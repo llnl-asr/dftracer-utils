@@ -221,7 +221,7 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     if (view.query) v = v.filter(*view.query);
     if (!single_file || fields.by_path) v = v.time_range(scan_begin, end);
     auto scan = co_await v.map_batches<EvAcc>(
-        [&fields](EvAcc& a, const std::vector<dstd::StringView>& events) {
+        [&fields](EvAcc& a, const dstd::Vector<dstd::StringView>& events) {
             a.events.reserve(a.events.size() + events.size());
             fields.for_each_event(events, [&a](dstd::StringView ev) {
                 a.events.emplace_back(ev);
@@ -402,7 +402,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
             to_view_files(collect_candidate_files(index, params)))
             .filter(duql::parse_or_throw(text))
             .cancel_when([&req]() { return req.cancel_token.cancelled(); })
-            .select(columns)
+            .select(dstd::Vector<dstd::String>(columns.begin(), columns.end()))
             .sort_by_multi(order, descending);
     std::string all_rows;
     bool whole = true;  // all_rows still holds every row so far

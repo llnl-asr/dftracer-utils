@@ -3,19 +3,17 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_H
 
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index::extensions {}
 
@@ -40,16 +38,17 @@ struct AggSchema;
 /// `inputs`, which name row columns (as a row select would). A group key of
 /// kind Expr, or an aggregate's field, names it.
 struct ComputedColumn {
-    std::string name;
+    dstd::String name;
     dataframe::Expr expr;
-    std::vector<std::string> inputs;
+    dstd::Vector<dstd::String> inputs;
 };
 
 /// See ViewPlan::build_step. `run` takes the query the scan would use and
 /// gives the one to use with the lookups' key sets. It is thread-safe and
 /// runs the sides once; a call after a failed one runs them again.
 struct BuildStep {
-    std::function<dstd::Optional<duql::Query>(dstd::Optional<duql::Query>)> run;
+    dstd::Function<dstd::Optional<duql::Query>(dstd::Optional<duql::Query>)>
+        run;
 };
 
 struct ViewPlan;
@@ -59,7 +58,7 @@ ExportStats counted(const ViewPlan& plan, ExportStats st);
 /// The logical plan a `View` carries. The ops form a linear pipeline, so a flat
 /// struct captures it; each builder copies and mutates one field.
 struct ViewPlan {
-    std::vector<ViewFile> files;
+    dstd::Vector<ViewFile> files;
 
     dstd::Optional<duql::Query> query;
     dstd::Optional<dstd::Pair<double, double>> time_range;
@@ -89,9 +88,9 @@ struct ViewPlan {
     /// A trace operation (time range, bucket, occupancy, call tree,
     /// flamegraph) reads this plan, so records need a time.
     bool timed = false;
-    std::vector<ComputedColumn> computed;
-    std::vector<GroupKey> group_by;
-    std::vector<AggSpec> agg;
+    dstd::Vector<ComputedColumn> computed;
+    dstd::Vector<GroupKey> group_by;
+    dstd::Vector<AggSpec> agg;
     /// Aggregate every numeric args.* field as a dynamic per-group metric
     /// (skipping metadata/pre-aggregated args). This is how ph="C" counters
     /// aggregate without naming the fields up front. With `numeric_arg_aggs`
@@ -104,7 +103,7 @@ struct ViewPlan {
     /// legacy bare-mean column. Only FieldStat-derivable ops
     /// (Count/Sum/Min/Max/SumSq/ Mean/Var/Std/Skew/Kurt) are supported here;
     /// Pct needs a per-arg sketch.
-    std::vector<AggSpec> numeric_arg_aggs;
+    dstd::Vector<AggSpec> numeric_arg_aggs;
     /// Out-of-core aggregation budget shared by collect / export_counters /
     /// aggregate_partial: when a worker's in-memory group map grows past this
     /// many bytes it spills to a sorted temp run; the runs are k-way merged at
@@ -116,10 +115,10 @@ struct ViewPlan {
     std::uint64_t memory_budget = 0;
     /// Where the scans of this plan add their counts; null counts nothing.
     dstd::SharedPtr<ScanCounter> scan_counter;
-    std::vector<std::string> select;
+    dstd::Vector<dstd::String> select;
     /// Paths a row scan with an empty select names as schema columns after
     /// its own; the scan still returns every path.
-    std::vector<dataframe::Field> named_columns;
+    dstd::Vector<dataframe::Field> named_columns;
 
     /// Pagination. `limit` caps the output (0 = unlimited); `offset` skips that
     /// many leading rows/events first. Applied to collect()'s materialized rows
@@ -135,21 +134,21 @@ struct ViewPlan {
     /// offset/limit with the vec sort kernels: `sort_col` sorts by that column
     /// (descending if `sort_desc`); `topk_col` then keeps the `topk_k` best
     /// rows (largest unless `!topk_largest`). Empty column = not applied.
-    std::string sort_col;
+    dstd::String sort_col;
     bool sort_desc = false;
-    std::string topk_col;
+    dstd::String topk_col;
     std::int64_t topk_k = -1;
     bool topk_largest = true;
 
     /// Root holding the rollup cache store. Empty = the files' index root.
     /// Rollups are keyed by the plan signature, so a changed grain (files,
     /// filter, group_by, agg, bucket, range) recomputes instead of matching.
-    std::string rollup_root;
+    dstd::String rollup_root;
 
     /// Directory holding materialized filtered-trace views, one subdir per
     /// view. Empty = the index root's `views`. Set to relocate MVs (a scratch
     /// dir) away from the dataset.
-    std::string views_root;
+    dstd::String views_root;
 
     /// Persist this query's result as a materialized view (rollup) as a
     /// byproduct of answering it, so a later matching query reads it back.
@@ -165,7 +164,7 @@ struct ViewPlan {
 
     /// Cooperative cancellation, polled by every terminal at its loop
     /// boundaries; empty = never cancelled.
-    std::function<bool()> cancelled;
+    dstd::SharedPtr<dstd::Function<bool()>> cancelled;
 
     /// Memoized fold schema (ensure_schema builds it once before the parallel
     /// fold; workers read it race-free). Mutable so a const plan can cache it;

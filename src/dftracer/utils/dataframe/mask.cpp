@@ -167,12 +167,13 @@ dataframe::Series field_mask(const dataframe::DataFrame& b,
 
 dataframe::Series leaf_mask(const ExprLeaf& leaf,
                             const dataframe::DataFrame& b) {
-    std::vector<VectorColumn> cols;
+    dstd::Vector<VectorColumn> cols;
     std::vector<const dataframe::Series*> inputs;
     cols.reserve(b.columns.size());
     inputs.reserve(b.columns.size());
     for (std::size_t i = 0; i < b.columns.size(); ++i) {
-        cols.push_back({b.names[i], b.columns[i].data_type(), false});
+        cols.push_back(
+            {dstd::String(b.names[i]), b.columns[i].data_type(), false});
         inputs.push_back(&b.columns[i]);
     }
     dstd::Vector<const TQuant*> quants;

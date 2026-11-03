@@ -32,7 +32,7 @@ namespace {
 
 FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
                              bool needs_args,
-                             const std::vector<std::string>* extra = nullptr,
+                             const dstd::Vector<dstd::String>* extra = nullptr,
                              bool capture_schema = false) {
     FoldEvent ev;
     extract_fold_event_into(ev, root, intern, needs_args, extra,
@@ -45,9 +45,9 @@ std::string padded(std::string s) {
     return s;
 }
 
-std::vector<FoldEvent> fold_events_of(const std::vector<std::string>& lines,
-                                      StringIntern& intern) {
-    std::vector<FoldEvent> out;
+dstd::Vector<FoldEvent> fold_events_of(const std::vector<std::string>& lines,
+                                       StringIntern& intern) {
+    dstd::Vector<FoldEvent> out;
     simdjson::dom::parser parser;
     for (const auto& l : lines) {
         std::string buf = padded(l);
@@ -155,8 +155,9 @@ TEST_SUITE("RowSetFold") {
         const std::string gz = write_trace(env, trace_lines());
         const auto ixr =
             ix::Indexer::open({dstd::String(dstd::StringView(gz))});
-        const View v =
-            View::from_file(gz, std::string(determine_index_path(gz, "")));
+        const View v = View::from_file(
+            dstd::String(gz),
+            dstd::String(std::string(determine_index_path(gz, ""))));
         for (const char* name : {"files", "hosts", "strings", "ranks"}) {
             CAPTURE(name);
             const df::DataFrame stored = ixr.rowset(name);
@@ -183,8 +184,9 @@ TEST_SUITE("RowSetFold") {
         const std::string gz = write_trace(env, lines);
         const auto ixr =
             ix::Indexer::open({dstd::String(dstd::StringView(gz))});
-        const View v =
-            View::from_file(gz, std::string(determine_index_path(gz, "")));
+        const View v = View::from_file(
+            dstd::String(gz),
+            dstd::String(std::string(determine_index_path(gz, ""))));
         const df::DataFrame stored = ixr.rowset("runs");
         CHECK(rows_of(stored) ==
               rows_of(run(v.duql("from runs | where true").collect())));
@@ -201,7 +203,9 @@ TEST_SUITE("RowSetFold") {
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"depth":1,"count":2})");
         const std::string gz = write_trace(env, lines, /*build=*/false);
         const View v =
-            View::from_file(gz, std::string(determine_index_path(gz, "")))
+            View::from_file(
+                dstd::String(gz),
+                dstd::String(std::string(determine_index_path(gz, ""))))
                 .group_by({GroupKey::field("gtype")})
                 .agg({{AggOp::Count, "", "n"}});
         for (int touch = 0; touch < 2; ++touch) {
@@ -298,8 +302,9 @@ TEST_SUITE("RowSetFold") {
         const std::string gz = write_trace(env, lines);
         const auto ixr =
             ix::Indexer::open({dstd::String(dstd::StringView(gz))});
-        const View v =
-            View::from_file(gz, std::string(determine_index_path(gz, "")));
+        const View v = View::from_file(
+            dstd::String(gz),
+            dstd::String(std::string(determine_index_path(gz, ""))));
         const df::DataFrame f =
             v.duql("where dur.sketch == \"SK7\" | select path, dur.count")
                 .collect()

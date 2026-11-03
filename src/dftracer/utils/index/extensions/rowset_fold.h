@@ -42,8 +42,7 @@ class RowSetFold : public trace::views::detail::Fold {
     bool needs_args() const override { return true; }
     // The schema refuses a row set that reads a never_index path.
     bool reads_never_indexed() const override { return false; }
-    // keep std: trace::views::detail::Fold::slice returns std::unique_ptr
-    std::unique_ptr<trace::views::detail::Fold> slice() const override;
+    dstd::UniquePtr<trace::views::detail::Fold> slice() const override;
     void step(const trace::views::detail::FoldBatch& batch) override;
     void seal_unit(const trace::views::detail::ScanUnit& unit) override;
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;

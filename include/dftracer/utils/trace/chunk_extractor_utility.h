@@ -8,16 +8,13 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::trace {
 
@@ -28,12 +25,12 @@ namespace dftracer::utils::trace {
  */
 struct ChunkExtractorUtilityInput {
     int chunk_index = 0;  ///< Group number, part of the output file names
-    std::vector<std::string> files;
+    dstd::Vector<dstd::String> files;
     /// If not empty, parallel to `files`: an open descriptor of each file, read
     /// instead of opening it. A null entry opens the file.
-    std::vector<dstd::SharedPtr<dstd::ScopedFd>> open_files;
-    std::string output_dir;
-    std::string app_name;
+    dstd::Vector<dstd::SharedPtr<dstd::ScopedFd>> open_files;
+    dstd::String output_dir;
+    dstd::String app_name;
     bool compress = false;
     bool compute_hash = true;
     /// Uncompressed bytes per gzip member.
@@ -46,7 +43,7 @@ struct ChunkExtractorUtilityInput {
     std::uint64_t memory_budget = 0;
 
     static ChunkExtractorUtilityInput from_files(int index,
-                                                 std::vector<std::string> f) {
+                                                 dstd::Vector<dstd::String> f) {
         ChunkExtractorUtilityInput input;
         input.chunk_index = index;
         input.files = std::move(f);
@@ -54,17 +51,17 @@ struct ChunkExtractorUtilityInput {
     }
 
     ChunkExtractorUtilityInput& with_open_files(
-        std::vector<dstd::SharedPtr<dstd::ScopedFd>> fds) {
+        dstd::Vector<dstd::SharedPtr<dstd::ScopedFd>> fds) {
         open_files = std::move(fds);
         return *this;
     }
 
-    ChunkExtractorUtilityInput& with_output_dir(std::string dir) {
+    ChunkExtractorUtilityInput& with_output_dir(dstd::String dir) {
         output_dir = std::move(dir);
         return *this;
     }
 
-    ChunkExtractorUtilityInput& with_app_name(std::string name) {
+    ChunkExtractorUtilityInput& with_app_name(dstd::String name) {
         app_name = std::move(name);
         return *this;
     }
@@ -100,8 +97,8 @@ struct ChunkExtractorUtilityInput {
  */
 struct ChunkExtractorUtilityOutput {
     int chunk_index = 0;
-    std::vector<utilities::fileio::ChunkInfo> chunks;  ///< Files written
-    std::size_t events = 0;                            ///< JSON events written
+    dstd::Vector<utilities::fileio::ChunkInfo> chunks;  ///< Files written
+    std::size_t events = 0;                             ///< JSON events written
     std::size_t event_hash = 0;
     std::uint64_t peak_bytes = 0;  ///< Most bytes the chunk writer reserved
     bool success = false;

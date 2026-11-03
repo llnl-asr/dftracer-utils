@@ -69,7 +69,9 @@ TEST_SUITE("ComparisonConfig") {
         ComparisonNode node;
         node.name = "root";
         node.query = "cat == \"POSIX\"";
-        node.metrics = std::vector<std::string>{"count"};
+        node.metrics =
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                "count"};
         cfg.nodes.push_back(node);
 
         cfg.resolve();

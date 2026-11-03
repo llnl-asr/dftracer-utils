@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -18,10 +19,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::index::plan {
 class GroupResolver;
@@ -49,7 +46,7 @@ class StreamRowFold : public Fold {
     StreamRowFold(dstd::SharedPtr<coro::Channel<dataframe::Morsel>> channel,
                   dstd::SharedPtr<coro::CoroSemaphore> budget,
                   dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern,
-                  std::vector<std::string> select, double time_scale = 1.0,
+                  dstd::Vector<dstd::String> select, double time_scale = 1.0,
                   bool keep_metadata = false, bool emit_dyn = false,
                   dstd::SharedPtr<const ViewPlan> branch = nullptr,
                   dstd::SharedPtr<const std::atomic<bool>> dropped = nullptr,
@@ -73,16 +70,16 @@ class StreamRowFold : public Fold {
     bool needs_args() const override { return true; }
     bool wants_metadata() const override { return keep_metadata_; }
 
-    std::vector<std::string> extra_captures() const override {
-        std::vector<std::string> fields = select_;
+    dstd::Vector<dstd::String> extra_captures() const override {
+        dstd::Vector<dstd::String> fields = select_;
         if (branch_ && branch_->query)
             for (dstd::StringView f : branch_->query->fields())
                 fields.emplace_back(f);
         return row_fold_extra_captures(fields);
     }
 
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<StreamRowFold>(
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<StreamRowFold>(
             channel_, budget_, intern_, select_, time_scale_, keep_metadata_,
             emit_dyn_, branch_, dropped_, by_path_, ordered_, json_);
     }
@@ -115,7 +112,7 @@ class StreamRowFold : public Fold {
     dstd::SharedPtr<coro::Channel<dataframe::Morsel>> channel_;
     dstd::SharedPtr<coro::CoroSemaphore> budget_;
     dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_;
-    std::vector<std::string> select_;
+    dstd::Vector<dstd::String> select_;
     double time_scale_;
     bool keep_metadata_;  // phase("metadata"): keep ph=M records
     bool emit_dyn_;       // auto_numeric_metrics: emit per-batch dyn columns
@@ -130,7 +127,7 @@ class StreamRowFold : public Fold {
 
     // Indices of the batch events the filter keeps, reused across step() calls
     // so a batch costs no vector allocation and no FoldEvent copy.
-    std::vector<std::uint32_t> kept_;
+    dstd::Vector<std::uint32_t> kept_;
 
     // fuse() awaits take_pending()'s task right after step() and before the
     // next step() on this fold, so one reused slot is enough.

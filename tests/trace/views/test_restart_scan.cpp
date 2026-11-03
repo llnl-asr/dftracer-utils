@@ -79,7 +79,10 @@ void write_file(const std::string& path, const std::vector<std::uint8_t>& b) {
 struct Indexed {
     std::string gz;
     std::string idx;
-    ViewFile file() const { return ViewFile{gz, idx, 0, 0, CKPT}; }
+    ViewFile file() const {
+        return ViewFile{dftracer::utils::dstd::String(gz),
+                        dftracer::utils::dstd::String(idx), 0, 0, CKPT};
+    }
 };
 
 Indexed make_indexed(TestEnvironment& env, const Trace& t,

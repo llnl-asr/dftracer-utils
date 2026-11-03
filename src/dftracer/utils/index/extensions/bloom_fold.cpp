@@ -483,14 +483,11 @@ void BloomFold::spill(FileState& fs, std::uint64_t upto) {
     if (sp.run_bytes > run_limit(spill_share_, sp.runs)) spill_pending_ = true;
 }
 
-// keep std: trace::views::detail::Fold::extra_captures returns std::vector
-std::vector<std::string> BloomFold::extra_captures() const {
-    std::vector<std::string> out;  // keep std: the return type above
+dstd::Vector<dstd::String> BloomFold::extra_captures() const {
+    dstd::Vector<dstd::String> out;
     for (const dstd::String& dim : config_.extra_dimensions)
-        if (captures_nested() && trace::views::detail::is_nested_path(dim)) {
-            const dstd::String path = capture_path(dim);
-            out.emplace_back(path.data(), path.size());
-        }
+        if (captures_nested() && trace::views::detail::is_nested_path(dim))
+            out.push_back(capture_path(dim));
     return out;
 }
 

@@ -24,12 +24,12 @@
 
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::trace::views {
 class View;
@@ -38,26 +38,26 @@ class View;
 namespace dftracer::utils::trace::provenance {
 
 struct ProvenanceEntity {
-    std::string hash;   // 16 hex digits
-    std::string type;   // entity type, e.g. "relaxed_structure"
-    std::string id;     // instance id, e.g. "MGYP001796749278/model_1_ptm"
-    std::string store;  // memory | file | db | object | network | ...
-    std::string uri;
-    std::vector<std::int64_t> pids;  // processes that declared it
+    dstd::String hash;   // 16 hex digits
+    dstd::String type;   // entity type, e.g. "relaxed_structure"
+    dstd::String id;     // instance id, e.g. "MGYP001796749278/model_1_ptm"
+    dstd::String store;  // memory | file | db | object | network | ...
+    dstd::String uri;
+    dstd::Vector<std::int64_t> pids;  // processes that declared it
 };
 
 struct ProvenanceActivity {
-    std::string aid;       // unique activity instance id
-    std::string name;      // event name
-    std::string activity;  // activity type
+    dstd::String aid;       // unique activity instance id
+    dstd::String name;      // event name
+    dstd::String activity;  // activity type
     std::int64_t pid = 0;
     std::uint64_t ts = 0;
     std::uint64_t dur = 0;
-    std::string cat;                       // event category
-    std::vector<std::string> used;         // cause entity ids (16-hex)
-    std::vector<std::string> generated;    // effect entity ids
-    std::vector<std::string> invalidated;  // entities this event ended
-    std::vector<std::string> updated;      // entities modified in place
+    dstd::String cat;                        // event category
+    dstd::Vector<dstd::String> used;         // cause entity ids (16-hex)
+    dstd::Vector<dstd::String> generated;    // effect entity ids
+    dstd::Vector<dstd::String> invalidated;  // entities this event ended
+    dstd::Vector<dstd::String> updated;      // entities modified in place
     std::int64_t nused = -1;  // expected counts as reported (-1: absent)
     std::int64_t ngen = -1;
     bool has_main = false;    // false: only PROV_CONT chunks were seen
@@ -66,51 +66,51 @@ struct ProvenanceActivity {
 /// An entity type as described by the producer (prov_type:\<type\> metadata,
 /// value "<role>|<description>"): its role in the workflow and what it is.
 struct ProvenanceType {
-    std::string name;         // entity type, e.g. "best_structure"
-    std::string role;         // input | output | intermediate ("" if not given)
-    std::string description;  // what the type represents in the workflow
+    dstd::String name;  // entity type, e.g. "best_structure"
+    dstd::String role;  // input | output | intermediate ("" if not given)
+    dstd::String description;  // what the type represents in the workflow
 };
 
 /// Entity -> entity relation from an ER record (dftracer entity API), e.g.
 /// subject CONTAINS object, subject DERIVED_FROM object.
 struct ProvenanceEntityRelation {
-    std::string relation;  // contains | part_of | derived_from | revision_of |
-                           // specialization_of | alternate_of | depends_on
-    std::string subject;   // entity id (16-hex)
-    std::string object;
+    dstd::String relation;  // contains | part_of | derived_from | revision_of |
+                            // specialization_of | alternate_of | depends_on
+    dstd::String subject;   // entity id (16-hex)
+    dstd::String object;
 };
 
 /// A storage location (mount point) holding provenance-relevant files.
 struct ProvenanceMount {
-    std::string path;  // e.g. "/p/lustre5", "/mnt/nnf/<id>"
-    std::string
-        fstype;        // from the mount table; "rabbit"/"unknown" when inferred
+    dstd::String path;  // e.g. "/p/lustre5", "/mnt/nnf/<id>"
+    dstd::String
+        fstype;  // from the mount table; "rabbit"/"unknown" when inferred
 };
 
 /// A file touched by a provenance activity or named by an entity's uri.
 struct ProvenanceFile {
-    std::string fhash;  // dftracer file hash (POSIX/STDIO fhash)
-    std::string path;   // absolute path: the FH record, or a relative FH path
-                        // resolved against the process cwd (start event)
-    std::string mount;  // owning mount point (ProvenanceMount::path)
-    std::string rel;    // path relative to `mount`
+    dstd::String fhash;  // dftracer file hash (POSIX/STDIO fhash)
+    dstd::String path;   // absolute path: the FH record, or a relative FH path
+                         // resolved against the process cwd (start event)
+    dstd::String mount;  // owning mount point (ProvenanceMount::path)
+    dstd::String rel;    // path relative to `mount`
 };
 
 /// One activity's I/O on one file, aggregated over its POSIX/STDIO calls.
 struct ProvenanceAccess {
-    std::string aid;    // ProvenanceActivity::aid
-    std::string fhash;  // ProvenanceFile::fhash
-    std::string path;   // ProvenanceFile::path (the file's identity)
-    std::string op;     // read | write | open | delete | meta
+    dstd::String aid;    // ProvenanceActivity::aid
+    dstd::String fhash;  // ProvenanceFile::fhash
+    dstd::String path;   // ProvenanceFile::path (the file's identity)
+    dstd::String op;     // read | write | open | delete | meta
     std::uint64_t calls = 0;
     std::uint64_t bytes = 0;
 };
 
 /// Entity <-> file association: the entity's uri is (or prefixes) the file.
 struct ProvenanceEntityFile {
-    std::string entity;  // ProvenanceEntity::hash
-    std::string fhash;
-    std::string path;    // ProvenanceFile::path
+    dstd::String entity;  // ProvenanceEntity::hash
+    dstd::String fhash;
+    dstd::String path;    // ProvenanceFile::path
 };
 
 struct ProvenanceStats {
@@ -133,22 +133,22 @@ struct ProvenanceOptions {
     bool include_all_files = false;
     /// Extra mount points (absolute prefixes) checked before the host mount
     /// table, e.g. the compute nodes' mounts when serving from a login node.
-    std::vector<std::string> mounts;
+    dstd::Vector<dstd::String> mounts;
 };
 
 struct ProvenanceGraph {
-    std::vector<ProvenanceEntity> entities;
-    std::vector<ProvenanceActivity> activities;
-    std::vector<ProvenanceType> types;
-    std::vector<ProvenanceEntityRelation> entity_relations;
-    std::vector<ProvenanceFile> files;
-    std::vector<ProvenanceMount> mounts;
-    std::vector<ProvenanceAccess> accesses;
-    std::vector<ProvenanceEntityFile> entity_files;
+    dstd::Vector<ProvenanceEntity> entities;
+    dstd::Vector<ProvenanceActivity> activities;
+    dstd::Vector<ProvenanceType> types;
+    dstd::Vector<ProvenanceEntityRelation> entity_relations;
+    dstd::Vector<ProvenanceFile> files;
+    dstd::Vector<ProvenanceMount> mounts;
+    dstd::Vector<ProvenanceAccess> accesses;
+    dstd::Vector<ProvenanceEntityFile> entity_files;
     ProvenanceStats stats;
 
     /// {"entities":[...],"activities":[...],"stats":{...}}
-    std::string to_json() const;
+    dstd::String to_json() const;
 };
 
 /// Scan `view` for provenance records and assemble the graph.
@@ -165,8 +165,8 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
 /// Split `path` into (mount point, path relative to it) using `table`
 /// (longest prefix wins), then the Rabbit rule (/mnt/nnf/\<id\>), then the
 /// first two path components. Exposed for tests.
-dstd::Pair<std::string, std::string> split_mount(
-    const std::string& path, const std::vector<ProvenanceMount>& table);
+dstd::Pair<dstd::String, dstd::String> split_mount(
+    const dstd::String& path, const dstd::Vector<ProvenanceMount>& table);
 
 }  // namespace dftracer::utils::trace::provenance
 

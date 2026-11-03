@@ -32,8 +32,7 @@ namespace dftracer::utils::duql {
 /// the column of that computed index or list literal, likewise. `term` marks
 /// a column that holds the values of that term, computed per batch.
 struct VectorColumn {
-    // keep std: view_duql builds names as std::string
-    std::string name;
+    dstd::String name;
     dataframe::DataType type;
     bool json = false;
     bool record = false;
@@ -57,20 +56,17 @@ struct VectorizeError {
 /// column names reads the column of that name under `args.`; the same holds
 /// for the functions below.
 dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
-    // keep std: view_duql and mask pass std::vector<VectorColumn>
-    const Term& t, const std::vector<VectorColumn>& columns,
+    const Term& t, const dstd::Vector<VectorColumn>& columns,
     bool args_fallback);
 
 /// Whether `t` compiles to a null in every row: the literal null or a field no
 /// column names.
-// keep std: view_duql and mask pass std::vector<VectorColumn>
-bool is_null_term(const Term& t, const std::vector<VectorColumn>& columns,
+bool is_null_term(const Term& t, const dstd::Vector<VectorColumn>& columns,
                   bool args_fallback);
 
 /// `t` as a Bool column: its truth, null where it is not a bool.
 dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError>
-// keep std: view_duql and mask pass std::vector<VectorColumn>
-vectorize_condition(const Term& t, const std::vector<VectorColumn>& columns,
+vectorize_condition(const Term& t, const dstd::Vector<VectorColumn>& columns,
                     bool args_fallback);
 
 /// The truth of `q` for each row of `inputs`, the frame `columns` describes:
@@ -82,16 +78,14 @@ vectorize_condition(const Term& t, const std::vector<VectorColumn>& columns,
 dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
     // keep std: dataframe::eval and agg take std::vector<const Series*>
     const TQuant& q, const std::vector<const dataframe::Series*>& inputs,
-    // keep std: view_duql and mask pass std::vector<VectorColumn>
-    const std::vector<VectorColumn>& columns, bool args_fallback);
+    const dstd::Vector<VectorColumn>& columns, bool args_fallback);
 
 /// The column the bound lookup `l` (not `l.all`) gives for each row of
 /// `inputs`. Throws DFTUtilsException for a query error of the lookup.
 dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
     // keep std: dataframe::eval and agg take std::vector<const Series*>
     const TLookup& l, const std::vector<const dataframe::Series*>& inputs,
-    // keep std: view_duql and mask pass std::vector<VectorColumn>
-    const std::vector<VectorColumn>& columns, bool args_fallback);
+    const dstd::Vector<VectorColumn>& columns, bool args_fallback);
 
 /// Whether `fn` runs on columns only through call_column(): slice, flatten,
 /// keys, values, parse_json, split, index_of, sort, unique and join.
@@ -111,19 +105,16 @@ bool is_column_term(const Term& t);
 /// of one scalar type, and sort() or unique() of an array of arrays or
 /// objects.
 dstd::Optional<dataframe::DataType> call_type(
-    // keep std: view_duql passes std::vector for these
-    const Term& t, const std::vector<dataframe::DataType>& args);
+    const Term& t, const dstd::Vector<dataframe::DataType>& args);
 
 /// The column of `t` over its arguments' columns `args`, as `type`, of
 /// `rows` rows. For keys and values, `args` are the object's fields named
 /// `keys`, or its one struct column. parse_json gives canonical JSON text.
-dataframe::Series call_column(
-    const Term& t,
-    // keep std: view_duql passes std::vector for these
-    const std::vector<dataframe::Series>& args,
-    // keep std: view_duql passes std::vector for these
-    const std::vector<std::string>& keys, const dataframe::DataType& type,
-    std::int64_t rows);
+dataframe::Series call_column(const Term& t,
+                              const dstd::Vector<dataframe::Series>& args,
+                              const dstd::Vector<dstd::String>& keys,
+                              const dataframe::DataType& type,
+                              std::int64_t rows);
 
 /// The key of row `r` of the FLAT column `s`; false when it has none.
 bool append_cell_key(dstd::String& out, const dataframe::Series& s,

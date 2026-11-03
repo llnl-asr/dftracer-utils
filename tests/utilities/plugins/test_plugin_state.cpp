@@ -216,8 +216,10 @@ FoldEvent evt(StringIntern& intern, const std::string& name,
 
 // GROUPS distinct names, each seen once per slice, so every total depends on
 // the cross-slice merge as well as on any spill.
-std::vector<std::vector<FoldEvent>> slices(StringIntern& intern, int n_slices) {
-    std::vector<std::vector<FoldEvent>> out(static_cast<std::size_t>(n_slices));
+std::vector<dstd::Vector<FoldEvent>> slices(StringIntern& intern,
+                                            int n_slices) {
+    std::vector<dstd::Vector<FoldEvent>> out(
+        static_cast<std::size_t>(n_slices));
     for (int s = 0; s < n_slices; ++s)
         for (int i = 0; i < GROUPS; ++i)
             out[static_cast<std::size_t>(s)].push_back(
@@ -250,7 +252,7 @@ RunResult run_state(bool spillable, std::uint64_t budget, int n_slices) {
     NamedResultRegistry named;
     PluginFold master(&p, intern, nullptr, &named, "state_test", budget,
                       &registry);
-    for (const std::vector<FoldEvent>& evs : slices(intern, n_slices)) {
+    for (const dstd::Vector<FoldEvent>& evs : slices(intern, n_slices)) {
         auto slice = master.slice();
         auto* pf = static_cast<PluginFold*>(slice.get());
         ScanUnit unit{};
@@ -343,7 +345,7 @@ SliceRun run_slice(bool reclaimable, std::uint64_t budget, int n_slices) {
     NamedResultRegistry named;
     PluginFold master(&p, intern, nullptr, &named, "slice_test", budget,
                       nullptr);
-    for (const std::vector<FoldEvent>& evs : slices(intern, n_slices)) {
+    for (const dstd::Vector<FoldEvent>& evs : slices(intern, n_slices)) {
         auto slice = master.slice();
         auto* pf = static_cast<PluginFold*>(slice.get());
         ScanUnit unit{};

@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -20,14 +21,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory>
-#include <span>
-#include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
-#include <vector>
 
 // The owned event the fold-fusion scan core batches, kept in its own header so
 // both the Fold interface and the event accessor depend on the data, not on
@@ -64,7 +60,7 @@ class ChunkArena {
                 ? MIN_CHUNK_ENTRIES
                 : std::min(CHUNK_ENTRIES, chunks_.back().capacity * 2);
         const std::size_t capacity = std::max(n, step);
-        chunks_.push_back(Chunk{std::make_unique<T[]>(capacity), capacity});
+        chunks_.push_back(Chunk{dstd::make_unique<T[]>(capacity), capacity});
         current_ = chunks_.size() - 1;
         used_ = n;
         return chunks_.back().data.get();
@@ -93,10 +89,10 @@ class ChunkArena {
 
    private:
     struct Chunk {
-        std::unique_ptr<T[]> data;
+        dstd::UniquePtr<T[]> data;
         std::size_t capacity = 0;
     };
-    std::vector<Chunk> chunks_;
+    dstd::Vector<Chunk> chunks_;
     std::size_t current_ = 0;
     std::size_t used_ = 0;
 };
@@ -402,7 +398,7 @@ class FoldEventBuffer {
         ev.schema_leaves.bind(&leaves_);
     }
 
-    std::vector<FoldEvent> slots_;
+    dstd::Vector<FoldEvent> slots_;
     std::size_t live_ = 0;
     ChunkArena<FoldEvent::Arg> args_;
     ChunkArena<FoldEvent::SpecialValue> specials_;
@@ -416,7 +412,7 @@ class EventRows {
    public:
     EventRows(dstd::Span<const FoldEvent> all)
         : base_(all.data()), n_(all.size()) {}
-    EventRows(const std::vector<FoldEvent>& all)
+    EventRows(const dstd::Vector<FoldEvent>& all)
         : base_(all.data()), n_(all.size()) {}
     EventRows(dstd::Span<const FoldEvent> all,
               dstd::Span<const std::uint32_t> pick)
@@ -537,7 +533,7 @@ inline void append_scalar_arg(ArenaVec<FoldEvent::Arg>& into,
 
 /// Flatten the array or object `v` into `ev.args` under `path` the way
 /// dftracer args are flattened (`path.0`, `path.key`).
-void flatten_container(FoldEvent& ev, std::string path,
+void flatten_container(FoldEvent& ev, dstd::String path,
                        simdjson::dom::element v,
                        dftracer::utils::dstd::StringIntern& intern);
 
@@ -549,7 +545,7 @@ void flatten_container(FoldEvent& ev, std::string path,
 /// everything else to `args`. No-op when the path is absent.
 inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
                                 dftracer::utils::dstd::StringIntern& intern,
-                                const std::string& name) {
+                                const dstd::String& name) {
     bool ok = false;
     simdjson::dom::element v = resolve_json_path(root, name, ok);
     const bool schema_field = !is_nested_path(name) && is_schema_field(name);
@@ -594,22 +590,22 @@ struct DecodeHints {
     std::size_t args = 0;
     /// The path being walked by decode_record, reused so a record's walk
     /// allocates no path string.
-    std::string path;
+    dstd::String path;
     const dftracer::utils::index::RecordSchema* schema = nullptr;
-    std::vector<const dftracer::utils::index::FieldSpec*> fields;
-    std::vector<std::uint8_t> known;
+    dstd::Vector<const dftracer::utils::index::FieldSpec*> fields;
+    dstd::Vector<std::uint8_t> known;
     /// The catalog path id ("args." + key) of each argument key id, by index
     /// below FIELD_CACHE_IDS and by map above.
-    std::vector<std::uint32_t> arg_leaf;
+    dstd::Vector<std::uint32_t> arg_leaf;
     ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> arg_leaf_far;
     /// The path id of each top-level key whose value is a scalar. `packed`
     /// holds a key of up to 8 bytes, zero padded, so it compares as a word.
     struct TopLeaf {
-        std::string key;
+        dstd::String key;
         std::uint64_t packed;
         std::uint32_t id;
     };
-    std::vector<TopLeaf> top_leaf;
+    dstd::Vector<TopLeaf> top_leaf;
     /// The keys of the record being decoded by append_dftracer_record that are
     /// catalog paths, in order, kept from its one walk of the record.
     struct WalkedKey {
@@ -655,9 +651,9 @@ inline bool args_leaves_in_walk(bool needs_args, bool has_args,
 void decode_record_into(
     FoldEvent& ev, simdjson::dom::element root,
     dftracer::utils::dstd::StringIntern& intern, bool capture_schema = true,
-    const std::vector<std::string>* paths = nullptr,
+    const dstd::Vector<dstd::String>* paths = nullptr,
     const dftracer::utils::index::RecordSchema* record_schema = nullptr,
-    const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields =
+    const dstd::Vector<const dftracer::utils::index::FieldSpec*>* path_fields =
         nullptr,
     std::size_t max_children = 0, DecodeHints* hints = nullptr,
     bool skip_never_indexed = false);
@@ -704,7 +700,7 @@ bool counts_as_event(simdjson::dom::element root);
 void extract_fold_event_into(
     FoldEvent& ev, simdjson::dom::element root,
     dftracer::utils::dstd::StringIntern& intern, bool needs_args,
-    const std::vector<std::string>* extra_fields = nullptr,
+    const dstd::Vector<dstd::String>* extra_fields = nullptr,
     bool capture_schema = false, DecodeHints* hints = nullptr);
 
 }  // namespace dftracer::utils::trace::views::detail

@@ -164,17 +164,20 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
     // Hoist the fold arguments to named locals: as co_await full-expression
     // temporaries these vectors/strings would be lifetime-extended into the
     // coroutine frame, which the compiler mishandles.
-    std::vector<std::string> partition;
+    dstd::Vector<dstd::String> partition;
     for (const auto* f : {&fields.entity, &fields.lane})
-        if (!f->empty()) partition.push_back(*f);
-    std::string ts_field = fields.time, dur_field = fields.duration,
-                name_field = fields.label;
+        if (!f->empty()) partition.emplace_back(*f);
+    dstd::String ts_field(fields.time), dur_field(fields.duration),
+        name_field(fields.label);
     if (ts_field.empty() || dur_field.empty())
         co_return HttpResponse::ok(
             R"({"truncated":false,"tree":{"name":"all","total":0,"self":0,"count":0,"children":[]}})");
-    dataframe::LazyResult<std::string> partial =
-        v.flamegraph_partial(partition, ts_field, dur_field, name_field, group);
-    std::string blob = co_await partial.collect();
+    const dstd::Vector<dstd::String> group_args(group.begin(), group.end());
+    dataframe::LazyResult<dstd::String> partial = v.flamegraph_partial(
+        partition, ts_field, dur_field, name_field, group_args);
+    const dstd::String blob_text = co_await partial.collect();
+    // keep std: calltree_json_from_arena takes a std::string
+    std::string blob(blob_text);
     if (cancel.cancelled()) co_return HttpResponse::ok(CANCELLED_TREE);
 
     const double dur_us =

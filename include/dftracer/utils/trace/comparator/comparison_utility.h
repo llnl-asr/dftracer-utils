@@ -5,10 +5,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/comparator/comparison_config.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
-
-#include <vector>
 
 namespace dftracer::utils::trace::comparator {
 
@@ -26,7 +25,7 @@ struct ComparisonVisitorPair {
 /// Input to ComparisonUtility::process().
 struct ComparisonUtilityInput {
     /// Visitor pairs, one per flattened node in the tree.
-    std::vector<ComparisonVisitorPair> visitors;
+    dstd::Vector<ComparisonVisitorPair> visitors;
     /// Root node of the comparison tree (for hierarchy reconstruction).
     ComparisonNode root_node;
 
@@ -58,16 +57,16 @@ class ComparisonUtility {
 
    private:
     /// Sort groups by worst regression first.
-    void sort_by_regression(std::vector<GroupComparison>& groups) const;
+    void sort_by_regression(dstd::Vector<GroupComparison>& groups) const;
 
     /// Remove groups below the threshold percentage.
-    void apply_threshold(std::vector<GroupComparison>& groups,
+    void apply_threshold(dstd::Vector<GroupComparison>& groups,
                          double threshold_pct) const;
 
     /// Recursively build the result tree from flattened visitors.
     NodeResult build_result_tree(
         const ComparisonNode& node,
-        const std::vector<ComparisonVisitorPair>& visitors,
+        const dstd::Vector<ComparisonVisitorPair>& visitors,
         const dstd::StringIntern& intern, std::size_t& visitor_index) const;
 };
 

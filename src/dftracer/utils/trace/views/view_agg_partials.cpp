@@ -6,8 +6,11 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/term.h>
@@ -31,14 +34,9 @@
 
 #include <algorithm>
 #include <bit>
-#include <map>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -54,8 +52,8 @@ constexpr char EXTRA_SEP = '\x1f';
 // A path-decoded role maps to the tier's field only when the tier holds exactly
 // the value the scan reads: a required field, in microseconds for times. Empty
 // when it does not.
-std::string tier_field(const ViewPlan& plan, dstd::StringView f) {
-    if (!plan_by_path(plan)) return std::string(f);
+dstd::String tier_field(const ViewPlan& plan, dstd::StringView f) {
+    if (!plan_by_path(plan)) return dstd::String(f);
     namespace ix = dftracer::utils::index;
     const ix::RecordSchema& s = plan_record_schema(plan);
     const ix::Roles& r = s.roles;
@@ -80,12 +78,12 @@ std::string tier_field(const ViewPlan& plan, dstd::StringView f) {
 bool roles_complete(const ViewPlan& plan) {
     namespace ix = dftracer::utils::index;
     const ix::Roles& r = plan_record_schema(plan).roles;
-    std::vector<dstd::StringView> paths;
+    dstd::Vector<dstd::StringView> paths;
     for (const dstd::String* p :
          {&r.name, &r.entity, &r.lane, &r.duration, &r.time})
         if (!tier_field(plan, *p).empty()) paths.push_back(*p);
     if (paths.empty()) return true;
-    std::map<std::string, ix::Snapshot> snapshots;
+    dstd::Map<dstd::String, ix::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         auto at = snapshots.find(f.index_path);
         if (at == snapshots.end())
@@ -101,8 +99,8 @@ bool roles_complete(const ViewPlan& plan) {
             return false;
         const auto spans = common::unwrap(ix::spans(snapshot, *file));
         for (dstd::StringView p : paths) {
-            std::map<std::uint64_t,
-                     dftracer::utils::index::extensions::kinds::Zone>
+            dstd::Map<std::uint64_t,
+                      dftracer::utils::index::extensions::kinds::Zone>
                 zones;
             for (const auto& [granule, bytes] : common::unwrap(ix::granules(
                      snapshot, *file, store::IndexExtension::Zonemap, p)))
@@ -127,7 +125,7 @@ bool roles_complete(const ViewPlan& plan) {
     return true;
 }
 
-bool answerable_field(const std::string& f) {
+bool answerable_field(const dstd::String& f) {
     return f == "dur" || f == "size" || f == "offset" || f == "ts" || f == "te";
 }
 
@@ -139,13 +137,13 @@ bool rows_match(const ViewPlan& plan) {
 }
 
 // nullopt when a key is one the partials cannot answer.
-dstd::Optional<std::vector<GroupKey>> partial_keys(const ViewPlan& plan) {
+dstd::Optional<dstd::Vector<GroupKey>> partial_keys(const ViewPlan& plan) {
     using Kind = GroupKey::Kind;
-    std::vector<GroupKey> keys = plan.group_by;
+    dstd::Vector<GroupKey> keys = plan.group_by;
     if (plan_by_path(plan)) {
         for (auto& gk : keys) {
             if (gk.kind != Kind::Field) return dstd::nullopt;
-            const std::string t = tier_field(plan, gk.arg);
+            const dstd::String t = tier_field(plan, gk.arg);
             if (t == "name")
                 gk.kind = Kind::Name;
             else if (t == "pid")
@@ -212,7 +210,7 @@ bool query_answerable(const ViewPlan& plan) {
     // The view binds a row set's rows only on the scan path.
     if (reads_lookup(q.root())) return false;
     for (dstd::StringView f : q.fields()) {
-        const std::string t = tier_field(plan, f);
+        const dstd::String t = tier_field(plan, f);
         if (t != "name" && t != "pid" && t != "tid" && t != "fhash" &&
             t != "hhash" && t != "cat")
             return false;
@@ -248,13 +246,13 @@ bool serves_op(AggOp op) {
 }
 
 // A phrase for the decline log, empty when the partials answer every aggregate.
-std::string unanswered_agg(const ViewPlan& plan, const AggSchema& sch) {
+dstd::String unanswered_agg(const ViewPlan& plan, const AggSchema& sch) {
     if (!rows_match(plan)) return "rows of another kind than the partials";
     for (const auto& s : plan.agg) {
-        const std::string field = tier_field(plan, s.field);
-        const std::string by = tier_field(plan, s.by);
+        const dstd::String field = tier_field(plan, s.field);
+        const dstd::String by = tier_field(plan, s.by);
         const auto refused = [&] {
-            return "aggregate " + std::to_string(static_cast<int>(s.op)) +
+            return "aggregate " + dstd::to_string(static_cast<int>(s.op)) +
                    " of field '" + s.field + "'";
         };
         if (!serves_op(s.op)) return refused();
@@ -301,10 +299,10 @@ struct FilterSets {
 };
 
 bool add_leaf(const ViewPlan& plan, const duql::FieldNode& field,
-              const std::vector<const duql::LiteralValue*>& values,
+              const dstd::Vector<const duql::LiteralValue*>& values,
               FilterSets& sets) {
     if (field.any || values.empty()) return false;
-    const std::string t = tier_field(plan, field.path);
+    const dstd::String t = tier_field(plan, field.path);
     auto strings = [&](bool& seen, dstd::Vector<dstd::String>& out) {
         if (seen) return false;
         seen = true;
@@ -346,7 +344,7 @@ bool extract_sets(const ViewPlan& plan, const duql::QueryNode& n,
                 if (node.op != CompareOp::Eq) return false;
                 return add_leaf(plan, node.field, {&node.value.value}, sets);
             } else if constexpr (std::is_same_v<T, InNode>) {
-                std::vector<const LiteralValue*> values;
+                dstd::Vector<const LiteralValue*> values;
                 for (const auto& e : node.values.elements)
                     values.push_back(&e.value);
                 return add_leaf(plan, node.field, values, sets);
@@ -359,20 +357,22 @@ bool extract_sets(const ViewPlan& plan, const duql::QueryNode& n,
 
 struct ValueCol {
     std::int32_t value_col;
-    std::string field;
+    dstd::String field;
 };
 
-std::vector<ValueCol> value_cols(const ViewPlan& plan,
-                                 const std::vector<std::string>& value_names) {
-    std::vector<ValueCol> out;
+dstd::Vector<ValueCol> value_cols(
+    const ViewPlan& plan,
+    // keep std: lowered value names are a std::vector<std::string>
+    const std::vector<std::string>& value_names) {
+    dstd::Vector<ValueCol> out;
     for (std::size_t vc = 0; vc < value_names.size(); ++vc) {
-        std::string base = agg_value_base_field(value_names[vc]);
+        dstd::String base = agg_value_base_field(value_names[vc]);
         // The partial holds offset under its bare name.
         if (!plan_by_path(plan) &&
             base ==
-                std::string(dftracer::utils::common::ARGS_PREFIX) + "offset")
+                dstd::String(dftracer::utils::common::ARGS_PREFIX) + "offset")
             base = "offset";
-        std::string field = tier_field(plan, base);
+        dstd::String field = tier_field(plan, base);
         if (!answerable_field(field)) continue;  // e.g. a SetUnion text column
         out.push_back({static_cast<std::int32_t>(vc), std::move(field)});
     }
@@ -381,12 +381,12 @@ std::vector<ValueCol> value_cols(const ViewPlan& plan,
 
 struct Prepared {
     AggQuery query;
-    std::vector<GroupKey> keys;
-    std::vector<std::string> extra;
+    dstd::Vector<GroupKey> keys;
+    dstd::Vector<dstd::String> extra;
     bool by_path = false;
 };
 
-dstd::NullOpt declined(const std::string& why) {
+dstd::NullOpt declined(const dstd::String& why) {
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the index partials cannot answer this query (%s); the traces "
         "are scanned",
@@ -415,7 +415,7 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
         return declined("a filter the partials cannot evaluate");
     auto keys = partial_keys(plan);
     if (!keys) return declined("a group key the partials do not hold");
-    if (const std::string why = unanswered_agg(plan, sch); !why.empty())
+    if (const dstd::String why = unanswered_agg(plan, sch); !why.empty())
         return declined(why);
 
     Prepared p;
@@ -450,8 +450,8 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
     // The first root with a config fixes the span of a pre-aggregated counter
     // and the extra keys. A root without one says nothing about either.
     bool config_seen = false;
-    std::map<std::string, std::size_t> root_of;
-    std::map<std::string, index::Snapshot> snapshots;
+    dstd::Map<dstd::String, std::size_t> root_of;
+    dstd::Map<dstd::String, index::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         std::size_t at = q.sources.size();
         bool indexed = false;
@@ -505,17 +505,17 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
             } catch (const std::exception& e) {
                 // The scan reports an unreadable index.
                 if (!trace)
-                    return declined(std::string("an unreadable index: ") +
+                    return declined(dstd::String("an unreadable index: ") +
                                     e.what());
                 indexed = false;
             }
         }
         if (!indexed) {
             // A file with no usable index is a source of its own.
-            auto it = root_of.find(std::string());
+            auto it = root_of.find(dstd::String());
             if (it == root_of.end()) {
                 AggQuerySource src;
-                it = root_of.emplace(std::string(), q.sources.size()).first;
+                it = root_of.emplace(dstd::String(), q.sources.size()).first;
                 q.sources.push_back(std::move(src));
             }
             at = it->second;
@@ -594,7 +594,7 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
 }
 
 // A path record's int field is signed where dftracer's is unsigned.
-dataframe::FieldStat field_stat(const std::string& field,
+dataframe::FieldStat field_stat(const dstd::String& field,
                                 const agg::AggPartial& p,
                                 dataframe::FieldStatDomain domain) {
     dataframe::FieldStat fs;
@@ -631,8 +631,8 @@ bool key_is_resolved(GroupKey::Kind kind) {
 
 class Seeder {
    public:
-    Seeder(const ViewPlan& plan, const std::vector<GroupKey>& keys,
-           const std::vector<std::string>& extra, bool quantiles,
+    Seeder(const ViewPlan& plan, const dstd::Vector<GroupKey>& keys,
+           const dstd::Vector<dstd::String>& extra, bool quantiles,
            const dstd::StringIntern& texts)
         : keys_(keys),
           extra_(extra),
@@ -661,30 +661,36 @@ class Seeder {
     }
 
     // A file key of a row without a file hash is null, as a scan keys it.
-    void keys_of(const AggKey& key, std::vector<std::string>& out,
+    void keys_of(const AggKey& key,
+                 // keep std: agg_seed_group takes std::vectors
+                 std::vector<std::string>& out,
+                 // keep std: the dataframe API takes std::vector<bool>
                  std::vector<bool>& nulls) const {
         out.clear();
         nulls.clear();
         if (has_bucket_) {
-            out.push_back(std::to_string(key.window));
+            out.emplace_back(dstd::to_string(key.window));
             nulls.push_back(false);
         }
         for (const auto& gk : keys_) {
             nulls.push_back(is_file_key(gk.kind) &&
                             key.file_text == dstd::StringIntern::NO_ID &&
                             key.file == 0);
-            std::string v = group_value(gk, key);
+            dstd::String v = group_value(gk, key);
             if (gk.transform != GroupKey::Transform::None) {
                 if (resolver_ && key_is_resolved(gk.kind))
                     v = resolve_group_value(*resolver_, gk, v);
                 v = apply_group_transform(gk, std::move(v));
             }
-            out.push_back(std::move(v));
+            out.emplace_back(v);
         }
     }
 
+    // keep std: agg_seed_group takes std::vectors
     void seed(dataframe::AggState& state, const std::vector<std::string>& keys,
+              // keep std: the dataframe API takes std::vector<bool>
               const std::vector<bool>& nulls, const agg::AggPartial& p) {
+        // keep std: agg_seed_group takes std::vectors
         std::vector<dataframe::AggSeedValue> values;
         values.reserve(cols_.size());
         for (std::size_t i = 0; i < cols_.size(); ++i) {
@@ -720,31 +726,31 @@ class Seeder {
                kind == GroupKey::Kind::FileName;
     }
 
-    std::string group_value(const GroupKey& gk, const AggKey& k) const {
+    dstd::String group_value(const GroupKey& gk, const AggKey& k) const {
         switch (gk.kind) {
             case GroupKey::Kind::Name:
-                return std::string(text(k.name));
+                return dstd::String(text(k.name));
             case GroupKey::Kind::Cat:
-                return std::string(text(k.cat));
+                return dstd::String(text(k.cat));
             case GroupKey::Kind::Pid:
-                return std::to_string(k.pid);
+                return dstd::to_string(k.pid);
             case GroupKey::Kind::Tid:
-                return std::to_string(k.tid);
+                return dstd::to_string(k.tid);
             case GroupKey::Kind::Fhash:
             case GroupKey::Kind::FilePath:
             case GroupKey::Kind::FileName: {
                 if (k.file_text != dstd::StringIntern::NO_ID)
-                    return std::string(text(k.file_text));
+                    return dstd::String(text(k.file_text));
                 if (k.file == 0) return {};
                 char buf[::dftracer::utils::dstd::hash::HEX64_DIGITS];
                 ::dftracer::utils::dstd::hash::format_hex64(k.file, buf);
-                return std::string(buf, sizeof(buf));
+                return dstd::String(buf, sizeof(buf));
             }
             case GroupKey::Kind::Hhash:
             case GroupKey::Kind::HostName:
-                return std::string(text(k.host));
+                return dstd::String(text(k.host));
             case GroupKey::Kind::IoCat:
-                return std::to_string(static_cast<int>(
+                return dstd::to_string(static_cast<int>(
                     trace::internal::io_category(text(k.name))));
             case GroupKey::Kind::AccPat:
                 return "0";
@@ -755,7 +761,7 @@ class Seeder {
                 for (const auto& name : extra_) {
                     const std::size_t at = rest.find(EXTRA_SEP);
                     const dstd::StringView part = rest.substr(0, at);
-                    if (name == gk.arg) return std::string(part);
+                    if (name == gk.arg) return dstd::String(part);
                     if (at == dstd::StringView::npos) break;
                     rest.remove_prefix(at + 1);
                 }
@@ -770,16 +776,16 @@ class Seeder {
         return {};
     }
 
-    const std::vector<GroupKey>& keys_;
-    const std::vector<std::string>& extra_;
+    const dstd::Vector<GroupKey>& keys_;
+    const dstd::Vector<dstd::String>& extra_;
     bool quantiles_;
     const dstd::StringIntern& texts_;
     bool has_bucket_;
     dataframe::FieldStatDomain domain_;
     AggInputSpec spec_;
     dataframe::LoweredGroupAggs lowered_;
-    std::vector<ValueCol> cols_;
-    std::vector<dataframe::DDSketch> sketches_;
+    dstd::Vector<ValueCol> cols_;
+    dstd::Vector<dataframe::DDSketch> sketches_;
     const dftracer::utils::index::plan::GroupResolver* resolver_ = nullptr;
 };
 
@@ -800,14 +806,16 @@ void log_answer(const AggQueryStats& st) {
 }
 
 dataframe::AggStatePtr seed_rows_of(const ViewPlan& plan,
-                                    const std::vector<GroupKey>& keys,
-                                    const std::vector<std::string>& extra,
+                                    const dstd::Vector<GroupKey>& keys,
+                                    const dstd::Vector<dstd::String>& extra,
                                     bool quantiles,
                                     const dstd::StringIntern& texts,
                                     const AggQueryResult::Rows& rows) {
     Seeder seeder(plan, keys, extra, quantiles, texts);
     auto state = seeder.new_state();
+    // keep std: agg_seed_group takes std::vectors
     std::vector<std::string> texts_of_row;
+    // keep std: the dataframe API takes std::vector<bool>
     std::vector<bool> nulls;
     const bool events_only = plan.phase == Phase::Events;
     for (const auto& [key, partial] : rows) {
@@ -838,9 +846,9 @@ dataframe::AggStatePtr seed_rows(const ViewPlan& plan, const AggQuery& query,
                                  const dstd::StringIntern& texts,
                                  const AggQueryResult::Rows& rows) {
     auto keys = partial_keys(plan);
-    std::vector<std::string> extra;
+    dstd::Vector<dstd::String> extra;
     for (const auto& k : query.config.extra_group_keys) extra.emplace_back(k);
-    return seed_rows_of(plan, keys ? *keys : std::vector<GroupKey>{}, extra,
+    return seed_rows_of(plan, keys ? *keys : dstd::Vector<GroupKey>{}, extra,
                         query.quantiles, texts, rows);
 }
 
@@ -903,9 +911,11 @@ coro::CoroTask<bool> partials_collect_typed(
                   result.strings());
     auto events = seeder.new_state();
     auto profiles = seeder.new_state();
+    // keep std: agg_seed_group takes std::vectors
     std::vector<std::string> keys;
+    // keep std: the dataframe API takes std::vector<bool>
     std::vector<bool> nulls;
-    std::string joined;
+    dstd::String joined;
     for (const auto& [key, partial] : result.rows) {
         if (key.kind == AggKind::System) continue;
         seeder.keys_of(key, keys, nulls);

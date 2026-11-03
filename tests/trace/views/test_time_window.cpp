@@ -57,7 +57,9 @@ std::string write_trace(TestEnvironment& env, const std::string& name,
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, std::string(determine_index_path(gz, "")));
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(std::string(determine_index_path(gz, ""))));
 }
 
 std::int64_t rows_in(const std::string& gz, double b, double e) {
@@ -69,7 +71,7 @@ double agg_in(const std::string& gz, double b, double e, AggOp op,
     auto df = view_of(gz)
                   .time_range(b, e)
                   .group_by({GroupKey::name()})
-                  .agg({{op, field, "v"}})
+                  .agg({{op, dstd::String(field), "v"}})
                   .collect()
                   .get();
     return df.num_rows() == 0 ? 0.0 : bnum(df, 0, "v");
@@ -247,7 +249,7 @@ TEST_SUITE("TimeWindow") {
             run(view_of(gz)
                     .time_range(11000000, 12000000)
                     .map_batches<int>(
-                        [](int&, const std::vector<dstd::StringView>&) {},
+                        [](int&, const dstd::Vector<dstd::StringView>&) {},
                         [](int&& a, int&&) { return a; }, 1))
                 .stats;
         CHECK(stats.chunks_scanned < 10);

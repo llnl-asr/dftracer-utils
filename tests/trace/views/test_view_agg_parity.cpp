@@ -58,14 +58,16 @@ TEST_SUITE("View") {
             const std::string ridx = std::string(determine_index_path(rgz, ""));
             auto fine = [&] {
                 return scan::agg(
-                    scan::group_by(scan::from_file(rgz, ridx),
-                                   {GroupKey::cat(), GroupKey::name()}),
+                    scan::group_by(
+                        scan::from_file(dstd::String(rgz), dstd::String(ridx)),
+                        {GroupKey::cat(), GroupKey::name()}),
                     {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
             };
             auto coarse = [&] {
                 return scan::agg(
-                    scan::group_by(scan::from_file(rgz, ridx),
-                                   {GroupKey::cat()}),
+                    scan::group_by(
+                        scan::from_file(dstd::String(rgz), dstd::String(ridx)),
+                        {GroupKey::cat()}),
                     {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
             };
 
@@ -84,20 +86,22 @@ TEST_SUITE("View") {
             const std::string rgz = write_agg_engine_trace(renv.get_dir());
             const std::string ridx = std::string(determine_index_path(rgz, ""));
             auto q = [&] {
-                return scan::agg(scan::group_by(scan::from_file(rgz, ridx),
-                                                {GroupKey::cat()}),
-                                 {
-                                     {AggOp::Count, "", "n"},
-                                     {AggOp::Sum, "dur", "sum_dur"},
-                                     {AggOp::Mean, "dur", "mean_dur"},
-                                     {AggOp::Min, "dur", "min_dur"},
-                                     {AggOp::Max, "dur", "max_dur"},
-                                     {AggOp::Var, "dur", "var_dur"},
-                                     {AggOp::Std, "dur", "std_dur"},
-                                     {AggOp::Pct, "dur", "p90_dur", "", 0.9},
-                                     {AggOp::SetUnion, "cat", "cats"},
-                                     {AggOp::ArgMax, "name", "top_name", "dur"},
-                                 });
+                return scan::agg(
+                    scan::group_by(
+                        scan::from_file(dstd::String(rgz), dstd::String(ridx)),
+                        {GroupKey::cat()}),
+                    {
+                        {AggOp::Count, "", "n"},
+                        {AggOp::Sum, "dur", "sum_dur"},
+                        {AggOp::Mean, "dur", "mean_dur"},
+                        {AggOp::Min, "dur", "min_dur"},
+                        {AggOp::Max, "dur", "max_dur"},
+                        {AggOp::Var, "dur", "var_dur"},
+                        {AggOp::Std, "dur", "std_dur"},
+                        {AggOp::Pct, "dur", "p90_dur", "", 0.9},
+                        {AggOp::SetUnion, "cat", "cats"},
+                        {AggOp::ArgMax, "name", "top_name", "dur"},
+                    });
             };
             dataframe::DataFrame expect = collect_groupmap_plan(q());
             scan::run(q()).get();
@@ -113,7 +117,7 @@ TEST_SUITE("View") {
             const std::string rgz = write_agg_engine_trace(renv.get_dir());
             const std::string ridx = std::string(determine_index_path(rgz, ""));
             auto specs = [] {
-                return std::vector<AggSpec>{
+                return dstd::Vector<AggSpec>{
                     {AggOp::Count, "", "n"},
                     {AggOp::Sum, "dur", "sum_dur"},
                     {AggOp::Mean, "dur", "mean_dur"},
@@ -123,14 +127,17 @@ TEST_SUITE("View") {
             };
             auto fine = [&] {
                 return scan::agg(
-                    scan::group_by(scan::from_file(rgz, ridx),
-                                   {GroupKey::cat(), GroupKey::name()}),
+                    scan::group_by(
+                        scan::from_file(dstd::String(rgz), dstd::String(ridx)),
+                        {GroupKey::cat(), GroupKey::name()}),
                     specs());
             };
             auto coarse = [&] {
-                return scan::agg(scan::group_by(scan::from_file(rgz, ridx),
-                                                {GroupKey::cat()}),
-                                 specs());
+                return scan::agg(
+                    scan::group_by(
+                        scan::from_file(dstd::String(rgz), dstd::String(ridx)),
+                        {GroupKey::cat()}),
+                    specs());
             };
             dataframe::DataFrame expect = collect_groupmap_plan(coarse());
             scan::run(fine()).get();
@@ -146,9 +153,11 @@ TEST_SUITE("View") {
             REQUIRE(renv.is_valid());
             const std::string rgz = write_agg_engine_trace(renv.get_dir());
             const std::string ridx = std::string(determine_index_path(rgz, ""));
-            auto occ = [&](std::vector<GroupKey> gb) {
+            auto occ = [&](dstd::Vector<GroupKey> gb) {
                 return scan::agg(
-                    scan::group_by(scan::from_file(rgz, ridx), std::move(gb)),
+                    scan::group_by(
+                        scan::from_file(dstd::String(rgz), dstd::String(ridx)),
+                        std::move(gb)),
                     {
                         {AggOp::Busy, "", "busy"},
                         {AggOp::Active, "", "active"},
@@ -196,9 +205,11 @@ TEST_SUITE("View") {
                     }
                 }
             };
-            auto hv = [&](std::vector<GroupKey> gb) {
+            auto hv = [&](dstd::Vector<GroupKey> gb) {
                 return scan::agg(
-                    scan::group_by(scan::from_file(rgz, ridx), std::move(gb)),
+                    scan::group_by(
+                        scan::from_file(dstd::String(rgz), dstd::String(ridx)),
+                        std::move(gb)),
                     {{AggOp::Count, "", "n"}, {AggOp::Hist, "dur", "h"}});
             };
             dataframe::DataFrame same_expect =

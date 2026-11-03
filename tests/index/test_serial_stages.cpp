@@ -115,7 +115,7 @@ std::string view_index_root(const std::string& file,
 
 void cold_count(const std::vector<std::string>& files,
                 const std::string& index_dir) {
-    std::vector<views::ViewFile> view_files;
+    dstd::Vector<views::ViewFile> view_files;
     for (const auto& f : files) {
         views::ViewFile vf;
         vf.file_path = f;

@@ -749,7 +749,9 @@ TEST_SUITE("AggQuery") {
             "comparator-side",
             coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                 auto r = co_await trace::comparator::aggregate_side(
-                    files, index_dir, filters, FIVE_SECONDS_US, 0, strings);
+                    dstd::Vector<dstd::String>(files.begin(), files.end()),
+                    dstd::String(index_dir), filters, FIVE_SECONDS_US, 0,
+                    strings);
                 if (r)
                     side = std::move(*r);
                 else

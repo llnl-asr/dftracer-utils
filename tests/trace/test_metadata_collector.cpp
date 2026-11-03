@@ -63,7 +63,8 @@ TEST_SUITE("MetadataCollector") {
             std::string trace_file = create_test_trace_file(test_dir, 10);
 
             // Create input
-            auto input = MetadataCollectorUtilityInput::from_file(trace_file)
+            auto input = MetadataCollectorUtilityInput::from_file(
+                             dstd::String(trace_file))
                              .with_compute_hash(true);
 
             // Process
@@ -72,7 +73,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Verify output
             CHECK(output.success == true);
-            CHECK(output.file_path == trace_file);
+            CHECK(std::string(output.file_path) == trace_file);
             CHECK(output.valid_events == 10);
             CHECK(output.end_line >= 9);  // Should have at least 10 lines (0-9)
             CHECK(output.size_mb > 0);
@@ -84,7 +85,8 @@ TEST_SUITE("MetadataCollector") {
             std::string trace_file = create_test_trace_file(test_dir, 1000);
 
             // Create input with small checkpoint size
-            auto input = MetadataCollectorUtilityInput::from_file(trace_file)
+            auto input = MetadataCollectorUtilityInput::from_file(
+                             dstd::String(trace_file))
                              .with_checkpoint_size(100)
                              .with_force_rebuild(true)
                              .with_compute_hash(true);
@@ -107,7 +109,8 @@ TEST_SUITE("MetadataCollector") {
             std::string trace_file = create_test_trace_file(own_dir, 100);
 
             // Create input
-            auto input = MetadataCollectorUtilityInput::from_file(trace_file)
+            auto input = MetadataCollectorUtilityInput::from_file(
+                             dstd::String(trace_file))
                              .with_compute_hash(true);
 
             // Process
@@ -116,7 +119,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Verify extended metadata fields
             CHECK(output.success == true);
-            CHECK(output.file_path == trace_file);
+            CHECK(std::string(output.file_path) == trace_file);
             CHECK(output.valid_events == 100);
 
             // Collecting metadata for a gzip trace builds its index.
@@ -147,11 +150,12 @@ TEST_SUITE("MetadataCollector") {
             // Create input with index
             std::string index_path =
                 std::string(internal::determine_index_path(gz_file, ""));
-            auto input = MetadataCollectorUtilityInput::from_file(gz_file)
-                             .with_index(index_path)
-                             .with_checkpoint_size(1024 * 1024)  // 1MB
-                             .with_force_rebuild(true)
-                             .with_compute_hash(true);
+            auto input =
+                MetadataCollectorUtilityInput::from_file(dstd::String(gz_file))
+                    .with_index(dstd::String(index_path))
+                    .with_checkpoint_size(1024 * 1024)  // 1MB
+                    .with_force_rebuild(true)
+                    .with_compute_hash(true);
 
             // Process
             MetadataCollectorUtility collector;
@@ -159,14 +163,14 @@ TEST_SUITE("MetadataCollector") {
 
             // Verify basic fields
             CHECK(output.success == true);
-            CHECK(output.file_path == gz_file);
+            CHECK(std::string(output.file_path) == gz_file);
             CHECK(output.valid_events > 0);
 
             // Verify extended fields for compressed files
             CHECK(output.format == common::ArchiveFormat::Gzip);
             CHECK(output.has_index == true);
             CHECK(output.index_valid == true);
-            CHECK(output.index_path == index_path);
+            CHECK(std::string(output.index_path) == index_path);
             CHECK(output.compressed_size > 0);
             CHECK(output.uncompressed_size > 0);
             CHECK(output.compressed_size <
@@ -187,8 +191,9 @@ TEST_SUITE("MetadataCollector") {
 
             // First run - build index
             {
-                auto input = MetadataCollectorUtilityInput::from_file(gz_file)
-                                 .with_index(index_path)
+                auto input = MetadataCollectorUtilityInput::from_file(
+                                 dstd::String(gz_file))
+                                 .with_index(dstd::String(index_path))
                                  .with_force_rebuild(true)
                                  .with_compute_hash(true);
 
@@ -203,8 +208,9 @@ TEST_SUITE("MetadataCollector") {
 
             // Second run - reuse index (no force rebuild)
             {
-                auto input = MetadataCollectorUtilityInput::from_file(gz_file)
-                                 .with_index(index_path)
+                auto input = MetadataCollectorUtilityInput::from_file(
+                                 dstd::String(gz_file))
+                                 .with_index(dstd::String(index_path))
                                  .with_force_rebuild(false)
                                  .with_compute_hash(true);
 
@@ -233,9 +239,10 @@ TEST_SUITE("MetadataCollector") {
         const std::string root =
             std::string(internal::determine_index_path(gz_file, ""));
 
-        auto first = MetadataCollectorUtilityInput::from_file(gz_file)
-                         .with_index(root)
-                         .with_force_rebuild(true);
+        auto first =
+            MetadataCollectorUtilityInput::from_file(dstd::String(gz_file))
+                .with_index(dstd::String(root))
+                .with_force_rebuild(true);
         MetadataCollectorUtility collector;
         REQUIRE(collector(first).get().success);
 
@@ -249,9 +256,10 @@ TEST_SUITE("MetadataCollector") {
         std::ofstream((dstd::Path(root) / "store" / "stale_marker").c_str())
             << "s";
 
-        auto second = MetadataCollectorUtilityInput::from_file(gz_file)
-                          .with_index(root)
-                          .with_force_rebuild(true);
+        auto second =
+            MetadataCollectorUtilityInput::from_file(dstd::String(gz_file))
+                .with_index(dstd::String(root))
+                .with_force_rebuild(true);
         const auto output = collector(second).get();
         CHECK(output.success);
         CHECK(output.num_lines == 25);
@@ -292,13 +300,14 @@ TEST_SUITE("MetadataCollector") {
             std::ofstream ofs(empty_file.c_str());
             ofs.close();
 
-            auto input = MetadataCollectorUtilityInput::from_file(empty_file);
+            auto input = MetadataCollectorUtilityInput::from_file(
+                dstd::String(empty_file));
 
             MetadataCollectorUtility collector;
             auto output = collector(input).get();
 
             // Empty file should still succeed but with 0 events
-            CHECK(output.file_path == empty_file);
+            CHECK(std::string(output.file_path) == empty_file);
             CHECK(output.valid_events == 0);
             CHECK(output.size_mb == 0);
 
@@ -325,15 +334,16 @@ TEST_SUITE("MetadataCollectorRoot") {
         }
         auto collect = [&](const std::string& file) {
             MetadataCollectorUtility collector;
-            return collector(MetadataCollectorUtilityInput::from_file(file)
-                                 .with_index(index_path))
+            return collector(MetadataCollectorUtilityInput::from_file(
+                                 dstd::String(file))
+                                 .with_index(dstd::String(index_path)))
                 .get();
         };
         for (const auto& file : files) REQUIRE(collect(file).success);
 
         // The collector keys the root by its normalized path.
-        auto root = internal::index_root(std::string(
-            index::store::internal::normalize_index_root(index_path)));
+        auto root = internal::index_root(dstd::String(std::string(
+            index::store::internal::normalize_index_root(index_path))));
         // Forget what this process saw, so each check reads the index.
         {
             std::lock_guard<std::mutex> lock(root->current_mutex);

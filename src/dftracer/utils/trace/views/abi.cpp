@@ -2,7 +2,9 @@
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/internal/duql_handle.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -14,10 +16,7 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <memory>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 // The opaque dftu_view handle owns one immutable scan plan; each builder call
 // returns a handle to a new plan.
@@ -207,7 +206,7 @@ dftu_view* dftu_view_from_files(const char* const* paths,
                                 const char* const* index_paths, int32_t n) {
     if (!paths || n < 0) return nullptr;
     try {
-        std::vector<ViewFile> files;
+        dftracer::utils::dstd::Vector<ViewFile> files;
         files.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
             if (!paths[i]) return nullptr;
@@ -272,7 +271,7 @@ dftu_view* dftu_view_select(const dftu_view* v, const char* const* cols,
                             int32_t n) {
     if (!v || n < 0 || (n > 0 && !cols)) return nullptr;
     try {
-        std::vector<std::string> c;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> c;
         c.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
             if (!cols[i]) return nullptr;
@@ -349,7 +348,7 @@ dftu_view* dftu_view_group_by(const dftu_view* v, const dftu_group_key* keys,
                               int32_t n) {
     if (!v || n < 0 || (n > 0 && !keys)) return nullptr;
     try {
-        std::vector<GroupKey> ks;
+        dftracer::utils::dstd::Vector<GroupKey> ks;
         ks.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
             GroupKey k;
@@ -376,7 +375,7 @@ dftu_view* dftu_view_agg(const dftu_view* v, const dftu_view_agg_spec* specs,
                          int32_t n) {
     if (!v || n < 0 || (n > 0 && !specs)) return nullptr;
     try {
-        std::vector<AggSpec> ag;
+        dftracer::utils::dstd::Vector<AggSpec> ag;
         ag.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
             ag.emplace_back(to_agg_op(specs[i].op),
@@ -403,8 +402,8 @@ dftu_dataframe* dftu_view_collect(const dftu_view* v, dftu_runtime* rt) {
 dftu_lazyframe* dftu_view_lazy(const dftu_view* v) {
     if (!v) return nullptr;
     try {
-        return lazyframe_handle_wrap(
-            LazyFrame::scan(std::make_shared<ViewSource>(v->p)));
+        return lazyframe_handle_wrap(LazyFrame::scan(
+            dftracer::utils::dstd::make_shared<ViewSource>(v->p)));
     } catch (const std::exception&) {
         return nullptr;
     }

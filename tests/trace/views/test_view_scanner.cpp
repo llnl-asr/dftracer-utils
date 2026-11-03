@@ -121,8 +121,9 @@ TEST_SUITE("ViewScanner") {
         const std::string gz = write_newline_split_trace(env, first_len);
         auto scan = [&](std::size_t begin, std::size_t end) {
             ViewScannerInput input;
-            input.with_file_path(gz)
-                .with_index_path(std::string(determine_index_path(gz, "")))
+            input.with_file_path(dstd::String(gz))
+                .with_index_path(
+                    dstd::String(std::string(determine_index_path(gz, ""))))
                 .with_checkpoint_size(1024)
                 .with_batch_size(128)
                 .with_byte_range(begin, end);
@@ -152,8 +153,8 @@ TEST_SUITE("ViewScanner") {
         std::string db_root = std::string(determine_index_path(gz, ""));
 
         ViewScannerInput input;
-        input.with_file_path(gz)
-            .with_index_path(db_root)
+        input.with_file_path(dstd::String(gz))
+            .with_index_path(dstd::String(db_root))
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
 
@@ -172,8 +173,8 @@ TEST_SUITE("ViewScanner") {
         std::string db_root = std::string(determine_index_path(gz, ""));
 
         ViewScannerInput input;
-        input.with_file_path(gz)
-            .with_index_path(db_root)
+        input.with_file_path(dstd::String(gz))
+            .with_index_path(dstd::String(db_root))
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
 
@@ -195,8 +196,8 @@ TEST_SUITE("ViewScanner") {
         std::string db_root = std::string(determine_index_path(gz, ""));
 
         ViewScannerInput input;
-        input.with_file_path(gz)
-            .with_index_path(db_root)
+        input.with_file_path(dstd::String(gz))
+            .with_index_path(dstd::String(db_root))
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
 
@@ -219,8 +220,8 @@ TEST_SUITE("ViewScanner") {
         std::string db_root = std::string(determine_index_path(gz, ""));
 
         ViewScannerInput input;
-        input.with_file_path(gz)
-            .with_index_path(db_root)
+        input.with_file_path(dstd::String(gz))
+            .with_index_path(dstd::String(db_root))
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
         input.view.include_metadata = true;

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -18,11 +20,11 @@ namespace dftracer::utils::trace {
  */
 class EventIdCollector : public utilities::reader::internal::LineProcessor {
    public:
-    std::vector<EventId>& events;
+    dstd::Vector<EventId>& events;
     bool trim_commas;
     dftracer::utils::json::RecordParser parser;
 
-    explicit EventIdCollector(std::vector<EventId>& event_list,
+    explicit EventIdCollector(dstd::Vector<EventId>& event_list,
                               bool should_trim_commas = false)
         : events(event_list), trim_commas(should_trim_commas) {}
 
@@ -60,7 +62,7 @@ class EventIdCollector : public utilities::reader::internal::LineProcessor {
 coro::CoroTask<EventCollectorUtilityOutput>
 EventCollectorFromMetadataUtility::operator()(
     const EventCollectorFromMetadataCollectorUtilityInput& input) const {
-    std::vector<EventId> events;
+    dstd::Vector<EventId> events;
 
     for (const auto& file : input.metadata) {
         if (!file.success) {

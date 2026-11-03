@@ -318,7 +318,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
 
     auto fold_events = [begin, end, scan_begin, interval_native, &gcol, cov_bw,
                         &fields](StatMap& acc,
-                                 const std::vector<dstd::StringView>& events) {
+                                 const dstd::Vector<dstd::StringView>& events) {
         thread_local dftracer::utils::json::RecordParser parser;
         thread_local std::string buf;
         fields.for_each_event(events, [&](dstd::StringView ev) {

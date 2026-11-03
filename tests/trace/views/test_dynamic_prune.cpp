@@ -59,8 +59,8 @@ struct NameCollectorFold : Fold {
     std::uint64_t sealed_units = 0;
 
     bool accepts(const ScanShape&) const override { return true; }
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<NameCollectorFold>();
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<NameCollectorFold>();
     }
     void step(const FoldBatch& b) override {
         for (const auto& e : b.events) name_ids.push_back(e.name_id);
@@ -185,7 +185,8 @@ TEST_SUITE("Dynamic filter pushdown") {
                                              /*checkpoint_size=*/256));
         const std::string idx = std::string(determine_index_path(gz, idx_dir));
 
-        ScanPlan plan_ptr = scan::from_file(gz, idx);
+        ScanPlan plan_ptr =
+            scan::from_file(dstd::String(gz), dstd::String(idx));
         const ViewPlan& plan = *plan_ptr;
         ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
 
@@ -224,7 +225,7 @@ TEST_SUITE("Dynamic filter pushdown") {
             REQUIRE(out.success);
             std::set<std::uint64_t> keep(out.candidate_checkpoints.begin(),
                                          out.candidate_checkpoints.end());
-            std::vector<std::uint64_t> excluded;
+            dftracer::utils::dstd::Vector<std::uint64_t> excluded;
             for (std::uint64_t c = 0; c < out.total_checkpoints; ++c)
                 if (!keep.count(c)) excluded.push_back(c);
             // The prune must find at least one chunk it can rule out, or the
@@ -267,7 +268,8 @@ TEST_SUITE("Dynamic filter pushdown") {
                                              /*checkpoint_size=*/256));
         const std::string idx = std::string(determine_index_path(gz, idx_dir));
 
-        ScanPlan plan_ptr = scan::from_file(gz, idx);
+        ScanPlan plan_ptr =
+            scan::from_file(dstd::String(gz), dstd::String(idx));
         ViewSource src(plan_ptr);
         // A pushed projection fixes every morsel's columns to exactly this
         // list, in this order (see ScanRequest::projection); the unselected
@@ -385,7 +387,8 @@ TEST_SUITE("Dynamic filter pushdown") {
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
         const std::string idx = std::string(determine_index_path(gz, idx_dir));
-        ScanPlan plan_ptr = scan::from_file(gz, idx);
+        ScanPlan plan_ptr =
+            scan::from_file(dstd::String(gz), dstd::String(idx));
 
         // The build side: one key, pid 3, the last of the three groups, in
         // the scan's own key type.
@@ -440,7 +443,8 @@ TEST_SUITE("Dynamic filter pushdown") {
         // Each call plans over its own ViewPlan, so threads share the index
         // and nothing else.
         auto scan_all = [&] {
-            ScanPlan plan_ptr = scan::from_file(gz, idx);
+            ScanPlan plan_ptr =
+                scan::from_file(dstd::String(gz), dstd::String(idx));
             const ViewPlan& plan = *plan_ptr;
             ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
             std::uint64_t skipped = 0;

@@ -5,13 +5,12 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
 #include <cstdint>
-#include <span>
-#include <vector>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -32,8 +31,8 @@ struct PipelineNode {
 /// driver run.
 struct Pipeline {
     PipelineNode source;
-    std::vector<PipelineNode> ops;
-    std::vector<PipelineNode> sinks;
+    dstd::Vector<PipelineNode> ops;
+    dstd::Vector<PipelineNode> sinks;
 };
 
 /// Lowering (a): the scan as the Source with every fold in `sinks` fused into

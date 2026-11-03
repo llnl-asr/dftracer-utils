@@ -3,19 +3,15 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_SOURCE_H
 
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstdint>
-#include <functional>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::trace::views {
 
@@ -56,11 +52,11 @@ enum class TraceOutput : std::uint8_t {
 /// The lane, interval and label fields of a containment terminal (see
 /// View::flamegraph).
 struct ContainmentArgs {
-    std::vector<std::string> partition{"pid", "tid"};
-    std::string ts = "ts";
-    std::string dur = "dur";
-    std::string name = "name";
-    std::vector<std::string> group;
+    dstd::Vector<dstd::String> partition{"pid", "tid"};
+    dstd::String ts = "ts";
+    dstd::String dur = "dur";
+    dstd::String name = "name";
+    dstd::Vector<dstd::String> group;
     bool operator==(const ContainmentArgs&) const = default;
 };
 
@@ -101,7 +97,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// absorbing it would recurse into the same engine.
     static dstd::SharedPtr<ViewSource> engine_scan(detail::ScanPlan raw,
                                                    bool emit_dyn) {
-        auto s = std::make_shared<ViewSource>(std::move(raw), emit_dyn);
+        auto s = dstd::make_shared<ViewSource>(std::move(raw), emit_dyn);
         s->absorb_aggregation_ = false;
         return s;
     }
@@ -120,6 +116,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     dstd::Optional<dftracer::utils::dataframe::SourceApplication> apply_filter(
         const dftracer::utils::dataframe::Expr& predicate) const override;
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
+    // keep std: Source::apply_projection takes std::vector<NamedExpr>
     apply_projection(const std::vector<dftracer::utils::dataframe::NamedExpr>&
                          exprs) const override;
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
@@ -135,6 +132,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// acc_pat, window, clip, list and agg-engine tokens); the host cursor
     /// then handles it.
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
+    // keep std: Source::apply_distinct takes std::vector<std::string>
     apply_distinct(const std::vector<std::string>& subset) const override;
 
     /// Equal for sources that read the same files with the same scan
@@ -142,23 +140,30 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// so they can share one ViewSession scan. Branch-local shape (filters,
     /// phase, group-by, aggregates, select, time bucket) is not part of it.
     /// None for a plan the session cannot run as a branch.
+    // keep std: Source::batch_key returns std::optional<std::string>
     dstd::Optional<std::string> batch_key() const override;
+    // keep std: Source::collect_batch uses std::vector
     coro::CoroTask<std::vector<dftracer::utils::dataframe::DataFrame>>
     collect_batch(
+        // keep std: Source::collect_batch uses std::vector
         std::vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
             members) const override;
 
     /// Row members stream as branches of one ViewSession scan; an aggregation
     /// member arrives as one frame once the scan ends. dstd::nullopt when a
     /// member's rows cannot stream (a select that needs the name resolver).
+    // keep std: Source::open_batch uses std::vector and std::unique_ptr
     dstd::Optional<
+        // keep std: dataframe cursors are std::unique_ptr
         std::vector<std::unique_ptr<dftracer::utils::dataframe::Cursor>>>
     open_batch(
+        // keep std: Source::open_batch uses std::vector
         std::vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
             members,
         std::uint64_t memory_budget) const override;
 
     struct Batch {
+        // keep std: collect_batch returns these as a std::vector
         std::vector<dftracer::utils::dataframe::DataFrame> frames;
         ExportStats stats;
     };
@@ -166,7 +171,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// ViewSession: an aggregation as collect(), a row query as
     /// collect_events().
     static coro::CoroTask<Batch> run_batch(
-        std::vector<dstd::SharedPtr<const ViewSource>> members);
+        dstd::Vector<dstd::SharedPtr<const ViewSource>> members);
 
     /// The plan this source scans.
     const detail::ScanPlan& plan() const { return plan_; }
@@ -184,11 +189,11 @@ class ViewSource : public dftracer::utils::dataframe::Source {
 
     /// Register each member not in `skip` as a branch of `session`; the i-th
     /// call reads member i's frame once the session has executed.
-    static std::vector<std::function<
+    static dstd::Vector<dstd::Function<
         dftracer::utils::dataframe::DataFrame(const ExportStats&)>>
     add_branches(ViewSession& session,
-                 const std::vector<const ViewSource*>& members,
-                 const std::vector<bool>& skip);
+                 const dstd::Vector<const ViewSource*>& members,
+                 const dstd::Vector<bool>& skip);
 
     dftracer::utils::dataframe::Schema compute_schema() const;
 
@@ -203,22 +208,23 @@ class ViewSource : public dftracer::utils::dataframe::Source {
 
     /// Best-effort column list for the streaming source's schema(), from index
     /// metadata rather than a scan.
-    std::vector<std::string> row_schema() const;
+    dstd::Vector<dstd::String> row_schema() const;
 
     /// Open a bounded-channel streaming cursor over `v` (a row query). Used by
     /// scan() once projection + filters are folded into `v`. `fnames` is the
     /// column list the cursor's morsels carry (schema() when no projection
     /// was pushed), so the returned cursor's narrow() can translate a
     /// predicate positional against it the same way scan() does.
+    // keep std: ScanResult::cursor is a std::unique_ptr
     std::unique_ptr<dftracer::utils::dataframe::Cursor> open_stream(
         const detail::ScanPlan& v, std::uint64_t memory_budget,
-        std::vector<std::string> fnames) const;
+        dstd::Vector<dstd::String> fnames) const;
 
     dstd::SharedPtr<const dftracer::utils::dataframe::DataFrame> buffer()
         const {
         if (!buf_)
             buf_ =
-                std::make_shared<const dftracer::utils::dataframe::DataFrame>(
+                dstd::make_shared<const dftracer::utils::dataframe::DataFrame>(
                     run_alone().get());
         return buf_;
     }
@@ -234,12 +240,12 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     bool emit_dyn_ = false;
     // Fingerprints of the predicates already absorbed, so offering one again
     // answers "no change".
-    std::vector<std::uint64_t> applied_filters_;
+    dstd::Vector<std::uint64_t> applied_filters_;
     bool absorb_aggregation_ = true;
     // A distinct row scan: buffered, keyed on these positions of `select`
     // (empty when not a distinct scan). Set once by apply_distinct().
     bool distinct_ = false;
-    std::vector<std::int64_t> distinct_key_idx_;
+    dstd::Vector<std::int64_t> distinct_key_idx_;
     mutable dstd::SharedPtr<const dftracer::utils::dataframe::DataFrame> buf_;
     // The source never changes, so its schema (index metadata reads for a row
     // query, the buffered result otherwise) is computed once.
@@ -251,7 +257,7 @@ namespace detail {
 
 /// A partial as the one-row frame a partial terminal yields, and back.
 dftracer::utils::dataframe::DataFrame partial_frame(dstd::StringView partial);
-std::string partial_of(const dftracer::utils::dataframe::DataFrame& frame);
+dstd::String partial_of(const dftracer::utils::dataframe::DataFrame& frame);
 
 /// ExportStats as the one-row frame a sink terminal yields, and back.
 dftracer::utils::dataframe::DataFrame stats_frame(const ExportStats& stats);

@@ -191,7 +191,7 @@ TEST_SUITE("DetailedStatistics") {
         stats.chunks_scanned = 1;
         stats.chunks_skipped = 3;
 
-        std::string json = stats.to_json();
+        std::string json = std::string(stats.to_json());
 
         simdjson::dom::parser parser;
         auto result = parser.parse(json);
@@ -229,7 +229,7 @@ TEST_SUITE("DetailedStatistics") {
         DetailedStatistics stats;
         stats.duration.update(100);
 
-        std::string json = stats.to_json();
+        std::string json = std::string(stats.to_json());
 
         simdjson::dom::parser parser;
         auto result = parser.parse(json);
@@ -243,7 +243,7 @@ TEST_SUITE("DetailedStatistics") {
     TEST_CASE("to_json - global duration always present") {
         DetailedStatistics stats;
         // Even with no events, duration section should be present
-        std::string json = stats.to_json();
+        std::string json = std::string(stats.to_json());
 
         simdjson::dom::parser parser;
         auto result = parser.parse(json);

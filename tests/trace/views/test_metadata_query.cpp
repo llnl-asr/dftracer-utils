@@ -57,7 +57,7 @@ std::string create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
 // index must already exist).
 void prime_index(const std::string& gz, const std::string& idx) {
     StringSink sink;
-    View::from_file(gz, idx).sink_json(sink).get();
+    View::from_file(dstd::String(gz), dstd::String(idx)).sink_json(sink).get();
 }
 
 // Rows whose top-level name column equals `name`.
@@ -77,7 +77,8 @@ void check_metadata_variant(bool numeric_ph) {
     prime_index(gz, idx);
 
     // phase("metadata") returns the CM record as a row, args flattened.
-    ScanPlan meta = scan::phase(scan::from_file(gz, idx), Phase::Metadata);
+    ScanPlan meta = scan::phase(
+        scan::from_file(dstd::String(gz), dstd::String(idx)), Phase::Metadata);
     dataframe::LazyFrame meta_lazy = scan::collect(meta);
     dataframe::DataFrame via_lazy = run(meta_lazy.collect());
     dataframe::DataFrame via_eager = run(scan::collect_frame(meta));
@@ -96,9 +97,10 @@ void check_metadata_variant(bool numeric_ph) {
     CHECK(found);
 
     // The query filter applies to metadata rows (both collect paths).
-    ScanPlan filtered =
-        scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
-                     duql::parse_or_throw("args.name == \"time_metric\""));
+    ScanPlan filtered = scan::filter(
+        scan::phase(scan::from_file(dstd::String(gz), dstd::String(idx)),
+                    Phase::Metadata),
+        duql::parse_or_throw("args.name == \"time_metric\""));
     dataframe::LazyFrame filtered_lazy = scan::collect(filtered);
     dataframe::DataFrame f_lazy = run(filtered_lazy.collect());
     dataframe::DataFrame f_eager = run(scan::collect_frame(filtered));
@@ -107,15 +109,17 @@ void check_metadata_variant(bool numeric_ph) {
     CHECK(bstr(f_lazy, 0, "args.value") == "NS");
 
     // A non-matching metadata filter returns nothing (the filter really runs).
-    ScanPlan no_match =
-        scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
-                     duql::parse_or_throw("args.name == \"nope\""));
+    ScanPlan no_match = scan::filter(
+        scan::phase(scan::from_file(dstd::String(gz), dstd::String(idx)),
+                    Phase::Metadata),
+        duql::parse_or_throw("args.name == \"nope\""));
     dataframe::LazyFrame no_match_lazy = scan::collect(no_match);
     CHECK(run(no_match_lazy.collect()).num_rows() == 0);
     CHECK(run(scan::collect_frame(no_match)).num_rows() == 0);
 
     // A normal event row query never includes the metadata record.
-    ScanPlan events = scan::phase(scan::from_file(gz, idx), Phase::Events);
+    ScanPlan events = scan::phase(
+        scan::from_file(dstd::String(gz), dstd::String(idx)), Phase::Events);
     dataframe::LazyFrame events_lazy = scan::collect(events);
     dataframe::DataFrame ev_lazy = run(events_lazy.collect());
     CHECK(ev_lazy.num_rows() == 5);
@@ -198,13 +202,18 @@ TEST_SUITE("View - metadata under pruning") {
         const std::string gz = create_threaded_trace(env);
         const std::string idx = std::string(determine_index_path(gz, ""));
         StringSink data;
-        View::from_file(gz, idx).sink_json(data).get();
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .sink_json(data)
+            .get();
         CHECK(count_containing(data.lines(), "thread_name") == 0);
         StringSink every;
-        View::from_file(gz, idx).phase(Phase::Any).sink_json(every).get();
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .phase(Phase::Any)
+            .sink_json(every)
+            .get();
         CHECK(count_containing(every.lines(), "thread_name") == 40);
         StringSink pruned;
-        View::from_file(gz, idx)
+        View::from_file(dstd::String(gz), dstd::String(idx))
             .phase(Phase::Any)
             .duql(R"(name in ["open", "thread_name"])")
             .sink_json(pruned)
@@ -217,13 +226,15 @@ TEST_SUITE("View - metadata under pruning") {
         TestEnvironment env(200);
         const std::string gz = create_threaded_trace(env);
         const std::string idx = std::string(determine_index_path(gz, ""));
-        ScanPlan q =
-            scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
-                         duql::parse_or_throw(R"(args.name == "t37")"));
+        ScanPlan q = scan::filter(
+            scan::phase(scan::from_file(dstd::String(gz), dstd::String(idx)),
+                        Phase::Metadata),
+            duql::parse_or_throw(R"(args.name == "t37")"));
         CHECK(run(scan::collect_frame(q)).num_rows() == 1);
-        ScanPlan all =
-            scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
-                         duql::parse_or_throw(R"(name == "thread_name")"));
+        ScanPlan all = scan::filter(
+            scan::phase(scan::from_file(dstd::String(gz), dstd::String(idx)),
+                        Phase::Metadata),
+            duql::parse_or_throw(R"(name == "thread_name")"));
         CHECK(run(scan::collect_frame(all)).num_rows() == 40);
     }
 
@@ -245,7 +256,9 @@ TEST_SUITE("View - metadata under pruning") {
             .build();
         StringSink sink;
         const auto stats =
-            run(View::from_file(gz, std::string(determine_index_path(gz, "")))
+            run(View::from_file(
+                    dstd::String(gz),
+                    dstd::String(std::string(determine_index_path(gz, ""))))
                     .phase(Phase::Metadata)
                     .sink_json(sink));
         CHECK(stats.chunks_scanned == 0);
@@ -267,12 +280,13 @@ TEST_SUITE("View - metadata under pruning") {
                                               snapshot, gz)))
                             .has_value());
         }
-        ScanPlan all =
-            scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
-                         duql::parse_or_throw(R"(name == "thread_name")"));
+        ScanPlan all = scan::filter(
+            scan::phase(scan::from_file(dstd::String(gz), dstd::String(idx)),
+                        Phase::Metadata),
+            duql::parse_or_throw(R"(name == "thread_name")"));
         CHECK(run(scan::collect_frame(all)).num_rows() == 40);
         StringSink pruned;
-        View::from_file(gz, idx)
+        View::from_file(dstd::String(gz), dstd::String(idx))
             .phase(Phase::Any)
             .duql(R"(name in ["open", "thread_name"])")
             .sink_json(pruned)

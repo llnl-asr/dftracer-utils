@@ -35,7 +35,6 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::task_graph;
 using ExtractInput = trace::ChunkExtractorUtilityInput;
 using ExtractResult = trace::ChunkExtractorUtilityOutput;
-// keep std: unswept API
 using ExtractChunksOutput = std::vector<ExtractResult>;
 // std types (tasks step)
 namespace gzc = utilities::fileio::compress;
@@ -99,10 +98,9 @@ class SplitArgParse : public binaries::ArgParse {
 namespace {
 
 struct FileProbe {
-    // keep std: unswept API
-    std::string path;  ///< The rechunked copy when the input was rechunked  //
-                       ///< keep std: gzip and extractor APIs take std::string
-                       ///< (utilities step)
+    dstd::String path;  ///< The rechunked copy when the input was rechunked  //
+                        ///< keep std: gzip and extractor APIs take dstd::String
+                        ///< (utilities step)
     std::uint64_t bytes = 0;
     double ratio = 1.0;  ///< Uncompressed bytes per compressed byte
     bool ok = false;
@@ -112,11 +110,9 @@ struct FileProbe {
 };
 
 struct FileGroup {
-    // keep std: unswept API
-    std::vector<std::string> files;
+    dstd::Vector<dstd::String> files;
     // use std types (tasks step)
-    // keep std: unswept API
-    std::vector<dstd::SharedPtr<dstd::ScopedFd>> open_files;
+    dstd::Vector<dstd::SharedPtr<dstd::ScopedFd>> open_files;
     // (tasks step)
     double ratio = 1.0;
 };
@@ -147,7 +143,6 @@ struct RechunkDir {
 
 // The target is a small share of the input when there are many threads, so
 // that every thread gets a group.
-// keep std: unswept API
 std::vector<FileGroup> group_files(const std::vector<FileProbe>& probes,
                                    std::size_t chunk_bytes,
                                    std::size_t threads) {
@@ -159,7 +154,6 @@ std::vector<FileGroup> group_files(const std::vector<FileProbe>& probes,
         total / (threads * 2), chunk_bytes * GROUP_MIN_CHUNKS,
         chunk_bytes * GROUP_MAX_CHUNKS);
 
-    // keep std: unswept API
     std::vector<FileGroup> groups;
     // std types (tasks step)
     FileGroup group;
@@ -193,8 +187,7 @@ std::size_t chunk_uncompressed_bytes(std::size_t chunk_bytes, double ratio,
     return static_cast<std::size_t>(std::max(aim, 1.0));
 }
 
-// keep std: unswept API
-coro::CoroTask<std::size_t> hash_events(const std::string& path) {
+coro::CoroTask<std::size_t> hash_events(const dstd::String& path) {
     // std::string (utilities step)
     std::size_t content_hash = 0;
     utilities::hash::HasherUtility hasher;
@@ -220,8 +213,7 @@ coro::CoroTask<std::size_t> hash_events(const std::string& path) {
 static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     const auto log_dir = binaries::absolute_path(cli->inputs.directory);
     const auto output_dir = binaries::absolute_path(cli->output_dir);
-    // keep std: unswept API
-    const std::string app_name(cli->app_name);
+    const dstd::String app_name(cli->app_name);
     const auto chunk_size_bytes = cli->chunk_size_bytes;
     const double chunk_size_mb =
         static_cast<double>(chunk_size_bytes) / (1024.0 * 1024.0);
@@ -360,10 +352,9 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
             }
             if (first.exceeds_cap) {
                 // (utilities step)
-                // keep std: unswept API
-                std::string out((rechunk_dir_ptr->get().view() /
-                                 dstd::PathView(probe.path).filename())
-                                    .str());
+                dstd::String out((rechunk_dir_ptr->get().view() /
+                                  dstd::PathView(probe.path).filename())
+                                     .str());
                 DFTRACER_UTILS_LOG_WARN(
                     "Input %s is a single large gzip member; rechunking to "
                     "bounded members at %s",
@@ -384,19 +375,14 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
         probe_task->depends_on(start_task);
     }
 
-    // keep std: unswept API
-    std::vector<std::string> split_files;
-    // the extractor (trace step)
+    dstd::Vector<dstd::String> split_files;
     auto* split_files_ptr = &split_files;
-    // keep std: unswept API
     auto groups_task = graph.reduce<std::vector<FileGroup>>(
         // std types (tasks step)
         file_probes, split_every{input_files.size()},
         [chunk_size_bytes, executor_threads, split_files_ptr](
-            // keep std: unswept API
             CoroScope&, std::vector<FileProbe> probes)
         // use std types (tasks step)
-        // keep std: unswept API
         -> coro::CoroTask<std::vector<FileGroup>> {
             // the extractor use std
             // types (tasks step)
@@ -413,8 +399,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
         {.name = "GroupFiles"});
 
     auto* app_name_ptr = &app_name;
-    // keep std: unswept API
-    const std::string output_dir_text(output_dir.str());
+    const dstd::String output_dir_text(output_dir.str());
     // std::string (utilities step)
     auto* output_dir_ptr = &output_dir_text;
 
@@ -424,7 +409,6 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     auto task_extract_chunks = make_task(
         [app_name_ptr, output_dir_ptr, split_results_ptr, compress, verify,
          executor_threads, member_size_bytes, chunk_size_bytes,
-         // keep std: unswept API
          memory_budget](CoroScope&, std::vector<FileGroup> groups)
         // use std types (tasks step)
         -> coro::CoroTask<ExtractChunksOutput> {
@@ -536,9 +520,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
                         dstd::Vector<coro::SpawnFuture<std::size_t>> futures;
                         futures.reserve(split_files_ptr->size());
                         for (const auto& file : *split_files_ptr) {
-                            // keep std: unswept API
-                            const std::string* path = &file;
-                            // extractor (trace step)
+                            const dstd::String* path = &file;
                             futures.push_back(scope.spawn_future(
                                 [path,
                                  running_ptr]() -> coro::CoroTask<std::size_t> {

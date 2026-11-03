@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -10,9 +12,6 @@
 #include <simdjson.h>
 
 #include <charconv>
-#include <string>
-#include <string_view>
-#include <unordered_set>
 
 using dftracer::utils::json::JsonValue;
 using dftracer::utils::trace::DFTracerEvent;
@@ -30,8 +29,8 @@ static bool is_io_event(dstd::StringView name) {
     return false;
 }
 
-static void build_group_key(std::string& key,
-                            const std::vector<std::string>& group_by,
+static void build_group_key(dstd::String& key,
+                            const dstd::Vector<dstd::String>& group_by,
                             const DFTracerEvent& ev) {
     key.clear();
     for (std::size_t i = 0; i < group_by.size(); ++i) {
@@ -43,20 +42,20 @@ static void build_group_key(std::string& key,
             key += ev.cat;
         } else if (dim == "pid") {
             char buf[32];
-            auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), ev.pid);
+            auto [ptr, ec] = dstd::to_chars(buf, buf + sizeof(buf), ev.pid);
             if (ec == std::errc()) key.append(buf, ptr - buf);
         } else if (dim == "tid") {
             char buf[32];
-            auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), ev.tid);
+            auto [ptr, ec] = dstd::to_chars(buf, buf + sizeof(buf), ev.tid);
             if (ec == std::errc()) key.append(buf, ptr - buf);
         } else if (dim == "pid_tid") {
             char buf[64];
-            auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), ev.pid);
+            auto [ptr, ec] = dstd::to_chars(buf, buf + sizeof(buf), ev.pid);
             if (ec == std::errc()) {
                 key.append(buf, ptr - buf);
                 key.push_back(':');
                 auto [ptr2, ec2] =
-                    std::to_chars(ptr, buf + sizeof(buf), ev.tid);
+                    dstd::to_chars(ptr, buf + sizeof(buf), ev.tid);
                 if (ec2 == std::errc()) key.append(ptr, ptr2 - ptr);
             }
         } else if (dim == "fhash") {
@@ -69,13 +68,12 @@ static void build_group_key(std::string& key,
     }
 }
 
-static void update_event(
-    DetailedStatistics& acc, const DFTracerEvent& ev,
-    const std::vector<std::string>* group_by,
-    const std::unordered_set<dstd::StringView>& name_filter,
-    const std::unordered_set<dstd::StringView>& cat_filter,
-    std::string& group_key_buf) {
-    static const std::string global_key{GLOBAL_GROUP_KEY};
+static void update_event(DetailedStatistics& acc, const DFTracerEvent& ev,
+                         const dstd::Vector<dstd::String>* group_by,
+                         const dstd::HashSet<dstd::StringView>& name_filter,
+                         const dstd::HashSet<dstd::StringView>& cat_filter,
+                         dstd::String& group_key_buf) {
+    static const dstd::String global_key{GLOBAL_GROUP_KEY};
 
     if (ev.is_metadata()) return;
     if (!name_filter.empty() && name_filter.find(ev.name) == name_filter.end())
@@ -87,7 +85,7 @@ static void update_event(
     if (ev.has_dur) acc.duration.update(dur);
 
     const bool has_grouping = group_by && !group_by->empty();
-    const std::string* io_key_ptr;
+    const dstd::String* io_key_ptr;
     if (has_grouping) {
         build_group_key(group_key_buf, *group_by, ev);
         auto& grouped = acc.grouped_duration[group_key_buf];
@@ -119,21 +117,21 @@ static void update_event(
 
 coro::CoroTask<DetailedStatistics> DetailStatsView::collect(
     const DetailNeeds& needs) const {
-    std::unordered_set<dstd::StringView> name_filter;
-    std::unordered_set<dstd::StringView> cat_filter;
+    dstd::HashSet<dstd::StringView> name_filter;
+    dstd::HashSet<dstd::StringView> cat_filter;
     if (needs.filter_names)
         for (const auto& n : *needs.filter_names) name_filter.insert(n);
     if (needs.filter_categories)
         for (const auto& c : *needs.filter_categories) cat_filter.insert(c);
 
-    const std::vector<std::string>* group_by = needs.group_by;
+    const dstd::Vector<dstd::String>* group_by = needs.group_by;
     std::size_t slots = needs.num_slots ? needs.num_slots : 4;
 
     auto fold = [group_by, &name_filter, &cat_filter](
                     DetailedStatistics& acc,
-                    const std::vector<dstd::StringView>& lines) {
+                    const dstd::Vector<dstd::StringView>& lines) {
         dftracer::utils::json::RecordParser parser;
-        std::string group_key_buf;
+        dstd::String group_key_buf;
         group_key_buf.reserve(128);
         for (dstd::StringView line : lines) {
             auto result = parser.parse(line.data(), line.size());

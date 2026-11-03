@@ -3,11 +3,10 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_SHARDED_VIEW_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/view.h>
-
-#include <functional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::trace::views {
 
@@ -33,19 +32,19 @@ class ShardedView {
     /// the `configure` lambda in `dftracer_view` does. The same configuration
     /// is applied to every shard and to the merger, so all partials are
     /// compatible.
-    using Configure = std::function<View(View)>;
+    using Configure = dstd::Function<View(View)>;
 
     /// Discover shards by reading `<root>/shards.json`; each shard's `path`
     /// resolves relative to `root`. Empty shards are dropped. Throws
     /// @ref dftracer::utils::common::DFTUtilsException "DFTUtilsException" when
     /// the manifest is absent, unreadable, or built with a schema version this
     /// build cannot read.
-    static ShardedView from_manifest(const std::string& root);
+    static ShardedView from_manifest(const dstd::String& root);
 
     /// Use an explicit set of shard index directories, bypassing the manifest.
-    static ShardedView from_shard_dirs(std::vector<std::string> shard_dirs);
+    static ShardedView from_shard_dirs(dstd::Vector<dstd::String> shard_dirs);
 
-    const std::vector<std::string>& shard_dirs() const { return shard_dirs_; }
+    const dstd::Vector<dstd::String>& shard_dirs() const { return shard_dirs_; }
 
     /// Aggregate (group_by/agg) across all shards into one table. `configure`
     /// must set an aggregation; a raw-event configuration has no partial to
@@ -59,13 +58,14 @@ class ShardedView {
                                                    ExportSink& sink) const;
 
    private:
-    explicit ShardedView(std::vector<std::string> shard_dirs)
+    explicit ShardedView(dstd::Vector<dstd::String> shard_dirs)
         : shard_dirs_(std::move(shard_dirs)) {}
 
-    std::vector<ViewFile> shard_view_files(const std::string& shard_dir) const;
-    std::vector<View> shards(const Configure& configure) const;
+    dstd::Vector<ViewFile> shard_view_files(
+        const dstd::String& shard_dir) const;
+    dstd::Vector<View> shards(const Configure& configure) const;
 
-    std::vector<std::string> shard_dirs_;
+    dstd::Vector<dstd::String> shard_dirs_;
 };
 
 /// Write the root's `shards.json` manifest cataloging `shard_dirs` as the
@@ -74,8 +74,8 @@ class ShardedView {
 /// under it, so a shard under `<root>/shards/` is stored as `shards/<n>`, else
 /// absolute. Overwrites any existing manifest atomically. A later
 /// `ShardedView::from_manifest(root)` reads the set back.
-void write_shard_set(const std::string& root,
-                     const std::vector<std::string>& shard_dirs);
+void write_shard_set(const dstd::String& root,
+                     const dstd::Vector<dstd::String>& shard_dirs);
 
 /// Merge the shards the root's `shards.json` names into the root's own store,
 /// by moving each shard's data files, and return the number of trace files the
@@ -87,15 +87,15 @@ void write_shard_set(const std::string& root,
 /// did not move stay in their shard, with the manifest and the shard
 /// directories, so a later call retries the merge without a rebuild. Releases
 /// the handles of the root and of every shard.
-std::size_t consolidate_shard_set(const std::string& root);
+std::size_t consolidate_shard_set(const dstd::String& root);
 
 /// Merge a shard set's aggregation tiers into one consolidated tier index at
 /// `out_root` WITHOUT re-reading traces. Each shard's tier is re-keyed into a
 /// unified intern dictionary and combined by the merge operator, so the result
 /// answers tier-covered queries from one index, while the shards stay in place.
 /// Returns the number of files cataloged.
-std::size_t merge_shard_set(const std::string& root,
-                            const std::string& out_root);
+std::size_t merge_shard_set(const dstd::String& root,
+                            const dstd::String& out_root);
 
 }  // namespace dftracer::utils::trace::views
 

@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -10,6 +11,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/parser.h>
@@ -31,10 +34,8 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <memory>
-#include <string>
 #include <utility>
 
 namespace dftracer::utils::trace::views {
@@ -46,10 +47,10 @@ ViewSession::ViewSession(dstd::SharedPtr<const detail::ViewPlan> plan)
 
 void ViewSession::attach_fold(
     dstd::Optional<Query> predicate,
-    std::function<
-        std::function<void(const json::JsonValue&, dstd::StringView)>()>
+    dstd::Function<
+        dstd::Function<void(const json::JsonValue&, dstd::StringView)>()>
         make_consumer,
-    std::function<void()> finalize) {
+    dstd::Function<void()> finalize) {
     if (predicate)
         detail::add_fold_branch(*state_, std::move(*predicate),
                                 std::move(make_consumer), std::move(finalize));
@@ -59,10 +60,10 @@ void ViewSession::attach_fold(
 }
 
 void ViewSession::attach_fold_factory(
-    std::function<
-        std::unique_ptr<detail::Fold>(dftracer::utils::dstd::StringIntern&)>
+    dstd::Function<
+        dstd::UniquePtr<detail::Fold>(dftracer::utils::dstd::StringIntern&)>
         make,
-    std::function<void()> finalize) {
+    dstd::Function<void()> finalize) {
     detail::add_fold_factory(*state_, std::move(make), std::move(finalize));
 }
 
@@ -71,8 +72,9 @@ void ViewSession::propose_base_prune(Query q) {
 }
 
 Deferred<dataframe::DataFrame> ViewSession::collect(
-    Query predicate, std::vector<GroupKey> group_by, std::vector<AggSpec> agg) {
-    auto out = std::make_shared<dataframe::DataFrame>();
+    Query predicate, dstd::Vector<GroupKey> group_by,
+    dstd::Vector<AggSpec> agg) {
+    auto out = dstd::make_shared<dataframe::DataFrame>();
     key_counts_.emplace_back(out.get(),
                              static_cast<std::int64_t>(group_by.size()));
     // A predicated collect runs as an engine agg branch that filters per event
@@ -91,8 +93,8 @@ Deferred<dataframe::DataFrame> ViewSession::collect(
 }
 
 Deferred<dataframe::DataFrame> ViewSession::collect(
-    std::vector<GroupKey> group_by, std::vector<AggSpec> agg) {
-    auto out = std::make_shared<dataframe::DataFrame>();
+    dstd::Vector<GroupKey> group_by, dstd::Vector<AggSpec> agg) {
+    auto out = dstd::make_shared<dataframe::DataFrame>();
     key_counts_.emplace_back(out.get(),
                              static_cast<std::int64_t>(group_by.size()));
     // No predicate: match all scanned events. The descriptor lets execute()
@@ -107,7 +109,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect(
 
 Deferred<dataframe::DataFrame> ViewSession::collect(
     const dstd::SharedPtr<const detail::ViewPlan>& branch) {
-    auto out = std::make_shared<dataframe::DataFrame>();
+    auto out = dstd::make_shared<dataframe::DataFrame>();
     const auto& bp = *branch;
     // Output key columns are [time_bucket?, group_by...], so a bucketed branch
     // has one more leading key column than its group_by (matches join layout).
@@ -142,7 +144,7 @@ Deferred<dataframe::DataFrame> ViewSession::join(
         throw common::DFTUtilsException::cat(
             common::ErrorCode::InvalidArgument,
             "ViewSession::join: cannot infer n_key; pass it explicitly");
-    auto out = std::make_shared<dataframe::DataFrame>();
+    auto out = dstd::make_shared<dataframe::DataFrame>();
     combines_.emplace_back(
         [out, l = left.value_, r = right.value_, n_key, how]() {
             *out = join_batches(*l, *r, n_key, how);
@@ -164,7 +166,7 @@ Deferred<dataframe::DataFrame> ViewSession::compare(
         throw common::DFTUtilsException::cat(
             common::ErrorCode::InvalidArgument,
             "ViewSession::compare: cannot infer n_key; pass it explicitly");
-    auto out = std::make_shared<dataframe::DataFrame>();
+    auto out = dstd::make_shared<dataframe::DataFrame>();
     combines_.emplace_back(
         [out, b = baseline.value_, v = variant.value_, n_key]() {
             *out = comparator::CompareView::compare_batches(*b, *v, n_key);
@@ -172,11 +174,11 @@ Deferred<dataframe::DataFrame> ViewSession::compare(
     return {out, executed_};
 }
 
-Deferred<std::string> ViewSession::aggregate_partial(
+Deferred<dstd::String> ViewSession::aggregate_partial(
     const dstd::SharedPtr<const detail::ViewPlan>& branch) {
     auto out =
-        std::make_shared<dataframe::DataFrame>();  // unused; partial path
-    auto partial = std::make_shared<std::string>();
+        dstd::make_shared<dataframe::DataFrame>();  // unused; partial path
+    auto partial = dstd::make_shared<dstd::String>();
     const auto& bp = *branch;
     detail::BranchHooks h;
     h.agg =
@@ -186,15 +188,15 @@ Deferred<std::string> ViewSession::aggregate_partial(
     return {partial, executed_};
 }
 
-void ViewSession::materialize(std::vector<GroupKey> group_by,
-                              std::vector<AggSpec> agg) {
+void ViewSession::materialize(dstd::Vector<GroupKey> group_by,
+                              dstd::Vector<AggSpec> agg) {
     detail::add_materialize_branch(*state_, std::move(group_by),
                                    std::move(agg));
 }
 
 Deferred<ExportStats> ViewSession::export_json(Query predicate,
                                                ExportSink& sink) {
-    auto out = std::make_shared<ExportStats>();
+    auto out = dstd::make_shared<ExportStats>();
     detail::BranchHooks h = detail::make_export_branch(sink, out);
     h.predicate = std::move(predicate);
     detail::add_branch(*state_, std::move(h));
@@ -202,7 +204,7 @@ Deferred<ExportStats> ViewSession::export_json(Query predicate,
 }
 
 Deferred<ExportStats> ViewSession::export_json(ExportSink& sink) {
-    auto out = std::make_shared<ExportStats>();
+    auto out = dstd::make_shared<ExportStats>();
     detail::BranchHooks h = detail::make_export_branch(sink, out);
     detail::add_branch(*state_, std::move(h));
     return {out, executed_};
@@ -211,7 +213,7 @@ Deferred<ExportStats> ViewSession::export_json(ExportSink& sink) {
 Deferred<dataframe::DataFrame> ViewSession::collect_events(
     const dstd::SharedPtr<const detail::ViewPlan>& branch) {
     const auto& bp = *branch;
-    auto out = std::make_shared<dataframe::DataFrame>();
+    auto out = dstd::make_shared<dataframe::DataFrame>();
     // Per-worker owned events built straight into native columns (no Arrow);
     // each worker interns its own strings, so build_row_frame resolves them per
     // worker.
@@ -219,8 +221,8 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
         dftracer::utils::dstd::StringIntern intern;
         detail::FoldEventBuffer events;
     };
-    auto slots = std::make_shared<std::vector<dstd::SharedPtr<Slot>>>();
-    auto select = std::make_shared<std::vector<std::string>>(bp.select);
+    auto slots = dstd::make_shared<dstd::Vector<dstd::SharedPtr<Slot>>>();
+    auto select = dstd::make_shared<dstd::Vector<dstd::String>>(bp.select);
     const double time_scale = bp.time_scale;
     const bool by_path = detail::plan_by_path(bp);
     const bool keep_metadata = detail::metadata_rows(bp);
@@ -230,7 +232,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
             : nullptr;
 
     auto make_consumer = [slots, by_path, keep_metadata, record_schema]() {
-        auto slot = std::make_shared<Slot>();
+        auto slot = dstd::make_shared<Slot>();
         slots->push_back(slot);
         return [slot, by_path, keep_metadata, record_schema](
                    const json::JsonValue& jv, dstd::StringView) {
@@ -248,7 +250,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
         };
     };
     auto finalize = [slots, select, out, time_scale, by_path]() {
-        std::vector<dataframe::DataFrame> frames;
+        dstd::Vector<dataframe::DataFrame> frames;
         frames.reserve(slots->size());
         for (const auto& s : *slots) {
             if (s->events.empty()) continue;
@@ -256,6 +258,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
                 s->events.events(), s->intern, *select, time_scale, by_path));
         }
         if (frames.empty()) return;  // out stays an empty frame
+        // keep std: dataframe::concat takes std::vector<const DataFrame*>
         std::vector<const dataframe::DataFrame*> parts;
         parts.reserve(frames.size());
         for (const auto& f : frames) parts.push_back(&f);
@@ -280,22 +283,22 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
 // sorting each lane once when both are.
 void ViewSession::add_containment_branch(
     const dstd::SharedPtr<const detail::ViewPlan>& branch,
-    const std::vector<std::string>& partition, const std::string& ts,
-    const std::string& dur, const std::string& name,
-    const std::vector<std::string>& group,
+    const dstd::Vector<dstd::String>& partition, const dstd::String& ts,
+    const dstd::String& dur, const dstd::String& name,
+    const dstd::Vector<dstd::String>& group,
     dstd::SharedPtr<dataframe::DataFrame> out_ct,
     dstd::SharedPtr<dataframe::DataFrame> out_fg,
-    dstd::SharedPtr<std::string> out_partial) {
+    dstd::SharedPtr<dstd::String> out_partial) {
     const auto& bp = *branch;
-    auto intern = std::make_shared<dftracer::utils::dstd::StringIntern>();
-    auto spec =
-        std::make_shared<detail::ContainmentSpec>(detail::make_containment_spec(
-            *intern, partition, ts, dur, name, group,
-            detail::plan_by_path(bp) ? &detail::plan_record_schema(bp)
-                                     : nullptr,
-            bp.time_scale));
-    auto bufs = std::make_shared<
-        std::vector<dstd::SharedPtr<std::vector<detail::ContainmentRow>>>>();
+    auto intern = dstd::make_shared<dftracer::utils::dstd::StringIntern>();
+    auto spec = dstd::make_shared<detail::ContainmentSpec>(
+        detail::make_containment_spec(*intern, partition, ts, dur, name, group,
+                                      detail::plan_by_path(bp)
+                                          ? &detail::plan_record_schema(bp)
+                                          : nullptr,
+                                      bp.time_scale));
+    auto bufs = dstd::make_shared<
+        dstd::Vector<dstd::SharedPtr<dstd::Vector<detail::ContainmentRow>>>>();
     const bool by_path = detail::plan_by_path(bp);
     const dftracer::utils::index::RecordSchema* record_schema =
         by_path && !detail::plan_record_schema(bp).fields.empty()
@@ -305,9 +308,9 @@ void ViewSession::add_containment_branch(
     // One shared intern across workers keeps lane ids consistent, so the
     // per-worker rows concatenate without a re-key.
     auto make_consumer = [intern, spec, bufs, by_path, record_schema]() {
-        auto rows = std::make_shared<std::vector<detail::ContainmentRow>>();
+        auto rows = dstd::make_shared<dstd::Vector<detail::ContainmentRow>>();
         bufs->push_back(rows);
-        auto scratch = std::make_shared<detail::FoldEvent>();
+        auto scratch = dstd::make_shared<detail::FoldEvent>();
         return [intern, spec, rows, scratch, by_path, record_schema](
                    const json::JsonValue& jv, dstd::StringView) {
             detail::FoldEvent& fe = *scratch;
@@ -326,7 +329,7 @@ void ViewSession::add_containment_branch(
     };
     auto finalize = [intern, spec, bufs, out_ct, out_fg, out_partial]() {
         const detail::TimeOut& time_out = spec->out;
-        std::vector<detail::ContainmentRow> all;
+        dstd::Vector<detail::ContainmentRow> all;
         for (const auto& rows : *bufs)
             all.insert(all.end(), rows->begin(), rows->end());
         if (out_partial)
@@ -354,28 +357,28 @@ void ViewSession::add_containment_branch(
 
 Deferred<dataframe::DataFrame> ViewSession::call_tree(
     const dstd::SharedPtr<const detail::ViewPlan>& branch,
-    std::vector<std::string> partition, std::string ts, std::string dur,
-    std::string name) {
-    auto out = std::make_shared<dataframe::DataFrame>();
+    dstd::Vector<dstd::String> partition, dstd::String ts, dstd::String dur,
+    dstd::String name) {
+    auto out = dstd::make_shared<dataframe::DataFrame>();
     add_containment_branch(branch, partition, ts, dur, name, {}, out, nullptr);
     return {out, executed_};
 }
 
 Deferred<dataframe::DataFrame> ViewSession::flamegraph(
     const dstd::SharedPtr<const detail::ViewPlan>& branch,
-    std::vector<std::string> partition, std::string ts, std::string dur,
-    std::string name) {
-    auto out = std::make_shared<dataframe::DataFrame>();
+    dstd::Vector<dstd::String> partition, dstd::String ts, dstd::String dur,
+    dstd::String name) {
+    auto out = dstd::make_shared<dataframe::DataFrame>();
     add_containment_branch(branch, partition, ts, dur, name, {}, nullptr, out);
     return {out, executed_};
 }
 
 ContainmentHandles ViewSession::containment(
     const dstd::SharedPtr<const detail::ViewPlan>& branch,
-    std::vector<std::string> partition, std::string ts, std::string dur,
-    std::string name) {
-    auto out_ct = std::make_shared<dataframe::DataFrame>();
-    auto out_fg = std::make_shared<dataframe::DataFrame>();
+    dstd::Vector<dstd::String> partition, dstd::String ts, dstd::String dur,
+    dstd::String name) {
+    auto out_ct = dstd::make_shared<dataframe::DataFrame>();
+    auto out_fg = dstd::make_shared<dataframe::DataFrame>();
     add_containment_branch(branch, partition, ts, dur, name, {}, out_ct,
                            out_fg);
     return {{out_ct, executed_}, {out_fg, executed_}};
@@ -390,6 +393,7 @@ coro::CoroTask<ExportStats> ViewSession::execute() {
     co_return stats;
 }
 
+// keep std: LazyResult::plans is a std::vector<LazyFrame>
 void TraceSession::add(const std::vector<dataframe::LazyFrame>& plans,
                        Resolve resolve) {
     if (*executed_)
@@ -415,12 +419,14 @@ Deferred<ExportStats> TraceSession::materialize(const View& tv) {
 }
 
 coro::CoroTask<void> TraceSession::execute() {
+    // keep std: collect_all returns a std::vector<DataFrame>
     std::vector<dataframe::DataFrame> frames;
     if (!plans_.empty())
         frames = co_await dataframe::collect_all(std::move(plans_));
     plans_.clear();
     std::size_t at = 0;
     for (Pending& p : pending_) {
+        // keep std: Resolve takes std::vector<DataFrame>
         std::vector<dataframe::DataFrame> mine(
             std::make_move_iterator(frames.begin() + at),
             std::make_move_iterator(frames.begin() + at + p.count));
@@ -441,7 +447,7 @@ scan::ScanPlan scanned_plan(const dataframe::LazyFrame& lf) {
 
 }  // namespace
 
-View::View() : View(std::make_shared<detail::ViewPlan>()) {}
+View::View() : View(dstd::make_shared<detail::ViewPlan>()) {}
 
 View::View(detail::ScanPlan plan) : plan_(), lf_(scan::collect(plan)) {
     plan_ = scanned_plan(lf_);
@@ -450,16 +456,16 @@ View::View(detail::ScanPlan plan) : plan_(), lf_(scan::collect(plan)) {
 View::View(detail::ScanPlan plan, dataframe::LazyFrame lf)
     : plan_(std::move(plan)), lf_(std::move(lf)) {}
 
-View View::from_file(std::string file_path, std::string index_path) {
+View View::from_file(dstd::String file_path, dstd::String index_path) {
     return View(scan::from_file(std::move(file_path), std::move(index_path)));
 }
 
-View View::from_files(std::vector<ViewFile> files) {
+View View::from_files(dstd::Vector<ViewFile> files) {
     return View(scan::from_files(std::move(files)));
 }
 
-coro::CoroTask<View> View::from_directory(std::string dir,
-                                          std::string index_path) {
+coro::CoroTask<View> View::from_directory(dstd::String dir,
+                                          dstd::String index_path) {
     co_return View(
         co_await scan::from_directory(std::move(dir), std::move(index_path)));
 }
@@ -470,31 +476,32 @@ View View::with_lazy(dataframe::LazyFrame lf) const {
 
 View View::reshape(
     const char* builder,
-    const std::function<scan::ScanPlan(const scan::ScanPlan&)>& step) const {
-    auto refuse = [&](const std::string& why) {
+    const dstd::Function<scan::ScanPlan(const scan::ScanPlan&)>& step) const {
+    auto refuse = [&](dstd::StringView why) {
         return common::DFTUtilsException::cat(
-            common::ErrorCode::InvalidArgument,
-            std::string("View::") + builder + " " + why);
+            common::ErrorCode::InvalidArgument, "View::", builder, " ", why);
     };
+    // keep std: first_non_filter_op returns std::optional<std::string>
     if (dstd::Optional<std::string> op =
             dataframe::detail::first_non_filter_op(lf_))
         throw refuse("must come before '" + *op + "'");
     if (!dataframe::detail::first_op(lf_)) {
         scan::ScanPlan next = step(plan_);
         dataframe::LazyFrame lf =
-            dataframe::detail::rebase(lf_, std::make_shared<ViewSource>(next));
+            dataframe::detail::rebase(lf_, dstd::make_shared<ViewSource>(next));
         return View(std::move(next), std::move(lf));
     }
     // The filters before a builder select the events it sees, so they move
     // into the scan first.
     dataframe::LazyFrame planned = dataframe::detail::optimize_plan(lf_);
+    // keep std: first_op returns std::optional<std::string>
     dstd::Optional<std::string> residual = dataframe::detail::first_op(planned);
     if (!residual) {
         const auto& src = static_cast<const ViewSource&>(
             *dataframe::detail::plan_source(planned));
         scan::ScanPlan next = step(src.plan());
         dataframe::LazyFrame lf = dataframe::detail::rebase(
-            planned, std::make_shared<ViewSource>(next));
+            planned, dstd::make_shared<ViewSource>(next));
         return View(std::move(next), std::move(lf));
     }
     // A filter the scan cannot evaluate stays above it, which is sound only
@@ -505,7 +512,7 @@ View View::reshape(
         throw refuse("cannot follow '" + *residual +
                      "': the trace scan cannot evaluate that filter");
     dataframe::LazyFrame lf =
-        dataframe::detail::rebase(lf_, std::make_shared<ViewSource>(next));
+        dataframe::detail::rebase(lf_, dstd::make_shared<ViewSource>(next));
     return View(std::move(next), std::move(lf));
 }
 
@@ -518,15 +525,15 @@ bool View::aggregates() const {
 }
 
 scan::ScanPlan View::absorbed(const char* method, Need need) const {
-    auto fail = [&](const std::string& why) {
+    auto fail = [&](dstd::StringView why) {
         return common::DFTUtilsException::cat(
-            common::ErrorCode::InvalidArgument,
-            std::string("View::") + method + " " + why);
+            common::ErrorCode::InvalidArgument, "View::", method, " ", why);
     };
     dataframe::LazyFrame planned = dataframe::detail::optimize_plan(lf_);
     dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> window;
     if (need == Need::EventsWindow || need == Need::EventsHead)
         window = dataframe::detail::sole_slice(planned);
+    // keep std: first_op returns std::optional<std::string>
     if (dstd::Optional<std::string> op = dataframe::detail::first_op(planned);
         op && !window)
         throw fail("cannot follow '" + *op + "'");
@@ -560,44 +567,53 @@ dataframe::LazyFrame terminal_plan(scan::ScanPlan v, TraceOutput output,
                                    dstd::SharedPtr<ExportSink> sink = nullptr) {
     const std::uint64_t budget = v->memory_budget;
     return dataframe::LazyFrame::scan(
-               std::make_shared<ViewSource>(std::move(v), output,
-                                            std::move(tree), std::move(sink)))
+               dstd::make_shared<ViewSource>(std::move(v), output,
+                                             std::move(tree), std::move(sink)))
         .memory_budget(budget);
 }
 
-dataframe::LazyResult<std::string> partial_result(dataframe::LazyFrame plan) {
+dataframe::LazyResult<dstd::String> partial_result(dataframe::LazyFrame plan) {
     return {
-        {std::move(plan)}, [](std::vector<dataframe::DataFrame> frames) {
+        {std::move(plan)},
+        [](
+            // keep std: Finish takes std::vector<DataFrame>
+            std::vector<dataframe::DataFrame> frames) {
             return dataframe::detail::ready(detail::partial_of(frames.front()));
         }};
 }
 
 dataframe::LazyResult<ExportStats> stats_result(dataframe::LazyFrame plan) {
     return {
-        {std::move(plan)}, [](std::vector<dataframe::DataFrame> frames) {
+        {std::move(plan)},
+        [](
+            // keep std: Finish takes std::vector<DataFrame>
+            std::vector<dataframe::DataFrame> frames) {
             return dataframe::detail::ready(detail::stats_of(frames.front()));
         }};
 }
 
 coro::CoroTask<TypedResult> run_typed(scan::ScanPlan v, int shard_begin,
-                                      int shard_end, ProgressFn progress) {
-    co_return co_await scan::collect_typed(v, shard_begin, shard_end,
-                                           progress ? &progress : nullptr);
+                                      int shard_end,
+                                      dstd::SharedPtr<ProgressFn> progress) {
+    co_return co_await scan::collect_typed(
+        v, shard_begin, shard_end,
+        progress && *progress ? progress.get() : nullptr);
 }
 
-coro::CoroTask<ExportStats> run_materialize(scan::ScanPlan v,
-                                            ProgressFn progress) {
-    co_return co_await scan::run(v, progress ? &progress : nullptr);
+coro::CoroTask<ExportStats> run_materialize(
+    scan::ScanPlan v, dstd::SharedPtr<ProgressFn> progress) {
+    co_return co_await scan::run(
+        v, progress && *progress ? progress.get() : nullptr);
 }
 
 coro::CoroTask<void> materialize_from_partials(
-    scan::ScanPlan v, std::vector<dstd::StringView> partials) {
+    scan::ScanPlan v, dstd::Vector<dstd::StringView> partials) {
     co_await detail::run_materialize_partials(*v, partials);
 }
 
 coro::CoroTask<ExportStats> scan_batches(
     scan::ScanPlan v,
-    std::function<void(std::size_t, const std::vector<dstd::StringView>&)>
+    dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
         on_batch,
     std::size_t num_slots, std::uint64_t limit) {
     const std::uint64_t cap = v->limit;
@@ -624,9 +640,9 @@ coro::CoroTask<ExportStats> run_sink_trace(scan::ScanPlan v,
 
 }  // namespace
 
-dataframe::LazyFrame View::call_tree(std::vector<std::string> partition,
-                                     std::string ts, std::string dur,
-                                     std::string name) const {
+dataframe::LazyFrame View::call_tree(dstd::Vector<dstd::String> partition,
+                                     dstd::String ts, dstd::String dur,
+                                     dstd::String name) const {
     scan::ScanPlan v = absorbed("call_tree", Need::Events);
     detail::require_role(*v, "call_tree", detail::TraceRole::Duration);
     v = scan::timed(v);
@@ -638,10 +654,10 @@ dataframe::LazyFrame View::call_tree(std::vector<std::string> partition,
                           {}});
 }
 
-dataframe::LazyFrame View::flamegraph(std::vector<std::string> partition,
-                                      std::string ts, std::string dur,
-                                      std::string name,
-                                      std::vector<std::string> group) const {
+dataframe::LazyFrame View::flamegraph(dstd::Vector<dstd::String> partition,
+                                      dstd::String ts, dstd::String dur,
+                                      dstd::String name,
+                                      dstd::Vector<dstd::String> group) const {
     scan::ScanPlan v = absorbed("flamegraph", Need::Events);
     detail::require_role(*v, "flamegraph", detail::TraceRole::Duration);
     v = scan::timed(v);
@@ -651,8 +667,8 @@ dataframe::LazyFrame View::flamegraph(std::vector<std::string> partition,
 }
 
 dataframe::LazyResult<ContainmentResult> View::containment(
-    std::vector<std::string> partition, std::string ts, std::string dur,
-    std::string name, std::vector<std::string> group) const {
+    dstd::Vector<dstd::String> partition, dstd::String ts, dstd::String dur,
+    dstd::String name, dstd::Vector<dstd::String> group) const {
     scan::ScanPlan v = absorbed("containment", Need::Events);
     detail::require_role(*v, "containment", detail::TraceRole::Duration);
     v = scan::timed(v);
@@ -660,15 +676,17 @@ dataframe::LazyResult<ContainmentResult> View::containment(
                          std::move(name), std::move(group)};
     return {{terminal_plan(v, TraceOutput::CallTree, tree),
              terminal_plan(v, TraceOutput::Flamegraph, tree)},
-            [](std::vector<dataframe::DataFrame> frames) {
+            [](
+                // keep std: Finish takes std::vector<DataFrame>
+                std::vector<dataframe::DataFrame> frames) {
                 return dataframe::detail::ready(ContainmentResult{
                     std::move(frames[0]), std::move(frames[1])});
             }};
 }
 
-dataframe::LazyResult<std::string> View::flamegraph_partial(
-    std::vector<std::string> partition, std::string ts, std::string dur,
-    std::string name, std::vector<std::string> group) const {
+dataframe::LazyResult<dstd::String> View::flamegraph_partial(
+    dstd::Vector<dstd::String> partition, dstd::String ts, dstd::String dur,
+    dstd::String name, dstd::Vector<dstd::String> group) const {
     scan::ScanPlan v = absorbed("flamegraph_partial", Need::EventsHead);
     detail::require_role(*v, "flamegraph", detail::TraceRole::Duration);
     v = scan::timed(v);
@@ -678,19 +696,19 @@ dataframe::LazyResult<std::string> View::flamegraph_partial(
                        std::move(name), std::move(group)}));
 }
 
-dataframe::LazyResult<std::string> View::aggregate_partial() const {
+dataframe::LazyResult<dstd::String> View::aggregate_partial() const {
     return partial_result(
         terminal_plan(absorbed("aggregate_partial", Need::Aggregate),
                       TraceOutput::AggregatePartial));
 }
 
 dataframe::DataFrame View::merge_flamegraph_partials(
-    const std::vector<dstd::StringView>& partials) {
+    const dstd::Vector<dstd::StringView>& partials) {
     return scan::merge_flamegraph_partials(partials);
 }
 
 dataframe::DataFrame View::merge_partials(
-    const std::vector<dstd::StringView>& partials) const {
+    const dstd::Vector<dstd::StringView>& partials) const {
     return scan::merge_partials_to_table(
         absorbed("merge_partials", Need::Aggregate), partials);
 }
@@ -698,18 +716,20 @@ dataframe::DataFrame View::merge_partials(
 dataframe::LazyResult<TypedResult> View::typed(int shard_begin, int shard_end,
                                                ProgressFn progress) const {
     scan::ScanPlan v = absorbed("typed", Need::Any);
-    return {
-        {},
-        [v = std::move(v), shard_begin, shard_end,
-         progress = std::move(progress)](std::vector<dataframe::DataFrame>) {
-            return run_typed(v, shard_begin, shard_end, progress);
-        }};
+    return {{},
+            [v = std::move(v), shard_begin, shard_end,
+             progress = dstd::make_shared<ProgressFn>(std::move(progress))](
+                // keep std: LazyResult::Finish takes std::vector<DataFrame>
+                std::vector<dataframe::DataFrame>) {
+                return run_typed(v, shard_begin, shard_end, progress);
+            }};
 }
 
 coro::CoroTask<TypedResult> View::collect_typed(int shard_begin, int shard_end,
                                                 ProgressFn progress) const {
     return run_typed(absorbed("collect_typed", Need::Any), shard_begin,
-                     shard_end, std::move(progress));
+                     shard_end,
+                     dstd::make_shared<ProgressFn>(std::move(progress)));
 }
 
 coro::CoroTask<ExportStats> View::sink_json(ExportSink& sink) const {
@@ -737,8 +757,9 @@ dataframe::LazyResult<ExportStats> View::sink_trace(TraceWriteOptions opts,
                                                     Lazy) const {
     scan::ScanPlan v = absorbed("sink_trace", Need::EventsWindow);
     return {{},
-            [v = std::move(v),
-             opts = std::move(opts)](std::vector<dataframe::DataFrame>) {
+            [v = std::move(v), opts = std::move(opts)](
+                // keep std: LazyResult::Finish takes std::vector<DataFrame>
+                std::vector<dataframe::DataFrame>) {
                 return run_sink_trace(v, opts);
             }};
 }
@@ -758,7 +779,7 @@ dataframe::LazyFrame View::compare(const View& variant) const {
 }
 
 coro::CoroTask<ExportStats> View::for_each_batch(
-    std::function<void(std::size_t, const std::vector<dstd::StringView>&)>
+    dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
         on_batch,
     std::size_t num_slots, std::uint64_t limit) const {
     return scan_batches(absorbed("for_each_batch", Need::EventsHead),
@@ -771,29 +792,29 @@ coro::CoroTask<ExportStats> View::run_folds(
     return scan_folds(absorbed("run_folds", Need::EventsHead), folds, intern);
 }
 
-std::vector<TraceConfig> View::config() const { return scan::config(plan_); }
+dstd::Vector<TraceConfig> View::config() const { return scan::config(plan_); }
 
-std::vector<std::string> View::columns() const {
+dstd::Vector<dstd::String> View::columns() const {
     scan::ensure_catalog(plan_);
     return scan::columns(plan_);
 }
 
-std::vector<ColumnInfo> View::column_info() const {
+dstd::Vector<ColumnInfo> View::column_info() const {
     scan::ensure_catalog(plan_);
     return scan::schema(plan_);
 }
 
-std::vector<SchemaLeaf> View::schema_tree() const {
+dstd::Vector<SchemaLeaf> View::schema_tree() const {
     return scan::schema_tree(plan_);
 }
 
-std::vector<SchemaLeaf> detail::catalog_leaves(const View& v) {
+dstd::Vector<SchemaLeaf> detail::catalog_leaves(const View& v) {
     return scan::catalog_tree(v.plan_);
 }
 
-dstd::String schema_tree_json(const std::vector<SchemaLeaf>& leaves) {
+dstd::String schema_tree_json(const dstd::Vector<SchemaLeaf>& leaves) {
     dstd::String out = "[";
-    auto text = [&](const std::string& s) {
+    auto text = [&](const dstd::String& s) {
         if (s.empty()) {
             out += "null";
             return;
@@ -810,7 +831,7 @@ dstd::String schema_tree_json(const std::vector<SchemaLeaf>& leaves) {
         out += ",\"type\":";
         text(l.type);
         out += ",\"count\":";
-        out += l.count ? std::to_string(*l.count) : "null";
+        out += l.count ? dstd::to_string(*l.count) : "null";
         out += ",\"field\":";
         text(l.field);
         out += ",\"declared_type\":";
@@ -841,7 +862,7 @@ bool View::collect_would_bootstrap() const {
 }
 
 ExportStats View::merge_counter_partials(
-    const std::vector<dstd::StringView>& partials, ExportSink& sink) const {
+    const dstd::Vector<dstd::StringView>& partials, ExportSink& sink) const {
     return scan::merge_counter_partials(
         absorbed("merge_counter_partials", Need::Aggregate), partials, sink);
 }
@@ -850,12 +871,12 @@ dataframe::LazyFrame View::branch(SessionBranch attach) const {
     scan::ScanPlan v = absorbed("branch", Need::EventsHead);
     const std::uint64_t budget = v->memory_budget;
     return dataframe::LazyFrame::scan(
-               std::make_shared<ViewSource>(std::move(v), std::move(attach)))
+               dstd::make_shared<ViewSource>(std::move(v), std::move(attach)))
         .memory_budget(budget);
 }
 
 coro::CoroTask<void> View::materialize_partials(
-    const std::vector<dstd::StringView>& partials) const {
+    const dstd::Vector<dstd::StringView>& partials) const {
     return materialize_from_partials(
         absorbed("materialize_partials", Need::Aggregate), partials);
 }
@@ -878,32 +899,37 @@ dataframe::LazyResult<ExportStats> View::materialize(
     scan::ScanPlan v = scan::materialize(absorbed("materialize", Need::Any),
                                          checkpoint_size, part_size);
     return {{},
-            [v = std::move(v), progress = std::move(progress)](
+            [v = std::move(v),
+             progress = dstd::make_shared<ProgressFn>(std::move(progress))](
+                // keep std: LazyResult::Finish takes std::vector<DataFrame>
                 std::vector<dataframe::DataFrame>) {
                 return run_materialize(v, progress);
             }};
 }
 
-std::vector<std::string> View::mv_source() const {
+dstd::Vector<dstd::String> View::mv_source() const {
     return scan::mv_source(absorbed("mv_source", Need::Any));
 }
 
-std::string View::materialize_dir() const {
+dstd::String View::materialize_dir() const {
     return scan::materialize_dir(absorbed("materialize_dir", Need::Any));
 }
 
-void View::register_materialized(const std::string& dir) const {
+void View::register_materialized(const dstd::String& dir) const {
     scan::register_materialized(absorbed("register_materialized", Need::Any),
                                 dir);
 }
 
-View View::select(std::vector<std::string> names) const {
+View View::select(dstd::Vector<dstd::String> names) const {
     if (detail::is_row_query(*plan_) &&
         !dataframe::detail::first_non_filter_op(lf_))
         return reshape("select", [&](const scan::ScanPlan& v) {
             return scan::select(v, std::move(names));
         });
-    return LazyOps<View>::select(std::move(names));
+    // keep std: LazyOps::select takes std::vector<std::string>
+    return LazyOps<View>::select(
+        // keep std: the dataframe API takes std::vector
+        std::vector<std::string>(names.begin(), names.end()));
 }
 
 View View::filter(Query q) const {
@@ -960,19 +986,19 @@ View View::time_scale(double ns_ratio) const {
     });
 }
 
-View View::group_by(std::vector<GroupKey> keys) const {
+View View::group_by(dstd::Vector<GroupKey> keys) const {
     return reshape("group_by", [&](const scan::ScanPlan& v) {
         return scan::group_by(v, std::move(keys));
     });
 }
 
-View View::agg(std::vector<AggSpec> specs) const {
+View View::agg(dstd::Vector<AggSpec> specs) const {
     return reshape("agg", [&](const scan::ScanPlan& v) {
         return scan::agg(v, std::move(specs));
     });
 }
 
-View View::agg(std::vector<FieldAggExpr> exprs) const {
+View View::agg(dstd::Vector<FieldAggExpr> exprs) const {
     return reshape("agg", [&](const scan::ScanPlan& v) {
         return scan::agg(v, std::move(exprs));
     });
@@ -984,31 +1010,31 @@ View View::agg_numeric_args() const {
     });
 }
 
-View View::agg_numeric_args(std::vector<AggSpec> reductions) const {
+View View::agg_numeric_args(dstd::Vector<AggSpec> reductions) const {
     return reshape("agg_numeric_args", [&](const scan::ScanPlan& v) {
         return scan::agg_numeric_args(v, std::move(reductions));
     });
 }
 
-View View::record_schema(std::string id) const {
+View View::record_schema(dstd::String id) const {
     return reshape("record_schema", [&](const scan::ScanPlan& v) {
         return scan::record_schema(v, id);
     });
 }
 
-View View::rollup_root(std::string dir) const {
+View View::rollup_root(dstd::String dir) const {
     return reshape("rollup_root", [&](const scan::ScanPlan& v) {
         return scan::rollup_root(v, std::move(dir));
     });
 }
 
-View View::views_root(std::string dir) const {
+View View::views_root(dstd::String dir) const {
     return reshape("views_root", [&](const scan::ScanPlan& v) {
         return scan::views_root(v, std::move(dir));
     });
 }
 
-View View::cancel_when(std::function<bool()> pred) const {
+View View::cancel_when(dstd::Function<bool()> pred) const {
     return reshape("cancel_when", [&](const scan::ScanPlan& v) {
         return scan::cancel_when(v, std::move(pred));
     });
@@ -1017,13 +1043,13 @@ View View::cancel_when(std::function<bool()> pred) const {
 View View::count_scans(dstd::SharedPtr<ScanCounter> counter) const {
     scan::ScanPlan next = scan::count_scans(plan_, std::move(counter));
     return View(next, dataframe::detail::rebase(
-                          lf_, std::make_shared<ViewSource>(next)));
+                          lf_, dstd::make_shared<ViewSource>(next)));
 }
 
 View View::memory_budget(std::uint64_t bytes) const {
     scan::ScanPlan next = scan::memory_budget(plan_, bytes);
     dataframe::LazyFrame lf =
-        dataframe::detail::rebase(lf_, std::make_shared<ViewSource>(next))
+        dataframe::detail::rebase(lf_, dstd::make_shared<ViewSource>(next))
             .memory_budget(bytes);
     return View(std::move(next), std::move(lf));
 }

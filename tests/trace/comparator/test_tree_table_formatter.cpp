@@ -24,9 +24,10 @@ static MetricComparison make_mc(std::string name, double base, double var) {
     return mc;
 }
 
-static NodeResult make_node(std::string name,
-                            std::vector<MetricComparison> summary = {},
-                            std::vector<NodeResult> children = {}) {
+static NodeResult make_node(
+    std::string name,
+    dftracer::utils::dstd::Vector<MetricComparison> summary = {},
+    dftracer::utils::dstd::Vector<NodeResult> children = {}) {
     NodeResult n;
     n.name = std::move(name);
     n.summary.metrics = std::move(summary);

@@ -77,8 +77,8 @@ TEST_SUITE("VectorizedFold") {
     TEST_CASE("a batch is folded as columns, not per event") {
         StringIntern in;
         auto fold = make_fold(in);
-        std::vector<FoldEvent> evs = {ev(in, 1, 100, 5), ev(in, 1, 110, 5),
-                                      ev(in, 2, 120, 5)};
+        dftracer::utils::dstd::Vector<FoldEvent> evs = {
+            ev(in, 1, 100, 5), ev(in, 1, 110, 5), ev(in, 2, 120, 5)};
         ScanUnit unit{};
         fold.step(FoldBatch{
             dftracer::utils::dstd::Span<const FoldEvent>(evs), unit, {}});
@@ -91,8 +91,9 @@ TEST_SUITE("VectorizedFold") {
         auto proto = make_fold(in);
         auto a = proto.slice();  // fresh state, like a worker slot
         auto b = proto.slice();
-        std::vector<FoldEvent> ea = {ev(in, 1, 1, 10), ev(in, 1, 2, 10)};
-        std::vector<FoldEvent> eb = {ev(in, 2, 3, 7)};
+        dftracer::utils::dstd::Vector<FoldEvent> ea = {ev(in, 1, 1, 10),
+                                                       ev(in, 1, 2, 10)};
+        dftracer::utils::dstd::Vector<FoldEvent> eb = {ev(in, 2, 3, 7)};
         ScanUnit unit{};
         a->step(FoldBatch{
             dftracer::utils::dstd::Span<const FoldEvent>(ea), unit, {}});
@@ -110,7 +111,7 @@ TEST_SUITE("VectorizedFold") {
         auto fold = make_fold(in);
         FoldEvent m = ev(in, 1, 1, 0);
         m.phase = RecordPhase::Metadata;
-        std::vector<FoldEvent> evs = {m};
+        dftracer::utils::dstd::Vector<FoldEvent> evs = {m};
         ScanUnit unit{};
         fold.step(FoldBatch{
             dftracer::utils::dstd::Span<const FoldEvent>(evs), unit, {}});

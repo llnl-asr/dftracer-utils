@@ -4,13 +4,11 @@
 
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan.h>
-
-#include <optional>
-#include <string>
-#include <vector>
 
 // Emitting aggregate rows/groups as dftracer ph="C" counter events: group
 // columns map to name/cat/pid/tid/ts, everything else becomes args.
@@ -19,12 +17,12 @@ namespace dftracer::utils::trace::views::detail {
 // One aggregate group -> one ph="C" counter event JSON line. `keys` aligns to
 // `group_cols` (nullopt for a null key), `values` to `value_cols`. The group
 // columns `entity_col` and `lane_col` give pid and tid, as index::entity_id.
-dstd::String counter_line(const std::vector<std::string>& group_cols,
-                          const std::vector<dstd::Optional<std::string>>& keys,
-                          const std::vector<std::string>& value_cols,
-                          const std::vector<double>& values,
-                          const std::string& entity_col,
-                          const std::string& lane_col);
+dstd::String counter_line(
+    const dstd::Vector<dstd::String>& group_cols,
+    const dstd::Vector<dstd::Optional<dstd::String>>& keys,
+    const dstd::Vector<dstd::String>& value_cols,
+    const dstd::Vector<double>& values, const dstd::String& entity_col,
+    const dstd::String& lane_col);
 
 // Emit ph="C" counter events from a merged engine AggState (the distributed
 // counter-partial merge). Byte-matches emit_group_counter: finalizes the state,

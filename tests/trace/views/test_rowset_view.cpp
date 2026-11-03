@@ -52,7 +52,9 @@ std::string write_trace(TestEnvironment& env) {
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, std::string(determine_index_path(gz, "")));
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(std::string(determine_index_path(gz, ""))));
 }
 
 }  // namespace

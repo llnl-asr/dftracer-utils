@@ -191,8 +191,8 @@ struct ViewCounts {
 ViewCounts view_counts(const std::string& gz, const Query& q) {
     views::detail::ViewPlan vp;
     vp.files.push_back(
-        {gz, std::string(dftracer::utils::trace::internal::determine_index_path(
-                 gz, ""))});
+        {dstd::String(gz),
+         dftracer::utils::trace::internal::determine_index_path(gz, "")});
     vp.query = q;
     auto vdef = views::detail::make_vdef(vp, false);
     auto run = [&]() -> dftracer::utils::coro::CoroTask<ViewCounts> {

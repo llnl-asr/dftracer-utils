@@ -98,7 +98,7 @@ std::size_t rows(const View& v, const std::string& q) {
 }
 
 View dir_view(const std::string& dir, const std::string& root = "") {
-    return run(View::from_directory(dir, root));
+    return run(View::from_directory(dstd::String(dir), dstd::String(root)));
 }
 
 std::int64_t count_by(const dataframe::DataFrame& df, const std::string& cat) {
@@ -255,8 +255,10 @@ TEST_SUITE("ViewIndexFreshness") {
         REQUIRE(dftu_utils_test::build_index(gz));
 
         NullSink sink;
-        const auto stats =
-            View::from_file(gz).duql(R"(cat == "RARE")").sink_json(sink).get();
+        const auto stats = View::from_file(dstd::String(gz))
+                               .duql(R"(cat == "RARE")")
+                               .sink_json(sink)
+                               .get();
         CHECK(stats.events_matched == 3);
         CHECK(stats.chunks_skipped > 0);
     }

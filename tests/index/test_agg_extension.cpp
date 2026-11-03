@@ -84,8 +84,10 @@ std::string index_of(const std::string& trace) {
 }
 
 dataframe::DataFrame counters_of(const std::vector<std::string>& traces) {
-    std::vector<ViewFile> files;
-    for (const auto& t : traces) files.push_back({t, index_of(t)});
+    dstd::Vector<ViewFile> files;
+    for (const auto& t : traces)
+        files.push_back({dftracer::utils::dstd::String(t),
+                         dftracer::utils::dstd::String(index_of(t))});
     return View::from_files(std::move(files)).collect_typed().get().counters;
 }
 
@@ -158,8 +160,10 @@ dstd::Optional<index::ExtensionEntry> agg_entry(const Indexer& ix,
 }
 
 double count_reads(const std::vector<std::string>& traces) {
-    std::vector<ViewFile> files;
-    for (const auto& t : traces) files.push_back({t, index_of(t)});
+    dstd::Vector<ViewFile> files;
+    for (const auto& t : traces)
+        files.push_back({dftracer::utils::dstd::String(t),
+                         dftracer::utils::dstd::String(index_of(t))});
     const auto df = View::from_files(std::move(files))
                         .phase(Phase::Events)
                         .group_by({GroupKey::name()})

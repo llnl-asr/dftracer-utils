@@ -4,13 +4,12 @@
 
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::trace::comparator {
 
@@ -35,11 +34,11 @@ class CompareView {
         return CompareView(std::move(baseline), std::move(variant));
     }
 
-    CompareView& group_by(std::vector<views::GroupKey> keys) {
+    CompareView& group_by(dstd::Vector<views::GroupKey> keys) {
         group_by_ = std::move(keys);
         return *this;
     }
-    CompareView& agg(std::vector<views::AggSpec> specs) {
+    CompareView& agg(dstd::Vector<views::AggSpec> specs) {
         agg_ = std::move(specs);
         return *this;
     }
@@ -68,8 +67,8 @@ class CompareView {
 
     views::View baseline_;
     views::View variant_;
-    std::vector<views::GroupKey> group_by_;
-    std::vector<views::AggSpec> agg_;
+    dstd::Vector<views::GroupKey> group_by_;
+    dstd::Vector<views::AggSpec> agg_;
 };
 
 }  // namespace dftracer::utils::trace::comparator

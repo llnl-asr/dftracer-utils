@@ -177,7 +177,7 @@ struct TraceFields {
     // Calls `fn` with each of `events` as a trace event; the view it gets
     // lasts until `fn` returns.
     template <typename Fn>
-    void for_each_event(const std::vector<dstd::StringView>& events,
+    void for_each_event(const dstd::Vector<dstd::StringView>& events,
                         Fn&& fn) const {
         if (!by_path) {
             for (auto e : events) fn(e);

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -8,17 +11,15 @@
 
 #include <cmath>
 #include <cstdint>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::trace::comparator {
 
-std::vector<MetricComparison> build_metadata_metrics(
+dstd::Vector<MetricComparison> build_metadata_metrics(
     const TraceMetadata& baseline, const TraceMetadata& variant) {
-    std::vector<MetricComparison> out;
+    dstd::Vector<MetricComparison> out;
 
-    auto make = [](const std::string& name, double bval,
+    auto make = [](const dstd::String& name, double bval,
                    double vval) -> MetricComparison {
         MetricComparison mc;
         mc.metric_name = name;
@@ -90,17 +91,17 @@ double safe_quantile(const QuantileStore& store, double p) {
     return std::isnan(v) ? 0.0 : v;
 }
 
-std::string percentile_label(const std::string& prefix, double p) {
-    return prefix + "_p" + std::to_string(static_cast<int>(p * 100.0));
+dstd::String percentile_label(const dstd::String& prefix, double p) {
+    return prefix + "_p" + dstd::to_string(static_cast<int>(p * 100.0));
 }
 
 }  // anonymous namespace
 
-std::vector<MetricComparison> compare_metrics(
+dstd::Vector<MetricComparison> compare_metrics(
     const CollapsedMetrics& baseline, const CollapsedMetrics& variant,
-    const std::vector<std::string>& metrics,
-    const std::vector<double>& percentiles) {
-    std::vector<MetricComparison> result;
+    const dstd::Vector<dstd::String>& metrics,
+    const dstd::Vector<double>& percentiles) {
+    dstd::Vector<MetricComparison> result;
     const auto& bm = baseline.merged;
     const auto& vm = variant.merged;
 
@@ -208,23 +209,23 @@ std::vector<MetricComparison> compare_metrics(
 // Metric-name helpers are used by the tree formatter too, so keep them out of
 // the Arrow ifdef below.
 
-bool is_atomic_metric(const std::string& name) {
+bool is_atomic_metric(const dstd::String& name) {
     return name == "count" || name == "transfer_size" || name == "bandwidth" ||
            name == "unique_files" || name == "proc_files" ||
            name == "processes" || name == "threads" || name == "total_bytes";
 }
 
-std::string metric_group(const std::string& name) {
+dstd::String metric_group(const dstd::String& name) {
     if (is_atomic_metric(name)) return "";
     auto pos = name.find('_');
-    if (pos == std::string::npos) return "";
+    if (pos == dstd::String::npos) return "";
     return name.substr(0, pos);
 }
 
-std::string metric_leaf(const std::string& name) {
+dstd::String metric_leaf(const dstd::String& name) {
     if (is_atomic_metric(name)) return name;
     auto pos = name.find('_');
-    if (pos == std::string::npos) return name;
+    if (pos == dstd::String::npos) return name;
     return name.substr(pos + 1);
 }
 
@@ -250,12 +251,12 @@ using utilities::arrow::RecordBatchBuilder;
 namespace {
 
 void flatten_node(RecordBatchBuilder& builder, const NodeResult& node,
-                  const std::string& parent_path) {
-    std::string path =
+                  const dstd::String& parent_path) {
+    dstd::String path =
         parent_path.empty() ? node.name : parent_path + "/" + node.name;
 
-    auto emit = [&](const std::string& sub_path,
-                    const std::vector<MetricComparison>& metrics) {
+    auto emit = [&](const dstd::String& sub_path,
+                    const dstd::Vector<MetricComparison>& metrics) {
         for (const auto& mc : metrics) {
             if (mc.baseline_value == 0.0 && mc.variant_value == 0.0) continue;
             builder.append_string(0, sub_path);

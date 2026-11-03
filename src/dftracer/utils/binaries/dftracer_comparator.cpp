@@ -123,12 +123,11 @@ struct NodeAggPlan {
 };
 
 static coro::CoroTask<void> aggregate_all(
-    // keep std: unswept API
-    const std::vector<std::string>& files,
-    // keep std: unswept API
-    const dstd::Vector<ComparisonFilter>& filters, const std::string& index_dir,
-    const ComparisonConfig& config, std::size_t workers,
-    dstd::StringIntern& strings, SideAggregate& out, bool& failed) {
+    const dstd::Vector<dstd::String>& files,
+    const dstd::Vector<ComparisonFilter>& filters,
+    const dstd::String& index_dir, const ComparisonConfig& config,
+    std::size_t workers, dstd::StringIntern& strings, SideAggregate& out,
+    bool& failed) {
     auto result = co_await aggregate_side(
         files, index_dir, filters,
         static_cast<std::uint64_t>(config.defaults.time_interval_ms * 1000.0),
@@ -149,20 +148,13 @@ static coro::CoroTask<void> aggregate_all(
 // nullopt on any user-facing error (already logged).
 static dstd::Optional<ComparisonConfig> build_comparison_config(
     const ComparatorArgParse* cli) {
-    // keep std: unswept API
-    const std::string config_path(cli->config_path);
-    // keep std: unswept API
-    const std::string preset(cli->preset);
-    // keep std: unswept API
-    const std::string baseline_path(cli->baseline);
-    // keep std: unswept API
-    const std::string variant_path(cli->variant);
-    // keep std: unswept API
-    const std::string duql_str(cli->duql_args.duql);
-    // keep std: unswept API
-    const std::string group_by_str(cli->group_by);
-    // keep std: unswept API
-    const std::string format(cli->format);
+    const dstd::String config_path(cli->config_path);
+    const dstd::String preset(cli->preset);
+    const dstd::String baseline_path(cli->baseline);
+    const dstd::String variant_path(cli->variant);
+    const dstd::String duql_str(cli->duql_args.duql);
+    const dstd::String group_by_str(cli->group_by);
+    const dstd::String format(cli->format);
     auto no_color = cli->no_color;
     auto force_rebuild = cli->indexing.force;
     auto checkpoint_size = cli->indexing.checkpoint_size;
@@ -171,8 +163,7 @@ static dstd::Optional<ComparisonConfig> build_comparison_config(
 
     ComparisonConfig config;
     if (!config_path.empty()) {
-        // keep std: unswept API
-        std::string error;
+        dstd::String error;
         auto parsed = ComparisonConfig::from_json_file(config_path, error);
         if (!parsed) {
             DFTRACER_UTILS_LOG_ERROR("Config error: %s", error.c_str());
@@ -219,13 +210,9 @@ static dstd::Optional<ComparisonConfig> build_comparison_config(
         config.executor_threads = cli->pipeline.executor_threads;
     if (checkpoint_size > 0) config.checkpoint_size = checkpoint_size;
     if (!cli->baseline_index_dir.empty())
-        // keep std: unswept API
-        config.baseline_index_dir = std::string(cli->baseline_index_dir);
-    // config API (trace step)
+        config.baseline_index_dir = dstd::String(cli->baseline_index_dir);
     if (!cli->variant_index_dir.empty())
-        // keep std: unswept API
-        config.variant_index_dir = std::string(cli->variant_index_dir);
-    // API (trace step)
+        config.variant_index_dir = dstd::String(cli->variant_index_dir);
     if (force_rebuild) config.force_rebuild = force_rebuild;
     if (threshold > 0.0) config.defaults.threshold_pct = threshold;
     if (time_interval_ms > 0.0)
@@ -315,11 +302,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
     // Indexes the traces under `path` with the aggregation config the queries
     // use and lists the trace files.
     auto resolve_and_build =
-        // keep std: unswept API
-        [&config](const std::string& path, const std::string& index_dir,
-                  // keep std: unswept API
-                  std::vector<std::string>& out_files,
-                  // resolver APIs (trace step)
+        [&config](const dstd::String& path, const dstd::String& index_dir,
+                  dstd::Vector<dstd::String>& out_files,
                   std::size_t parallelism) -> coro::CoroTask<void> {
         if (!common::input_exists(path)) {
             DFTRACER_UTILS_LOG_ERROR("Path does not exist: %s", path.c_str());
@@ -356,10 +340,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
     };
 
     // Shared state between tasks
-    // keep std: unswept API
-    std::vector<std::string> baseline_files;
-    // keep std: unswept API
-    std::vector<std::string> variant_files;
+    dstd::Vector<dstd::String> baseline_files;
+    dstd::Vector<dstd::String> variant_files;
     // The ids of both sides' groups are in this one table.
     dstd::StringIntern strings;
     SideAggregate baseline_side;
@@ -495,9 +477,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
             std::size_t visitor_index = 0;
             for (std::size_t ni = 0; ni < agg_plans.size(); ++ni) {
                 const auto& plan = agg_plans[ni];
-                // keep std: unswept API
-                std::vector<ComparisonVisitorPair> pairs;
-                // std::vector (trace step)
+                dstd::Vector<ComparisonVisitorPair> pairs;
                 pairs.reserve(plan.specs.size());
 
                 for (std::size_t vi = 0; vi < plan.specs.size(); ++vi) {

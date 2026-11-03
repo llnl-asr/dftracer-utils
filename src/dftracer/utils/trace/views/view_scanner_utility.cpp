@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/json/json.h>
@@ -16,7 +17,6 @@
 #include <simdjson.h>
 
 #include <cstring>
-#include <string>
 
 namespace dftracer::utils::trace::views {
 
@@ -108,12 +108,12 @@ void ScanCounts::add_to(ExportStats& st) const {
     st.values_unconverted += values_unconverted;
 }
 
-ViewScannerInput& ViewScannerInput::with_file_path(const std::string& path) {
+ViewScannerInput& ViewScannerInput::with_file_path(const dstd::String& path) {
     file_path = path;
     return *this;
 }
 
-ViewScannerInput& ViewScannerInput::with_index_path(const std::string& path) {
+ViewScannerInput& ViewScannerInput::with_index_path(const dstd::String& path) {
     index_path = path;
     return *this;
 }
@@ -166,7 +166,7 @@ struct EventProbe {
 static EventProbe probe_event(const char* data, std::size_t n,
                               const ViewDefinition& view) {
     thread_local simdjson::ondemand::parser parser;
-    thread_local std::string padbuf;
+    thread_local dstd::String padbuf;
     padbuf.assign(data, n);
     padbuf.resize(n + simdjson::SIMDJSON_PADDING);
     EventProbe p;
@@ -384,6 +384,7 @@ ArrowExportResult ViewScannerBatch::to_arrow() const {
 ArrowExportResult ViewScannerBatch::to_arrow(
     RecordBatchBuilder& builder) const {
     builder.reserve(events.size());
+    // keep std: simdjson::minify returns std::string
     std::vector<std::string> held_serialized;
     dftracer::utils::json::RecordParser parser;
 

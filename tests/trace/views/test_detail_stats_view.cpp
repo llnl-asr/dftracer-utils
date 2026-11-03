@@ -42,7 +42,10 @@ TEST_SUITE("detail stats via View") {
 
         stats::DetailNeeds needs;                          // no group-by
         stats::DetailedStatistics d =
-            run_detail(stats::DetailStatsView::from_file(gz, idx), needs);
+            run_detail(stats::DetailStatsView::from_file(
+                           dftracer::utils::dstd::String(gz),
+                           dftracer::utils::dstd::String(idx)),
+                       needs);
 
         CHECK(d.events_scanned == 50);
         CHECK(d.duration.count() == 50);
@@ -69,11 +72,15 @@ TEST_SUITE("detail stats via View") {
         (void)dftracer::utils::dstd::fs::remove(pfw);
         const std::string idx = std::string(determine_index_path(gz, ""));
 
-        std::vector<std::string> group_by{"name"};
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> group_by{
+            "name"};
         stats::DetailNeeds needs;
         needs.group_by = &group_by;
         stats::DetailedStatistics d =
-            run_detail(stats::DetailStatsView::from_file(gz, idx), needs);
+            run_detail(stats::DetailStatsView::from_file(
+                           dftracer::utils::dstd::String(gz),
+                           dftracer::utils::dstd::String(idx)),
+                       needs);
 
         CHECK(d.events_scanned == 8);
         CHECK(d.duration.count() == 5);
@@ -86,11 +93,15 @@ TEST_SUITE("detail stats via View") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        std::vector<std::string> group_by{"name"};
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> group_by{
+            "name"};
         stats::DetailNeeds needs;
         needs.group_by = &group_by;
         stats::DetailedStatistics d =
-            run_detail(stats::DetailStatsView::from_file(gz, idx), needs);
+            run_detail(stats::DetailStatsView::from_file(
+                           dftracer::utils::dstd::String(gz),
+                           dftracer::utils::dstd::String(idx)),
+                       needs);
 
         CHECK(d.grouped_duration.size() == 2);  // read, fwrite
         std::uint64_t total = 0;
@@ -106,13 +117,18 @@ TEST_SUITE("detail stats via View") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        std::vector<std::string> group_by{"cat"};
-        std::vector<std::string> filter_names{"read"};
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> group_by{
+            "cat"};
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
+            filter_names{"read"};
         stats::DetailNeeds needs;
         needs.group_by = &group_by;
         needs.filter_names = &filter_names;
         stats::DetailedStatistics d =
-            run_detail(stats::DetailStatsView::from_file(gz, idx), needs);
+            run_detail(stats::DetailStatsView::from_file(
+                           dftracer::utils::dstd::String(gz),
+                           dftracer::utils::dstd::String(idx)),
+                       needs);
 
         CHECK(d.events_scanned == 30);  // only POSIX "read"
         CHECK(d.grouped_duration.size() == 1);

@@ -48,9 +48,10 @@ struct CountFold : dftracer::utils::trace::views::detail::Fold {
         const override {
         return true;
     }
-    std::unique_ptr<dftracer::utils::trace::views::detail::Fold> slice()
-        const override {
-        return std::make_unique<CountFold>(total);
+    dftracer::utils::dstd::UniquePtr<
+        dftracer::utils::trace::views::detail::Fold>
+    slice() const override {
+        return dftracer::utils::dstd::make_unique<CountFold>(total);
     }
     void step(
         const dftracer::utils::trace::views::detail::FoldBatch& b) override {
@@ -281,8 +282,9 @@ inline void run_both_file(const std::string& file, const std::string& file_idx,
                           std::uint64_t mem_budget) {
     auto build = [&] {
         dftracer::utils::trace::views::detail::scan::ScanPlan v =
-            dftracer::utils::trace::views::detail::scan::from_file(file,
-                                                                   file_idx);
+            dftracer::utils::trace::views::detail::scan::from_file(
+                dftracer::utils::dstd::String(file),
+                dftracer::utils::dstd::String(file_idx));
         if (mem_budget)
             v = dftracer::utils::trace::views::detail::scan::memory_budget(
                 v, mem_budget);
@@ -310,8 +312,10 @@ inline void run_both_file(const std::string& file, const std::string& file_idx,
 }
 
 inline void run_both_multi(
-    std::vector<dftracer::utils::trace::views::ViewFile> files,
-    const std::vector<dftracer::utils::trace::views::GroupKey>& gks,
+    dftracer::utils::dstd::Vector<dftracer::utils::trace::views::ViewFile>
+        files,
+    const dftracer::utils::dstd::Vector<
+        dftracer::utils::trace::views::GroupKey>& gks,
     const std::vector<std::string>& key_cols, std::uint64_t mem_budget) {
     auto build = [&] {
         dftracer::utils::trace::views::detail::scan::ScanPlan v =

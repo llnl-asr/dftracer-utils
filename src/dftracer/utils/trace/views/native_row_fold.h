@@ -3,20 +3,18 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_NATIVE_ROW_FOLD_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 
 #include <cstdint>
 #include <memory>
-#include <span>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index::plan {
 class GroupResolver;
@@ -58,10 +56,10 @@ inline constexpr dstd::StringView AGG_DERIVED_PREFIX = "__aggderiv:";
 /// clip_token(lo, hi, "ts" or "dur") is the event's [ts, ts + dur) clamped to
 /// the window, as a Uint64 start or length. Internal to the agg-engine <->
 /// row-fold seam.
-std::string window_token(std::uint64_t lo, std::uint64_t hi,
-                         dstd::StringView sel);
-std::string clip_token(std::uint64_t lo, std::uint64_t hi,
-                       dstd::StringView part);
+dstd::String window_token(std::uint64_t lo, std::uint64_t hi,
+                          dstd::StringView sel);
+dstd::String clip_token(std::uint64_t lo, std::uint64_t hi,
+                        dstd::StringView part);
 /// The record field a select token reads (an agg-engine token's field, a
 /// window token's inner field), or `sel` itself; empty for a clip token.
 dstd::StringView select_source_field(dstd::StringView sel);
@@ -73,7 +71,7 @@ dstd::StringView select_source_field(dstd::StringView sel);
 /// of those fields of object elements, each typed by its letter). A missing,
 /// null or non-array value is a null row; an element of another type is a null
 /// element.
-std::string list_token(dstd::StringView spec, dstd::StringView path);
+dstd::String list_token(dstd::StringView spec, dstd::StringView path);
 
 /// The `sel` a window_token wraps, or `sel` itself.
 dstd::StringView window_inner(dstd::StringView sel);
@@ -95,7 +93,7 @@ dataframe::Series interned_column(
 /// collect and the streaming chunk builder.
 dataframe::DataFrame build_row_frame(
     EventRows events, const dftracer::utils::dstd::StringIntern& intern,
-    const std::vector<std::string>& select, double time_scale = 1.0,
+    const dstd::Vector<dstd::String>& select, double time_scale = 1.0,
     bool by_path = false);
 
 /// The per-batch auto-numeric dyn value columns for `events`: one Float64
@@ -106,10 +104,11 @@ dataframe::DataFrame build_row_frame(
 /// column layout is unchanged. Empty when the batch holds no numeric arg.
 /// With a window or clip token in `select`, only the events that start in its
 /// window contribute.
-std::vector<dstd::Pair<std::string, dataframe::Series>>
+// keep std: the names go into DataFrame::names, a std::vector<std::string>
+std::vector<std::pair<std::string, dataframe::Series>>
 build_dyn_numeric_columns(EventRows events,
                           const dftracer::utils::dstd::StringIntern& intern,
-                          const std::vector<std::string>& select);
+                          const dstd::Vector<dstd::String>& select);
 
 /// The non-scalar fields a `select` needs the scan to capture: nested paths and
 /// non-POD top-level fields the scan does not carry by default (args, nested
@@ -117,8 +116,8 @@ build_dyn_numeric_columns(EventRows events,
 /// group-key sentinel is mapped to its underlying real field. A row fold
 /// returns this from extra_captures() so build_row_frame's select branch can
 /// resolve those fields.
-std::vector<std::string> row_fold_extra_captures(
-    const std::vector<std::string>& select);
+dstd::Vector<dstd::String> row_fold_extra_captures(
+    const dstd::Vector<dstd::String>& select);
 
 /// The output column name build_row_frame's select branch gives `sel`: a
 /// top-level field or resolved column keeps its own name;
@@ -127,6 +126,7 @@ std::vector<std::string> row_fold_extra_captures(
 /// (accepting `sel` bare or "args."-prefixed).
 /// ViewSource::names() uses this so a streamed morsel's schema always matches
 /// what build_row_frame actually emits for the same select.
+// keep std: dataframe column names are std::string
 std::string canonical_row_column_name(dstd::StringView sel,
                                       bool by_path = false);
 
@@ -157,8 +157,8 @@ struct RowKeySource {
         Arg,
     };
     Kind kind = Kind::Refused;
-    std::string arg_full;
-    std::string arg_bare;
+    dstd::String arg_full;
+    dstd::String arg_bare;
 };
 RowKeySource row_key_source(dstd::StringView sel, bool by_path = false);
 
@@ -180,7 +180,7 @@ RowKeySource row_key_source(dstd::StringView sel, bool by_path = false);
 class NativeRowFold : public Fold {
    public:
     NativeRowFold(const dftracer::utils::dstd::StringIntern& intern,
-                  std::vector<std::string> select, double time_scale = 1.0,
+                  dstd::Vector<dstd::String> select, double time_scale = 1.0,
                   bool keep_metadata = false, bool by_path = false)
         : intern_(&intern),
           select_(std::move(select)),
@@ -192,13 +192,13 @@ class NativeRowFold : public Fold {
     bool needs_args() const override { return true; }
     bool wants_metadata() const override { return keep_metadata_; }
 
-    std::vector<std::string> extra_captures() const override {
+    dstd::Vector<dstd::String> extra_captures() const override {
         return row_fold_extra_captures(select_);
     }
 
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<NativeRowFold>(*intern_, select_, time_scale_,
-                                               keep_metadata_, by_path_);
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<NativeRowFold>(*intern_, select_, time_scale_,
+                                                keep_metadata_, by_path_);
     }
 
     void step(const FoldBatch& batch) override {
@@ -230,11 +230,11 @@ class NativeRowFold : public Fold {
 
    private:
     const dftracer::utils::dstd::StringIntern* intern_;
-    std::vector<std::string> select_;  // empty = every column
-    double time_scale_;                // ts/dur multiplier (1.0 = none)
-    bool keep_metadata_;               // phase("metadata"): keep ph=M records
+    dstd::Vector<dstd::String> select_;  // empty = every column
+    double time_scale_;                  // ts/dur multiplier (1.0 = none)
+    bool keep_metadata_;                 // phase("metadata"): keep ph=M records
     bool by_path_;
-    std::vector<FoldEvent> events_;
+    dstd::Vector<FoldEvent> events_;
 };
 
 }  // namespace dftracer::utils::trace::views::detail

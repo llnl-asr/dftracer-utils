@@ -3,19 +3,17 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_CONTAINMENT_FOLD_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -52,21 +50,22 @@ struct TimeOut {
 // group_by): every event carries its group value and each lane folds under a
 // synthetic node named by it.
 struct ContainmentSpec {
-    std::vector<FieldRef> lane_fields;
-    std::vector<FieldRef> group_fields;
+    dstd::Vector<FieldRef> lane_fields;
+    dstd::Vector<FieldRef> group_fields;
     FieldRef start_ref;
     FieldRef dur_ref;
     FieldRef name_ref;
     TimeOut out;
     bool needs_args = false;
-    std::vector<std::string> nested_captures;
+    dstd::Vector<dstd::String> nested_captures;
 };
 
 ContainmentSpec make_containment_spec(
     dftracer::utils::dstd::StringIntern& intern,
-    const std::vector<std::string>& partition, const std::string& start_field,
-    const std::string& dur_field, const std::string& name_field,
-    const std::vector<std::string>& group = {},
+    const dstd::Vector<dstd::String>& partition,
+    const dstd::String& start_field, const dstd::String& dur_field,
+    const dstd::String& name_field,
+    const dstd::Vector<dstd::String>& group = {},
     const dftracer::utils::index::RecordSchema* path_schema = nullptr,
     double time_scale = 1.0);
 
@@ -80,33 +79,33 @@ bool containment_row(const FoldEvent& ev, const ContainmentSpec& spec,
 // Group rows into lanes (rows sharing the lane key), each sorted by start
 // (enclosing-first on a tie), ready for the containment walk. Shared by both
 // builders so a combined build sorts once.
-std::vector<std::vector<std::int64_t>> sorted_lanes(
-    const std::vector<ContainmentRow>& rows);
+dstd::Vector<dstd::Vector<std::int64_t>> sorted_lanes(
+    const dstd::Vector<ContainmentRow>& rows);
 
 dataframe::DataFrame build_call_tree(
-    const std::vector<ContainmentRow>& rows,
-    const std::vector<std::vector<std::int64_t>>& lanes,
+    const dstd::Vector<ContainmentRow>& rows,
+    const dstd::Vector<dstd::Vector<std::int64_t>>& lanes,
     const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 dataframe::DataFrame build_flamegraph(
-    const std::vector<ContainmentRow>& rows,
-    const std::vector<std::vector<std::int64_t>>& lanes,
+    const dstd::Vector<ContainmentRow>& rows,
+    const dstd::Vector<dstd::Vector<std::int64_t>>& lanes,
     const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 
 // Both frames from one buffer, sorting each lane once. .first = call_tree,
 // .second = flamegraph.
 dstd::Pair<dataframe::DataFrame, dataframe::DataFrame> build_containment_both(
-    const std::vector<ContainmentRow>& rows,
+    const dstd::Vector<ContainmentRow>& rows,
     const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 
 // Distributed flamegraph: a rank folds its rows into an arena and serializes it
 // (flamegraph_partial); rank 0 merges every rank's blob by name path and emits
 // the node frame (merge_flamegraph_partials). The arena is the mergeable
 // partial for MPI gather and Dask tree-reduce alike.
-std::string flamegraph_partial(
-    const std::vector<ContainmentRow>& rows,
+dstd::String flamegraph_partial(
+    const dstd::Vector<ContainmentRow>& rows,
     const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 dataframe::DataFrame merge_flamegraph_partials(
-    const std::vector<dstd::StringView>& partials);
+    const dstd::Vector<dstd::StringView>& partials);
 
 // The View's containment terminal as a fuse-engine Fold: buffers rows during
 // the shared scan, builds in parallel at the end. One fold, two builders
@@ -117,18 +116,18 @@ class ContainmentFold : public Fold {
    public:
     ContainmentFold(
         dftracer::utils::dstd::StringIntern& intern,
-        std::vector<std::string> partition, std::string start_field = "ts",
-        std::string dur_field = "dur", std::string name_field = "name",
-        double time_scale = 1.0, std::vector<std::string> group = {},
+        dstd::Vector<dstd::String> partition, dstd::String start_field = "ts",
+        dstd::String dur_field = "dur", dstd::String name_field = "name",
+        double time_scale = 1.0, dstd::Vector<dstd::String> group = {},
         const dftracer::utils::index::RecordSchema* path_schema = nullptr);
 
     bool accepts(const ScanShape&) const override { return true; }
     bool needs_args() const override { return spec_.needs_args; }
-    std::vector<std::string> extra_captures() const override {
+    dstd::Vector<dstd::String> extra_captures() const override {
         return spec_.nested_captures;
     }
 
-    std::unique_ptr<Fold> slice() const override;
+    dstd::UniquePtr<Fold> slice() const override;
     void step(const FoldBatch& batch) override;
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
@@ -147,7 +146,7 @@ class ContainmentFold : public Fold {
     dstd::Pair<dataframe::DataFrame, dataframe::DataFrame> containment() const {
         return build_containment_both(rows_, *intern_, spec_.out);
     }
-    std::string flamegraph_partial() const {
+    dstd::String flamegraph_partial() const {
         return dftracer::utils::trace::views::detail::flamegraph_partial(
             rows_, *intern_, spec_.out);
     }
@@ -158,7 +157,7 @@ class ContainmentFold : public Fold {
     // path that also interns during the fused scan.
     dftracer::utils::dstd::StringIntern* intern_;
     ContainmentSpec spec_;
-    std::vector<ContainmentRow> rows_;
+    dstd::Vector<ContainmentRow> rows_;
 };
 
 }  // namespace dftracer::utils::trace::views::detail

@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 
 #include <algorithm>
-#include <set>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dataframe = dftracer::utils::dataframe;
 
@@ -23,7 +23,7 @@ AggSchema make_agg_schema(const ViewPlan& plan) {
     s.spec_field.assign(plan.agg.size(), -1);
     s.spec_argmax.assign(plan.agg.size(), -1);
     s.spec_set.assign(plan.agg.size(), -1);
-    auto field_index = [&](const std::string& f) -> int {
+    auto field_index = [&](const dstd::String& f) -> int {
         for (std::size_t i = 0; i < s.fields.size(); ++i)
             if (s.fields[i] == f) return static_cast<int>(i);
         s.fields.push_back(f);
@@ -73,7 +73,7 @@ AggSchema make_agg_schema(const ViewPlan& plan) {
 
 const AggSchema& ensure_schema(const ViewPlan& plan) {
     if (!plan.schema)
-        plan.schema = std::make_shared<AggSchema>(make_agg_schema(plan));
+        plan.schema = dstd::make_shared<AggSchema>(make_agg_schema(plan));
     return *plan.schema;
 }
 
@@ -116,17 +116,17 @@ const dftracer::utils::index::plan::GroupResolver* ensure_resolver(
             {dstd::String(dstd::StringView(f.file_path)), std::move(index)});
     }
     plan.resolver =
-        std::make_shared<dftracer::utils::index::plan::GroupResolver>(files,
-                                                                      columns);
+        dstd::make_shared<dftracer::utils::index::plan::GroupResolver>(files,
+                                                                       columns);
     return plan.resolver.get();
 }
 
-std::string resolve_group_value(
+dstd::String resolve_group_value(
     const dftracer::utils::index::plan::GroupResolver& r, const GroupKey& gk,
-    const std::string& hash) {
+    const dstd::String& hash) {
     const GroupKey::Kind kind = gk.kind;
     auto text = [](const dstd::String& v) {
-        return std::string(v.data(), v.size());
+        return dstd::String(v.data(), v.size());
     };
     if (kind == GroupKey::Kind::FilePath) return text(r.value(FILE_PATH, hash));
     if (kind == GroupKey::Kind::FileName) {
@@ -134,25 +134,25 @@ std::string resolve_group_value(
         const std::size_t slash = p.find_last_of('/');
         return slash == dstd::String::npos
                    ? text(p)
-                   : std::string(p.data() + slash + 1, p.size() - slash - 1);
+                   : dstd::String(p.data() + slash + 1, p.size() - slash - 1);
     }
     if (kind == GroupKey::Kind::HostName) return text(r.value(HOST_NAME, hash));
     if (kind == GroupKey::Kind::Rank) return text(r.value(RANK, hash));
     return hash;
 }
 
-std::string apply_group_transform(const GroupKey& gk, std::string v) {
+dstd::String apply_group_transform(const GroupKey& gk, dstd::String v) {
     switch (gk.transform) {
         case GroupKey::Transform::None:
             return v;
         case GroupKey::Transform::Dirname: {
             const auto slash = v.find_last_of('/');
-            if (slash == std::string::npos) return std::string();
+            if (slash == dstd::String::npos) return dstd::String();
             return v.substr(0, slash);
         }
         case GroupKey::Transform::Basename: {
             const auto slash = v.find_last_of('/');
-            return slash == std::string::npos ? v : v.substr(slash + 1);
+            return slash == dstd::String::npos ? v : v.substr(slash + 1);
         }
         case GroupKey::Transform::Lower: {
             ::dftracer::utils::common::detail::lower_ascii(v);
@@ -160,13 +160,13 @@ std::string apply_group_transform(const GroupKey& gk, std::string v) {
         }
         case GroupKey::Transform::Bucket:
             for (const auto& b : gk.transform_args)
-                if (v.find(b) != std::string::npos) return b;
-            return std::string();
+                if (v.find(b) != dstd::String::npos) return b;
+            return dstd::String();
     }
     return v;
 }
 
-std::string group_col_name(const GroupKey& gk) {
+dstd::String group_col_name(const GroupKey& gk) {
     switch (gk.kind) {
         case GroupKey::Kind::Name:
             return "name";
@@ -204,7 +204,7 @@ std::string group_col_name(const GroupKey& gk) {
 // convention (sum_field). The legacy mean path keeps the bare arg name. Pct
 // uses the spec's out_name prefix (e.g. "p90_" from the pNN shorthand) so the
 // quantile is legible; otherwise it falls back to "pct_".
-std::string dyn_col_name(const AggSpec& spec, const std::string& key) {
+dstd::String dyn_col_name(const AggSpec& spec, const dstd::String& key) {
     switch (spec.op) {
         case AggOp::Count:
             return "count_" + key;
@@ -227,7 +227,7 @@ std::string dyn_col_name(const AggSpec& spec, const std::string& key) {
         case AggOp::Kurt:
             return "kurt_" + key;
         case AggOp::Pct: {
-            std::string pfx = spec.out_name.empty() ? "pct_" : spec.out_name;
+            dstd::String pfx = spec.out_name.empty() ? "pct_" : spec.out_name;
             if (pfx.back() != '_') pfx += '_';
             return pfx + key;
         }
@@ -236,7 +236,7 @@ std::string dyn_col_name(const AggSpec& spec, const std::string& key) {
     }
 }
 
-std::string agg_col_name(const AggSpec& spec) {
+dstd::String agg_col_name(const AggSpec& spec) {
     if (!spec.out_name.empty()) return spec.out_name;
     switch (spec.op) {
         case AggOp::Count:
@@ -280,13 +280,15 @@ std::string agg_col_name(const AggSpec& spec) {
 }
 
 void project_columns(dftracer::utils::dataframe::DataFrame& batch,
-                     const std::vector<std::string>& select) {
+                     const dstd::Vector<dstd::String>& select) {
     if (select.empty()) return;
-    const std::set<std::string> keep(select.begin(), select.end());
+    const dstd::Set<dstd::String> keep(select.begin(), select.end());
+    // keep std: DataFrame::names and columns are std::vectors
     std::vector<std::string> names;
+    // keep std: DataFrame::columns is a std::vector
     std::vector<dftracer::utils::dataframe::Series> columns;
     for (std::size_t i = 0; i < batch.names.size(); ++i) {
-        if (keep.count(batch.names[i])) {
+        if (keep.count(dstd::StringView(batch.names[i]))) {
             names.push_back(std::move(batch.names[i]));
             columns.push_back(std::move(batch.columns[i]));
         }
@@ -298,9 +300,12 @@ void project_columns(dftracer::utils::dataframe::DataFrame& batch,
 dataframe::DataFrame apply_agg_post_ops(dataframe::DataFrame batch,
                                         const ViewPlan& plan) {
     if (!plan.sort_col.empty())
-        batch = batch.sort_by(plan.sort_col, plan.sort_desc);
+        // keep std: sort_by takes a std::string
+        batch = batch.sort_by(std::string(plan.sort_col), plan.sort_desc);
     if (!plan.topk_col.empty())
-        batch = batch.topk(plan.topk_col, plan.topk_k, plan.topk_largest);
+        // keep std: topk takes a std::string
+        batch = batch.topk(std::string(plan.topk_col), plan.topk_k,
+                           plan.topk_largest);
     if (plan.offset || plan.limit) {
         const std::int64_t off = static_cast<std::int64_t>(plan.offset);
         const std::int64_t len = plan.limit

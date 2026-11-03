@@ -105,8 +105,8 @@ TEST_SUITE("ViewPlannerUtility") {
 
         ViewPlannerInput input;
         input.with_view(ViewDefinition::io_view())
-            .with_file_path(file_path)
-            .with_index_path(index_path)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
             .with_num_checkpoints(4);
 
@@ -141,8 +141,8 @@ TEST_SUITE("ViewPlannerUtility") {
 
         ViewPlannerInput input;
         input.with_view(ViewDefinition::compute_view())
-            .with_file_path(file_path)
-            .with_index_path(index_path)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
             .with_num_checkpoints(4);
 
@@ -174,8 +174,8 @@ TEST_SUITE("ViewPlannerUtility") {
 
         ViewPlannerInput input;
         input.with_view(view)
-            .with_file_path(file_path)
-            .with_index_path(index_path)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
             .with_num_checkpoints(4);
 
@@ -205,8 +205,8 @@ TEST_SUITE("ViewPlannerUtility") {
 
         ViewPlannerInput input;
         input.with_view(view)
-            .with_file_path(file_path)
-            .with_index_path(index_path)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
             .with_num_checkpoints(4);
 
@@ -298,8 +298,8 @@ TEST_SUITE("ViewPlannerUtility") {
 
         ViewPlannerInput input;
         input.with_view(view)
-            .with_file_path(file_path)
-            .with_index_path(index_path)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(10000)
             .with_num_checkpoints(1);
 
@@ -334,8 +334,8 @@ TEST_SUITE("ViewPlannerUtility") {
 
         ViewPlannerInput input;
         input.with_view(view)
-            .with_file_path(file_path)
-            .with_index_path(index_path)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(10000)
             .with_num_checkpoints(3);
 

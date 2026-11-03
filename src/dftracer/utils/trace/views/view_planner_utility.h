@@ -6,15 +6,14 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/types.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index {
 class Snapshot;
@@ -24,8 +23,8 @@ namespace dftracer::utils::trace::views {
 
 struct ViewPlannerInput {
     ViewDefinition view;
-    std::string file_path;
-    std::string index_path;  // `.dftindex` store path
+    dstd::String file_path;
+    dstd::String index_path;  // `.dftindex` store path
     std::size_t uncompressed_size = 0;
     std::size_t num_checkpoints = 0;
     dstd::Optional<dstd::Pair<double, double>> time_range;  // {begin, end}
@@ -38,8 +37,8 @@ struct ViewPlannerInput {
     const index::Snapshot* snapshot = nullptr;
 
     ViewPlannerInput& with_view(const ViewDefinition& v);
-    ViewPlannerInput& with_file_path(const std::string& path);
-    ViewPlannerInput& with_index_path(const std::string& path);
+    ViewPlannerInput& with_file_path(const dstd::String& path);
+    ViewPlannerInput& with_index_path(const dstd::String& path);
     ViewPlannerInput& with_uncompressed_size(std::size_t s);
     ViewPlannerInput& with_num_checkpoints(std::size_t n);
     ViewPlannerInput& with_time_range(double begin, double end);
@@ -56,7 +55,7 @@ struct ViewChunkCandidate {
 // Success payload; failures are reported via Result<ViewPlannerOutput>.
 struct ViewPlannerOutput {
     bool file_may_match = false;
-    std::vector<ViewChunkCandidate> candidates;
+    dstd::Vector<ViewChunkCandidate> candidates;
     std::uint64_t total_checkpoints = 0;
     std::uint64_t skipped_checkpoints = 0;
 };

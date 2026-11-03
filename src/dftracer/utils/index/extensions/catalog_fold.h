@@ -38,10 +38,8 @@ class CatalogFold : public trace::views::detail::Fold {
     bool reads_never_indexed() const override { return false; }
     bool wants_metadata() const override { return false; }
 
-    // keep std: trace::views::detail::Fold::slice returns std::unique_ptr
-    std::unique_ptr<trace::views::detail::Fold> slice() const override {
-        // keep std: Fold::slice returns std::unique_ptr
-        return std::make_unique<CatalogFold>(*intern_, params_hash_);
+    dstd::UniquePtr<trace::views::detail::Fold> slice() const override {
+        return dstd::make_unique<CatalogFold>(*intern_, params_hash_);
     }
 
     void step(const trace::views::detail::FoldBatch& batch) override;

@@ -272,7 +272,7 @@ TEST_CASE("plugin cxx: Batch view iterates typed Events") {
         PluginFold fold(p, intern);
 
         const std::uint32_t N = 3;
-        std::vector<FoldEvent> evs(N);
+        dstd::Vector<FoldEvent> evs(N);
         for (std::uint32_t i = 0; i < N; ++i) {
             evs[i] = FoldEvent{};
             evs[i].cat_id = intern.get_or_insert("POSIX");
@@ -328,7 +328,7 @@ TEST_CASE("plugin cxx: Event args expose typed values and dotted lookup") {
         fe.args.emplace_back(intern.get_or_insert("fd"), 2.5);
         fe.args.emplace_back(intern.get_or_insert("path"),
                              intern.get_or_insert("/tmp/a"));
-        std::vector<FoldEvent> evs = {fe};
+        dstd::Vector<FoldEvent> evs = {fe};
         ScanUnit unit{};
         fold.step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
     }
@@ -478,7 +478,7 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
 
     // Merged counts: pid 1 -> 3, pid 2 -> 2. Argmax tid by duration: pid 1 at
     // dur 30 -> tid 300; pid 2 at dur 50 -> tid 500.
-    const std::vector<std::vector<FoldEvent>> slices = {
+    const std::vector<dstd::Vector<FoldEvent>> slices = {
         {evt(1, 10, 100), evt(1, 30, 300), evt(2, 5, 50)},
         {evt(1, 20, 200), evt(2, 50, 500)}};
     for (const auto& evs : slices) {

@@ -9,6 +9,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -78,17 +79,9 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
-#include <functional>
 #include <limits>
-#include <map>
-#include <memory>
 #include <mutex>
 #include <numeric>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
 
 // The View terminals: each lowers a ViewPlan onto the module pieces and runs a
 // pruned parallel scan. The scan Source lives in view_scan (gather_units +
@@ -102,7 +95,7 @@ namespace dftracer::utils::trace::views::detail {
 // Every file is a clean first touch: it has an index path with no store yet,
 // so a bootstrap can build it (and there is nothing to read instead).
 static bool all_files_fresh(const ViewPlan& plan) {
-    const std::string* checked = nullptr;
+    const dstd::String* checked = nullptr;
     for (const auto& f : plan.files) {
         if (f.index_path.empty()) return false;
         if (checked && *checked == f.index_path) continue;
@@ -134,7 +127,7 @@ bool export_bootstrap_eligible(const ViewPlan& plan) {
 // runs on pooled coroutine threads.
 static dstd::String project_event(simdjson::dom::parser& parser,
                                   dstd::StringView ev,
-                                  const std::vector<std::string>& select,
+                                  const dstd::Vector<dstd::String>& select,
                                   bool args_fallback) {
     simdjson::padded_string padded(ev);
     simdjson::dom::element doc;
@@ -183,7 +176,7 @@ namespace {
 //
 // The descriptor is the one open_bootstrap_source hashed.
 coro::CoroTask<void> build_bootstrap_artifacts(
-    coro::Scope& scope, std::string file,
+    coro::Scope& scope, dstd::String file,
     dftracer::utils::index::gzip::CheckpointIndexer::VisitorList visitors,
     dftracer::utils::index::gzip::GzipBuildArtifacts* arts, bool* ok,
     std::size_t ways, dstd::SharedPtr<dstd::ScopedFd> source) {
@@ -215,7 +208,7 @@ BootstrapSource open_bootstrap_source(dstd::StringView file,
     BootstrapSource out;
     if (!shared)
         shared = dstd::make_shared<dstd::ScopedFd>(
-            ::open(std::string(file).c_str(), O_RDONLY));
+            ::open(dstd::String(file).c_str(), O_RDONLY));
     const int fd = shared->get();
     if (fd < 0) return out;
     struct stat st{};
@@ -229,10 +222,10 @@ BootstrapSource open_bootstrap_source(dstd::StringView file,
 }
 
 struct BootstrapRoot {
-    std::string index_path;
+    dstd::String index_path;
     dstd::Vector<std::size_t> members;
     dstd::Optional<dftracer::utils::index::Index> index;
-    std::string index_error;
+    dstd::String index_error;
 };
 
 // Every index root of a bootstrap is held read-write until the last commit.
@@ -254,7 +247,7 @@ struct BootstrapStores {
 coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
                                            BootstrapStores& out) {
     const std::size_t n = plan.files.size();
-    dstd::Map<std::string, dstd::Vector<std::size_t>> by_index;
+    dstd::Map<dstd::String, dstd::Vector<std::size_t>> by_index;
     for (std::size_t i = 0; i < n; ++i)
         by_index[plan.files[i].index_path].push_back(i);
     for (const auto& entry : by_index) {
@@ -278,7 +271,7 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
         if (opened)
             store->index.emplace(std::move(*opened));
         else
-            store->index_error = std::string(opened.error().message());
+            store->index_error = dstd::String(opened.error().message());
         out.roots.push_back(std::move(store));
     }
 }
@@ -288,7 +281,7 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
 // index cannot hold it.
 struct BootstrapBuild {
     dstd::Optional<dftracer::utils::index::FileBuild> build;
-    std::string failure;
+    dstd::String failure;
 };
 
 BootstrapBuild open_bootstrap_build(BootstrapRoot& root, dstd::StringView file,
@@ -306,7 +299,7 @@ BootstrapBuild open_bootstrap_build(BootstrapRoot& root, dstd::StringView file,
     if (started)
         out.build.emplace(std::move(*started));
     else
-        out.failure = std::string(started.error().message());
+        out.failure = dstd::String(started.error().message());
     return out;
 }
 
@@ -351,7 +344,7 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
                                   std::size_t) override {
         buf_.append(data, len);
         const std::size_t last_nl = buf_.rfind('\n');
-        if (last_nl == std::string::npos) co_return;
+        if (last_nl == dstd::String::npos) co_return;
         if (!drop_metadata_) {
             sink_->write(dstd::StringView(buf_.data(), last_nl + 1));
         } else {
@@ -386,9 +379,9 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
 
     ExportSink* sink_;
     bool drop_metadata_;
-    std::string buf_;
-    std::string kept_;
-    std::string pad_;
+    dstd::String buf_;
+    dstd::String kept_;
+    dstd::String pad_;
     simdjson::ondemand::parser parser_;
 };
 
@@ -404,7 +397,7 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
 
     BootstrapStores stores;
     co_await open_bootstrap_stores(plan, stores);
-    dstd::Map<std::string, std::size_t> slot_of;
+    dstd::Map<dstd::String, std::size_t> slot_of;
     for (std::size_t r = 0; r < stores.roots.size(); ++r)
         slot_of.emplace(stores.roots[r]->index_path, r);
 
@@ -520,7 +513,7 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
     // make the read slower than not having it.
     dftracer::utils::dstd::StringIntern intern;
     auto folds = select_index_folds(plan, vdef, intern);
-    std::vector<Fold*> fold_ptrs;
+    dstd::Vector<Fold*> fold_ptrs;
     for (auto& f : folds) fold_ptrs.push_back(f.get());
     // Stream matched events; --select projects each one to the chosen fields
     // (SQL-style), otherwise they are written verbatim. The scan driver owns
@@ -528,7 +521,7 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
     dftracer::utils::json::RecordParser proj_parser;
     ExportStats stats = co_await for_each_scanned_batch(
         plan, vdef, /*num_slots=*/0, cap,
-        [&](std::size_t, const std::vector<dstd::StringView>& events) {
+        [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
             std::lock_guard<std::mutex> lk(sink_mtx);
             for (const auto& ev : events) {
                 if (seen++ < plan.offset) continue;
@@ -589,7 +582,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     }
     auto writer = std::move(*opened);
 
-    std::vector<ScanCounts> counts_v(num_workers);
+    dstd::Vector<ScanCounts> counts_v(num_workers);
     bool ok = true;
 
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
@@ -665,7 +658,7 @@ coro::CoroTask<ExportStats> run_folds(
     coro::CoroSemaphore* gate) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     auto catalog = select_catalog_fold(plan, vdef, intern);
-    std::vector<Fold*> all(folds.begin(), folds.end());
+    dstd::Vector<Fold*> all(folds.begin(), folds.end());
     if (catalog) all.push_back(catalog.get());
     co_return co_await fuse(plan, vdef, all, intern, /*covered=*/nullptr,
                             /*limit=*/0, dyn_prune, gate);
@@ -762,14 +755,14 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
                                  f.file_path.c_str(), started.failure.c_str());
         co_return out;
     }
-    std::unique_ptr<IndexRuleFold> rule_agg;
-    std::unique_ptr<EngineAggFold> frame_agg;
+    dstd::UniquePtr<IndexRuleFold> rule_agg;
+    dstd::UniquePtr<EngineAggFold> frame_agg;
     if (run->rule_query)
         rule_agg = IndexRuleFold::make(*plan, *run->rule_query, intern,
                                        /*apply_query=*/true);
     else
-        frame_agg = std::make_unique<EngineAggFold>(*plan, intern,
-                                                    /*apply_query=*/true);
+        frame_agg = dstd::make_unique<EngineAggFold>(*plan, intern,
+                                                     /*apply_query=*/true);
     Fold* agg = rule_agg ? static_cast<Fold*>(rule_agg.get())
                          : static_cast<Fold*>(frame_agg.get());
     dftracer::utils::index::extensions::BloomFold bloom(
@@ -1023,7 +1016,7 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
             co_return ExportStats{};
         constexpr std::uint64_t DEFAULT_PART_SIZE = 128ull * 1024 * 1024;
         TraceWriteOptions opts;
-        opts.output_path = std::string(
+        opts.output_path = dstd::String(
             (dstd::PathView(dftracer::utils::index::view_parts_dir(dir)) /
              "part.pfw.gz")
                 .str());
@@ -1135,7 +1128,7 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     std::uint64_t global_min = std::numeric_limits<std::uint64_t>::max();
     const bool by_path = plan_by_path(plan);
     const ix::Roles& roles = plan_record_schema(plan).roles;
-    std::map<std::string, ix::Snapshot> snapshots;
+    dstd::Map<dstd::String, ix::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         if (f.index_path.empty() ||
             !common::input_exists(ix::store_of(f.index_path)))
@@ -1241,7 +1234,7 @@ class DistinctRowFold : public Fold {
     };
 
     DistinctRowFold(const dftracer::utils::dstd::StringIntern& intern,
-                    std::vector<std::string> select, std::vector<Key> keys,
+                    dstd::Vector<dstd::String> select, dstd::Vector<Key> keys,
                     double time_scale, bool keep_metadata, bool by_path)
         : intern_(&intern),
           select_(std::move(select)),
@@ -1255,12 +1248,12 @@ class DistinctRowFold : public Fold {
     bool needs_args() const override { return true; }
     bool wants_metadata() const override { return keep_metadata_; }
 
-    std::vector<std::string> extra_captures() const override {
+    dstd::Vector<dstd::String> extra_captures() const override {
         return row_fold_extra_captures(select_);
     }
 
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<DistinctRowFold>(
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<DistinctRowFold>(
             *intern_, select_, keys_, time_scale_, keep_metadata_, by_path_);
     }
 
@@ -1328,13 +1321,13 @@ class DistinctRowFold : public Fold {
 
     // The distinct candidates in first-position order.
     dataframe::DataFrame build() {
-        std::vector<std::size_t> order(entries_.size());
+        dstd::Vector<std::size_t> order(entries_.size());
         for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
         std::sort(order.begin(), order.end(),
                   [&](std::size_t a, std::size_t b) {
                       return entries_[a].pos < entries_[b].pos;
                   });
-        std::vector<FoldEvent> evs;
+        dstd::Vector<FoldEvent> evs;
         evs.reserve(entries_.size());
         for (std::size_t i : order) evs.push_back(std::move(entries_[i].ev));
         entries_.clear();
@@ -1361,7 +1354,7 @@ class DistinctRowFold : public Fold {
     static constexpr std::uint8_t KIND_UINT = 4;
     static constexpr std::uint8_t KIND_DBL = 8;
 
-    static void append_id(std::string& out, std::uint32_t id) {
+    static void append_id(dstd::String& out, std::uint32_t id) {
         if (id == dftracer::utils::dstd::StringIntern::NO_ID) {
             out.push_back('\0');
             return;
@@ -1370,7 +1363,7 @@ class DistinctRowFold : public Fold {
         out.append(reinterpret_cast<const char*>(&id), sizeof(id));
     }
 
-    static void append_word(std::string& out, char tag, std::uint64_t v) {
+    static void append_word(dstd::String& out, char tag, std::uint64_t v) {
         out.push_back(tag);
         out.append(reinterpret_cast<const char*>(&v), sizeof(v));
     }
@@ -1453,23 +1446,23 @@ class DistinctRowFold : public Fold {
     }
 
     const dftracer::utils::dstd::StringIntern* intern_;
-    std::vector<std::string> select_;
-    std::vector<Key> keys_;
-    std::vector<std::uint8_t> kinds_;
+    dstd::Vector<dstd::String> select_;
+    dstd::Vector<Key> keys_;
+    dstd::Vector<std::uint8_t> kinds_;
     double time_scale_;
     bool keep_metadata_;
     bool by_path_;
     std::int64_t cur_seq_ = -1;
     std::int64_t row_in_unit_ = 0;
-    std::string scratch_;
-    std::vector<Entry> entries_;
-    ankerl::unordered_dense::map<std::string, std::size_t> index_;
+    dstd::String scratch_;
+    dstd::Vector<Entry> entries_;
+    ankerl::unordered_dense::map<dstd::String, std::size_t> index_;
 };
 
 }  // namespace
 
 bool distinct_keyable(const ViewPlan& plan,
-                      const std::vector<std::int64_t>& key_idx) {
+                      const dstd::Vector<std::int64_t>& key_idx) {
     const bool by_path = plan_by_path(plan);
     for (std::int64_t at : key_idx) {
         if (at < 0 || static_cast<std::size_t>(at) >= plan.select.size())
@@ -1487,7 +1480,7 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
     const bool by_path = plan_by_path(plan);
     NativeRowFold fold(intern, plan.select, plan.time_scale,
                        metadata_rows(plan), by_path);
-    std::vector<Fold*> folds{&fold};
+    dstd::Vector<Fold*> folds{&fold};
     auto catalog = select_catalog_fold(plan, vdef, intern);
     if (catalog) folds.push_back(catalog.get());
     co_await execute(lower_fused_folds(plan, vdef, folds), intern);
@@ -1511,16 +1504,17 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
 }
 
 coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
-    const ViewPlan& plan, const std::vector<std::int64_t>& key_idx) {
+    const ViewPlan& plan, const dstd::Vector<std::int64_t>& key_idx) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     dftracer::utils::dstd::StringIntern intern;
     const bool by_path = plan_by_path(plan);
-    std::vector<DistinctRowFold::Key> keys;
+    dstd::Vector<DistinctRowFold::Key> keys;
+    // keep std: LazyFrame::unique takes std::vector<std::string>
     std::vector<std::string> subset;
     keys.reserve(key_idx.size());
     subset.reserve(key_idx.size());
     for (std::int64_t at : key_idx) {
-        const std::string& sel = plan.select[static_cast<std::size_t>(at)];
+        const dstd::String& sel = plan.select[static_cast<std::size_t>(at)];
         const RowKeySource src = row_key_source(sel, by_path);
         DistinctRowFold::Key k;
         k.field = src.kind;
@@ -1534,7 +1528,7 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
     }
     DistinctRowFold fold(intern, plan.select, std::move(keys), plan.time_scale,
                          metadata_rows(plan), by_path);
-    std::vector<Fold*> folds{&fold};
+    dstd::Vector<Fold*> folds{&fold};
     auto catalog = select_catalog_fold(plan, vdef, intern);
     if (catalog) folds.push_back(catalog.get());
     co_await execute(lower_fused_folds(plan, vdef, folds), intern);
@@ -1544,7 +1538,7 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
     // The frame holds only the fold's candidates, already in first-position
     // order, so the host first-occurrence dedup runs over far fewer rows.
     co_return co_await dataframe::LazyFrame::scan(
-        std::make_shared<dataframe::InMemorySource>(std::move(b)))
+        dstd::make_shared<dataframe::InMemorySource>(std::move(b)))
         .unique(std::move(subset))
         .collect();
 }
@@ -1553,9 +1547,9 @@ namespace {
 
 template <class R>
 coro::CoroTask<R> run_containment_terminal(
-    const ViewPlan& plan, std::vector<std::string> partition,
-    std::string ts_field, std::string dur_field, std::string name_field,
-    std::vector<std::string> group, R (ContainmentFold::*build)() const) {
+    const ViewPlan& plan, dstd::Vector<dstd::String> partition,
+    dstd::String ts_field, dstd::String dur_field, dstd::String name_field,
+    dstd::Vector<dstd::String> group, R (ContainmentFold::*build)() const) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     dftracer::utils::dstd::StringIntern intern;
     ContainmentFold fold(
@@ -1570,35 +1564,35 @@ coro::CoroTask<R> run_containment_terminal(
 }  // namespace
 
 coro::CoroTask<dataframe::DataFrame> run_call_tree(
-    const ViewPlan& plan, std::vector<std::string> partition,
-    std::string ts_field, std::string dur_field, std::string name_field) {
+    const ViewPlan& plan, dstd::Vector<dstd::String> partition,
+    dstd::String ts_field, dstd::String dur_field, dstd::String name_field) {
     return run_containment_terminal(
         plan, std::move(partition), std::move(ts_field), std::move(dur_field),
         std::move(name_field), {}, &ContainmentFold::call_tree);
 }
 
 coro::CoroTask<dataframe::DataFrame> run_flamegraph(
-    const ViewPlan& plan, std::vector<std::string> partition,
-    std::string ts_field, std::string dur_field, std::string name_field,
-    std::vector<std::string> group) {
+    const ViewPlan& plan, dstd::Vector<dstd::String> partition,
+    dstd::String ts_field, dstd::String dur_field, dstd::String name_field,
+    dstd::Vector<dstd::String> group) {
     return run_containment_terminal(
         plan, std::move(partition), std::move(ts_field), std::move(dur_field),
         std::move(name_field), std::move(group), &ContainmentFold::flamegraph);
 }
 
 coro::CoroTask<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>
-run_containment(const ViewPlan& plan, std::vector<std::string> partition,
-                std::string ts_field, std::string dur_field,
-                std::string name_field, std::vector<std::string> group) {
+run_containment(const ViewPlan& plan, dstd::Vector<dstd::String> partition,
+                dstd::String ts_field, dstd::String dur_field,
+                dstd::String name_field, dstd::Vector<dstd::String> group) {
     return run_containment_terminal(
         plan, std::move(partition), std::move(ts_field), std::move(dur_field),
         std::move(name_field), std::move(group), &ContainmentFold::containment);
 }
 
-coro::CoroTask<std::string> run_flamegraph_partial(
-    const ViewPlan& plan, std::vector<std::string> partition,
-    std::string ts_field, std::string dur_field, std::string name_field,
-    std::vector<std::string> group) {
+coro::CoroTask<dstd::String> run_flamegraph_partial(
+    const ViewPlan& plan, dstd::Vector<dstd::String> partition,
+    dstd::String ts_field, dstd::String dur_field, dstd::String name_field,
+    dstd::Vector<dstd::String> group) {
     return run_containment_terminal(plan, std::move(partition),
                                     std::move(ts_field), std::move(dur_field),
                                     std::move(name_field), std::move(group),
@@ -1613,8 +1607,8 @@ namespace {
 // both emit it); a partial with any other leading byte is rejected loudly.
 enum class AggWireTag : std::uint8_t { AggState = 2 };
 
-std::string encode_agg_partial(const dataframe::AggState& st) {
-    std::string out(1, static_cast<char>(AggWireTag::AggState));
+dstd::String encode_agg_partial(const dataframe::AggState& st) {
+    dstd::String out(1, static_cast<char>(AggWireTag::AggState));
     out += dataframe::agg_serialize(st);
     return out;
 }
@@ -1622,7 +1616,7 @@ std::string encode_agg_partial(const dataframe::AggState& st) {
 // Merge every partial into one AggState. An empty or unknown-tagged blob is
 // rejected, not misparsed.
 dataframe::AggStatePtr decode_partials(
-    const std::vector<dstd::StringView>& partials) {
+    const dstd::Vector<dstd::StringView>& partials) {
     dataframe::AggStatePtr state;
     for (dstd::StringView p : partials) {
         if (p.empty())
@@ -1634,8 +1628,9 @@ dataframe::AggStatePtr decode_partials(
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Aggregation,
                 "aggregate partial: unknown wire tag");
-        dataframe::AggStatePtr st =
-            dataframe::agg_deserialize(std::string(p.substr(1)));
+        dataframe::AggStatePtr st = dataframe::agg_deserialize(
+            // keep std: agg_deserialize takes std::string
+            std::string(p.substr(1)));
         if (!state)
             state = std::move(st);
         else
@@ -1664,7 +1659,7 @@ dataframe::AggStatePtr empty_engine_state(const ViewPlan& plan) {
 // Distributed materialize: combine the rank-local partials and persist the
 // merged rollup.
 coro::CoroTask<void> run_materialize_partials(
-    const ViewPlan& plan, const std::vector<dstd::StringView>& partials) {
+    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
     ensure_schema(plan);
     const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
@@ -1697,8 +1692,8 @@ dstd::Optional<dataframe::DataFrame> run_reconstruct_if_cached(
 coro::CoroTask<ExportStats> run_scan_batches(
     const dstd::SharedPtr<const ViewPlan>& plan_ptr, std::size_t num_slots,
     std::uint64_t limit,
-    const std::function<void(std::size_t,
-                             const std::vector<dstd::StringView>&)>& on_batch) {
+    const dstd::Function<
+        void(std::size_t, const dstd::Vector<dstd::StringView>&)>& on_batch) {
     bool from_mv = false;
     const ViewPlan plan = redirect_reads(*plan_ptr, &from_mv);
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
@@ -1713,9 +1708,9 @@ coro::CoroTask<ExportStats> run_scan_batches(
 // `make` builds it with the scan's intern so ids agree and per-worker slices
 // merge; `finalize` runs after the merge.
 struct FoldFactory {
-    std::function<std::unique_ptr<Fold>(dftracer::utils::dstd::StringIntern&)>
+    dstd::Function<dstd::UniquePtr<Fold>(dftracer::utils::dstd::StringIntern&)>
         make;
-    std::function<void()> finalize;
+    dstd::Function<void()> finalize;
 };
 
 struct StreamBranch {
@@ -1727,9 +1722,9 @@ struct StreamBranch {
 
 struct ViewSessionState {
     dstd::SharedPtr<const ViewPlan> plan;
-    std::vector<BranchHooks> branches;
-    std::vector<FoldFactory> fold_factories;
-    std::vector<StreamBranch> stream_branches;
+    dstd::Vector<BranchHooks> branches;
+    dstd::Vector<FoldFactory> fold_factories;
+    dstd::Vector<StreamBranch> stream_branches;
     /// A narrowing an attached fold offered for the shared scan, applied by
     /// execute() only when no other branch exists. The scan feeds every
     /// branch, so narrowing it for one would starve the rest; whether that
@@ -1739,7 +1734,7 @@ struct ViewSessionState {
 
 dstd::SharedPtr<ViewSessionState> make_view_session_state(
     dstd::SharedPtr<const ViewPlan> plan) {
-    auto st = std::make_shared<ViewSessionState>();
+    auto st = dstd::make_shared<ViewSessionState>();
     st->plan = std::move(plan);
     return st;
 }
@@ -1763,15 +1758,15 @@ void add_stream_branch(
 
 void add_fold_factory(
     ViewSessionState& state,
-    std::function<std::unique_ptr<Fold>(dftracer::utils::dstd::StringIntern&)>
+    dstd::Function<dstd::UniquePtr<Fold>(dftracer::utils::dstd::StringIntern&)>
         make,
-    std::function<void()> finalize) {
+    dstd::Function<void()> finalize) {
     state.fold_factories.push_back({std::move(make), std::move(finalize)});
 }
 
 void add_fold_branch(ViewSessionState& state, Query predicate,
-                     std::function<BranchConsumer()> make_consumer,
-                     std::function<void()> finalize, bool wants_metadata) {
+                     dstd::Function<BranchConsumer()> make_consumer,
+                     dstd::Function<void()> finalize, bool wants_metadata) {
     BranchHooks h;
     h.wants_metadata = wants_metadata;
     h.predicate = std::move(predicate);
@@ -1781,8 +1776,8 @@ void add_fold_branch(ViewSessionState& state, Query predicate,
 }
 
 void add_fold_branch(ViewSessionState& state,
-                     std::function<BranchConsumer()> make_consumer,
-                     std::function<void()> finalize, bool wants_metadata) {
+                     dstd::Function<BranchConsumer()> make_consumer,
+                     dstd::Function<void()> finalize, bool wants_metadata) {
     BranchHooks h;  // predicate unset = match all scanned events
     h.wants_metadata = wants_metadata;
     h.make_consumer = std::move(make_consumer);
@@ -1791,8 +1786,8 @@ void add_fold_branch(ViewSessionState& state,
 }
 
 void add_selection_fold_branch(ViewSessionState& state,
-                               std::function<BranchConsumer()> make_consumer,
-                               std::function<void()> finalize) {
+                               dstd::Function<BranchConsumer()> make_consumer,
+                               dstd::Function<void()> finalize) {
     if (auto eq = effective_query(*state.plan))
         add_fold_branch(state, std::move(*eq), std::move(make_consumer),
                         std::move(finalize));
@@ -1801,9 +1796,9 @@ void add_selection_fold_branch(ViewSessionState& state,
 }
 
 void add_materialize_branch(ViewSessionState& state,
-                            std::vector<GroupKey> group_by,
-                            std::vector<AggSpec> agg) {
-    auto plan = std::make_shared<ViewPlan>(*state.plan);
+                            dstd::Vector<GroupKey> group_by,
+                            dstd::Vector<AggSpec> agg) {
+    auto plan = dstd::make_shared<ViewPlan>(*state.plan);
     plan->group_by = std::move(group_by);
     plan->agg = std::move(agg);
     plan->schema.reset();
@@ -1850,13 +1845,13 @@ BranchHooks make_export_branch(ExportSink& sink,
                                dstd::SharedPtr<ExportStats> out) {
     // The sink is one shared object, so writes still serialize on a mutex; only
     // the count is per worker.
-    auto mtx = std::make_shared<std::mutex>();
+    auto mtx = dstd::make_shared<std::mutex>();
     auto counts =
-        std::make_shared<std::vector<dstd::SharedPtr<std::uint64_t>>>();
+        dstd::make_shared<dstd::Vector<dstd::SharedPtr<std::uint64_t>>>();
 
     BranchHooks h;
     h.make_consumer = [&sink, mtx, counts]() -> BranchConsumer {
-        auto count = std::make_shared<std::uint64_t>(0);
+        auto count = dstd::make_shared<std::uint64_t>(0);
         counts->push_back(count);
         return
             [&sink, mtx, count](const json::JsonValue&, dstd::StringView raw) {
@@ -1883,15 +1878,15 @@ class BranchDriverFold : public Fold {
    public:
     // `gate_metadata`: the scan carries metadata records only for the
     // branches that read them, so the others must not see them.
-    BranchDriverFold(dstd::SharedPtr<std::vector<const BranchHooks*>> branches,
+    BranchDriverFold(dstd::SharedPtr<dstd::Vector<const BranchHooks*>> branches,
                      bool gate_metadata)
         : branches_(std::move(branches)), gate_metadata_(gate_metadata) {}
 
     bool accepts(const ScanShape&) const override { return true; }
     bool wants_raw() const override { return true; }
 
-    std::unique_ptr<Fold> slice() const override {
-        auto s = std::make_unique<BranchDriverFold>(branches_, gate_metadata_);
+    dstd::UniquePtr<Fold> slice() const override {
+        auto s = dstd::make_unique<BranchDriverFold>(branches_, gate_metadata_);
         s->consumers_.reserve(branches_->size());
         for (const auto* br : *branches_)
             s->consumers_.push_back(br->make_consumer());
@@ -1901,7 +1896,9 @@ class BranchDriverFold : public Fold {
     void step(const FoldBatch& b) override {
         for (dstd::StringView line : b.raw) {
             buf_.assign(line);
-            auto res = parser_.parse(buf_);
+            auto res = parser_.parse(
+                buf_.data(), buf_.size(),
+                buf_.capacity() - buf_.size() < simdjson::SIMDJSON_PADDING);
             if (res.error()) continue;
             auto root = res.value_unsafe();
             if (!root.is_object()) continue;
@@ -1931,11 +1928,11 @@ class BranchDriverFold : public Fold {
     }
 
    private:
-    dstd::SharedPtr<std::vector<const BranchHooks*>> branches_;
+    dstd::SharedPtr<dstd::Vector<const BranchHooks*>> branches_;
     bool gate_metadata_;
-    std::vector<BranchConsumer> consumers_;
+    dstd::Vector<BranchConsumer> consumers_;
     dftracer::utils::json::RecordParser parser_;
-    std::string buf_;
+    dstd::String buf_;
 };
 
 coro::CoroTask<ExportStats> run_session(
@@ -1951,12 +1948,13 @@ coro::CoroTask<ExportStats> run_session(
         dstd::SharedPtr<ViewPlan> agg_plan;  // set only for a match-all agg
         bool apply_query = false;  // branch EngineAggFold filters per event
     };
-    std::vector<ScanBranch> scan_branches;
+    dstd::Vector<ScanBranch> scan_branches;
     scan_branches.reserve(state->branches.size());
     for (const auto& br : state->branches) {
         if (br.agg && !br.predicate) {
-            auto full = br.agg->plan ? std::make_shared<ViewPlan>(*br.agg->plan)
-                                     : std::make_shared<ViewPlan>(plan);
+            auto full = br.agg->plan
+                            ? dstd::make_shared<ViewPlan>(*br.agg->plan)
+                            : dstd::make_shared<ViewPlan>(plan);
             if (!br.agg->plan) {
                 full->group_by = br.agg->group_by;
                 full->agg = br.agg->agg;
@@ -2003,7 +2001,7 @@ coro::CoroTask<ExportStats> run_session(
     if (scan_branches.empty() && !has_factories && !has_streams)
         co_return ExportStats{};
 
-    std::vector<const ScanBranch*> agg_b, raw_b;
+    dstd::Vector<const ScanBranch*> agg_b, raw_b;
     for (const auto& sb : scan_branches)
         (sb.agg_plan ? agg_b : raw_b).push_back(&sb);
 
@@ -2039,33 +2037,34 @@ coro::CoroTask<ExportStats> run_session(
     ViewDefinition avdef = make_vdef(scan_plan, /*for_aggregation=*/true);
     // Streamed morsels hold the intern their ids resolve through, and outlive
     // this scan in their consumers' hands.
-    auto intern_owner = std::make_shared<dftracer::utils::dstd::StringIntern>();
+    auto intern_owner =
+        dstd::make_shared<dftracer::utils::dstd::StringIntern>();
     dftracer::utils::dstd::StringIntern& intern = *intern_owner;
 
-    std::vector<std::unique_ptr<StreamRowFold>> streams;
+    dstd::Vector<dstd::UniquePtr<StreamRowFold>> streams;
     streams.reserve(state->stream_branches.size());
     for (const StreamBranch& sb : state->stream_branches) {
         const bool keep_metadata = metadata_rows(*sb.plan);
         if (keep_metadata) avdef.include_metadata = true;
-        streams.push_back(std::make_unique<StreamRowFold>(
+        streams.push_back(dstd::make_unique<StreamRowFold>(
             sb.channel, sb.budget, intern_owner, sb.plan->select,
             sb.plan->time_scale, keep_metadata, false, sb.plan, sb.dropped,
             plan_by_path(*sb.plan)));
     }
 
-    std::vector<std::unique_ptr<EngineAggFold>> aggs(agg_b.size());
-    std::vector<std::unique_ptr<IndexRuleFold>> rule_aggs(agg_b.size());
+    dstd::Vector<dstd::UniquePtr<EngineAggFold>> aggs(agg_b.size());
+    dstd::Vector<dstd::UniquePtr<IndexRuleFold>> rule_aggs(agg_b.size());
     for (std::size_t i = 0; i < agg_b.size(); ++i) {
         rule_aggs[i] = IndexRuleFold::make(*agg_b[i]->agg_plan, intern,
                                            agg_b[i]->apply_query);
         if (!rule_aggs[i])
-            aggs[i] = std::make_unique<EngineAggFold>(
+            aggs[i] = dstd::make_unique<EngineAggFold>(
                 *agg_b[i]->agg_plan, intern, agg_b[i]->apply_query);
     }
 
-    std::unique_ptr<BranchDriverFold> raw_fold;
+    dstd::UniquePtr<BranchDriverFold> raw_fold;
     if (!raw_b.empty()) {
-        auto branches = std::make_shared<std::vector<const BranchHooks*>>();
+        auto branches = dstd::make_shared<dstd::Vector<const BranchHooks*>>();
         branches->reserve(raw_b.size());
         bool any_metadata = false;
         for (const auto* sb : raw_b) {
@@ -2075,17 +2074,17 @@ coro::CoroTask<ExportStats> run_session(
         const bool gate = any_metadata && !avdef.include_metadata;
         if (gate) avdef.include_metadata = true;
         raw_fold =
-            std::make_unique<BranchDriverFold>(std::move(branches), gate);
+            dstd::make_unique<BranchDriverFold>(std::move(branches), gate);
     }
 
     // Externally-built folds (plugins), constructed with the shared intern so
     // ids agree and per-worker slices merge.
-    std::vector<std::unique_ptr<Fold>> factory_folds;
+    dstd::Vector<dstd::UniquePtr<Fold>> factory_folds;
     factory_folds.reserve(state->fold_factories.size());
     for (auto& ff : state->fold_factories)
         if (auto f = ff.make(intern)) factory_folds.push_back(std::move(f));
 
-    std::vector<Fold*> fold_ptrs;
+    dstd::Vector<Fold*> fold_ptrs;
     fold_ptrs.reserve(aggs.size() + factory_folds.size() + 1);
     for (std::size_t i = 0; i < agg_b.size(); ++i)
         fold_ptrs.push_back(rule_aggs[i]
@@ -2143,7 +2142,7 @@ coro::CoroTask<ExportStats> run_export_counters(const ViewPlan& plan,
 // Rank-local counter aggregation for distributed runs: aggregate this view's
 // (shard of) files in memory and serialize the groups into an opaque partial
 // buffer. The transport (MPI etc.) lives in the caller; only bytes cross ranks.
-coro::CoroTask<std::string> run_aggregate_partial(const ViewPlan& plan) {
+coro::CoroTask<dstd::String> run_aggregate_partial(const ViewPlan& plan) {
     // Index-only fast path: the EVENT-only tier answers without reading traces
     // (a sharded reader merges straight from indexes). Everything else scans;
     // both emit the same mergeable AggState wire partial.
@@ -2162,7 +2161,7 @@ coro::CoroTask<std::string> run_aggregate_partial(const ViewPlan& plan) {
 
 // Merge partials and emit each combined group as a ph="C" counter event.
 ExportStats merge_counters_partials(
-    const ViewPlan& plan, const std::vector<dstd::StringView>& partials,
+    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials,
     ExportSink& sink) {
     const ViewPlan p = resolve_bucket_origin(plan);
     ensure_schema(p);
@@ -2178,7 +2177,7 @@ ExportStats merge_counters_partials(
 
 // Merge partials into a materialized DataFrame (distributed collect()).
 dataframe::DataFrame merge_partials_to_table(
-    const ViewPlan& plan, const std::vector<dstd::StringView>& partials) {
+    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
     const ViewPlan p = resolve_bucket_origin(plan);
     ensure_schema(p);
     dataframe::AggStatePtr state = decode_partials(partials);

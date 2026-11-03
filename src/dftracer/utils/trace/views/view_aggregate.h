@@ -5,16 +5,13 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
 #include <cstdint>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <vector>
 
 // The query-derived aggregation schema (make_agg_schema/AggSchema) plus the
 // group-key/column-name and name-resolution helpers shared by the engine
@@ -37,15 +34,15 @@ using dftracer::utils::dataframe::FieldStat;
 // onto them. A pure function of the plan, built once per terminal (cached on
 // ViewPlan) so the per-event fold touches each field once, not once per spec.
 struct AggSchema {
-    std::vector<std::string> fields;  // distinct fields to accumulate
-    std::vector<int> spec_field;      // plan.agg[i] -> fields index, or -1
-    std::vector<int> spec_argmax;     // plan.agg[i] -> argmax slot, or -1
+    dstd::Vector<dstd::String> fields;  // distinct fields to accumulate
+    dstd::Vector<int> spec_field;       // plan.agg[i] -> fields index, or -1
+    dstd::Vector<int> spec_argmax;      // plan.agg[i] -> argmax slot, or -1
     std::size_t argmax_count = 0;
-    std::vector<bool> field_scaled;   // fields[i] is ts/dur/te (time_scale)
+    dstd::Vector<bool> field_scaled;    // fields[i] is ts/dur/te (time_scale)
     // fields[i] -> DDSketch slot for percentile/histogram aggs, or -1.
-    std::vector<int> field_sketch;
+    dstd::Vector<int> field_sketch;
     std::size_t sketch_count = 0;
-    std::vector<int> spec_set;      // plan.agg[i] -> SetUnion slot, or -1
+    dstd::Vector<int> spec_set;     // plan.agg[i] -> SetUnion slot, or -1
     std::size_t set_count = 0;
     bool want_occupancy = false;    // any busy/concurrency/utilization spec
     std::uint64_t occ_cell_us = 0;  // optional exact-union tolerance; 0 = exact
@@ -75,30 +72,30 @@ const dftracer::utils::index::plan::GroupResolver* ensure_resolver(
 // Resolve one group value from its stored key to the name for `gk`
 // (FilePath/FileName/HostName/Rank); returns `key` unchanged for other
 // kinds.
-std::string resolve_group_value(
+dstd::String resolve_group_value(
     const dftracer::utils::index::plan::GroupResolver& r, const GroupKey& gk,
-    const std::string& key);
+    const dstd::String& key);
 
 // Apply `gk`'s value transform to an already-resolved group value. Coarsens
 // the grain, so both the scan and the tier must call it or the same query
 // answers differently depending on which path served it.
-std::string apply_group_transform(const GroupKey& gk, std::string v);
+dstd::String apply_group_transform(const GroupKey& gk, dstd::String v);
 
 // Column names for group-key and aggregate output columns.
-std::string group_col_name(const GroupKey& gk);
-std::string agg_col_name(const AggSpec& spec);
+dstd::String group_col_name(const GroupKey& gk);
+dstd::String agg_col_name(const AggSpec& spec);
 
 // Column name for one per-arg reduction of the dyn (auto_numeric_metrics) path:
 // "<op>_<arg>" (Pct uses the spec's out_name prefix). The legacy bare-mean
 // column keeps the bare arg name and does not go through here.
-std::string dyn_col_name(const AggSpec& spec, const std::string& key);
+dstd::String dyn_col_name(const AggSpec& spec, const dstd::String& key);
 
 // Drop every column whose name is not in `select`, preserving result order. A
 // no-op when `select` is empty or names a column that is not present. Apply
 // only at the final collect() boundary, never to an intermediate that will be
 // merged further.
 void project_columns(dftracer::utils::dataframe::DataFrame& batch,
-                     const std::vector<std::string>& select);
+                     const dstd::Vector<dstd::String>& select);
 
 // The plan's sort_by/topk/offset+limit/select, applied in that order. Apply
 // once at the final result boundary, after all merges.

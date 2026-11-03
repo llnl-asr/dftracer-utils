@@ -75,7 +75,9 @@ void register_log_schema() {
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, std::string(determine_index_path(gz, "")));
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(std::string(determine_index_path(gz, ""))));
 }
 
 std::size_t rows(const View& v) { return v.collect().get().num_rows(); }
@@ -88,7 +90,8 @@ TEST_SUITE("SchemaView") {
         TestEnvironment env(10);
         const auto gz = write_log(env);
         std::map<std::string, std::string> types;
-        for (const auto& c : view_of(gz).column_info()) types[c.name] = c.type;
+        for (const auto& c : view_of(gz).column_info())
+            types[std::string(c.name)] = std::string(c.type);
         CHECK(types["status"] == "int64");
         CHECK(types["took"] == "float64");
         CHECK(types["tags"] == "json");
@@ -194,7 +197,7 @@ TEST_SUITE("SchemaView") {
         const auto gz = write_log(env);
         std::map<std::string, SchemaLeaf> tree;
         for (auto& leaf : view_of(gz).schema_tree())
-            tree[leaf.path] = std::move(leaf);
+            tree[std::string(leaf.path)] = std::move(leaf);
         REQUIRE(tree.count("status"));
         CHECK(tree["status"].type == "mixed");
         CHECK(tree["status"].declared_type == "int");

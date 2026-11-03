@@ -7,9 +7,7 @@
 #include <dftracer/utils/trace/views/stream_row_fold.h>
 
 #include <cstdint>
-#include <span>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::trace::views::detail {
 

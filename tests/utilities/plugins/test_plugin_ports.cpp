@@ -76,9 +76,9 @@ struct FoldHolder {
     }
 };
 
-std::vector<FoldEvent> make_events(std::uint64_t with_dur,
-                                   std::uint64_t total) {
-    std::vector<FoldEvent> evs(total);
+dftracer::utils::dstd::Vector<FoldEvent> make_events(std::uint64_t with_dur,
+                                                     std::uint64_t total) {
+    dftracer::utils::dstd::Vector<FoldEvent> evs(total);
     for (std::uint64_t i = 0; i < total; ++i) {
         // step() drops METADATA/UNKNOWN-phase events before it ever reaches
         // on_batch, and plugins::Event::has_dur() is phase() == Complete;

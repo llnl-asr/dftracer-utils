@@ -28,15 +28,17 @@ using dftracer::utils::index::Json;
 constexpr int RECORDS = 3000;
 
 struct Access {
-    Field<std::string, "op"> op;
+    Field<dftracer::utils::dstd::String, "op"> op;
     Field<std::int64_t, "lat"> lat;
     Field<dftracer::utils::dstd::Optional<std::int64_t>, "io.off"> off;
     Field<dftracer::utils::dstd::Optional<Json>, "tags"> tags;
-    Field<dftracer::utils::dstd::Optional<std::string>, "hosts.1"> host;
+    Field<dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>,
+          "hosts.1">
+        host;
 };
 
 struct Event {
-    Field<std::string, "name"> name;
+    Field<dftracer::utils::dstd::String, "name"> name;
     Field<double, "ts"> ts;
     Field<dftracer::utils::dstd::Optional<std::int64_t>, "args.size"> size;
 };
@@ -67,7 +69,9 @@ std::string write_access(TestEnvironment& env, const std::string& extra) {
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, std::string(determine_index_path(gz, "")));
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(std::string(determine_index_path(gz, ""))));
 }
 
 }  // namespace
@@ -91,7 +95,8 @@ TEST_SUITE("TypedRows") {
             CHECK(r.tags->has_value() == (i % 5 == 0));
             if (i % 5 == 0) CHECK((*r.tags)->text == R"({"a":"x","b":[1,2]})");
             CHECK(r.host->has_value() == (i % 7 == 0));
-            if (i % 7 == 0) CHECK(**r.host == "h" + std::to_string(i));
+            if (i % 7 == 0)
+                CHECK(std::string(**r.host) == "h" + std::to_string(i));
         }
 
         const auto df = view_of(gz).collect().get();

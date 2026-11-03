@@ -5,16 +5,15 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 
 #include <cstdint>
-#include <memory>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -33,8 +32,8 @@ class TypedCollectFold : public Fold {
     bool needs_args() const override { return false; }
     bool wants_metadata() const override { return false; }
 
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<TypedCollectFold>(*intern_);
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<TypedCollectFold>(*intern_);
     }
 
     void step(const FoldBatch& batch) override {
@@ -86,10 +85,10 @@ class TypedCollectFold : public Fold {
     // String ids are held raw and resolved once in to_frame, after the merge,
     // so step() touches no shared intern.
     struct Cols {
-        std::vector<std::uint64_t> ts, dur, pid, tid;
-        std::vector<std::uint32_t> name_id, cat_id;
-        std::vector<std::int64_t> ph;
-        std::vector<std::uint8_t> has_dur;
+        dstd::Vector<std::uint64_t> ts, dur, pid, tid;
+        dstd::Vector<std::uint32_t> name_id, cat_id;
+        dstd::Vector<std::int64_t> ph;
+        dstd::Vector<std::uint8_t> has_dur;
 
         void push(const FoldEvent& ev) {
             ts.push_back(ev.ts);
@@ -132,8 +131,8 @@ class TypedCollectFold : public Fold {
             };
             // A record without a numeric dur has no duration (null row), as
             // a row-frame dur column reports it.
-            auto dur_cell_validity = [](const std::vector<std::uint8_t>& has) {
-                std::vector<std::uint8_t> v((has.size() + 7) / 8, 0);
+            auto dur_cell_validity = [](const dstd::Vector<std::uint8_t>& has) {
+                dstd::Vector<std::uint8_t> v((has.size() + 7) / 8, 0);
                 bool any_missing = false;
                 for (std::size_t r = 0; r < has.size(); ++r) {
                     if (has[r] != 0)
@@ -156,7 +155,7 @@ class TypedCollectFold : public Fold {
             out.names.emplace_back("ts");
             out.columns.push_back(column(std::move(ts), df::TypeId::Uint64));
             out.names.emplace_back("dur");
-            std::vector<std::uint8_t> bits = dur_cell_validity(has_dur);
+            dstd::Vector<std::uint8_t> bits = dur_cell_validity(has_dur);
             if (dur.empty()) {
                 out.columns.push_back(
                     df::Series::flat(df::TypeId::Uint64, nullptr, 0));

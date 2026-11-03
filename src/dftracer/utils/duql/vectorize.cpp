@@ -114,8 +114,7 @@ struct Failure {
 
 class Vectorizer {
    public:
-    // keep std: view_duql and mask pass std::vector<VectorColumn>
-    Vectorizer(const std::vector<VectorColumn>& columns, bool args_fallback)
+    Vectorizer(const dstd::Vector<VectorColumn>& columns, bool args_fallback)
         : columns_(columns), args_fallback_(args_fallback) {}
 
     V operator()(const Term& t) {
@@ -124,8 +123,7 @@ class Vectorizer {
     }
 
    private:
-    // keep std: view_duql and mask pass std::vector<VectorColumn>
-    const std::vector<VectorColumn>& columns_;
+    const dstd::Vector<VectorColumn>& columns_;
     bool args_fallback_;
 
     [[noreturn]] static void fail(dstd::String msg, bool rows = false) {
@@ -918,8 +916,7 @@ class Vectorizer {
 }  // namespace
 
 dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
-    // keep std: view_duql and mask pass std::vector<VectorColumn>
-    const Term& t, const std::vector<VectorColumn>& columns,
+    const Term& t, const dstd::Vector<VectorColumn>& columns,
     bool args_fallback) {
     try {
         V v = Vectorizer(columns, args_fallback).whole(t);
@@ -930,8 +927,7 @@ dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
     }
 }
 
-// keep std: view_duql and mask pass std::vector<VectorColumn>
-bool is_null_term(const Term& t, const std::vector<VectorColumn>& columns,
+bool is_null_term(const Term& t, const dstd::Vector<VectorColumn>& columns,
                   bool args_fallback) {
     try {
         return Vectorizer(columns, args_fallback).whole(t).k == K::Nul;
@@ -946,8 +942,7 @@ namespace {
 dstd::Vector<df::Series> key_columns(
     // keep std: dataframe::eval and agg take std::vector<const Series*>
     const TLookup& l, const std::vector<const df::Series*>& inputs,
-    // keep std: view_duql and mask pass std::vector<VectorColumn>
-    const std::vector<VectorColumn>& columns, std::int64_t rows,
+    const dstd::Vector<VectorColumn>& columns, std::int64_t rows,
     bool args_fallback) {
     dstd::Vector<df::Series> out;
     for (const auto& k : l.keys) {
@@ -970,8 +965,7 @@ const LookupTable& bound(const TLookup& l) {
 dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
     // keep std: dataframe::eval and agg take std::vector<const Series*>
     const TLookup& l, const std::vector<const dataframe::Series*>& inputs,
-    // keep std: view_duql and mask pass std::vector<VectorColumn>
-    const std::vector<VectorColumn>& columns, bool args_fallback) {
+    const dstd::Vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
     try {
         bound(l);
@@ -989,8 +983,7 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
 dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
     // keep std: dataframe::eval and agg take std::vector<const Series*>
     const TQuant& q, const std::vector<const dataframe::Series*>& inputs,
-    // keep std: view_duql and mask pass std::vector<VectorColumn>
-    const std::vector<VectorColumn>& columns, bool args_fallback) {
+    const dstd::Vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
     const df::Series unknown = df::Series::nulls(TypeId::Bool, rows);
     try {
@@ -1044,15 +1037,15 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
         const auto n = static_cast<std::int64_t>(parent.size());
 
         dstd::Vector<df::Series> owned;
-        // keep std: view_duql and mask pass std::vector<VectorColumn>
-        std::vector<VectorColumn> cols;
+        dstd::Vector<VectorColumn> cols;
         owned.push_back(std::move(values));
         cols.push_back({".", owned.back().data_type()});
         if (owned.front().type() == TypeId::Struct)
             for (std::int64_t i = 0; i < owned.front().num_children(); ++i) {
                 df::Series field = owned.front().child(i);
                 cols.push_back(
-                    {"." + owned.front().field_name(i), field.data_type()});
+                    {dstd::String(".").append(owned.front().field_name(i)),
+                     field.data_type()});
                 owned.push_back(std::move(field));
             }
         dstd::Vector<dstd::String> read;
@@ -1118,8 +1111,7 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
 }
 
 dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError>
-// keep std: view_duql and mask pass std::vector<VectorColumn>
-vectorize_condition(const Term& t, const std::vector<VectorColumn>& columns,
+vectorize_condition(const Term& t, const dstd::Vector<VectorColumn>& columns,
                     bool args_fallback) {
     try {
         V v = Vectorizer(columns, args_fallback)(t);
@@ -1187,8 +1179,7 @@ std::int64_t clamp_at(std::int64_t i, std::int64_t size) {
     return std::min(i, size);
 }
 
-// keep std: view_duql passes std::vector for these
-df::Series slice_column(const std::vector<df::Series>& args) {
+df::Series slice_column(const dstd::Vector<df::Series>& args) {
     auto p = list_parts(args[0]);
     const std::int64_t n = args[0].length();
     const df::Series from = args[1].cast(TypeId::Int64).materialize();
@@ -1244,8 +1235,8 @@ df::Series flatten_column(const df::Series& arg) {
 
 // The object's fields as (key, column), in the byte order of the keys.
 dstd::Vector<dstd::Pair<dstd::String, df::Series>> object_fields(
-    // keep std: view_duql passes std::vector for these
-    const std::vector<df::Series>& args, const std::vector<std::string>& keys) {
+    const dstd::Vector<df::Series>& args,
+    const dstd::Vector<dstd::String>& keys) {
     dstd::Vector<dstd::Pair<dstd::String, df::Series>> out;
     if (args.size() == 1 && args[0].type() == TypeId::Struct) {
         const df::Series st = flat_of(args[0]);
@@ -1261,10 +1252,8 @@ dstd::Vector<dstd::Pair<dstd::String, df::Series>> object_fields(
     return out;
 }
 
-// keep std: view_duql passes std::vector for these
-df::Series members_column(const std::vector<df::Series>& args,
-                          // keep std: view_duql passes std::vector for these
-                          const std::vector<std::string>& keys, bool names,
+df::Series members_column(const dstd::Vector<df::Series>& args,
+                          const dstd::Vector<dstd::String>& keys, bool names,
                           const df::DataType& type) {
     const std::int64_t n = args.empty() ? 0 : args[0].length();
     const auto fields = object_fields(args, keys);
@@ -1403,8 +1392,7 @@ class Cells {
 };
 
 // The element at each row's index, 0-based and from the end when negative.
-// keep std: view_duql passes std::vector for these
-df::Series index_column(const std::vector<df::Series>& args) {
+df::Series index_column(const dstd::Vector<df::Series>& args) {
     auto p = list_parts(args[0]);
     const std::int64_t n = args[0].length();
     const Cells at(args[1]);
@@ -1569,8 +1557,7 @@ df::Series join_column(const df::Series& arg, const df::Series& sep_arg) {
 }
 
 // One list per row of the items' values at that row.
-// keep std: view_duql passes std::vector for these
-df::Series list_column(const std::vector<df::Series>& items, std::int64_t n,
+df::Series list_column(const dstd::Vector<df::Series>& items, std::int64_t n,
                        const df::DataType& type) {
     const TypeId elem = type.fields.front().type.id;
     const auto m = static_cast<std::int64_t>(items.size());
@@ -1616,10 +1603,8 @@ bool is_column_term(const Term& t) {
            std::holds_alternative<TList>(t.node);
 }
 
-dstd::Optional<df::DataType> call_type(
-    const Term& t,
-    // keep std: view_duql passes std::vector for these
-    const std::vector<df::DataType>& args) {
+dstd::Optional<df::DataType> call_type(const Term& t,
+                                       const dstd::Vector<df::DataType>& args) {
     auto integer = [](const df::DataType& d) {
         return kind_of(d.id) == K::Int || kind_of(d.id) == K::Uint;
     };
@@ -1669,8 +1654,7 @@ dstd::Optional<df::DataType> call_type(
             if (args.empty()) return dstd::nullopt;
             return df::list_of(df::scalar(TypeId::String));
         case Fn::Values: {
-            // keep std: view_duql passes std::vector for these
-            std::vector<df::DataType> fields = args;
+            dstd::Vector<df::DataType> fields = args;
             if (args.size() == 1 && args[0].id == TypeId::Struct) {
                 fields.clear();
                 for (const auto& f : args[0].fields) fields.push_back(f.type);
@@ -1724,10 +1708,8 @@ dstd::Optional<df::DataType> call_type(
     }
 }
 
-// keep std: view_duql passes std::vector for these
-df::Series call_column(const Term& t, const std::vector<df::Series>& args,
-                       // keep std: view_duql passes std::vector for these
-                       const std::vector<std::string>& keys,
+df::Series call_column(const Term& t, const dstd::Vector<df::Series>& args,
+                       const dstd::Vector<dstd::String>& keys,
                        const df::DataType& type, std::int64_t rows) {
     if (std::holds_alternative<TIndex>(t.node)) return index_column(args);
     if (std::holds_alternative<TList>(t.node))

@@ -163,9 +163,9 @@ void check_merged_partials(const std::string& tag,
     build_shard_index(b, config);
 
     std::string root = env.get_dir() + "/set";
-    write_shard_set(root, {ia, ib});
+    write_shard_set(dstd::String(root), {dstd::String(ia), dstd::String(ib)});
     std::string out = env.get_dir() + "/merged";
-    merge_shard_set(root, out);
+    merge_shard_set(dstd::String(root), dstd::String(out));
     std::string merged_idx = std::string(determine_index_path("x", out));
 
     (void)dstd::fs::remove(a);
@@ -226,11 +226,16 @@ TEST_SUITE("ShardedView") {
         };
 
         auto expect = canon(
-            configure(View::from_files({{a, ia}, {b, ib}})).collect().get());
+            configure(View::from_files({{dstd::String(a), dstd::String(ia)},
+                                        {dstd::String(b), dstd::String(ib)}}))
+                .collect()
+                .get());
         REQUIRE(expect.size() == 2);  // POSIX + STDIO
 
         auto got = canon(
-            ShardedView::from_shard_dirs({ia, ib}).aggregate(configure).get());
+            ShardedView::from_shard_dirs({dstd::String(ia), dstd::String(ib)})
+                .aggregate(configure)
+                .get());
         CHECK(got == expect);
     }
 
@@ -251,12 +256,13 @@ TEST_SUITE("ShardedView") {
         };
 
         StringSink single;
-        configure(View::from_files({{a, ia}, {b, ib}}))
+        configure(View::from_files({{dstd::String(a), dstd::String(ia)},
+                                    {dstd::String(b), dstd::String(ib)}}))
             .sink_counters(single)
             .get();
 
         StringSink sharded;
-        ShardedView::from_shard_dirs({ia, ib})
+        ShardedView::from_shard_dirs({dstd::String(ia), dstd::String(ib)})
             .aggregate_counters(configure, sharded)
             .get();
 
@@ -296,9 +302,13 @@ TEST_SUITE("ShardedView") {
         };
 
         auto expect = canon(
-            configure(View::from_files({{a, ia}, {b, ib}})).collect().get());
-        auto got =
-            canon(ShardedView::from_manifest(root).aggregate(configure).get());
+            configure(View::from_files({{dstd::String(a), dstd::String(ia)},
+                                        {dstd::String(b), dstd::String(ib)}}))
+                .collect()
+                .get());
+        auto got = canon(ShardedView::from_manifest(dstd::String(root))
+                             .aggregate(configure)
+                             .get());
         CHECK(got == expect);
     }
 
@@ -319,7 +329,8 @@ TEST_SUITE("ShardedView") {
             return v.group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
-        auto sharded = ShardedView::from_shard_dirs({ia, ib});
+        auto sharded =
+            ShardedView::from_shard_dirs({dstd::String(ia), dstd::String(ib)});
         auto with_traces = canon(sharded.aggregate(configure).get());
         REQUIRE(with_traces.size() == 2);
 
@@ -340,7 +351,8 @@ TEST_SUITE("ShardedView") {
         build_shard_index(b);
 
         std::string root = env.get_dir() + "/set";
-        write_shard_set(root, {ia, ib});
+        write_shard_set(dstd::String(root),
+                        {dstd::String(ia), dstd::String(ib)});
 
         auto manifest = read_shard_manifest(root);
         REQUIRE(manifest.has_value());
@@ -353,9 +365,13 @@ TEST_SUITE("ShardedView") {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
         };
         auto expect = canon(
-            configure(View::from_files({{a, ia}, {b, ib}})).collect().get());
-        auto got =
-            canon(ShardedView::from_manifest(root).aggregate(configure).get());
+            configure(View::from_files({{dstd::String(a), dstd::String(ia)},
+                                        {dstd::String(b), dstd::String(ib)}}))
+                .collect()
+                .get());
+        auto got = canon(ShardedView::from_manifest(dstd::String(root))
+                             .aggregate(configure)
+                             .get());
         CHECK(got == expect);
     }
 
@@ -379,7 +395,9 @@ TEST_SUITE("ShardedView") {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
         };
         auto got = canon(
-            ShardedView::from_shard_dirs({ia, ib}).aggregate(configure).get());
+            ShardedView::from_shard_dirs({dstd::String(ia), dstd::String(ib)})
+                .aggregate(configure)
+                .get());
 
         // Restore write perms so the environment can clean up.
         REQUIRE(dstd::fs::set_permissions(ia, 0750).has_value());
@@ -419,7 +437,9 @@ TEST_SUITE("ShardedView") {
                             1, 0});
         std::string root = env.get_dir() + "/set";
         write_shard_manifest(root, m);
-        auto got = ShardedView::from_manifest(root).aggregate(scan_cfg).get();
+        auto got = ShardedView::from_manifest(dstd::String(root))
+                       .aggregate(scan_cfg)
+                       .get();
 
         CHECK(got.num_rows() == 2);  // POSIX + STDIO, resolved via stored paths
     }
@@ -441,7 +461,9 @@ TEST_SUITE("ShardedView") {
                 std::string(dftracer::utils::index::shard_root(root, i)));
             build_shard_index(files[i], {}, shards.back());
         }
-        write_shard_set(root, shards);
+        dstd::Vector<dstd::String> shard_dirs;
+        for (const auto& shard : shards) shard_dirs.emplace_back(shard);
+        write_shard_set(dstd::String(root), shard_dirs);
         auto manifest = read_shard_manifest(root);
         REQUIRE(manifest.has_value());
         REQUIRE(manifest->shards.size() == 3);
@@ -453,13 +475,16 @@ TEST_SUITE("ShardedView") {
         };
         const std::string single = env.get_dir() + "/single/.dftindex";
         for (const auto& f : files) build_shard_index(f, {}, single);
-        auto expect = canon(
-            configure(View::from_files({{a, single}, {b, single}, {c, single}}))
-                .collect()
-                .get());
+        auto expect =
+            canon(configure(View::from_files(
+                                {{dstd::String(a), dstd::String(single)},
+                                 {dstd::String(b), dstd::String(single)},
+                                 {dstd::String(c), dstd::String(single)}}))
+                      .collect()
+                      .get());
         REQUIRE(expect.size() == 2);
 
-        CHECK(consolidate_shard_set(root) == 3);
+        CHECK(consolidate_shard_set(dstd::String(root)) == 3);
         CHECK_FALSE(read_shard_manifest(root).has_value());
         CHECK_FALSE(
             dstd::fs::exists(dftracer::utils::index::shards_dir(root)).value());
@@ -467,10 +492,12 @@ TEST_SUITE("ShardedView") {
             dstd::fs::exists(dftracer::utils::index::store_dir(root)).value());
         CHECK(indexed_files(root, files).size() == 3);
 
-        auto got =
-            canon(configure(View::from_files({{a, root}, {b, root}, {c, root}}))
-                      .collect()
-                      .get());
+        auto got = canon(
+            configure(View::from_files({{dstd::String(a), dstd::String(root)},
+                                        {dstd::String(b), dstd::String(root)},
+                                        {dstd::String(c), dstd::String(root)}}))
+                .collect()
+                .get());
         CHECK(got == expect);
     }
 
@@ -490,7 +517,9 @@ TEST_SUITE("ShardedView") {
                 std::string(dftracer::utils::index::shard_root(root, i)));
             build_shard_index(files[i], {}, shards.back());
         }
-        write_shard_set(root, shards);
+        dstd::Vector<dstd::String> shard_dirs;
+        for (const auto& shard : shards) shard_dirs.emplace_back(shard);
+        write_shard_set(dstd::String(root), shard_dirs);
 
         // A regular file where the second shard's store belongs, so listing it
         // fails whatever user the merge runs as.
@@ -502,7 +531,7 @@ TEST_SUITE("ShardedView") {
             ofs << "not a store";
         }
 
-        CHECK_THROWS(consolidate_shard_set(root));
+        CHECK_THROWS(consolidate_shard_set(dstd::String(root)));
         CHECK(read_shard_manifest(root).has_value());
         CHECK(dstd::fs::exists(shards[0]).value());
         CHECK(dstd::fs::exists(shards[1]).value());
@@ -516,12 +545,12 @@ TEST_SUITE("ShardedView") {
         (void)dstd::fs::remove(store_b);
         REQUIRE(dstd::fs::rename(held, store_b).has_value());
 
-        CHECK(consolidate_shard_set(root) == 2);
+        CHECK(consolidate_shard_set(dstd::String(root)) == 2);
         CHECK_FALSE(read_shard_manifest(root).has_value());
         CHECK_FALSE(
             dstd::fs::exists(dftracer::utils::index::shards_dir(root)).value());
         CHECK(indexed_files(root, files).size() == 2);
-        CHECK_THROWS(consolidate_shard_set(root));
+        CHECK_THROWS(consolidate_shard_set(dstd::String(root)));
     }
 
     // No-rescan tier merge: transcode each shard's tier into one consolidated
@@ -538,18 +567,20 @@ TEST_SUITE("ShardedView") {
         build_shard_index(b);
 
         std::string root = env.get_dir() + "/set";
-        write_shard_set(root, {ia, ib});
+        write_shard_set(dstd::String(root),
+                        {dstd::String(ia), dstd::String(ib)});
 
         auto configure = [](View v) -> View {
             return v.group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
-        auto sharded =
-            canon(ShardedView::from_manifest(root).aggregate(configure).get());
+        auto sharded = canon(ShardedView::from_manifest(dstd::String(root))
+                                 .aggregate(configure)
+                                 .get());
         REQUIRE(sharded.size() == 2);
 
         std::string out = env.get_dir() + "/merged";
-        std::size_t n = merge_shard_set(root, out);
+        std::size_t n = merge_shard_set(dstd::String(root), dstd::String(out));
         CHECK(n == 2);
 
         // The tiers arrive in the new root; the shards stay where they are.
@@ -560,7 +591,9 @@ TEST_SUITE("ShardedView") {
         (void)dstd::fs::remove(b);
         const std::string out_idx = std::string(determine_index_path("x", out));
         auto merged =
-            canon(configure(View::from_files({{a, out_idx}, {b, out_idx}}))
+            canon(configure(View::from_files(
+                                {{dstd::String(a), dstd::String(out_idx)},
+                                 {dstd::String(b), dstd::String(out_idx)}}))
                       .collect()
                       .get());
         CHECK(merged == sharded);
@@ -582,7 +615,8 @@ TEST_SUITE("ShardedView") {
     TEST_CASE("from_manifest throws when the manifest is absent") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        CHECK_THROWS(ShardedView::from_manifest(env.get_dir() + "/nope"));
+        CHECK_THROWS(
+            ShardedView::from_manifest(dstd::String(env.get_dir() + "/nope")));
     }
 
     TEST_CASE("from_manifest rejects a manifest with no or another version") {
@@ -595,18 +629,18 @@ TEST_SUITE("ShardedView") {
             std::ofstream ofs((root + "/shards.json").c_str(), std::ios::trunc);
             ofs << R"({"shards":[]})";
         }
-        CHECK_THROWS(ShardedView::from_manifest(root));
+        CHECK_THROWS(ShardedView::from_manifest(dstd::String(root)));
 
         IndexShardManifest other;
         other.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION) + 1;
         write_shard_manifest(root, other);
-        CHECK_THROWS(ShardedView::from_manifest(root));
+        CHECK_THROWS(ShardedView::from_manifest(dstd::String(root)));
 
         IndexShardManifest current;
         current.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
         write_shard_manifest(root, current);
-        CHECK_NOTHROW(ShardedView::from_manifest(root));
+        CHECK_NOTHROW(ShardedView::from_manifest(dstd::String(root)));
     }
 }

@@ -173,12 +173,10 @@ class PluginFold : public trace::views::detail::Fold {
     bool needs_args() const override { return true; }
     bool reads_every_field() const override { return true; }
 
-    // keep std: trace::views::detail::Fold::slice returns std::unique_ptr
-    std::unique_ptr<Fold> slice() const override {
-        // keep std: Fold::slice returns std::unique_ptr
-        return std::make_unique<PluginFold>(plugin_, *intern_, results_,
-                                            named_results_, plugin_name_,
-                                            memory_budget_, states_);
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<PluginFold>(plugin_, *intern_, results_,
+                                             named_results_, plugin_name_,
+                                             memory_budget_, states_);
     }
 
     /// Name this plugin logs under (its load-path stem); empty if unknown.
@@ -317,8 +315,7 @@ class PluginFold : public trace::views::detail::Fold {
     // A batch an earlier plugin rewrote, as this plugin sees it.
     dataframe::DataFrame rewritten_batch(
         const dataframe::DataFrame& frame,
-        // keep std: DataFrame::names and build_row_frame speak std::string
-        const std::vector<std::string>& projection);
+        const dstd::Vector<dstd::String>& projection);
     bool query_on_rewrite_refused_ = false;
 
     // dft.ext.agg accumulators; unique_ptr keeps each handed-out dftu_agg*
@@ -348,14 +345,12 @@ class PluginFold : public trace::views::detail::Fold {
     dstd::Deque<Query> compiled_queries_;
     ValueMap match_qmap_;
 
-    // keep std: trace::views::EventRows is built from a std::vector
-    std::vector<FoldEvent> col_scratch_;  // batch materialization
+    dstd::Vector<FoldEvent> col_scratch_;  // batch materialization
 
     // The columns dftu_plugin::reads declared, snapshotted once at
     // construction. Empty means the plugin declared none, which build_row_frame
     // reads as "every column".
-    // keep std: DataFrame::names and build_row_frame speak std::string
-    std::vector<std::string> projection_;
+    dstd::Vector<dstd::String> projection_;
 };
 
 }  // namespace dftracer::utils::plugins

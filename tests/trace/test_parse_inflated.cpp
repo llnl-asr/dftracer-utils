@@ -18,8 +18,10 @@ using dftracer::utils::trace::strip_array_delimiters;
 namespace {
 
 // parse_buffer needs the buffer to carry simdjson's trailing padding.
-dftracer::utils::dstd::SharedPtr<std::string> padded(const std::string& s) {
-    auto b = std::make_shared<std::string>(s);
+dftracer::utils::dstd::SharedPtr<dftracer::utils::dstd::String> padded(
+    const std::string& s) {
+    auto b = dftracer::utils::dstd::make_shared<dftracer::utils::dstd::String>(
+        s.data(), s.size());
     b->resize(s.size() + simdjson::SIMDJSON_PADDING, '\0');
     return b;
 }

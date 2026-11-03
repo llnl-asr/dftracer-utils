@@ -44,10 +44,11 @@ using dftracer::utils::index::extensions::ScalableBloomFilter;
 
 namespace {
 
-FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
-                             bool needs_args,
-                             const std::vector<std::string>* extra = nullptr,
-                             bool capture_schema = false) {
+FoldEvent extract_fold_event(
+    simdjson::dom::element root, StringIntern& intern, bool needs_args,
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>* extra =
+        nullptr,
+    bool capture_schema = false) {
     FoldEvent ev;
     extract_fold_event_into(ev, root, intern, needs_args, extra,
                             capture_schema);
@@ -147,9 +148,9 @@ dftracer::utils::index::FileBuild start_build(const std::string& root) {
     return std::move(*build);
 }
 
-std::vector<FoldEvent> events_of(const std::vector<std::string>& lines,
-                                 StringIntern& intern) {
-    std::vector<FoldEvent> out;
+dftracer::utils::dstd::Vector<FoldEvent> events_of(
+    const std::vector<std::string>& lines, StringIntern& intern) {
+    dftracer::utils::dstd::Vector<FoldEvent> out;
     out.reserve(lines.size());
     simdjson::dom::parser parser;
     for (const auto& l : lines) {
@@ -264,7 +265,10 @@ TEST_SUITE("BloomFold") {
         std::string index_path = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(gz, index_path).sink_json(s).get();
+            View::from_file(dftracer::utils::dstd::String(gz),
+                            dftracer::utils::dstd::String(index_path))
+                .sink_json(s)
+                .get();
         }
 
         const auto snapshot = dftu_utils_test::index_snapshot(index_path);
@@ -307,7 +311,8 @@ TEST_SUITE("BloomFold") {
             // A filtered export builds the members but attaches no index fold,
             // so the index starts without a bloom for the fold to establish.
             StringSink s;
-            View::from_file(gz, index_path)
+            View::from_file(dftracer::utils::dstd::String(gz),
+                            dftracer::utils::dstd::String(index_path))
                 .duql(R"(cat == "POSIX")")
                 .sink_json(s)
                 .get();
@@ -371,7 +376,8 @@ TEST_SUITE("BloomFold") {
         std::string index_path = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(gz, index_path)
+            View::from_file(dftracer::utils::dstd::String(gz),
+                            dftracer::utils::dstd::String(index_path))
                 .duql(R"(cat == "POSIX")")
                 .sink_json(s)
                 .get();
@@ -425,7 +431,8 @@ TEST_SUITE("BloomFold") {
         std::string index_path = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(gz, index_path)
+            View::from_file(dftracer::utils::dstd::String(gz),
+                            dftracer::utils::dstd::String(index_path))
                 .duql(R"(cat == "POSIX")")
                 .sink_json(s)
                 .get();
@@ -503,13 +510,18 @@ TEST_SUITE("BloomFold") {
         std::string index_path = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(gz, index_path).sink_json(s).get();
+            View::from_file(dftracer::utils::dstd::String(gz),
+                            dftracer::utils::dstd::String(index_path))
+                .sink_json(s)
+                .get();
         }
 
-        View v = View::from_file(gz, index_path);
+        View v = View::from_file(dftracer::utils::dstd::String(gz),
+                                 dftracer::utils::dstd::String(index_path));
         auto cols = v.columns();
         auto has = [&](const std::string& c) {
-            return std::find(cols.begin(), cols.end(), c) != cols.end();
+            return std::find(cols.begin(), cols.end(),
+                             dftracer::utils::dstd::String(c)) != cols.end();
         };
         // Base axis fields.
         CHECK(has("pid"));
@@ -533,7 +545,8 @@ TEST_SUITE("BloomFold") {
         CHECK_FALSE(has("resolved.fhash.path"));
 
         std::unordered_map<std::string, std::string> ty;
-        for (const auto& ci : v.column_info()) ty[ci.name] = ci.type;
+        for (const auto& ci : v.column_info())
+            ty[std::string(ci.name)] = std::string(ci.type);
         CHECK(ty["pid"] == "int64");
         CHECK(ty["ts"] == "int64");
         CHECK(ty["hostname"] == "string");

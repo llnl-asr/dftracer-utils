@@ -213,7 +213,8 @@ std::string make_trace(dftu_utils_test::TestEnvironment& env) {
     return gz;
 }
 
-void run_host(dstd::Vector<dftu_plugin*> plugins, std::vector<ViewFile> files) {
+void run_host(dstd::Vector<dftu_plugin*> plugins,
+              dstd::Vector<ViewFile> files) {
     auto set = build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));

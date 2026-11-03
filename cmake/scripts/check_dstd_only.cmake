@@ -31,7 +31,9 @@ set(_dirs
     include/dftracer/utils/index
     src/dftracer/utils/index
     include/dftracer/utils/utilities
-    src/dftracer/utils/utilities)
+    src/dftracer/utils/utilities
+    include/dftracer/utils/trace
+    src/dftracer/utils/trace)
 
 # The Task, TaskGraph and Pipeline trees move in a later step.
 set(_skip
@@ -53,6 +55,9 @@ FNR == 1 { kept = 0 }
   if (line ~ /(^|[^A-Za-z0-9_:])std::(string|string_view|vector|span|map|set|multimap|multiset|unordered_map|unordered_set|deque|list|queue|priority_queue|unique_ptr|make_unique|shared_ptr|make_shared|weak_ptr|optional|nullopt|variant|monostate|pair|make_pair|tuple|any|any_cast|function|thread|promise|future|shared_future|to_string|stoi|stol|stoll|stoul|stoull|stod|stof|stable_sort|ofstream|ifstream|ostringstream|stringstream|istringstream|to_chars|from_chars)([^A-Za-z0-9_]|$)/) {
     print FILENAME ":" FNR ": " $0
     hits++
+  } else if (line ~ /UniquePtr<.*>[ \t]*([A-Za-z_][A-Za-z0-9_]*)?[ \t]*[({][ \t]*new[ \t]/) {
+    print FILENAME ":" FNR ": " $0 "  (raw new: use dstd::make_unique)"
+    hits++
   }
 }
 END { exit hits > 0 ? 1 : 0 }
@@ -70,13 +75,15 @@ if(SELF_TEST)
        "std::string_view c;  // keep std: test\n"
        "std::atomic<int> d;\n"
        "// keep std: test\n"
-       "std::deque<int> e;\n")
+       "std::deque<int> e;\n"
+       "dstd::UniquePtr<int> f(new int(1));\n")
   execute_process(COMMAND ${_awk} -f "${_awk_file}" "${_sample}"
                   RESULT_VARIABLE _rc OUTPUT_VARIABLE _out)
   string(REGEX REPLACE "[^\n]" "" _newlines "${_out}")
   string(LENGTH "${_newlines}" _n)
-  if(NOT _rc OR NOT _n EQUAL 1 OR NOT _out MATCHES ":1: std::vector")
-    message(FATAL_ERROR "dstd_only self test: expected one hit on line 1, got:\n${_out}")
+  if(NOT _rc OR NOT _n EQUAL 2 OR NOT _out MATCHES ":1: std::vector"
+     OR NOT _out MATCHES ":8: dstd::UniquePtr")
+    message(FATAL_ERROR "dstd_only self test: expected hits on lines 1 and 8, got:\n${_out}")
   endif()
   return()
 endif()

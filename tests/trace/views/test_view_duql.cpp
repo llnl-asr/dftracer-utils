@@ -153,7 +153,7 @@ struct PluginOps {
 
 View base() {
     const auto& s = shared_trace();
-    return View::from_file(s.gz, s.idx);
+    return View::from_file(dstd::String(s.gz), dstd::String(s.idx));
 }
 
 df::DataFrame frame(const View& v) { return run(v.collect()); }
@@ -247,7 +247,9 @@ View view_of_lines(TestEnvironment& env, const std::vector<std::string>& lines,
     (void)dstd::fs::remove(pfw);
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
-    return View::from_file(gz, std::string(determine_index_path(gz, "")));
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(std::string(determine_index_path(gz, ""))));
 }
 
 // A 60-record trace whose every third record carries no dur, so the duration
@@ -812,8 +814,9 @@ TEST_SUITE("View duql pipeline") {
                 for (std::size_t workers : {1, 2, 8}) {
                     dftracer::utils::Runtime rt(workers);
                     const View v =
-                        View::from_file(
-                            gz, std::string(determine_index_path(gz, "")))
+                        View::from_file(dstd::String(gz),
+                                        dstd::String(std::string(
+                                            determine_index_path(gz, ""))))
                             .duql(q);
                     const std::string got = text(rt.submit(v.collect()).get());
                     if (!want) want = got;
@@ -1090,8 +1093,9 @@ TEST_SUITE("View duql aggregation") {
         // The bounds are 10% of the expected 10% sample, as a count.
         constexpr int EVENTS = 20000;
         const std::string gz = create_multimember_trace(env, EVENTS, 1 << 20);
-        const View v =
-            View::from_file(gz, std::string(determine_index_path(gz, "")));
+        const View v = View::from_file(
+            dstd::String(gz),
+            dstd::String(std::string(determine_index_path(gz, ""))));
         const std::int64_t n =
             frame(v.duql("sample 10% | select ts")).num_rows();
         CHECK(n >= EVENTS / 10 - EVENTS / 100);
@@ -2438,8 +2442,9 @@ TEST_SUITE("View duql reshape determinism") {
                 for (std::size_t workers : {1, 2, 8}) {
                     dftracer::utils::Runtime rt(workers);
                     const View v =
-                        View::from_file(
-                            gz, std::string(determine_index_path(gz, "")))
+                        View::from_file(dstd::String(gz),
+                                        dstd::String(std::string(
+                                            determine_index_path(gz, ""))))
                             .duql(q);
                     const std::string got = rows(rt.submit(v.collect()).get());
                     if (!want) want = got;
@@ -2454,8 +2459,9 @@ TEST_SUITE("View duql reshape determinism") {
     TEST_CASE("a quantifier gives the same rows in the scan and after it") {
         TestEnvironment env(10);
         const std::string gz = reshape_trace(env, 4096);
-        const View v =
-            View::from_file(gz, std::string(determine_index_path(gz, "")));
+        const View v = View::from_file(
+            dstd::String(gz),
+            dstd::String(std::string(determine_index_path(gz, ""))));
         for (const char* cond :
              {R"(any(tags, . == "b"))", R"(all(tags, . != "a"))",
               R"(not any(tags, . < "b" and ^.dur > 50))"}) {
@@ -2862,7 +2868,9 @@ TEST_SUITE("View duql session") {
     }
 
     static View view_of(const std::string& gz) {
-        return View::from_file(gz, std::string(determine_index_path(gz, "")));
+        return View::from_file(
+            dstd::String(gz),
+            dstd::String(std::string(determine_index_path(gz, ""))));
     }
 
     TEST_CASE("an idle gap after the latest end starts a session") {

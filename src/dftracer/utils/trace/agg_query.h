@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -17,8 +18,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <string_view>
 
 // A query over the chunk partials of the aggregation tier. It yields one
 // AggPartial row per group key. A chunk is the lines that END in its gzip
@@ -96,7 +95,7 @@ struct AggQuery {
 
     /// Polled before a chunk is read and before a parsed batch is folded. True
     /// stops the query, which answers with the rows it folded so far.
-    std::function<bool()> cancelled;
+    dstd::SharedPtr<dstd::Function<bool()>> cancelled;
 
     /// The parts of the rows to keep. Grouping by pid or tid does not need
     /// the ids kept.

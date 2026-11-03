@@ -43,7 +43,7 @@ TEST_SUITE("Pipeline plan") {
         std::string gz = test_view_common::create_mixed_trace(env, 30, 20);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        ScanPlan base = scan::from_file(gz, idx);
+        ScanPlan base = scan::from_file(dstd::String(gz), dstd::String(idx));
         dataframe::DataFrame all = run(scan::collect_frame(base));
         REQUIRE(all.num_rows() == 50);
         CHECK(bhas(all, "cat"));

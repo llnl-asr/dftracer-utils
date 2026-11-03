@@ -117,7 +117,7 @@ std::string make_homog_trace(dftu_utils_test::TestEnvironment& env,
 }
 
 ExportStats run_host(dstd::Vector<dftu_plugin*> plugins,
-                     std::vector<ViewFile> files) {
+                     dstd::Vector<ViewFile> files) {
     auto set = build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));
@@ -197,7 +197,7 @@ TEST_SUITE("PluginPlannerScan") {
             index_trace(make_homog_trace(env, "stdio", "fwrite", "STDIO", N));
         ViewFile posix =
             index_trace(make_homog_trace(env, "posix", "read", "POSIX", N));
-        std::vector<ViewFile> files{stdio, posix};
+        dstd::Vector<ViewFile> files{stdio, posix};
 
         const char* stdio_q = R"(cat == "STDIO")";
 
@@ -233,7 +233,7 @@ TEST_SUITE("PluginPlannerScan") {
         dftu_utils_test::TestEnvironment env(0);
         REQUIRE(env.is_valid());
         const int N = 200;
-        std::vector<ViewFile> files{
+        dstd::Vector<ViewFile> files{
             index_trace(make_homog_trace(env, "s1", "fwrite", "STDIO", N)),
             index_trace(make_homog_trace(env, "p1", "read", "POSIX", N)),
             index_trace(make_homog_trace(env, "p2", "write", "POSIX", N))};
@@ -285,7 +285,7 @@ TEST_SUITE("PluginAttachHandle") {
     TEST_CASE("reading the handle before execute() throws") {
         dftu_utils_test::TestEnvironment env(0);
         REQUIRE(env.is_valid());
-        std::vector<ViewFile> files{
+        dstd::Vector<ViewFile> files{
             index_trace(make_homog_trace(env, "early", "read", "POSIX", 5))};
         CountState st{nullptr};
         dftu_plugin p = make_count_plugin(&st);
@@ -309,7 +309,7 @@ TEST_SUITE("PluginAttachHandle") {
         dftu_utils_test::TestEnvironment env(0);
         REQUIRE(env.is_valid());
         const int N = 200;
-        std::vector<ViewFile> files{
+        dstd::Vector<ViewFile> files{
             index_trace(make_homog_trace(env, "solo1", "fwrite", "STDIO", N)),
             index_trace(make_homog_trace(env, "solo2", "read", "POSIX", N)),
             index_trace(make_homog_trace(env, "solo3", "write", "POSIX", N))};
@@ -356,7 +356,7 @@ TEST_SUITE("PluginAttachHandle") {
         dftu_utils_test::TestEnvironment env(0);
         REQUIRE(env.is_valid());
         const int N = 50;
-        std::vector<ViewFile> files{
+        dstd::Vector<ViewFile> files{
             index_trace(make_homog_trace(env, "mix1", "fwrite", "STDIO", N)),
             index_trace(make_homog_trace(env, "mix2", "read", "POSIX", N))};
 

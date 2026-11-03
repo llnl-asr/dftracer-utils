@@ -11,10 +11,6 @@
 #include <dftracer/utils/trace/views/view_plan.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <variant>
 
 namespace dftracer::utils::trace::views::detail {
 

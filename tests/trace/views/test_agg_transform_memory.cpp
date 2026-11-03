@@ -77,7 +77,10 @@ int child_main(const std::string& mode, const std::string& gz) {
         key.transform_args = {"category_1"};
     }
     scan::ScanPlan plan = scan::agg(
-        scan::group_by(scan::memory_budget(scan::from_file(gz, idx), BUDGET),
+        scan::group_by(scan::memory_budget(
+                           scan::from_file(dftracer::utils::dstd::String(gz),
+                                           dftracer::utils::dstd::String(idx)),
+                           BUDGET),
                        {key}),
         {{AggOp::Sum, "dur", "sum_dur"}});
     static dftracer::utils::Runtime rt;

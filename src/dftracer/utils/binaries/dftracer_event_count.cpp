@@ -198,8 +198,7 @@ static int run_event_count(const EventCountArgParse* cli) {
         cli->inputs.directory.empty()
             ? dstd::Path()
             : binaries::absolute_path(cli->inputs.directory);
-    // keep std: unswept API
-    const std::string index_dir(cli->indexing.index_dir);
+    const dstd::String index_dir(cli->indexing.index_dir);
     const auto force = cli->indexing.force;
     const auto executor_threads = cli->pipeline.executor_threads;
 

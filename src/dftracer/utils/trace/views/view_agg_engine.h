@@ -6,13 +6,11 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
-
-#include <optional>
-#include <string>
-#include <vector>
 
 // View -> dataframe engine aggregation convergence: every group_by/agg (and
 // global) View aggregation runs through the dataframe engine's streaming
@@ -54,7 +52,7 @@ coro::CoroTask<dftracer::utils::dataframe::AggStatePtr> build_engine_agg_state(
 /// Pct on an absent arg reads an empty sketch (NaN -> 0), a Count is folded as
 /// a present-count (Int64) but the dyn convention is Float64.
 struct DynFix {
-    std::string out;
+    dstd::String out;
     bool pct = false;
     bool count = false;
 };
@@ -65,9 +63,13 @@ struct DynFix {
 /// reductions (auto_numeric_metrics) plus the column-name tag they carry.
 struct EnginePrep {
     dstd::Optional<dftracer::utils::dataframe::LazyFrame> lf;
+    // keep std: the dataframe aggregation API takes std::vector<std::string>
     std::vector<std::string> group_key_names;
+    // keep std: lower_group_aggs takes std::vector<GroupAgg>
     std::vector<dftracer::utils::dataframe::GroupAgg> gaggs;
+    // keep std: agg_new takes std::vector<AggDynSpec>
     std::vector<dftracer::utils::dataframe::AggDynSpec> dyn_specs;
+    // keep std: the dataframe aggregation API takes a std::string
     std::string dyn_prefix;
 };
 
@@ -78,40 +80,44 @@ struct EnginePrep {
 /// the fixed gaggs (value then text), the dyn reductions, and the key/value
 /// transforms both paths apply on top of the base frame.
 struct AggInputSpec {
-    std::vector<std::string> select;  ///< build_row_frame select tokens
+    dstd::Vector<dstd::String> select;  ///< build_row_frame select tokens
     /// The plan's computed columns, each expression positional against
     /// `select`, appended (or replacing a same-named column) before grouping.
     struct Computed {
-        std::string name;
+        dstd::String name;
         dftracer::utils::dataframe::Expr expr;
     };
-    std::vector<Computed> computed;
+    dstd::Vector<Computed> computed;
     double base_time_scale = 1.0;  ///< time_scale passed to build_row_frame
     bool emit_dyn = false;         ///< append build_dyn_numeric_columns
     bool by_path = false;          ///< columns named by path
 
+    // keep std: the dataframe aggregation API takes std::vector<std::string>
     std::vector<std::string> group_key_names;  ///< final key column names
+    // keep std: lower_group_aggs takes std::vector<GroupAgg>
     std::vector<dftracer::utils::dataframe::GroupAgg> gaggs;
+    // keep std: agg_new takes std::vector<AggDynSpec>
     std::vector<dftracer::utils::dataframe::AggDynSpec> dyn_specs;
+    // keep std: the dataframe aggregation API takes a std::string
     std::string dyn_prefix;
 
     /// cat key(s) lowercased for grouping only; the base column to lower into
     /// the hidden CAT_KEY_COL, or empty when no non-transformed cat key.
-    std::string cat_lower_src;
+    dstd::String cat_lower_src;
     /// Group-key value transforms (dirname/basename/lower/bucket): read
     /// `src_col` from the base frame, resolve+transform each cell into
     /// `out_col`.
     struct Transform {
         GroupKey gk;
-        std::string src_col;
-        std::string out_col;
+        dstd::String src_col;
+        dstd::String out_col;
     };
-    std::vector<Transform> transforms;
+    dstd::Vector<Transform> transforms;
     bool transform_wants_resolver = false;
 
     /// Time-bucket floor over the base ts column into the hidden
     /// BUCKET_KEY_COL; empty `bucket_ts_src` means no bucket.
-    std::string bucket_ts_src;
+    dstd::String bucket_ts_src;
     double bucket_scale = 1.0;
     double bucket_interval = 0.0;
     std::int64_t bucket_w = 0;
@@ -120,7 +126,7 @@ struct AggInputSpec {
     /// Unrounded ts/dur/te rescale (agg_fold.h field_scaled), each into its
     /// hidden SCALED_* column; an empty source name skips that field.
     double value_scale = 1.0;
-    std::string scale_ts_src, scale_dur_src, scale_te_src;
+    dstd::String scale_ts_src, scale_dur_src, scale_te_src;
 };
 
 /// Derive the shared aggregation input spec for a bucket-resolved,
@@ -135,7 +141,7 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan);
 /// feeds agg_accumulate_chunk with `spec.group_key_names`, the gagg value
 /// names, and `spec.dyn_prefix`.
 dftracer::utils::dataframe::DataFrame build_agg_input_frame(
-    const std::vector<FoldEvent>& events,
+    const dstd::Vector<FoldEvent>& events,
     const dftracer::utils::dstd::StringIntern& intern, const AggInputSpec& spec,
     const dftracer::utils::index::plan::GroupResolver* resolver);
 
@@ -144,7 +150,7 @@ dftracer::utils::dataframe::DataFrame build_agg_input_frame(
 /// back to ts/dur/te); any other name is returned unchanged. The tier's seed
 /// path uses this to fill a value column's FieldStat from the stored metric for
 /// the underlying field.
-std::string agg_value_base_field(const std::string& value_name);
+dstd::String agg_value_base_field(dstd::StringView value_name);
 
 }  // namespace dftracer::utils::trace::views::detail
 

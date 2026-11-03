@@ -50,6 +50,26 @@
 
 namespace {
 
+PyObject* str_list_dstd(
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& v) {
+    PyObject* list = PyList_New(static_cast<Py_ssize_t>(v.size()));
+    if (!list) return nullptr;
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        PyObject* item = PyUnicode_FromStringAndSize(
+            v[i].data(), static_cast<Py_ssize_t>(v[i].size()));
+        if (!item) {
+            Py_DECREF(list);
+            return nullptr;
+        }
+        PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), item);
+    }
+    return list;
+}
+
+dftracer::utils::dstd::String DS(const std::string& v) {
+    return dftracer::utils::dstd::String(v.data(), v.size());
+}
+
 namespace py = dftracer::utils::python;
 namespace views = dftracer::utils::trace::views;
 using dftracer::utils::dataframe::DataFrame;
@@ -225,11 +245,11 @@ GroupKey parse_group_key(const std::string& s) {
     else if (t == "rank")
         out = GroupKey::rank();
     else if (t.rfind("arg:", 0) == 0)
-        out = GroupKey::of_arg(t.substr(4));
+        out = GroupKey::of_arg(DS(t.substr(4)));
     else
-        out = GroupKey::field(t);
+        out = GroupKey::field(DS(t));
     out.transform = tf;
-    out.transform_args = std::move(targs);
+    for (const auto& a : targs) out.transform_args.push_back(DS(a));
     return out;
 }
 
@@ -247,26 +267,26 @@ dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(const std::string& t) {
         if (c2 != std::string::npos) by = rest.substr(c2 + 1);
     }
     const std::string occ = field.empty() ? "dur" : field;
-    if (op == "count") return AggSpec(AggOp::Count, field, "", "");
-    if (op == "sum") return AggSpec(AggOp::Sum, field);
-    if (op == "sumsq") return AggSpec(AggOp::SumSq, field);
-    if (op == "min") return AggSpec(AggOp::Min, field);
-    if (op == "max") return AggSpec(AggOp::Max, field);
-    if (op == "mean") return AggSpec(AggOp::Mean, field);
-    if (op == "var") return AggSpec(AggOp::Var, field);
-    if (op == "std") return AggSpec(AggOp::Std, field);
-    if (op == "skew") return AggSpec(AggOp::Skew, field);
-    if (op == "kurt") return AggSpec(AggOp::Kurt, field);
-    if (op == "hist") return AggSpec(AggOp::Hist, field);
-    if (op == "argmax") return AggSpec(AggOp::ArgMax, field, "", by);
+    if (op == "count") return AggSpec(AggOp::Count, DS(field), "", "");
+    if (op == "sum") return AggSpec(AggOp::Sum, DS(field));
+    if (op == "sumsq") return AggSpec(AggOp::SumSq, DS(field));
+    if (op == "min") return AggSpec(AggOp::Min, DS(field));
+    if (op == "max") return AggSpec(AggOp::Max, DS(field));
+    if (op == "mean") return AggSpec(AggOp::Mean, DS(field));
+    if (op == "var") return AggSpec(AggOp::Var, DS(field));
+    if (op == "std") return AggSpec(AggOp::Std, DS(field));
+    if (op == "skew") return AggSpec(AggOp::Skew, DS(field));
+    if (op == "kurt") return AggSpec(AggOp::Kurt, DS(field));
+    if (op == "hist") return AggSpec(AggOp::Hist, DS(field));
+    if (op == "argmax") return AggSpec(AggOp::ArgMax, DS(field), "", DS(by));
     if (op == "set_union" || op == "uniq")
-        return AggSpec(AggOp::SetUnion, field);
-    if (op == "busy") return AggSpec(AggOp::Busy, occ);
-    if (op == "concurrency") return AggSpec(AggOp::Concurrency, occ);
-    if (op == "utilization") return AggSpec(AggOp::Utilization, occ);
-    if (op == "active") return AggSpec(AggOp::Active, occ);
+        return AggSpec(AggOp::SetUnion, DS(field));
+    if (op == "busy") return AggSpec(AggOp::Busy, DS(occ));
+    if (op == "concurrency") return AggSpec(AggOp::Concurrency, DS(occ));
+    if (op == "utilization") return AggSpec(AggOp::Utilization, DS(occ));
+    if (op == "active") return AggSpec(AggOp::Active, DS(occ));
     if (op == "pct")
-        return AggSpec(AggOp::Pct, field, "", "",
+        return AggSpec(AggOp::Pct, DS(field), "", "",
                        by.empty() ? 0.0 : std::stod(by));
     if (op.size() >= 2 && op[0] == 'p') {
         double denom = 1.0;
@@ -275,13 +295,13 @@ dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(const std::string& t) {
                 return dftracer::utils::dstd::nullopt;
             denom *= 10.0;
         }
-        return AggSpec(AggOp::Pct, field, op + "_" + field, "",
+        return AggSpec(AggOp::Pct, DS(field), DS(op + "_" + field), "",
                        std::stod(op.substr(1)) / denom);
     }
     return dftracer::utils::dstd::nullopt;
 }
 
-bool parse_specs(PyObject* args, std::vector<AggSpec>& out) {
+bool parse_specs(PyObject* args, dftracer::utils::dstd::Vector<AggSpec>& out) {
     const Py_ssize_t n = PyTuple_Size(args);
     for (Py_ssize_t i = 0; i < n; ++i) {
         const char* s = as_utf8(PyTuple_GetItem(args, i));
@@ -361,7 +381,7 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
         index_dir = s;
     }
     std::vector<std::string> paths;
-    dftracer::utils::dstd::Optional<std::string> dir;
+    dftracer::utils::dstd::Optional<dftracer::utils::dstd::String> dir;
     if (PyUnicode_Check(files)) {
         const char* path = PyUnicode_AsUTF8(files);
         if (!path) return -1;
@@ -369,7 +389,7 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
             dftracer::utils::dstd::PathView(
                 dftracer::utils::dstd::StringView(path)));
         if (is_dir && *is_dir)
-            dir = path;
+            dir = DS(path);
         else
             paths.emplace_back(path);
     } else if (!py::parse_string_seq(files,
@@ -382,19 +402,18 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
     if (dir) {
         if (!run_blocking([&] {
                 tv = py::get_default_runtime()
-                         ->submit(View::from_directory(*dir, index_dir))
+                         ->submit(View::from_directory(*dir, DS(index_dir)))
                          .get();
             }))
             return -1;
     } else {
-        std::vector<views::ViewFile> vfiles;
+        dftracer::utils::dstd::Vector<views::ViewFile> vfiles;
         vfiles.reserve(paths.size());
         for (const std::string& p : paths) {
             const auto index_path =
                 dftracer::utils::trace::internal::determine_index_path(
                     p, index_dir);
-            vfiles.push_back(views::ViewFile{
-                p, std::string(index_path.data(), index_path.size())});
+            vfiles.push_back(views::ViewFile{DS(p), index_path});
         }
         if (!run_blocking([&] { tv = View::from_files(std::move(vfiles)); }))
             return -1;
@@ -532,8 +551,11 @@ PyObject* tv_select(PyObject* self, PyObject* arg) {
     std::vector<std::string> names;
     if (!py::parse_string_seq(arg, "select expects a sequence of names", names))
         return nullptr;
-    return build(self,
-                 [&](const View& t) { return t.select(std::move(names)); });
+    return build(self, [&](const View& t) {
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
+        for (const auto& n : names) cols.push_back(DS(n));
+        return t.select(std::move(cols));
+    });
 }
 
 PyObject* tv_phase(PyObject* self, PyObject* arg) {
@@ -648,7 +670,7 @@ PyObject* tv_time_unit(PyObject* self, PyObject* arg) {
 }
 
 PyObject* tv_group_by(PyObject* self, PyObject* args) {
-    std::vector<GroupKey> keys;
+    dftracer::utils::dstd::Vector<GroupKey> keys;
     const Py_ssize_t n = PyTuple_Size(args);
     for (Py_ssize_t i = 0; i < n; ++i) {
         const char* s = as_utf8(PyTuple_GetItem(args, i));
@@ -660,13 +682,13 @@ PyObject* tv_group_by(PyObject* self, PyObject* args) {
 }
 
 PyObject* tv_agg(PyObject* self, PyObject* args) {
-    std::vector<AggSpec> specs;
+    dftracer::utils::dstd::Vector<AggSpec> specs;
     if (!parse_specs(args, specs)) return nullptr;
     return build(self, [&](const View& t) { return t.agg(std::move(specs)); });
 }
 
 PyObject* tv_agg_numeric_args(PyObject* self, PyObject* args) {
-    std::vector<AggSpec> specs;
+    dftracer::utils::dstd::Vector<AggSpec> specs;
     if (!parse_specs(args, specs)) return nullptr;
     return build(self, [&](const View& t) {
         return specs.empty() ? t.agg_numeric_args()
@@ -705,13 +727,13 @@ PyObject* tv_memory_budget(PyObject* self, PyObject* arg) {
 }
 
 PyObject* tv_columns(PyObject* self, PyObject*) {
-    std::vector<std::string> cols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
     if (!run_blocking([&] { cols = tv_of(self).columns(); })) return nullptr;
-    return str_list_from(cols);
+    return str_list_dstd(cols);
 }
 
 PyObject* tv_column_info(PyObject* self, PyObject*) {
-    std::vector<views::ColumnInfo> info;
+    dftracer::utils::dstd::Vector<views::ColumnInfo> info;
     if (!run_blocking([&] { info = tv_of(self).column_info(); }))
         return nullptr;
     PyObject* d = PyDict_New();
@@ -839,7 +861,8 @@ PyObject* tv_typed(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!run_on(
             runtime_arg,
             [&] {
-                return tv_of(self).collect_typed(shard_begin, shard_end, fn);
+                return tv_of(self).collect_typed(shard_begin, shard_end,
+                                                 std::move(fn));
             },
             typed))
         return nullptr;
@@ -878,7 +901,7 @@ PyObject* tv_materialize(PyObject* self, PyObject* args, PyObject* kwds) {
             [&] {
                 return tv_of(self).materialize(
                     static_cast<std::uint64_t>(checkpoint_size),
-                    static_cast<std::uint64_t>(part_size), fn);
+                    static_cast<std::uint64_t>(part_size), std::move(fn));
             },
             stats))
         return nullptr;
@@ -952,8 +975,8 @@ PyObject* tv_merge_partials(PyObject* self, PyObject* arg) {
     std::vector<std::string> owned;
     if (!py::parse_bytes_seq(arg, "merge_partials expects a sequence", owned))
         return nullptr;
-    std::vector<dftracer::utils::dstd::StringView> parts(owned.begin(),
-                                                         owned.end());
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
+        owned.begin(), owned.end());
     DataFrame out;
     if (!run_blocking([&] { out = tv_of(self).merge_partials(parts); }))
         return nullptr;
@@ -972,8 +995,8 @@ PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
     if (!py::parse_bytes_seq(arg, "materialize_partials expects a sequence",
                              owned))
         return nullptr;
-    std::vector<dftracer::utils::dstd::StringView> parts(owned.begin(),
-                                                         owned.end());
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
+        owned.begin(), owned.end());
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
@@ -992,13 +1015,13 @@ PyObject* tv_reconstruct_if_cached(PyObject* self, PyObject*) {
 }
 
 PyObject* tv_mv_source(PyObject* self, PyObject*) {
-    std::vector<std::string> out;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
     if (!run_blocking([&] { out = tv_of(self).mv_source(); })) return nullptr;
-    return str_list_from(out);
+    return str_list_dstd(out);
 }
 
 PyObject* tv_materialize_dir(PyObject* self, PyObject*) {
-    std::string out;
+    dftracer::utils::dstd::String out;
     if (!run_blocking([&] { out = tv_of(self).materialize_dir(); }))
         return nullptr;
     return PyUnicode_FromStringAndSize(out.data(),
@@ -1008,7 +1031,8 @@ PyObject* tv_materialize_dir(PyObject* self, PyObject*) {
 PyObject* tv_register_materialized(PyObject* self, PyObject* arg) {
     const char* dir = as_utf8(arg);
     if (!dir) return nullptr;
-    const std::string d(dir);
+    const dftracer::utils::dstd::String d{
+        dftracer::utils::dstd::StringView(dir)};
     if (!run_blocking([&] { tv_of(self).register_materialized(d); }))
         return nullptr;
     Py_RETURN_NONE;
@@ -1059,8 +1083,8 @@ PyObject* merge_flamegraph_partials_py(PyObject*, PyObject* arg) {
     if (!py::parse_bytes_seq(
             arg, "merge_flamegraph_partials expects a sequence", owned))
         return nullptr;
-    std::vector<dftracer::utils::dstd::StringView> parts(owned.begin(),
-                                                         owned.end());
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
+        owned.begin(), owned.end());
     return guarded([&] {
         return py::wrap_dataframe(View::merge_flamegraph_partials(parts));
     });

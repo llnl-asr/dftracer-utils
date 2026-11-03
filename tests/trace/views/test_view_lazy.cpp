@@ -32,7 +32,9 @@ TEST_SUITE("trace scan - lazy collect") {
         "scan::collect() returns a LazyFrame matching scan::collect_frame()") {
         const auto& s = shared_trace();
         scan::ScanPlan v = scan::agg(
-            scan::group_by(scan::from_file(s.gz, s.idx), {GroupKey::cat()}),
+            scan::group_by(
+                scan::from_file(dstd::String(s.gz), dstd::String(s.idx)),
+                {GroupKey::cat()}),
             {{AggOp::Count, "", "n"}});
 
         dataframe::LazyFrame lz = scan::collect(v);
@@ -49,7 +51,8 @@ TEST_SUITE("trace scan - lazy collect") {
 
     TEST_CASE("scan::collect() lazy plan composes filter + select") {
         const auto& s = shared_trace();
-        scan::ScanPlan base = scan::from_file(s.gz, s.idx);
+        scan::ScanPlan base =
+            scan::from_file(dstd::String(s.gz), dstd::String(s.idx));
 
         dataframe::DataFrame all_events = run(scan::collect_frame(base));
 
@@ -70,9 +73,10 @@ TEST_SUITE("trace scan - lazy collect") {
 
     TEST_CASE("sorting and reversing a filter that matches nothing") {
         const auto& s = shared_trace();
-        const auto none = View::from_file(s.gz, s.idx)
-                              .duql(R"(cat == "NOPE")")
-                              .select({"name", "dur"});
+        const auto none =
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                .duql(R"(cat == "NOPE")")
+                .select({"name", "dur"});
         CHECK(run(none.sort_by_multi({"dur", "name"},
                                      std::vector<bool>{true, false})
                       .slice(0, 10)
@@ -113,7 +117,7 @@ std::string canonical(const trace::views::detail::ViewPlan& p) {
     for (const GroupKey& k : p.group_by) {
         o << static_cast<int>(k.kind) << ':' << k.arg << ':'
           << static_cast<int>(k.transform);
-        for (const std::string& a : k.transform_args) o << ':' << a;
+        for (const auto& a : k.transform_args) o << ':' << a;
         o << ';';
     }
     o << "\nagg=";
@@ -124,7 +128,7 @@ std::string canonical(const trace::views::detail::ViewPlan& p) {
     for (const AggSpec& a : p.numeric_arg_aggs)
         o << static_cast<int>(a.op) << ';';
     o << "\nbudget=" << p.memory_budget << "\nselect=";
-    for (const std::string& s : p.select) o << s << ';';
+    for (const auto& s : p.select) o << s << ';';
     o << "\npage=" << p.limit << ',' << p.offset << " sort=" << p.sort_col
       << ',' << p.sort_desc << " topk=" << p.topk_col << ',' << p.topk_k << ','
       << p.topk_largest;
@@ -155,12 +159,12 @@ void check_same_rows(const DataFrame& a, const DataFrame& b) {
 
 scan::ScanPlan base_plan() {
     const auto& s = shared_trace();
-    return scan::from_file(s.gz, s.idx);
+    return scan::from_file(dstd::String(s.gz), dstd::String(s.idx));
 }
 
 View base_viewer() {
     const auto& s = shared_trace();
-    return View::from_file(s.gz, s.idx);
+    return View::from_file(dstd::String(s.gz), dstd::String(s.idx));
 }
 
 }  // namespace
@@ -373,7 +377,7 @@ TEST_SUITE("View - collect_all and sessions") {
     }
 
     TEST_CASE("a batch scans the trace once for every branch") {
-        std::vector<dstd::SharedPtr<const ViewSource>> members;
+        dstd::Vector<dstd::SharedPtr<const ViewSource>> members;
         for (const LazyFrame& lf : mixed_plans())
             members.push_back(absorbed_source(lf));
         ViewSource::Batch b = run(ViewSource::run_batch(members));
@@ -522,7 +526,8 @@ struct FnameTrace {
         (void)dstd::fs::remove(pfw);
         idx = std::string(determine_index_path(gz, ""));
         StringSink sink;
-        run(View::from_file(gz, idx).sink_json(sink));
+        run(View::from_file(dstd::String(gz), dstd::String(idx))
+                .sink_json(sink));
     }
 };
 
@@ -559,7 +564,7 @@ TEST_SUITE("View - streamed batches") {
 
     TEST_CASE("a branch predicate on a string arg selects its events") {
         FnameTrace f;
-        View t = View::from_file(f.gz, f.idx);
+        View t = View::from_file(dstd::String(f.gz), dstd::String(f.idx));
         std::vector<DataFrame> r = run(dftracer::utils::dataframe::collect_all(
             {t.duql(R"(fname == "/a")").lazy(),
              t.duql(R"(fname == "/b")").lazy(),
@@ -636,8 +641,8 @@ TEST_SUITE("View - expression keys") {
         TestEnvironment env(10);
         const std::string roots = env.get_dir() + "/rollups";
         auto polls = std::make_shared<int>(0);
-        View t = View::from_file(sh.gz, sh.idx)
-                     .rollup_root(roots)
+        View t = View::from_file(dstd::String(sh.gz), dstd::String(sh.idx))
+                     .rollup_root(dstd::String(roots))
                      .cancel_when([polls] {
                          ++*polls;
                          return false;
@@ -735,7 +740,7 @@ struct NestedTrace {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
         StringSink sink;
-        run(View::from_file(gz).sink_json(sink));
+        run(View::from_file(dstd::String(gz)).sink_json(sink));
     }
 };
 
@@ -744,10 +749,12 @@ const NestedTrace& nested_trace() {
     return t;
 }
 
-scan::ScanPlan nested_plan() { return scan::from_file(nested_trace().gz); }
+scan::ScanPlan nested_plan() {
+    return scan::from_file(dstd::String(nested_trace().gz));
+}
 
 DataFrame scan_flamegraph(scan::ScanPlan p,
-                          std::vector<std::string> group = {}) {
+                          dstd::Vector<dstd::String> group = {}) {
     return run(scan::flamegraph(std::move(p), {"pid", "tid"}, "ts", "dur",
                                 "name", std::move(group)));
 }
@@ -757,7 +764,9 @@ DataFrame scan_call_tree(scan::ScanPlan p) {
         scan::call_tree(std::move(p), {"pid", "tid"}, "ts", "dur", "name"));
 }
 
-View nested_viewer() { return View::from_file(nested_trace().gz); }
+View nested_viewer() {
+    return View::from_file(dstd::String(nested_trace().gz));
+}
 
 // The rows of `f` over `cols`, one string each, in sorted order: containment
 // ids depend on scan order, so frames compare by content.
@@ -893,16 +902,16 @@ TEST_SUITE("View - trace terminals") {
 
     TEST_CASE("partials merge to the collected result") {
         View t = nested_viewer();
-        const std::string fp = run(t.flamegraph_partial().collect());
-        const std::vector<dstd::StringView> fps{fp, fp};
+        const dstd::String fp = run(t.flamegraph_partial().collect());
+        const dstd::Vector<dstd::StringView> fps{fp, fp};
         const DataFrame merged = View::merge_flamegraph_partials(fps);
         CHECK(rows_of(merged, {"name", "level"}) ==
               rows_of(run(t.flamegraph().collect()), {"name", "level"}));
 
         View agg =
             t.group_by({GroupKey::name()}).agg({{AggOp::Count, "", "n"}});
-        const std::string ap = run(agg.aggregate_partial().collect());
-        const std::vector<dstd::StringView> aps{ap};
+        const dstd::String ap = run(agg.aggregate_partial().collect());
+        const dstd::Vector<dstd::StringView> aps{ap};
         CHECK(rows_of(agg.merge_partials(aps), {"name", "n"}) ==
               rows_of(run(agg.collect()), {"name", "n"}));
     }
@@ -934,7 +943,7 @@ TEST_SUITE("View - trace terminals") {
             agg.aggregate_partial().plans().front(),
             t.duql(R"(cat == "APP")").sink_json(sink, LAZY).plans().front(),
             agg.lazy()};
-        std::vector<dstd::SharedPtr<const ViewSource>> members;
+        dstd::Vector<dstd::SharedPtr<const ViewSource>> members;
         for (const LazyFrame& lf : plans) {
             members.push_back(absorbed_source(lf));
             CHECK(members.back()->batch_key() == members.front()->batch_key());
@@ -950,12 +959,12 @@ TEST_SUITE("View - trace terminals") {
                           nested_plan(),
                           duql::parse_or_throw(R"(cat == "POSIX")"))),
                       FLAME_COLS));
-        const std::string fp = trace::views::detail::partial_of(b.frames[3]);
-        const std::vector<dstd::StringView> fps{fp};
+        const dstd::String fp = trace::views::detail::partial_of(b.frames[3]);
+        const dstd::Vector<dstd::StringView> fps{fp};
         CHECK(rows_of(View::merge_flamegraph_partials(fps), FLAME_COLS) ==
               rows_of(b.frames[0], FLAME_COLS));
-        const std::string ap = trace::views::detail::partial_of(b.frames[4]);
-        const std::vector<dstd::StringView> aps{ap};
+        const dstd::String ap = trace::views::detail::partial_of(b.frames[4]);
+        const dstd::Vector<dstd::StringView> aps{ap};
         CHECK(rows_of(agg.merge_partials(aps), {"name", "n"}) ==
               rows_of(b.frames[6], {"name", "n"}));
         CHECK(trace::views::detail::stats_of(b.frames[5]).events_matched == 16);
@@ -990,8 +999,8 @@ TEST_SUITE("View - trace terminals") {
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        const TypedResult t =
-            run(scan::collect_typed(scan::from_file(gz), 0, 4096));
+        const TypedResult t = run(
+            scan::collect_typed(scan::from_file(dstd::String(gz)), 0, 4096));
         REQUIRE(t.regular.num_rows() == 2);
         const dataframe::Series& dur =
             t.regular.columns[static_cast<std::size_t>(bcol(t.regular, "dur"))];
@@ -1034,9 +1043,9 @@ TEST_SUITE("View - trace terminals") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        View t = View::from_file(gz);
-        const DataFrame want =
-            scan_flamegraph(scan::phase(scan::from_file(gz), Phase::Events));
+        View t = View::from_file(dstd::String(gz));
+        const DataFrame want = scan_flamegraph(
+            scan::phase(scan::from_file(dstd::String(gz)), Phase::Events));
         auto [events, any] = run(dftracer::utils::dataframe::collect_all(
             t.phase(Phase::Events).flamegraph(), t.flamegraph()));
         CHECK(rows_of(events, FLAME_COLS) == rows_of(want, FLAME_COLS));
@@ -1048,7 +1057,7 @@ TEST_SUITE("View - trace terminals") {
         TestEnvironment env(10);
         auto polls = std::make_shared<int>(0);
         View t = nested_viewer()
-                     .rollup_root(env.get_dir() + "/rollups")
+                     .rollup_root(dstd::String(env.get_dir() + "/rollups"))
                      .cancel_when([polls] {
                          ++*polls;
                          return false;
@@ -1127,11 +1136,11 @@ TEST_SUITE("View - trace terminals") {
     TEST_CASE("distributed rollup terminals work through the viewer") {
         TestEnvironment env(10);
         View agg = nested_viewer()
-                       .rollup_root(env.get_dir() + "/rollups")
+                       .rollup_root(dstd::String(env.get_dir() + "/rollups"))
                        .group_by({GroupKey::name()})
                        .agg({{AggOp::Count, "", "n"}});
         CHECK_FALSE(agg.reconstruct_if_cached());
-        const std::string p = run(agg.aggregate_partial().collect());
+        const dstd::String p = run(agg.aggregate_partial().collect());
         run(agg.materialize_partials({p}));
         dstd::Optional<DataFrame> cached = agg.reconstruct_if_cached();
         REQUIRE(cached);
@@ -1184,7 +1193,7 @@ TEST_SUITE("View - trace terminals") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        View t = View::from_file(gz);
+        View t = View::from_file(dstd::String(gz));
         DataFrame rows = run(t.select({"name", "size"}).collect());
         CHECK(rows.names == std::vector<std::string>{"name", "args.size"});
         CHECK(rows.num_rows() == 4);
@@ -1228,13 +1237,13 @@ TEST_SUITE("View - low-level scans") {
         View t = nested_viewer().duql(R"(cat == "POSIX")");
         std::atomic<std::int64_t> n{0};
         run(t.for_each_batch(
-            [&](std::size_t, const std::vector<dstd::StringView>& events) {
+            [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
                 n += static_cast<std::int64_t>(events.size());
             },
             4));
         CHECK(n == 16);
         auto counted = run(t.map_batches<std::int64_t>(
-            [](std::int64_t& acc, const std::vector<dstd::StringView>& ev) {
+            [](std::int64_t& acc, const dstd::Vector<dstd::StringView>& ev) {
                 acc += static_cast<std::int64_t>(ev.size());
             },
             [](std::int64_t&& a, std::int64_t&& b) { return a + b; }, 3));
@@ -1245,7 +1254,7 @@ TEST_SUITE("View - low-level scans") {
         View t = nested_viewer();
         std::atomic<std::int64_t> n{0};
         run(t.head(5).for_each_batch(
-            [&](std::size_t, const std::vector<dstd::StringView>& events) {
+            [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
                 n += static_cast<std::int64_t>(events.size());
             },
             1));
@@ -1258,13 +1267,12 @@ TEST_SUITE("View - low-level scans") {
         CHECK(skipped.lines().size() == 2);
         CHECK_THROWS_WITH_AS(
             run(t.slice(2, 5).for_each_batch(
-                [](std::size_t, const std::vector<dstd::StringView>&) {}, 1)),
+                [](std::size_t, const dstd::Vector<dstd::StringView>&) {}, 1)),
             doctest::Contains("head"),
             dftracer::utils::common::DFTUtilsException);
         CHECK_THROWS_WITH_AS(t.head(5).flamegraph(), doctest::Contains("slice"),
                              dftracer::utils::common::DFTUtilsException);
-        dataframe::LazyResult<std::string> part =
-            t.head(5).flamegraph_partial();
+        auto part = t.head(5).flamegraph_partial();
         CHECK_FALSE(run(part.collect()).empty());
         CHECK_THROWS_WITH_AS(t.slice(1, 5).flamegraph_partial(),
                              doctest::Contains("skips rows"),
@@ -1281,7 +1289,8 @@ TEST_SUITE("View - unindexed reads") {
     TEST_CASE("an unindexed multi-member trace reads every event once") {
         TestEnvironment env(10);
         const std::string gz = create_multimember_trace(env, 5000, 20000);
-        const auto rows = run(View::from_file(gz, "").collect()).num_rows();
+        const auto rows =
+            run(View::from_file(dstd::String(gz), "").collect()).num_rows();
         CHECK(rows == 5000);
     }
 
@@ -1291,8 +1300,12 @@ TEST_SUITE("View - unindexed reads") {
         TestEnvironment env(10);
         const std::string gz = create_multimember_trace(env, 5000, 20000);
         const std::string idx = std::string(determine_index_path(gz, ""));
-        CHECK(run(View::from_file(gz, idx).collect()).num_rows() == 5000);
-        CHECK(run(View::from_file(gz, idx).collect()).num_rows() == 5000);
+        CHECK(
+            run(View::from_file(dstd::String(gz), dstd::String(idx)).collect())
+                .num_rows() == 5000);
+        CHECK(
+            run(View::from_file(dstd::String(gz), dstd::String(idx)).collect())
+                .num_rows() == 5000);
     }
 }
 
@@ -1332,7 +1345,9 @@ TEST_SUITE("View - computed columns over a trace scan") {
         namespace df = dftracer::utils::dataframe;
         TestEnvironment env(10);
         const std::string gz = write_args_trace(env);
-        View v = View::from_file(gz, std::string(determine_index_path(gz, "")));
+        View v = View::from_file(
+            dstd::String(gz),
+            dstd::String(std::string(determine_index_path(gz, ""))));
         View a = v.with_column("z", df::expr_lit(std::int64_t{1}))
                      .with_column("t", df::expr_lit_null(df::TypeId::Int64))
                      .select({"t", "z"});
@@ -1348,7 +1363,7 @@ TEST_SUITE("View - computed columns over a trace scan") {
         TestEnvironment env(10);
         const std::string gz = create_multimember_trace(env, 20000, 1 << 16);
         View big =
-            View::from_file(gz, std::string(determine_index_path(gz, "")));
+            View::from_file(dstd::String(gz), determine_index_path(gz, ""));
         LazyFrame lf = big.lazy().with_row_index("r");
         const std::int32_t r = 0;
         REQUIRE(lf.schema()[0] == "r");
@@ -1366,7 +1381,7 @@ TEST_SUITE("View - computed columns over a trace scan") {
             CAPTURE(member);
             const std::string gz = create_multimember_trace(env, 3000, member);
             LazyFrame lf = scan::collect(scan::ordered(scan::from_file(
-                gz, std::string(determine_index_path(gz, "")))));
+                dstd::String(gz), determine_index_path(gz, ""))));
             const std::vector<std::string> names = lf.schema();
             const auto at = [&](const char* n) {
                 return static_cast<std::int32_t>(
@@ -1408,7 +1423,7 @@ TEST_SUITE("View - aggregations over a nullable arg") {
         TestEnvironment env(10);
         const std::string gz = write_args_trace(env);
         LazyFrame lf = scan::collect(scan::ordered(scan::select(
-            scan::from_file(gz, std::string(determine_index_path(gz, ""))),
+            scan::from_file(dstd::String(gz), determine_index_path(gz, "")),
             {"name", "cat", "pid", "tid", "ts", "dur", "ph", "x"})));
         const std::int32_t x =
             static_cast<std::int32_t>(lf.schema().size()) - 1;
@@ -1444,8 +1459,8 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
         using dftracer::utils::dataframe::GroupAgg;
         using dftracer::utils::dataframe::TypeId;
         TestEnvironment env(10);
-        const std::vector<std::string> cols{"name", "cat", "pid", "tid",
-                                            "ts",   "dur", "ph",  "x"};
+        const dstd::Vector<dstd::String> cols{"name", "cat", "pid", "tid",
+                                              "ts",   "dur", "ph",  "x"};
         const std::vector<GroupAgg> typed{{Agg::Sum, "args.x", "s"},
                                           {Agg::Min, "args.x", "lo"},
                                           {Agg::Max, "args.x", "hi"}};
@@ -1469,10 +1484,10 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
 
         for (const std::string& gz : {write_args_trace(env), absent}) {
             CAPTURE(gz);
-            const std::string idx = std::string(determine_index_path(gz, ""));
-            View v = View::from_file(gz, idx);
-            const LazyFrame ordered = scan::collect(
-                scan::ordered(scan::select(scan::from_file(gz, idx), cols)));
+            const dstd::String idx = determine_index_path(gz, "");
+            View v = View::from_file(dstd::String(gz), idx);
+            const LazyFrame ordered = scan::collect(scan::ordered(
+                scan::select(scan::from_file(dstd::String(gz), idx), cols)));
             for (const LazyFrame& lf :
                  {v.select(cols).lazy(), ordered,
                   v.select(cols).duql("derive q = 1").lazy()})

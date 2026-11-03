@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/string.h>
@@ -14,7 +15,12 @@ namespace dftracer::utils::index::schemas::dft::agg {
 namespace {
 struct Registry {
     std::mutex mutex;
-    dstd::StringViewMap<dstd::WeakPtr<AggInternTable>> tables;
+    dstd::Optional<dstd::StringViewMap<dstd::WeakPtr<AggInternTable>>> slot;
+
+    dstd::StringViewMap<dstd::WeakPtr<AggInternTable>>& tables() {
+        if (!slot) slot.emplace();
+        return *slot;
+    }
 };
 
 Registry& registry() {
@@ -24,8 +30,7 @@ Registry& registry() {
         dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
             Registry& r = dstd::Singleton<Registry>::get();
             std::lock_guard lock(r.mutex);
-            decltype(r.tables) released;
-            r.tables.swap(released);
+            r.slot.reset();
         });
         return true;
     }();
@@ -51,13 +56,14 @@ AggInternPtr intern_for_index(dstd::StringView index_path) {
 
     auto& r = registry();
     std::lock_guard lock(r.mutex);
-    auto it = r.tables.find(index_path);
-    if (it != r.tables.end()) {
+    auto& tables = r.tables();
+    auto it = tables.find(index_path);
+    if (it != tables.end()) {
         if (auto existing = it->second.lock()) return existing;
-        r.tables.erase(it);
+        tables.erase(it);
     }
     auto table = new_table();
-    r.tables.emplace(dstd::String(index_path), table);
+    tables.emplace(dstd::String(index_path), table);
     return table;
 }
 

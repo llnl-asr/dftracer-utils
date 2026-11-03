@@ -171,7 +171,7 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
 
     auto fold_events = [begin, bucket_us, nb, &fields](
                            CounterAcc& acc,
-                           const std::vector<dstd::StringView>& events) {
+                           const dstd::Vector<dstd::StringView>& events) {
         if (acc.ops.empty()) acc.init(nb);
         fields.for_each_event(events, [&](dstd::StringView ev) {
             fold_counter(ev, begin, bucket_us, nb, acc);

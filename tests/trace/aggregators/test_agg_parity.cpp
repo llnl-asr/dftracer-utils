@@ -462,8 +462,8 @@ struct ViewQuery {
     BuildView build;
 };
 
-const std::vector<AggSpec>& moment_aggs() {
-    static const std::vector<AggSpec> aggs{
+const dftracer::utils::dstd::Vector<AggSpec>& moment_aggs() {
+    static const dftracer::utils::dstd::Vector<AggSpec> aggs{
         {AggOp::Count, "", "n"},
         {AggOp::Sum, "dur", "sum_dur"},
         {AggOp::Min, "dur", "min_dur"},
@@ -479,8 +479,8 @@ const std::vector<AggSpec>& moment_aggs() {
     return aggs;
 }
 
-const std::vector<AggSpec>& occupancy_aggs() {
-    static const std::vector<AggSpec> aggs{
+const dftracer::utils::dstd::Vector<AggSpec>& occupancy_aggs() {
+    static const dftracer::utils::dstd::Vector<AggSpec> aggs{
         {AggOp::Count, "", "n"},
         {AggOp::Busy, "", "busy"},
         {AggOp::Active, "", "active"},
@@ -579,10 +579,12 @@ Vector<ViewQuery> view_queries() {
     return queries;
 }
 
-std::vector<ViewFile> view_files(const std::vector<std::string>& gz) {
-    std::vector<ViewFile> files;
+dftracer::utils::dstd::Vector<ViewFile> view_files(
+    const std::vector<std::string>& gz) {
+    dftracer::utils::dstd::Vector<ViewFile> files;
     for (const auto& f : gz)
-        files.push_back({f, std::string(determine_index_path(f, ""))});
+        files.push_back(
+            {dftracer::utils::dstd::String(f), determine_index_path(f, "")});
     return files;
 }
 

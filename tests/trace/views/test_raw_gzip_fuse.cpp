@@ -131,7 +131,9 @@ TEST_SUITE("RawGzipFuse") {
             std::string(determine_index_path(gz, env.get_dir() + "/refi"));
         {
             StringSink s;
-            View::from_file(gz, ref_idx).sink_json(s).get();
+            View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                .sink_json(s)
+                .get();
         }
         gmoracle::GroupMap ref;
         {
@@ -242,9 +244,11 @@ TEST_SUITE("RawGzipFuse") {
             std::string(determine_index_path(gz, env.get_dir() + "/ri"));
         {
             StringSink s;
-            View::from_file(gz, ref_idx).sink_json(s).get();
+            View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                .sink_json(s)
+                .get();
         }
-        auto ref = View::from_file(gz, ref_idx)
+        auto ref = View::from_file(dstd::String(gz), dstd::String(ref_idx))
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
                        .collect()
@@ -253,7 +257,7 @@ TEST_SUITE("RawGzipFuse") {
         std::string boot_idx =
             std::string(determine_index_path(gz, env.get_dir() + "/bi"));
         REQUIRE_FALSE(dstd::fs::exists(boot_idx).value());
-        auto boot = View::from_file(gz, boot_idx)
+        auto boot = View::from_file(dstd::String(gz), dstd::String(boot_idx))
                         .group_by({GroupKey::cat()})
                         .agg({{AggOp::Count, "", "n"}})
                         .collect()
@@ -282,7 +286,9 @@ TEST_SUITE("RawGzipFuse") {
             std::string(determine_index_path(gz, env.get_dir() + "/ei"));
         REQUIRE_FALSE(dstd::fs::exists(idx).value());
         StringSink boot;
-        View::from_file(gz, idx).sink_json(boot).get();  // bootstrap path
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .sink_json(boot)
+            .get();  // bootstrap path
 
         auto lines = boot.lines();
         CHECK(lines.size() == 20);
@@ -290,7 +296,10 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(count_containing(lines, R"("ph":"X")") == 20);
 
         StringSink all;
-        View::from_file(gz, idx).phase(Phase::Any).sink_json(all).get();
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .phase(Phase::Any)
+            .sink_json(all)
+            .get();
         CHECK(all.lines().size() == 22);
         CHECK(count_containing(all.lines(), R"("name":"FH")") == 1);
         CHECK(count_containing(all.lines(), R"("name":"HH")") == 1);
@@ -314,9 +323,11 @@ TEST_SUITE("RawGzipFuse") {
             std::string(determine_index_path(gz, env.get_dir() + "/fr"));
         {
             StringSink s;
-            View::from_file(gz, ref_idx).sink_json(s).get();
+            View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                .sink_json(s)
+                .get();
         }
-        auto ref = View::from_file(gz, ref_idx)
+        auto ref = View::from_file(dstd::String(gz), dstd::String(ref_idx))
                        .duql(R"(cat == "POSIX")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
@@ -327,7 +338,7 @@ TEST_SUITE("RawGzipFuse") {
         std::string fresh =
             std::string(determine_index_path(gz, env.get_dir() + "/ff"));
         REQUIRE_FALSE(dstd::fs::exists(fresh).value());
-        auto got = View::from_file(gz, fresh)
+        auto got = View::from_file(dstd::String(gz), dstd::String(fresh))
                        .duql(R"(cat == "POSIX")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
@@ -353,9 +364,11 @@ TEST_SUITE("RawGzipFuse") {
             std::string(determine_index_path(gz, env.get_dir() + "/nr"));
         {
             StringSink s;
-            View::from_file(gz, ref_idx).sink_json(s).get();
+            View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                .sink_json(s)
+                .get();
         }
-        auto ref = View::from_file(gz, ref_idx)
+        auto ref = View::from_file(dstd::String(gz), dstd::String(ref_idx))
                        .duql(R"(fhash == "fh1")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
@@ -364,7 +377,7 @@ TEST_SUITE("RawGzipFuse") {
 
         std::string fresh =
             std::string(determine_index_path(gz, env.get_dir() + "/nf"));
-        auto got = View::from_file(gz, fresh)
+        auto got = View::from_file(dstd::String(gz), dstd::String(fresh))
                        .duql(R"(fhash == "fh1")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
@@ -382,8 +395,8 @@ class RecordingFold final : public Fold {
    public:
     explicit RecordingFold(const StringIntern& intern) : intern_(&intern) {}
     bool accepts(const ScanShape&) const override { return true; }
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<RecordingFold>(*intern_);
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<RecordingFold>(*intern_);
     }
     void step(const FoldBatch& batch) override {
         for (const auto& e : batch.events)
@@ -473,8 +486,8 @@ std::vector<std::string> record_index_pass(const std::string& gz,
 class ThrowingFold final : public Fold {
    public:
     bool accepts(const ScanShape&) const override { return true; }
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<ThrowingFold>();
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<ThrowingFold>();
     }
     void step(const FoldBatch&) override {
         if (++batches == 12) throw std::runtime_error("bad batch");
@@ -500,7 +513,7 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
     REQUIRE(env.is_valid());
     const std::string gz = write_multi_member(env.get_dir());
     auto count = [&](const std::string& idx, std::uint64_t budget) {
-        return View::from_file(gz, idx)
+        return View::from_file(dstd::String(gz), dstd::String(idx))
             .memory_budget(budget)
             .group_by({GroupKey::cat()})
             .agg({{AggOp::Count, "", "n"}})

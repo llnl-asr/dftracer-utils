@@ -271,7 +271,8 @@ std::vector<std::string> run_oracle(const Corpus& c) {
 
             for (const auto& tr : TIME_RANGES) {
                 trace::views::detail::ViewPlan vp;
-                vp.files.push_back({trace, index_path, uc, members, 0});
+                vp.files.push_back({dstd::String(trace),
+                                    dstd::String(index_path), uc, members, 0});
                 vp.query = q;
                 vp.time_range = tr;
                 const auto vdef = trace::views::detail::make_vdef(vp, false);
@@ -329,7 +330,8 @@ std::uint64_t count_view(const std::string& trace,
                          const std::string& index_path,
                          const std::string& text) {
     trace::views::detail::ViewPlan vp;
-    vp.files.push_back({trace, index_path, 0, 0, 0});
+    vp.files.push_back(
+        {dstd::String(trace), dstd::String(index_path), 0, 0, 0});
     vp.query = duql::parse_or_throw(text);
     const auto vdef = trace::views::detail::make_vdef(vp, false);
     auto run = [&]() -> coro::CoroTask<std::uint64_t> {
@@ -356,9 +358,14 @@ std::uint64_t count_view_unpruned(const std::string& trace,
     REQUIRE_FALSE(spans.empty());
     dstd::SharedPtr<const duql::Query> q;
     const trace::views::detail::ScanUnit u{
-        trace, index_path, trace::views::detail::checkpoint_size_or_default(0),
-        0,     0,          spans.back().uc_offset + spans.back().uc_size,
-        0,     q};
+        dstd::String(trace),
+        dstd::String(index_path),
+        trace::views::detail::checkpoint_size_or_default(0),
+        0,
+        0,
+        spans.back().uc_offset + spans.back().uc_size,
+        0,
+        q};
     return scan_unit(u, vdef).get();
 }
 
@@ -410,7 +417,7 @@ dstd::Vector<std::uint64_t> view_chunks(const std::string& trace,
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     trace::views::detail::ViewPlan vp;
     vp.files.push_back(
-        {trace, index_path,
+        {dstd::String(trace), dstd::String(index_path),
          dftu_utils_test::index_take(index::file_metadata(snapshot, file))
              ->max_bytes,
          dftu_utils_test::index_take(index::members(snapshot, file)).size(),
@@ -578,7 +585,8 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     using trace::views::AggOp;
     using trace::views::GroupKey;
     const auto summary = [&](const std::string& index_path) {
-        const auto df = trace::views::View::from_files({{trace, index_path}})
+        const auto df = trace::views::View::from_files(
+                            {{dstd::String(trace), dstd::String(index_path)}})
                             .group_by({GroupKey::cat(), GroupKey::name(),
                                        GroupKey::pid(), GroupKey::tid()})
                             .agg({{AggOp::Count, "", "n"},
@@ -662,7 +670,8 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
     CHECK(rows->num_rows() == 2);
     for (const auto& trace : traces) {
         CAPTURE(trace);
-        const auto v = trace::views::View::from_file(trace, index_path);
+        const auto v = trace::views::View::from_file(dstd::String(trace),
+                                                     dstd::String(index_path));
         const auto f =
             dftracer::utils::default_runtime()
                 .submit(

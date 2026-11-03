@@ -2,21 +2,18 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
 #include <algorithm>
-#include <optional>
-#include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
 namespace dataframe = dftracer::utils::dataframe;
 
@@ -25,13 +22,13 @@ namespace dftracer::utils::trace::views {
 namespace {
 
 // A null key cell is nullopt, so it joins other null keys but never "".
-using Key = std::vector<dstd::Optional<std::string>>;
+using Key = dstd::Vector<dstd::Optional<dstd::String>>;
 
 struct KeyHash {
     std::size_t operator()(const Key& k) const {
         std::size_t h = dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
-        for (const dstd::Optional<std::string>& s : k) {
-            std::size_t sh = std::hash<dstd::Optional<std::string>>{}(s);
+        for (const dstd::Optional<dstd::String>& s : k) {
+            std::size_t sh = std::hash<dstd::Optional<dstd::String>>{}(s);
             h ^= sh + dftracer::utils::dstd::hash::GOLDEN_RATIO + (h << 6) +
                  (h >> 2);
         }
@@ -48,7 +45,7 @@ Key key_of(const dataframe::DataFrame& b, std::int64_t n_key,
         if (c.is_null(row))
             k.emplace_back();
         else
-            k.emplace_back(std::string(c.string_at(row)));
+            k.emplace_back(dstd::String(c.string_at(row)));
     }
     return k;
 }
@@ -84,18 +81,18 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
     const bool want_right_only =
         type == JoinType::Right || type == JoinType::Full;
 
-    std::unordered_map<Key, std::int64_t, KeyHash> ridx;
+    dstd::HashMap<Key, std::int64_t, KeyHash> ridx;
     ridx.reserve(static_cast<std::size_t>(right.num_rows()));
     for (std::int64_t r = 0; r < right.num_rows(); ++r)
         ridx.emplace(key_of(right, n_key, r), r);
-    std::unordered_set<Key, KeyHash> matched;
+    dstd::HashSet<Key, KeyHash> matched;
 
     struct Row {
         Key key;
         std::int64_t li;
         std::int64_t ri;
     };
-    std::vector<Row> rows;
+    dstd::Vector<Row> rows;
     for (std::int64_t l = 0; l < left.num_rows(); ++l) {
         auto key = key_of(left, n_key, l);
         auto it = ridx.find(key);
@@ -115,6 +112,7 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
     std::sort(rows.begin(), rows.end(),
               [](const Row& a, const Row& b) { return a.key < b.key; });
 
+    // keep std: dataframe::take takes std::vector<std::int64_t>
     std::vector<std::int64_t> li, ri;
     li.reserve(rows.size());
     ri.reserve(rows.size());
@@ -124,8 +122,8 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
     }
 
     dataframe::DataFrame out;
-    std::vector<dstd::StringView> vals(rows.size());
-    std::vector<std::uint8_t> vbits((rows.size() + 7) / 8);
+    dstd::Vector<dstd::StringView> vals(rows.size());
+    dstd::Vector<std::uint8_t> vbits((rows.size() + 7) / 8);
     for (std::int64_t k = 0; k < n_key; ++k) {
         std::fill(vbits.begin(), vbits.end(), std::uint8_t{0});
         for (std::size_t r = 0; r < rows.size(); ++r) {

@@ -91,8 +91,9 @@ struct NullSink : ExportSink {
 
 View view_of(const std::string& gz) {
     return View::from_file(
-        gz, std::string(dftracer::utils::trace::internal::determine_index_path(
-                gz, "")));
+        dstd::String(gz),
+        dstd::String(std::string(
+            dftracer::utils::trace::internal::determine_index_path(gz, ""))));
 }
 
 }  // namespace

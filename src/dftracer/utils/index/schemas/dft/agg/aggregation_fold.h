@@ -147,11 +147,9 @@ class AggregationFold : public trace::views::detail::Fold {
     }
     bool needs_args() const override { return true; }
 
-    // keep std: trace::views::detail::Fold::slice returns std::unique_ptr
-    std::unique_ptr<trace::views::detail::Fold> slice() const override {
-        // keep std: Fold::slice returns std::unique_ptr
-        auto made = std::make_unique<AggregationFold>(*build_intern_,
-                                                      agg_intern_, config_);
+    dstd::UniquePtr<trace::views::detail::Fold> slice() const override {
+        auto made = dstd::make_unique<AggregationFold>(*build_intern_,
+                                                       agg_intern_, config_);
         made->has_file_ = has_file_;
         return made;
     }

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
@@ -27,10 +28,7 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <span>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::trace::views {
 
@@ -38,9 +36,9 @@ namespace {
 
 // Each shard's aggregate_partial, run concurrently in waves as wide as the
 // spill budget allows, the budget split evenly across a wave.
-coro::CoroTask<std::vector<std::string>> collect_partials(
-    std::vector<View> shards) {
-    std::vector<std::string> partials;
+coro::CoroTask<dstd::Vector<dstd::String>> collect_partials(
+    dstd::Vector<View> shards) {
+    dstd::Vector<dstd::String> partials;
     if (shards.empty()) co_return partials;
     const std::uint64_t configured = shards.front().memory_budget_bytes();
     const std::size_t ways =
@@ -49,26 +47,27 @@ coro::CoroTask<std::vector<std::string>> collect_partials(
     partials.reserve(shards.size());
     for (std::size_t at = 0; at < shards.size(); at += ways) {
         const std::size_t end = std::min(shards.size(), at + ways);
-        std::vector<dataframe::LazyResult<std::string>> plans;
+        dstd::Vector<dataframe::LazyResult<dstd::String>> plans;
         plans.reserve(end - at);
         for (std::size_t i = at; i < end; ++i)
             plans.push_back(shards[i].memory_budget(share).aggregate_partial());
-        dstd::Vector<coro::CoroTask<std::string>> runs;
+        dstd::Vector<coro::CoroTask<dstd::String>> runs;
         runs.reserve(plans.size());
         for (const auto& p : plans) runs.push_back(p.collect());
         auto done = co_await coro::when_all(std::move(runs));
-        for (std::string& d : done) partials.push_back(std::move(d));
+        for (dstd::String& d : done) partials.push_back(std::move(d));
     }
     co_return partials;
 }
 
 }  // namespace
 
-ShardedView ShardedView::from_shard_dirs(std::vector<std::string> shard_dirs) {
+ShardedView ShardedView::from_shard_dirs(
+    dstd::Vector<dstd::String> shard_dirs) {
     return ShardedView(std::move(shard_dirs));
 }
 
-ShardedView ShardedView::from_manifest(const std::string& root) {
+ShardedView ShardedView::from_manifest(const dstd::String& root) {
     auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
     if (!manifest) {
         throw common::DFTUtilsException(
@@ -84,44 +83,44 @@ ShardedView ShardedView::from_manifest(const std::string& root) {
             common::ErrorCode::InvalidArgument,
             "shard manifest format version " +
                 (manifest->format_version
-                     ? std::to_string(*manifest->format_version)
-                     : std::string("(missing)")) +
+                     ? dstd::to_string(*manifest->format_version)
+                     : dstd::String("(missing)")) +
                 " does not match this build's " +
-                std::to_string(INDEX_FORMAT_VERSION));
+                dstd::to_string(INDEX_FORMAT_VERSION));
     }
 
-    std::vector<std::string> dirs;
+    dstd::Vector<dstd::String> dirs;
     dirs.reserve(manifest->shards.size());
     for (const auto& shard : manifest->shards) {
         if (shard.empty()) continue;
-        dirs.push_back(std::string((dstd::PathView(root) / shard.path).str()));
+        dirs.push_back(dstd::String((dstd::PathView(root) / shard.path).str()));
     }
     return ShardedView(std::move(dirs));
 }
 
-std::vector<ViewFile> ShardedView::shard_view_files(
-    const std::string& shard_dir) const {
+dstd::Vector<ViewFile> ShardedView::shard_view_files(
+    const dstd::String& shard_dir) const {
     // A shard's Members scopes store each file's full canonical path, so it
     // locates the trace directly and the index may live apart from it.
     auto snapshot =
         common::unwrap(dftracer::utils::index::plan::open_snapshot(shard_dir));
     const auto indexed = common::unwrap(snapshot.files());
-    std::vector<ViewFile> files;
+    dstd::Vector<ViewFile> files;
     files.reserve(indexed.size());
     for (const auto& file : indexed) {
         ViewFile vf;
-        vf.file_path = std::string(file.path());
+        vf.file_path = dstd::String(file.path());
         vf.index_path = shard_dir;
         files.push_back(std::move(vf));
     }
     return files;
 }
 
-std::vector<View> ShardedView::shards(const Configure& configure) const {
-    std::vector<View> out;
+dstd::Vector<View> ShardedView::shards(const Configure& configure) const {
+    dstd::Vector<View> out;
     out.reserve(shard_dirs_.size());
     for (const auto& dir : shard_dirs_) {
-        std::vector<ViewFile> files = shard_view_files(dir);
+        dstd::Vector<ViewFile> files = shard_view_files(dir);
         if (files.empty()) continue;
         out.push_back(configure(View::from_files(std::move(files))));
     }
@@ -130,26 +129,26 @@ std::vector<View> ShardedView::shards(const Configure& configure) const {
 
 coro::CoroTask<dftracer::utils::dataframe::DataFrame> ShardedView::aggregate(
     Configure configure) const {
-    std::vector<View> views = shards(configure);
-    std::vector<std::string> partials =
+    dstd::Vector<View> views = shards(configure);
+    dstd::Vector<dstd::String> partials =
         co_await collect_partials(std::move(views));
 
-    std::vector<dstd::StringView> pv(partials.begin(), partials.end());
+    dstd::Vector<dstd::StringView> pv(partials.begin(), partials.end());
     co_return configure(View::from_files({})).merge_partials(pv);
 }
 
 coro::CoroTask<ExportStats> ShardedView::aggregate_counters(
     Configure configure, ExportSink& sink) const {
-    std::vector<View> views = shards(configure);
-    std::vector<std::string> partials =
+    dstd::Vector<View> views = shards(configure);
+    dstd::Vector<dstd::String> partials =
         co_await collect_partials(std::move(views));
 
-    std::vector<dstd::StringView> pv(partials.begin(), partials.end());
+    dstd::Vector<dstd::StringView> pv(partials.begin(), partials.end());
     co_return configure(View::from_files({})).merge_counter_partials(pv, sink);
 }
 
-void write_shard_set(const std::string& root,
-                     const std::vector<std::string>& shard_dirs) {
+void write_shard_set(const dstd::String& root,
+                     const dstd::Vector<dstd::String>& shard_dirs) {
     dftracer::utils::index::store::IndexShardManifest manifest;
     manifest.format_version =
         static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
@@ -166,13 +165,13 @@ void write_shard_set(const std::string& root,
             dstd::relative(dstd::PathView(dir), dstd::PathView(root));
         entry.path = (rel.empty() || rel.str().rfind("..", 0) == 0)
                          ? dir
-                         : std::string(rel.str());
+                         : dstd::String(rel.str());
         manifest.shards.push_back(std::move(entry));
     }
     dftracer::utils::index::store::write_shard_manifest(root, manifest);
 }
 
-std::size_t consolidate_shard_set(const std::string& root) {
+std::size_t consolidate_shard_set(const dstd::String& root) {
     auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
     if (!manifest) {
         throw common::DFTUtilsException(
@@ -181,13 +180,13 @@ std::size_t consolidate_shard_set(const std::string& root) {
                 dftracer::utils::index::shard_manifest_path(root));
     }
 
-    std::vector<std::string> shard_roots;
+    dstd::Vector<dstd::String> shard_roots;
     shard_roots.reserve(manifest->shards.size());
     std::size_t files = 0;
     for (const auto& shard : manifest->shards) {
         if (shard.empty()) continue;
         shard_roots.push_back(
-            std::string((dstd::PathView(root) / shard.path).str()));
+            dstd::String((dstd::PathView(root) / shard.path).str()));
         files += shard.num_files;
     }
 
@@ -223,7 +222,7 @@ void copy_agg_data(const idx::Snapshot& source_db,
                    const idx::FileRef& source_file, idx::FileBuild& build,
                    const agg::AggInternTable& source,
                    agg::AggInternTable& target) {
-    std::vector<std::uint32_t> referenced;
+    dstd::Vector<std::uint32_t> referenced;
     const auto remap = [&](std::uint32_t id) {
         const std::uint32_t mapped =
             target.intern.get_or_insert(source.intern.resolve(id));
@@ -275,8 +274,8 @@ void copy_agg_data(const idx::Snapshot& source_db,
 
 }  // namespace
 
-std::size_t merge_shard_set(const std::string& root,
-                            const std::string& out_root) {
+std::size_t merge_shard_set(const dstd::String& root,
+                            const dstd::String& out_root) {
     auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
     if (!manifest) {
         throw common::DFTUtilsException(
@@ -297,7 +296,7 @@ std::size_t merge_shard_set(const std::string& root,
 
             for (const auto& shard : manifest->shards) {
                 if (shard.empty()) continue;
-                const std::string idx(
+                const dstd::String idx(
                     (dstd::PathView(root) / shard.path).str());
                 auto snapshot = common::unwrap(idx::plan::open_snapshot(idx));
                 agg::AggInternTable shard_intern;

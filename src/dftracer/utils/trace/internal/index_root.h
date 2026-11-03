@@ -5,13 +5,12 @@
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <mutex>
-#include <string>
 #include <utility>
 
 namespace dftracer::utils::trace::internal {
@@ -58,7 +57,7 @@ class RootPermit {
 };
 
 // The shared state of the root at `index_path`, keyed by canonical path.
-dstd::SharedPtr<IndexRoot> index_root(const std::string& index_path);
+dstd::SharedPtr<IndexRoot> index_root(const dstd::String& index_path);
 
 }  // namespace dftracer::utils::trace::internal
 

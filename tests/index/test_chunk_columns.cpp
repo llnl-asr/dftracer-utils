@@ -896,9 +896,11 @@ TEST_SUITE("ChunkColumns") {
             CHECK_FALSE(columns.empty());
 
         const std::string root = env.get_dir() + "/set";
-        views::write_shard_set(root, {ia, ib});
+        views::write_shard_set(dstd::String(root),
+                               {dstd::String(ia), dstd::String(ib)});
         const std::string out = env.get_dir() + "/merged";
-        CHECK(views::merge_shard_set(root, out) == 2);
+        CHECK(views::merge_shard_set(dstd::String(root), dstd::String(out)) ==
+              2);
 
         const std::string merged =
             std::string(trace::internal::determine_index_path("x", out));

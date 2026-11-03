@@ -3,12 +3,12 @@
 #define DFTRACER_UTILS_TRACE_STATISTICS_DETAIL_STATS_VIEW_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/statistics/detailed_statistics.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstddef>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::duql {
 class Query;
@@ -21,9 +21,9 @@ namespace dftracer::utils::trace::statistics {
 /// chunks in the scan. Pointers are borrowed and must outlive the collect()
 /// call.
 struct DetailNeeds {
-    const std::vector<std::string>* group_by = nullptr;
-    const std::vector<std::string>* filter_names = nullptr;
-    const std::vector<std::string>* filter_categories = nullptr;
+    const dstd::Vector<dstd::String>* group_by = nullptr;
+    const dstd::Vector<dstd::String>* filter_names = nullptr;
+    const dstd::Vector<dstd::String>* filter_categories = nullptr;
     const duql::Query* query = nullptr;  ///< chunk pruning; null = scan all
     std::size_t num_slots = 0;  ///< parallel scan width; 0 = a small default
 };
@@ -33,13 +33,14 @@ struct DetailNeeds {
 /// index-pruned parallel scan. Holds a source, not a materialized result.
 class DetailStatsView {
    public:
-    static DetailStatsView from_file(std::string file, std::string index = "") {
+    static DetailStatsView from_file(dstd::String file,
+                                     dstd::String index = "") {
         DetailStatsView s;
         s.file_ = std::move(file);
         s.index_ = std::move(index);
         return s;
     }
-    static DetailStatsView from_files(std::vector<views::ViewFile> files) {
+    static DetailStatsView from_files(dstd::Vector<views::ViewFile> files) {
         DetailStatsView s;
         s.files_ = std::move(files);
         s.multi_ = true;
@@ -58,8 +59,8 @@ class DetailStatsView {
     coro::CoroTask<DetailedStatistics> collect(const DetailNeeds& needs) const;
 
    private:
-    std::string file_, index_;
-    std::vector<views::ViewFile> files_;
+    dstd::String file_, index_;
+    dstd::Vector<views::ViewFile> files_;
     bool multi_ = false;
 };
 

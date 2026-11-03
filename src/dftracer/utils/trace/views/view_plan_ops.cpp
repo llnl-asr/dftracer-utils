@@ -2,14 +2,18 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -38,15 +42,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <functional>
 #include <limits>
-#include <map>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <string>
 #include <tuple>
-#include <unordered_set>
 #include <utility>
 
 namespace dftracer::utils::trace::views::detail {
@@ -64,8 +62,8 @@ namespace {
 // A mutable copy of a plan (or a fresh one), ready for one op to mutate.
 dstd::SharedPtr<detail::ViewPlan> clone(
     const dstd::SharedPtr<const detail::ViewPlan>& base) {
-    return base ? std::make_shared<detail::ViewPlan>(*base)
-                : std::make_shared<detail::ViewPlan>();
+    return base ? dstd::make_shared<detail::ViewPlan>(*base)
+                : dstd::make_shared<detail::ViewPlan>();
 }
 
 // time_bucket() adds the bucket as an implicit leading group key, so listing
@@ -102,13 +100,13 @@ bool has_rowset(const dftracer::utils::index::RecordSchema& schema,
 // like-named field), file and host keys on the `fhash` and `hhash` fields,
 // rank on the entity role, and the keys only dftracer events have are
 // rejected. A key relabeled through a row set needs the source to define it.
-void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
+void check_keys(const detail::ViewPlan& p, dstd::Vector<GroupKey>& keys) {
     if (!detail::plan_by_path(p)) return;
     const auto& schema = detail::plan_record_schema(p);
     const auto& roles = schema.roles;
     auto role = [](const dstd::String& path, const char* field) {
-        return path.empty() ? std::string(field)
-                            : std::string(path.data(), path.size());
+        return path.empty() ? dstd::String(field)
+                            : dstd::String(path.data(), path.size());
     };
     for (auto& k : keys) {
         bool field = true;
@@ -169,7 +167,7 @@ void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
 
 namespace {
 
-using Snapshots = std::map<std::string, dftracer::utils::index::Snapshot>;
+using Snapshots = dstd::Map<dstd::String, dftracer::utils::index::Snapshot>;
 
 struct FileIndex {
     const dftracer::utils::index::Snapshot* snapshot = nullptr;
@@ -193,11 +191,25 @@ FileIndex find_file_index(Snapshots& snapshots, const ViewFile& f) {
 
 struct ConfirmedFiles {
     std::mutex mu;
-    std::unordered_set<std::string> keys;
+    dstd::Optional<dstd::HashSet<dstd::String>> slot;
+
+    dstd::HashSet<dstd::String>& keys() {
+        if (!slot) slot.emplace();
+        return *slot;
+    }
 };
 
 ConfirmedFiles& confirmed_files() {
-    return dstd::Singleton<ConfirmedFiles>::get();
+    ConfirmedFiles& files = dstd::Singleton<ConfirmedFiles>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+            ConfirmedFiles& confirmed = dstd::Singleton<ConfirmedFiles>::get();
+            const std::lock_guard<std::mutex> lock(confirmed.mu);
+            confirmed.slot.reset();
+        });
+        return true;
+    }();
+    return files;
 }
 
 // Brings every index the files read fresh through the resolver, which clears
@@ -207,25 +219,25 @@ ConfirmedFiles& confirmed_files() {
 // that does not exist yet holds no evidence, so its first build is left to
 // the first read. Concurrent callers may both rebuild one file; the index
 // writes serialize.
-void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
+void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
     namespace ib = dftracer::utils::index::build;
     namespace ix = dftracer::utils::index;
     namespace st = dftracer::utils::index::store;
     struct Pending {
-        std::string key;
-        std::string file;
+        dstd::String key;
+        dstd::String file;
     };
     struct Group {
-        std::string root;
+        dstd::String root;
         std::size_t checkpoint_size;
-        std::string schema;
+        dstd::String schema;
         bool operator<(const Group& o) const {
             return std::tie(root, checkpoint_size, schema) <
                    std::tie(o.root, o.checkpoint_size, o.schema);
         }
     };
-    std::map<Group, std::vector<Pending>> groups;
-    std::vector<std::string> confirmed;
+    dstd::Map<Group, dstd::Vector<Pending>> groups;
+    dstd::Vector<dstd::String> confirmed;
     {
         Snapshots snapshots;
         dstd::HashSet<dstd::String> missing_roots;
@@ -237,16 +249,16 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
                 continue;
             const dstd::String logical =
                 st::internal::get_logical_path(f.file_path);
-            std::string key(logical.data(), logical.size());
+            dstd::String key(logical.data(), logical.size());
             key += '\n';
-            key += std::to_string(static_cast<long long>(file_stat.mtime));
+            key += dstd::to_string(static_cast<long long>(file_stat.mtime));
             key += '\n';
-            key += std::to_string(file_stat.size);
+            key += dstd::to_string(file_stat.size);
             key += '\n';
             key += f.index_path;
             key += '\n';
-            key += std::to_string(f.checkpoint_size);
-            if (confirmed_files().keys.contains(key)) continue;
+            key += dstd::to_string(f.checkpoint_size);
+            if (confirmed_files().keys().contains(key)) continue;
 
             if (missing_roots.contains(dstd::StringView(f.index_path)))
                 continue;
@@ -261,7 +273,7 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
             } catch (const common::DFTUtilsException&) {
                 continue;
             }
-            std::string schema;
+            dstd::String schema;
             if (found.file) {
                 const auto meta = common::unwrap(
                     ix::file_metadata(*found.snapshot, *found.file));
@@ -288,7 +300,7 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
             groups[{f.index_path, f.checkpoint_size, std::move(schema)}]
                 .push_back({std::move(key), f.file_path});
         }
-        for (auto& k : confirmed) confirmed_files().keys.insert(std::move(k));
+        for (auto& k : confirmed) confirmed_files().keys().insert(std::move(k));
     }
     for (auto& [group, pending] : groups) {
         ib::ResolveAndBuildInput in;
@@ -308,30 +320,31 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
                 " is stale and its rebuild failed: ",
                 result.failures.front().message);
         std::lock_guard<std::mutex> lock(confirmed_files().mu);
-        for (auto& p : pending) confirmed_files().keys.insert(std::move(p.key));
+        for (auto& p : pending)
+            confirmed_files().keys().insert(std::move(p.key));
     }
 }
 
 }  // namespace
 
-ScanPlan from_files(std::vector<ViewFile> files) {
+ScanPlan from_files(dstd::Vector<ViewFile> files) {
     for (auto& f : files)
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
     ensure_indexes_fresh(files);
-    auto plan = std::make_shared<detail::ViewPlan>();
+    auto plan = dstd::make_shared<detail::ViewPlan>();
     plan->files = std::move(files);
     return plan;
 }
 
-ScanPlan from_file(std::string file_path, std::string index_path) {
-    std::vector<ViewFile> files;
+ScanPlan from_file(dstd::String file_path, dstd::String index_path) {
+    dstd::Vector<ViewFile> files;
     files.push_back(ViewFile{std::move(file_path), std::move(index_path)});
     return from_files(std::move(files));
 }
 
-coro::CoroTask<ScanPlan> from_directory(std::string dir,
-                                        std::string index_path) {
+coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
+                                        dstd::String index_path) {
     utilities::filesystem::PatternDirectoryScannerUtility scanner;
     utilities::filesystem::PatternDirectoryScannerUtilityInput input(
         std::move(dir), utilities::filesystem::trace_file_patterns(),
@@ -343,13 +356,13 @@ coro::CoroTask<ScanPlan> from_directory(std::string dir,
         entries = co_await scanner(scope, input);
     });
 
-    std::vector<ViewFile> files;
+    dstd::Vector<ViewFile> files;
     files.reserve(entries.size());
     for (auto& e : entries) {
-        std::string fp(e.path.str());
+        dstd::String fp(e.path.str());
         const dstd::String index =
             internal::determine_index_path(fp, index_path);
-        files.push_back(ViewFile{fp, std::string(index.data(), index.size())});
+        files.push_back(ViewFile{fp, dstd::String(index.data(), index.size())});
     }
     std::sort(files.begin(), files.end(),
               [](const ViewFile& a, const ViewFile& b) {
@@ -358,8 +371,8 @@ coro::CoroTask<ScanPlan> from_directory(std::string dir,
     co_return from_files(std::move(files));
 }
 
-std::vector<TraceConfig> config(const ScanPlan& plan_) {
-    std::vector<TraceConfig> out;
+dstd::Vector<TraceConfig> config(const ScanPlan& plan_) {
+    dstd::Vector<TraceConfig> out;
     for (const auto& f : plan_->files) {
         auto tail = read_trace_config(f.file_path);
         if (!tail.empty()) {
@@ -369,7 +382,7 @@ std::vector<TraceConfig> config(const ScanPlan& plan_) {
         if (f.index_path.empty()) continue;
 
         struct Sink : ExportSink {
-            std::string buf;
+            dstd::String buf;
             void write(dstd::StringView d) override { buf.append(d); }
         } sink;
         export_json(filter(from_file(f.file_path, f.index_path),
@@ -379,7 +392,7 @@ std::vector<TraceConfig> config(const ScanPlan& plan_) {
         std::size_t pos = 0;
         while (pos < sink.buf.size()) {
             std::size_t nl = sink.buf.find('\n', pos);
-            if (nl == std::string::npos) nl = sink.buf.size();
+            if (nl == dstd::String::npos) nl = sink.buf.size();
             if (auto c = parse_end_event(
                     dstd::StringView(sink.buf).substr(pos, nl - pos)))
                 out.push_back(std::move(*c));
@@ -404,7 +417,7 @@ void fold_col_map(ColTypeMap& into, const ColTypeMap& from) {
 }
 
 // Path-decoded files: the union of each file's catalog paths as written.
-ColTypeMap harvest_path_types(const std::vector<ViewFile>& files) {
+ColTypeMap harvest_path_types(const dstd::Vector<ViewFile>& files) {
     ColTypeMap merged;
     Snapshots snapshots;
     for (const auto& f : files) {
@@ -415,7 +428,7 @@ ColTypeMap harvest_path_types(const std::vector<ViewFile>& files) {
         for (auto& [path, t] :
              common::unwrap(dftracer::utils::index::file_column_types(
                  *found.snapshot, *found.file)))
-            one.emplace(std::string(path.data(), path.size()), t);
+            one.emplace(dstd::String(path.data(), path.size()), t);
         fold_col_map(merged, one);
     }
     return merged;
@@ -424,11 +437,11 @@ ColTypeMap harvest_path_types(const std::vector<ViewFile>& files) {
 // Union the column types of the view's own files, reading each distinct index
 // root in parallel. An index root also holds files the view does not read, so
 // only the view's files contribute. Seeds the base axis fields.
-ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
+ColTypeMap harvest_column_types(const dstd::Vector<ViewFile>& files) {
     // Distinct index roots (many files often share one index), each with the
     // logical paths of the view's files in it.
-    std::vector<std::string> roots;
-    std::vector<dstd::Vector<dstd::String>> root_files;
+    dstd::Vector<dstd::String> roots;
+    dstd::Vector<dstd::Vector<dstd::String>> root_files;
     for (const auto& f : files) {
         if (f.index_path.empty()) continue;
         auto pos = std::find(roots.begin(), roots.end(), f.index_path);
@@ -472,7 +485,7 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
                             if (name.starts_with("args."))
                                 name.remove_prefix(5);
                             auto [at, fresh] =
-                                one.emplace(std::string(name), t);
+                                one.emplace(dstd::String(name), t);
                             if (!fresh)
                                 at->second =
                                     st::merge_column_type(at->second, t);
@@ -528,11 +541,11 @@ ColTypeMap harvest_plan_types(const ScanPlan& plan_) {
 
 }  // namespace
 
-std::vector<std::string> columns(const ScanPlan& plan_) {
+dstd::Vector<dstd::String> columns(const ScanPlan& plan_) {
     ColTypeMap m = harvest_plan_types(plan_);
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     out.reserve(m.size());
-    for (auto& [name, t] : m) out.push_back(name);
+    for (auto& [name, t] : m) out.emplace_back(name);
     std::sort(out.begin(), out.end());
     return out;
 }
@@ -566,7 +579,7 @@ const char* path_type_name(dftracer::utils::index::store::PathType t) {
 
 }  // namespace
 
-dstd::Optional<std::string> file_without_catalog(const ScanPlan& plan_) {
+dstd::Optional<dstd::String> file_without_catalog(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;
     Snapshots snapshots;
     for (const auto& f : plan_->files) {
@@ -583,7 +596,7 @@ dstd::Optional<std::string> file_without_catalog(const ScanPlan& plan_) {
 void ensure_catalog(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;
     Snapshots snapshots;
-    auto only = std::make_shared<detail::ViewPlan>();
+    auto only = dstd::make_shared<detail::ViewPlan>();
     for (const auto& f : plan_->files) {
         if (f.index_path.empty()) continue;
         const FileIndex found = find_file_index(snapshots, f);
@@ -607,14 +620,14 @@ void ensure_catalog(const ScanPlan& plan_) {
         }()));
 }
 
-std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {
+dstd::Vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {
     ensure_catalog(plan_);
     return catalog_tree(plan_);
 }
 
-std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
+dstd::Vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;
-    std::map<std::string, st::PathStat> merged;
+    dstd::Map<dstd::String, st::PathStat> merged;
     Snapshots snapshots;
     for (const auto& f : plan_->files) {
         if (f.index_path.empty()) continue;
@@ -623,14 +636,14 @@ std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
         for (auto& [path, stat] :
              common::unwrap(dftracer::utils::index::catalog(*found.snapshot,
                                                             *found.file))) {
-            auto [pos, inserted] =
-                merged.try_emplace(std::string(path.data(), path.size()), stat);
+            auto [pos, inserted] = merged.try_emplace(
+                dstd::String(path.data(), path.size()), stat);
             if (inserted) continue;
             pos->second.type = st::join(pos->second.type, stat.type);
             pos->second.count += stat.count;
         }
     }
-    std::map<std::string, SchemaLeaf> leaves;
+    dstd::Map<dstd::String, SchemaLeaf> leaves;
     for (auto& [path, stat] : merged)
         if (stat.type != st::PathType::Object &&
             stat.type != st::PathType::Array)
@@ -640,7 +653,7 @@ std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
     const ix::RecordSchema& schema = detail::plan_record_schema(*plan_);
     for (const auto& f : schema.fields) {
         auto [pos, inserted] =
-            leaves.try_emplace(std::string(f.path.data(), f.path.size()));
+            leaves.try_emplace(dstd::String(f.path.data(), f.path.size()));
         SchemaLeaf& leaf = pos->second;
         if (inserted) {
             leaf.path = f.path;
@@ -653,21 +666,22 @@ std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
             if (!has_leaves) leaf.count = 0;
         }
         leaf.field = f.name;
-        leaf.declared_type = std::string(ix::field_type_name(f.type));
+        leaf.declared_type = dstd::String(ix::field_type_name(f.type));
     }
-    std::vector<SchemaLeaf> out;
+    dstd::Vector<SchemaLeaf> out;
     out.reserve(leaves.size());
     for (auto& [path, leaf] : leaves) out.push_back(std::move(leaf));
     return out;
 }
 
-std::vector<ColumnInfo> schema(const ScanPlan& plan_) {
+dstd::Vector<ColumnInfo> schema(const ScanPlan& plan_) {
     ColTypeMap m = harvest_plan_types(plan_);
-    std::vector<ColumnInfo> out;
+    dstd::Vector<ColumnInfo> out;
     out.reserve(m.size());
     for (auto& [name, t] : m)
         out.push_back(ColumnInfo{
-            name, dftracer::utils::index::store::column_type_name(t)});
+            dstd::String(name),
+            dstd::String(dftracer::utils::index::store::column_type_name(t))});
     std::sort(out.begin(), out.end(),
               [](const ColumnInfo& a, const ColumnInfo& b) {
                   return a.name < b.name;
@@ -683,7 +697,7 @@ dstd::SharedPtr<const detail::JsonColumns> json_columns(
     ColTypeMap m = by_path ? harvest_path_types(plan.files)
                            : harvest_column_types(plan.files);
     if (by_path) overlay_declared(m, schema);
-    auto out = std::make_shared<detail::JsonColumns>();
+    auto out = dstd::make_shared<detail::JsonColumns>();
     for (const auto& [name, t] : m) {
         if (t != CT::Json) continue;
         const auto* field = schema.field_at(name);
@@ -695,18 +709,19 @@ dstd::SharedPtr<const detail::JsonColumns> json_columns(
             out->emplace(name, text);
         else
             out->emplace(
-                std::string(dftracer::utils::common::ARGS_PREFIX) + name, text);
+                dstd::String(dftracer::utils::common::ARGS_PREFIX).append(name),
+                text);
     }
     if (out->empty()) return nullptr;
     return out;
 }
 
-std::unordered_map<std::string, dataframe::DataType> column_types(
+dstd::HashMap<dstd::String, dataframe::DataType> column_types(
     const ScanPlan& plan_) {
     namespace df = dftracer::utils::dataframe;
     using CT = dftracer::utils::index::store::ColumnType;
     ColTypeMap m = harvest_plan_types(plan_);
-    std::unordered_map<std::string, df::DataType> out;
+    dstd::HashMap<dstd::String, df::DataType> out;
     out.reserve(m.size());
     for (auto& [name, t] : m) {
         df::DataType type = df::scalar(df::TypeId::Unknown);
@@ -758,7 +773,7 @@ ScanPlan time_range(const ScanPlan& plan_, double begin, double end) {
     detail::require_role(*plan_, "time_range");
     auto next = clone(plan_);
     next->timed = true;
-    next->time_range = std::make_pair(begin, end);
+    next->time_range = dstd::Pair(begin, end);
     return next;
 }
 
@@ -811,7 +826,7 @@ ScanPlan time_scale(const ScanPlan& plan_, double ns_ratio) {
     return next;
 }
 
-ScanPlan group_by(const ScanPlan& plan_, std::vector<GroupKey> keys) {
+ScanPlan group_by(const ScanPlan& plan_, dstd::Vector<GroupKey> keys) {
     check_keys(*plan_, keys);
     auto next = clone(plan_);
     next->group_by = std::move(keys);
@@ -819,7 +834,7 @@ ScanPlan group_by(const ScanPlan& plan_, std::vector<GroupKey> keys) {
     return next;
 }
 
-ScanPlan agg(const ScanPlan& plan_, std::vector<AggSpec> specs) {
+ScanPlan agg(const ScanPlan& plan_, dstd::Vector<AggSpec> specs) {
     bool timed = plan_->timed;
     for (const AggSpec& s : specs)
         if (is_occupancy_op(s.op)) {
@@ -842,25 +857,26 @@ AggSpec lower_field_agg(const FieldAggExpr& e) {
     using dftracer::utils::dataframe::field::AggFn;
     switch (e.fn()) {
         case AggFn::Count:
-            return AggSpec(AggOp::Count, e.field());
+            return AggSpec(AggOp::Count, dstd::String(e.field()));
         case AggFn::Sum:
-            return AggSpec(AggOp::Sum, e.field());
+            return AggSpec(AggOp::Sum, dstd::String(e.field()));
         case AggFn::Min:
-            return AggSpec(AggOp::Min, e.field());
+            return AggSpec(AggOp::Min, dstd::String(e.field()));
         case AggFn::Max:
-            return AggSpec(AggOp::Max, e.field());
+            return AggSpec(AggOp::Max, dstd::String(e.field()));
         case AggFn::Mean:
-            return AggSpec(AggOp::Mean, e.field());
+            return AggSpec(AggOp::Mean, dstd::String(e.field()));
         case AggFn::Var:
-            return AggSpec(AggOp::Var, e.field());
+            return AggSpec(AggOp::Var, dstd::String(e.field()));
         case AggFn::Std:
-            return AggSpec(AggOp::Std, e.field());
+            return AggSpec(AggOp::Std, dstd::String(e.field()));
         case AggFn::Skew:
-            return AggSpec(AggOp::Skew, e.field());
+            return AggSpec(AggOp::Skew, dstd::String(e.field()));
         case AggFn::Kurt:
-            return AggSpec(AggOp::Kurt, e.field());
+            return AggSpec(AggOp::Kurt, dstd::String(e.field()));
         case AggFn::ArgMax:
-            return AggSpec(AggOp::ArgMax, e.field(), "", e.by());
+            return AggSpec(AggOp::ArgMax, dstd::String(e.field()), "",
+                           dstd::String(e.by()));
     }
     throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
                                          "unhandled aggregate function");
@@ -868,14 +884,14 @@ AggSpec lower_field_agg(const FieldAggExpr& e) {
 
 }  // namespace
 
-ScanPlan agg(const ScanPlan& plan_, std::vector<FieldAggExpr> exprs) {
+ScanPlan agg(const ScanPlan& plan_, dstd::Vector<FieldAggExpr> exprs) {
     using dftracer::utils::dataframe::field::AggFn;
-    std::vector<AggSpec> specs;
+    dstd::Vector<AggSpec> specs;
     specs.reserve(exprs.size());
     // Wildcard (F.any) reductions run over every discovered numeric arg. Mean
     // alone keeps the legacy bare column; other reductions (and mean alongside
     // them) emit `<op>_<arg>` columns via numeric_arg_aggs.
-    std::vector<AggSpec> num_args;
+    dstd::Vector<AggSpec> num_args;
     bool wildcard_mean = false;
     for (const auto& e : exprs) {
         if (e.wildcard()) {
@@ -937,7 +953,7 @@ ScanPlan agg_numeric_args(const ScanPlan& plan_) {
 }
 
 ScanPlan agg_numeric_args(const ScanPlan& plan_,
-                          std::vector<AggSpec> reductions) {
+                          dstd::Vector<AggSpec> reductions) {
     for (const auto& s : reductions)
         if (!is_dyn_reduction(s.op))
             throw common::DFTUtilsException::cat(
@@ -974,14 +990,14 @@ ScanPlan auto_spill(const ScanPlan& plan_) {
     return memory_budget(plan_, budget);
 }
 
-ScanPlan select(const ScanPlan& plan_, std::vector<std::string> cols) {
+ScanPlan select(const ScanPlan& plan_, dstd::Vector<dstd::String> cols) {
     auto next = clone(plan_);
     next->select = std::move(cols);
     return next;
 }
 
 ScanPlan name_columns(const ScanPlan& plan_,
-                      std::vector<dataframe::Field> columns) {
+                      dstd::Vector<dataframe::Field> columns) {
     auto next = clone(plan_);
     next->named_columns = std::move(columns);
     return next;
@@ -999,14 +1015,14 @@ ScanPlan offset(const ScanPlan& plan_, std::uint64_t n) {
     return next;
 }
 
-ScanPlan sort_by(const ScanPlan& plan_, std::string column, bool descending) {
+ScanPlan sort_by(const ScanPlan& plan_, dstd::String column, bool descending) {
     auto next = clone(plan_);
     next->sort_col = std::move(column);
     next->sort_desc = descending;
     return next;
 }
 
-ScanPlan topk(const ScanPlan& plan_, std::string column, std::int64_t k,
+ScanPlan topk(const ScanPlan& plan_, dstd::String column, std::int64_t k,
               bool largest) {
     auto next = clone(plan_);
     next->topk_col = std::move(column);
@@ -1030,7 +1046,7 @@ ScanPlan timed(const ScanPlan& plan_) {
     return next;
 }
 
-ScanPlan record_schema(const ScanPlan& plan_, const std::string& id) {
+ScanPlan record_schema(const ScanPlan& plan_, const dstd::String& id) {
     const auto& p = dftracer::utils::index::get_schema(id);
     auto next = clone(plan_);
     // Registered record_schemas live until the process exits.
@@ -1042,9 +1058,10 @@ ScanPlan record_schema(const ScanPlan& plan_, const std::string& id) {
     return next;
 }
 
-ScanPlan cancel_when(const ScanPlan& plan_, std::function<bool()> pred) {
+ScanPlan cancel_when(const ScanPlan& plan_, dstd::Function<bool()> pred) {
     auto next = clone(plan_);
-    next->cancelled = std::move(pred);
+    next->cancelled =
+        dstd::make_shared<dstd::Function<bool()>>(std::move(pred));
     return next;
 }
 
@@ -1054,13 +1071,13 @@ ScanPlan ordered(const ScanPlan& plan_) {
     return next;
 }
 
-ScanPlan rollup_root(const ScanPlan& plan_, std::string dir) {
+ScanPlan rollup_root(const ScanPlan& plan_, dstd::String dir) {
     auto next = clone(plan_);
     next->rollup_root = std::move(dir);
     return next;
 }
 
-ScanPlan views_root(const ScanPlan& plan_, std::string dir) {
+ScanPlan views_root(const ScanPlan& plan_, dstd::String dir) {
     auto next = clone(plan_);
     next->views_root = std::move(dir);
     return next;
@@ -1068,7 +1085,7 @@ ScanPlan views_root(const ScanPlan& plan_, std::string dir) {
 
 coro::CoroTask<ExportStats> for_each_batch(
     ScanPlan plan_,
-    std::function<void(std::size_t, const std::vector<dstd::StringView>&)>
+    dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
         on_batch,
     std::size_t num_slots, std::uint64_t limit) {
     co_return co_await detail::run_scan_batches(plan_, num_slots, limit,
@@ -1115,7 +1132,7 @@ dataframe::LazyFrame collect(const ScanPlan& plan_) {
 
     dataframe::LazyFrame lf =
         dataframe::LazyFrame::scan(
-            std::make_shared<ViewSource>(ScanPlan(std::move(stripped))))
+            dstd::make_shared<ViewSource>(ScanPlan(std::move(stripped))))
             .memory_budget(plan_->memory_budget);
 
     // A row query's scan producer canonicalizes arg column names to
@@ -1125,13 +1142,15 @@ dataframe::LazyFrame collect(const ScanPlan& plan_) {
         lf = lf.sort_by(row_query
                             ? detail::canonical_row_column_name(
                                   plan_->sort_col, detail::plan_by_path(*plan_))
-                            : plan_->sort_col,
+                            // keep std: dataframe names are std::string
+                            : std::string(plan_->sort_col),
                         plan_->sort_desc);
     if (!plan_->topk_col.empty())
         lf = lf.topk(row_query
                          ? detail::canonical_row_column_name(
                                plan_->topk_col, detail::plan_by_path(*plan_))
-                         : plan_->topk_col,
+                         // keep std: dataframe names are std::string
+                         : std::string(plan_->topk_col),
                      plan_->topk_k, plan_->topk_largest);
     if (plan_->offset || plan_->limit) {
         const std::int64_t off = static_cast<std::int64_t>(plan_->offset);
@@ -1141,7 +1160,9 @@ dataframe::LazyFrame collect(const ScanPlan& plan_) {
         lf = lf.slice(off, len);
     }
     if (!select_in_scan && !plan_->select.empty())
-        lf = lf.select(plan_->select);
+        // keep std: LazyFrame::select takes std::vector<std::string>
+        lf = lf.select(std::vector<std::string>(plan_->select.begin(),
+                                                plan_->select.end()));
     return lf;
 }
 
@@ -1171,39 +1192,40 @@ bool is_row_query(const ScanPlan& plan_) {
 }
 
 coro::CoroTask<dataframe::DataFrame> call_tree(
-    ScanPlan plan_, std::vector<std::string> partition, std::string ts,
-    std::string dur, std::string name) {
+    ScanPlan plan_, dstd::Vector<dstd::String> partition, dstd::String ts,
+    dstd::String dur, dstd::String name) {
     co_return co_await detail::run_call_tree(*plan_, std::move(partition),
                                              std::move(ts), std::move(dur),
                                              std::move(name));
 }
 
 coro::CoroTask<dataframe::DataFrame> flamegraph(
-    ScanPlan plan_, std::vector<std::string> partition, std::string ts,
-    std::string dur, std::string name, std::vector<std::string> group) {
+    ScanPlan plan_, dstd::Vector<dstd::String> partition, dstd::String ts,
+    dstd::String dur, dstd::String name, dstd::Vector<dstd::String> group) {
     co_return co_await detail::run_flamegraph(
         *plan_, std::move(partition), std::move(ts), std::move(dur),
         std::move(name), std::move(group));
 }
 
 coro::CoroTask<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>
-containment(ScanPlan plan_, std::vector<std::string> partition, std::string ts,
-            std::string dur, std::string name, std::vector<std::string> group) {
+containment(ScanPlan plan_, dstd::Vector<dstd::String> partition,
+            dstd::String ts, dstd::String dur, dstd::String name,
+            dstd::Vector<dstd::String> group) {
     co_return co_await detail::run_containment(
         *plan_, std::move(partition), std::move(ts), std::move(dur),
         std::move(name), std::move(group));
 }
 
-coro::CoroTask<std::string> flamegraph_partial(
-    ScanPlan plan_, std::vector<std::string> partition, std::string ts,
-    std::string dur, std::string name, std::vector<std::string> group) {
+coro::CoroTask<dstd::String> flamegraph_partial(
+    ScanPlan plan_, dstd::Vector<dstd::String> partition, dstd::String ts,
+    dstd::String dur, dstd::String name, dstd::Vector<dstd::String> group) {
     co_return co_await detail::run_flamegraph_partial(
         *plan_, std::move(partition), std::move(ts), std::move(dur),
         std::move(name), std::move(group));
 }
 
 dataframe::DataFrame merge_flamegraph_partials(
-    const std::vector<dstd::StringView>& partials) {
+    const dstd::Vector<dstd::StringView>& partials) {
     return detail::merge_flamegraph_partials(partials);
 }
 
@@ -1219,20 +1241,20 @@ coro::CoroTask<ExportStats> run(ScanPlan plan_, const ProgressFn* progress) {
     co_return co_await detail::run_materialize(*plan_, progress);
 }
 
-std::string materialize_dir(const ScanPlan& plan_) {
+dstd::String materialize_dir(const ScanPlan& plan_) {
     detail::plan_record_schema(*plan_);
     const dstd::String dir =
         dftracer::utils::index::cache::materialize_view_dir(*plan_);
-    return std::string(dir.data(), dir.size());
+    return dstd::String(dir.data(), dir.size());
 }
 
-void register_materialized(const ScanPlan& plan_, const std::string& dir) {
+void register_materialized(const ScanPlan& plan_, const dstd::String& dir) {
     detail::plan_record_schema(*plan_);
     dftracer::utils::index::cache::register_view(dir, *plan_);
 }
 
-std::vector<std::string> mv_source(const ScanPlan& plan_) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> mv_source(const ScanPlan& plan_) {
+    dstd::Vector<dstd::String> out;
     detail::plan_record_schema(*plan_);
     if (auto mv = dftracer::utils::index::cache::find_subsuming_view(*plan_))
         for (const auto& f : *mv) out.push_back(f.file_path);
@@ -1251,7 +1273,7 @@ coro::CoroTask<ExportStats> export_counters(ScanPlan plan_, ExportSink& sink) {
 }
 
 coro::CoroTask<void> materialize_partials(
-    ScanPlan plan_, const std::vector<dstd::StringView>& partials) {
+    ScanPlan plan_, const dstd::Vector<dstd::StringView>& partials) {
     co_return co_await detail::run_materialize_partials(*plan_, partials);
 }
 
@@ -1260,17 +1282,17 @@ dstd::Optional<dataframe::DataFrame> reconstruct_if_cached(
     return detail::run_reconstruct_if_cached(*plan_);
 }
 
-coro::CoroTask<std::string> aggregate_partial(ScanPlan plan_) {
+coro::CoroTask<dstd::String> aggregate_partial(ScanPlan plan_) {
     co_return co_await detail::run_aggregate_partial(*plan_);
 }
 
 dataframe::DataFrame merge_partials_to_table(
-    const ScanPlan& plan_, const std::vector<dstd::StringView>& partials) {
+    const ScanPlan& plan_, const dstd::Vector<dstd::StringView>& partials) {
     return detail::merge_partials_to_table(*plan_, partials);
 }
 
 ExportStats merge_counter_partials(
-    const ScanPlan& plan_, const std::vector<dstd::StringView>& partials,
+    const ScanPlan& plan_, const dstd::Vector<dstd::StringView>& partials,
     ExportSink& sink) {
     return detail::merge_counters_partials(*plan_, partials, sink);
 }

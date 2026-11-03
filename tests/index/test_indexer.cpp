@@ -601,7 +601,9 @@ TEST_SUITE("Truncated") {
         CHECK(count_lines(cut).get() == ref.lines);  // indexed
 
         auto df =
-            dftracer::utils::trace::views::View::from_file(cut).collect().get();
+            dftracer::utils::trace::views::View::from_file(dstd::String(cut))
+                .collect()
+                .get();
         CHECK(static_cast<std::size_t>(df.num_rows()) == ref.events);
         rt.shutdown();
     }

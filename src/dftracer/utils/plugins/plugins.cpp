@@ -690,18 +690,15 @@ trace::views::Deferred<PluginRun> Plugins::attach(
         session.attach_fold_factory(
             [plugin, shared, named, name,
              states](dftracer::utils::dstd::StringIntern& intern)
-            // keep std: the factory returns std::unique_ptr
-            -> std::unique_ptr<views::detail::Fold> {
-                // keep std: the factory returns std::unique_ptr
-                return std::make_unique<PluginFold>(
+                -> dstd::UniquePtr<views::detail::Fold> {
+                return dstd::make_unique<PluginFold>(
                     plugin, intern, shared.get(), named, name, 0, states);
             },
             // The fused scan finalizes every attached fold together, so the
             // last one to finalize marks the handle resolved.
             idx + 1 == n
-                ? std::function<void()>(  // keep std: attach_fold_factory
-                      [executed]() { *executed = true; })
-                : std::function<void()>([]() {}));  // keep std: session api
+                ? dstd::Function<void()>([executed]() { *executed = true; })
+                : dstd::Function<void()>([]() {}));
     }
     return {out, executed};
 }

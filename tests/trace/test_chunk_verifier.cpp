@@ -23,10 +23,10 @@ using namespace dftracer::utils::trace;
 // Test data structures
 struct TestChunk {
     std::size_t id;
-    std::vector<int> data;
+    dstd::Vector<int> data;
 
     TestChunk() : id(0) {}
-    TestChunk(std::size_t i, std::vector<int> d) : id(i), data(std::move(d)) {}
+    TestChunk(std::size_t i, dstd::Vector<int> d) : id(i), data(std::move(d)) {}
 };
 
 struct TestMetadata {
@@ -66,8 +66,8 @@ TEST_SUITE("ChunkVerifier") {
         SUBCASE("Verify matching chunks") {
             printf("Starting test: Verify matching chunks\n");
 
-            auto input_hasher =
-                [](const std::vector<TestMetadata>& metadata) -> std::uint64_t {
+            auto input_hasher = [](const dstd::Vector<TestMetadata>& metadata)
+                -> std::uint64_t {
                 std::uint64_t hash = 0;
                 for (const auto& meta : metadata) {
                     hash ^= std::hash<std::string>{}(meta.name);
@@ -80,13 +80,13 @@ TEST_SUITE("ChunkVerifier") {
 
             auto event_collector =
                 [](coro::Scope&,
-                   const TestChunk& chunk) -> std::vector<TestEvent> {
+                   const TestChunk& chunk) -> dstd::Vector<TestEvent> {
                 printf("Collecting events from chunk %zu\n", chunk.id);
                 return chunk.data;
             };
 
             auto event_hasher =
-                [](const std::vector<TestEvent>& /*events*/) -> std::uint64_t {
+                [](const dstd::Vector<TestEvent>& /*events*/) -> std::uint64_t {
                 std::uint64_t hash = 0;
                 hash ^= std::hash<std::string>{}("test");
                 hash ^= std::hash<std::size_t>{}(9);  // total events
@@ -100,10 +100,10 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            std::vector<TestChunk> chunks = {TestChunk(1, {1, 2, 3}),
-                                             TestChunk(2, {4, 5, 6}),
-                                             TestChunk(3, {7, 8, 9})};
-            std::vector<TestMetadata> metadata = {TestMetadata("test", 9)};
+            dstd::Vector<TestChunk> chunks = {TestChunk(1, {1, 2, 3}),
+                                              TestChunk(2, {4, 5, 6}),
+                                              TestChunk(3, {7, 8, 9})};
+            dstd::Vector<TestMetadata> metadata = {TestMetadata("test", 9)};
             ChunkVerificationUtilityInput<TestChunk, TestMetadata> input(
                 chunks, metadata);
 
@@ -119,15 +119,15 @@ TEST_SUITE("ChunkVerifier") {
 
         SUBCASE("Detect mismatched chunks") {
             auto input_hasher =
-                [](const std::vector<TestMetadata>&) -> std::uint64_t {
+                [](const dstd::Vector<TestMetadata>&) -> std::uint64_t {
                 return 12345;
             };
 
             auto event_collector = [](coro::Scope&, const TestChunk& chunk)
-                -> std::vector<TestEvent> { return chunk.data; };
+                -> dstd::Vector<TestEvent> { return chunk.data; };
 
             auto event_hasher =
-                [](const std::vector<TestEvent>&) -> std::uint64_t {
+                [](const dstd::Vector<TestEvent>&) -> std::uint64_t {
                 return 67890;
             };
 
@@ -135,8 +135,8 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            std::vector<TestChunk> chunks = {TestChunk(1, {1, 2, 3})};
-            std::vector<TestMetadata> metadata = {TestMetadata("test", 3)};
+            dstd::Vector<TestChunk> chunks = {TestChunk(1, {1, 2, 3})};
+            dstd::Vector<TestMetadata> metadata = {TestMetadata("test", 3)};
             ChunkVerificationUtilityInput<TestChunk, TestMetadata> input(
                 chunks, metadata);
 
@@ -152,19 +152,19 @@ TEST_SUITE("ChunkVerifier") {
     TEST_CASE("ChunkVerifier - Parallel Processing") {
         SUBCASE("Process multiple chunks in parallel") {
             auto input_hasher =
-                [](const std::vector<TestMetadata>&) -> std::uint64_t {
+                [](const dstd::Vector<TestMetadata>&) -> std::uint64_t {
                 return 435;  // Expected sum of all event values
             };
 
             auto event_collector =
                 [](coro::Scope&,
-                   const TestChunk& chunk) -> std::vector<TestEvent> {
+                   const TestChunk& chunk) -> dstd::Vector<TestEvent> {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 return chunk.data;
             };
 
             auto event_hasher =
-                [](const std::vector<TestEvent>& events) -> std::uint64_t {
+                [](const dstd::Vector<TestEvent>& events) -> std::uint64_t {
                 std::uint64_t hash = 0;
                 for (const auto& event : events) {
                     hash += event;
@@ -176,15 +176,15 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            std::vector<TestChunk> chunks;
-            std::vector<TestEvent> all_events;
+            dstd::Vector<TestChunk> chunks;
+            dstd::Vector<TestEvent> all_events;
             for (int i = 0; i < 10; ++i) {
-                std::vector<int> data = {i * 3, i * 3 + 1, i * 3 + 2};
+                dstd::Vector<int> data = {i * 3, i * 3 + 1, i * 3 + 2};
                 chunks.emplace_back(i, data);
                 all_events.insert(all_events.end(), data.begin(), data.end());
             }
 
-            std::vector<TestMetadata> metadata = {
+            dstd::Vector<TestMetadata> metadata = {
                 TestMetadata("parallel_test", all_events.size())};
             ChunkVerificationUtilityInput<TestChunk, TestMetadata> input(
                 chunks, metadata);
@@ -201,17 +201,17 @@ TEST_SUITE("ChunkVerifier") {
     TEST_CASE("ChunkVerifier - Empty and Edge Cases") {
         SUBCASE("Empty chunks") {
             auto input_hasher =
-                [](const std::vector<TestMetadata>&) -> std::uint64_t {
+                [](const dstd::Vector<TestMetadata>&) -> std::uint64_t {
                 return 0;
             };
 
             auto event_collector =
-                [](coro::Scope&, const TestChunk&) -> std::vector<TestEvent> {
+                [](coro::Scope&, const TestChunk&) -> dstd::Vector<TestEvent> {
                 return {};
             };
 
             auto event_hasher =
-                [](const std::vector<TestEvent>&) -> std::uint64_t {
+                [](const dstd::Vector<TestEvent>&) -> std::uint64_t {
                 return 0;
             };
 
@@ -219,8 +219,8 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            std::vector<TestChunk> chunks;
-            std::vector<TestMetadata> metadata;
+            dstd::Vector<TestChunk> chunks;
+            dstd::Vector<TestMetadata> metadata;
             ChunkVerificationUtilityInput<TestChunk, TestMetadata> input(
                 chunks, metadata);
 
@@ -234,8 +234,8 @@ TEST_SUITE("ChunkVerifier") {
         SUBCASE("Single chunk") {
             printf("Starting single chunk test\n");
 
-            auto input_hasher =
-                [](const std::vector<TestMetadata>& metadata) -> std::uint64_t {
+            auto input_hasher = [](const dstd::Vector<TestMetadata>& metadata)
+                -> std::uint64_t {
                 auto hash = metadata.empty() ? 0 : metadata[0].total_events;
                 printf("Input hash: %lu\n", (unsigned long)hash);
                 return hash;
@@ -243,13 +243,13 @@ TEST_SUITE("ChunkVerifier") {
 
             auto event_collector =
                 [](coro::Scope&,
-                   const TestChunk& chunk) -> std::vector<TestEvent> {
+                   const TestChunk& chunk) -> dstd::Vector<TestEvent> {
                 printf("Collecting from chunk %zu\n", chunk.id);
                 return chunk.data;
             };
 
             auto event_hasher =
-                [](const std::vector<TestEvent>& events) -> std::uint64_t {
+                [](const dstd::Vector<TestEvent>& events) -> std::uint64_t {
                 auto hash = events.size();
                 printf("Event hash: %zu (from %zu events)\n", hash,
                        events.size());
@@ -261,8 +261,8 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            std::vector<TestChunk> chunks = {TestChunk(1, {10, 20, 30})};
-            std::vector<TestMetadata> metadata = {TestMetadata("single", 3)};
+            dstd::Vector<TestChunk> chunks = {TestChunk(1, {10, 20, 30})};
+            dstd::Vector<TestMetadata> metadata = {TestMetadata("single", 3)};
             ChunkVerificationUtilityInput<TestChunk, TestMetadata> input(
                 chunks, metadata);
 
@@ -281,15 +281,15 @@ TEST_SUITE("ChunkVerifier") {
     TEST_CASE("ChunkVerifier - Builder Pattern") {
         SUBCASE("Using from_chunks builder") {
             auto input_hasher =
-                [](const std::vector<TestMetadata>&) -> std::uint64_t {
+                [](const dstd::Vector<TestMetadata>&) -> std::uint64_t {
                 return 100;
             };
 
             auto event_collector = [](coro::Scope&, const TestChunk& chunk)
-                -> std::vector<TestEvent> { return chunk.data; };
+                -> dstd::Vector<TestEvent> { return chunk.data; };
 
             auto event_hasher =
-                [](const std::vector<TestEvent>&) -> std::uint64_t {
+                [](const dstd::Vector<TestEvent>&) -> std::uint64_t {
                 return 100;  // Match input hash
             };
 
@@ -297,8 +297,8 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            std::vector<TestChunk> chunks = {TestChunk(1, {1, 2}),
-                                             TestChunk(2, {3, 4})};
+            dstd::Vector<TestChunk> chunks = {TestChunk(1, {1, 2}),
+                                              TestChunk(2, {3, 4})};
 
             auto input =
                 ChunkVerificationUtilityInput<TestChunk,

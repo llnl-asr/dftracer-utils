@@ -106,13 +106,10 @@ class ServerArgParse : public binaries::ArgParse {
 };
 
 static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
-    // keep std: unswept API
-    const std::string bind_addr(cli->bind_addr);
+    const dstd::String bind_addr(cli->bind_addr);
     auto port = cli->port;
-    // keep std: unswept API
-    const std::string dir(cli->inputs.directory);
-    // keep std: unswept API
-    std::string index_dir(cli->index_dir);
+    const dstd::String dir(cli->inputs.directory);
+    dstd::String index_dir(cli->index_dir);
     auto executor_threads = cli->pipeline.executor_threads;
 
     if (index_dir.empty()) {
@@ -148,18 +145,17 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
                  "bytes\n",
                  executor_threads, cli->checkpoint_size);
 
-    TraceIndex trace_index(dir, index_dir, executor_threads,
-                           cli->checkpoint_size);
+    TraceIndex trace_index(std::string(dir), std::string(index_dir),
+                           executor_threads, cli->checkpoint_size);
     co_await trace_index.initialize();
 
     Router router;
-    // keep std: unswept API
     router.set_auth_token(std::string(cli->auth_token));
     register_trace_api(router, trace_index);
     register_viz_api(router, trace_index);
     register_viz_ui(router);
 
-    TcpListener listener(bind_addr, port);
+    TcpListener listener(std::string(bind_addr), port);
     if (!listener.start()) {
         DFTRACER_UTILS_LOG_ERROR("Failed to bind to %s:%u", bind_addr.c_str(),
                                  port);

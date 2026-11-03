@@ -34,7 +34,9 @@ std::string indexed_trace(TestEnvironment& env, int posix_n) {
 }
 
 auto plan_of(const std::string& gz) {
-    auto p = scan::from_file(gz, std::string(determine_index_path(gz, "")));
+    auto p = scan::from_file(
+        dstd::String(gz),
+        dstd::String(std::string(determine_index_path(gz, ""))));
     dftracer::utils::trace::views::detail::plan_record_schema(*p);
     return p;
 }
@@ -198,8 +200,9 @@ TEST_SUITE("LookupStore") {
         const std::string gz = lookup_trace(env);
         const std::string q = lookup_query();
         for (int query = 0; query < 20; ++query) {
-            const View v =
-                View::from_file(gz, std::string(determine_index_path(gz, "")));
+            const View v = View::from_file(
+                dstd::String(gz),
+                dstd::String(std::string(determine_index_path(gz, ""))));
             const auto g = run(v.duql(q).lazy().collect());
             CHECK(g.num_rows() == 4);
         }

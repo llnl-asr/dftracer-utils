@@ -45,8 +45,9 @@ AdmittedRun run_admitted(const std::string& file, const std::string& out_dir,
         for (std::size_t i = 0; i < groups; ++i) {
             tasks.push_back(admitted_extract(
                 &admission, ChunkExtractorUtilityInput::from_files(
-                                static_cast<int>(i + 1), {file})
-                                .with_output_dir(out_dir)
+                                static_cast<int>(i + 1),
+                                {dftracer::utils::dstd::String(file)})
+                                .with_output_dir(dstd::String(out_dir))
                                 .with_app_name("bounded")
                                 .with_compression(true)
                                 .with_member_size(64 * 1024)
@@ -70,8 +71,9 @@ TEST_SUITE("ChunkExtractor") {
 
         std::string test_file = env.create_dft_test_gzip_file(5);
 
-        auto input = ChunkExtractorUtilityInput::from_files(0, {test_file})
-                         .with_output_dir(env.get_dir())
+        auto input = ChunkExtractorUtilityInput::from_files(
+                         0, {dftracer::utils::dstd::String(test_file)})
+                         .with_output_dir(dstd::String(env.get_dir()))
                          .with_app_name("test");
 
         ChunkExtractorUtility extractor;
@@ -90,8 +92,9 @@ TEST_SUITE("ChunkExtractor") {
 
         // A chunk ends at the first member end past its size, so small
         // members give several chunks.
-        auto input = ChunkExtractorUtilityInput::from_files(1, {test_file})
-                         .with_output_dir(env.get_dir())
+        auto input = ChunkExtractorUtilityInput::from_files(
+                         1, {dftracer::utils::dstd::String(test_file)})
+                         .with_output_dir(dstd::String(env.get_dir()))
                          .with_app_name("test")
                          .with_compression(true)
                          .with_member_size(64 * 1024)
@@ -117,19 +120,22 @@ TEST_SUITE("ChunkExtractor") {
         std::string second = env.create_dft_test_gzip_file(40);
 
         ChunkExtractorUtility extractor;
-        auto one = extractor(ChunkExtractorUtilityInput::from_files(0, {first})
-                                 .with_output_dir(env.get_dir())
+        auto one = extractor(ChunkExtractorUtilityInput::from_files(
+                                 0, {dftracer::utils::dstd::String(first)})
+                                 .with_output_dir(dstd::String(env.get_dir()))
                                  .with_app_name("one"))
                        .get();
-        auto two = extractor(ChunkExtractorUtilityInput::from_files(0, {second})
-                                 .with_output_dir(env.get_dir())
+        auto two = extractor(ChunkExtractorUtilityInput::from_files(
+                                 0, {dftracer::utils::dstd::String(second)})
+                                 .with_output_dir(dstd::String(env.get_dir()))
                                  .with_app_name("two"))
                        .get();
-        auto both =
-            extractor(ChunkExtractorUtilityInput::from_files(0, {first, second})
-                          .with_output_dir(env.get_dir())
-                          .with_app_name("both"))
-                .get();
+        auto both = extractor(ChunkExtractorUtilityInput::from_files(
+                                  0, {dftracer::utils::dstd::String(first),
+                                      dftracer::utils::dstd::String(second)})
+                                  .with_output_dir(dstd::String(env.get_dir()))
+                                  .with_app_name("both"))
+                        .get();
 
         REQUIRE(one.success);
         REQUIRE(two.success);
@@ -141,8 +147,9 @@ TEST_SUITE("ChunkExtractor") {
         TestEnvironment env(100);
 
         auto input =
-            ChunkExtractorUtilityInput::from_files(0, {env.get_dir() + "/no"})
-                .with_output_dir(env.get_dir())
+            ChunkExtractorUtilityInput::from_files(
+                0, {dftracer::utils::dstd::String(env.get_dir() + "/no")})
+                .with_output_dir(dstd::String(env.get_dir()))
                 .with_app_name("test");
 
         ChunkExtractorUtility extractor;
@@ -161,8 +168,9 @@ TEST_SUITE("ChunkExtractor") {
             out << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
         }
 
-        auto input = ChunkExtractorUtilityInput::from_files(0, {plain})
-                         .with_output_dir(env.get_dir())
+        auto input = ChunkExtractorUtilityInput::from_files(
+                         0, {dftracer::utils::dstd::String(plain)})
+                         .with_output_dir(dstd::String(env.get_dir()))
                          .with_app_name("test");
 
         ChunkExtractorUtility extractor;

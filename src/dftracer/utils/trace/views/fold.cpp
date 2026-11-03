@@ -3,11 +3,15 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/event_cost.h>
 #include <dftracer/utils/index/store/file.h>
@@ -27,28 +31,23 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <map>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <unordered_map>
 #include <utility>
 
 namespace dftracer::utils::trace::views::detail {
 
-void DynamicPrune::exclude_file(const std::string& file_path) {
+void DynamicPrune::exclude_file(const dstd::String& file_path) {
     std::lock_guard<std::mutex> lk(mu_);
     excluded_files_.insert(file_path);
 }
 
-void DynamicPrune::exclude_checkpoints(const std::string& file_path,
-                                       std::vector<std::uint64_t> checkpoints) {
+void DynamicPrune::exclude_checkpoints(
+    const dstd::String& file_path, dstd::Vector<std::uint64_t> checkpoints) {
     std::lock_guard<std::mutex> lk(mu_);
     auto& set = excluded_checkpoints_[file_path];
     for (std::uint64_t c : checkpoints) set.insert(c);
 }
 
-bool DynamicPrune::is_excluded(const std::string& file_path,
+bool DynamicPrune::is_excluded(const dstd::String& file_path,
                                std::uint64_t checkpoint_idx) const {
     std::lock_guard<std::mutex> lk(mu_);
     if (excluded_files_.count(file_path)) return true;
@@ -129,7 +128,7 @@ std::uint8_t leaf_type_tag(simdjson::dom::element v) {
 // PathType) into ev.schema_leaves. Objects recurse by key (a.b.c), arrays by
 // index (a.0.b), so the harvest lists every column a row fold emits. `path` is
 // a reused buffer (restored on return).
-void enumerate_leaves(std::string& path, simdjson::dom::element v,
+void enumerate_leaves(dstd::String& path, simdjson::dom::element v,
                       dftracer::utils::dstd::StringIntern& intern,
                       FoldEvent& ev) {
     simdjson::dom::object obj;
@@ -164,7 +163,7 @@ std::uint32_t arg_leaf_id(DecodeHints& h,
                           dftracer::utils::dstd::StringIntern& intern,
                           std::uint32_t key_id, dstd::StringView key) {
     auto resolve = [&] {
-        std::string path("args.");
+        dstd::String path("args.");
         path.append(key);
         return intern_leaf_path(intern, path);
     };
@@ -198,7 +197,7 @@ std::uint32_t top_leaf_id(DecodeHints& h,
             (small ? leaf.packed == packed : leaf.key == key))
             return leaf.id;
     const std::uint32_t id = intern_leaf_path(intern, key);
-    h.top_leaf.push_back({std::string(key), packed, id});
+    h.top_leaf.push_back({dstd::String(key), packed, id});
     return id;
 }
 
@@ -231,7 +230,7 @@ void append_arg_leaf(FoldEvent& ev, std::uint32_t key_id, dstd::StringView key,
 
 // Flatten a nested arg into dotted scalar keys named as event.h flatten_arg
 // names them: objects "a.b", arrays "a.0". `path` holds the key so far.
-void flatten_nested_arg(std::string& path, simdjson::dom::element v,
+void flatten_nested_arg(dstd::String& path, simdjson::dom::element v,
                         dftracer::utils::dstd::StringIntern& intern,
                         FoldEvent& ev, DecodeHints* leaves = nullptr) {
     simdjson::dom::object obj;
@@ -263,7 +262,7 @@ void flatten_nested_arg(std::string& path, simdjson::dom::element v,
 
 }  // namespace
 
-void flatten_container(FoldEvent& ev, std::string path,
+void flatten_container(FoldEvent& ev, dstd::String path,
                        simdjson::dom::element v,
                        dftracer::utils::dstd::StringIntern& intern) {
     flatten_nested_arg(path, v, intern, ev);
@@ -273,7 +272,7 @@ namespace {
 
 // A value rebuilt from flattened keys: a leaf's JSON text, or members.
 struct JsonNode {
-    std::map<std::string, JsonNode, std::less<>> kids;
+    dstd::Map<dstd::String, JsonNode, std::less<>> kids;
     dstd::String leaf;
     bool is_leaf = false;
 };
@@ -286,7 +285,7 @@ void insert_leaf(JsonNode& root, dstd::StringView rel, dstd::String text) {
         auto it = n->kids.find(rel.substr(start, dot - start));
         if (it == n->kids.end())
             it = n->kids
-                     .emplace(std::string(rel.substr(start, dot - start)),
+                     .emplace(dstd::String(rel.substr(start, dot - start)),
                               JsonNode{})
                      .first;
         n = &it->second;
@@ -303,17 +302,15 @@ void put_node(dstd::String& out, const JsonNode& n) {
         out += n.leaf;
         return;
     }
-    std::vector<const JsonNode*> items(n.kids.size(), nullptr);
+    dstd::Vector<const JsonNode*> items(n.kids.size(), nullptr);
     bool array = true;
     for (const auto& [k, kid] : n.kids) {
-        std::size_t at = 0;
-        const auto r = std::from_chars(k.data(), k.data() + k.size(), at);
-        if (r.ec != std::errc{} || r.ptr != k.data() + k.size() ||
-            at >= items.size()) {
+        const dstd::Optional<std::size_t> at = dstd::from_chars<std::size_t>(k);
+        if (!at || *at >= items.size()) {
             array = false;
             break;
         }
-        items[at] = &kid;
+        items[*at] = &kid;
     }
     if (array) {
         out += '[';
@@ -488,7 +485,7 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
             switch (v.type()) {
                 case simdjson::dom::element_type::OBJECT:
                 case simdjson::dom::element_type::ARRAY: {
-                    std::string path(key);
+                    dstd::String path(key);
                     flatten_nested_arg(path, v, intern, ev, leaves);
                     break;
                 }
@@ -503,7 +500,7 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
 void extract_fold_event_into(FoldEvent& ev, simdjson::dom::element root,
                              dftracer::utils::dstd::StringIntern& intern,
                              bool needs_args,
-                             const std::vector<std::string>* extra_fields,
+                             const dstd::Vector<dstd::String>* extra_fields,
                              bool capture_schema, DecodeHints* hints) {
     DFTracerEvent scalars;
     simdjson::dom::element args;
@@ -535,11 +532,11 @@ struct LeafDecode {
     dftracer::utils::dstd::StringIntern& intern;
     FoldEvent& ev;
     bool schema;
-    const std::vector<std::string>* paths;
+    const dstd::Vector<dstd::String>* paths;
     std::size_t left;
     const dftracer::utils::index::RecordSchema* record_schema;
     // With `paths`, the declared field at each path (null when undeclared).
-    const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields;
+    const dstd::Vector<const dftracer::utils::index::FieldSpec*>* path_fields;
     // Whether a json field can be decoded, so objects and arrays are checked.
     bool json;
     std::size_t max_children;
@@ -549,7 +546,7 @@ struct LeafDecode {
     // The declared field at `path`, found at `pos` in `paths` when set, or
     // remembered by the leaf's path id in `hints`.
     const dftracer::utils::index::FieldSpec* field(
-        const std::string& path, std::size_t pos,
+        const dstd::String& path, std::size_t pos,
         std::uint32_t id = dftracer::utils::dstd::StringIntern::NO_ID) const {
         if (path_fields) return (*path_fields)[pos];
         if (!record_schema) return nullptr;
@@ -573,8 +570,8 @@ struct LeafDecode {
 };
 
 // The position of `path` in the sorted `paths`, or nullopt.
-dstd::Optional<std::size_t> position(const std::vector<std::string>& paths,
-                                     const std::string& path) {
+dstd::Optional<std::size_t> position(const dstd::Vector<dstd::String>& paths,
+                                     const dstd::String& path) {
     const auto it = std::lower_bound(paths.begin(), paths.end(), path);
     if (it == paths.end() || *it != path) return dstd::nullopt;
     return static_cast<std::size_t>(it - paths.begin());
@@ -716,8 +713,8 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
     }
 }
 
-bool wanted_below(const std::vector<std::string>& paths,
-                  const std::string& path) {
+bool wanted_below(const dstd::Vector<dstd::String>& paths,
+                  const dstd::String& path) {
     auto it = std::lower_bound(paths.begin(), paths.end(), path);
     for (; it != paths.end() && it->starts_with(path); ++it)
         if (it->size() > path.size() && (*it)[path.size()] == '.') return true;
@@ -726,7 +723,7 @@ bool wanted_below(const std::vector<std::string>& paths,
 
 // A declared json field at an object or array: its canonical text, keyed by
 // the field's path; the leaves below are decoded as well.
-void capture_json(const std::string& path, simdjson::dom::element v,
+void capture_json(const dstd::String& path, simdjson::dom::element v,
                   LeafDecode& d) {
     std::size_t pos = 0;
     if (d.paths) {
@@ -747,7 +744,7 @@ void capture_json(const std::string& path, simdjson::dom::element v,
 }
 
 // An array or object past max_children: one leaf of its canonical text.
-void collapse(const std::string& path, simdjson::dom::element v,
+void collapse(const dstd::String& path, simdjson::dom::element v,
               LeafDecode& d) {
     const std::uint32_t id = d.intern.get_or_insert(path);
     // A declared json field already holds its text.
@@ -762,7 +759,7 @@ void collapse(const std::string& path, simdjson::dom::element v,
 }
 
 // An empty array or object at a decoded path, for filters.
-void note_empty(const std::string& path, simdjson::dom::element v,
+void note_empty(const dstd::String& path, simdjson::dom::element v,
                 LeafDecode& d) {
     if (path.empty() || (d.paths && !position(*d.paths, path))) return;
     const std::uint32_t id = d.intern.get_or_insert(path);
@@ -772,7 +769,8 @@ void note_empty(const std::string& path, simdjson::dom::element v,
                                      : FoldEvent::Special::EmptyObject});
 }
 
-void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
+void decode_leaves(dstd::String& path, simdjson::dom::element v,
+                   LeafDecode& d) {
     if (d.paths && d.left == 0) return;
     if (d.json && !path.empty() && (v.is_object() || v.is_array()))
         capture_json(path, v, d);
@@ -855,9 +853,9 @@ void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
 void decode_record_into(
     FoldEvent& ev, simdjson::dom::element root,
     dftracer::utils::dstd::StringIntern& intern, bool capture_schema,
-    const std::vector<std::string>* paths,
+    const dstd::Vector<dstd::String>* paths,
     const dftracer::utils::index::RecordSchema* record_schema,
-    const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields,
+    const dstd::Vector<const dftracer::utils::index::FieldSpec*>* path_fields,
     std::size_t max_children, DecodeHints* hints, bool skip_never_indexed) {
     namespace ix = dftracer::utils::index;
     reset_fold_event(ev);
@@ -882,8 +880,8 @@ void decode_record_into(
                  hints,
                  skip_never_indexed};
     if (hints) ev.args.reserve(hints->args);
-    std::string local_path;
-    std::string& path = hints ? hints->path : local_path;
+    dstd::String local_path;
+    dstd::String& path = hints ? hints->path : local_path;
     path.clear();
     decode_leaves(path, root, d);
     if (hints) hints->args = ev.args.size();
@@ -895,7 +893,7 @@ void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
     // The axis and structural keys are not catalog paths.
     simdjson::dom::object obj;
     if (root.get_object().get(obj) != simdjson::SUCCESS) return;
-    std::string path;
+    dstd::String path;
     for (auto kv : obj) {
         const dstd::StringView k = kv.key;
         if (is_axis_key(k, skip_args)) continue;
@@ -1102,7 +1100,7 @@ bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
                 switch (v.type()) {
                     case simdjson::dom::element_type::OBJECT:
                     case simdjson::dom::element_type::ARRAY: {
-                        std::string nested(key);
+                        dstd::String nested(key);
                         flatten_nested_arg(nested, v, intern, ev, leaves);
                         break;
                     }
@@ -1140,16 +1138,16 @@ bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
     return true;
 }
 
-std::vector<std::string> extra_capture_fields(const ViewPlan& plan) {
+dstd::Vector<dstd::String> extra_capture_fields(const ViewPlan& plan) {
     // Args come from needs_args, nested ones flattened; only top-level fields
     // the POD does not carry (anything but the six scalars) and nested paths
     // need capture, since a fold may not set needs_args.
-    auto is_pod_scalar = [](const std::string& f) {
+    auto is_pod_scalar = [](const dstd::String& f) {
         return f == "name" || f == "cat" || f == "pid" || f == "tid" ||
                f == "ts" || f == "dur";
     };
-    std::vector<std::string> out;
-    auto add = [&](const std::string& f) {
+    dstd::Vector<dstd::String> out;
+    auto add = [&](const dstd::String& f) {
         if (f.empty()) return;
         for (const auto& e : out)
             if (e == f) return;
@@ -1175,8 +1173,8 @@ namespace {
 // fuse returns). Passed by value into fuse_worker so the coroutine frame owns
 // its copy of the (trivially copyable) handles.
 struct FuseWorkerCtx {
-    std::vector<std::vector<std::unique_ptr<Fold>>>& fslice;
-    const std::vector<ScanUnit>& units;
+    dstd::Vector<dstd::Vector<dstd::UniquePtr<Fold>>>& fslice;
+    const dstd::Vector<ScanUnit>& units;
     std::atomic<std::size_t>& next_unit;
     std::atomic<std::uint64_t>& produced;
     std::uint64_t cap;
@@ -1185,9 +1183,9 @@ struct FuseWorkerCtx {
     dftracer::utils::dstd::StringIntern& intern;
     const CoverageSet* covered;
     coro::CoroSemaphore& budget_sem;
-    std::vector<ScanCounts>& counts_v;
-    std::vector<CoverageSet>& covered_v;
-    const std::vector<std::string>& extra_fields;
+    dstd::Vector<ScanCounts>& counts_v;
+    dstd::Vector<CoverageSet>& covered_v;
+    const dstd::Vector<dstd::String>& extra_fields;
     bool any_needs_args;
     bool any_wants_raw;
     bool any_wants_fold_event;
@@ -1199,7 +1197,7 @@ struct FuseWorkerCtx {
 
 // Runs `hook` on every slice, awaiting the task each one leaves.
 template <class Hook>
-coro::CoroTask<void> for_slices(std::vector<std::unique_ptr<Fold>>& slices,
+coro::CoroTask<void> for_slices(dstd::Vector<dstd::UniquePtr<Fold>>& slices,
                                 Hook hook) {
     for (auto& s : slices) {
         hook(*s);
@@ -1365,12 +1363,12 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
             any_wants_fold_event = true;
     }
 
-    std::vector<std::string> extra_fields = extra_capture_fields(plan);
+    dstd::Vector<dstd::String> extra_fields = extra_capture_fields(plan);
     // Fold-declared captures (nested fields a fold resolves itself) merged in.
     for (auto* f : folds)
-        for (const std::string& c : f->extra_captures()) {
+        for (const dstd::String& c : f->extra_captures()) {
             bool seen = false;
-            for (const std::string& e : extra_fields)
+            for (const dstd::String& e : extra_fields)
                 if (e == c) {
                     seen = true;
                     break;
@@ -1389,11 +1387,11 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
     coro::CoroSemaphore budget_sem(
         common::compute_memory_budget(plan.memory_budget));
     std::atomic<std::size_t> next_unit{0};
-    std::vector<ScanCounts> counts_v(nworkers);
-    std::vector<CoverageSet> covered_v(nworkers);
+    dstd::Vector<ScanCounts> counts_v(nworkers);
+    dstd::Vector<CoverageSet> covered_v(nworkers);
     // Per-worker slice of every fold, owned here so a slice outlives the
     // coroutine that filled it; merged into the shared folds after the join.
-    std::vector<std::vector<std::unique_ptr<Fold>>> fslice(nworkers);
+    dstd::Vector<dstd::Vector<dstd::UniquePtr<Fold>>> fslice(nworkers);
     for (std::size_t w = 0; w < nworkers; ++w)
         for (auto* f : folds) fslice[w].push_back(f->slice());
 
@@ -1438,8 +1436,7 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
     // A file is whole only if nothing was pruned (statically or by a
     // narrow() call mid-scan) and every unit of it sealed.
     if (skipped == 0 && dyn_skipped == 0) {
-        std::unordered_map<dstd::StringView,
-                           dstd::Pair<std::size_t, std::size_t>>
+        dstd::HashMap<dstd::StringView, dstd::Pair<std::size_t, std::size_t>>
             per_file;
         for (const auto& u : units) {
             auto& c = per_file[u.file_path];

@@ -57,12 +57,9 @@ using namespace dftracer::utils::utilities::filesystem;
 #ifdef DFTRACER_UTILS_ENABLE_MPI
 // The files owned by `rank` of `size`: a deterministic round-robin split, so
 // every rank derives the same assignment from the same sorted file list.
-// keep std: unswept API
-static std::vector<std::string> shard_files(
-    // keep std: unswept API
-    const std::vector<std::string>& all_files, int rank, int size) {
-    // keep std: unswept API
-    std::vector<std::string> shard;
+static dstd::Vector<dstd::String> shard_files(
+    const dstd::Vector<dstd::String>& all_files, int rank, int size) {
+    dstd::Vector<dstd::String> shard;
     for (std::size_t i = 0; i < all_files.size(); ++i)
         if (static_cast<int>(i % size) == rank) shard.push_back(all_files[i]);
     return shard;
@@ -292,21 +289,10 @@ class NullSink : public ExportSink {
     void write(dstd::StringView) override {}
 };
 
-// The files as the index build takes them.
-static dstd::Vector<dstd::String> dstd_files(
-    const std::vector<std::string>& files) {
-    dstd::Vector<dstd::String> out;
-    out.reserve(files.size());
-    for (const auto& file : files) out.emplace_back(dstd::StringView(file));
-    return out;
-}
-
 // Re-scan a freshly written trace and confirm the event count round-trips.
 template <class Configure>
-// keep std: unswept API
-static coro::CoroTask<void> verify_output(const std::string& final_output,
-                                          // keep std: unswept API
-                                          const std::string& index_dir,
+static coro::CoroTask<void> verify_output(const dstd::String& final_output,
+                                          const dstd::String& index_dir,
                                           std::size_t checkpoint_size,
                                           Configure&& configure,
                                           std::uint64_t expected_events,
@@ -337,21 +323,17 @@ static coro::CoroTask<void> verify_output(const std::string& final_output,
 }
 
 // Spec keys and reducers hold their names as owned text.
-// keep std: unswept API
-static std::string text(dstd::StringView v) { return std::string(v); }
+static dstd::String text(dstd::StringView v) { return dstd::String(v); }
 
-// keep std: unswept API
-static std::vector<std::string> texts(
+static dstd::Vector<dstd::String> texts(
     const dstd::Vector<dstd::StringView>& views) {
-    // keep std: unswept API
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     out.reserve(views.size());
     for (const auto v : views) out.emplace_back(v);
     return out;
 }
 
-// keep std: unswept API
-static bool parse_group_by(dstd::StringView spec, std::vector<GroupKey>& out) {
+static bool parse_group_by(dstd::StringView spec, dstd::Vector<GroupKey>& out) {
     for (const auto tok : binaries::split_csv(spec)) {
         if (tok == "name")
             out.push_back(GroupKey::name());
@@ -387,8 +369,7 @@ static bool parse_group_by(dstd::StringView spec, std::vector<GroupKey>& out) {
     return true;
 }
 
-// keep std: unswept API
-static bool parse_agg(dstd::StringView spec, std::vector<AggSpec>& out) {
+static bool parse_agg(dstd::StringView spec, dstd::Vector<AggSpec>& out) {
     for (const auto tok : binaries::split_csv(spec)) {
         const auto colon = tok.find(':');
         const dstd::StringView op = tok.substr(0, colon);
@@ -540,8 +521,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         }
         auto json_content =
             common::unwrap(dstd::fs::read_file(dstd::PathView(recipe_path)));
-        // keep std: unswept API
-        view = ViewDefinition::from_json(std::string(json_content));
+        view = ViewDefinition::from_json(dstd::String(json_content));
     } else {
         view.name = "custom";
         view.description = "Custom inline view";
@@ -551,11 +531,9 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     dstd::Optional<Query> query;
     duql::Params duql_params;
     for (const auto param : cli->params) {
-        // keep std: unswept API
-        const std::string kv(param);
+        const dstd::String kv(param);
         const auto eq = kv.find('=');
-        // keep std: unswept API
-        if (eq == std::string::npos || eq == 0) {
+        if (eq == dstd::String::npos || eq == 0) {
             DFTRACER_UTILS_LOG_ERROR("Invalid --param '%s': use name=value",
                                      kv.c_str());
             co_return 1;
@@ -602,18 +580,15 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     }
 
     if (min_duration > 0 || max_duration > 0) {
-        // keep std: unswept API
-        std::string extra;
+        dstd::String extra;
         if (min_duration > 0) {
             if (!extra.empty()) extra += " and ";
             extra +=
-                // keep std: unswept API
                 "dur >= " + std::to_string(static_cast<uint64_t>(min_duration));
         }
         if (max_duration > 0) {
             if (!extra.empty()) extra += " and ";
             extra +=
-                // keep std: unswept API
                 "dur <= " + std::to_string(static_cast<uint64_t>(max_duration));
         }
         query = duql::parse_or_throw(extra);
@@ -623,18 +598,15 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         view.with_query(std::move(*query));
     }
 
-    // keep std: unswept API
-    std::vector<GroupKey> group_keys;
-    // keep std: unswept API
-    std::vector<AggSpec> agg_specs;
+    dstd::Vector<GroupKey> group_keys;
+    dstd::Vector<AggSpec> agg_specs;
     if (!parse_group_by(cli->group_by, group_keys)) co_return 1;
     if (!parse_agg(cli->agg, agg_specs)) co_return 1;
     const std::uint64_t time_bucket = cli->time_bucket;
     const bool counters = cli->counters;
     const bool ct_mode = cli->call_tree;
     const bool fg_mode = cli->flamegraph;
-    // keep std: unswept API
-    const std::vector<std::string> ct_partition =
+    const dstd::Vector<dstd::String> ct_partition =
         texts(binaries::split_csv(cli->ct_partition));
     const bool aggregate = !group_keys.empty() || !agg_specs.empty() ||
                            counters || time_bucket > 0 || cli->agg_numeric_args;
@@ -699,12 +671,9 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     // A shard set is a directory holding a shards.json manifest. When the
     // target is one, the query runs over the immutable shards via ShardedView
     // and needs no trace-file arguments (the shards are self-describing).
-    // keep std: unswept API
-    const std::string directory_std(directory);
-    // keep std: unswept API
-    const std::string index_dir_std(index_dir);
-    // keep std: unswept API
-    std::string shard_set_root;
+    const dstd::String directory_std(directory);
+    const dstd::String index_dir_std(index_dir);
+    dstd::String shard_set_root;
     if (!directory.empty())
         shard_set_root = resolve_shard_set_root(directory_std);
     if (shard_set_root.empty() && !index_dir.empty())
@@ -718,8 +687,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         co_return 1;
     }
 
-    // keep std: unswept API
-    std::vector<std::string> files;
+    dstd::Vector<dstd::String> files;
     if (!shard_set_root.empty()) {
         // Self-describing: ShardedView enumerates files from each shard index.
     } else if (!directory.empty()) {
@@ -752,8 +720,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     }
 
     // One View over every file; the executor plans and scans them in parallel.
-    // keep std: unswept API
-    std::vector<ViewFile> view_files;
+    dstd::Vector<ViewFile> view_files;
     view_files.reserve(files.size());
     for (std::size_t i = 0; i < files.size(); ++i) {
         ViewFile vf;
@@ -774,19 +741,17 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             binaries::run_on_pool(
                 cli->pipeline, "dftracer_view index",
                 [&](coro::Scope&) -> coro::CoroTask<void> {
-                    auto to_check = dstd_files(files);
+                    auto to_check = files;
                     dstd::String dir_arg{dstd::StringView(index_dir_std)};
                     co_await dftracer::utils::index::build::
                         ensure_indexes_fresh("", std::move(to_check),
                                              std::move(dir_arg));
                 });
-        // keep std: unswept API
-        std::string plan;
+        dstd::String plan;
         try {
             View probe = View::from_files(view_files);
             if (!cli->record_schema.empty())
-                // keep std: unswept API
-                probe = probe.record_schema(std::string(cli->record_schema));
+                probe = probe.record_schema(dstd::String(cli->record_schema));
             plan = probe.explain_duql(duql_str, duql_params);
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_ERROR("Invalid --duql: %s", e.what());
@@ -818,10 +783,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     }
     write_trace = write_trace && !duql_rows;
 
-    // keep std: unswept API
-    std::vector<std::string> files_needing_index;
+    dstd::Vector<dstd::String> files_needing_index;
     for (const auto& file_path : files) {
-        // keep std: unswept API
         const dstd::String index_path =
             internal::determine_index_path(file_path, index_dir);
         if (!common::unwrap(dstd::fs::exists(dstd::PathView(
@@ -849,11 +812,9 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     }
 
     // Trace output is always compressed; ensure the .gz extension.
-    // keep std: unswept API
-    std::string final_output(output_path);
+    dstd::String final_output(output_path);
     if (write_trace && !final_output.empty()) {
-        // keep std: unswept API
-        const std::string gz = ".gz";
+        const dstd::String gz = ".gz";
         if (final_output.size() < gz.size() ||
             final_output.compare(final_output.size() - gz.size(), gz.size(),
                                  gz) != 0)
@@ -884,7 +845,6 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
 
     ExportStats stats;
     // collect() returns only its table, so its scans count here.
-    // keep std: unswept API
     auto scans = std::make_shared<ScanCounter>();
     // Apply the parsed view options to a base View; shared by the single-node
     // and distributed paths so both aggregate identically. The projection and
@@ -892,8 +852,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     auto configure = [&](View v) {
         v = v.count_scans(scans);
         if (!cli->record_schema.empty())
-            // keep std: unswept API
-            v = v.record_schema(std::string(cli->record_schema));
+            v = v.record_schema(dstd::String(cli->record_schema));
         if (view.query) v = v.filter(*view.query);
         if (!cli->phase.empty()) v = v.phase(view_phase);
         if (time_range) v = v.time_range(time_range->first, time_range->second);
@@ -927,8 +886,12 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         -> coro::CoroTask<dataframe::DataFrame> {
         if (cli->select.empty() && !has_window) co_return table;
         dataframe::LazyFrame rows = dataframe::lazy(std::move(table));
-        if (!cli->select.empty())
-            rows = rows.select(texts(binaries::split_csv(cli->select)));
+        if (!cli->select.empty()) {
+            std::vector<std::string> cols;  // keep std: LazyFrame::select
+            for (const auto c : binaries::split_csv(cli->select))
+                cols.emplace_back(c);
+            rows = rows.select(std::move(cols));
+        }
         if (has_window)
             rows =
                 rows.slice(static_cast<std::int64_t>(cli->offset), window_len);
@@ -959,31 +922,27 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 if (!no_auto_index) {
                     // Build each rank's index with its aggregation tier.
                     dftracer::utils::index::build::ResolveAndBuildInput bin;
-                    bin.files = dstd_files(shard);
+                    bin.files = shard;
                     bin.index_dir = rank_idx;
                     bin.checkpoint_size = checkpoint_size;
                     bin.require_checkpoints = true;
                     co_await dftracer::utils::index::build::
                         resolve_and_build_index(std::move(bin));
                 }
-                // keep std: unswept API
-                std::vector<ViewFile> shard_files_vf;
+                dstd::Vector<ViewFile> shard_files_vf;
                 for (const auto& f : shard) {
                     ViewFile vf;
                     vf.file_path = f;
-                    // keep std: ViewFile::index_path is std::string
-                    vf.index_path = std::string(rank_idx);
+                    vf.index_path = rank_idx;
                     vf.checkpoint_size = checkpoint_size;
                     shard_files_vf.push_back(std::move(vf));
                 }
                 View shard_view =
                     configure(View::from_files(std::move(shard_files_vf)));
-                // keep std: unswept API
-                dataframe::LazyResult<std::string> partial_plan =
+                dataframe::LazyResult<dstd::String> partial_plan =
                     fg_mode ? shard_view.flamegraph_partial(ct_partition)
                             : shard_view.aggregate_partial();
-                // keep std: unswept API
-                std::string partial = co_await partial_plan.collect();
+                dstd::String partial = co_await partial_plan.collect();
                 auto partials = transport.all_gather(partial);
                 if (transport.rank() == 0) {
                     // Every rank published its shard before the gather, so
@@ -993,11 +952,9 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                     // the shards, so a later call retries it without a
                     // rebuild.
                     if (!no_auto_index) {
-                        // keep std: unswept API
-                        std::vector<std::string> shard_dirs;
+                        dstd::Vector<dstd::String> shard_dirs;
                         for (int r = 0; r < transport.size(); ++r) {
-                            // keep std: write_shard_set takes std::string
-                            std::string d(dftracer::utils::index::shard_root(
+                            dstd::String d(dftracer::utils::index::shard_root(
                                 idx_root, static_cast<std::size_t>(r)));
                             if (common::unwrap(dstd::fs::exists(dstd::PathView(
                                     dftracer::utils::index::store_dir(d)))))
@@ -1005,10 +962,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                         }
                         if (!shard_dirs.empty()) {
                             try {
-                                // keep std: write_shard_set takes std::string
-                                const std::string root_std(idx_root);
-                                write_shard_set(root_std, shard_dirs);
-                                consolidate_shard_set(root_std);
+                                write_shard_set(idx_root, shard_dirs);
+                                consolidate_shard_set(idx_root);
                             } catch (const std::exception& e) {
                                 index_merge_failed = true;
                                 DFTRACER_UTILS_LOG_ERROR(
@@ -1018,9 +973,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                         }
                     }
 
-                    // keep std: unswept API
-                    std::vector<dstd::StringView> pv(partials.begin(),
-                                                     partials.end());
+                    dstd::Vector<dstd::StringView> pv(partials.begin(),
+                                                      partials.end());
                     View merger = configure(View::from_files({}));
                     if (fg_mode) {
                         dataframe::DataFrame table =
@@ -1043,38 +997,29 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             if (write_trace && transport.size() > 1) {
                 auto shard =
                     shard_files(files, transport.rank(), transport.size());
-                // keep std: unswept API
-                std::string idx_base(index_dir);
+                dstd::String idx_base(index_dir);
                 if (idx_base.empty())
-                    // keep std: unswept API
-                    idx_base = std::string(
+                    idx_base = dstd::String(
                         dstd::PathView(files.front()).parent().str());
-                // keep std: unswept API
-                std::string rank_idx =
-                    // keep std: unswept API
-                    idx_base + "/rank_" + std::to_string(transport.rank());
+                dstd::String rank_idx =
+                    idx_base + "/rank_" + dstd::to_string(transport.rank());
                 if (!no_auto_index) {
-                    auto to_check = dstd_files(shard);
+                    auto to_check = shard;
                     dstd::String dir_arg{dstd::StringView(rank_idx)};
                     co_await dftracer::utils::index::build::
                         ensure_indexes_fresh("", std::move(to_check),
                                              std::move(dir_arg));
                 }
-                // keep std: unswept API
-                std::vector<ViewFile> shard_vf;
+                dstd::Vector<ViewFile> shard_vf;
                 for (const auto& f : shard) {
                     ViewFile vf;
                     vf.file_path = f;
-                    // keep std: ViewFile::index_path is std::string
-                    vf.index_path = std::string(
-                        internal::determine_index_path(f, rank_idx));
+                    vf.index_path = internal::determine_index_path(f, rank_idx);
                     vf.checkpoint_size = checkpoint_size;
                     shard_vf.push_back(std::move(vf));
                 }
-                // keep std: unswept API
-                const std::string rank_out =
-                    // keep std: unswept API
-                    final_output + ".rank_" + std::to_string(transport.rank());
+                const dstd::String rank_out =
+                    final_output + ".rank_" + dstd::to_string(transport.rank());
                 TraceWriteOptions topts;
                 topts.output_path = rank_out;
                 topts.member_size = member_size;
@@ -1139,7 +1084,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 (!counters && !aggregate && !write_trace && !duql_rows &&
                  v.export_would_bootstrap());
             if (!no_auto_index && !will_bootstrap) {
-                auto to_check = dstd_files(files);
+                auto to_check = files;
                 dstd::String dir_arg{dstd::StringView(index_dir_std)};
                 co_await dftracer::utils::index::build::ensure_indexes_fresh(
                     "", std::move(to_check), std::move(dir_arg));

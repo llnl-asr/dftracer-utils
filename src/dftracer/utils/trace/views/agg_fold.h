@@ -10,9 +10,6 @@
 #include <dftracer/utils/trace/views/event_source.h>
 
 #include <cstdint>
-#include <optional>
-#include <string>
-#include <string_view>
 
 // Generic per-event field extraction over an EventSource, written once so it
 // runs identically over a live simdjson element (DomSource) and the interned

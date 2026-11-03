@@ -2,10 +2,11 @@
 #ifndef DFTRACER_UTILS_TRACE_COMPARATOR_TREE_TABLE_FORMATTER_H
 #define DFTRACER_UTILS_TRACE_COMPARATOR_TREE_TABLE_FORMATTER_H
 
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 
 #include <cstdio>
-#include <string>
 
 namespace dftracer::utils::trace::comparator {
 
@@ -46,7 +47,7 @@ class TreeTableFormatter {
     void render(std::FILE* out, const ComparisonOutput& output) const;
 
     /// Render the comparison output as a JSON string.
-    std::string render_json(const ComparisonOutput& output) const;
+    dstd::String render_json(const ComparisonOutput& output) const;
 
    private:
     FormatterOptions options_;
@@ -63,29 +64,29 @@ class TreeTableFormatter {
     const char* color_dim() const;
     const char* color_reset() const;
 
-    std::string format_value(double value, const std::string& metric) const;
-    std::string format_delta(double delta, const std::string& metric) const;
-    std::string format_pct(double pct) const;
-    std::string format_significance(Significance sig) const;
-    std::string format_val_str(const MetricComparison& mc, bool is_base) const;
+    dstd::String format_value(double value, const dstd::String& metric) const;
+    dstd::String format_delta(double delta, const dstd::String& metric) const;
+    dstd::String format_pct(double pct) const;
+    dstd::String format_significance(Significance sig) const;
+    dstd::String format_val_str(const MetricComparison& mc, bool is_base) const;
 
-    void measure_metrics_tree(const std::vector<MetricComparison>& metrics,
-                              const std::string& prefix,
+    void measure_metrics_tree(const dstd::Vector<MetricComparison>& metrics,
+                              const dstd::String& prefix,
                               ColumnWidths& cw) const;
-    void measure_node(const NodeResult& node, const std::string& prefix,
+    void measure_node(const NodeResult& node, const dstd::String& prefix,
                       bool is_last, bool is_top_level, ColumnWidths& cw) const;
 
     void render_leaf(std::FILE* out, const MetricComparison& mc,
-                     const std::string& leaf_prefix,
-                     const std::string& leaf_name,
+                     const dstd::String& leaf_prefix,
+                     const dstd::String& leaf_name,
                      const ColumnWidths& cw) const;
     void render_metrics_tree(std::FILE* out,
-                             const std::vector<MetricComparison>& metrics,
-                             const std::string& prefix, bool is_last_section,
+                             const dstd::Vector<MetricComparison>& metrics,
+                             const dstd::String& prefix, bool is_last_section,
                              const ColumnWidths& cw) const;
     void render_node(std::FILE* out, const NodeResult& node,
-                     const std::string& prefix, bool is_last, bool is_top_level,
-                     const ColumnWidths& cw) const;
+                     const dstd::String& prefix, bool is_last,
+                     bool is_top_level, const ColumnWidths& cw) const;
 };
 
 }  // namespace dftracer::utils::trace::comparator

@@ -253,7 +253,7 @@ FoldEvent evt_full(StringIntern& intern, const char* cat, const char* name,
 // Two worker slices over one dataset, so every case below also exercises the
 // cross-slice merge. POSIX/pid 1: (ts, dur) = (1,10) (2,20) (3,30), an exact
 // line dur = 10*ts. STDIO/pid 2: (1,5) (2,7), the line dur = 2*ts + 3.
-std::vector<std::vector<FoldEvent>> sample_slices(StringIntern& intern) {
+std::vector<dstd::Vector<FoldEvent>> sample_slices(StringIntern& intern) {
     return {
         {evt_full(intern, "POSIX", "read", 1, 100, 1, 10),
          evt_full(intern, "POSIX", "write", 1, 200, 2, 20),
@@ -288,7 +288,7 @@ dftu_plugin make_columns_plugin(
 }
 
 void run_slices(PluginFold& master,
-                const std::vector<std::vector<FoldEvent>>& slices) {
+                const std::vector<dstd::Vector<FoldEvent>>& slices) {
     for (const auto& evs : slices) {
         auto slice = master.slice();
         auto* pf = static_cast<PluginFold*>(slice.get());
@@ -384,7 +384,7 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     PluginFold master(&p, intern, nullptr, &named);
 
     // Two slices (two workers), each one batch, merged into the master.
-    std::vector<std::vector<FoldEvent>> slices = {
+    std::vector<dstd::Vector<FoldEvent>> slices = {
         {evt(intern, "POSIX", "read", 10), evt(intern, "POSIX", "write", 20),
          evt(intern, "STDIO", "open", 5)},
         {evt(intern, "POSIX", "read", 30), evt(intern, "STDIO", "close", 7)},
@@ -522,7 +522,7 @@ TEST_CASE(
     NamedResultRegistry named;
     PluginFold master(&p, intern, nullptr, &named);
 
-    std::vector<std::vector<FoldEvent>> slices = {
+    std::vector<dstd::Vector<FoldEvent>> slices = {
         {evt(intern, "POSIX", "read", 10), evt(intern, "POSIX", "write", 20),
          evt(intern, "STDIO", "open", 5)},
         {evt(intern, "POSIX", "read", 30), evt(intern, "STDIO", "close", 7)},

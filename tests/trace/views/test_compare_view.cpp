@@ -54,8 +54,10 @@ TEST_SUITE("CompareView") {
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
                     auto view = comparator::CompareView::of(
-                                    View::from_file(base_gz, base_idx),
-                                    View::from_file(var_gz, var_idx))
+                                    View::from_file(dstd::String(base_gz),
+                                                    dstd::String(base_idx)),
+                                    View::from_file(dstd::String(var_gz),
+                                                    dstd::String(var_idx)))
                                     .group_by({GroupKey::cat()})
                                     .agg({AggSpec(AggOp::Count, "", "count")});
                     result = co_await view.collect();

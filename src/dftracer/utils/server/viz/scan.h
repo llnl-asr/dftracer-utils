@@ -395,7 +395,7 @@ inline ViewDefinition build_viz_view(const QueryParams& params, double begin,
         dsl += ')';
     }
 
-    if (!dsl.empty()) view.with_query(dsl);
+    if (!dsl.empty()) view.with_query(dstd::String(dsl));
     return view;
 }
 

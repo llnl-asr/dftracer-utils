@@ -148,7 +148,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     const TraceFields fields(index.record_schema());
     auto on_batch = [&accs, &fields](
                         std::size_t w,
-                        const std::vector<dstd::StringView>& events) {
+                        const dstd::Vector<dstd::StringView>& events) {
         thread_local dftracer::utils::json::RecordParser parser;
         thread_local std::string buf;
         Acc& acc = accs[w];

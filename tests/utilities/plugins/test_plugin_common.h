@@ -30,8 +30,12 @@ inline dftracer::utils::trace::views::ViewFile index_trace(
     struct Sink : ExportSink {
         void write(dftracer::utils::dstd::StringView) override {}
     } sink;
-    View::from_file(gz, idx).sink_json(sink).get();
-    return ViewFile{gz, idx};
+    View::from_file(dftracer::utils::dstd::String(gz),
+                    dftracer::utils::dstd::String(idx))
+        .sink_json(sink)
+        .get();
+    return ViewFile{dftracer::utils::dstd::String(gz),
+                    dftracer::utils::dstd::String(idx)};
 }
 
 // Runs a built plugin set over `view` to completion and returns the result.

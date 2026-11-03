@@ -10,15 +10,12 @@
 
 #include <cstdint>
 #include <limits>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <type_traits>
 #include <variant>
 
 namespace dftracer::utils::trace {
 
-using ArgsValue = dstd::Variant<dstd::Monostate, std::string, std::int64_t,
+using ArgsValue = dstd::Variant<dstd::Monostate, dstd::String, std::int64_t,
                                 std::uint64_t, double, bool>;
 
 class ArgsValueProxy {
@@ -34,7 +31,7 @@ class ArgsValueProxy {
     explicit operator bool() const { return exists(); }
     bool is_null() const { return !exists(); }
     bool is_string() const {
-        return val_ && std::holds_alternative<std::string>(*val_);
+        return val_ && std::holds_alternative<dstd::String>(*val_);
     }
     bool is_uint() const {
         return val_ && std::holds_alternative<std::uint64_t>(*val_);
@@ -59,15 +56,15 @@ class ArgsValueProxy {
         if constexpr (std::is_same_v<T, bool>) {
             if (auto* p = std::get_if<bool>(val_)) return *p;
             return default_val;
-        } else if constexpr (std::is_same_v<T, std::string>) {
-            if (auto* p = std::get_if<std::string>(val_)) return *p;
+        } else if constexpr (std::is_same_v<T, dstd::String>) {
+            if (auto* p = std::get_if<dstd::String>(val_)) return *p;
             return default_val;
         } else if constexpr (std::is_same_v<T, dstd::StringView>) {
-            if (auto* p = std::get_if<std::string>(val_))
+            if (auto* p = std::get_if<dstd::String>(val_))
                 return dstd::StringView(*p);
             return default_val;
         } else if constexpr (std::is_same_v<T, const char*>) {
-            if (auto* p = std::get_if<std::string>(val_)) return p->c_str();
+            if (auto* p = std::get_if<dstd::String>(val_)) return p->c_str();
             return default_val;
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
             if (auto* p = std::get_if<std::uint64_t>(val_)) return *p;
@@ -118,11 +115,11 @@ class ArgsValueProxy {
         if (!val_ || std::holds_alternative<dstd::Monostate>(*val_))
             return dstd::nullopt;
 
-        if constexpr (std::is_same_v<T, std::string>) {
-            if (auto* p = std::get_if<std::string>(val_)) return *p;
+        if constexpr (std::is_same_v<T, dstd::String>) {
+            if (auto* p = std::get_if<dstd::String>(val_)) return *p;
             return dstd::nullopt;
         } else if constexpr (std::is_same_v<T, dstd::StringView>) {
-            if (auto* p = std::get_if<std::string>(val_))
+            if (auto* p = std::get_if<dstd::String>(val_))
                 return dstd::StringView(*p);
             return dstd::nullopt;
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
@@ -203,12 +200,12 @@ class ArgsMap {
         return (*this)[dstd::StringView(key)];
     }
 
-    ArgsValueProxy operator[](const std::string& key) const {
+    ArgsValueProxy operator[](const dstd::String& key) const {
         return (*this)[dstd::StringView(key)];
     }
 
     ArgsValueProxy at(const char* key) const { return (*this)[key]; }
-    ArgsValueProxy at(const std::string& key) const { return (*this)[key]; }
+    ArgsValueProxy at(const dstd::String& key) const { return (*this)[key]; }
     ArgsValueProxy at(dstd::StringView key) const { return (*this)[key]; }
 
     template <typename Fn>

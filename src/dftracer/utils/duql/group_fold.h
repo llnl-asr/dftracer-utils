@@ -47,8 +47,7 @@ struct FoldAgg {
     double param = 0;
     dataframe::DataType type;
     dstd::String plugin;
-    // keep std: view_duql fills params from a std::vector<double>
-    std::vector<double> params;
+    dstd::Vector<double> params;
 };
 
 /// A group-by over batches whose first `keys` columns are the group keys,
@@ -57,10 +56,8 @@ struct FoldAgg {
 class GroupFold {
    public:
     /// `key_types` are the key columns' output types.
-    // keep std: view_duql owns these as std::vector
-    GroupFold(std::vector<dataframe::DataType> key_types,
-              // keep std: view_duql passes std::vector for these
-              std::vector<FoldAgg> aggs);
+    GroupFold(dstd::Vector<dataframe::DataType> key_types,
+              dstd::Vector<FoldAgg> aggs);
     ~GroupFold();
 
     /// Throws std::invalid_argument for a key that holds a list or object.
@@ -82,10 +79,8 @@ class GroupFold {
     void sketches(std::size_t a, const dataframe::Series& in,
                   const dstd::Vector<std::int64_t>& gid);
 
-    // keep std: constructed from the caller's std::vector
-    std::vector<dataframe::DataType> key_types_;
-    // keep std: constructed from the caller's std::vector
-    std::vector<FoldAgg> aggs_;
+    dstd::Vector<dataframe::DataType> key_types_;
+    dstd::Vector<FoldAgg> aggs_;
     dstd::HashMap<dstd::String, std::int64_t> groups_;
     dstd::StringViewMap<std::int64_t> str_groups_;
     std::int64_t null_group_ = -1;

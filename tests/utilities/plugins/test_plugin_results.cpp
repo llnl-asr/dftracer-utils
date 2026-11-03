@@ -71,8 +71,8 @@ struct FoldHolder {
     }
 };
 
-std::vector<FoldEvent> make_events(std::uint64_t count) {
-    std::vector<FoldEvent> evs(count);
+dstd::Vector<FoldEvent> make_events(std::uint64_t count) {
+    dstd::Vector<FoldEvent> evs(count);
     for (std::uint64_t i = 0; i < count; ++i) {
         evs[i].ts = i;
         // step() drops METADATA/UNKNOWN-phase events before it ever reaches

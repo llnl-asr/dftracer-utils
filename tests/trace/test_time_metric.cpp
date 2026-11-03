@@ -41,8 +41,8 @@ TEST_SUITE("TimeMetric") {
         ev.phase = RecordPhase::Metadata;
         ev.name = "CM";
         ev.args.set_valid(true);
-        ev.args.insert("name", std::string("time_metric"));
-        ev.args.insert("value", std::string("NS"));
+        ev.args.insert("name", dftracer::utils::dstd::String("time_metric"));
+        ev.args.insert("value", dftracer::utils::dstd::String("NS"));
         TimeMetric out = TimeMetric::Us;
         CHECK(extract_time_metric(ev, out));
         CHECK(out == TimeMetric::Ns);

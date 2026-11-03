@@ -387,9 +387,9 @@ TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
 
     StringIntern intern;
     PluginFold fold(&p, intern);
-    std::vector<FoldEvent> evs = {make_event(intern, "f", "h"),
-                                  make_event(intern, "f", "h"),
-                                  make_event(intern, "f", "h")};
+    dstd::Vector<FoldEvent> evs = {make_event(intern, "f", "h"),
+                                   make_event(intern, "f", "h"),
+                                   make_event(intern, "f", "h")};
     ScanUnit unit{};
     fold.step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
     CHECK(g_col_state.dur_sum == 15);  // 3 events x dur 5, SIMD-reduced
@@ -460,7 +460,7 @@ TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
         tree.set("duql", "fhash == \"fhAAA\"");
         FoldFixture<CountSlice> fx(tree.root());
 
-        std::vector<FoldEvent> evs;
+        dstd::Vector<FoldEvent> evs;
         evs.push_back(make_event(fx.intern, "fhAAA", "hh1"));
         evs.push_back(make_event(fx.intern, "fhBBB", "hh1"));
         evs.push_back(make_event(fx.intern, "fhAAA", "hh2"));
@@ -483,7 +483,7 @@ TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
         tree.set("duql", "hhash == \"hhZ\"");
         FoldFixture<CountSlice> fx(tree.root());
 
-        std::vector<FoldEvent> evs;
+        dstd::Vector<FoldEvent> evs;
         evs.push_back(make_event(fx.intern, "fh1", "hhZ"));
         evs.push_back(make_event(fx.intern, "fh2", "hhY"));
         evs.push_back(make_event(fx.intern, "fh3", "hhZ"));

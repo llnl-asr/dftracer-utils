@@ -24,7 +24,6 @@
 
 #include <cinttypes>
 #include <mutex>
-#include <optional>
 
 namespace dftracer::utils::trace {
 
@@ -39,7 +38,7 @@ MetadataCollectorUtility::operator()(
     meta.success = false;
 
     try {
-        const std::string& file_path = input.file_path;
+        const dstd::String& file_path = input.file_path;
         if (file_path.size() <= 3 ||
             file_path.substr(file_path.size() - 3) != ".gz") {
             throw common::DFTUtilsException(
@@ -73,7 +72,7 @@ namespace {
 // The index record of `file` when the index holds it unchanged since the stat
 // the caller read. The file is not opened again.
 dstd::Optional<internal::IndexedFile> fresh_index_record(
-    const std::string& index_path, const std::string& file,
+    const dstd::String& index_path, const dstd::String& file,
     const dftracer::utils::common::InputFileStat& st) {
     namespace idx = dftracer::utils::index;
     try {
@@ -125,7 +124,7 @@ MetadataCollectorUtility::process_compressed(
             internal::index_root(input.index_path);
         const dstd::Pair<std::int64_t, std::uint64_t> stamp{input_stat.mtime,
                                                             input_stat.size};
-        const std::string& file_key = input.file_path;
+        const dstd::String& file_key = input.file_path;
 
         using dftracer::utils::index::gzip::CheckpointIndexer;
         using dftracer::utils::index::gzip::CheckpointIndexerFactory;

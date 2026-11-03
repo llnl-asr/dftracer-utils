@@ -382,11 +382,10 @@ trace::views::ViewFile view_file(const dstd::String& file,
 // used. Parts directly under parts/ use the view root. A distributed
 // materialize puts each rank's parts in a subdir of parts/, which resolves to
 // the same view root inside the index root and to its own root elsewhere.
-// keep std: ViewPlan::files is a std::vector
-std::vector<trace::views::ViewFile> gather_view_files(const dstd::String& dir) {
+dstd::Vector<trace::views::ViewFile> gather_view_files(
+    const dstd::String& dir) {
     namespace dfti = trace::internal;
-    // keep std: ViewPlan::files is a std::vector
-    std::vector<trace::views::ViewFile> out;
+    dstd::Vector<trace::views::ViewFile> out;
     const dstd::String view_idx = dfti::determine_index_path(dir, "");
     const dstd::String parts = index::view_parts_dir(dir);
     for (const auto& t : view_trace_files(parts))
@@ -401,8 +400,7 @@ std::vector<trace::views::ViewFile> gather_view_files(const dstd::String& dir) {
     return out;
 }
 
-// keep std: ViewPlan::files is a std::vector
-std::uint64_t total_size(const std::vector<trace::views::ViewFile>& files) {
+std::uint64_t total_size(const dstd::Vector<trace::views::ViewFile>& files) {
     std::uint64_t sum = 0;
     for (const auto& f : files) {
         dftracer::utils::common::InputFileStat st;
@@ -551,8 +549,7 @@ void register_view(dstd::StringView dir,
     if (!root.empty()) evict_views(root, dir);
 }
 
-// keep std: ViewPlan::files is a std::vector
-dstd::Optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
+dstd::Optional<dstd::Vector<trace::views::ViewFile>> find_subsuming_view(
     const trace::views::detail::ViewPlan& plan) {
     const dstd::String root = views_root(plan);
     if (root.empty()) return dstd::nullopt;
@@ -568,8 +565,7 @@ dstd::Optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
         return s;
     }();
 
-    // keep std: ViewPlan::files is a std::vector
-    std::vector<trace::views::ViewFile> best;
+    dstd::Vector<trace::views::ViewFile> best;
     dstd::String best_dir;
     std::uint64_t best_bytes = base_bytes;  // must beat the base to be worth it
     for (const dstd::Path& path :

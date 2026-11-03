@@ -11,7 +11,6 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
-#include <memory>
 #include <utility>
 
 namespace dftracer::utils::trace::views::detail {
@@ -20,12 +19,12 @@ class IndexRuleFold : public Fold {
    public:
     /// Folds every event of `plan` by the rules of the index fold, in the ids
     /// of `scan_intern`. nullptr when the plan stays on the frame path.
-    static std::unique_ptr<IndexRuleFold> make(
+    static dstd::UniquePtr<IndexRuleFold> make(
         const ViewPlan& plan, dftracer::utils::dstd::StringIntern& scan_intern,
         bool apply_query);
 
     /// As above, with the query `trace_fold_query(plan)` returned.
-    static std::unique_ptr<IndexRuleFold> make(
+    static dstd::UniquePtr<IndexRuleFold> make(
         const ViewPlan& plan, AggQuery query,
         dftracer::utils::dstd::StringIntern& scan_intern, bool apply_query);
 
@@ -34,7 +33,7 @@ class IndexRuleFold : public Fold {
     /// A pre-aggregated record carries its counts in its args.
     bool needs_args() const override { return true; }
 
-    std::unique_ptr<Fold> slice() const override;
+    dstd::UniquePtr<Fold> slice() const override;
 
     void step(const FoldBatch& batch) override;
     void seal_unit(const ScanUnit&) override {}
@@ -53,6 +52,10 @@ class IndexRuleFold : public Fold {
     }
 
    private:
+    struct Key {
+        explicit Key() = default;
+    };
+
     struct Rules {
         Rules(const ViewPlan& plan, AggQuery q,
               dftracer::utils::dstd::StringIntern& read, bool apply_query);
@@ -64,8 +67,10 @@ class IndexRuleFold : public Fold {
         bool apply_query;
     };
 
-    explicit IndexRuleFold(dftracer::utils::dstd::SharedPtr<Rules> rules);
+   public:
+    IndexRuleFold(Key, dftracer::utils::dstd::SharedPtr<Rules> rules);
 
+   private:
     dftracer::utils::dstd::SharedPtr<Rules> rules_;
     AggQueryResult::Rows rows_;
     AggQueryStats stats_;

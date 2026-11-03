@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -9,8 +12,6 @@
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::trace::views {
 
@@ -22,12 +23,12 @@ ViewPlannerInput& ViewPlannerInput::with_view(const ViewDefinition& v) {
     return *this;
 }
 
-ViewPlannerInput& ViewPlannerInput::with_file_path(const std::string& path) {
+ViewPlannerInput& ViewPlannerInput::with_file_path(const dstd::String& path) {
     file_path = path;
     return *this;
 }
 
-ViewPlannerInput& ViewPlannerInput::with_index_path(const std::string& path) {
+ViewPlannerInput& ViewPlannerInput::with_index_path(const dstd::String& path) {
     index_path = path;
     return *this;
 }
@@ -68,7 +69,7 @@ ViewPlannerUtility::operator()(const ViewPlannerInput& input) {
 
     // Real per-chunk offsets are required: gzip members are non-uniformly
     // sized, so a uniform ckpt_idx*bytes_per estimate decodes the wrong bytes.
-    std::vector<std::uint64_t> candidate_checkpoints;
+    dstd::Vector<std::uint64_t> candidate_checkpoints;
     dstd::Vector<dftracer::utils::index::gzip::ChunkSpan> chunk_spans;
     const bool indexed = !input.index_path.empty();
     if (indexed) {
@@ -128,7 +129,7 @@ ViewPlannerUtility::operator()(const ViewPlannerInput& input) {
             // reads downstream as a prune and silently drops the file.
             co_return common::make_error(
                 common::ErrorCode::Indexer,
-                std::string("ViewPlanner: index read failed for ") +
+                dstd::String("ViewPlanner: index read failed for ") +
                     input.file_path + ": " + e.what());
         }
         if (input.scan_all_chunks) {
@@ -175,11 +176,11 @@ ViewPlannerUtility::operator()(const ViewPlannerInput& input) {
         } else {
             co_return common::make_error(
                 common::ErrorCode::Indexer,
-                std::string("ViewPlanner: the chunk table of ") +
+                dstd::String("ViewPlanner: the chunk table of ") +
                     input.file_path + " has " +
-                    std::to_string(chunk_spans.size()) +
+                    dstd::to_string(chunk_spans.size()) +
                     " chunks and cannot place chunk " +
-                    std::to_string(ckpt_idx));
+                    dstd::to_string(ckpt_idx));
         }
 
         output.candidates.push_back(candidate);

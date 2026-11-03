@@ -214,8 +214,7 @@ int main(int argc, char** argv) {
             // Remap component (cat, name) selectors from the event map, if any.
             if (!cli.event_map.empty()) {
                 try {
-                    // keep std: unswept API
-                    dlio::load_event_map(std::string(cli.event_map),
+                    dlio::load_event_map(dstd::String(cli.event_map),
                                          loader_opts);
                 } catch (const std::exception& e) {
                     DFTRACER_UTILS_LOG_ERROR("%s", e.what());
@@ -334,7 +333,6 @@ int main(int argc, char** argv) {
                 prep_block_ptr = &(*prep_block_storage);
             }
 
-            // keep std: unswept API
             std::ofstream out{std::string(cli.output)};
             if (!out) {
                 DFTRACER_UTILS_LOG_ERROR("Cannot open %s for writing",

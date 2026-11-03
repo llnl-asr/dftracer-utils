@@ -10,9 +10,6 @@
 
 #include <cstddef>
 #include <cstring>
-#include <memory>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::trace {
 
@@ -145,7 +142,7 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
 /// chunk is re-parsed line by line so a bad record drops only itself.
 template <typename Cb>
 std::size_t parse_buffer(simdjson::dom::parser& parser,
-                         dstd::SharedPtr<std::string> chunk_buffer,
+                         dstd::SharedPtr<dstd::String> chunk_buffer,
                          std::size_t len, std::size_t checkpoint_idx,
                          std::size_t& line_number, Cb&& cb) {
     if (!chunk_buffer || len == 0) return 0;

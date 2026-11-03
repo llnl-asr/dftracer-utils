@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dstd/string.h>
@@ -15,9 +16,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::trace::comparator {
 
@@ -28,9 +26,9 @@ using dftracer::utils::index::schemas::dft::agg::QuantileStore;
 /// formatter so the atomic-name set cannot drift between them. Atomic names are
 /// standalone metrics (e.g. "count"); others split into group + leaf, e.g.
 /// "dur_mean" -> group "dur", leaf "mean".
-bool is_atomic_metric(const std::string& name);
-std::string metric_group(const std::string& name);
-std::string metric_leaf(const std::string& name);
+bool is_atomic_metric(const dstd::String& name);
+dstd::String metric_group(const dstd::String& name);
+dstd::String metric_leaf(const dstd::String& name);
 
 /// Cohen's d effect size classification.
 enum class Significance : int {
@@ -46,7 +44,7 @@ const char* significance_to_string(Significance s);
 /// Comparison of a single metric between baseline and variant.
 struct MetricComparison {
     /// Metric name (e.g. "count", "dur_mean", "dur_p50", "size").
-    std::string metric_name;
+    dstd::String metric_name;
     /// Baseline value (mean across time windows).
     double baseline_value = 0.0;
     /// Variant value (mean across time windows).
@@ -68,24 +66,24 @@ struct MetricComparison {
 /// Comparison of all metrics for a single (category, operation) group.
 struct GroupComparison {
     /// Group label (e.g. "POSIX/read", empty for summary).
-    std::string label;
+    dstd::String label;
     bool baseline_present = true;
     bool variant_present = true;
-    std::vector<MetricComparison> metrics;
+    dstd::Vector<MetricComparison> metrics;
     /// Worst percentage change across all metrics (for regression sorting).
     double worst_pct_change = 0.0;
 };
 
 /// Result for a single node in the comparison tree.
 struct NodeResult {
-    std::string name;
-    std::string composed_query;
-    std::vector<std::string> group_by;
+    dstd::String name;
+    dstd::String composed_query;
+    dstd::Vector<dstd::String> group_by;
     /// Per-group comparisons (empty if summary-only).
-    std::vector<GroupComparison> groups;
+    dstd::Vector<GroupComparison> groups;
     /// Aggregate summary across all groups (always present).
     GroupComparison summary;
-    std::vector<NodeResult> children;
+    dstd::Vector<NodeResult> children;
 };
 
 /// Metadata extracted from a trace run (baseline or variant).
@@ -110,13 +108,13 @@ struct TraceMetadata {
 
 /// Top-level output of the comparison pipeline.
 struct ComparisonOutput {
-    std::string baseline_path;
-    std::string variant_path;
+    dstd::String baseline_path;
+    dstd::String variant_path;
     std::size_t baseline_file_count = 0;
     std::size_t variant_file_count = 0;
     TraceMetadata baseline_meta;
     TraceMetadata variant_meta;
-    std::vector<NodeResult> nodes;
+    dstd::Vector<NodeResult> nodes;
     double execution_time_ms = 0.0;
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -199,15 +197,15 @@ Significance classify_significance(double cohens_d);
 /// Build @ref MetricComparison entries for trace-level metadata
 /// (file_count, process_count, thread_count, makespan, total_bytes,
 /// total_io_time). Intended for injection into the root SUMMARY.
-std::vector<MetricComparison> build_metadata_metrics(
+dstd::Vector<MetricComparison> build_metadata_metrics(
     const TraceMetadata& baseline, const TraceMetadata& variant);
 
 /// Build @ref MetricComparison entries for a pair of @ref CollapsedMetrics,
 /// comparing the requested metrics and percentiles.
-std::vector<MetricComparison> compare_metrics(
+dstd::Vector<MetricComparison> compare_metrics(
     const CollapsedMetrics& baseline, const CollapsedMetrics& variant,
-    const std::vector<std::string>& metrics,
-    const std::vector<double>& percentiles);
+    const dstd::Vector<dstd::String>& metrics,
+    const dstd::Vector<double>& percentiles);
 
 }  // namespace dftracer::utils::trace::comparator
 

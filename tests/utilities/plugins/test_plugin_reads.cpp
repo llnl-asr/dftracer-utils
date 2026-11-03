@@ -136,7 +136,8 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
         .build();
     using dftracer::utils::trace::internal::determine_index_path;
     View view = View::from_files(
-        {ViewFile{gz, std::string(determine_index_path(gz, ""))}});
+        {ViewFile{dstd::String(gz),
+                  dstd::String(std::string(determine_index_path(gz, "")))}});
     PluginRun run = run_set(*set, view, "reads-projection");
 
     CHECK(result_text(run, "reads_probe.columns") == "k,x");
@@ -149,11 +150,12 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
                              config_of(R"({"declare_reads": false})"))
                         .build();
     REQUIRE(narrowed.has_value());
-    PluginRun projected =
-        run_set(*narrowed,
-                View::from_files(
-                    {ViewFile{gz, std::string(determine_index_path(gz, ""))}})
-                    .select({"k"}),
-                "reads-projection");
+    PluginRun projected = run_set(
+        *narrowed,
+        View::from_files(
+            {ViewFile{dstd::String(gz),
+                      dstd::String(std::string(determine_index_path(gz, "")))}})
+            .select({"k"}),
+        "reads-projection");
     CHECK(result_text(projected, "reads_probe.args_x_sum") == "190.000000");
 }

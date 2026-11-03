@@ -2,12 +2,11 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_COVERAGE_H
 #define DFTRACER_UTILS_TRACE_VIEWS_COVERAGE_H
 
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
-#include <unordered_set>
 #include <utility>
 
 namespace dftracer::utils::trace::views::detail {
@@ -20,17 +19,17 @@ namespace dftracer::utils::trace::views::detail {
 /// rather than a slow one.
 class CoverageSet {
    public:
-    static std::string key(dstd::StringView file, std::uint64_t checkpoint) {
-        std::string k(file);
+    static dstd::String key(dstd::StringView file, std::uint64_t checkpoint) {
+        dstd::String k(file);
         k += '\x1f';
-        k += std::to_string(checkpoint);
+        k += dstd::to_string(checkpoint);
         return k;
     }
 
     /// Whole-file unit, for artifacts a single member cannot establish. The
     /// marker is not a digit, so it cannot collide with a checkpoint key.
-    static std::string file_key(dstd::StringView file) {
-        std::string k(file);
+    static dstd::String file_key(dstd::StringView file) {
+        dstd::String k(file);
         k += '\x1f';
         k += '*';
         return k;
@@ -53,7 +52,7 @@ class CoverageSet {
     bool empty() const noexcept { return units_.empty(); }
     std::size_t size() const noexcept { return units_.size(); }
 
-    void add_raw(std::string unit) { units_.insert(std::move(unit)); }
+    void add_raw(dstd::String unit) { units_.insert(std::move(unit)); }
 
     /// Take over `other`'s units, leaving it empty. The set is not
     /// thread-safe, so a parallel scan gives each worker its own and folds
@@ -68,7 +67,7 @@ class CoverageSet {
     }
 
    private:
-    std::unordered_set<std::string> units_;
+    dstd::HashSet<dstd::String> units_;
 };
 
 /// Coverage accumulated by one scan, published only when the scan completes.
@@ -114,7 +113,7 @@ class PendingCoverage {
 
    private:
     CoverageSet* target_;
-    std::unordered_set<std::string> pending_;
+    dstd::HashSet<dstd::String> pending_;
     bool sealed_ = false;
 };
 

@@ -6,6 +6,7 @@
 // usage: view_containment_example <trace.pfw.gz> [index_dir]
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstdio>
@@ -19,8 +20,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "usage: %s <trace.pfw.gz> [index_dir]\n", argv[0]);
         return 1;
     }
-    const std::string file = argv[1];
-    const std::string index_dir = argc > 2 ? argv[2] : "";
+    const dftracer::utils::dstd::String file = argv[1];
+    const dftracer::utils::dstd::String index_dir = argc > 2 ? argv[2] : "";
 
     views::View v = views::View::from_file(file, index_dir);
     views::ContainmentResult both = v.containment().collect().get();

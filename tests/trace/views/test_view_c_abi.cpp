@@ -143,7 +143,7 @@ std::string write_and_index(const std::string& dir, const std::string& name,
     (void)dstd::fs::remove(pfw);
     std::string idx = std::string(determine_index_path(gz, ""));
     StringSink sink;
-    View::from_file(gz, idx).sink_json(sink).get();
+    View::from_file(dstd::String(gz), dstd::String(idx)).sink_json(sink).get();
     return gz;
 }
 
@@ -166,7 +166,8 @@ TEST_SUITE("View C ABI") {
         dftu_dataframe* df = dftu_view_collect(filtered, nullptr);
         REQUIRE(df != nullptr);
 
-        View cpp_view = View::from_file(s.gz, s.idx).duql(R"(cat == "POSIX")");
+        View cpp_view = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                            .duql(R"(cat == "POSIX")");
         DataFrame cpp_df = run(cpp_view.collect());
 
         CHECK(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
@@ -202,7 +203,9 @@ TEST_SUITE("View C ABI") {
         p.emplace("min", duql::LiteralValue{std::uint64_t{30}});
         p.emplace("n", duql::LiteralValue{std::uint64_t{3}});
         const DataFrame want =
-            run(View::from_file(s.gz, s.idx).duql(text, p).collect());
+            run(View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                    .duql(text, p)
+                    .collect());
         REQUIRE(dftu_dataframe_num_rows(df) == 3);
         for (std::int64_t i = 0; i < 3; ++i)
             CHECK(abi_num(df, i, "ts") == bnum(want, i, "ts"));
@@ -232,7 +235,7 @@ TEST_SUITE("View C ABI") {
                                 dftracer::utils::dstd::String("read"),
                                 dftracer::utils::dstd::String("write")});
         CHECK(dftu_dataframe_num_rows(names_df) ==
-              run(View::from_file(s.gz, s.idx)
+              run(View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                       .duql("where name in $names | select name", lp)
                       .collect())
                   .num_rows());
@@ -275,7 +278,9 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_lazyframe_collect(lf, 0);
             REQUIRE(df != nullptr);
             const DataFrame want =
-                run(View::from_file(s.gz, s.idx).duql(c.text).collect());
+                run(View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                        .duql(c.text)
+                        .collect());
             CHECK(dftu_dataframe_num_rows(df) == c.rows);
             CHECK(want.num_rows() == c.rows);
             dftu_dataframe_free(df);
@@ -309,7 +314,9 @@ TEST_SUITE("View C ABI") {
         duql::Params p;
         p.emplace("min", duql::LiteralValue{std::uint64_t{30}});
         const DataFrame want =
-            run(View::from_file(s.gz, s.idx).duql(text, p).collect());
+            run(View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                    .duql(text, p)
+                    .collect());
         REQUIRE(dftu_dataframe_num_rows(df) == want.num_rows());
         REQUIRE(want.num_rows() == 2);
         for (std::int64_t i = 0; i < want.num_rows(); ++i) {
@@ -339,7 +346,9 @@ TEST_SUITE("View C ABI") {
         dftu_dataframe* df = dftu_lazyframe_collect(lf, 0);
         REQUIRE(df != nullptr);
         const DataFrame want =
-            run(View::from_file(s.gz, s.idx).duql(text).collect());
+            run(View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                    .duql(text)
+                    .collect());
         REQUIRE(dftu_dataframe_num_rows(df) == want.num_rows());
         REQUIRE(want.num_rows() == 50);
         for (std::int64_t i = 0; i < want.num_rows(); ++i) {
@@ -389,7 +398,9 @@ TEST_SUITE("View C ABI") {
         std::string gz = write_group_trace(env);
         std::string idx = std::string(determine_index_path(gz, ""));
         StringSink sink;
-        View::from_file(gz, idx).sink_json(sink).get();
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .sink_json(sink)
+            .get();
 
         const char* paths[1] = {gz.c_str()};
         const char* idxs[1] = {idx.c_str()};
@@ -408,7 +419,7 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_view_collect(agged, nullptr);
             REQUIRE(df != nullptr);
 
-            View cpp_view = View::from_file(gz, idx)
+            View cpp_view = View::from_file(dstd::String(gz), dstd::String(idx))
                                 .group_by({GroupKey::name()})
                                 .agg({{AggOp::Count, "", "n"}});
             DataFrame cpp_df = run(cpp_view.collect());
@@ -441,7 +452,7 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_view_collect(agged, nullptr);
             REQUIRE(df != nullptr);
 
-            View cpp_view = View::from_file(gz, idx)
+            View cpp_view = View::from_file(dstd::String(gz), dstd::String(idx))
                                 .group_by({GroupKey::pid()})
                                 .agg({{AggOp::Sum, "dur", "total_dur"}});
             DataFrame cpp_df = run(cpp_view.collect());
@@ -477,7 +488,7 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_view_collect(agged, nullptr);
             REQUIRE(df != nullptr);
 
-            View cpp_view = View::from_file(gz, idx)
+            View cpp_view = View::from_file(dstd::String(gz), dstd::String(idx))
                                 .group_by({GroupKey::field("dur")})
                                 .agg({{AggOp::Count, "", "n"}});
             DataFrame cpp_df = run(cpp_view.collect());
@@ -499,7 +510,9 @@ TEST_SUITE("View C ABI") {
             std::string am_gz = write_argmax_trace(env);
             std::string am_idx = std::string(determine_index_path(am_gz, ""));
             StringSink am_sink;
-            View::from_file(am_gz, am_idx).sink_json(am_sink).get();
+            View::from_file(dstd::String(am_gz), dstd::String(am_idx))
+                .sink_json(am_sink)
+                .get();
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
 
@@ -517,7 +530,7 @@ TEST_SUITE("View C ABI") {
             REQUIRE(df != nullptr);
 
             View cpp_view =
-                View::from_file(am_gz, am_idx)
+                View::from_file(dstd::String(am_gz), dstd::String(am_idx))
                     .group_by({GroupKey::pid()})
                     .agg({{AggOp::ArgMax, "name", "argmax_name", "dur"}});
             DataFrame cpp_df = run(cpp_view.collect());
@@ -544,7 +557,9 @@ TEST_SUITE("View C ABI") {
             std::string am_gz = write_argmax_trace(env);
             std::string am_idx = std::string(determine_index_path(am_gz, ""));
             StringSink am_sink;
-            View::from_file(am_gz, am_idx).sink_json(am_sink).get();
+            View::from_file(dstd::String(am_gz), dstd::String(am_idx))
+                .sink_json(am_sink)
+                .get();
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
 
@@ -561,9 +576,10 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_view_collect(agged, nullptr);
             REQUIRE(df != nullptr);
 
-            View cpp_view = View::from_file(am_gz, am_idx)
-                                .group_by({GroupKey::pid()})
-                                .agg({{AggOp::Pct, "dur", "p50_dur", "", 0.5}});
+            View cpp_view =
+                View::from_file(dstd::String(am_gz), dstd::String(am_idx))
+                    .group_by({GroupKey::pid()})
+                    .agg({{AggOp::Pct, "dur", "p50_dur", "", 0.5}});
             DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
@@ -583,7 +599,9 @@ TEST_SUITE("View C ABI") {
             std::string am_gz = write_argmax_trace(env);
             std::string am_idx = std::string(determine_index_path(am_gz, ""));
             StringSink am_sink;
-            View::from_file(am_gz, am_idx).sink_json(am_sink).get();
+            View::from_file(dstd::String(am_gz), dstd::String(am_idx))
+                .sink_json(am_sink)
+                .get();
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
 
@@ -600,9 +618,10 @@ TEST_SUITE("View C ABI") {
             dftu_dataframe* df = dftu_view_collect(agged, nullptr);
             REQUIRE(df != nullptr);
 
-            View cpp_view = View::from_file(am_gz, am_idx)
-                                .group_by({GroupKey::pid()})
-                                .agg({{AggOp::Busy, "", "busy_us"}});
+            View cpp_view =
+                View::from_file(dstd::String(am_gz), dstd::String(am_idx))
+                    .group_by({GroupKey::pid()})
+                    .agg({{AggOp::Busy, "", "busy_us"}});
             DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
@@ -638,7 +657,9 @@ TEST_SUITE("View C ABI") {
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
         StringSink sink;
-        View::from_file(gz, idx).sink_json(sink).get();
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .sink_json(sink)
+            .get();
 
         const char* paths[1] = {gz.c_str()};
         const char* idxs[1] = {idx.c_str()};
@@ -741,7 +762,7 @@ TEST_SUITE("View C ABI") {
         dftu_dataframe* via_lazy = dftu_lazyframe_collect(headed, 0);
         REQUIRE(via_lazy != nullptr);
 
-        View cpp_view = View::from_file(s.gz, s.idx)
+        View cpp_view = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                             .duql(R"(cat == "POSIX")")
                             .sort_by("ts", false)
                             .head(5);

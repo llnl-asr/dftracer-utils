@@ -50,8 +50,7 @@ void register_view(dstd::StringView dir,
 /// implies, and a smaller on-disk footprint than the base - and return the
 /// trace file(s) to redirect the scan onto (with their shared index). nullopt
 /// when none qualifies, so the caller scans the base.
-// keep std: ViewPlan::files is a std::vector
-dstd::Optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
+dstd::Optional<dstd::Vector<trace::views::ViewFile>> find_subsuming_view(
     const trace::views::detail::ViewPlan& plan);
 
 }  // namespace dftracer::utils::index::cache

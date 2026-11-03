@@ -60,7 +60,7 @@ TEST_SUITE("TraceStatistics") {
         ts.merged.update_from_event("read", "POSIX", 1, 1, 1000, 100);
         ts.merged.update_from_event("write", "storage", 2, 2, 2000, 200);
 
-        std::string json = ts.to_json();
+        std::string json = std::string(ts.to_json());
 
         // Parse and validate the JSON
         simdjson::dom::parser parser;
@@ -102,7 +102,7 @@ TEST_SUITE("TraceStatistics") {
         ts.success = false;
         ts.error_message = "File not found";
 
-        std::string json = ts.to_json();
+        std::string json = std::string(ts.to_json());
 
         simdjson::dom::parser parser;
         auto result = parser.parse(json);

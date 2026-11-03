@@ -155,8 +155,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     IndexFoldDriver(dftracer::utils::dstd::StringIntern& intern,
                     dstd::Span<trace::views::detail::Fold* const> folds,
                     dstd::String file_path, dstd::String index_path,
-                    // keep std: capture_extra_field takes std::string
-                    std::vector<std::string> extra_fields = {})
+                    dstd::Vector<dstd::String> extra_fields = {})
         : intern_(&intern),
           folds_(folds.begin(), folds.end()),
           file_path_(std::move(file_path)),
@@ -171,8 +170,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             needs_args_ |= f->needs_args();
             capture_schema_ |= f->wants_schema();
             skip_never_indexed_ &= !f->reads_never_indexed();
-            // keep std: Fold::extra_captures returns std::vector<std::string>
-            for (std::string& name : f->extra_captures())
+            for (dstd::String& name : f->extra_captures())
                 if (std::find(extra_fields_.begin(), extra_fields_.end(),
                               name) == extra_fields_.end())
                     extra_fields_.push_back(std::move(name));
@@ -314,8 +312,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         bool capture_schema;
         bool skip_never_indexed;
         bool keep_lines;
-        // keep std: capture_extra_field takes std::string
-        std::vector<std::string> extra_fields;
+        dstd::Vector<dstd::String> extra_fields;
 #if DFTRACER_UTILS_TEST_PROBES
         mutable std::atomic<std::uint64_t> parsing{0};
 #endif
@@ -850,8 +847,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     std::size_t plain_offset_ = 0;
     dstd::String file_path_;
     dstd::String index_path_;
-    // keep std: capture_extra_field takes std::string
-    std::vector<std::string> extra_fields_;
+    dstd::Vector<dstd::String> extra_fields_;
     index::extensions::PluginBuilders* builders_ = nullptr;
 };
 

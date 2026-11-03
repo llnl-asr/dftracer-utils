@@ -40,7 +40,9 @@ std::string write_records(TestEnvironment& env, const std::string& name,
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, std::string(determine_index_path(gz, "")));
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(std::string(determine_index_path(gz, ""))));
 }
 
 df::DataFrame frame(const View& v) {
@@ -135,7 +137,9 @@ TEST_SUITE("View duql sources") {
             dftu_utils_test::compress_file_to_gzip(plain, gzs.back());
         }
         const std::string idx = env.get_dir() + "/none/.dftindex";
-        const View v = View::from_files({{gzs[0], idx}, {gzs[1], idx}});
+        const View v =
+            View::from_files({{dstd::String(gzs[0]), dstd::String(idx)},
+                              {dstd::String(gzs[1]), dstd::String(idx)}});
         CHECK_NOTHROW((void)v.schema_tree());
     }
 

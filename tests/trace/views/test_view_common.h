@@ -216,7 +216,9 @@ struct SharedIndexedTrace {
         gz = create_mixed_trace(env, 30, 20);
         idx = dftracer::utils::trace::internal::determine_index_path(gz, "");
         StringSink sink;
-        dftracer::utils::trace::views::View::from_file(gz, idx)
+        dftracer::utils::trace::views::View::from_file(
+            dftracer::utils::dstd::String(gz),
+            dftracer::utils::dstd::String(idx))
             .sink_json(sink)
             .get();
     }

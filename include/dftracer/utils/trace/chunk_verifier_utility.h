@@ -5,12 +5,12 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <functional>
-#include <vector>
 
 namespace dftracer::utils::trace {
 
@@ -19,24 +19,24 @@ namespace dftracer::utils::trace {
  */
 template <typename ChunkType, typename MetadataType>
 struct ChunkVerificationUtilityInput {
-    std::vector<ChunkType> chunks;
-    std::vector<MetadataType> metadata;
+    dstd::Vector<ChunkType> chunks;
+    dstd::Vector<MetadataType> metadata;
 
     ChunkVerificationUtilityInput() = default;
 
-    ChunkVerificationUtilityInput(std::vector<ChunkType> c,
-                                  std::vector<MetadataType> m)
+    ChunkVerificationUtilityInput(dstd::Vector<ChunkType> c,
+                                  dstd::Vector<MetadataType> m)
         : chunks(std::move(c)), metadata(std::move(m)) {}
 
     static ChunkVerificationUtilityInput<ChunkType, MetadataType> from_chunks(
-        std::vector<ChunkType> c) {
+        dstd::Vector<ChunkType> c) {
         ChunkVerificationUtilityInput<ChunkType, MetadataType> input;
         input.chunks = std::move(c);
         return input;
     }
 
     ChunkVerificationUtilityInput<ChunkType, MetadataType>& with_metadata(
-        std::vector<MetadataType> m) {
+        dstd::Vector<MetadataType> m) {
         metadata = std::move(m);
         return *this;
     }
@@ -55,7 +55,7 @@ struct ChunkVerificationUtilityOutput {
     bool passed = false;
     std::uint64_t input_hash = 0;
     std::uint64_t output_hash = 0;
-    std::string error_message;
+    dstd::String error_message;
 
     ChunkVerificationUtilityOutput() = default;
 
@@ -70,7 +70,7 @@ struct ChunkVerificationUtilityOutput {
 
     static ChunkVerificationUtilityOutput failure(std::uint64_t input_h,
                                                   std::uint64_t output_h,
-                                                  const std::string& error) {
+                                                  const dstd::String& error) {
         ChunkVerificationUtilityOutput result;
         result.passed = false;
         result.input_hash = input_h;
@@ -97,11 +97,11 @@ template <typename ChunkType, typename MetadataType, typename EventType>
 class ChunkVerifierUtility {
    public:
     using InputHashFn =
-        std::function<std::uint64_t(const std::vector<MetadataType>&)>;
+        dstd::Function<std::uint64_t(const dstd::Vector<MetadataType>&)>;
     using EventCollectorFn =
-        std::function<std::vector<EventType>(coro::Scope&, const ChunkType&)>;
+        dstd::Function<dstd::Vector<EventType>(coro::Scope&, const ChunkType&)>;
     using EventHashFn =
-        std::function<std::uint64_t(const std::vector<EventType>&)>;
+        dstd::Function<std::uint64_t(const dstd::Vector<EventType>&)>;
 
    private:
     InputHashFn input_hasher_;
@@ -137,14 +137,14 @@ class ChunkVerifierUtility {
         std::uint64_t input_hash = input_hasher_(input.metadata);
 
         // Spawn parallel event collection for each chunk
-        dstd::Vector<coro::SpawnFuture<std::vector<EventType>>> futures;
+        dstd::Vector<coro::SpawnFuture<dstd::Vector<EventType>>> futures;
         futures.reserve(input.chunks.size());
 
         for (const auto& chunk : input.chunks) {
             auto* collector = &event_collector_;
             futures.push_back(ctx.spawn_future(
                 [collector, chunk,
-                 &ctx]() -> coro::CoroTask<std::vector<EventType>> {
+                 &ctx]() -> coro::CoroTask<dstd::Vector<EventType>> {
                     co_return (*collector)(ctx, chunk);
                 }));
         }
@@ -153,7 +153,7 @@ class ChunkVerifierUtility {
         auto chunk_results = co_await coro::when_all(std::move(futures));
 
         // Flatten results
-        std::vector<EventType> output_events;
+        dstd::Vector<EventType> output_events;
         for (auto& events : chunk_results) {
             output_events.insert(output_events.end(),
                                  std::make_move_iterator(events.begin()),

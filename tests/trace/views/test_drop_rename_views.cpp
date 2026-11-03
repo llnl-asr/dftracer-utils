@@ -74,14 +74,17 @@ std::string dft_trace(TestEnvironment& env) {
 }
 
 View query_indexed(const std::string& gz, const std::string& schema) {
-    return View::from_file(gz).record_schema(schema);
+    return View::from_file(dstd::String(gz))
+        .record_schema(dstd::String(schema));
 }
 
 View full_index(const std::string& gz, const std::string& schema) {
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
-    return View::from_file(gz, std::string(determine_index_path(gz, "")))
-        .record_schema(schema);
+    return View::from_file(
+               dstd::String(gz),
+               dstd::String(std::string(determine_index_path(gz, ""))))
+        .record_schema(dstd::String(schema));
 }
 
 dataframe::DataFrame frame(const View& v, const std::string& q) {
@@ -96,7 +99,7 @@ bool has(const dataframe::DataFrame& f, const std::string& n) {
 bool declares(const View& v, const std::string& path) {
     for (const auto& leaf :
          dftracer::utils::trace::views::detail::catalog_leaves(v))
-        if (leaf.path == path) return true;
+        if (std::string(leaf.path) == path) return true;
     return false;
 }
 

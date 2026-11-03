@@ -67,12 +67,9 @@ using dftracer::utils::index::schemas::dft::ChunkStatistics;
 using duql::Query;
 
 struct StatsConfig {
-    // keep std: unswept API
-    std::string directory;
-    // keep std: unswept API
-    std::vector<std::string> files;
-    // keep std: unswept API
-    std::string index_dir;
+    dstd::String directory;
+    dstd::Vector<dstd::String> files;
+    dstd::String index_dir;
     bool json_output = false;
     std::uint64_t top_n = 0;
     std::uint64_t top_n_pid_tid = 10;
@@ -80,12 +77,9 @@ struct StatsConfig {
     std::size_t checkpoint_size = 0;
     std::size_t executor_threads = 0;
     dstd::Optional<Query> query;
-    // keep std: unswept API
-    std::vector<std::string> filter_names;
-    // keep std: unswept API
-    std::vector<std::string> filter_cats;
-    // keep std: unswept API
-    std::vector<std::string> group_by;
+    dstd::Vector<dstd::String> filter_names;
+    dstd::Vector<dstd::String> filter_cats;
+    dstd::Vector<dstd::String> group_by;
     StatisticsQueryType report_type = StatisticsQueryType::Summary;
 };
 
@@ -131,8 +125,7 @@ class StatsArgParse : public dftracer::utils::binaries::ArgParse {
 
         const auto duql_str = duql_args.duql;
         if (!duql_str.empty()) {
-            // keep std: unswept API
-            auto result = Query::from_string(std::string(duql_str));
+            auto result = Query::from_string(dstd::String(duql_str));
             if (!result) {
                 DFTRACER_UTILS_LOG_ERROR("Invalid --query: %s",
                                          result.error().format().c_str());
@@ -240,15 +233,13 @@ struct IndexPartition {
     dstd::Vector<FileWorkItem> files_needing_index;
     dstd::Vector<ResolvedFile> indexed_entries;
     ResolverResult resolver_result;
-    // keep std: unswept API
-    std::vector<dstd::Pair<std::size_t, TraceStatistics>> precomputed_failures;
-    // keep std: unswept API
-    std::vector<dstd::Pair<std::size_t, TraceStatistics>> precomputed_successes;
+    dstd::Vector<dstd::Pair<std::size_t, TraceStatistics>> precomputed_failures;
+    dstd::Vector<dstd::Pair<std::size_t, TraceStatistics>>
+        precomputed_successes;
 };
 
 struct AggregateStatsResult {
-    // keep std: unswept API
-    std::vector<dstd::Pair<std::size_t, TraceStatistics>> indexed_stats;
+    dstd::Vector<dstd::Pair<std::size_t, TraceStatistics>> indexed_stats;
     TraceStatistics total;
     std::size_t successful_count = 0;
     std::size_t failed_count = 0;
@@ -257,14 +248,12 @@ struct AggregateStatsResult {
 };
 
 struct IndexedRootSnapshot {
-    // keep std: unswept API
-    std::vector<std::string> logical_files;
+    dstd::Vector<dstd::String> logical_files;
     IndexPartition partition;
 };
 
 static void append_failed_stats_result(
-    // keep std: unswept API
-    std::vector<dstd::Pair<std::size_t, TraceStatistics>>& results,
+    dstd::Vector<dstd::Pair<std::size_t, TraceStatistics>>& results,
     std::size_t file_index, dstd::StringView file_path,
     dstd::StringView error_message) {
     TraceStatistics failed;
@@ -275,8 +264,7 @@ static void append_failed_stats_result(
 }
 
 static void append_empty_indexed_stats_result(
-    // keep std: unswept API
-    std::vector<dstd::Pair<std::size_t, TraceStatistics>>& results,
+    dstd::Vector<dstd::Pair<std::size_t, TraceStatistics>>& results,
     std::size_t file_index, dstd::StringView file_path,
     dstd::StringView index_path) {
     TraceStatistics stats;
@@ -291,14 +279,11 @@ static double ns_to_ms(std::uint64_t ns) {
     return static_cast<double>(ns) / 1'000'000.0;
 }
 
-// keep std: unswept API
-using CountPair = dstd::Pair<std::string, std::uint64_t>;
+using CountPair = dstd::Pair<dstd::String, std::uint64_t>;
 
 template <typename Map>
-// keep std: unswept API
-static std::vector<CountPair> sorted_by_count_desc(const Map& counts) {
-    // keep std: unswept API
-    std::vector<CountPair> sorted(counts.begin(), counts.end());
+static dstd::Vector<CountPair> sorted_by_count_desc(const Map& counts) {
+    dstd::Vector<CountPair> sorted(counts.begin(), counts.end());
     std::sort(sorted.begin(), sorted.end(),
               [](const CountPair& a, const CountPair& b) {
                   if (a.second != b.second) return a.second > b.second;
@@ -347,12 +332,9 @@ static DetailedStatistics to_detailed(const TraceStatistics& stats) {
 }
 
 // Resolve a group key for display, looking up hash values if needed
-// keep std: unswept API
-static std::string resolve_display_key(
-    // keep std: unswept API
-    const std::string& key,
-    // keep std: unswept API
-    const std::unordered_map<std::string, std::string>& hash_resolutions) {
+static dstd::String resolve_display_key(
+    const dstd::String& key,
+    const std::unordered_map<dstd::String, dstd::String>& hash_resolutions) {
     if (!hash_resolutions.empty()) {
         auto it = hash_resolutions.find(key);
         if (it != hash_resolutions.end()) {
@@ -363,8 +345,7 @@ static std::string resolve_display_key(
 }
 
 // Header plus the optional summary sections (time span, categories, PID:TID).
-// keep std: unswept API
-static void print_detailed_header(const std::string& file_path,
+static void print_detailed_header(const dstd::String& file_path,
                                   const DetailedStatistics& detailed,
                                   std::uint64_t total_chunks,
                                   const TraceStatistics* summary,
@@ -448,29 +429,23 @@ static void print_detailed_global_duration(const DetailedStatistics& detailed) {
 // Per-group duration table, split by category.
 static void print_detailed_grouped_duration(
     const DetailedStatistics& detailed, std::uint64_t top_n,
-    // keep std: unswept API
-    const std::unordered_map<std::string, std::string>& hash_resolutions) {
+    const std::unordered_map<dstd::String, dstd::String>& hash_resolutions) {
     if (!detailed.grouped_duration.empty()) {
-        // keep std: unswept API
-        using DurPair = dstd::Pair<std::string, const DistributionStats*>;
+        using DurPair = dstd::Pair<dstd::String, const DistributionStats*>;
 
         // Group entries by category
-        // keep std: unswept API
-        std::unordered_map<std::string, std::vector<DurPair>> by_category;
+        std::unordered_map<dstd::String, dstd::Vector<DurPair>> by_category;
         for (const auto& [key, dist] : detailed.grouped_duration) {
             auto cat_it = detailed.group_key_category.find(key);
-            // keep std: unswept API
-            std::string cat = (cat_it != detailed.group_key_category.end())
-                                  ? cat_it->second
-                                  : "other";
+            dstd::String cat = (cat_it != detailed.group_key_category.end())
+                                   ? cat_it->second
+                                   : "other";
             by_category[cat].emplace_back(key, &dist);
         }
 
         // Sort categories by total event count descending
-        // keep std: unswept API
-        using CatPair = dstd::Pair<std::string, std::vector<DurPair>*>;
-        // keep std: unswept API
-        std::vector<CatPair> sorted_cats;
+        using CatPair = dstd::Pair<dstd::String, dstd::Vector<DurPair>*>;
+        dstd::Vector<CatPair> sorted_cats;
         sorted_cats.reserve(by_category.size());
         for (auto& [cat, entries] : by_category) {
             // Sort entries within category by count descending
@@ -514,8 +489,7 @@ static void print_detailed_grouped_duration(
 
             for (std::size_t i = 0; i < show; ++i) {
                 const auto& [key, dist] = entries[i];
-                // keep std: unswept API
-                std::string display_key =
+                dstd::String display_key =
                     resolve_display_key(key, hash_resolutions);
                 if (display_key.size() > 30) {
                     display_key = display_key.substr(0, 27) + "...";
@@ -554,17 +528,14 @@ static void print_detailed_grouped_duration(
 // Per-group I/O metrics table (or simple global I/O stats when ungrouped).
 static void print_detailed_grouped_io(
     const DetailedStatistics& detailed, std::uint64_t top_n,
-    // keep std: unswept API
-    const std::unordered_map<std::string, std::string>& hash_resolutions) {
+    const std::unordered_map<dstd::String, dstd::String>& hash_resolutions) {
     if (!detailed.grouped_io.empty()) {
         // Check if this is the global (no grouping) case
         bool is_global = (detailed.grouped_io.size() == 1 &&
                           detailed.grouped_io.count("__global__") == 1);
 
-        // keep std: unswept API
-        using IOPair = dstd::Pair<std::string, const IOEventMetrics*>;
-        // keep std: unswept API
-        std::vector<IOPair> sorted_io;
+        using IOPair = dstd::Pair<dstd::String, const IOEventMetrics*>;
+        dstd::Vector<IOPair> sorted_io;
         sorted_io.reserve(detailed.grouped_io.size());
         for (const auto& [key, io] : detailed.grouped_io) {
             sorted_io.emplace_back(key, &io);
@@ -631,8 +602,7 @@ static void print_detailed_grouped_io(
 
             for (std::size_t i = 0; i < show; ++i) {
                 const auto& [key, io] = sorted_io[i];
-                // keep std: unswept API
-                std::string display_key =
+                dstd::String display_key =
                     resolve_display_key(key, hash_resolutions);
                 if (display_key.size() > 30) {
                     display_key = display_key.substr(0, 27) + "...";
@@ -664,8 +634,7 @@ static void print_detailed_grouped_io(
             // Print I/O size histogram for top event
             if (!sorted_io.empty() && sorted_io[0].second->size.count() > 0) {
                 const auto& [top_key, top_io] = sorted_io[0];
-                // keep std: unswept API
-                std::string display_key =
+                dstd::String display_key =
                     resolve_display_key(top_key, hash_resolutions);
                 std::printf("\n  I/O Size Histogram (top: %s):\n",
                             display_key.c_str());
@@ -677,11 +646,9 @@ static void print_detailed_grouped_io(
 }
 
 static void print_text_detailed(
-    // keep std: unswept API
-    const std::string& file_path, const DetailedStatistics& detailed,
+    const dstd::String& file_path, const DetailedStatistics& detailed,
     std::uint64_t total_chunks, std::uint64_t top_n,
-    // keep std: unswept API
-    const std::unordered_map<std::string, std::string>& hash_resolutions,
+    const std::unordered_map<dstd::String, dstd::String>& hash_resolutions,
     const TraceStatistics* summary = nullptr,
     std::uint64_t top_n_pid_tid = 10) {
     print_detailed_header(file_path, detailed, total_chunks, summary,
@@ -696,24 +663,18 @@ static void print_text_detailed(
 // DetailedStatistics over a View's index-pruned parallel scan, then resolves
 // hashes and produces output.
 static coro::CoroTask<void> process_file_detailed(
-    // keep std: unswept API
-    std::string file_path, std::size_t fi, std::string index_dir,
+    dstd::String file_path, std::size_t fi, dstd::String index_dir,
     bool needs_hash_resolution, bool json_output, std::uint64_t top_n,
     const duql::Query* query_ptr,
-    // keep std: unswept API
-    const std::vector<std::string>* filter_names_ptr,
-    // keep std: unswept API
-    const std::vector<std::string>* filter_cats_ptr,
-    // keep std: unswept API
-    const std::vector<std::string>* group_by_ptr,
+    const dstd::Vector<dstd::String>* filter_names_ptr,
+    const dstd::Vector<dstd::String>* filter_cats_ptr,
+    const dstd::Vector<dstd::String>* group_by_ptr,
     DetailedStatistics* aggregate_detailed_ptr, std::mutex* aggregate_mutex_ptr,
     std::mutex* output_mutex_ptr,
-    // keep std: unswept API
-    std::vector<dstd::Pair<std::size_t, std::string>>* json_results_ptr) {
+    dstd::Vector<dstd::Pair<std::size_t, dstd::String>>* json_results_ptr) {
     const dstd::String determined =
         trace::internal::determine_index_path(file_path, index_dir);
-    // keep std: DetailStatsView::from_file takes std::string
-    std::string index_path(determined.data(), determined.size());
+    dstd::String index_path(determined.data(), determined.size());
 
     DetailNeeds detail_needs;
     detail_needs.group_by = group_by_ptr;
@@ -726,8 +687,7 @@ static coro::CoroTask<void> process_file_detailed(
             .collect(detail_needs);
 
     // Hash resolution (sequential, all chunks done)
-    // keep std: unswept API
-    std::unordered_map<std::string, std::string> hash_resolutions;
+    std::unordered_map<dstd::String, dstd::String> hash_resolutions;
     if (needs_hash_resolution &&
         common::unwrap(dstd::fs::exists(
             dstd::PathView(dftracer::utils::index::store_dir(index_path))))) {
@@ -741,12 +701,14 @@ static coro::CoroTask<void> process_file_detailed(
                 const auto* values = r.column(column.name);
                 if (!values) return;
                 auto add = [&](const auto& grouped) {
-                    for (const auto& [key, _] : grouped)
-                        if (hash_resolutions.count(key) == 0)
+                    for (const auto& [key, _] : grouped) {
+                        const dstd::String k{dstd::StringView(key)};
+                        if (hash_resolutions.count(k) == 0)
                             if (auto it = values->find(key);
                                 it != values->end())
-                                hash_resolutions[key] = std::string(
+                                hash_resolutions[k] = dstd::String(
                                     it->second.data(), it->second.size());
+                    }
                 };
                 add(file_detailed.grouped_duration);
                 add(file_detailed.grouped_io);
@@ -767,11 +729,9 @@ static coro::CoroTask<void> process_file_detailed(
 
     // Output per-file results
     if (json_output) {
-        // keep std: unswept API
-        std::string detail_json = file_detailed.to_json();
-        // keep std: unswept API
-        std::string json_obj = std::string("{\"file_path\": \"") + file_path +
-                               "\", \"detailed\": " + detail_json + "}";
+        dstd::String detail_json = file_detailed.to_json();
+        dstd::String json_obj = dstd::String("{\"file_path\": \"") + file_path +
+                                "\", \"detailed\": " + detail_json + "}";
         std::lock_guard<std::mutex> lock(*output_mutex_ptr);
         json_results_ptr->emplace_back(fi, std::move(json_obj));
     } else {
@@ -791,18 +751,13 @@ static coro::CoroTask<void> process_file_detailed(
 }
 
 static void run_detailed_query_workers(
-    // keep std: unswept API
-    coro::Scope& scope, const std::vector<std::string>* files_ptr,
-    // keep std: unswept API
-    std::size_t executor_threads, const std::string* index_dir_ptr,
+    coro::Scope& scope, const dstd::Vector<dstd::String>* files_ptr,
+    std::size_t executor_threads, const dstd::String* index_dir_ptr,
     bool needs_hash_resolution, bool json_output, std::size_t top_n,
-    // keep std: unswept API
-    const duql::Query* qp, const std::vector<std::string>* fn,
-    // keep std: unswept API
-    const std::vector<std::string>* fc, const std::vector<std::string>* gb,
+    const duql::Query* qp, const dstd::Vector<dstd::String>* fn,
+    const dstd::Vector<dstd::String>* fc, const dstd::Vector<dstd::String>* gb,
     DetailedStatistics* ad, std::mutex* am, std::mutex* om,
-    // keep std: unswept API
-    std::vector<dstd::Pair<std::size_t, std::string>>* jr) {
+    dstd::Vector<dstd::Pair<std::size_t, dstd::String>>* jr) {
     auto file_chan = coro::make_channel<std::size_t>(executor_threads * 2);
 
     scope.spawn([ch = file_chan->producer(),
@@ -825,8 +780,7 @@ static void run_detailed_query_workers(
                 auto fi_opt = co_await ch.receive();
                 if (!fi_opt) break;
                 std::size_t fi = *fi_opt;
-                // keep std: unswept API
-                std::string file_path = (*files_ptr)[fi];
+                dstd::String file_path = (*files_ptr)[fi];
                 co_await process_file_detailed(
                     std::move(file_path), fi, *index_dir_ptr,
                     needs_hash_resolution, json_output, top_n, qp, fn, fc, gb,
@@ -911,18 +865,14 @@ static void print_text_query_output(const TraceStatistics& stats,
     }
 }
 
-// keep std: unswept API
-static coro::CoroTask<std::vector<std::string>> collect_files(
-    // keep std: unswept API
-    coro::Scope& ctx, const std::vector<std::string>& cli_files,
-    // keep std: unswept API
-    std::string directory) {
+static coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
+    coro::Scope& ctx, const dstd::Vector<dstd::String>& cli_files,
+    dstd::String directory) {
     if (!directory.empty()) {
         if (!common::input_exists(directory)) {
             DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                      directory.c_str());
-            // keep std: unswept API
-            co_return std::vector<std::string>{};
+            co_return dstd::Vector<dstd::String>{};
         }
 
         auto files =
@@ -933,8 +883,7 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
             DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
                                      directory.c_str());
         }
-        // keep std: unswept API
-        std::vector<std::string> converted;
+        dstd::Vector<dstd::String> converted;
         converted.reserve(files.size());
         for (const auto& file : files) converted.emplace_back(file);
         co_return converted;
@@ -947,11 +896,9 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
     co_return cli_files;
 }
 
-// keep std: unswept API
-static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
+static dstd::UniquePtr<IndexedRootSnapshot> load_index_root_snapshot_impl(
     const dstd::String& index_path) {
-    // keep std: unswept API
-    auto snapshot = std::make_unique<IndexedRootSnapshot>();
+    auto snapshot = dstd::make_unique<IndexedRootSnapshot>();
     const auto index_snapshot =
         common::unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
     const auto registry = common::unwrap(index_snapshot.files());
@@ -961,8 +908,7 @@ static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
 
     std::size_t file_index = 0;
     for (const auto& file : registry) {
-        // keep std: unswept API
-        std::string logical_path(file.path());
+        dstd::String logical_path(file.path());
         const bool has_summary = dftracer::utils::index::extension_current(
             index_snapshot, file, IndexExtension::Stats);
         snapshot->logical_files.push_back(logical_path);
@@ -982,8 +928,7 @@ static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
     return snapshot;
 }
 
-// keep std: unswept API
-static coro::CoroTask<std::unique_ptr<IndexedRootSnapshot>>
+static coro::CoroTask<dstd::UniquePtr<IndexedRootSnapshot>>
 load_index_root_snapshot(dstd::String index_path) {
     co_return load_index_root_snapshot_impl(index_path);
 }
@@ -1025,8 +970,7 @@ run_batch_build(
 }
 
 static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
-                                             // keep std: unswept API
-                                             const std::string& index_dir,
+                                             const dstd::String& index_dir,
                                              std::size_t checkpoint_size,
                                              std::size_t executor_threads) {
     auto index_path = trace::internal::determine_index_path(
@@ -1037,7 +981,6 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
                 partition.files_needing_index.size());
 
     {
-        // keep std: unswept API
         auto batch_config = std::make_shared<
             dftracer::utils::index::build::IndexBuildBatchConfig>();
         batch_config->file_paths.reserve(partition.files_needing_index.size());
@@ -1125,8 +1068,8 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
 }
 
 static coro::CoroTask<int> run_detailed_stats(
-    // keep std: unswept API
-    const StatsConfig* config_ptr, const std::vector<std::string>* files_ptr) {
+    const StatsConfig* config_ptr,
+    const dstd::Vector<dstd::String>* files_ptr) {
     auto start_time = std::chrono::high_resolution_clock::now();
 
     bool needs_hash_resolution = false;
@@ -1137,13 +1080,11 @@ static coro::CoroTask<int> run_detailed_stats(
         }
     }
 
-    // keep std: unswept API
-    auto aggregate_detailed = std::make_unique<DetailedStatistics>();
+    auto aggregate_detailed = dstd::make_unique<DetailedStatistics>();
     std::mutex aggregate_mutex;
     std::mutex output_mutex;
-    auto json_results =
-        // keep std: unswept API
-        std::make_unique<std::vector<dstd::Pair<std::size_t, std::string>>>();
+    auto json_results = dstd::make_unique<
+        dstd::Vector<dstd::Pair<std::size_t, dstd::String>>>();
 
     auto* filter_names_ptr = &config_ptr->filter_names;
     auto* filter_cats_ptr = &config_ptr->filter_cats;
@@ -1194,8 +1135,7 @@ static coro::CoroTask<int> run_detailed_stats(
         std::printf("==========================================\n");
         std::printf("Consolidated Detailed (%zu files)\n", files_ptr->size());
         std::printf("==========================================\n");
-        // keep std: unswept API
-        std::unordered_map<std::string, std::string> no_resolutions;
+        std::unordered_map<dstd::String, dstd::String> no_resolutions;
         print_text_detailed(config_ptr->directory, *aggregate_detailed,
                             aggregate_detailed->chunks_scanned +
                                 aggregate_detailed->chunks_skipped,
@@ -1236,8 +1176,7 @@ static dstd::Optional<ChunkStatistics> file_rows_to_statistics(
         dstd::StringViewMap<std::uint64_t> raw;
         add_path_counts(snapshot, file, "cat", raw);
         for (const auto& [cat, count] : raw) {
-            // keep std: unswept API
-            std::string lower(cat);
+            dstd::String lower(cat);
             ::dftracer::utils::common::detail::lower_ascii(lower);
             cs.category_counts[lower] += count;
         }
@@ -1258,8 +1197,7 @@ static views::ViewFile view_file(dstd::StringView file,
 static coro::CoroTask<void> process_index_group(
     const dstd::String* index_path_ptr,
     const dstd::Vector<ResolvedFile>* group_ptr,
-    // keep std: unswept API
-    std::vector<dstd::Pair<std::size_t, TraceStatistics>>* indexed_stats_ptr,
+    dstd::Vector<dstd::Pair<std::size_t, TraceStatistics>>* indexed_stats_ptr,
     std::mutex* stats_mutex_ptr, bool needs_per_file_results,
     TraceStatistics* total_ptr, std::mutex* total_mutex_ptr,
     std::atomic<std::size_t>* successful_ptr,
@@ -1283,13 +1221,11 @@ static coro::CoroTask<void> process_index_group(
         // fold and no write. The rest go through the View path below.
         // Release the ReadOnly index handle before materialize(), which opens
         // the same index ReadWrite to persist.
-        // keep std: unswept API
         std::unordered_map<std::size_t, std::uint64_t> num_chunks_map;
         ChunkStatistics fast_total;
         std::uint64_t fast_chunks = 0;
         std::size_t fast_files = 0;
-        // keep std: unswept API
-        std::vector<const ResolvedFile*> slow_files;
+        dstd::Vector<const ResolvedFile*> slow_files;
         {
             const auto snapshot = common::unwrap(
                 dftracer::utils::index::plan::open_snapshot(*index_path_ptr));
@@ -1355,8 +1291,7 @@ static coro::CoroTask<void> process_index_group(
 
         if (!needs_per_file_results) {
             // Whole-group total: one View aggregation over every file at once.
-            // keep std: unswept API
-            std::vector<views::ViewFile> view_files;
+            dstd::Vector<views::ViewFile> view_files;
             view_files.reserve(slow_files.size());
             std::uint64_t total_chunks = 0;
             for (const auto* rf : slow_files) {
@@ -1388,7 +1323,7 @@ static coro::CoroTask<void> process_index_group(
                                     index_path_ptr->size());
             stats.num_chunks = num_chunks_of(rf->file_index);
             auto sv = stats_ns::StatsView::from_file(
-                std::string(rf->file_path), std::string(*index_path_ptr));
+                dstd::String(rf->file_path), dstd::String(*index_path_ptr));
             co_await sv.materialize(needs);
             stats_ns::ViewStats vs = co_await sv.collect(needs);
             stats_ns::fill_chunk_statistics(stats.merged, vs);
@@ -1417,11 +1352,9 @@ static coro::CoroTask<void> process_index_group(
 
 static coro::CoroTask<AggregateStatsResult> run_aggregate_stats(
     coro::Scope& /*ctx*/, const StatsConfig* config_ptr,
-    // keep std: unswept API
-    std::unique_ptr<IndexPartition> partition_ptr) {
+    dstd::UniquePtr<IndexPartition> partition_ptr) {
     auto& partition = *partition_ptr;
-    // keep std: unswept API
-    auto agg = std::make_unique<AggregateStatsResult>();
+    auto agg = dstd::make_unique<AggregateStatsResult>();
     agg->total.success = true;
     agg->total.file_path = config_ptr->directory;
 
@@ -1481,12 +1414,9 @@ static coro::CoroTask<AggregateStatsResult> run_aggregate_stats(
 }
 
 static coro::CoroTask<int> output_aggregate_stats(
-    // keep std: unswept API
-    const StatsConfig* config_ptr, const std::vector<std::string>* files_ptr,
-    // keep std: unswept API
-    std::unique_ptr<AggregateStatsResult> agg, common::Timer overall) {
-    // keep std: unswept API
-    std::vector<TraceStatistics> all_stats;
+    const StatsConfig* config_ptr, const dstd::Vector<dstd::String>* files_ptr,
+    dstd::UniquePtr<AggregateStatsResult> agg, common::Timer overall) {
+    dstd::Vector<TraceStatistics> all_stats;
     if (config_ptr->json_output) {
         std::sort(
             agg->indexed_stats.begin(), agg->indexed_stats.end(),
@@ -1528,8 +1458,7 @@ static coro::CoroTask<int> output_aggregate_stats(
         std::printf("==========================================\n");
         if (config_ptr->report_type == StatisticsQueryType::Summary) {
             auto detailed = to_detailed(agg->total);
-            // keep std: unswept API
-            std::unordered_map<std::string, std::string> no_resolutions;
+            std::unordered_map<dstd::String, dstd::String> no_resolutions;
             print_text_detailed(agg->total.file_path, detailed,
                                 agg->total.num_chunks, config_ptr->top_n,
                                 no_resolutions, &agg->total,
@@ -1566,8 +1495,7 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
         args->pipeline.time_profiling ? &stages_storage : nullptr;
     common::Timer overall(true);
 
-    // keep std: unswept API
-    std::vector<std::string> files;
+    dstd::Vector<dstd::String> files;
     IndexPartition partition;
     bool used_index_source_of_truth = false;
 
@@ -1656,16 +1584,13 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
         co_return co_await run_detailed_stats(&config, &files);
     }
 
-    // keep std: unswept API
-    std::unique_ptr<AggregateStatsResult> agg_ptr;
+    dstd::UniquePtr<AggregateStatsResult> agg_ptr;
     {
         common::ScopedTimer _ag(stages, "aggregate_stats");
         auto agg_val = co_await run_aggregate_stats(
             ctx, &config,
-            // keep std: unswept API
-            std::make_unique<IndexPartition>(std::move(partition)));
-        // keep std: unswept API
-        agg_ptr = std::make_unique<AggregateStatsResult>(std::move(agg_val));
+            dstd::make_unique<IndexPartition>(std::move(partition)));
+        agg_ptr = dstd::make_unique<AggregateStatsResult>(std::move(agg_val));
     }
 
     if (stages) stages->print_stages();

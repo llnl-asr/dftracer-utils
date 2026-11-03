@@ -184,7 +184,7 @@ TEST_SUITE("StatisticsQueryUtility") {
             input.top_n = 5;
 
             auto output = query(input).get();
-            std::string json = output.to_json();
+            std::string json = std::string(output.to_json());
 
             simdjson::dom::parser parser;
             auto result = parser.parse(json);

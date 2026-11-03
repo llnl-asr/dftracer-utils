@@ -42,7 +42,8 @@ coro::CoroTask<HttpResponse> handle_prov_graph(const HttpRequest& req,
     }
     auto graph = co_await trace::provenance::extract_provenance_graph(
         v, slots, std::move(opts));
-    co_return HttpResponse::ok(graph.to_json());
+    // keep std: HttpResponse::ok takes a std::string
+    co_return HttpResponse::ok(std::string(graph.to_json()));
 }
 
 }  // namespace dftracer::utils::server

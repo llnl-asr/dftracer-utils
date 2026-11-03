@@ -7,8 +7,6 @@
 #include <dftracer/utils/trace/event.h>
 
 #include <cstdint>
-#include <optional>
-#include <string_view>
 
 namespace dftracer::utils::trace {
 

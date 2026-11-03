@@ -45,8 +45,10 @@ TEST_SUITE("View - streaming early-out") {
 
         ProducerSentinel sentinel;
         {
-            View v = View::from_file(gz, idx).memory_budget(4096).cancel_when(
-                [keep = sentinel.strong] { return false; });
+            View v =
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .memory_budget(4096)
+                    .cancel_when([keep = sentinel.strong] { return false; });
 
             auto pulled =
                 dftracer::utils::default_runtime()
@@ -71,7 +73,8 @@ TEST_SUITE("View - streaming early-out") {
         std::string gz =
             test_view_common::create_multimember_trace(env, 500, 512);
         std::string idx = std::string(determine_index_path(gz, ""));
-        View v = View::from_file(gz, idx).memory_budget(4096);
+        View v = View::from_file(dstd::String(gz), dstd::String(idx))
+                     .memory_budget(4096);
 
         const std::int64_t rows =
             dftracer::utils::default_runtime()

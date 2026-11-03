@@ -53,17 +53,13 @@ using trace_gen::TraceWriter;
 // Verify: build bloom indices and run queries to prove chunk-skipping works
 // ---------------------------------------------------------------------------
 struct QuerySpec {
-    // keep std: unswept API
-    std::string label;
-    // keep std: unswept API
-    std::unordered_map<std::string, std::vector<std::string>> predicates;
+    dstd::String label;
+    std::unordered_map<dstd::String, dstd::Vector<dstd::String>> predicates;
 };
 
 static coro::CoroTask<int> run_verify(
-    // keep std: unswept API
-    const std::vector<std::string>& file_paths,
-    // keep std: unswept API
-    const std::vector<QuerySpec>& queries, std::size_t ckpt_size) {
+    const dstd::Vector<dstd::String>& file_paths,
+    const dstd::Vector<QuerySpec>& queries, std::size_t ckpt_size) {
     // Extra dimensions: arbitrary dot-paths into args
     dstd::Vector<dstd::String> extra_dims = {"ret", "count", "offset", "epoch",
                                              "step"};
@@ -107,11 +103,10 @@ static coro::CoroTask<int> run_verify(
         dstd::String index_path = internal::determine_index_path(abs_path, "");
 
         // Collect metadata
-        auto meta_input =
-            MetadataCollectorUtilityInput::from_file(std::string(abs_path))
-                .with_checkpoint_size(ckpt_size)
-                .with_force_rebuild(false)
-                .with_index(std::string(index_path));
+        auto meta_input = MetadataCollectorUtilityInput::from_file(abs_path)
+                              .with_checkpoint_size(ckpt_size)
+                              .with_force_rebuild(false)
+                              .with_index(index_path);
         MetadataCollectorUtility collector;
         auto metadata = co_await collector(meta_input);
 
@@ -152,8 +147,7 @@ static coro::CoroTask<int> run_verify(
                 std::size_t start;
                 std::size_t end;
             };
-            // keep std: unswept API
-            std::vector<ChunkWork> chunks;
+            dstd::Vector<ChunkWork> chunks;
 
             if (num_ckpts == 0) {
                 chunks.push_back({0, 0, file_size});
@@ -168,7 +162,6 @@ static coro::CoroTask<int> run_verify(
                 }
             }
 
-            // keep std: unswept API
             std::unordered_map<std::string, ScalableBloomFilter> file_blooms;
             std::size_t total_events = 0;
 
@@ -257,8 +250,7 @@ static coro::CoroTask<int> run_verify(
 
             try {
                 // Convert predicate map to query DSL string
-                // keep std: unswept API
-                std::string query_dsl;
+                dstd::String query_dsl;
                 for (const auto& [dim, vals] : q.predicates) {
                     if (!query_dsl.empty()) query_dsl += " and ";
                     if (vals.size() == 1) {
@@ -416,47 +408,34 @@ int main(int argc, char** argv) {
             // -----------------------------------------------------------------------
             // Pre-compute hashes using project HasherUtility
             // -----------------------------------------------------------------------
-            // keep std: unswept API
-            std::vector<std::string> host_names(num_hosts);
-            // keep std: unswept API
-            std::vector<std::string> host_hashes(num_hosts);
+            dstd::Vector<dstd::String> host_names(num_hosts);
+            dstd::Vector<dstd::String> host_hashes(num_hosts);
             for (int h = 0; h < num_hosts; ++h) {
-                // keep std: unswept API
                 host_names[h] = "node-" + std::to_string(h);
                 host_hashes[h] = make_hash(host_names[h]);
             }
 
-            // keep std: unswept API
-            std::vector<std::string> train_file_names(num_train_files);
-            // keep std: unswept API
-            std::vector<std::string> train_file_hashes(num_train_files);
+            dstd::Vector<dstd::String> train_file_names(num_train_files);
+            dstd::Vector<dstd::String> train_file_hashes(num_train_files);
             for (int f = 0; f < num_train_files; ++f) {
                 train_file_names[f] =
-                    // keep std: unswept API
                     "/data/train/shard_" + std::to_string(f) + ".h5";
                 train_file_hashes[f] = make_hash(train_file_names[f]);
             }
 
-            // keep std: unswept API
-            std::vector<std::string> val_file_names(num_val_files);
-            // keep std: unswept API
-            std::vector<std::string> val_file_hashes(num_val_files);
+            dstd::Vector<dstd::String> val_file_names(num_val_files);
+            dstd::Vector<dstd::String> val_file_hashes(num_val_files);
             for (int f = 0; f < num_val_files; ++f) {
                 val_file_names[f] =
-                    // keep std: unswept API
                     "/data/val/val_" + std::to_string(f) + ".h5";
                 val_file_hashes[f] = make_hash(val_file_names[f]);
             }
 
-            // keep std: unswept API
-            const std::string ckpt_file_name = "/checkpoints/model_ckpt.pt";
-            // keep std: unswept API
-            const std::string ckpt_file_hash(make_hash(ckpt_file_name));
+            const dstd::String ckpt_file_name = "/checkpoints/model_ckpt.pt";
+            const dstd::String ckpt_file_hash(make_hash(ckpt_file_name));
 
-            // keep std: unswept API
-            const std::string script_name = "python train_unet3d.py";
-            // keep std: unswept API
-            const std::string script_hash(make_hash(script_name));
+            const dstd::String script_name = "python train_unet3d.py";
+            const dstd::String script_hash(make_hash(script_name));
 
             // -----------------------------------------------------------------------
             // Banner
@@ -479,14 +458,11 @@ int main(int argc, char** argv) {
             std::printf("  Output: %s\n", binaries::c_str(output_dir));
             std::printf("==========================================\n\n");
 
-            // keep std: unswept API
-            std::vector<std::string> generated_files(num_ranks);
-            // keep std: unswept API
-            std::vector<std::size_t> rank_event_counts(num_ranks, 0);
+            dstd::Vector<dstd::String> generated_files(num_ranks);
+            dstd::Vector<std::size_t> rank_event_counts(num_ranks, 0);
 
             for (int rank = 0; rank < num_ranks; ++rank) {
-                // keep std: unswept API
-                generated_files[rank] = std::string(
+                generated_files[rank] = dstd::String(
                     common::str_cat(output_dir, "/rank_", rank, ".pfw.gz"));
             }
 
@@ -509,7 +485,6 @@ int main(int argc, char** argv) {
             auto* script_name_ptr = &script_name;
             auto* sref_ptr = &script_hash;
             auto* rank_event_counts_ptr = &rank_event_counts;
-            // keep std: unswept API
             std::vector<dstd::SharedPtr<Task>> rank_tasks;
             for (int rank = 0; rank < num_ranks; ++rank) {
                 auto task = make_task(
@@ -522,23 +497,19 @@ int main(int argc, char** argv) {
                      ckpt_file_name_ptr, ckref_ptr, script_name_ptr, sref_ptr,
                      rank_event_counts_ptr](
                         CoroScope&) -> coro::CoroTask<void> {
-                        // keep std: unswept API
-                        const std::string& path = (*generated_files_ptr)[rank];
+                        const dstd::String& path = (*generated_files_ptr)[rank];
                         // and index APIs
                         TraceWriter writer(path);
                         writer.write("[\n");
-                        // keep std: unswept API
-                        const std::string& sref = *sref_ptr;
-                        // keep std: unswept API
-                        const std::string& ckref = *ckref_ptr;
+                        const dstd::String& sref = *sref_ptr;
+                        const dstd::String& ckref = *ckref_ptr;
 
                         std::mt19937_64 rng(base_seed +
                                             static_cast<std::uint64_t>(rank) *
                                                 10000ULL);
 
                         const int host_idx = rank % num_hosts;
-                        // keep std: unswept API
-                        const std::string& my_hhash =
+                        const dstd::String& my_hhash =
                             (*host_hashes_ptr)[host_idx];
                         const std::uint64_t pid =
                             1000 + static_cast<std::uint64_t>(rank);
@@ -547,8 +518,7 @@ int main(int argc, char** argv) {
 
                         // Determine which train shards this rank reads
                         // (round-robin)
-                        // keep std: unswept API
-                        std::vector<int> my_train_shards;
+                        dstd::Vector<int> my_train_shards;
                         for (int f = rank; f < num_train_files;
                              f += num_ranks) {
                             my_train_shards.push_back(f);
@@ -583,24 +553,24 @@ int main(int argc, char** argv) {
                         std::uint64_t ts = 1000000000ULL;  // 1 second in us
 
                         // Helper: fill common fields and auto-assign id
-                        auto make_event =
-                            // keep std: unswept API
-                            [&](const std::string& name, const std::string& cat,
-                                std::uint64_t event_tid, std::uint64_t event_ts,
-                                std::uint64_t dur, int level) {
-                                EventArgs a;
-                                a.id = next_id++;
-                                a.pid = pid;
-                                a.tid = event_tid;
-                                a.name = name;
-                                a.cat = cat;
-                                a.ts = event_ts;
-                                a.dur = dur;
-                                a.level = level;
-                                a.hhash = my_hhash;
-                                a.cmd_hash = sref;
-                                return a;
-                            };
+                        auto make_event = [&](const dstd::String& name,
+                                              const dstd::String& cat,
+                                              std::uint64_t event_tid,
+                                              std::uint64_t event_ts,
+                                              std::uint64_t dur, int level) {
+                            EventArgs a;
+                            a.id = next_id++;
+                            a.pid = pid;
+                            a.tid = event_tid;
+                            a.name = name;
+                            a.cat = cat;
+                            a.ts = event_ts;
+                            a.dur = dur;
+                            a.level = level;
+                            a.hhash = my_hhash;
+                            a.cmd_hash = sref;
+                            return a;
+                        };
 
                         // -------------------------------------------------------------------
                         // Per epoch
@@ -618,8 +588,7 @@ int main(int argc, char** argv) {
                                     my_train_shards[step % static_cast<int>(
                                                                my_train_shards
                                                                    .size())];
-                                // keep std: unswept API
-                                const std::string& data_fhash =
+                                const dstd::String& data_fhash =
                                     (*train_file_hashes_ptr)[shard_idx];
                                 std::uint64_t io_size = jitter(rng, 4096);
 
@@ -789,8 +758,7 @@ int main(int argc, char** argv) {
                                 for (int vs = 0; vs < val_steps; ++vs) {
                                     char extra[256];
                                     int vf_idx = vs % num_val_files;
-                                    // keep std: unswept API
-                                    const std::string& vf_hash =
+                                    const dstd::String& vf_hash =
                                         (*val_file_hashes_ptr)[vf_idx];
                                     std::uint64_t vio_size = jitter(rng, 4096);
                                     std::uint64_t val_step_start = ts;
@@ -1000,7 +968,6 @@ int main(int argc, char** argv) {
                         (*rank_event_counts_ptr)[rank] = rank_events;
                         co_return;
                     },
-                    // keep std: unswept API
                     "Rank-" + std::to_string(rank));
                 rank_tasks.push_back(task);
             }
@@ -1065,8 +1032,7 @@ int main(int argc, char** argv) {
             dstd::SharedPtr<Task> verify_task;
 
             if (verify) {
-                // keep std: unswept API
-                std::vector<QuerySpec> test_queries;
+                dstd::Vector<QuerySpec> test_queries;
 
                 test_queries.push_back({"name=pwrite (sparse, ckpt only)",
                                         {{"name", {"pwrite"}}}});
@@ -1081,13 +1047,11 @@ int main(int argc, char** argv) {
                 test_queries.push_back(
                     {"cat=APP (all compute events)", {{"cat", {"APP"}}}});
 
-                // keep std: unswept API
-                std::string pid0 = std::to_string(1000);
+                dstd::String pid0 = dstd::to_string(1000);
                 test_queries.push_back(
                     {"pid=" + pid0 + " (rank 0 only)", {{"pid", {pid0}}}});
 
-                // keep std: unswept API
-                std::string tid_io_0 = std::to_string(10001);
+                dstd::String tid_io_0 = dstd::to_string(10001);
                 test_queries.push_back(
                     {"tid=" + tid_io_0 + " (rank 0 io thread)",
                      {{"tid", {tid_io_0}}}});
@@ -1136,9 +1100,8 @@ int main(int argc, char** argv) {
                 test_queries.push_back(
                     {"fhash=any val file (OR)",
                      {{"fhash",
-                       // keep std: unswept API
-                       std::vector<std::string>(val_file_hashes.begin(),
-                                                val_file_hashes.end())}}});
+                       dstd::Vector<dstd::String>(val_file_hashes.begin(),
+                                                  val_file_hashes.end())}}});
 
                 test_queries.push_back({"name=NONEXISTENT (expect 0)",
                                         {{"name", {"NONEXISTENT"}}}});

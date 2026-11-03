@@ -177,9 +177,10 @@ struct Fixture {
         index_path = std::string(determine_index_path(gz.front(), o.index_dir));
     }
 
-    std::vector<ViewFile> files() const {
-        std::vector<ViewFile> out;
-        for (const auto& g : gz) out.push_back({g, index_path});
+    dstd::Vector<ViewFile> files() const {
+        dstd::Vector<ViewFile> out;
+        for (const auto& g : gz)
+            out.push_back({dstd::String(g), dstd::String(index_path)});
         return out;
     }
 
@@ -205,7 +206,7 @@ df::DataFrame scan_only(const scan::ScanPlan& p) {
 
 struct Shape {
     std::string label;
-    std::vector<GroupKey> keys;
+    dstd::Vector<GroupKey> keys;
     std::vector<std::string> columns;
     std::uint64_t window_us = 0;
 };
@@ -358,12 +359,13 @@ std::string join(const std::vector<std::string>& parts) {
     return out;
 }
 
-Cells view_cells(const std::vector<ViewFile>& files,
-                 const std::vector<GroupKey>& keys,
+Cells view_cells(const dstd::Vector<ViewFile>& files,
+                 const dstd::Vector<GroupKey>& keys,
                  const std::vector<std::string>& columns, const AggSpec& spec) {
     View v = View::from_files(files);
     if (!keys.empty()) v = v.group_by(keys);
-    return cells_of(v.agg({spec}).collect().get(), columns, spec.out_name);
+    return cells_of(v.agg({spec}).collect().get(), columns,
+                    std::string(spec.out_name));
 }
 
 void check_same_cells(const Cells& want, const Cells& got) {
@@ -400,7 +402,8 @@ TEST_SUITE("ViewIndexParity") {
                 p = scan::agg(p, {ac.spec});
                 try {
                     expected[sh.label][ac.label] =
-                        cells_of(scan_only(p), sh.columns, ac.spec.out_name);
+                        cells_of(scan_only(p), sh.columns,
+                                 std::string(ac.spec.out_name));
                 } catch (const std::exception& e) {
                     scan_error[sh.label + "/" + ac.label] = e.what();
                 }
@@ -441,7 +444,7 @@ TEST_SUITE("ViewIndexParity") {
                     if (!sh.keys.empty()) v = v.group_by(sh.keys);
                     if (sh.window_us != 0) v = v.time_bucket(sh.window_us);
                     got = cells_of(v.agg({ac.spec}).collect().get(), sh.columns,
-                                   ac.spec.out_name);
+                                   std::string(ac.spec.out_name));
                 } catch (const std::exception& e) {
                     line.status = "declined";
                     line.note = first_line(e.what());
@@ -539,13 +542,13 @@ TEST_SUITE("ViewIndexParity") {
         const std::string index =
             std::string(determine_index_path(gz, o.index_dir));
 
-        const std::vector<AggSpec> count{{AggOp::Count, "", "n"}};
-        const df::DataFrame trace =
-            scan_only(scan::agg(scan::from_file(gz, index), count));
+        const dstd::Vector<AggSpec> count{{AggOp::Count, "", "n"}};
+        const df::DataFrame trace = scan_only(scan::agg(
+            scan::from_file(dstd::String(gz), dstd::String(index)), count));
         REQUIRE(trace.num_rows() == 1);
         CHECK(bnum(trace, 0, "n") == doctest::Approx(4));
 
-        const View v = View::from_file(gz, index);
+        const View v = View::from_file(dstd::String(gz), dstd::String(index));
         const df::DataFrame frame =
             v.with_column("z", df::expr_lit(std::int64_t{1}))
                 .group_by(std::vector<std::string>{"z"},
@@ -594,9 +597,13 @@ TEST_SUITE("ViewIndexParity") {
         const std::string index =
             std::string(determine_index_path(gz.front(), opts.index_dir));
 
-        const std::vector<ViewFile> mixed{{gz[0], ""}, {gz[1], index}};
-        const std::vector<ViewFile> indexed{{gz[0], index}, {gz[1], index}};
-        const std::vector<GroupKey> keys{GroupKey::of_arg("epoch")};
+        const dstd::Vector<ViewFile> mixed{
+            {dstd::String(gz[0]), ""},
+            {dstd::String(gz[1]), dstd::String(index)}};
+        const dstd::Vector<ViewFile> indexed{
+            {dstd::String(gz[0]), dstd::String(index)},
+            {dstd::String(gz[1]), dstd::String(index)}};
+        const dstd::Vector<GroupKey> keys{GroupKey::of_arg("epoch")};
         const std::vector<std::string> columns{"epoch"};
         const AggSpec count{AggOp::Count, "", "n"};
         const AggSpec max_te{AggOp::Max, "te", "max_te"};
@@ -641,13 +648,14 @@ TEST_SUITE("ViewIndexParity") {
             std::string(determine_index_path(gz, index_dir));
         REQUIRE_FALSE(dstd::fs::exists(index).value());
 
-        const std::vector<ViewFile> files{{gz, index}};
-        const std::vector<GroupKey> keys{GroupKey::name()};
+        const dstd::Vector<ViewFile> files{
+            {dstd::String(gz), dstd::String(index)}};
+        const dstd::Vector<GroupKey> keys{GroupKey::name()};
         const std::vector<std::string> columns{"name"};
-        const std::vector<AggSpec> specs{{AggOp::Count, "", "n"},
-                                         {AggOp::Sum, "dur", "sum_dur"},
-                                         {AggOp::Min, "dur", "min_dur"},
-                                         {AggOp::Max, "dur", "max_dur"}};
+        const dstd::Vector<AggSpec> specs{{AggOp::Count, "", "n"},
+                                          {AggOp::Sum, "dur", "sum_dur"},
+                                          {AggOp::Min, "dur", "min_dur"},
+                                          {AggOp::Max, "dur", "max_dur"}};
         const auto ask = [&] {
             return View::from_files(files)
                 .group_by(keys)
@@ -705,13 +713,16 @@ TEST_SUITE("ViewIndexParity") {
         const std::string index =
             std::string(determine_index_path(gz, opts.index_dir));
 
-        const std::vector<GroupKey> keys{GroupKey::cat(), GroupKey::name()};
+        const dstd::Vector<GroupKey> keys{GroupKey::cat(), GroupKey::name()};
         const std::vector<std::string> columns{"cat", "name"};
         const AggSpec sum_dur{AggOp::Sum, "dur", "sum_dur"};
 
-        const std::vector<ViewFile> missing{{gz, env.get_dir() + "/no-such"}};
-        const std::vector<ViewFile> unreadable{{gz, junk}};
-        const Cells want = view_cells({{gz, index}}, keys, columns, sum_dur);
+        const dstd::Vector<ViewFile> missing{
+            {dstd::String(gz), dstd::String(env.get_dir() + "/no-such")}};
+        const dstd::Vector<ViewFile> unreadable{
+            {dstd::String(gz), dstd::String(junk)}};
+        const Cells want = view_cells({{dstd::String(gz), dstd::String(index)}},
+                                      keys, columns, sum_dur);
         const Cells from_missing = view_cells(missing, keys, columns, sum_dur);
         const Cells from_unreadable =
             view_cells(unreadable, keys, columns, sum_dur);
@@ -744,16 +755,18 @@ TEST_SUITE("ViewIndexParity") {
         opts.index_dir = env.get_dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
         ix::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
-        const std::vector<ViewFile> files{
-            {gz[0], std::string(determine_index_path(gz[0], opts.index_dir))},
-            {gz[1], std::string(determine_index_path(gz[1], opts.index_dir))}};
+        const dstd::Vector<ViewFile> files{
+            {dstd::String(gz[0]), dstd::String(std::string(determine_index_path(
+                                      gz[0], opts.index_dir)))},
+            {dstd::String(gz[1]), dstd::String(std::string(determine_index_path(
+                                      gz[1], opts.index_dir)))}};
         const Query stdio = Query::from_string(R"(cat == "STDIO")").value();
         const Query posix = Query::from_string(R"(cat == "POSIX")").value();
-        const std::vector<GroupKey> by_name{GroupKey::name()};
+        const dstd::Vector<GroupKey> by_name{GroupKey::name()};
         const std::vector<std::string> columns{"name"};
         const auto aggs = [] {
-            return std::vector<AggSpec>{{AggOp::Count, "", "n"},
-                                        {AggOp::Sum, "dur", "sum_dur"}};
+            return dstd::Vector<AggSpec>{{AggOp::Count, "", "n"},
+                                         {AggOp::Sum, "dur", "sum_dur"}};
         };
 
         static Runtime rt;

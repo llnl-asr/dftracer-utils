@@ -28,7 +28,7 @@ namespace {
 
 FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
                              bool needs_args,
-                             const std::vector<std::string>* extra = nullptr,
+                             const dstd::Vector<dstd::String>* extra = nullptr,
                              bool capture_schema = false) {
     FoldEvent ev;
     extract_fold_event_into(ev, root, intern, needs_args, extra,
@@ -49,8 +49,8 @@ struct CountingFold : Fold {
     std::uint64_t sealed_units = 0;
 
     bool accepts(const ScanShape&) const override { return true; }
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<CountingFold>();
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<CountingFold>();
     }
     void step(const FoldBatch& b) override {
         for (const auto& e : b.events) {
@@ -186,7 +186,9 @@ TEST_SUITE("Fold") {
         std::string idx = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(gz, idx).sink_json(s).get();
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .sink_json(s)
+                .get();
         }
 
         ViewPlan plan;
@@ -230,7 +232,9 @@ TEST_SUITE("Fold") {
         std::string idx = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(gz, idx).sink_json(s).get();
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .sink_json(s)
+                .get();
         }
 
         // A minimal dictionary fold: collects (type -> {name -> value}) from
@@ -241,8 +245,8 @@ TEST_SUITE("Fold") {
             explicit DictProbe(const StringIntern& i) : in(&i) {}
             bool accepts(const ScanShape&) const override { return true; }
             bool needs_args() const override { return true; }
-            std::unique_ptr<Fold> slice() const override {
-                return std::make_unique<DictProbe>(*in);
+            dstd::UniquePtr<Fold> slice() const override {
+                return dstd::make_unique<DictProbe>(*in);
             }
             void step(const FoldBatch& b) override {
                 for (const auto& e : b.events) {
@@ -382,7 +386,8 @@ TEST_SUITE("Fold") {
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(r.error());
-        const std::vector<std::string> extra = {"dur.p99", "type"};
+        const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
+            extra = {"dur.p99", "type"};
         FoldEvent e =
             extract_fold_event(r.value_unsafe(), intern, false, &extra);
 
@@ -511,7 +516,7 @@ TEST_SUITE("Fold") {
     }
 
     TEST_CASE("EventRows over a pick list reads only the picked events") {
-        std::vector<FoldEvent> evs(5);
+        dstd::Vector<FoldEvent> evs(5);
         for (std::size_t i = 0; i < evs.size(); ++i) evs[i].ts = 10 * i;
         const std::vector<std::uint32_t> pick{1, 3, 4};
         EventRows rows(evs, pick);

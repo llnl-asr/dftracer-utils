@@ -115,16 +115,13 @@ static void load_cached_files(dstd::StringView index_path,
     }
 }
 
-// keep std: unswept API
-static std::vector<MetadataCollectorUtilityOutput>
-// keep std: unswept API
+static dstd::Vector<MetadataCollectorUtilityOutput>
 process_index_group_info_sync(dstd::String index_path,
                               dstd::Vector<ResolvedFile> entries) {
     const auto snapshot =
         common::unwrap(index::plan::open_snapshot(index_path));
 
-    // keep std: unswept API
-    std::vector<MetadataCollectorUtilityOutput> results;
+    dstd::Vector<MetadataCollectorUtilityOutput> results;
     results.reserve(entries.size());
 
     for (const auto& entry : entries) {
@@ -184,9 +181,7 @@ process_index_group_info_sync(dstd::String index_path,
     return results;
 }
 
-// keep std: unswept API
-static coro::CoroTask<std::vector<MetadataCollectorUtilityOutput>>
-// keep std: unswept API
+static coro::CoroTask<dstd::Vector<MetadataCollectorUtilityOutput>>
 process_index_group_info(dstd::SharedPtr<dstd::String> index_path,
                          dstd::SharedPtr<dstd::Vector<ResolvedFile>> entries) {
     co_return process_index_group_info_sync(std::move(*index_path),
@@ -466,8 +461,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
         co_return 1;
     }
 
-    // keep std: unswept API
-    std::vector<MetadataCollectorUtilityOutput> all_results;
+    dstd::Vector<MetadataCollectorUtilityOutput> all_results;
     std::mutex results_mutex;
 
     if (!indexed_groups.empty()) {
@@ -573,8 +567,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
         co_return (bad == 0) ? 0 : 1;
     }
 
-    // keep std: unswept API
-    std::unordered_map<std::string, index::Snapshot> snapshots;
+    std::unordered_map<dstd::String, index::Snapshot> snapshots;
     for (const auto& r : all_results) {
         auto it = snapshots.find(r.index_path);
         if (it == snapshots.end())

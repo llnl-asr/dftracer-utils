@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 
@@ -53,7 +54,7 @@ dataframe::Morsel events_to_morsel(
     m.columns = std::move(f.columns);
     dataframe::MorselDyn& d = m.dyn_state();
     d.name_ids.reserve(f.names.size());
-    for (const std::string& name : f.names)
+    for (const auto& name : f.names)
         d.name_ids.push_back(intern->get_or_insert(name));
     d.intern = std::move(intern);
     return m;

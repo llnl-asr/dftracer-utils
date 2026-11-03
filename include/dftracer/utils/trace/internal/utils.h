@@ -5,14 +5,35 @@
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
-#include <string>
-#include <string_view>
+#include <cstdio>
+#include <type_traits>
 
 namespace dftracer::utils::trace::internal {
+
+// Appends `v` as a stream with precision 17 would print it: integers in
+// decimal, floating point as %.17g, a character as itself, anything else as
+// text.
+template <class T>
+void append_value(dstd::String& out, const T& v) {
+    if constexpr (std::is_floating_point_v<T>) {
+        char buf[40];
+        const int n =
+            std::snprintf(buf, sizeof(buf), "%.17g", static_cast<double>(v));
+        if (n > 0) out.append(buf, static_cast<std::size_t>(n));
+    } else if constexpr (std::is_same_v<T, char>) {
+        out.push_back(v);
+    } else if constexpr (std::is_integral_v<T>) {
+        char buf[40];
+        const auto r = dstd::to_chars(buf, buf + sizeof(buf), v);
+        out.append(buf, r.ptr);
+    } else {
+        out.append(v);
+    }
+}
 
 // Canonical POSIX/STDIO operation name groups.
 // Used by is_data_transfer_op() and by query builders (name_in_query).
@@ -63,8 +84,8 @@ constexpr dstd::StringView IPC[] = {
 
 // Build a DSL query fragment: name in ["op1", "op2", ...]
 template <std::size_t N>
-inline std::string name_in_query(const dstd::StringView (&ops)[N]) {
-    std::string q = "name in [";
+inline dstd::String name_in_query(const dstd::StringView (&ops)[N]) {
+    dstd::String q = "name in [";
     for (std::size_t i = 0; i < N; ++i) {
         if (i > 0) q += ", ";
         q += '"';

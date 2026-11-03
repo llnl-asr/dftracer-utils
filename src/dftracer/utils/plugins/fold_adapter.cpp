@@ -763,8 +763,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
     namespace views = trace::views;
     try {
-        // keep std: index and trace views take std::string paths
-        std::string p(path);
+        dstd::String p(path);
         dftracer::utils::default_runtime().block_on(
             coro::named("dft-plugin-trace-read", [&]() -> coro::CoroTask<void> {
                 dftracer::utils::json::RecordParser parser;
@@ -777,8 +776,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                 views::View v = views::View::from_file(p);
                 co_await v.for_each_batch(
                     [&](std::size_t,
-                        // keep std: for_each_batch yields a std::vector
-                        const std::vector<dstd::StringView>& events) {
+                        const dstd::Vector<dstd::StringView>& events) {
                         batch_events.clear();
                         for (dstd::StringView ev : events) {
                             simdjson::padded_string ps(ev);
@@ -1286,10 +1284,8 @@ void PluginFold::step(const FoldBatch& batch) {
     task_arena_.clear();
 
     // A transform sees the whole batch, whatever it declared in reads.
-    // keep std: build_row_frame takes std::vector<std::string>
-    static const std::vector<std::string> every_column;
-    // keep std: build_row_frame takes std::vector<std::string>
-    const std::vector<std::string>& projection =
+    const dstd::Vector<dstd::String> every_column;
+    const dstd::Vector<dstd::String>& projection =
         has_transform ? every_column : projection_;
 
     dataframe::DataFrame df;
@@ -1360,18 +1356,17 @@ void PluginFold::step(const FoldBatch& batch) {
 // rows pass unfiltered rather than being dropped.
 dataframe::DataFrame PluginFold::rewritten_batch(
     const dataframe::DataFrame& frame,
-    const std::vector<std::string>& projection) {  // keep std: DataFrame
+    const dstd::Vector<dstd::String>& projection) {
     dataframe::DataFrame df;
     if (projection.empty()) {
         df.names = frame.names;
         for (const dataframe::Series& c : frame.columns)
             df.columns.push_back(c.share());
     } else {
-        // keep std: DataFrame::names holds std::string
-        for (const std::string& name : projection) {
+        for (const dstd::String& name : projection) {
             for (std::size_t i = 0; i < frame.names.size(); ++i) {
-                if (frame.names[i] != name) continue;
-                df.names.push_back(name);
+                if (dstd::StringView(frame.names[i]) != name) continue;
+                df.names.emplace_back(name);
                 df.columns.push_back(frame.columns[i].share());
                 break;
             }

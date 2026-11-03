@@ -25,12 +25,7 @@ namespace {
 dstd::Optional<std::int64_t> suffix_number(dstd::StringView name,
                                            dstd::StringView prefix) {
     if (name.substr(0, prefix.size()) != prefix) return dstd::nullopt;
-    std::int64_t v = 0;
-    const char* first = name.data() + prefix.size();
-    const char* last = name.data() + name.size();
-    auto [ptr, ec] = std::from_chars(first, last, v);
-    if (ec != std::errc() || ptr != last || first == last) return dstd::nullopt;
-    return v;
+    return dstd::from_chars<std::int64_t>(name.substr(prefix.size()));
 }
 
 // `<stem>-<k>_chunk<c>.pfw.gz` -> k.
@@ -39,12 +34,8 @@ dstd::Optional<std::int64_t> slice_index(dstd::StringView file_name) {
     const auto dash = file_name.rfind('-', chunk);
     if (chunk == dstd::StringView::npos || dash == dstd::StringView::npos)
         return dstd::nullopt;
-    std::int64_t v = 0;
-    const char* first = file_name.data() + dash + 1;
-    const char* last = file_name.data() + chunk;
-    auto [ptr, ec] = std::from_chars(first, last, v);
-    if (ec != std::errc() || ptr != last || first == last) return dstd::nullopt;
-    return v;
+    return dstd::from_chars<std::int64_t>(
+        file_name.substr(dash + 1, chunk - dash - 1));
 }
 
 struct DirFiles {

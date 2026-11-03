@@ -49,7 +49,9 @@ std::string write_ndjson(TestEnvironment& env, const std::string& name) {
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, std::string(determine_index_path(gz, "")));
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(std::string(determine_index_path(gz, ""))));
 }
 
 std::set<std::string> names_of(const dataframe::DataFrame& df) {
@@ -81,7 +83,8 @@ TEST_SUITE("GenericView") {
             deep);
 
         std::set<std::string> schema;
-        for (const auto& c : view_of(gz).column_info()) schema.insert(c.name);
+        for (const auto& c : view_of(gz).column_info())
+            schema.insert(std::string(c.name));
         CHECK(schema == paths);
     }
 
@@ -171,8 +174,10 @@ TEST_SUITE("GenericView") {
             {dstd::String(dstd::StringView(dft))})
             .build();
         View v = View::from_files(
-            {{gz, std::string(determine_index_path(gz, ""))},
-             {dft, std::string(determine_index_path(dft, ""))}});
+            {{dstd::String(gz),
+              dstd::String(std::string(determine_index_path(gz, "")))},
+             {dstd::String(dft),
+              dstd::String(std::string(determine_index_path(dft, "")))}});
         try {
             v.collect().get();
             FAIL("no error");
@@ -187,7 +192,7 @@ TEST_SUITE("GenericView") {
     TEST_CASE("from_directory finds JSON lines files") {
         TestEnvironment env(10);
         write_ndjson(env, "d");
-        View v = run(View::from_directory(env.get_dir()));
+        View v = run(View::from_directory(dstd::String(env.get_dir())));
         CHECK(v.collect().get().num_rows() == RECORDS);
     }
 
@@ -207,7 +212,8 @@ TEST_SUITE("GenericView") {
         }
         // Unindexed, then indexed with each file's own detection.
         auto rows = [&] {
-            return run(View::from_directory(std::string(dir.str())))
+            return run(View::from_directory(
+                           dstd::String(std::string(dir.str()))))
                 .collect()
                 .get()
                 .num_rows();
@@ -221,7 +227,8 @@ TEST_SUITE("GenericView") {
         TestEnvironment empty_env(10);
         std::ofstream((empty_env.get_dir() + "/a.pfw.gz").c_str());
         std::ofstream((empty_env.get_dir() + "/b.pfw.gz").c_str());
-        View empty = run(View::from_directory(empty_env.get_dir()));
+        View empty =
+            run(View::from_directory(dstd::String(empty_env.get_dir())));
         CHECK(empty.collect().get().num_rows() == 0);
     }
 
@@ -230,7 +237,9 @@ TEST_SUITE("GenericView") {
         std::ofstream((env.get_dir() + "/plain.jsonl").c_str())
             << R"({"k":1})" << "\n";
         try {
-            run(View::from_directory(env.get_dir())).collect().get();
+            run(View::from_directory(dstd::String(env.get_dir())))
+                .collect()
+                .get();
             FAIL("no error");
         } catch (const std::exception& e) {
             CAPTURE(e.what());

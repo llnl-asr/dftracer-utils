@@ -10,9 +10,6 @@
 #include <dftracer/utils/trace/schema.h>
 
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::trace {
 
@@ -21,7 +18,7 @@ using json::JsonValue;
 namespace detail {
 
 /// Append a decimal index straight into the path buffer.
-inline void append_index(std::string& out, std::size_t v) {
+inline void append_index(dstd::String& out, std::size_t v) {
     char buf[20];
     char* p = buf + sizeof(buf);
     do {
@@ -34,7 +31,7 @@ inline void append_index(std::string& out, std::size_t v) {
 inline void insert_scalar_arg(ArgsMap& args, dstd::StringView key,
                               const JsonValue& v) {
     if (v.is_string())
-        args.insert(key, std::string(v.get<dstd::StringView>()));
+        args.insert(key, dstd::String(v.get<dstd::StringView>()));
     else if (v.is_uint())
         args.insert(key, v.get<std::uint64_t>());
     else if (v.is_int())
@@ -49,7 +46,7 @@ inline void insert_scalar_arg(ArgsMap& args, dstd::StringView key,
 /// contribute "prefix.key", arrays "prefix.<index>", scalars insert at prefix.
 /// Depth is unbounded, so "tags.0.model.size" round-trips. Only invoked when a
 /// value is actually an object/array; flat scalar args never allocate a prefix.
-inline void flatten_arg(std::string& prefix, const JsonValue& v,
+inline void flatten_arg(dstd::String& prefix, const JsonValue& v,
                         ArgsMap& args) {
     if (v.is_object()) {
         v.for_each_member([&](dstd::StringView k, JsonValue cv) {
@@ -79,7 +76,7 @@ inline void flatten_arg(std::string& prefix, const JsonValue& v,
 inline void insert_arg_member(ArgsMap& args, dstd::StringView key,
                               const JsonValue& av) {
     if (av.is_object() || av.is_array()) {
-        std::string prefix(key);
+        dstd::String prefix(key);
         flatten_arg(prefix, av, args);
     } else {
         insert_scalar_arg(args, key, av);
@@ -88,7 +85,7 @@ inline void insert_arg_member(ArgsMap& args, dstd::StringView key,
 
 /// On-demand mirror of flatten_arg: recurse nested objects/arrays into dotted
 /// keys, consuming the cursor in order.
-inline void flatten_arg_ondemand(std::string& prefix,
+inline void flatten_arg_ondemand(dstd::String& prefix,
                                  simdjson::ondemand::value val, ArgsMap& args) {
     auto t = val.type();
     if (t.error()) return;
@@ -126,7 +123,7 @@ inline void flatten_arg_ondemand(std::string& prefix,
         }
         case simdjson::ondemand::json_type::string: {
             auto r = val.get_string();
-            if (!r.error()) args.insert(prefix, std::string(r.value_unsafe()));
+            if (!r.error()) args.insert(prefix, dstd::String(r.value_unsafe()));
             break;
         }
         case simdjson::ondemand::json_type::number: {
@@ -361,7 +358,7 @@ struct DFTracerEvent {
                                 if (!r.error())
                                     out.args.insert(
                                         fkey.value_unsafe(),
-                                        std::string(r.value_unsafe()));
+                                        dstd::String(r.value_unsafe()));
                                 break;
                             }
                             case simdjson::ondemand::json_type::number: {
@@ -391,7 +388,7 @@ struct DFTracerEvent {
                             }
                             case simdjson::ondemand::json_type::object:
                             case simdjson::ondemand::json_type::array: {
-                                std::string prefix(fkey.value_unsafe());
+                                dstd::String prefix(fkey.value_unsafe());
                                 detail::flatten_arg_ondemand(
                                     prefix, fval.value_unsafe(), out.args);
                                 break;
@@ -414,7 +411,7 @@ struct EventRecord {
     const DFTracerEvent& ev;
     const json::JsonValue& json;
     dstd::StringView line;
-    dstd::SharedPtr<std::string> line_buffer;
+    dstd::SharedPtr<dstd::String> line_buffer;
     std::size_t checkpoint_idx;
     std::size_t line_number;
     simdjson::dom::element args_dom{};

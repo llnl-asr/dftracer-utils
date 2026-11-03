@@ -2,13 +2,17 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
@@ -36,10 +40,6 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
-#include <map>
-#include <memory>
-#include <span>
-#include <unordered_map>
 #include <utility>
 
 namespace dftracer::utils::trace::views::detail {
@@ -114,8 +114,8 @@ dstd::Optional<duql::Query> phase_query(const ViewPlan& plan) {
     // Match both the current integer "ph" and the legacy single-letter form so
     // the same View reads new- and old-format traces alike.
     duql::Query q = duql::parse_or_throw(
-        "ph == " + std::to_string(phase_to_int(rp)) + " or ph == \"" +
-        std::string(1, phase_to_letter(rp)) + "\"");
+        "ph == " + dstd::to_string(phase_to_int(rp)) + " or ph == \"" +
+        dstd::String(1, phase_to_letter(rp)) + "\"");
     if (plan.query) return duql::conjoin(*plan.query, q);
     return q;
 }
@@ -152,17 +152,17 @@ bool metadata_rows(const ViewPlan& plan) {
 }
 
 bool is_cancelled(const ViewPlan& plan) {
-    return plan.cancelled && plan.cancelled();
+    return plan.cancelled && (*plan.cancelled)();
 }
 
 namespace {
 
 // The paths a path-decoded scan of `plan` reads; empty to read every leaf (a
 // full row collect, or metrics over every numeric field).
-std::vector<std::string> needed_paths(const ViewPlan& plan) {
+dstd::Vector<dstd::String> needed_paths(const ViewPlan& plan) {
     const bool rows = plan.group_by.empty() && plan.agg.empty();
     if (plan.auto_numeric_metrics || (rows && plan.select.empty())) return {};
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     auto add = [&](dstd::StringView f) {
         if (!f.empty()) out.emplace_back(f);
     };
@@ -183,11 +183,11 @@ std::vector<std::string> needed_paths(const ViewPlan& plan) {
     out.erase(std::unique(out.begin(), out.end()), out.end());
     // A computed column is not a record field, unless a computed column reads
     // the field of its name (a key computed as itself).
-    std::erase_if(out, [&](const std::string& f) {
+    std::erase_if(out, [&](const dstd::String& f) {
         const auto named = [&](const ComputedColumn& c) { return c.name == f; };
         const auto reads = [&](const ComputedColumn& c) {
             return std::any_of(c.inputs.begin(), c.inputs.end(),
-                               [&](const std::string& in) {
+                               [&](const dstd::String& in) {
                                    return select_source_field(in) == f;
                                });
         };
@@ -211,10 +211,10 @@ void add_time_conditions(const ViewPlan& plan, ViewDefinition& vdef) {
     if (time_field &&
         time_field->type == dftracer::utils::index::FieldType::String)
         return;
-    std::vector<std::string> conds;
+    dstd::Vector<dstd::String> conds;
     auto bound = [&](const char* op, double v) {
         conds.push_back(vdef.time_path + " " + op + " " +
-                        std::to_string(static_cast<long long>(v)));
+                        dstd::to_string(static_cast<long long>(v)));
     };
     if (plan.timed) bound(">=", 0);
     if (plan.time_range) {
@@ -223,7 +223,7 @@ void add_time_conditions(const ViewPlan& plan, ViewDefinition& vdef) {
             bound(">=", std::floor(plan.time_range->first / vdef.time_factor));
     }
     if (conds.empty()) return;
-    std::string q;
+    dstd::String q;
     for (const auto& c : conds) q += (q.empty() ? "" : " and ") + c;
     duql::Query bounds = duql::parse_or_throw(q);
     vdef.query = vdef.query ? duql::conjoin(*vdef.query, bounds) : bounds;
@@ -303,14 +303,14 @@ ViewScannerInput make_scanner_input(const ScanUnit& u,
     return sin;
 }
 
-coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
-                                                   const ViewDefinition& vdef,
-                                                   std::uint64_t& skipped_out) {
-    std::vector<std::vector<ScanUnit>> per_file(plan.files.size());
-    std::vector<std::uint64_t> skip_v(plan.files.size(), 0);
-    std::vector<std::exception_ptr> errors(plan.files.size());
-    std::vector<std::uint64_t> uc_sizes(plan.files.size());
-    std::vector<std::size_t> ckpt_counts(plan.files.size());
+coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
+    const ViewPlan& plan, const ViewDefinition& vdef,
+    std::uint64_t& skipped_out) {
+    dstd::Vector<dstd::Vector<ScanUnit>> per_file(plan.files.size());
+    dstd::Vector<std::uint64_t> skip_v(plan.files.size(), 0);
+    dstd::Vector<std::exception_ptr> errors(plan.files.size());
+    dstd::Vector<std::uint64_t> uc_sizes(plan.files.size());
+    dstd::Vector<std::size_t> ckpt_counts(plan.files.size());
     for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
         uc_sizes[fi] = plan.files[fi].uncompressed_size;
         ckpt_counts[fi] = plan.files[fi].num_checkpoints;
@@ -376,7 +376,7 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                     const auto& f = plan.files[fi];
                     const std::size_t ckpt =
                         checkpoint_size_or_default(f.checkpoint_size);
-                    const std::string& index_path = f.index_path;
+                    const dstd::String& index_path = f.index_path;
 
                     ViewPlannerInput pin;
                     pin.with_view(vdef)
@@ -422,7 +422,7 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
         if (e) std::rethrow_exception(e);
     skipped_out = 0;
     for (auto s : skip_v) skipped_out += s;
-    std::vector<ScanUnit> units;
+    dstd::Vector<ScanUnit> units;
     for (auto& v : per_file)
         for (auto& u : v) units.push_back(std::move(u));
     co_return units;
@@ -447,7 +447,7 @@ namespace {
 bool any_file_missing_extension(
     const ViewPlan& plan, dftracer::utils::index::store::IndexExtension ext) {
     namespace ix = dftracer::utils::index;
-    std::map<std::string, ix::Snapshot> snapshots;
+    dstd::Map<dstd::String, ix::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         try {
             auto at = snapshots.find(f.index_path);
@@ -482,27 +482,27 @@ bool any_file_missing_catalog(const ViewPlan& plan) {
 
 }  // namespace
 
-std::vector<std::unique_ptr<Fold>> select_index_folds(
+dstd::Vector<dstd::UniquePtr<Fold>> select_index_folds(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern) {
-    std::vector<std::unique_ptr<Fold>> kept;
+    dstd::Vector<dstd::UniquePtr<Fold>> kept;
     if (plan.files.empty() || !any_file_missing_bloom(plan)) return kept;
 
     const ScanShape shape = scan_shape(vdef);
     auto bloom =
-        std::make_unique<dftracer::utils::index::extensions::BloomFold>(
+        dstd::make_unique<dftracer::utils::index::extensions::BloomFold>(
             intern, dftracer::utils::index::build::for_schema(
                         {}, plan_record_schema(plan)));
     if (bloom->accepts(shape)) kept.push_back(std::move(bloom));
     return kept;
 }
 
-std::unique_ptr<Fold> select_catalog_fold(
+dstd::UniquePtr<Fold> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern) {
     namespace ix = dftracer::utils::index;
     if (plan.files.empty() || !any_file_missing_catalog(plan)) return nullptr;
-    auto fold = std::make_unique<ix::extensions::CatalogFold>(
+    auto fold = dstd::make_unique<ix::extensions::CatalogFold>(
         intern, ix::build::for_schema({}, plan_record_schema(plan))
                     .params_hash(ix::store::IndexExtension::Catalog));
     if (!fold->accepts(scan_shape(vdef))) return nullptr;
@@ -512,8 +512,8 @@ std::unique_ptr<Fold> select_catalog_fold(
 coro::CoroTask<ExportStats> for_each_scanned_batch(
     const ViewPlan& plan, const ViewDefinition& vdef, std::size_t num_slots,
     std::uint64_t limit,
-    const std::function<void(std::size_t,
-                             const std::vector<dstd::StringView>&)>& on_batch,
+    const dstd::Function<void(std::size_t,
+                              const dstd::Vector<dstd::StringView>&)>& on_batch,
     dstd::Span<Fold* const> folds,
     dftracer::utils::dstd::StringIntern* intern) {
     std::uint64_t skipped = 0;
@@ -525,9 +525,9 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
         limit > 0 ? limit : std::numeric_limits<std::uint64_t>::max();
     std::atomic<std::uint64_t> produced{0};
     std::atomic<std::size_t> next_unit{0};
-    std::vector<ScanCounts> counts_v(num_slots);
+    dstd::Vector<ScanCounts> counts_v(num_slots);
     const std::size_t nworkers = std::min(num_slots, units.size());
-    std::vector<CoverageSet> covered_v(nworkers);
+    dstd::Vector<CoverageSet> covered_v(nworkers);
 
     bool any_needs_args = false;
     bool any_wants_schema = false;
@@ -541,7 +541,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     }
     // One slice of every fold per worker, owned here so a slice outlives the
     // coroutine that filled it; merged after the join.
-    std::vector<std::vector<std::unique_ptr<Fold>>> fslice(nworkers);
+    dstd::Vector<dstd::Vector<dstd::UniquePtr<Fold>>> fslice(nworkers);
     if (!folds.empty())
         for (std::size_t w = 0; w < nworkers; ++w)
             for (auto* f : folds) fslice[w].push_back(f->slice());
@@ -557,7 +557,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                 PendingCoverage pending(covered_v[w]);
                 auto& slices = fslice[w];
                 dftracer::utils::json::RecordParser parser;
-                std::string parse_buf;
+                dstd::String parse_buf;
                 FoldEventBuffer fold_events;
                 DecodeHints hints;
                 for (;;) {
@@ -655,8 +655,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     // were attached, so it cannot be a requirement they declare - it has to
     // land here, as a coverage fact.
     if (skipped == 0) {
-        std::unordered_map<dstd::StringView,
-                           dstd::Pair<std::size_t, std::size_t>>
+        dstd::HashMap<dstd::StringView, dstd::Pair<std::size_t, std::size_t>>
             per_file;
         for (const auto& u : units) {
             auto& c = per_file[u.file_path];

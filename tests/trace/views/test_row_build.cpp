@@ -41,12 +41,12 @@ namespace {
 
 constexpr int EVENTS = 40;
 
-std::vector<FoldEvent> make_events(StringIntern& intern) {
+dstd::Vector<FoldEvent> make_events(StringIntern& intern) {
     const auto size = intern.get_or_insert("size");
     const auto lat = intern.get_or_insert("lat");
     const auto op = intern.get_or_insert("op");
     const auto tag = intern.get_or_insert("tag");
-    std::vector<FoldEvent> out;
+    dstd::Vector<FoldEvent> out;
     for (int i = 0; i < EVENTS; ++i) {
         FoldEvent ev;
         ev.phase = RecordPhase::Complete;
@@ -69,7 +69,7 @@ struct Built {
 
 coro::CoroTask<Built> run_step(StringIntern& intern_ref,
                                dstd::SharedPtr<StringIntern> intern,
-                               std::vector<FoldEvent> events) {
+                               dstd::Vector<FoldEvent> events) {
     (void)intern_ref;
     auto channel = std::make_shared<coro::Channel<df::Morsel>>(4);
     auto budget = std::make_shared<coro::CoroSemaphore>(1ull << 30);
@@ -90,13 +90,13 @@ coro::CoroTask<Built> run_step(StringIntern& intern_ref,
 }
 
 Built stepped(const dstd::SharedPtr<StringIntern>& intern,
-              std::vector<FoldEvent> events) {
+              dstd::Vector<FoldEvent> events) {
     return dftracer::utils::default_runtime()
         .submit(run_step(*intern, intern, std::move(events)))
         .get();
 }
 
-std::vector<FoldEvent> copy_events(const std::vector<FoldEvent>& events) {
+dstd::Vector<FoldEvent> copy_events(const dstd::Vector<FoldEvent>& events) {
     return events;
 }
 
@@ -142,7 +142,7 @@ TEST_SUITE("RowBuild") {
     TEST_CASE("a filtered batch builds exactly the kept events") {
         auto intern = std::make_shared<StringIntern>();
         auto events = make_events(*intern);
-        std::vector<FoldEvent> kept;
+        dstd::Vector<FoldEvent> kept;
         for (std::size_t i = 0; i < events.size(); ++i) {
             if (i % 4 == 1) {
                 events[i].phase = RecordPhase::Unknown;

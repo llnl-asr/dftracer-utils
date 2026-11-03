@@ -50,9 +50,9 @@ struct CountFold : dftracer::utils::trace::views::detail::Fold {
         const override {
         return true;
     }
-    std::unique_ptr<dftracer::utils::trace::views::detail::Fold> slice()
+    dstd::UniquePtr<dftracer::utils::trace::views::detail::Fold> slice()
         const override {
-        return std::make_unique<CountFold>(total);
+        return dstd::make_unique<CountFold>(total);
     }
     void step(
         const dftracer::utils::trace::views::detail::FoldBatch& b) override {
@@ -206,7 +206,7 @@ TEST_SUITE("View") {
         std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
         std::string idx = std::string(determine_index_path(gz, ""));
         auto make = [&] {
-            return View::from_file(gz, idx)
+            return View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}});
         };
@@ -240,7 +240,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
         std::string idx = std::string(determine_index_path(gz, ""));
-        View base = View::from_file(gz, idx);
+        View base = View::from_file(dstd::String(gz), dstd::String(idx));
 
         auto run = base.session();
         auto a = run.collect(base.group_by({GroupKey::cat()})
@@ -270,16 +270,16 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // 50 events
         std::string idx = std::string(determine_index_path(gz, ""));
-        View base = View::from_file(gz, idx);
+        View base = View::from_file(dstd::String(gz), dstd::String(idx));
 
         auto total = std::make_shared<std::atomic<std::uint64_t>>(0);
         dataframe::LazyResult<dataframe::DataFrame> plan =
             base.branch<dataframe::DataFrame>([total](ViewSession& s) {
                 s.attach_fold_factory(
                     [total](dftracer::utils::dstd::StringIntern&)
-                        -> std::unique_ptr<
+                        -> dstd::UniquePtr<
                             dftracer::utils::trace::views::detail::Fold> {
-                        return std::make_unique<CountFold>(total);
+                        return dstd::make_unique<CountFold>(total);
                     },
                     []() {});
                 return s.collect({GroupKey::cat()}, {{AggOp::Count, "", "n"}});
@@ -299,11 +299,11 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
         std::string idx = std::string(determine_index_path(gz, ""));
-        View base = View::from_file(gz, idx);
+        View base = View::from_file(dstd::String(gz), dstd::String(idx));
         Query posix = Query::from_string(R"(cat == "POSIX")").value();
-        auto by_cat = [] { return std::vector<GroupKey>{GroupKey::cat()}; };
+        auto by_cat = [] { return dstd::Vector<GroupKey>{GroupKey::cat()}; };
         auto count = [] {
-            return std::vector<AggSpec>{{AggOp::Count, "", "n"}};
+            return dstd::Vector<AggSpec>{{AggOp::Count, "", "n"}};
         };
 
         auto j = std::make_shared<dataframe::DataFrame>();
@@ -323,12 +323,12 @@ TEST_SUITE("View") {
 
         // Reference: collect both branches standalone, combine with the same
         // primitives the session ops wrap. The session must match exactly.
-        auto ra = View::from_file(gz, idx)
+        auto ra = View::from_file(dstd::String(gz), dstd::String(idx))
                       .group_by(by_cat())
                       .agg(count())
                       .collect()
                       .get();
-        auto rb = View::from_file(gz, idx)
+        auto rb = View::from_file(dstd::String(gz), dstd::String(idx))
                       .filter(posix)
                       .group_by(by_cat())
                       .agg(count())
@@ -356,7 +356,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = std::string(determine_index_path(gz, ""));
-        View base = View::from_file(gz, idx);
+        View base = View::from_file(dstd::String(gz), dstd::String(idx));
 
         auto foreign = std::make_shared<Deferred<dataframe::DataFrame>>();
         dataframe::LazyResult<dataframe::DataFrame> other =
@@ -386,14 +386,14 @@ TEST_SUITE("View") {
 
         // Named field aggregates lower to the matching AggSpec, so the F form
         // and the AggSpec form produce the same table (same default col names).
-        auto by_expr = View::from_file(gz, idx)
+        auto by_expr = View::from_file(dstd::String(gz), dstd::String(idx))
                            .group_by({GroupKey::cat()})
-                           .agg(std::vector<fld::FieldAggExpr>{
+                           .agg(dstd::Vector<fld::FieldAggExpr>{
                                F("dur").sum(), F("dur").mean(), F.any.count()})
                            .collect()
                            .get();
         auto by_spec =
-            View::from_file(gz, idx)
+            View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::cat()})
                 .agg(
                     {{AggOp::Sum, "dur"}, {AggOp::Mean, "dur"}, {AggOp::Count}})
@@ -435,7 +435,7 @@ TEST_SUITE("View") {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
         const std::string idx = std::string(determine_index_path(gz, ""));
-        auto out = View::from_file(gz, idx)
+        auto out = View::from_file(dstd::String(gz), dstd::String(idx))
                        .group_by({GroupKey::name()})
                        .agg({{AggOp::Sum, "dur", "t"}})
                        .collect()
@@ -478,10 +478,10 @@ TEST_SUITE("View") {
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        auto any = View::from_file(gz, idx)
+        auto any = View::from_file(dstd::String(gz), dstd::String(idx))
                        .group_by({GroupKey::cat()})
-                       .agg(std::vector<fld::FieldAggExpr>{F.any.mean(),
-                                                           F.any.count()})
+                       .agg(dstd::Vector<fld::FieldAggExpr>{F.any.mean(),
+                                                            F.any.count()})
                        .collect()
                        .get();
         REQUIRE(
@@ -498,9 +498,9 @@ TEST_SUITE("View") {
         CHECK(level["stdio"] == doctest::Approx(101.5));  // mean 100..103
 
         // F.any.sum() applies a sum to every numeric arg (one sum_<arg>).
-        auto anysum = View::from_file(gz, idx)
+        auto anysum = View::from_file(dstd::String(gz), dstd::String(idx))
                           .group_by({GroupKey::cat()})
-                          .agg(std::vector<fld::FieldAggExpr>{F.any.sum()})
+                          .agg(dstd::Vector<fld::FieldAggExpr>{F.any.sum()})
                           .collect()
                           .get();
         REQUIRE(bhas(anysum, "sum_level"));
@@ -513,7 +513,7 @@ TEST_SUITE("View") {
         // A per-arg percentile collects a per-arg sketch (p90 of posix level
         // 0..9 is ~9; DDSketch is approximate, so allow a small band).
         auto anypct =
-            View::from_file(gz, idx)
+            View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::cat()})
                 .agg_numeric_args({AggSpec(AggOp::Pct, "", "p90", "", 0.9)})
                 .collect()
@@ -527,7 +527,7 @@ TEST_SUITE("View") {
 
         // An op with no per-arg support (Hist) is still rejected on the dyn
         // path (only FieldStat/sketch-derivable reductions are allowed).
-        CHECK_THROWS_AS(View::from_file(gz, idx)
+        CHECK_THROWS_AS(View::from_file(dstd::String(gz), dstd::String(idx))
                             .group_by({GroupKey::cat()})
                             .agg_numeric_args({AggSpec(AggOp::Hist, "level")}),
                         dftracer::utils::common::DFTUtilsException);
@@ -541,7 +541,7 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
 
         // Per-cat distinct names: each cat has exactly one name here.
-        auto t = View::from_file(gz, idx)
+        auto t = View::from_file(dstd::String(gz), dstd::String(idx))
                      .group_by({GroupKey::cat()})
                      .agg({{AggOp::Count, "", "n"},
                            {AggOp::SetUnion, "name", "names"}})
@@ -555,7 +555,7 @@ TEST_SUITE("View") {
         CHECK(got["stdio"] == "fwrite");
 
         // No grouping: one row unioning both names, sorted + SET_SEP-joined.
-        auto whole = View::from_file(gz, idx)
+        auto whole = View::from_file(dstd::String(gz), dstd::String(idx))
                          .agg({{AggOp::SetUnion, "name", "names"}})
                          .collect()
                          .get();
@@ -570,12 +570,12 @@ TEST_SUITE("View") {
         CHECK(vals == std::set<std::string>{"read", "fwrite"});
 
         // Distributed partial + merge preserves the union.
-        std::string p = View::from_file(gz, idx)
-                            .agg({{AggOp::SetUnion, "name", "names"}})
-                            .aggregate_partial()
-                            .collect()
-                            .get();
-        auto merged = View::from_file(gz, idx)
+        dstd::String p = (View::from_file(dstd::String(gz), dstd::String(idx))
+                              .agg({{AggOp::SetUnion, "name", "names"}})
+                              .aggregate_partial()
+                              .collect()
+                              .get());
+        auto merged = View::from_file(dstd::String(gz), dstd::String(idx))
                           .agg({{AggOp::SetUnion, "name", "names"}})
                           .merge_partials({p});
         REQUIRE(merged.num_rows() == 1);
@@ -584,7 +584,7 @@ TEST_SUITE("View") {
         // Rollup round-trip: materialize persists the set, a repeat reads it
         // back.
         auto make = [&]() {
-            return View::from_file(gz, idx)
+            return View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::SetUnion, "name", "names"}});
         };
@@ -605,7 +605,7 @@ TEST_SUITE("View") {
 
         auto run = [&](std::uint64_t budget) {
             StringSink s;
-            View::from_file(gz, idx)
+            View::from_file(dstd::String(gz), dstd::String(idx))
                 .phase(Phase::Counters)
                 .group_by({GroupKey::name()})
                 .agg_numeric_args()
@@ -627,7 +627,9 @@ TEST_SUITE("View") {
         StringSink sa;
         scan::export_counters(
             scan::auto_spill(scan::agg_numeric_args(scan::group_by(
-                scan::phase(scan::from_file(gz, idx), Phase::Counters),
+                scan::phase(
+                    scan::from_file(dstd::String(gz), dstd::String(idx)),
+                    Phase::Counters),
                 {GroupKey::name()}))),
             sa)
             .get();
@@ -647,7 +649,7 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
 
         auto row = [&](std::uint64_t budget) {
-            auto t = View::from_file(gz, idx)
+            auto t = View::from_file(dstd::String(gz), dstd::String(idx))
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Mean, "dur", "m"},
                                {AggOp::Var, "dur", "v"},
@@ -681,7 +683,7 @@ TEST_SUITE("View") {
         std::string gz = create_mixed_trace(env, 200, 0);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        auto t = View::from_file(gz, idx)
+        auto t = View::from_file(dstd::String(gz), dstd::String(idx))
                      .group_by({GroupKey::cat()})
                      .agg({{AggOp::Min, "dur", "mn"},
                            {AggOp::Max, "dur", "mx"},
@@ -709,7 +711,7 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
 
         auto make = [&] {
-            return View::from_file(gz, idx)
+            return View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::Min, "dur", "mn"},
                       {AggOp::Max, "dur", "mx"},
@@ -719,7 +721,7 @@ TEST_SUITE("View") {
         // Direct fold path.
         dataframe::DataFrame direct = make().collect().get();
         // Partial + merge path (serializes the accumulator and back).
-        std::string p = make().aggregate_partial().collect().get();
+        dstd::String p = make().aggregate_partial().collect().get();
         dataframe::DataFrame merged = make().merge_partials({p});
 
         REQUIRE(direct.num_rows() == 1);
@@ -752,7 +754,7 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
 
         auto p99 = [&](std::uint64_t budget) {
-            auto t = View::from_file(gz, idx)
+            auto t = View::from_file(dstd::String(gz), dstd::String(idx))
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Pct, "dur", "p99", "", 0.99}})
                          .memory_budget(budget)
@@ -777,7 +779,7 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
 
         auto hist = [&](std::uint64_t budget) {
-            auto t = View::from_file(gz, idx)
+            auto t = View::from_file(dstd::String(gz), dstd::String(idx))
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Hist, "dur", "h"}})
                          .memory_budget(budget)
@@ -814,7 +816,7 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
 
         auto run = [&](std::uint64_t budget) {
-            auto t = View::from_file(gz, idx)
+            auto t = View::from_file(dstd::String(gz), dstd::String(idx))
                          .group_by({GroupKey::cat()})
                          .time_bucket(100)
                          .agg({{AggOp::Count, "", "n"},
@@ -847,9 +849,12 @@ TEST_SUITE("View") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = std::string(determine_index_path(gz, ""));
         StringSink sink;
-        View::from_file(gz, idx).sink_json(sink).get();
-        scan::ScanPlan base = scan::rollup_root(scan::from_file(gz, idx),
-                                                env.get_dir() + "/rollups");
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .sink_json(sink)
+            .get();
+        scan::ScanPlan base = scan::rollup_root(
+            scan::from_file(dstd::String(gz), dstd::String(idx)),
+            dstd::String(env.get_dir() + "/rollups"));
 
         GroupKey bucketed = GroupKey::name();
         bucketed.transform = GroupKey::Transform::Bucket;
@@ -912,7 +917,8 @@ TEST_SUITE("View") {
         // path where the materialize hook lives, independent of tier state.
         auto make = [&]() {
             return scan::agg(
-                scan::group_by(scan::filter(scan::from_file(gz, idx),
+                scan::group_by(scan::filter(scan::from_file(dstd::String(gz),
+                                                            dstd::String(idx)),
                                             duql::parse_or_throw("dur >= 0")),
                                {GroupKey::cat()}),
                 {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
@@ -969,7 +975,7 @@ TEST_SUITE("View") {
             return rows;
         };
         auto make = [&]() {
-            return View::from_file(gz, idx)
+            return View::from_file(dstd::String(gz), dstd::String(idx))
                 .duql("dur >= 0")
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
@@ -1024,13 +1030,13 @@ TEST_SUITE("View") {
         // Finer and coarser views differ only in grouping (same filter + aggs),
         // so the coarser is the finer rolled up over `name`.
         auto fine = [&]() {
-            return View::from_file(gz, idx)
+            return View::from_file(dstd::String(gz), dstd::String(idx))
                 .duql("dur >= 0")
                 .group_by({GroupKey::cat(), GroupKey::name()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
         auto coarse = [&]() {
-            return View::from_file(gz, idx)
+            return View::from_file(dstd::String(gz), dstd::String(idx))
                 .duql("dur >= 0")
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
@@ -1079,7 +1085,7 @@ TEST_SUITE("View") {
         // Same grouping and aggs, differing only in time grain. 1000 is a
         // multiple of 100, so the coarse view is the fine one re-bucketed.
         auto at_bucket = [&](std::uint64_t b) {
-            return View::from_file(gz, idx)
+            return View::from_file(dstd::String(gz), dstd::String(idx))
                 .duql("dur >= 0")
                 .time_bucket(b)
                 .group_by({GroupKey::cat()})
@@ -1134,12 +1140,14 @@ TEST_SUITE("View") {
             std::sort(rows.begin(), rows.end());
             return rows;
         };
-        auto view = [&](std::vector<ViewFile> files) {
+        auto view = [&](dstd::Vector<ViewFile> files) {
             return View::from_files(std::move(files))
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
-        const std::vector<ViewFile> both{{a, shared}, {b, shared}};
+        const dstd::Vector<ViewFile> both{
+            {dstd::String(a), dstd::String(shared)},
+            {dstd::String(b), dstd::String(shared)}};
 
         auto expect =
             canon(view(both).collect().get());  // single-node baseline
@@ -1147,10 +1155,14 @@ TEST_SUITE("View") {
 
         // Each rank aggregates its shard; the coordinator reduces +
         // materializes.
-        std::string pa =
-            view({{a, shared}}).aggregate_partial().collect().get();
-        std::string pb =
-            view({{b, shared}}).aggregate_partial().collect().get();
+        dstd::String pa = view({{dstd::String(a), dstd::String(shared)}})
+                              .aggregate_partial()
+                              .collect()
+                              .get();
+        dstd::String pb = view({{dstd::String(b), dstd::String(shared)}})
+                              .aggregate_partial()
+                              .collect()
+                              .get();
         view(both).materialize_partials({pa, pb}).get();
 
         // The full query now reads the distributed-built rollup.
@@ -1166,7 +1178,7 @@ TEST_SUITE("View") {
         std::string ia = std::string(determine_index_path(a, ""));
         std::string ib = std::string(determine_index_path(b, ""));
 
-        auto view = [](std::vector<ViewFile> files) {
+        auto view = [](dstd::Vector<ViewFile> files) {
             return View::from_files(std::move(files))
                 .phase(Phase::Counters)
                 .group_by({GroupKey::name()})
@@ -1174,14 +1186,23 @@ TEST_SUITE("View") {
         };
 
         // Rank-local partials, then merge them (the transport is elided here).
-        std::string pa = view({{a, ia}}).aggregate_partial().collect().get();
-        std::string pb = view({{b, ib}}).aggregate_partial().collect().get();
+        dstd::String pa = view({{dstd::String(a), dstd::String(ia)}})
+                              .aggregate_partial()
+                              .collect()
+                              .get();
+        dstd::String pb = view({{dstd::String(b), dstd::String(ib)}})
+                              .aggregate_partial()
+                              .collect()
+                              .get();
         StringSink merged;
         view({}).merge_counter_partials({pa, pb}, merged);
 
         // Compare against aggregating both shards at once.
         StringSink single;
-        view({{a, ia}, {b, ib}}).sink_counters(single).get();
+        view({{dstd::String(a), dstd::String(ia)},
+              {dstd::String(b), dstd::String(ib)}})
+            .sink_counters(single)
+            .get();
 
         auto ml = merged.lines();
         auto sl = single.lines();
@@ -1199,19 +1220,20 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string gz = write_agg_trace(env);
         std::string idx = std::string(determine_index_path(gz, ""));
-        View base = View::from_file(gz, idx);
-        scan::ScanPlan plan = scan::from_file(gz, idx);
+        View base = View::from_file(dstd::String(gz), dstd::String(idx));
+        scan::ScanPlan plan =
+            scan::from_file(dstd::String(gz), dstd::String(idx));
 
         // Mixed keys/ops over one shared scan: numeric + a sketch + SetUnion,
         // an auto-numeric dyn branch, and an occupancy branch.
-        const std::vector<AggSpec> aggs_a{{AggOp::Count, "", "n"},
-                                          {AggOp::Mean, "dur", "md"},
-                                          {AggOp::Pct, "dur", "p90", "", 0.9},
-                                          {AggOp::SetUnion, "name", "names"}};
-        const std::vector<AggSpec> aggs_b{{AggOp::Count, "", "n"}};
-        const std::vector<AggSpec> aggs_c{{AggOp::Sum, "dur", "sd"},
-                                          {AggOp::Busy, "", "busy"},
-                                          {AggOp::Active, "", "active"}};
+        const dstd::Vector<AggSpec> aggs_a{{AggOp::Count, "", "n"},
+                                           {AggOp::Mean, "dur", "md"},
+                                           {AggOp::Pct, "dur", "p90", "", 0.9},
+                                           {AggOp::SetUnion, "name", "names"}};
+        const dstd::Vector<AggSpec> aggs_b{{AggOp::Count, "", "n"}};
+        const dstd::Vector<AggSpec> aggs_c{{AggOp::Sum, "dur", "sd"},
+                                           {AggOp::Busy, "", "busy"},
+                                           {AggOp::Active, "", "active"}};
         View va = base.group_by({GroupKey::cat()}).agg(aggs_a);
         View vb =
             base.group_by({GroupKey::name()}).agg(aggs_b).agg_numeric_args();
@@ -1241,15 +1263,16 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string gz = write_agg_trace(env);
         std::string idx = std::string(determine_index_path(gz, ""));
-        scan::ScanPlan base = scan::from_file(gz, idx);
-        auto by = [&](GroupKey gk, std::vector<AggSpec> specs) {
+        scan::ScanPlan base =
+            scan::from_file(dstd::String(gz), dstd::String(idx));
+        auto by = [&](GroupKey gk, dstd::Vector<AggSpec> specs) {
             return scan::agg(scan::group_by(base, {std::move(gk)}),
                              std::move(specs));
         };
 
         auto check = [&](const scan::ScanPlan& v,
                          const std::vector<std::string>& keys) {
-            std::string p = run(scan::aggregate_partial(v));
+            dstd::String p = run(scan::aggregate_partial(v));
             dataframe::DataFrame merged = scan::merge_partials_to_table(v, {p});
             frames_equal(merged, engine_collect(v), keys);
         };
@@ -1300,20 +1323,29 @@ TEST_SUITE("View") {
         std::string b = create_counter_file(env, "b", {80, 80});
         std::string ia = std::string(determine_index_path(a, ""));
         std::string ib = std::string(determine_index_path(b, ""));
-        auto view = [](std::vector<ViewFile> files) {
+        auto view = [](dstd::Vector<ViewFile> files) {
             return View::from_files(std::move(files))
                 .phase(Phase::Counters)
                 .group_by({GroupKey::name()})
                 .agg_numeric_args();
         };
 
-        std::string pa = view({{a, ia}}).aggregate_partial().collect().get();
-        std::string pb = view({{b, ib}}).aggregate_partial().collect().get();
+        dstd::String pa = view({{dstd::String(a), dstd::String(ia)}})
+                              .aggregate_partial()
+                              .collect()
+                              .get();
+        dstd::String pb = view({{dstd::String(b), dstd::String(ib)}})
+                              .aggregate_partial()
+                              .collect()
+                              .get();
         StringSink merged;
         view({}).merge_counter_partials({pa, pb}, merged);
 
         StringSink single;
-        view({{a, ia}, {b, ib}}).sink_counters(single).get();
+        view({{dstd::String(a), dstd::String(ia)},
+              {dstd::String(b), dstd::String(ib)}})
+            .sink_counters(single)
+            .get();
 
         auto ml = merged.lines();
         auto sl = single.lines();
@@ -1327,13 +1359,13 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string gz = write_agg_trace(env);
         std::string idx = std::string(determine_index_path(gz, ""));
-        View v = View::from_file(gz, idx)
+        View v = View::from_file(dstd::String(gz), dstd::String(idx))
                      .group_by({GroupKey::cat()})
                      .agg({{AggOp::Count, "", "n"}});
 
-        std::string good = v.aggregate_partial().collect().get();
+        dstd::String good = v.aggregate_partial().collect().get();
         REQUIRE(!good.empty());
-        std::string bad = good;
+        dstd::String bad = good;
         bad[0] = static_cast<char>(0x7e);  // wrong version tag
         CHECK_THROWS_AS(v.merge_partials({bad}),
                         dftracer::utils::common::DFTUtilsException);
@@ -1350,7 +1382,7 @@ TEST_SUITE("View") {
         std::string gz = create_mixed_trace(env, 30, 0);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        auto table = View::from_file(gz, idx)
+        auto table = View::from_file(dstd::String(gz), dstd::String(idx))
                          .group_by({GroupKey::cat()})
                          .time_bucket(1000)
                          .agg({{AggOp::Count, "", "n"}})
@@ -1388,15 +1420,15 @@ TEST_SUITE("View") {
         };
 
         // Absolute (aligned to 0): floor(1000/700)*700 = 700.
-        CHECK(first_bucket(View::from_file(gz, idx)
+        CHECK(first_bucket(View::from_file(dstd::String(gz), dstd::String(idx))
                                .group_by({GroupKey::cat()})
                                .time_bucket(700)) == 700);
         // Min-aligned: first bucket starts at the trace min ts (1000).
-        CHECK(first_bucket(View::from_file(gz, idx)
+        CHECK(first_bucket(View::from_file(dstd::String(gz), dstd::String(idx))
                                .group_by({GroupKey::cat()})
                                .time_bucket_min(700)) == 1000);
         // Explicit origin 500: floor((1000-500)/700)*700 + 500 = 500.
-        CHECK(first_bucket(View::from_file(gz, idx)
+        CHECK(first_bucket(View::from_file(dstd::String(gz), dstd::String(idx))
                                .group_by({GroupKey::cat()})
                                .time_bucket(700, 500)) == 500);
     }
@@ -1407,7 +1439,7 @@ TEST_SUITE("View") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        auto table = View::from_file(gz, idx)
+        auto table = View::from_file(dstd::String(gz), dstd::String(idx))
                          .agg({{AggOp::Count, "", "n"}})
                          .collect()
                          .get();
@@ -1435,7 +1467,7 @@ TEST_SUITE("View") {
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        auto table = View::from_file(gz, idx)
+        auto table = View::from_file(dstd::String(gz), dstd::String(idx))
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Max, "dur", "max_dur"},
                                {AggOp::ArgMax, "name", "longest", "dur"}})
@@ -1473,7 +1505,7 @@ TEST_SUITE("View") {
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        auto table = View::from_file(gz, idx)
+        auto table = View::from_file(dstd::String(gz), dstd::String(idx))
                          .group_by({GroupKey::rank()})
                          .agg({{AggOp::Count, "", "n"}})
                          .collect()
@@ -1511,9 +1543,9 @@ TEST_SUITE("View") {
                                      nullptr);
         };
         auto res =
-            View::from_file(gz, idx)
+            View::from_file(dstd::String(gz), dstd::String(idx))
                 .map_batches<Acc>(
-                    [&](Acc& a, const std::vector<dstd::StringView>& evs) {
+                    [&](Acc& a, const dstd::Vector<dstd::StringView>& evs) {
                         for (auto e : evs) {
                             double d = dur_of(e);
                             if (d < 25) {
@@ -1552,9 +1584,9 @@ TEST_SUITE("View") {
         struct Cnt {
             std::size_t n = 0;
         };
-        auto res = View::from_file(gz, idx)
+        auto res = View::from_file(dstd::String(gz), dstd::String(idx))
                        .map_batches<Cnt>(
-                           [](Cnt& c, const std::vector<dstd::StringView>& e) {
+                           [](Cnt& c, const dstd::Vector<dstd::StringView>& e) {
                                c.n += e.size();
                            },
                            [](Cnt&& a, Cnt&& b) {
@@ -1588,31 +1620,34 @@ TEST_SUITE("View") {
         Deferred<dataframe::DataFrame> posix;
         ExportStats stats;
         dataframe::LazyFrame plan =
-            View::from_file(gz, idx).branch([&](ViewSession& run) {
-                // custom fold: small events (dur < 25), reusing the parsed
-                // event.
-                small = run.fold<Small>(
-                    Query::from_string("dur < 25").value(),
-                    [](Small& s, const json::JsonValue& jv, dstd::StringView) {
-                        ++s.n;
-                        s.sum += jv["dur"].get<double>(0);
-                    },
-                    [](Small&& a, Small&& b) {
-                        a.n += b.n;
-                        a.sum += b.sum;
-                        return std::move(a);
-                    });
-                // raw passthrough: big events (dur >= 25).
-                big_stats = run.export_json(
-                    Query::from_string("dur >= 25").value(), big);
-                // built-in agg: POSIX count/sum over the same scan.
-                posix = run.collect(
-                    Query::from_string(R"(cat == "POSIX")").value(),
-                    {GroupKey::cat()},
-                    {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
-                return std::function<void(const ExportStats&)>(
-                    [&stats](const ExportStats& st) { stats = st; });
-            });
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .branch([&](ViewSession& run) {
+                    // custom fold: small events (dur < 25), reusing the parsed
+                    // event.
+                    small = run.fold<Small>(
+                        Query::from_string("dur < 25").value(),
+                        [](Small& s, const json::JsonValue& jv,
+                           dstd::StringView) {
+                            ++s.n;
+                            s.sum += jv["dur"].get<double>(0);
+                        },
+                        [](Small&& a, Small&& b) {
+                            a.n += b.n;
+                            a.sum += b.sum;
+                            return std::move(a);
+                        });
+                    // raw passthrough: big events (dur >= 25).
+                    big_stats = run.export_json(
+                        Query::from_string("dur >= 25").value(), big);
+                    // built-in agg: POSIX count/sum over the same scan.
+                    posix = run.collect(
+                        Query::from_string(R"(cat == "POSIX")").value(),
+                        {GroupKey::cat()},
+                        {{AggOp::Count, "", "n"},
+                         {AggOp::Sum, "dur", "sum_dur"}});
+                    return std::function<void(const ExportStats&)>(
+                        [&stats](const ExportStats& st) { stats = st; });
+                });
         plan.collect().get();
 
         // small: POSIX 10..24 (15) + STDIO 20..24 (5) = 20; sum 255 + 110.
@@ -1647,13 +1682,19 @@ TEST_SUITE("View") {
 
         // Events: the 10 ph=X reads, no counters.
         StringSink ev;
-        View::from_file(gz, idx).phase(Phase::Events).sink_json(ev).get();
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .phase(Phase::Events)
+            .sink_json(ev)
+            .get();
         CHECK(ev.lines().size() == 10);
         CHECK(count_containing(ev.lines(), R"("ph":"C")") == 0);
 
         // Counters: the 2 ph=C events only.
         StringSink ct;
-        View::from_file(gz, idx).phase(Phase::Counters).sink_json(ct).get();
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .phase(Phase::Counters)
+            .sink_json(ct)
+            .get();
         CHECK(ct.lines().size() == 2);
         CHECK(count_containing(ct.lines(), "cpu") == 2);
     }
@@ -1667,7 +1708,7 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
 
         StringSink sink;
-        View::from_file(gz, idx)
+        View::from_file(dstd::String(gz), dstd::String(idx))
             .group_by({GroupKey::cat()})
             .time_bucket(1000)
             .agg(
@@ -1689,7 +1730,7 @@ TEST_SUITE("View") {
         dftu_utils_test::write_gz_trace(out, sink.buffer);
         std::string out_idx = std::string(determine_index_path(out, ""));
         StringSink reread;
-        View::from_file(out, out_idx)
+        View::from_file(dstd::String(out), dstd::String(out_idx))
             .phase(Phase::Counters)
             .sink_json(reread)
             .get();
@@ -1720,7 +1761,7 @@ TEST_SUITE("View") {
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
         dataframe::DataFrame b =
-            View::from_file(gz, idx)
+            View::from_file(dstd::String(gz), dstd::String(idx))
                 .time_range(900, 2200)
                 .resolution(5)
                 .group_by({GroupKey::name()})
@@ -1818,13 +1859,14 @@ TEST_SUITE("View") {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
-        dataframe::DataFrame b = View::from_file(gz, idx)
-                                     .time_range(0, 1000000)
-                                     .group_by({GroupKey::name()})
-                                     .agg({{AggOp::Sum, "dur", "sum_dur"},
-                                           {AggOp::Busy, "", "busy"}})
-                                     .collect()
-                                     .get();
+        dataframe::DataFrame b =
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .time_range(0, 1000000)
+                .group_by({GroupKey::name()})
+                .agg(
+                    {{AggOp::Sum, "dur", "sum_dur"}, {AggOp::Busy, "", "busy"}})
+                .collect()
+                .get();
         REQUIRE(b.num_rows() == 1);
         CHECK(bnum(b, 0, "sum_dur") == static_cast<double>(sum_dur));
         CHECK(bnum(b, 0, "busy") == static_cast<double>(expect_union));
@@ -1846,7 +1888,7 @@ TEST_SUITE("View") {
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
         dataframe::DataFrame b =
-            View::from_file(gz, idx)
+            View::from_file(dstd::String(gz), dstd::String(idx))
                 .time_range(0, 1000000)
                 .group_by({GroupKey::name()})
                 .agg({{AggOp::Busy, "", "busy"}, {AggOp::Active, "", "active"}})
@@ -1871,14 +1913,15 @@ TEST_SUITE("View") {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
-        dataframe::DataFrame b = View::from_file(gz, idx)
-                                     .time_range(0, 1000000)
-                                     .group_by({GroupKey::name()})
-                                     .agg({{AggOp::Sum, "dur", "sum_dur"},
-                                           {AggOp::Busy, "", "busy"},
-                                           {AggOp::Active, "", "active"}})
-                                     .collect()
-                                     .get();
+        dataframe::DataFrame b =
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .time_range(0, 1000000)
+                .group_by({GroupKey::name()})
+                .agg({{AggOp::Sum, "dur", "sum_dur"},
+                      {AggOp::Busy, "", "busy"},
+                      {AggOp::Active, "", "active"}})
+                .collect()
+                .get();
         REQUIRE(b.num_rows() == 1);
         CHECK(bnum(b, 0, "sum_dur") == static_cast<double>(sum_dur));
         CHECK(bnum(b, 0, "busy") == static_cast<double>(sum_dur));
@@ -1901,25 +1944,27 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
 
         {
-            dataframe::DataFrame b0 = View::from_file(gz, idx)
-                                          .time_range(0, 1000000)
-                                          .group_by({GroupKey::name()})
-                                          .agg({{AggOp::Busy, "", "busy"}})
-                                          .collect()
-                                          .get();
+            dataframe::DataFrame b0 =
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .time_range(0, 1000000)
+                    .group_by({GroupKey::name()})
+                    .agg({{AggOp::Busy, "", "busy"}})
+                    .collect()
+                    .get();
             REQUIRE(bhas(b0, "busy_cell_us"));
             CHECK(bnum(b0, 0, "busy_cell_us") == 0);
             CHECK(bnum(b0, 0, "busy") == static_cast<double>(expect_exact));
         }
         {
             const std::uint64_t cell = 50;
-            dataframe::DataFrame b1 = View::from_file(gz, idx)
-                                          .time_range(0, 1000000)
-                                          .resolution(cell)
-                                          .group_by({GroupKey::name()})
-                                          .agg({{AggOp::Busy, "", "busy"}})
-                                          .collect()
-                                          .get();
+            dataframe::DataFrame b1 =
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .time_range(0, 1000000)
+                    .resolution(cell)
+                    .group_by({GroupKey::name()})
+                    .agg({{AggOp::Busy, "", "busy"}})
+                    .collect()
+                    .get();
             REQUIRE(bhas(b1, "busy_cell_us"));
             CHECK(bnum(b1, 0, "busy_cell_us") == static_cast<double>(cell));
             CHECK(bnum(b1, 0, "busy") >= static_cast<double>(expect_exact));
@@ -1939,11 +1984,12 @@ TEST_SUITE("View") {
         build_tier_index(gz);  // an EVENT tier answerable() would try
 
         auto make = [&] {
-            return scan::agg(
-                scan::group_by(scan::from_file(gz, idx), {GroupKey::cat()}),
-                {{AggOp::Busy, "", "busy"},
-                 {AggOp::Active, "", "active"},
-                 {AggOp::Count, "", "n"}});
+            return scan::agg(scan::group_by(scan::from_file(dstd::String(gz),
+                                                            dstd::String(idx)),
+                                            {GroupKey::cat()}),
+                             {{AggOp::Busy, "", "busy"},
+                              {AggOp::Active, "", "active"},
+                              {AggOp::Count, "", "n"}});
         };
         // No time_range: answerable() would previously serve occupancy from the
         // tier's per-key stats, which carry no per-event intervals -> zeros.
@@ -1964,17 +2010,19 @@ TEST_SUITE("View") {
         std::string gz = write_agg_trace(env);
         std::string idx = std::string(determine_index_path(gz, ""));
         build_tier_index(gz);
-        const std::vector<AggSpec> occ{{AggOp::Busy, "", "busy"},
-                                       {AggOp::Active, "", "active"},
-                                       {AggOp::Count, "", "n"}};
-        View base = View::from_file(gz, idx);
+        const dstd::Vector<AggSpec> occ{{AggOp::Busy, "", "busy"},
+                                        {AggOp::Active, "", "active"},
+                                        {AggOp::Count, "", "n"}};
+        View base = View::from_file(dstd::String(gz), dstd::String(idx));
         auto run = base.session();
         auto got =
             run.collect(base.group_by({GroupKey::cat()}).agg(occ).lazy());
         run.execute().get();
 
         dataframe::DataFrame scanned = scan_only(scan::agg(
-            scan::group_by(scan::from_file(gz, idx), {GroupKey::cat()}), occ));
+            scan::group_by(scan::from_file(dstd::String(gz), dstd::String(idx)),
+                           {GroupKey::cat()}),
+            occ));
         frames_equal(*got, scanned, {"cat"});
         double max_busy = 0;
         for (std::int64_t r = 0; r < got->num_rows(); ++r)
@@ -1995,7 +2043,9 @@ TEST_SUITE("View") {
         auto make = [&] {
             return scan::agg(
                 scan::group_by(
-                    scan::time_scale(scan::from_file(gz, idx), 0.001),
+                    scan::time_scale(
+                        scan::from_file(dstd::String(gz), dstd::String(idx)),
+                        0.001),
                     {GroupKey::cat()}),
                 {{AggOp::Sum, "dur", "total"},
                  {AggOp::Mean, "dur", "avg"},
@@ -2034,11 +2084,12 @@ TEST_SUITE("View") {
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
         auto counts = [&](const std::string& col, const GroupKey& gk) {
-            dataframe::DataFrame b = View::from_file(gz, idx)
-                                         .group_by({gk})
-                                         .agg({{AggOp::Count, "", "n"}})
-                                         .collect()
-                                         .get();
+            dataframe::DataFrame b =
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .group_by({gk})
+                    .agg({{AggOp::Count, "", "n"}})
+                    .collect()
+                    .get();
             std::map<std::string, double> m;
             for (std::int64_t i = 0; i < b.num_rows(); ++i)
                 m[bstr(b, i, col)] = bnum(b, i, "n");
@@ -2063,7 +2114,7 @@ TEST_SUITE("View") {
         }
 
         dataframe::DataFrame b =
-            View::from_file(gz, idx)
+            View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::field("args.meta.host")})
                 .agg({{AggOp::Mean, "args.n.v", "mv"}})
                 .collect()
@@ -2097,11 +2148,12 @@ TEST_SUITE("View") {
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
         auto counts = [&](const std::string& col, const GroupKey& gk) {
-            dataframe::DataFrame b = View::from_file(gz, idx)
-                                         .group_by({gk})
-                                         .agg({{AggOp::Count, "", "n"}})
-                                         .collect()
-                                         .get();
+            dataframe::DataFrame b =
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .group_by({gk})
+                    .agg({{AggOp::Count, "", "n"}})
+                    .collect()
+                    .get();
             std::map<std::string, double> m;
             for (std::int64_t i = 0; i < b.num_rows(); ++i)
                 m[bstr(b, i, col)] = bnum(b, i, "n");
@@ -2144,6 +2196,7 @@ TEST_SUITE("View") {
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        CHECK(View::from_file(gz, idx).time_metric() == trace::TimeMetric::Ns);
+        CHECK(View::from_file(dstd::String(gz), dstd::String(idx))
+                  .time_metric() == trace::TimeMetric::Ns);
     }
 }

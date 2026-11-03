@@ -169,17 +169,14 @@ static ConfigTree build_config(const SharedConfig& shared,
     ConfigTree tree;
     if (!shared.pconfig.empty())
         tree.merge_from(
-            // keep std: unswept API
-            ConfigTree::from_json_file(std::string(shared.pconfig)));
+            ConfigTree::from_json_file(dstd::String(shared.pconfig)));
     for (const auto& [k, v] : shared.pargs)
-        // keep std: unswept API
-        tree.set(std::string(k), std::string(v));
+        tree.set(dstd::String(k), dstd::String(v));
     if (!block.pconfig.empty())
-        // keep std: unswept API
-        tree.merge_from(ConfigTree::from_json_file(std::string(block.pconfig)));
+        tree.merge_from(
+            ConfigTree::from_json_file(dstd::String(block.pconfig)));
     for (const auto& [k, v] : block.pargs)
-        // keep std: unswept API
-        tree.set(std::string(k), std::string(v));
+        tree.set(dstd::String(k), dstd::String(v));
     return tree;
 }
 
@@ -300,8 +297,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
         co_return 1;
     }
 
-    // keep std: unswept API
-    std::vector<ViewFile> view_files;
+    dstd::Vector<ViewFile> view_files;
     view_files.reserve(files.size());
     for (const auto& file_path : files) {
         ViewFile vf;

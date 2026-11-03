@@ -51,17 +51,14 @@ class BloomFold : public trace::views::detail::Fold {
     }
     bool needs_args() const override { return true; }
     /// The nested extra dimensions, under their args.-prefixed path.
-    // keep std: trace::views::detail::Fold::extra_captures returns std::vector
-    std::vector<std::string> extra_captures() const override;
+    dstd::Vector<dstd::String> extra_captures() const override;
     /// Enumerate every scalar leaf (nested included) so the harvested column
     /// set is schemaless: a nested-object arg surfaces as dotted leaf columns.
     bool wants_schema() const override { return true; }
     bool reads_never_indexed() const override { return false; }
 
-    // keep std: trace::views::detail::Fold::slice returns std::unique_ptr
-    std::unique_ptr<trace::views::detail::Fold> slice() const override {
-        // keep std: Fold::slice returns std::unique_ptr
-        return std::make_unique<BloomFold>(*intern_, config_);
+    dstd::UniquePtr<trace::views::detail::Fold> slice() const override {
+        return dstd::make_unique<BloomFold>(*intern_, config_);
     }
 
     void step(const trace::views::detail::FoldBatch& batch) override;

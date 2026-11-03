@@ -122,8 +122,8 @@ FoldEvent evt(StringIntern& intern, const std::string& cat,
 
 // GROUPS distinct keys, each seen twice (in two different slices) so every
 // group's aggregate depends on the cross-slice merge as well as on the spill.
-std::vector<std::vector<FoldEvent>> wide_slices(StringIntern& intern) {
-    std::vector<FoldEvent> a, b;
+std::vector<dstd::Vector<FoldEvent>> wide_slices(StringIntern& intern) {
+    dstd::Vector<FoldEvent> a, b;
     a.reserve(GROUPS);
     b.reserve(GROUPS);
     for (int i = 0; i < GROUPS; ++i) {
@@ -218,7 +218,7 @@ std::map<std::string, Row> run_with_budget(dftu_plugin& p, std::uint64_t budget,
     StringIntern intern;
     NamedResultRegistry named;
     PluginFold master(&p, intern, nullptr, &named, "spill_test", budget);
-    for (const std::vector<FoldEvent>& evs : wide_slices(intern)) {
+    for (const dstd::Vector<FoldEvent>& evs : wide_slices(intern)) {
         auto slice = master.slice();
         auto* pf = static_cast<PluginFold*>(slice.get());
         ScanUnit unit{};

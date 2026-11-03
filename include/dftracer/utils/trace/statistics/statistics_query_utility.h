@@ -4,12 +4,12 @@
 
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/statistics/trace_statistics.h>
 
 #include <cstdint>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::trace::statistics {
 
@@ -32,7 +32,7 @@ struct StatisticsQueryInput {
 };
 
 struct StatisticsQueryOutput {
-    std::vector<dstd::Pair<std::string, std::uint64_t>> results;
+    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> results;
     std::uint64_t total_events = 0;
 
     std::uint64_t min_timestamp_us = 0;
@@ -45,9 +45,9 @@ struct StatisticsQueryOutput {
     std::uint64_t duration_min_us = 0;
     std::uint64_t duration_max_us = 0;
 
-    std::string query_type_name;
+    dstd::String query_type_name;
 
-    std::string to_json() const;
+    dstd::String to_json() const;
 };
 
 /// Derives report rows from a @ref TraceStatistics snapshot. A plain async op

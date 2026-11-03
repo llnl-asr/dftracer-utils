@@ -49,21 +49,21 @@ TEST_SUITE("IndexRootStat") {
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         REQUIRE(dstd::fs::create_directories(other).has_value());
 
-        const auto a =
-            trace::internal::index_root(std::string((dir / ".dftindex").str()));
+        const auto a = trace::internal::index_root(
+            dstd::String(std::string((dir / ".dftindex").str())));
         const auto b = trace::internal::index_root(
-            std::string((dir / "." / ".dftindex").str()));
+            dstd::String(std::string((dir / "." / ".dftindex").str())));
         CHECK(a == b);
         CHECK(a == trace::internal::index_root(
-                       std::string((dir / ".dftindex").str())));
+                       dstd::String(std::string((dir / ".dftindex").str()))));
         CHECK(a != trace::internal::index_root(
-                       std::string((other / ".dftindex").str())));
+                       dstd::String(std::string((other / ".dftindex").str()))));
 
         const dstd::Path link =
             dir.view().parent() / (std::string(dir.view().filename()) + "_ln");
         if (dstd::fs::create_symlink(dir, link).has_value()) {
-            CHECK(a == trace::internal::index_root(
-                           std::string((link / ".dftindex").str())));
+            CHECK(a == trace::internal::index_root(dstd::String(
+                           std::string((link / ".dftindex").str()))));
             (void)dstd::fs::remove(link);
         }
 

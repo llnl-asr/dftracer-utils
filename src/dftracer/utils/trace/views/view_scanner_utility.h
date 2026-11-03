@@ -4,7 +4,9 @@
 
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -19,17 +21,12 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
-#include <optional>
-#include <span>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::trace::views {
 
 struct ViewScannerInput {
-    std::string file_path;
-    std::string index_path;
+    dstd::String file_path;
+    dstd::String index_path;
     std::size_t checkpoint_size = dftracer::utils::index::gzip::
         CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t start_byte = 0;
@@ -54,7 +51,7 @@ struct ViewScannerInput {
     /// Top-level fields (type, ph, ...) to capture raw into each FoldEvent's
     /// args, for schemaless Field group keys the POD does not natively carry.
     /// Non-owning; the pointee outlives the scan. Null = capture nothing.
-    const std::vector<std::string>* fold_extra_fields = nullptr;
+    const dstd::Vector<dstd::String>* fold_extra_fields = nullptr;
     /// In fold mode, also keep each matching event's raw line in `events` (for
     /// a raw fold that parses it itself). Ignored when fold_intern is null -
     /// the non-fold scan already yields raw lines in `events`.
@@ -67,8 +64,8 @@ struct ViewScannerInput {
     /// of the decoded events; set only when no fold reads them.
     bool fold_skip_never_indexed = false;
 
-    ViewScannerInput& with_file_path(const std::string& path);
-    ViewScannerInput& with_index_path(const std::string& path);
+    ViewScannerInput& with_file_path(const dstd::String& path);
+    ViewScannerInput& with_index_path(const dstd::String& path);
     ViewScannerInput& with_checkpoint_size(std::size_t sz);
     ViewScannerInput& with_byte_range(std::size_t start, std::size_t end);
     ViewScannerInput& with_checkpoint_idx(std::uint64_t idx);
@@ -95,10 +92,10 @@ struct ViewScannerBatch {
     /// Event lines. In stream mode these are string_view into the
     /// decompressed chunk (zero copy, valid until next generator resume).
     /// Metadata events use owned strings stored in owned_events.
-    std::vector<dstd::StringView> events;
+    dstd::Vector<dstd::StringView> events;
     /// Owned storage for metadata events that outlive their source chunk.
     /// Uses deque so push_back doesn't invalidate string_view refs.
-    std::deque<std::string> owned_events;
+    dstd::Deque<dstd::String> owned_events;
     /// Fold mode (ViewScannerInput::fold_intern set): each matching event
     /// parsed once into an owned FoldEvent, so `events` stays empty. Borrowed
     /// from the scan's buffer; valid until the next generator resume.

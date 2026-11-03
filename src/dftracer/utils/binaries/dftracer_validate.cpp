@@ -85,8 +85,7 @@ coro::CoroTask<void> validate_file(dstd::String path, FileValResult* result) {
         // entry is absent from a shared root index resolves to zero bytes, so
         // validate would read no lines and still count the file as passing
         // without ever decompressing it.
-        // keep std: unswept API
-        const std::string std_path(result->path);
+        const dstd::String std_path(result->path);
         if (CheckpointIndexerFactory::detect_format(std_path) !=
             common::ArchiveFormat::Gzip) {
             throw std::runtime_error(

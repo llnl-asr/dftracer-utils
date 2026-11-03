@@ -4,10 +4,9 @@
 
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
-
-#include <string>
 
 namespace dftracer::utils::trace {
 
@@ -15,8 +14,8 @@ namespace dftracer::utils::trace {
  * @brief Input for DFTracer file metadata collection.
  */
 struct MetadataCollectorUtilityInput {
-    std::string file_path;
-    std::string index_path;  ///< Empty for plain files, otherwise `.dftindex`.
+    dstd::String file_path;
+    dstd::String index_path;  ///< Empty for plain files, otherwise `.dftindex`.
     std::size_t checkpoint_size = dftracer::utils::index::gzip::
         CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE;
     bool force_rebuild = false;
@@ -25,7 +24,7 @@ struct MetadataCollectorUtilityInput {
     MetadataCollectorUtilityInput() = default;
 
     MetadataCollectorUtilityInput(
-        std::string fpath, std::string ipath = "",
+        dstd::String fpath, dstd::String ipath = "",
         std::size_t ckpt = dftracer::utils::index::gzip::CheckpointIndexer::
             DEFAULT_CHECKPOINT_SIZE,
         bool force = false, bool hash = false)
@@ -35,13 +34,13 @@ struct MetadataCollectorUtilityInput {
           force_rebuild(force),
           compute_hash(hash) {}
 
-    static MetadataCollectorUtilityInput from_file(std::string path) {
+    static MetadataCollectorUtilityInput from_file(dstd::String path) {
         MetadataCollectorUtilityInput input;
         input.file_path = std::move(path);
         return input;
     }
 
-    MetadataCollectorUtilityInput& with_index(std::string idx) {
+    MetadataCollectorUtilityInput& with_index(dstd::String idx) {
         index_path = std::move(idx);
         return *this;
     }
@@ -73,8 +72,8 @@ struct MetadataCollectorUtilityInput {
  * @brief Output from DFTracer file metadata collection.
  */
 struct MetadataCollectorUtilityOutput {
-    std::string file_path;
-    std::string index_path;  ///< Root-local `.dftindex` path when available.
+    dstd::String file_path;
+    dstd::String index_path;  ///< Root-local `.dftindex` path when available.
     double size_mb = 0;
     std::size_t start_line = 0;
     std::size_t end_line = 0;
@@ -91,7 +90,7 @@ struct MetadataCollectorUtilityOutput {
     std::uint64_t checkpoint_size = 0;
     std::size_t num_checkpoints = 0;
     common::ArchiveFormat format = common::ArchiveFormat::Unknown;
-    std::string error_message;
+    dstd::String error_message;
     std::size_t event_hash = 0;
 
     MetadataCollectorUtilityOutput() = default;

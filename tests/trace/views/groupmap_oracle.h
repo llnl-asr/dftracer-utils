@@ -366,8 +366,8 @@ inline void resolve_group_keys(GroupMap& map, const ViewPlan& plan,
             if (idx >= accum.keys.size()) continue;
             std::string v =
                 maps.resolve(plan.group_by[j].kind, std::move(accum.keys[idx]));
-            accum.keys[idx] =
-                detail::apply_group_transform(plan.group_by[j], std::move(v));
+            accum.keys[idx] = std::string(detail::apply_group_transform(
+                plan.group_by[j], dftracer::utils::dstd::String(v)));
         }
         newkey.clear();
         for (const auto& part : accum.keys) {
@@ -554,18 +554,18 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
     std::vector<std::string> group_cols, value_cols, text_cols, hist_cols;
     if (plan.time_bucket_us > 0) group_cols.push_back("time_bucket");
     for (const auto& gk : plan.group_by)
-        group_cols.push_back(detail::group_col_name(gk));
+        group_cols.push_back(std::string(detail::group_col_name(gk)));
     const bool count_col = plan.agg.empty();
     if (count_col) {
         value_cols.push_back("count");
     } else {
         for (const auto& spec : plan.agg) {
             if (spec.op == AggOp::ArgMax || spec.op == AggOp::SetUnion)
-                text_cols.push_back(detail::agg_col_name(spec));
+                text_cols.push_back(std::string(detail::agg_col_name(spec)));
             else if (spec.op == AggOp::Hist)
-                hist_cols.push_back(detail::agg_col_name(spec));
+                hist_cols.push_back(std::string(detail::agg_col_name(spec)));
             else
-                value_cols.push_back(detail::agg_col_name(spec));
+                value_cols.push_back(std::string(detail::agg_col_name(spec)));
         }
     }
     struct DynCol {
@@ -587,7 +587,8 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
             for (const auto& n : names)
                 for (const auto& spec : plan.numeric_arg_aggs) {
                     dyn_cols.push_back({n, spec});
-                    value_cols.push_back(detail::dyn_col_name(spec, n));
+                    value_cols.push_back(std::string(detail::dyn_col_name(
+                        spec, dftracer::utils::dstd::String(n))));
                 }
         }
     }
@@ -778,8 +779,9 @@ class OracleAggFold : public detail::Fold {
 
     bool accepts(const detail::ScanShape&) const override { return true; }
     bool needs_args() const override { return true; }
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<OracleAggFold>(*plan_, *intern_);
+    dftracer::utils::dstd::UniquePtr<Fold> slice() const override {
+        return dftracer::utils::dstd::make_unique<OracleAggFold>(*plan_,
+                                                                 *intern_);
     }
     void step(const detail::FoldBatch& batch) override {
         for (const auto& ev : batch.events) {

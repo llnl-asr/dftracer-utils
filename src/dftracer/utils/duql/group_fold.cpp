@@ -87,8 +87,7 @@ dstd::Vector<std::uint8_t> validity(const dstd::Vector<bool>& valid) {
 }
 
 dftu_op_arg plugin_arg(const dftu_op_desc& op,
-                       // keep std: FoldAgg::params is a std::vector<double>
-                       const std::vector<double>& params) {
+                       const dstd::Vector<double>& params) {
     dftu_op_arg arg{};
     for (std::uint32_t i = 1; i < DFTU_OP_MAX_ARGS; ++i) {
         const dftu_op_tok tok = DFTU_OP_SIG_ARG(op.sig, i);
@@ -180,10 +179,8 @@ struct GroupFold::Arg {
     bool has = false;
 };
 
-// keep std: view_duql passes std::vector for these
-GroupFold::GroupFold(std::vector<df::DataType> key_types,
-                     // keep std: view_duql passes std::vector for these
-                     std::vector<FoldAgg> aggs)
+GroupFold::GroupFold(dstd::Vector<df::DataType> key_types,
+                     dstd::Vector<FoldAgg> aggs)
     : key_types_(std::move(key_types)),
       aggs_(std::move(aggs)),
       key_parts_(key_types_.size()),
@@ -472,7 +469,7 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
     if (engine_) {
         // keep std: df::agg_finalize takes std::vector<std::string>
         engine =
-            // keep std: view_duql passes std::vector for these
+            // keep std: df::agg_finalize takes std::vector<std::string>
             df::agg_finalize(*engine_, std::vector<std::string>{"__duql_gid"});
         order.assign(count, -1);
         const df::Series g = engine->columns.front().cast(TypeId::Int64);

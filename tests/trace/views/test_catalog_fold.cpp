@@ -120,8 +120,10 @@ Catalog catalog_of(const std::string& gz) {
 }
 
 View view_of(const std::string& gz, const std::string& schema = "") {
-    View v = View::from_file(gz, std::string(determine_index_path(gz, "")));
-    return schema.empty() ? v : v.record_schema(schema);
+    View v = View::from_file(
+        dstd::String(gz),
+        dstd::String(std::string(determine_index_path(gz, ""))));
+    return schema.empty() ? v : v.record_schema(dstd::String(schema));
 }
 
 void build_full(const std::string& gz, const std::string& schema = "") {
@@ -230,9 +232,9 @@ TEST_SUITE("CatalogFold") {
         (void)view_of(fresh).duql(R"(name == "read")").collect().get();
         REQUIRE_FALSE(has_catalog(fresh));
 
-        std::vector<ViewFile> files;
-        files.push_back({have, std::string(determine_index_path(have, ""))});
-        files.push_back({fresh, std::string(determine_index_path(fresh, ""))});
+        dstd::Vector<ViewFile> files;
+        files.push_back({dstd::String(have), determine_index_path(have, "")});
+        files.push_back({dstd::String(fresh), determine_index_path(fresh, "")});
         (void)View::from_files(std::move(files)).columns();
         CHECK(has_catalog(fresh));
         CHECK(has_sentinel(have));

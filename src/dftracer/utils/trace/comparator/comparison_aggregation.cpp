@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/comparator/comparison_aggregation.h>
 #include <dftracer/utils/trace/comparator/comparison_collapse.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -507,10 +510,10 @@ CollapsedMap collapse_by_group(const AggQueryResult& windows,
     order.reserve(merged.rows.size());
     for (const auto& row : merged.rows) order.push_back(&row);
     const auto text_key = [&](const AggKey& k) {
-        return std::tuple(merged.text(k.cat), merged.text(k.name),
-                          merged.text(k.host), merged.text(k.extra),
-                          merged.text(k.file_text), k.kind, k.pid, k.tid,
-                          k.file, k.window);
+        return dstd::Tuple(merged.text(k.cat), merged.text(k.name),
+                           merged.text(k.host), merged.text(k.extra),
+                           merged.text(k.file_text), k.kind, k.pid, k.tid,
+                           k.file, k.window);
     };
     std::sort(order.begin(), order.end(), [&](const auto* a, const auto* b) {
         return text_key(a->first) < text_key(b->first);
@@ -527,7 +530,7 @@ CollapsedMap collapse_by_group(const AggQueryResult& windows,
 }
 
 coro::CoroTask<common::Result<SideAggregate>> aggregate_side(
-    dstd::Span<const std::string> files, dstd::StringView index_dir,
+    dstd::Span<const dstd::String> files, dstd::StringView index_dir,
     const dstd::Vector<ComparisonFilter>& filters, std::uint64_t window_us,
     std::size_t workers, dstd::StringIntern& strings) {
     SideAggregate side;
@@ -538,7 +541,7 @@ coro::CoroTask<common::Result<SideAggregate>> aggregate_side(
         dstd::Map<dstd::String, std::size_t> root_of;
         for (const auto& f : files) {
             dstd::String root(
-                internal::determine_index_path(f, std::string(index_dir)));
+                internal::determine_index_path(f, dstd::String(index_dir)));
             auto it = root_of.find(root);
             if (it == root_of.end()) {
                 it = root_of.emplace(root, base.sources.size()).first;

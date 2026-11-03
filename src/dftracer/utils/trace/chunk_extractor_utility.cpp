@@ -3,6 +3,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
@@ -91,7 +92,7 @@ ChunkExtractorUtility::extract_and_write(
     ChunkWriterConfig writer_config;
     writer_config.output_dir = input.output_dir;
     writer_config.base_name =
-        input.app_name + "-" + std::to_string(input.chunk_index);
+        input.app_name + "-" + dstd::to_string(input.chunk_index);
     writer_config.chunk_size_bytes = input.chunk_size_bytes;
     writer_config.member_size_bytes = input.member_size_bytes;
     writer_config.compress = input.compress;
@@ -129,7 +130,6 @@ ChunkExtractorUtility::extract_and_write(
 
     co_await writer.close();
 
-    // keep std: ChunkExtractorUtilityOutput::chunks is a std::vector
     result.chunks.assign(writer.chunks().begin(), writer.chunks().end());
     result.events = writer.total_events_written();
     result.event_hash = content_hash;

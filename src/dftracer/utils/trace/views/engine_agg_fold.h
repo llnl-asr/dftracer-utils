@@ -4,8 +4,10 @@
 
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
@@ -19,10 +21,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -67,16 +65,16 @@ class EngineAggFold : public Fold {
         // arg field the predicate reads (cat/name/pid/... are arg-free).
         if (apply_query_ && plan_->query)
             for (dstd::StringView f : plan_->query->fields())
-                if (!arg_free_field(std::string(f))) return true;
+                if (!arg_free_field(dstd::String(f))) return true;
         return false;
     }
 
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<EngineAggFold>(*plan_, *intern_, apply_query_);
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<EngineAggFold>(*plan_, *intern_, apply_query_);
     }
 
     void step(const FoldBatch& batch) override {
-        std::vector<FoldEvent> keep =
+        dstd::Vector<FoldEvent> keep =
             select_events(batch, [&](const FoldEvent& ev) {
                 if (ev.phase == RecordPhase::Metadata && !keep_metadata_ &&
                     phase_target_ != RecordPhase::Metadata)
@@ -92,6 +90,7 @@ class EngineAggFold : public Fold {
             build_agg_input_frame(keep, *intern_, spec_, resolver_);
         dftracer::utils::dataframe::agg_accumulate_chunk(
             *state_, f, spec_.group_key_names, lowered_.value_names,
+            // keep std: dataframe names are std::string
             spec_.emit_dyn ? spec_.dyn_prefix : std::string());
     }
 
@@ -116,7 +115,7 @@ class EngineAggFold : public Fold {
     }
 
    private:
-    static bool arg_free_field(const std::string& f) {
+    static bool arg_free_field(const dstd::String& f) {
         return f.empty() || f == "ts" || f == "dur" || f == "te" ||
                f == "cat" || f == "name" || f == "pid" || f == "tid" ||
                f == "fhash" || f == "hhash";

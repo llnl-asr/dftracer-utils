@@ -855,7 +855,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     co_await views::View::from_files(to_view_files(files))
         .phase(views::Phase::Any)  // every record: cells, counters, metadata
         .for_each_batch(
-            [&b](std::size_t w, const std::vector<dstd::StringView>& events) {
+            [&b](std::size_t w, const dstd::Vector<dstd::StringView>& events) {
                 b.fields.for_each_event(events, [&](dstd::StringView ev) {
                     fold_summary(w, ev, b);
                 });

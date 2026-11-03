@@ -1,28 +1,30 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/statistics/statistics_query_utility.h>
 
 #include <algorithm>
 #include <cmath>
-#include <iomanip>
 #include <limits>
-#include <sstream>
 
 namespace dftracer::utils::trace::statistics {
 
 namespace {
 template <typename Map>
-std::vector<dstd::Pair<std::string, std::uint64_t>> sorted_desc(const Map& m) {
-    std::vector<dstd::Pair<std::string, std::uint64_t>> v(m.begin(), m.end());
+dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> sorted_desc(
+    const Map& m) {
+    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> v(m.begin(), m.end());
     std::sort(v.begin(), v.end(),
               [](const auto& a, const auto& b) { return a.second > b.second; });
     return v;
 }
 
 template <typename Map>
-std::vector<dstd::Pair<std::string, std::uint64_t>> top_n(const Map& m,
-                                                          std::uint64_t n) {
+dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> top_n(const Map& m,
+                                                            std::uint64_t n) {
     auto v = sorted_desc(m);
     if (n == 0) {
         return v;
@@ -136,45 +138,59 @@ coro::CoroTask<StatisticsQueryOutput> StatisticsQueryUtility::operator()(
     co_return output;
 }
 
-std::string StatisticsQueryOutput::to_json() const {
-    std::ostringstream ss;
-    ss << std::setprecision(17);
-    ss << '{';
+dstd::String StatisticsQueryOutput::to_json() const {
+    dstd::String ss;
+    ss += '{';
 
-    ss << "\"query_type\":\"" << query_type_name << '"';
-    ss << ",\"total_events\":" << total_events;
+    ss += "\"query_type\":\"";
+    internal::append_value(ss, query_type_name);
+    ss += '"';
+    ss += ",\"total_events\":";
+    internal::append_value(ss, total_events);
 
     if (!results.empty()) {
-        ss << ",\"results\":[";
+        ss += ",\"results\":[";
         bool first = true;
         for (const auto& [name, count] : results) {
-            if (!first) ss << ',';
+            if (!first) ss += ',';
             first = false;
-            ss << "{\"name\":\"" << name << "\",\"count\":" << count << '}';
+            ss += "{\"name\":\"";
+            internal::append_value(ss, name);
+            ss += "\",\"count\":";
+            internal::append_value(ss, count);
+            ss += '}';
         }
-        ss << ']';
+        ss += ']';
     }
 
     if (min_timestamp_us > 0 || max_timestamp_us > 0) {
-        ss << ",\"time_range\":{";
-        ss << "\"min_timestamp_us\":" << min_timestamp_us;
-        ss << ",\"max_timestamp_us\":" << max_timestamp_us;
-        ss << ",\"time_span_seconds\":" << time_span_seconds;
-        ss << '}';
+        ss += ",\"time_range\":{";
+        ss += "\"min_timestamp_us\":";
+        internal::append_value(ss, min_timestamp_us);
+        ss += ",\"max_timestamp_us\":";
+        internal::append_value(ss, max_timestamp_us);
+        ss += ",\"time_span_seconds\":";
+        internal::append_value(ss, time_span_seconds);
+        ss += '}';
     }
 
     if (duration_count > 0) {
-        ss << ",\"duration\":{";
-        ss << "\"count\":" << duration_count;
-        ss << ",\"mean_us\":" << duration_mean_us;
-        ss << ",\"stddev_us\":" << duration_stddev_us;
-        ss << ",\"min_us\":" << duration_min_us;
-        ss << ",\"max_us\":" << duration_max_us;
-        ss << '}';
+        ss += ",\"duration\":{";
+        ss += "\"count\":";
+        internal::append_value(ss, duration_count);
+        ss += ",\"mean_us\":";
+        internal::append_value(ss, duration_mean_us);
+        ss += ",\"stddev_us\":";
+        internal::append_value(ss, duration_stddev_us);
+        ss += ",\"min_us\":";
+        internal::append_value(ss, duration_min_us);
+        ss += ",\"max_us\":";
+        internal::append_value(ss, duration_max_us);
+        ss += '}';
     }
 
-    ss << '}';
-    return ss.str();
+    ss += '}';
+    return ss;
 }
 
 }  // namespace dftracer::utils::trace::statistics

@@ -9,6 +9,8 @@
 #include <dftracer/utils/dataframe/lazy_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/any.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -23,17 +25,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <span>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dstd {
 class StringIntern;
@@ -93,11 +87,11 @@ struct GroupKey {
     enum class Transform { None, Dirname, Basename, Lower, Bucket };
 
     Kind kind = Kind::Name;
-    std::string arg;
+    dstd::String arg;
     Transform transform = Transform::None;
     /// Bucket substrings, in priority order; the first one contained in the
     /// value wins and values matching none fold to empty. Bucket only.
-    std::vector<std::string> transform_args{};
+    dstd::Vector<dstd::String> transform_args{};
 
     static GroupKey name() { return {Kind::Name, {}}; }
     static GroupKey cat() { return {Kind::Cat, {}}; }
@@ -111,10 +105,10 @@ struct GroupKey {
     static GroupKey file_name() { return {Kind::FileName, {}}; }
     static GroupKey host_name() { return {Kind::HostName, {}}; }
     static GroupKey rank() { return {Kind::Rank, {}}; }
-    static GroupKey of_arg(std::string key) {
+    static GroupKey of_arg(dstd::String key) {
         return {Kind::Arg, std::move(key)};
     }
-    static GroupKey field(std::string name) {
+    static GroupKey field(dstd::String name) {
         return {Kind::Field, std::move(name)};
     }
 };
@@ -172,14 +166,14 @@ inline bool is_dyn_reduction(AggOp op) {
 /// `out_name` names the output column.
 struct AggSpec {
     AggOp op = AggOp::Count;
-    std::string field;
-    std::string out_name;
-    std::string by;  ///< ArgMax only: the field whose max selects `field`
-    double q = 0.0;  ///< Pct only: the quantile in (0, 1)
+    dstd::String field;
+    dstd::String out_name;
+    dstd::String by;  ///< ArgMax only: the field whose max selects `field`
+    double q = 0.0;   ///< Pct only: the quantile in (0, 1)
 
     AggSpec() = default;
-    AggSpec(AggOp o, std::string f = "", std::string out = "",
-            std::string b = "", double quant = 0.0)
+    AggSpec(AggOp o, dstd::String f = "", dstd::String out = "",
+            dstd::String b = "", double quant = 0.0)
         : op(o),
           field(std::move(f)),
           out_name(std::move(out)),
@@ -190,8 +184,8 @@ struct AggSpec {
 /// A file and its index. Sizes are optional; zero means read them from the
 /// index.
 struct ViewFile {
-    std::string file_path;
-    std::string index_path;
+    dstd::String file_path;
+    dstd::String index_path;
     std::uint64_t uncompressed_size = 0;
     std::size_t num_checkpoints = 0;
     std::size_t checkpoint_size = 0;  ///< 0 = indexer default
@@ -247,7 +241,7 @@ struct ScanCounter {
 /// (striped/sharded/padded) and the exact worker count are chosen from the
 /// target filesystem.
 struct TraceWriteOptions {
-    std::string output_path;
+    dstd::String output_path;
     std::size_t member_size = 0;
     std::size_t num_workers = 1;
     bool compress = true;
@@ -258,7 +252,7 @@ struct TraceWriteOptions {
     /// a single in-order member stream (scan/decompress stays parallel) so the
     /// index needs no post-hoc offset remap.
     bool build_index = false;
-    std::string index_path;
+    dstd::String index_path;
     /// Roll to a new `part-<k>` file once a part reaches this many uncompressed
     /// bytes, so one large result splits into several indexed part files
     /// sharing `index_path`. 0 = one file. Only honored on the indexed write
@@ -290,7 +284,7 @@ struct TypedResult {
 
 /// Progress callback for a shard-range read: called with (done, total) shard
 /// units as the scan advances through the range.
-using ProgressFn = std::function<void(std::size_t, std::size_t)>;
+using ProgressFn = dstd::Function<void(std::size_t, std::size_t)>;
 
 /// Result of map_batches(): the reduced fold `value` plus the `stats` of the
 /// scan that produced it.
@@ -372,20 +366,21 @@ class ViewSession {
     /// Aggregate the branch's matching events (group_by + agg) into a
     /// @ref dftracer::utils::dataframe::DataFrame "DataFrame".
     Deferred<dftracer::utils::dataframe::DataFrame> collect(
-        Query predicate, std::vector<GroupKey> group_by,
-        std::vector<AggSpec> agg);
+        Query predicate, dstd::Vector<GroupKey> group_by,
+        dstd::Vector<AggSpec> agg);
 
     /// Aggregate ALL of the base view's events (no per-branch predicate) into a
     /// @ref dftracer::utils::dataframe::DataFrame "DataFrame". For a branch
     /// that wants every scanned event, so several distinct group_by/agg
     /// aggregations share the one scan.
     Deferred<dftracer::utils::dataframe::DataFrame> collect(
-        std::vector<GroupKey> group_by, std::vector<AggSpec> agg);
+        dstd::Vector<GroupKey> group_by, dstd::Vector<AggSpec> agg);
 
     /// Persist the (group_by + agg) aggregation over ALL scanned events as a
     /// rollup, sharing the one scan. Build-only (no handle); a later matching
     /// collect() reads it back.
-    void materialize(std::vector<GroupKey> group_by, std::vector<AggSpec> agg);
+    void materialize(dstd::Vector<GroupKey> group_by,
+                     dstd::Vector<AggSpec> agg);
 
     /// Stream the branch's matching events verbatim to `sink`.
     Deferred<ExportStats> export_json(Query predicate, ExportSink& sink);
@@ -419,8 +414,8 @@ class ViewSession {
     template <class P>
     Deferred<P> fold(
         Query predicate,
-        std::function<void(P&, const json::JsonValue&, dstd::StringView)> f,
-        std::function<P(P&&, P&&)> combine) {
+        dstd::Function<void(P&, const json::JsonValue&, dstd::StringView)> f,
+        dstd::Function<P(P&&, P&&)> combine) {
         return fold_into<P>(std::move(predicate), std::move(f),
                             std::move(combine));
     }
@@ -429,8 +424,8 @@ class ViewSession {
     /// filters and phase (data events unless phase() selects metadata).
     template <class P>
     Deferred<P> fold(
-        std::function<void(P&, const json::JsonValue&, dstd::StringView)> f,
-        std::function<P(P&&, P&&)> combine) {
+        dstd::Function<void(P&, const json::JsonValue&, dstd::StringView)> f,
+        dstd::Function<P(P&&, P&&)> combine) {
         return fold_into<P>(dstd::nullopt, std::move(f), std::move(combine));
     }
 
@@ -439,8 +434,8 @@ class ViewSession {
     template <class P>
     Deferred<P> fold(
         const FieldExpr& predicate,
-        std::function<void(P&, const json::JsonValue&, dstd::StringView)> f,
-        std::function<P(P&&, P&&)> combine) {
+        dstd::Function<void(P&, const json::JsonValue&, dstd::StringView)> f,
+        dstd::Function<P(P&&, P&&)> combine) {
         return fold<P>(predicate.to_duql(), std::move(f), std::move(combine));
     }
 
@@ -448,10 +443,10 @@ class ViewSession {
     /// with the scan's @ref dstd::StringIntern so ids agree and per-worker
     /// slices merge; `finalize` runs after the scan while the fold is still
     /// alive. Forces a scan (a plugin cannot be served from a rollup).
-    void attach_fold_factory(std::function<std::unique_ptr<detail::Fold>(
+    void attach_fold_factory(dstd::Function<dstd::UniquePtr<detail::Fold>(
                                  dftracer::utils::dstd::StringIntern&)>
                                  make,
-                             std::function<void()> finalize);
+                             dstd::Function<void()> finalize);
 
     /// Offer `q` as a narrowing of this session's shared scan, so the index can
     /// skip chunks the attached fold does not want. APPLIED ONLY when no other
@@ -478,7 +473,7 @@ class ViewSession {
 
     /// Aggregate `branch` into a serialized partial (opaque bytes) for a
     /// distributed merge, over the shared scan. Merge and resolve later.
-    Deferred<std::string> aggregate_partial(const detail::ScanPlan& branch);
+    Deferred<dstd::String> aggregate_partial(const detail::ScanPlan& branch);
 
     /// Materialize the branch's matching events into a @ref
     /// dftracer::utils::dataframe::DataFrame "DataFrame" over the shared scan.
@@ -493,40 +488,41 @@ class ViewSession {
     /// (POD scalar fast path, else captured arg/nested).
     Deferred<dftracer::utils::dataframe::DataFrame> call_tree(
         const detail::ScanPlan& branch,
-        std::vector<std::string> partition = {"pid", "tid"},
-        std::string ts = "ts", std::string dur = "dur",
-        std::string name = "name");
+        dstd::Vector<dstd::String> partition = {"pid", "tid"},
+        dstd::String ts = "ts", dstd::String dur = "dur",
+        dstd::String name = "name");
 
     Deferred<dftracer::utils::dataframe::DataFrame> flamegraph(
         const detail::ScanPlan& branch,
-        std::vector<std::string> partition = {"pid", "tid"},
-        std::string ts = "ts", std::string dur = "dur",
-        std::string name = "name");
+        dstd::Vector<dstd::String> partition = {"pid", "tid"},
+        dstd::String ts = "ts", dstd::String dur = "dur",
+        dstd::String name = "name");
 
     /// Both containment outputs from ONE buffered fold over the shared scan -
     /// the events buffer once and each lane sorts once, feeding both builders.
-    ContainmentHandles containment(const detail::ScanPlan& branch,
-                                   std::vector<std::string> partition = {"pid",
-                                                                         "tid"},
-                                   std::string ts = "ts",
-                                   std::string dur = "dur",
-                                   std::string name = "name");
+    ContainmentHandles containment(
+        const detail::ScanPlan& branch,
+        dstd::Vector<dstd::String> partition = {"pid", "tid"},
+        dstd::String ts = "ts", dstd::String dur = "dur",
+        dstd::String name = "name");
 
     template <class P>
     Deferred<P> fold_into(
         dstd::Optional<Query> predicate,
-        std::function<void(P&, const json::JsonValue&, dstd::StringView)> f,
-        std::function<P(P&&, P&&)> combine) {
-        auto out = std::make_shared<P>();
-        auto partials = std::make_shared<std::vector<dstd::SharedPtr<P>>>();
+        dstd::Function<void(P&, const json::JsonValue&, dstd::StringView)> f,
+        dstd::Function<P(P&&, P&&)> combine) {
+        auto out = dstd::make_shared<P>();
+        auto partials = dstd::make_shared<dstd::Vector<dstd::SharedPtr<P>>>();
+        auto fn = dstd::make_shared<
+            dstd::Function<void(P&, const json::JsonValue&, dstd::StringView)>>(
+            std::move(f));
         attach_fold(
             std::move(predicate),
-            [f = std::move(f), partials]() {
-                auto p = std::make_shared<P>();
+            [fn, partials]() {
+                auto p = dstd::make_shared<P>();
                 partials->push_back(p);
-                return [f, p](const json::JsonValue& jv, dstd::StringView raw) {
-                    f(*p, jv, raw);
-                };
+                return [fn, p](const json::JsonValue& jv,
+                               dstd::StringView raw) { (*fn)(*p, jv, raw); };
             },
             [partials, out, combine = std::move(combine)]() {
                 P acc{};
@@ -543,58 +539,58 @@ class ViewSession {
     /// no predicate the branch takes the base view's selection.
     void attach_fold(
         dstd::Optional<Query> predicate,
-        std::function<
-            std::function<void(const json::JsonValue&, dstd::StringView)>()>
+        dstd::Function<
+            dstd::Function<void(const json::JsonValue&, dstd::StringView)>()>
             make_consumer,
-        std::function<void()> finalize);
+        dstd::Function<void()> finalize);
     /// Look up the leading key-column count recorded for a collect branch's
     /// output, or -1 if that output was not a collect() of this session.
     std::int64_t key_count_of(const void* out) const;
     void add_containment_branch(
         const detail::ScanPlan& branch,
-        const std::vector<std::string>& partition, const std::string& ts,
-        const std::string& dur, const std::string& name,
-        const std::vector<std::string>& group,
+        const dstd::Vector<dstd::String>& partition, const dstd::String& ts,
+        const dstd::String& dur, const dstd::String& name,
+        const dstd::Vector<dstd::String>& group,
         dstd::SharedPtr<dftracer::utils::dataframe::DataFrame> out_ct,
         dstd::SharedPtr<dftracer::utils::dataframe::DataFrame> out_fg,
-        dstd::SharedPtr<std::string> out_partial = nullptr);
+        dstd::SharedPtr<dstd::String> out_partial = nullptr);
     dstd::SharedPtr<detail::ViewSessionState> state_;
-    dstd::SharedPtr<bool> executed_ = std::make_shared<bool>(false);
+    dstd::SharedPtr<bool> executed_ = dstd::make_shared<bool>(false);
     /// Leading key-column count per collect branch, keyed by its output
     /// pointer, so join()/compare() can infer n_key without the caller passing
     /// it.
-    std::vector<dstd::Pair<const void*, std::int64_t>> key_counts_;
+    dstd::Vector<dstd::Pair<const void*, std::int64_t>> key_counts_;
     /// Post-scan combines (join/compare), run after every branch finalize in
     /// execute() since they read two already-resolved branch outputs.
-    std::vector<std::function<void()>> combines_;
+    dstd::Vector<dstd::Function<void()>> combines_;
 };
 
 enum class JoinType;
 
 /// A column of the trace schema and its type, as the index reports it.
 struct ColumnInfo {
-    std::string name;  ///< Dotted leaf path (e.g. "hostname", "pos.x").
-    std::string type;  ///< "int64", "float64", "string" or "json".
+    dstd::String name;  ///< Dotted leaf path (e.g. "hostname", "pos.x").
+    dstd::String type;  ///< "int64", "float64", "string" or "json".
 };
 
 /// One path of a View's schema tree, from the index.
 struct SchemaLeaf {
     /// The JSON path as the records write it (`io.off`, `hosts.1`).
-    std::string path;
+    dstd::String path;
     /// Observed type: "null", "bool", "int", "uint", "float", "string" or
     /// "mixed"; empty when no file holds the path.
-    std::string type;
+    dstd::String type;
     /// Records holding the path non-null, summed over the files; unset for a
     /// json field at an object or array, which the index does not count.
     dstd::Optional<std::uint64_t> count;
     /// The declared field's name and type; empty when undeclared.
-    std::string field;
-    std::string declared_type;
+    dstd::String field;
+    dstd::String declared_type;
 };
 
 /// `leaves` as a JSON array of objects with path, type, count, field and
 /// declared_type (null when empty or unset).
-dstd::String schema_tree_json(const std::vector<SchemaLeaf>& leaves);
+dstd::String schema_tree_json(const dstd::Vector<SchemaLeaf>& leaves);
 
 /// Collects several plans together: record them with collect(), then
 /// execute() once. Plans over the same trace base share one scan, as
@@ -606,7 +602,7 @@ class View;
 /// has executed, given the scan's stats. The branch sees every event the
 /// session scans.
 using SessionBranch =
-    std::function<std::function<void(const ExportStats&)>(ViewSession&)>;
+    dstd::Function<dstd::Function<void(const ExportStats&)>(ViewSession&)>;
 
 /// Both containment frames of one buffered fold.
 struct ContainmentResult {
@@ -624,6 +620,7 @@ namespace detail {
 template <class T>
 coro::CoroTask<void> resolve_into(
     dstd::SharedPtr<T> out, typename dataframe::LazyResult<T>::Finish finish,
+    // keep std: LazyResult::Finish takes std::vector<DataFrame>
     std::vector<dataframe::DataFrame> frames) {
     *out = co_await finish(std::move(frames));
 }
@@ -631,10 +628,10 @@ coro::CoroTask<void> resolve_into(
 View view_of(ScanPlan plan);
 /// `v`, whose row scan names `columns` as schema columns after its own and
 /// still returns every path. `v` must still read raw events.
-View with_named_columns(const View& v, std::vector<dataframe::Field> columns);
+View with_named_columns(const View& v, dstd::Vector<dataframe::Field> columns);
 /// The leaves of `v`'s catalogs as they stand; unlike View::schema_tree it
 /// builds none.
-std::vector<SchemaLeaf> catalog_leaves(const View& v);
+dstd::Vector<SchemaLeaf> catalog_leaves(const View& v);
 }  // namespace detail
 
 /// Plans registered here run together on execute(), as collect_all() runs
@@ -644,8 +641,9 @@ class TraceSession {
     Deferred<dataframe::DataFrame> collect(dataframe::LazyFrame plan);
     template <class T>
     Deferred<T> collect(dataframe::LazyResult<T> result) {
-        auto out = std::make_shared<T>();
+        auto out = dstd::make_shared<T>();
         add(result.plans(), [out, finish = result.finish()](
+                                // keep std: Finish takes std::vector
                                 std::vector<dataframe::DataFrame> frames) {
             return detail::resolve_into<T>(out, finish, std::move(frames));
         });
@@ -657,17 +655,21 @@ class TraceSession {
     coro::CoroTask<void> execute();
 
    private:
+    // keep std: LazyFrame collect_all hands out std::vector<DataFrame>
     using Resolve =
-        std::function<coro::CoroTask<void>(std::vector<dataframe::DataFrame>)>;
+        // keep std: the dataframe API takes std::vector
+        dstd::Function<coro::CoroTask<void>(std::vector<dataframe::DataFrame>)>;
     struct Pending {
         std::size_t count;
         Resolve resolve;
     };
+    // keep std: LazyResult::plans is a std::vector<LazyFrame>
     void add(const std::vector<dataframe::LazyFrame>& plans, Resolve resolve);
 
+    // keep std: collect_all takes std::vector<LazyFrame>
     std::vector<dataframe::LazyFrame> plans_;
-    std::vector<Pending> pending_;
-    dstd::SharedPtr<bool> executed_ = std::make_shared<bool>(false);
+    dstd::Vector<Pending> pending_;
+    dstd::SharedPtr<bool> executed_ = dstd::make_shared<bool>(false);
 };
 
 /// A lazy, composable view over trace files: a @ref
@@ -689,26 +691,24 @@ class View : public dataframe::LazyOps<View> {
     /// An empty view (no files); collects to an empty result.
     View();
 
-    static View from_file(std::string file_path, std::string index_path = "");
-    static View from_files(std::vector<ViewFile> files);
+    static View from_file(dstd::String file_path, dstd::String index_path = "");
+    static View from_files(dstd::Vector<ViewFile> files);
     /// Scans `dir` recursively for trace files (.pfw, .jsonl and
     /// .ndjson, plain or gzip), sorted by path; index, split and schemas
     /// directories are skipped. Each file's index resolves under
     /// `index_path` (empty = beside the trace). The files with records must
     /// share one record_schema.
-    static coro::CoroTask<View> from_directory(std::string dir,
-                                               std::string index_path = "");
+    static coro::CoroTask<View> from_directory(dstd::String dir,
+                                               dstd::String index_path = "");
 
     using LazyOps<View>::filter;
     using LazyOps<View>::group_by;
-
-    using LazyOps<View>::select;
 
     /// On raw events with only filters before it, the fields the scan reads:
     /// any field, indexed or not, and a bare arg name reads that arg as
     /// "args.<key>". Otherwise a projection of the plan's
     /// columns.
-    View select(std::vector<std::string> names) const;
+    View select(dstd::Vector<dstd::String> names) const;
     View filter(Query q) const;
     View filter(const FieldExpr& pred) const;
     /// Apply the duql pipeline `text` with `params` bound: the leading
@@ -757,19 +757,19 @@ class View : public dataframe::LazyOps<View> {
     /// Multiplies the ts and dur a dftracer trace outputs by `ns_ratio`.
     /// Throws INVALID_ARGUMENT for a path schema, whose fields declare units.
     View time_scale(double ns_ratio) const;
-    View group_by(std::vector<GroupKey> keys) const;
-    View agg(std::vector<AggSpec> specs) const;
-    View agg(std::vector<FieldAggExpr> exprs) const;
+    View group_by(dstd::Vector<GroupKey> keys) const;
+    View agg(dstd::Vector<AggSpec> specs) const;
+    View agg(dstd::Vector<FieldAggExpr> exprs) const;
     View agg_numeric_args() const;
-    View agg_numeric_args(std::vector<AggSpec> reductions) const;
+    View agg_numeric_args(dstd::Vector<AggSpec> reductions) const;
     /// Read the files as the registered record_schema `id` instead of their
     /// recorded or detected one. Throws @ref
     /// dftracer::utils::common::DFTUtilsException "DFTUtilsException"
     /// INVALID_ARGUMENT for an unregistered id.
-    View record_schema(std::string id) const;
-    View rollup_root(std::string dir) const;
-    View views_root(std::string dir) const;
-    View cancel_when(std::function<bool()> pred) const;
+    View record_schema(dstd::String id) const;
+    View rollup_root(dstd::String dir) const;
+    View views_root(dstd::String dir) const;
+    View cancel_when(dstd::Function<bool()> pred) const;
     /// Spill budget for both the trace aggregation and the @ref
     /// dftracer::utils::dataframe::LazyFrame "LazyFrame" ops.
     View memory_budget(std::uint64_t bytes) const;
@@ -778,12 +778,12 @@ class View : public dataframe::LazyOps<View> {
     View count_scans(dstd::SharedPtr<ScanCounter> counter) const;
 
     /// Index metadata only; no trace event is decoded.
-    std::vector<std::string> columns() const;
-    std::vector<ColumnInfo> column_info() const;
+    dstd::Vector<dstd::String> columns() const;
+    dstd::Vector<ColumnInfo> column_info() const;
     /// Every path the files hold, with types, counts and the record schema's
     /// declared fields (count 0 when no file holds one), sorted by path, from
     /// the index without scanning records.
-    std::vector<SchemaLeaf> schema_tree() const;
+    dstd::Vector<SchemaLeaf> schema_tree() const;
     TimeMetric time_metric() const;
     /// The spill budget set on this view, in bytes (0 = the default).
     std::uint64_t memory_budget_bytes() const;
@@ -800,34 +800,36 @@ class View : public dataframe::LazyOps<View> {
     /// "LazyFrame"; the trace methods end here. Each throws INVALID_ARGUMENT
     /// naming the first op of this viewer that the terminal cannot take
     /// (anything but absorbed filters and projections).
-    dataframe::LazyFrame call_tree(std::vector<std::string> partition = {"pid",
-                                                                         "tid"},
-                                   std::string ts = "ts",
-                                   std::string dur = "dur",
-                                   std::string name = "name") const;
+    dataframe::LazyFrame call_tree(
+        dstd::Vector<dstd::String> partition = {"pid", "tid"},
+        dstd::String ts = "ts", dstd::String dur = "dur",
+        dstd::String name = "name") const;
     dataframe::LazyFrame flamegraph(
-        std::vector<std::string> partition = {"pid", "tid"},
-        std::string ts = "ts", std::string dur = "dur",
-        std::string name = "name", std::vector<std::string> group = {}) const;
+        dstd::Vector<dstd::String> partition = {"pid", "tid"},
+        dstd::String ts = "ts", dstd::String dur = "dur",
+        dstd::String name = "name",
+        dstd::Vector<dstd::String> group = {}) const;
     /// Both frames from one buffered fold.
     dataframe::LazyResult<ContainmentResult> containment(
-        std::vector<std::string> partition = {"pid", "tid"},
-        std::string ts = "ts", std::string dur = "dur",
-        std::string name = "name", std::vector<std::string> group = {}) const;
+        dstd::Vector<dstd::String> partition = {"pid", "tid"},
+        dstd::String ts = "ts", dstd::String dur = "dur",
+        dstd::String name = "name",
+        dstd::Vector<dstd::String> group = {}) const;
 
     /// Mergeable partials for a distributed run: merge flamegraph partials
     /// with merge_flamegraph_partials(), aggregate partials with
     /// merge_partials() on a viewer of the same aggregation. A trailing head
     /// before flamegraph_partial caps the scan as in for_each_batch.
-    dataframe::LazyResult<std::string> flamegraph_partial(
-        std::vector<std::string> partition = {"pid", "tid"},
-        std::string ts = "ts", std::string dur = "dur",
-        std::string name = "name", std::vector<std::string> group = {}) const;
-    dataframe::LazyResult<std::string> aggregate_partial() const;
+    dataframe::LazyResult<dstd::String> flamegraph_partial(
+        dstd::Vector<dstd::String> partition = {"pid", "tid"},
+        dstd::String ts = "ts", dstd::String dur = "dur",
+        dstd::String name = "name",
+        dstd::Vector<dstd::String> group = {}) const;
+    dataframe::LazyResult<dstd::String> aggregate_partial() const;
     static dataframe::DataFrame merge_flamegraph_partials(
-        const std::vector<dstd::StringView>& partials);
+        const dstd::Vector<dstd::StringView>& partials);
     dataframe::DataFrame merge_partials(
-        const std::vector<dstd::StringView>& partials) const;
+        const dstd::Vector<dstd::StringView>& partials) const;
 
     /// The aggregation index's record families.
     dataframe::LazyResult<TypedResult> typed(int shard_begin = 0,
@@ -876,22 +878,22 @@ class View : public dataframe::LazyOps<View> {
     /// map_batches folds each batch into a per-slot partial and reduces them
     /// with `combine`; a default `P` must be the identity of combine.
     coro::CoroTask<ExportStats> for_each_batch(
-        std::function<void(std::size_t, const std::vector<dstd::StringView>&)>
+        dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
             on_batch,
         std::size_t num_slots, std::uint64_t limit = 0) const;
     template <class P>
     coro::CoroTask<BatchResult<P>> map_batches(
-        std::function<void(P&, const std::vector<dstd::StringView>&)> fold,
-        std::function<P(P&&, P&&)> combine, std::size_t num_slots,
+        dstd::Function<void(P&, const dstd::Vector<dstd::StringView>&)> fold,
+        dstd::Function<P(P&&, P&&)> combine, std::size_t num_slots,
         std::uint64_t limit = 0) const {
         if (num_slots == 0) num_slots = 1;
-        std::vector<P> partials(num_slots);
+        dstd::Vector<P> partials(num_slots);
         // A named callback, not a temporary in the co_await: GCC 11-12 destroy
         // such temporaries twice.
-        std::function<void(std::size_t, const std::vector<dstd::StringView>&)>
+        dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
             on_batch = [&partials, &fold](
                            std::size_t slot,
-                           const std::vector<dstd::StringView>& events) {
+                           const dstd::Vector<dstd::StringView>& events) {
                 fold(partials[slot], events);
             };
         ExportStats stats =
@@ -909,7 +911,7 @@ class View : public dataframe::LazyOps<View> {
 
     /// The trace self-description, one entry per process, from each file's
     /// "end" event (@ref TraceConfig). Ignores this view's filters.
-    std::vector<TraceConfig> config() const;
+    dstd::Vector<TraceConfig> config() const;
     /// True when sink_json / collect() would take the first-touch pass that
     /// answers the query and builds the index at once, so a caller that would
     /// build the index first can skip that.
@@ -918,7 +920,7 @@ class View : public dataframe::LazyOps<View> {
     /// Write merged aggregate_partial() output as counter events, with this
     /// view's aggregation.
     ExportStats merge_counter_partials(
-        const std::vector<dstd::StringView>& partials, ExportSink& sink) const;
+        const dstd::Vector<dstd::StringView>& partials, ExportSink& sink) const;
 
     /// A caller branch of the scan over this viewer's events, as a plan that
     /// yields no columns; `attach` runs once per collect of the plan. It
@@ -931,16 +933,17 @@ class View : public dataframe::LazyOps<View> {
     /// so collect one such result at a time.
     template <class T>
     dataframe::LazyResult<T> branch(
-        std::function<Deferred<T>(ViewSession&)> attach) const {
-        auto slot = std::make_shared<T>();
+        dstd::Function<Deferred<T>(ViewSession&)> attach) const {
+        auto slot = dstd::make_shared<T>();
         dataframe::LazyFrame plan =
             branch([attach = std::move(attach), slot](ViewSession& s) {
                 Deferred<T> h = attach(s);
-                return std::function<void(const ExportStats&)>(
+                return dstd::Function<void(const ExportStats&)>(
                     [h, slot](const ExportStats&) mutable {
                         *slot = std::move(h.get());
                     });
             });
+        // keep std: LazyResult::Finish takes std::vector<DataFrame>
         return {{std::move(plan)}, [slot](std::vector<dataframe::DataFrame>) {
                     return dataframe::detail::ready(std::move(*slot));
                 }};
@@ -949,13 +952,13 @@ class View : public dataframe::LazyOps<View> {
     /// The distributed rollup terminals, over this viewer's
     /// aggregation. The bytes behind `partials` must outlive the task.
     coro::CoroTask<void> materialize_partials(
-        const std::vector<dstd::StringView>& partials) const;
+        const dstd::Vector<dstd::StringView>& partials) const;
     dstd::Optional<dataframe::DataFrame> reconstruct_if_cached() const;
 
     /// Materialized-view bookkeeping over this viewer's events.
-    std::vector<std::string> mv_source() const;
-    std::string materialize_dir() const;
-    void register_materialized(const std::string& dir) const;
+    dstd::Vector<dstd::String> mv_source() const;
+    dstd::String materialize_dir() const;
+    void register_materialized(const dstd::String& dir) const;
 
     /// The plan: the trace scan as a source plus the ops above it.
     const dataframe::LazyFrame& lazy() const { return lf_; }
@@ -978,17 +981,18 @@ class View : public dataframe::LazyOps<View> {
 
     explicit View(detail::ScanPlan plan);
     View(detail::ScanPlan plan, dataframe::LazyFrame lf);
-    View reshape(const char* builder,
-                 const std::function<detail::ScanPlan(const detail::ScanPlan&)>&
-                     step) const;
+    View reshape(
+        const char* builder,
+        const dstd::Function<detail::ScanPlan(const detail::ScanPlan&)>& step)
+        const;
     /// The scan plan with every op of this view absorbed into it, for the
     /// terminal `method`; throws naming the first op that stays behind.
     detail::ScanPlan absorbed(const char* method, Need need) const;
     friend View detail::view_of(detail::ScanPlan plan);
     friend View detail::with_named_columns(
-        const View& v, std::vector<dataframe::Field> columns);
-    friend std::vector<SchemaLeaf> detail::catalog_leaves(const View& v);
-    dstd::Pair<View, std::vector<std::string>> duql_plan(
+        const View& v, dstd::Vector<dataframe::Field> columns);
+    friend dstd::Vector<SchemaLeaf> detail::catalog_leaves(const View& v);
+    dstd::Pair<View, dstd::Vector<dstd::String>> duql_plan(
         dstd::StringView text, const duql::Params& params) const;
 
     detail::ScanPlan plan_;

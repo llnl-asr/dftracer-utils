@@ -20,14 +20,15 @@ TEST_SUITE("EventCollector") {
         std::string test_file = env.create_dft_test_gzip_file(10);
 
         // First collect metadata
-        auto meta_input = MetadataCollectorUtilityInput::from_file(test_file)
+        auto meta_input = MetadataCollectorUtilityInput::from_file(
+                              dftracer::utils::dstd::String(test_file))
                               .with_compute_hash(true);
         MetadataCollectorUtility meta_collector;
         auto meta_output = meta_collector(meta_input).get();
 
         // Now collect events from metadata
-        std::vector<MetadataCollectorUtilityOutput> metadata_vec = {
-            meta_output};
+        dftracer::utils::dstd::Vector<MetadataCollectorUtilityOutput>
+            metadata_vec = {meta_output};
         auto input =
             EventCollectorFromMetadataCollectorUtilityInput::from_metadata(
                 metadata_vec);

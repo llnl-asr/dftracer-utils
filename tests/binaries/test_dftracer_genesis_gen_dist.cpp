@@ -263,7 +263,7 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
 
     const std::string index_path = d.file(".dftindex");
     auto rows = [&](const std::string& q) {
-        return View::from_file(out, index_path)
+        return View::from_file(dstd::String(out), dstd::String(index_path))
             .duql(q)
             .collect()
             .get()
@@ -276,7 +276,7 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     CHECK(rows("run -> runs.nodes == 1") == records);
     CHECK(rows(R"(run -> runs.papi_set == "set1")") == records);
 
-    const auto df = View::from_file(out, index_path)
+    const auto df = View::from_file(dstd::String(out), dstd::String(index_path))
                         .duql(
                             "derive u = run -> runs.unique_input | select "
                             "path, u")
@@ -289,10 +289,11 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
         CHECK((v == "x" || v == "y"));
     }
 
-    const auto runs = View::from_file(out, index_path)
-                          .duql("from runs | where true")
-                          .collect()
-                          .get();
+    const auto runs =
+        View::from_file(dstd::String(out), dstd::String(index_path))
+            .duql("from runs | where true")
+            .collect()
+            .get();
     CHECK(runs.num_rows() == 2);
     for (const char* name :
          {"run", "app", "system", "unique_input", "nodes", "ppn", "papi_set",
@@ -302,10 +303,11 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     }
 
     CHECK(rows(R"(gtype == "run")") == 0);
-    const auto run_records = View::from_file(out, index_path)
-                                 .duql(R"(from all | where gtype == "run")")
-                                 .collect()
-                                 .get();
+    const auto run_records =
+        View::from_file(dstd::String(out), dstd::String(index_path))
+            .duql(R"(from all | where gtype == "run")")
+            .collect()
+            .get();
     CHECK(run_records.num_rows() == 2);
     CHECK(run_records.column_index("summary.ok") >= 0);
 }

@@ -100,12 +100,12 @@ coro::CoroTask<HttpResponse> handle_viz_columns(const HttpRequest& /*req*/,
     // fields, and dftracer's pid/tid lanes, are not group options, so drop
     // them from View::column_info(). A path schema's entity stays groupable.
     const TraceFields fields(index.record_schema());
-    auto axis = [&fields](const std::string& name) {
+    auto axis = [&fields](dstd::StringView name) {
         return name == fields.time || name == fields.duration ||
                (!fields.by_path &&
                 (name == fields.entity || name == fields.lane));
     };
-    std::vector<views::ColumnInfo> schema;
+    dstd::Vector<views::ColumnInfo> schema;
     for (auto& c : v.column_info())
         if (!axis(c.name)) schema.push_back(std::move(c));
 

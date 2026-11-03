@@ -14,9 +14,6 @@
 #include <simdjson.h>
 
 #include <cstdint>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <variant>
 
 // Source-agnostic event extraction: the aggregation fold reads through an
@@ -187,7 +184,7 @@ class DomSource {
         }
         double d;
         if (e.get_double().get(d) == simdjson::SUCCESS) {
-            out.append(dftracer::utils::dstd::double_text(d));
+            out.append(dstd::double_string(d));
             return;
         }
         bool b;
@@ -427,7 +424,7 @@ class PodSource {
             char* p = dstd::to_chars_i64(buf, buf + sizeof(buf), i);
             out.append(buf, static_cast<std::size_t>(p - buf));
         } else {
-            out.append(dftracer::utils::dstd::double_text(d));
+            out.append(dstd::double_string(d));
         }
     }
 

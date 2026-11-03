@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <dftracer/utils/dstd/span.h>
@@ -38,11 +39,7 @@
 #include <atomic>
 #include <bit>
 #include <exception>
-#include <functional>
-#include <memory>
 #include <mutex>
-#include <span>
-#include <string>
 #include <utility>
 
 namespace dftracer::utils::trace {
@@ -70,7 +67,7 @@ struct Source {
         snapshot.emplace(common::unwrap(index::plan::open_snapshot(path)));
     }
 
-    std::string path;
+    dstd::String path;
     dstd::Optional<index::Snapshot> snapshot;
     std::uint64_t params_hash;
 };
@@ -106,7 +103,9 @@ class Runner {
         failed.store(true, std::memory_order_release);
     }
     bool is_failed() const { return failed.load(std::memory_order_acquire); }
-    bool cancelled() const { return rules.q.cancelled && rules.q.cancelled(); }
+    bool cancelled() const {
+        return rules.q.cancelled && (*rules.q.cancelled)();
+    }
     void take_stats(const AggQueryStats& t);
     void submit(std::size_t seq, std::size_t sub, AggQueryResult::Rows& rows);
 
@@ -116,8 +115,8 @@ class Runner {
     bool has_time = false;
     bool reread_only = false;
 
-    std::unique_ptr<coro::CoroSemaphore> permits;
-    dstd::Vector<std::unique_ptr<Source>> sources;
+    dstd::UniquePtr<coro::CoroSemaphore> permits;
+    dstd::Vector<dstd::UniquePtr<Source>> sources;
 
    private:
     /// One lock for all rows made every worker wait on each merge.
@@ -164,7 +163,7 @@ class Runner {
 
     coro::CoroTask<void> file_task(std::size_t source, std::size_t file,
                                    std::size_t seq);
-    coro::CoroTask<void> chunk_task(Source* source, const std::string* path,
+    coro::CoroTask<void> chunk_task(Source* source, const dstd::String* path,
                                     const index::gzip::ChunkSpan* span,
                                     const ChunkJob* job, std::size_t seq,
                                     std::size_t sub);
@@ -193,15 +192,15 @@ class Task {
 
     /// Fills `jobs` with the chunks to re-read, in chunk order, and `spans`
     /// with the chunk table of the file.
-    coro::CoroTask<void> scan_file(const std::string& path,
+    coro::CoroTask<void> scan_file(const dstd::String& path,
                                    dstd::Vector<ChunkJob>& jobs,
                                    dstd::Vector<index::gzip::ChunkSpan>& spans);
 
     coro::CoroTask<void> trace_jobs(
-        const std::string& path, dstd::Vector<ChunkJob>& jobs,
+        const dstd::String& path, dstd::Vector<ChunkJob>& jobs,
         dstd::Vector<index::gzip::ChunkSpan>& spans);
 
-    coro::CoroTask<void> read_chunk(const std::string& path,
+    coro::CoroTask<void> read_chunk(const dstd::String& path,
                                     const index::gzip::ChunkSpan& span,
                                     const ChunkJob& job,
                                     const index::gzip::ChunkSpan* spans);
@@ -262,21 +261,21 @@ class Task {
     bool bins_answer(const agg::AggPartial& p) const;
     void take_bins(const agg::AggPartial& p, AggKey key);
 
-    coro::CoroTask<void> whole_file_chunks(const std::string& path,
+    coro::CoroTask<void> whole_file_chunks(const dstd::String& path,
                                            const index::FileRef* file,
                                            std::size_t chunk_count,
                                            dstd::Vector<ChunkJob>& jobs);
 
     // The head of a line that a member boundary cut: the bytes before `chunk`
     // that follow the last newline.
-    coro::CoroTask<std::string> tail_before(
-        const std::string& path, std::uint32_t chunk,
+    coro::CoroTask<dstd::String> tail_before(
+        const dstd::String& path, std::uint32_t chunk,
         const index::gzip::ChunkSpan* spans);
 
     coro::CoroTask<dstd::SharedPtr<utilities::reader::internal::Reader>>
-    open_reader(const std::string& path);
+    open_reader(const dstd::String& path);
 
-    void parse_lines_of(std::string& pending, std::uint32_t chunk,
+    void parse_lines_of(dstd::String& pending, std::uint32_t chunk,
                         const dstd::HashSet<AggGroup, AggGroupHash>* wanted);
 
     /// False, with nothing added, when the index holds no column block.
@@ -292,7 +291,7 @@ class Task {
     views::detail::FoldEventBuffer buffer_;
     FoldEvent column_event_;
     json::RecordParser parser_;
-    dstd::SharedPtr<std::string> buf_ = std::make_shared<std::string>();
+    dstd::SharedPtr<dstd::String> buf_ = dstd::make_shared<dstd::String>();
 };
 
 void trim_row(agg::AggPartial& p, const AggKeep& keep) {
@@ -343,9 +342,10 @@ void Runner::Stripe::drain(bool offset) {
         }
     }
     std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) {
-        return a.first != b.first ? a.first < b.first
-                                  : std::pair(a.second->seq, a.second->sub) <
-                                        std::pair(b.second->seq, b.second->sub);
+        return a.first != b.first
+                   ? a.first < b.first
+                   : dstd::Pair(a.second->seq, a.second->sub) <
+                         dstd::Pair(b.second->seq, b.second->sub);
     });
     for (std::size_t at = 0; at < order.size();) {
         Moments merged = *order[at].second;
@@ -430,10 +430,10 @@ coro::CoroTask<void> Runner::run() {
         workers =
             ex != nullptr ? std::max<std::size_t>(1, ex->concurrency()) : 1;
     }
-    permits = std::make_unique<coro::CoroSemaphore>(workers);
+    permits = dstd::make_unique<coro::CoroSemaphore>(workers);
     const std::uint64_t default_params_hash = rules.q.config.params_hash();
     for (const auto& s : rules.q.sources)
-        sources.push_back(std::make_unique<Source>(s, default_params_hash));
+        sources.push_back(dstd::make_unique<Source>(s, default_params_hash));
 
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         std::size_t seq = 0;
@@ -508,7 +508,7 @@ coro::CoroTask<void> Runner::move_task(
 coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file,
                                        std::size_t seq) {
     Source& src = *sources[source];
-    const std::string path(rules.q.sources[source].files[file]);
+    const dstd::String path(rules.q.sources[source].files[file]);
     dstd::Vector<ChunkJob> jobs;
     dstd::Vector<index::gzip::ChunkSpan> spans;
     {
@@ -539,7 +539,8 @@ coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file,
     });
 }
 
-coro::CoroTask<void> Runner::chunk_task(Source* source, const std::string* path,
+coro::CoroTask<void> Runner::chunk_task(Source* source,
+                                        const dstd::String* path,
                                         const index::gzip::ChunkSpan* spans,
                                         const ChunkJob* job, std::size_t seq,
                                         std::size_t sub) {
@@ -560,7 +561,7 @@ coro::CoroTask<void> Runner::chunk_task(Source* source, const std::string* path,
 }
 
 coro::CoroTask<void> Task::scan_file(
-    const std::string& path, dstd::Vector<ChunkJob>& jobs,
+    const dstd::String& path, dstd::Vector<ChunkJob>& jobs,
     dstd::Vector<index::gzip::ChunkSpan>& spans) {
     if (!src_.snapshot)
         throw common::DFTUtilsException::cat(common::ErrorCode::NotFound,
@@ -646,7 +647,7 @@ coro::CoroTask<void> Task::scan_file(
 }
 
 coro::CoroTask<void> Task::trace_jobs(
-    const std::string& path, dstd::Vector<ChunkJob>& jobs,
+    const dstd::String& path, dstd::Vector<ChunkJob>& jobs,
     dstd::Vector<index::gzip::ChunkSpan>& spans) {
     ++stats.files;
     dstd::Optional<index::FileRef> file;
@@ -667,7 +668,7 @@ coro::CoroTask<void> Task::trace_jobs(
     co_await whole_file_chunks(path, held, spans.size(), jobs);
 }
 
-coro::CoroTask<void> Task::whole_file_chunks(const std::string& path,
+coro::CoroTask<void> Task::whole_file_chunks(const dstd::String& path,
                                              const index::FileRef* file,
                                              std::size_t chunk_count,
                                              dstd::Vector<ChunkJob>& jobs) {
@@ -679,10 +680,10 @@ coro::CoroTask<void> Task::whole_file_chunks(const std::string& path,
         request.file_path = path;
         request.snapshot = &*src_.snapshot;
         request.time_range =
-            std::make_pair(static_cast<double>(r_.rules.q.ts_begin),
-                           r_.rules.q.ts_end == UINT64_MAX
-                               ? 0.0
-                               : static_cast<double>(r_.rules.q.ts_end));
+            dstd::Pair(static_cast<double>(r_.rules.q.ts_begin),
+                       r_.rules.q.ts_end == UINT64_MAX
+                           ? 0.0
+                           : static_cast<double>(r_.rules.q.ts_end));
         request.chunk_count = chunk_count;
         request.by_start = true;
         auto pruned = co_await index::plan::prune_file(std::move(request));
@@ -837,7 +838,7 @@ void Task::take_bins(const agg::AggPartial& p, AggKey key) {
 }
 
 coro::CoroTask<dstd::SharedPtr<utilities::reader::internal::Reader>>
-Task::open_reader(const std::string& path) {
+Task::open_reader(const dstd::String& path) {
     auto input =
         utilities::fileio::IndexedReadInput::from_file(path).with_index(
             src_.path);
@@ -845,12 +846,12 @@ Task::open_reader(const std::string& path) {
     co_return co_await utility(input);
 }
 
-coro::CoroTask<std::string> Task::tail_before(
-    const std::string& path, std::uint32_t chunk,
+coro::CoroTask<dstd::String> Task::tail_before(
+    const dstd::String& path, std::uint32_t chunk,
     const index::gzip::ChunkSpan* spans) {
     namespace rd = utilities::reader::internal;
     auto reader = co_await open_reader(path);
-    std::string tail;
+    dstd::String tail;
     for (std::uint32_t k = chunk; k-- > 0;) {
         auto stream =
             reader->stream(rd::StreamConfig()
@@ -859,7 +860,7 @@ coro::CoroTask<std::string> Task::tail_before(
                                .buffer_size(STREAM_BUFFER_BYTES)
                                .from(spans[k].uc_offset)
                                .to(spans[k].uc_offset + spans[k].uc_size));
-        std::string after;  // bytes after the last newline seen in chunk k
+        dstd::String after;  // bytes after the last newline seen in chunk k
         bool found = false;
         while (!stream->done()) {
             auto piece = co_await stream->read_async();
@@ -881,10 +882,10 @@ coro::CoroTask<std::string> Task::tail_before(
 
 // Parses the complete lines of `pending` as the events of `chunk` and leaves
 // the rest. A line belongs to the chunk that holds its newline.
-void Task::parse_lines_of(std::string& pending, std::uint32_t chunk,
+void Task::parse_lines_of(dstd::String& pending, std::uint32_t chunk,
                           const dstd::HashSet<AggGroup, AggGroupHash>* wanted) {
     const std::size_t nl = pending.rfind('\n');
-    if (nl == std::string::npos) return;
+    if (nl == dstd::String::npos) return;
     const std::size_t whole = nl + 1;
     std::size_t off = 0;
     while (off < whole) {
@@ -916,7 +917,7 @@ void Task::parse_lines_of(std::string& pending, std::uint32_t chunk,
     pending.erase(0, whole);
 }
 
-coro::CoroTask<void> Task::read_chunk(const std::string& path,
+coro::CoroTask<void> Task::read_chunk(const dstd::String& path,
                                       const index::gzip::ChunkSpan& span,
                                       const ChunkJob& job,
                                       const index::gzip::ChunkSpan* spans) {
@@ -943,7 +944,7 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
                                      .buffer_size(STREAM_BUFFER_BYTES)
                                      .from(from)
                                      .to(to));
-    std::string pending;
+    dstd::String pending;
     bool decided = job.chunk == 0;
     while (!stream->done()) {
         if (r_.cancelled()) co_return;
@@ -952,7 +953,7 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
         pending.append(piece.data(), piece.size());
         if (!decided) {
             const std::size_t nl = pending.find('\n');
-            if (nl == std::string::npos) continue;
+            if (nl == dstd::String::npos) continue;
             decided = true;
             // The head is a whole line only when it parses as one object. The
             // tail of a line cut by the member boundary has a brace the head
@@ -961,7 +962,8 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
             const bool whole =
                 nl > 0 && !head.error() && head.value_unsafe().is_object();
             if (!whole) {
-                std::string tail = co_await tail_before(path, job.chunk, spans);
+                dstd::String tail =
+                    co_await tail_before(path, job.chunk, spans);
                 pending.insert(0, tail);
             }
         }

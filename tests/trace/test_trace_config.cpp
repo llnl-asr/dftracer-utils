@@ -58,7 +58,8 @@ TEST_SUITE("trace-config") {
         for (int i = 0; i < 40; ++i) body += complete(i) + "\n";
         body += end_event(1, true) + "\n";
 
-        auto cfgs = read_trace_config(make_gz(env, body));
+        auto cfgs = read_trace_config(
+            dftracer::utils::dstd::String(make_gz(env, body)));
         REQUIRE(cfgs.size() == 1);
         CHECK(cfgs[0].pid == 1);
         CHECK(cfgs[0].args["num_events"].get<std::uint64_t>() == 41);
@@ -77,7 +78,8 @@ TEST_SUITE("trace-config") {
         body += end_event(1, true) + "\n";
         body += end_event(2, true) + "\n";
 
-        auto cfgs = read_trace_config(make_gz(env, body));
+        auto cfgs = read_trace_config(
+            dftracer::utils::dstd::String(make_gz(env, body)));
         REQUIRE(cfgs.size() == 2);
         CHECK(cfgs[0].pid == 1);
         CHECK(cfgs[1].pid == 2);
@@ -90,7 +92,8 @@ TEST_SUITE("trace-config") {
         for (int i = 0; i < 20; ++i) body += complete(i) + "\n";
         body += end_event(7, false) + "\n";
 
-        auto cfgs = read_trace_config(make_gz(env, body));
+        auto cfgs = read_trace_config(
+            dftracer::utils::dstd::String(make_gz(env, body)));
         REQUIRE(cfgs.size() == 1);
         CHECK(cfgs[0].pid == 7);
         CHECK_FALSE(cfgs[0].args.exists());
@@ -102,7 +105,9 @@ TEST_SUITE("trace-config") {
         std::string body;
         for (int i = 0; i < 40; ++i) body += complete(i) + "\n";
 
-        CHECK(read_trace_config(make_gz(env, body)).empty());
+        CHECK(
+            read_trace_config(dftracer::utils::dstd::String(make_gz(env, body)))
+                .empty());
     }
 
     // View::config() tail path: end in the last member, no index needed.
@@ -114,9 +119,10 @@ TEST_SUITE("trace-config") {
         body += end_event(1, true) + "\n";
         std::string gz = make_gz(env, body);
 
-        auto cfgs =
-            View::from_file(gz, std::string(determine_index_path(gz, "")))
-                .config();
+        auto cfgs = View::from_file(dftracer::utils::dstd::String(gz),
+                                    dftracer::utils::dstd::String(std::string(
+                                        determine_index_path(gz, ""))))
+                        .config();
         REQUIRE(cfgs.size() == 1);
         CHECK(cfgs[0]
                   .args["app.model"]
@@ -135,8 +141,11 @@ TEST_SUITE("trace-config") {
         std::string gz = make_gz(env, body);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        REQUIRE(read_trace_config(gz).empty());  // tail probe alone misses it
-        auto cfgs = View::from_file(gz, idx).config();
+        REQUIRE(read_trace_config(dftracer::utils::dstd::String(gz))
+                    .empty());  // tail probe alone misses it
+        auto cfgs = View::from_file(dftracer::utils::dstd::String(gz),
+                                    dftracer::utils::dstd::String(idx))
+                        .config();
         REQUIRE(cfgs.size() == 1);
         CHECK(cfgs[0].pid == 5);
         CHECK(cfgs[0].args["num_events"].get<std::uint64_t>() == 41);

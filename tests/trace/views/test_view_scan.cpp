@@ -28,7 +28,7 @@ TEST_SUITE("View") {
     TEST_CASE(
         "View - builder ops return independent views (lazy, no shared state)") {
         const auto& s = shared_trace();
-        View base = View::from_file(s.gz, s.idx);
+        View base = View::from_file(dstd::String(s.gz), dstd::String(s.idx));
         View posix = base.duql(R"(cat == "POSIX")");
         View stdio = base.duql(R"(cat == "STDIO")");
 
@@ -46,7 +46,7 @@ TEST_SUITE("View") {
     TEST_CASE("View - query filters to matching events") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats = View::from_file(s.gz, s.idx)
+        auto stats = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                          .duql(R"(cat == "POSIX")")
                          .sink_json(sink)
                          .get();
@@ -62,7 +62,7 @@ TEST_SUITE("View") {
     TEST_CASE("View - chained filters AND together") {
         const auto& s = shared_trace();
         StringSink sink;
-        View::from_file(s.gz, s.idx)
+        View::from_file(dstd::String(s.gz), dstd::String(s.idx))
             .duql(R"(cat == "POSIX")")
             .duql(R"(name == "read")")
             .sink_json(sink)
@@ -74,7 +74,9 @@ TEST_SUITE("View") {
     TEST_CASE("View - no filter streams all events") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats = View::from_file(s.gz, s.idx).sink_json(sink).get();
+        auto stats = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                         .sink_json(sink)
+                         .get();
 
         CHECK(sink.lines().size() == 50);
         CHECK(stats.events_matched == 50);
@@ -83,8 +85,10 @@ TEST_SUITE("View") {
     TEST_CASE("View - head caps exported events") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats =
-            View::from_file(s.gz, s.idx).head(10).sink_json(sink).get();
+        auto stats = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                         .head(10)
+                         .sink_json(sink)
+                         .get();
 
         CHECK(sink.lines().size() == 10);
         CHECK(stats.truncated);
@@ -92,20 +96,20 @@ TEST_SUITE("View") {
 
     TEST_CASE("View - head/slice paginate collect rows") {
         const auto& s = shared_trace();
-        auto full = View::from_file(s.gz, s.idx)
+        auto full = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                         .group_by({GroupKey::name()})
                         .collect()
                         .get();
         REQUIRE(full.num_rows() == 2);  // read (POSIX), fwrite (STDIO)
 
-        auto one = View::from_file(s.gz, s.idx)
+        auto one = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                        .group_by({GroupKey::name()})
                        .head(1)
                        .collect()
                        .get();
         CHECK(one.num_rows() == 1);
 
-        auto rest = View::from_file(s.gz, s.idx)
+        auto rest = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                         .group_by({GroupKey::name()})
                         .slice(1, std::numeric_limits<std::int64_t>::max())
                         .collect()
@@ -116,7 +120,9 @@ TEST_SUITE("View") {
     TEST_CASE("View - a completed scan covers every chunk it read") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats = View::from_file(s.gz, s.idx).sink_json(sink).get();
+        auto stats = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                         .sink_json(sink)
+                         .get();
 
         CHECK(stats.chunks_scanned > 0);
         CHECK(stats.chunks_covered == stats.chunks_scanned);
@@ -127,8 +133,10 @@ TEST_SUITE("View") {
     TEST_CASE("View - a head does not retract coverage of a drained chunk") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats =
-            View::from_file(s.gz, s.idx).head(10).sink_json(sink).get();
+        auto stats = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                         .head(10)
+                         .sink_json(sink)
+                         .get();
 
         CHECK(stats.truncated);
         CHECK(stats.chunks_covered == stats.chunks_scanned);
@@ -148,7 +156,7 @@ TEST_SUITE("View") {
 
         SUBCASE("cancelled before the first batch") {
             StringSink sink;
-            auto stats = View::from_file(gz, idx)
+            auto stats = View::from_file(dstd::String(gz), dstd::String(idx))
                              .cancel_when([] { return true; })
                              .sink_json(sink)
                              .get();
@@ -166,7 +174,7 @@ TEST_SUITE("View") {
             } sink;
 
             auto stats =
-                View::from_file(gz, idx)
+                View::from_file(dstd::String(gz), dstd::String(idx))
                     .cancel_when([&] { return sink.events.load() > 0; })
                     .sink_json(sink)
                     .get();
@@ -193,7 +201,9 @@ TEST_SUITE("View") {
             .build();
 
         StringSink sink;
-        auto stats = View::from_file(gz, idx).sink_json(sink).get();
+        auto stats = View::from_file(dstd::String(gz), dstd::String(idx))
+                         .sink_json(sink)
+                         .get();
 
         CHECK(stats.events_matched == static_cast<std::uint64_t>(n));
         CHECK(sink.lines().size() == static_cast<std::size_t>(n));
@@ -214,12 +224,16 @@ TEST_SUITE("View") {
         opts.member_size = 4096;  // small members -> many boundaries
         opts.num_workers = 4;
         opts.compress = true;
-        auto stats = View::from_file(gz, idx).sink_trace(opts).get();
+        auto stats = View::from_file(dstd::String(gz), dstd::String(idx))
+                         .sink_trace(opts)
+                         .get();
         CHECK(stats.events_matched == static_cast<std::uint64_t>(n));
 
         std::string oidx = std::string(determine_index_path(out, ""));
         StringSink sink;
-        auto rstats = View::from_file(out, oidx).sink_json(sink).get();
+        auto rstats = View::from_file(dstd::String(out), dstd::String(oidx))
+                          .sink_json(sink)
+                          .get();
         CHECK(rstats.events_matched == static_cast<std::uint64_t>(n));
         CHECK(sink.lines().size() == static_cast<std::size_t>(n));
     }
@@ -236,7 +250,9 @@ TEST_SUITE("View") {
         opts.member_size = 4096;
         opts.num_workers = 4;
         opts.build_index = true;
-        CHECK_THROWS_AS(View::from_file(gz, idx).sink_trace(opts).get(),
+        CHECK_THROWS_AS(View::from_file(dstd::String(gz), dstd::String(idx))
+                            .sink_trace(opts)
+                            .get(),
                         dftracer::utils::common::DFTUtilsException);
     }
 
@@ -260,7 +276,9 @@ TEST_SUITE("View") {
         opts.num_workers = 4;
         opts.compress = true;
         opts.build_index = true;
-        auto st = View::from_file(gz, idx).sink_trace(opts).get();
+        auto st = View::from_file(dstd::String(gz), dstd::String(idx))
+                      .sink_trace(opts)
+                      .get();
         REQUIRE(dstd::fs::exists(outAgz).value());
         const std::string idxA = std::string(determine_index_path(outAgz, ""));
         // The write built the index, not a separate pass.
@@ -279,7 +297,7 @@ TEST_SUITE("View") {
         auto run = [](const std::string& f, const std::string& ix,
                       const char* q) {
             StringSink s;
-            View v = View::from_file(f, ix);
+            View v = View::from_file(dstd::String(f), dstd::String(ix));
             if (q != nullptr) v = v.duql(q);
             v.sink_json(s).get();
             auto ls = s.lines();
@@ -320,7 +338,9 @@ TEST_SUITE("View") {
         opts.part_size = 8192;
         opts.num_workers = 4;
         opts.build_index = true;
-        View::from_file(gz, idx).sink_trace(opts).get();
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .sink_trace(opts)
+            .get();
 
         std::vector<std::string> partsA, partsB;
         for (int i = 0; dstd::fs::exists(utilities::fileio::gzip_part_path(
@@ -350,14 +370,16 @@ TEST_SUITE("View") {
                          std::uint64_t& sc, std::uint64_t& mt,
                          std::vector<std::string>& cols) {
                 StringSink sink;
-                auto stt = View::from_file(f, ix)
+                auto stt = View::from_file(dstd::String(f), dstd::String(ix))
                                .duql(R"(cat == "STDIO")")
                                .sink_json(sink)
                                .get();
                 sc += stt.events_scanned;
                 mt += stt.events_matched;
-                for (auto& c : View::from_file(f, ix).columns())
-                    cols.push_back(c);
+                for (auto& c :
+                     View::from_file(dstd::String(f), dstd::String(ix))
+                         .columns())
+                    cols.emplace_back(c);
             };
             q(partsA[i], idxA, scannedA, matchedA, colsA);
             q(partsB[i], idxB, scannedB, matchedB, colsB);
@@ -386,7 +408,7 @@ TEST_SUITE("View") {
 
     TEST_CASE("View - group_by + agg (count/sum/min/max/mean)") {
         const auto& s = shared_trace();  // POSIX dur 10..39
-        auto table = View::from_file(s.gz, s.idx)
+        auto table = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Count, "", "n"},
                                {AggOp::Sum, "dur", "sum_dur"},
@@ -414,7 +436,9 @@ TEST_SUITE("View") {
 
     TEST_CASE("View - collect with no group_by returns the matching events") {
         const auto& s = shared_trace();  // 30 POSIX + 20 STDIO = 50 events
-        auto table = View::from_file(s.gz, s.idx).collect().get();
+        auto table = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                         .collect()
+                         .get();
         REQUIRE(table.num_rows() == 50);
         // Every event row carries the top-level columns.
         for (const char* c : {"name", "cat", "pid", "tid", "ts", "dur", "ph"})
@@ -423,7 +447,7 @@ TEST_SUITE("View") {
         CHECK_FALSE(bhas(table, "count"));
 
         // A filter narrows the event rows; select projects columns.
-        auto posix = View::from_file(s.gz, s.idx)
+        auto posix = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                          .duql(R"(cat == "POSIX")")
                          .select({"name", "dur"})
                          .collect()
@@ -458,7 +482,10 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
 
         // Empty select: every column, including both "name" and "args.name".
-        dataframe::DataFrame all = View::from_file(gz, idx).collect().get();
+        dataframe::DataFrame all =
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .collect()
+                .get();
         REQUIRE(bhas(all, "name"));
         REQUIRE(bhas(all, "args.name"));
         std::map<std::string, std::string> top_by_arg;
@@ -470,13 +497,19 @@ TEST_SUITE("View") {
         // A bare "name" select still resolves to the top-level field; the arg
         // is only reachable via its "args." prefix.
         dataframe::DataFrame bare_name =
-            View::from_file(gz, idx).select({"name"}).collect().get();
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .select({"name"})
+                .collect()
+                .get();
         REQUIRE(bare_name.num_columns() == 1);
         CHECK(bhas(bare_name, "name"));
         CHECK_FALSE(bhas(bare_name, "args.name"));
 
         dataframe::DataFrame arg_name =
-            View::from_file(gz, idx).select({"args.name"}).collect().get();
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .select({"args.name"})
+                .collect()
+                .get();
         REQUIRE(arg_name.num_columns() == 1);
         CHECK(bhas(arg_name, "args.name"));
         CHECK_FALSE(bhas(arg_name, "name"));
@@ -508,9 +541,11 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
         {
             StringSink index_build;
-            View::from_file(gz, idx).sink_json(index_build).get();
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .sink_json(index_build)
+                .get();
         }
-        View v = View::from_file(gz, idx);
+        View v = View::from_file(dstd::String(gz), dstd::String(idx));
 
         dataframe::DataFrame all = v.collect().get();
         REQUIRE(all.num_rows() == 3);
@@ -530,7 +565,8 @@ TEST_SUITE("View") {
                               "args.label.v", "args.cqe.raw_ns", "args.run"})
             CHECK(std::binary_search(collected.begin(), collected.end(),
                                      std::string(c)));
-        std::vector<std::string> index_cols = v.columns();
+        std::vector<std::string> index_cols;
+        for (const auto& name : v.columns()) index_cols.emplace_back(name);
         for (const std::string& c : collected) {
             if (c.rfind("args.", 0) != 0) continue;
             CAPTURE(c);
@@ -581,7 +617,7 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
 
         // ph="C" cpu counters: (user_pct,idle_pct) = (40,60) and (80,20).
-        auto table = View::from_file(gz, idx)
+        auto table = View::from_file(dstd::String(gz), dstd::String(idx))
                          .phase(Phase::Counters)
                          .group_by({GroupKey::name()})
                          .agg_numeric_args()
@@ -612,7 +648,7 @@ TEST_SUITE("View") {
 
         // ph="C" cpu counters: user_pct=(40,80), idle_pct=(60,20).
         auto table =
-            View::from_file(gz, idx)
+            View::from_file(dstd::String(gz), dstd::String(idx))
                 .phase(Phase::Counters)
                 .group_by({GroupKey::name()})
                 .agg_numeric_args({AggSpec(AggOp::Sum), AggSpec(AggOp::Max),
@@ -664,10 +700,11 @@ TEST_SUITE("View") {
         // Non-deterministic corruption: repeat so an uninitialized/garbage read
         // has several chances to surface.
         for (int rep = 0; rep < 8; ++rep) {
-            dataframe::DataFrame rows = View::from_file(gz, idx)
-                                            .select({"name", "cycles"})
-                                            .collect()
-                                            .get();
+            dataframe::DataFrame rows =
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .select({"name", "cycles"})
+                    .collect()
+                    .get();
             REQUIRE(rows.num_columns() == 2);
             REQUIRE(bhas(rows, "args.cycles"));
             REQUIRE(rows.num_rows() == 10);
@@ -739,7 +776,7 @@ TEST_SUITE("View") {
         std::string idx = std::string(determine_index_path(gz, ""));
 
         StringSink sink;
-        View::from_file(gz, idx)
+        View::from_file(dstd::String(gz), dstd::String(idx))
             .phase(Phase::Counters)
             .group_by({GroupKey::name()})
             .agg_numeric_args()
@@ -777,7 +814,7 @@ TEST_SUITE("View") {
         write_trace(dir + "/b.pfw.gz", "BBB", 2, 20);
         write_trace(dir + "/sub/c.pfw.gz", "CCC", 3, 5);  // nested: recursive
 
-        View v = View::from_directory(dir).get();
+        View v = View::from_directory(dstd::String(dir)).get();
         auto table = v.phase(Phase::Events)
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Count, "", "count"}})
@@ -818,7 +855,9 @@ View dict_trace(TestEnvironment& env) {
     dstd::fs::remove(pfw).has_value();
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
-    return View::from_file(gz, std::string(determine_index_path(gz, "")));
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(std::string(determine_index_path(gz, ""))));
 }
 
 std::string cell(const df::Series& s, std::int64_t r) {

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/statistics/detailed_statistics.h>
 
 #include <cmath>
 #include <cstdint>
-#include <iomanip>
-#include <sstream>
 
 namespace dftracer::utils::trace::statistics {
 
@@ -74,86 +74,105 @@ void DetailedStatistics::merge(const DetailedStatistics& other) {
 }
 
 namespace {
-void write_distribution_json(std::ostringstream& ss,
-                             const DistributionStats& dist) {
-    ss << "{\"count\":" << dist.count();
-    ss << ",\"sum\":" << dist.sum;
-    ss << ",\"mean\":" << dist.mean();
-    ss << ",\"stddev\":" << dist.stddev();
+void write_distribution_json(dstd::String& ss, const DistributionStats& dist) {
+    ss += "{\"count\":";
+    internal::append_value(ss, dist.count());
+    ss += ",\"sum\":";
+    internal::append_value(ss, dist.sum);
+    ss += ",\"mean\":";
+    internal::append_value(ss, dist.mean());
+    ss += ",\"stddev\":";
+    internal::append_value(ss, dist.stddev());
 
     if (dist.count() > 0 && !dist.sketch.empty()) {
-        ss << ",\"min\":" << dist.sketch.min();
-        ss << ",\"max\":" << dist.sketch.max();
-        ss << ",\"percentiles\":{";
-        ss << "\"p10\":" << dist.sketch.quantile(0.1);
-        ss << ",\"p25\":" << dist.sketch.quantile(0.25);
-        ss << ",\"p50\":" << dist.sketch.quantile(0.5);
-        ss << ",\"p75\":" << dist.sketch.quantile(0.75);
-        ss << ",\"p90\":" << dist.sketch.quantile(0.9);
-        ss << ",\"p95\":" << dist.sketch.quantile(0.95);
-        ss << ",\"p99\":" << dist.sketch.quantile(0.99);
-        ss << '}';
+        ss += ",\"min\":";
+        internal::append_value(ss, dist.sketch.min());
+        ss += ",\"max\":";
+        internal::append_value(ss, dist.sketch.max());
+        ss += ",\"percentiles\":{";
+        ss += "\"p10\":";
+        internal::append_value(ss, dist.sketch.quantile(0.1));
+        ss += ",\"p25\":";
+        internal::append_value(ss, dist.sketch.quantile(0.25));
+        ss += ",\"p50\":";
+        internal::append_value(ss, dist.sketch.quantile(0.5));
+        ss += ",\"p75\":";
+        internal::append_value(ss, dist.sketch.quantile(0.75));
+        ss += ",\"p90\":";
+        internal::append_value(ss, dist.sketch.quantile(0.9));
+        ss += ",\"p95\":";
+        internal::append_value(ss, dist.sketch.quantile(0.95));
+        ss += ",\"p99\":";
+        internal::append_value(ss, dist.sketch.quantile(0.99));
+        ss += '}';
     }
 
-    ss << ",\"histogram\":" << dist.histogram.to_json_detailed();
-    ss << '}';
+    ss += ",\"histogram\":";
+    internal::append_value(ss, dist.histogram.to_json_detailed());
+    ss += '}';
 }
 
-void write_io_metrics_json(std::ostringstream& ss, const IOEventMetrics& io) {
-    ss << "{\"duration\":";
+void write_io_metrics_json(dstd::String& ss, const IOEventMetrics& io) {
+    ss += "{\"duration\":";
     write_distribution_json(ss, io.duration);
-    ss << ",\"size\":";
+    ss += ",\"size\":";
     write_distribution_json(ss, io.size);
     if (io.bandwidth.count() > 0) {
-        ss << ",\"bandwidth\":";
+        ss += ",\"bandwidth\":";
         write_distribution_json(ss, io.bandwidth);
     }
     if (io.offset.count() > 0) {
-        ss << ",\"offset\":";
+        ss += ",\"offset\":";
         write_distribution_json(ss, io.offset);
     }
-    ss << '}';
+    ss += '}';
 }
 }  // namespace
 
-std::string DetailedStatistics::to_json() const {
-    std::ostringstream ss;
-    ss << std::setprecision(17);
-    ss << '{';
+dstd::String DetailedStatistics::to_json() const {
+    dstd::String ss;
+    ss += '{';
 
-    ss << "\"events_scanned\":" << events_scanned;
-    ss << ",\"chunks_scanned\":" << chunks_scanned;
-    ss << ",\"chunks_skipped\":" << chunks_skipped;
+    ss += "\"events_scanned\":";
+    internal::append_value(ss, events_scanned);
+    ss += ",\"chunks_scanned\":";
+    internal::append_value(ss, chunks_scanned);
+    ss += ",\"chunks_skipped\":";
+    internal::append_value(ss, chunks_skipped);
 
-    ss << ",\"duration\":";
+    ss += ",\"duration\":";
     write_distribution_json(ss, duration);
 
     if (!grouped_duration.empty()) {
-        ss << ",\"grouped_duration\":{";
+        ss += ",\"grouped_duration\":{";
         bool first = true;
         for (const auto& [key, dist] : grouped_duration) {
-            if (!first) ss << ',';
+            if (!first) ss += ',';
             first = false;
-            ss << '"' << key << "\":";
+            ss += '"';
+            internal::append_value(ss, key);
+            ss += "\":";
             write_distribution_json(ss, dist);
         }
-        ss << '}';
+        ss += '}';
     }
 
     if (!grouped_io.empty()) {
-        ss << ",\"grouped_io\":{";
+        ss += ",\"grouped_io\":{";
         bool first = true;
         for (const auto& [key, io] : grouped_io) {
-            if (!first) ss << ',';
+            if (!first) ss += ',';
             first = false;
-            ss << '"' << key << "\":";
+            ss += '"';
+            internal::append_value(ss, key);
+            ss += "\":";
             write_io_metrics_json(ss, io);
         }
-        ss << '}';
+        ss += '}';
     }
 
-    ss << '}';
-    return ss.str();
+    ss += '}';
+    return ss;
 }
 
 }  // namespace dftracer::utils::trace::statistics

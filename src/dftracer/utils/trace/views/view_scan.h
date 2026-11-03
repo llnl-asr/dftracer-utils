@@ -3,10 +3,12 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCAN_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -14,13 +16,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
 
 // The scan Source: turn a plan into pruned, member-aligned candidate chunks and
 // the per-chunk scanner input. Shared by every terminal, which then feed the
@@ -49,21 +44,21 @@ ScanShape scan_shape(const ViewDefinition& vdef);
 // The index-building folds worth riding along on this scan (dictionary, bloom):
 // those the scan can establish, and only while some file still lacks the pruner
 // bloom, so a repeat scan of an already-built index attaches nothing.
-std::vector<std::unique_ptr<Fold>> select_index_folds(
+dstd::Vector<dstd::UniquePtr<Fold>> select_index_folds(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern);
 
 // The fold that writes the path catalog of the files that lack one, or null
 // when every file has it or the scan cannot establish it. Its slot is the first
 // full scan of a trace.
-std::unique_ptr<Fold> select_catalog_fold(
+dstd::UniquePtr<Fold> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern);
 
 // One candidate chunk to scan: a byte range within a file's index.
 struct ScanUnit {
-    std::string file_path;
-    std::string index_path;
+    dstd::String file_path;
+    dstd::String index_path;
     std::size_t checkpoint_size = 0;
     std::uint64_t checkpoint_idx = 0;
     std::size_t start_byte = 0;
@@ -122,9 +117,9 @@ ViewScannerInput make_scanner_input(const ScanUnit& u,
 // count. Resolved columns are rewritten once per index before planning, and
 // each unit carries the rewritten query. Throws if an index cannot be read
 // for that rewrite.
-coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
-                                                   const ViewDefinition& vdef,
-                                                   std::uint64_t& skipped_out);
+coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(const ViewPlan& plan,
+                                                    const ViewDefinition& vdef,
+                                                    std::uint64_t& skipped_out);
 
 // The shared scan driver: gather candidate chunks and scan them in parallel,
 // handing each decoded batch to `on_batch(slot, events)`. `num_slots` worker
@@ -140,8 +135,8 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
 coro::CoroTask<ExportStats> for_each_scanned_batch(
     const ViewPlan& plan, const ViewDefinition& vdef, std::size_t num_slots,
     std::uint64_t limit,
-    const std::function<void(std::size_t,
-                             const std::vector<dstd::StringView>&)>& on_batch,
+    const dstd::Function<void(std::size_t,
+                              const dstd::Vector<dstd::StringView>&)>& on_batch,
     dstd::Span<Fold* const> folds = {},
     dftracer::utils::dstd::StringIntern* intern = nullptr);
 

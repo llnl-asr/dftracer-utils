@@ -120,9 +120,10 @@ struct Fixture {
         index_path = std::string(determine_index_path(gz.front(), o.index_dir));
     }
 
-    std::vector<ViewFile> files() const {
-        std::vector<ViewFile> out;
-        for (const auto& g : gz) out.push_back({g, index_path});
+    dstd::Vector<ViewFile> files() const {
+        dstd::Vector<ViewFile> out;
+        for (const auto& g : gz)
+            out.push_back({dstd::String(g), dstd::String(index_path)});
         return out;
     }
 
@@ -133,7 +134,7 @@ struct Fixture {
     }
 };
 
-std::vector<AggSpec> specs() {
+dstd::Vector<AggSpec> specs() {
     return {{AggOp::Count, "", "n"},     {AggOp::Sum, "dur", "total"},
             {AggOp::Mean, "dur", "avg"}, {AggOp::Min, "dur", "lo"},
             {AggOp::Max, "dur", "hi"},   {AggOp::Pct, "dur", "p50", "", 0.5}};
@@ -194,7 +195,7 @@ void same_rows(const df::DataFrame& got, const df::DataFrame& expected,
 }
 
 // The raw scan of the events of the traces (profiles left out), grouped.
-df::DataFrame scan_events(const Fixture& fx, std::vector<GroupKey> keys,
+df::DataFrame scan_events(const Fixture& fx, dstd::Vector<GroupKey> keys,
                           std::uint64_t window_us = 0) {
     auto p = scan::from_files(fx.files());
     p = scan::filter(
@@ -209,7 +210,7 @@ df::DataFrame scan_events(const Fixture& fx, std::vector<GroupKey> keys,
 TEST_SUITE("ViewPartials") {
     TEST_CASE("aggregates answer from the partials with the traces deleted") {
         Fixture fx;
-        const std::vector<std::vector<GroupKey>> groupings{
+        const std::vector<dstd::Vector<GroupKey>> groupings{
             {GroupKey::name()},
             {GroupKey::hhash()},
             {GroupKey::pid(), GroupKey::name()},
@@ -238,13 +239,13 @@ TEST_SUITE("ViewPartials") {
     TEST_CASE(
         "the stats rollup answers from the partials with the traces deleted") {
         // The aggregates dftracer_stats groups by category, pid and tid.
-        const std::vector<AggSpec> stats_specs{
+        const dstd::Vector<AggSpec> stats_specs{
             {AggOp::Count, "", "n"},       {AggOp::Sum, "dur", "dsum"},
             {AggOp::Min, "dur", "dmin"},   {AggOp::Max, "dur", "dmax"},
             {AggOp::Mean, "dur", "dmean"}, {AggOp::Var, "dur", "dvar"},
             {AggOp::Min, "ts", "tmin"},    {AggOp::Max, "ts", "tmax"}};
-        const std::vector<GroupKey> keys{GroupKey::cat(), GroupKey::pid(),
-                                         GroupKey::tid()};
+        const dstd::Vector<GroupKey> keys{GroupKey::cat(), GroupKey::pid(),
+                                          GroupKey::tid()};
         Fixture fx;
         auto p = scan::from_files(fx.files());
         p = scan::filter(
@@ -266,16 +267,16 @@ TEST_SUITE("ViewPartials") {
 
     TEST_CASE(
         "a rollup materializes from the partials with the traces deleted") {
-        const std::vector<AggSpec> stats_specs{
+        const dstd::Vector<AggSpec> stats_specs{
             {AggOp::Count, "", "n"},       {AggOp::Sum, "dur", "dsum"},
             {AggOp::Min, "dur", "dmin"},   {AggOp::Max, "dur", "dmax"},
             {AggOp::Mean, "dur", "dmean"}, {AggOp::Var, "dur", "dvar"},
             {AggOp::Min, "ts", "tmin"},    {AggOp::Max, "ts", "tmax"}};
-        const std::vector<GroupKey> keys{GroupKey::cat(), GroupKey::pid(),
-                                         GroupKey::tid()};
+        const dstd::Vector<GroupKey> keys{GroupKey::cat(), GroupKey::pid(),
+                                          GroupKey::tid()};
         // A rollup is stored beside one index, so the files share one.
         Fixture fx;
-        const std::vector<ViewFile> one{fx.files().front()};
+        const dstd::Vector<ViewFile> one{fx.files().front()};
         auto p = scan::from_files(one);
         p = scan::group_by(p, keys);
         const df::DataFrame expected = scan_only(scan::agg(p, stats_specs));

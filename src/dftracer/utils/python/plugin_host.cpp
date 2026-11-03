@@ -142,11 +142,11 @@ coro::CoroTask<void> run_host_scan(dftracer::utils::coro::Scope& scope,
             "", std::move(to_check), std::move(index_dir_arg));
     }
 
-    std::vector<views::ViewFile> view_files;
+    dftracer::utils::dstd::Vector<views::ViewFile> view_files;
     view_files.reserve(files.size());
     for (const auto& f : files) {
         views::ViewFile vf;
-        vf.file_path = f;
+        vf.file_path.assign(f.data(), f.size());
         vf.index_path = internal::determine_index_path(f, index_dir);
         view_files.push_back(std::move(vf));
     }

@@ -3,14 +3,13 @@
 #define DFTRACER_UTILS_TRACE_EVENT_COLLECTOR_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/event_id.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/reader/internal/line_processor.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::trace {
 
@@ -18,12 +17,12 @@ namespace dftracer::utils::trace {
  * @brief Input for event collection from DFTracer metadata.
  */
 struct EventCollectorFromMetadataCollectorUtilityInput {
-    std::vector<MetadataCollectorUtilityOutput> metadata;
+    dstd::Vector<MetadataCollectorUtilityOutput> metadata;
     bool trim_commas{
         false};  ///< Set to true for JSON array format (with trailing commas)
 
     static EventCollectorFromMetadataCollectorUtilityInput from_metadata(
-        std::vector<MetadataCollectorUtilityOutput> meta) {
+        dstd::Vector<MetadataCollectorUtilityOutput> meta) {
         EventCollectorFromMetadataCollectorUtilityInput input;
         input.metadata = std::move(meta);
         return input;
@@ -33,7 +32,7 @@ struct EventCollectorFromMetadataCollectorUtilityInput {
 /**
  * @brief Output: vector of collected EventIds.
  */
-using EventCollectorUtilityOutput = std::vector<EventId>;
+using EventCollectorUtilityOutput = dstd::Vector<EventId>;
 
 /**
  * @brief Workflow for collecting event IDs from DFTracer metadata files.

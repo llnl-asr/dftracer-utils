@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/index_rule_fold.h>
 #include <dftracer/utils/trace/views/view_agg_partials.h>
 
-#include <memory>
 #include <utility>
 
 namespace dftracer::utils::trace::views::detail {
@@ -20,10 +20,10 @@ IndexRuleFold::Rules::Rules(const ViewPlan& p, AggQuery q,
       plan(&p),
       apply_query(filter) {}
 
-IndexRuleFold::IndexRuleFold(dstd::SharedPtr<Rules> rules)
+IndexRuleFold::IndexRuleFold(Key, dstd::SharedPtr<Rules> rules)
     : rules_(std::move(rules)), folder_(rules_->events, rows_, stats_) {}
 
-std::unique_ptr<IndexRuleFold> IndexRuleFold::make(
+dstd::UniquePtr<IndexRuleFold> IndexRuleFold::make(
     const ViewPlan& plan, dftracer::utils::dstd::StringIntern& scan_intern,
     bool apply_query) {
     auto query = trace_fold_query(plan);
@@ -31,16 +31,16 @@ std::unique_ptr<IndexRuleFold> IndexRuleFold::make(
     return make(plan, std::move(*query), scan_intern, apply_query);
 }
 
-std::unique_ptr<IndexRuleFold> IndexRuleFold::make(
+dstd::UniquePtr<IndexRuleFold> IndexRuleFold::make(
     const ViewPlan& plan, AggQuery query,
     dftracer::utils::dstd::StringIntern& scan_intern, bool apply_query) {
-    auto rules = std::make_shared<Rules>(plan, std::move(query), scan_intern,
-                                         apply_query);
-    return std::unique_ptr<IndexRuleFold>(new IndexRuleFold(std::move(rules)));
+    auto rules = dstd::make_shared<Rules>(plan, std::move(query), scan_intern,
+                                          apply_query);
+    return dstd::make_unique<IndexRuleFold>(Key{}, std::move(rules));
 }
 
-std::unique_ptr<Fold> IndexRuleFold::slice() const {
-    return std::unique_ptr<Fold>(new IndexRuleFold(rules_));
+dstd::UniquePtr<Fold> IndexRuleFold::slice() const {
+    return dstd::make_unique<IndexRuleFold>(Key{}, rules_);
 }
 
 void IndexRuleFold::step(const FoldBatch& batch) {

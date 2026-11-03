@@ -60,7 +60,9 @@ std::uint64_t rollup_bytes(const std::string& gz) {
 }
 
 View by_cat(const std::string& gz, const std::string& query) {
-    return View::from_file(gz, std::string(determine_index_path(gz, "")))
+    return View::from_file(
+               dstd::String(gz),
+               dstd::String(std::string(determine_index_path(gz, ""))))
         .duql(query)
         .group_by({GroupKey::cat()})
         .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
@@ -79,7 +81,8 @@ std::vector<std::string> canon(const dataframe::DataFrame& df) {
 std::string indexed_trace(TestEnvironment& env) {
     std::string gz = create_mixed_trace(env, 30, 20);
     StringSink warm;
-    View::from_file(gz, std::string(determine_index_path(gz, "")))
+    View::from_file(dstd::String(gz),
+                    dstd::String(std::string(determine_index_path(gz, ""))))
         .sink_json(warm)
         .get();
     return gz;
@@ -121,13 +124,16 @@ TEST_SUITE("QueryCache") {
         const std::string idx = std::string(determine_index_path(gz, ""));
         const auto agg = canon(by_cat(gz, "dur >= 0").collect().get());
         StringSink rows;
-        View::from_file(gz, idx)
+        View::from_file(dstd::String(gz), dstd::String(idx))
             .duql(R"(name == "read")")
             .sink_json(rows)
             .get();
 
         by_cat(gz, "dur >= 0").materialize().get();
-        View::from_file(gz, idx).duql(R"(name == "read")").materialize().get();
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .duql(R"(name == "read")")
+            .materialize()
+            .get();
         REQUIRE(dstd::fs::exists(dstd::Path(views_of(gz))).value());
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
 
@@ -136,7 +142,7 @@ TEST_SUITE("QueryCache") {
         (void)dstd::fs::remove_all(views_of(gz));
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
         StringSink again;
-        const auto st = View::from_file(gz, idx)
+        const auto st = View::from_file(dstd::String(gz), dstd::String(idx))
                             .duql(R"(name == "read")")
                             .sink_json(again)
                             .get();
@@ -158,7 +164,7 @@ TEST_SUITE("QueryCache") {
         REQUIRE_FALSE(dstd::fs::exists(store).value());
 
         StringSink rows;
-        const auto st = View::from_file(gz, idx)
+        const auto st = View::from_file(dstd::String(gz), dstd::String(idx))
                             .duql(R"(name == "read")")
                             .sink_json(rows)
                             .get();
@@ -183,7 +189,8 @@ TEST_SUITE("QueryCache") {
         const std::string idx = std::string(determine_index_path(gz, ""));
         auto plan = [&](const std::string& q) {
             return scan::agg(
-                scan::group_by(scan::filter(scan::from_file(gz, idx),
+                scan::group_by(scan::filter(scan::from_file(dstd::String(gz),
+                                                            dstd::String(idx)),
                                             duql::parse_or_throw(q)),
                                {GroupKey::cat()}),
                 {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
@@ -217,7 +224,7 @@ TEST_SUITE("QueryCache") {
         const auto gz = indexed_trace(env);
         const std::string idx = std::string(determine_index_path(gz, ""));
         auto view = [&](bool generic) {
-            View v = View::from_file(gz, idx);
+            View v = View::from_file(dstd::String(gz), dstd::String(idx));
             if (generic) v = v.record_schema("generic");
             return v.group_by(std::vector<std::string>{"cat"},
                               {{dataframe::Agg::Count, "", "n"}});
@@ -233,7 +240,10 @@ TEST_SUITE("QueryCache") {
         const auto gz = indexed_trace(env);
         const std::string idx = std::string(determine_index_path(gz, ""));
         ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES", "1", 1);
-        View::from_file(gz, idx).duql(R"(name == "read")").materialize().get();
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .duql(R"(name == "read")")
+            .materialize()
+            .get();
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
         std::vector<std::string> views;
         for (const auto& e :
@@ -241,7 +251,7 @@ TEST_SUITE("QueryCache") {
             views.push_back(std::string(e.path.str()));
         CHECK(views.empty());
         StringSink rows;
-        const auto st = View::from_file(gz, idx)
+        const auto st = View::from_file(dstd::String(gz), dstd::String(idx))
                             .duql(R"(name == "read")")
                             .sink_json(rows)
                             .get();

@@ -4,11 +4,10 @@
 
 #include <dftracer/utils/dataframe/log2_histogram.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <cstdint>
-#include <string>
-#include <unordered_map>
 
 namespace dftracer::utils::trace::statistics {
 
@@ -55,14 +54,14 @@ struct DetailedStatistics {
 
     /// Group key -> category (e.g. "POSIX", "dlio_benchmark"); the display
     /// layer splits events by category on this.
-    dstd::StringViewMap<std::string> group_key_category;
+    dstd::StringViewMap<dstd::String> group_key_category;
 
     std::uint64_t events_scanned = 0;
     std::uint64_t chunks_scanned = 0;
     std::uint64_t chunks_skipped = 0;
 
     void merge(const DetailedStatistics& other);
-    std::string to_json() const;
+    dstd::String to_json() const;
 };
 
 }  // namespace dftracer::utils::trace::statistics

@@ -112,7 +112,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
     if (view.query) dv = dv.filter(*view.query);
     if (!single_file || fields.by_path) dv = dv.time_range(begin, end);
     auto scan = co_await dv.map_batches<DurAcc>(
-        [&fields](DurAcc& a, const std::vector<dstd::StringView>& events) {
+        [&fields](DurAcc& a, const dstd::Vector<dstd::StringView>& events) {
             fields.for_each_event(events, [&a](dstd::StringView e) {
                 EventScalars s;
                 if (parse_event_scalars(e, s) && s.has_dur)

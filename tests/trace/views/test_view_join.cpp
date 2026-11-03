@@ -50,10 +50,12 @@ TEST_SUITE("ViewJoin") {
         std::string gz = create_mixed_trace(env, 30, 20);  // 30 posix, 20 stdio
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        auto left = View::from_file(gz, idx)
+        auto left = View::from_file(dftracer::utils::dstd::String(gz),
+                                    dftracer::utils::dstd::String(idx))
                         .group_by({GroupKey::cat()})
                         .agg({{AggOp::Count, "", "n"}});
-        auto right = View::from_file(gz, idx)
+        auto right = View::from_file(dftracer::utils::dstd::String(gz),
+                                     dftracer::utils::dstd::String(idx))
                          .duql(R"(cat == "POSIX")")
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Sum, "dur", "s"}});
@@ -97,7 +99,8 @@ TEST_SUITE("ViewJoin") {
         }
 
         SUBCASE("a key absent from one side fails at collect") {
-            auto other = View::from_file(gz, idx)
+            auto other = View::from_file(dftracer::utils::dstd::String(gz),
+                                         dftracer::utils::dstd::String(idx))
                              .group_by({GroupKey::pid()})
                              .agg({{AggOp::Count, "", "n"}});
             auto plan =

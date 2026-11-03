@@ -4,11 +4,11 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
 
-#include <optional>
-#include <string>
 #include <utility>
 
 namespace dftracer::utils::trace::views {
@@ -17,8 +17,8 @@ using dftracer::utils::duql::Query;
 
 /// Named view definition with optional query filter.
 struct ViewDefinition {
-    std::string name;             ///< View name.
-    std::string description;      ///< Human-readable description.
+    dstd::String name;            ///< View name.
+    dstd::String description;     ///< Human-readable description.
     dstd::Optional<Query> query;  ///< Event filter (nullopt = match all).
     /// Return ph=M metadata records; they bypass `query` unless one of the
     /// two flags below is set.
@@ -39,17 +39,17 @@ struct ViewDefinition {
     bool by_path = false;
     /// With `by_path`, the paths to decode, sorted and unique; empty decodes
     /// every leaf.
-    std::vector<std::string> paths;
+    dstd::Vector<dstd::String> paths;
     /// With `by_path`, the files' record schema (registered, so it lives for
     /// the process); decoding converts its fields and binds its roles.
     const dftracer::utils::index::RecordSchema* record_schema = nullptr;
     /// With `record_schema`, the declared field at each of `paths` (null when
     /// undeclared), aligned with `paths`.
-    std::vector<const dftracer::utils::index::FieldSpec*> path_fields;
+    dstd::Vector<const dftracer::utils::index::FieldSpec*> path_fields;
     /// The fields `window` reads, and microseconds per unit of each; empty
     /// reads "ts" and "dur" in microseconds.
-    std::string time_path;
-    std::string duration_path;
+    dstd::String time_path;
+    dstd::String duration_path;
     double time_factor = 1;
     double duration_factor = 1;
     /// A bare name a record lacks reads the field of that name under `args`
@@ -59,14 +59,14 @@ struct ViewDefinition {
     /// (index::plan::Prefilter). Results are the same either way.
     bool prefilter = true;
 
-    ViewDefinition& with_name(const std::string& n);
-    ViewDefinition& with_description(const std::string& d);
+    ViewDefinition& with_name(const dstd::String& n);
+    ViewDefinition& with_description(const dstd::String& d);
     /// Set query from a DSL string. Silently ignored if parse fails.
-    ViewDefinition& with_query(const std::string& query_str);
+    ViewDefinition& with_query(const dstd::String& query_str);
     ViewDefinition& with_query(Query q);
 
-    std::string to_json() const;
-    static ViewDefinition from_json(const std::string& json);
+    dstd::String to_json() const;
+    static ViewDefinition from_json(const dstd::String& json);
 
     /// POSIX/STDIO I/O operations.
     static ViewDefinition io_view();

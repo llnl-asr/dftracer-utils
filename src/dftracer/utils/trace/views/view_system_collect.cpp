@@ -19,9 +19,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <optional>
-#include <set>
-#include <string_view>
 #include <utility>
 
 namespace dftracer::utils::trace::views::detail {
@@ -49,13 +46,13 @@ bool is_hash_arg(dstd::StringView path) {
 // their own (host, name, time_bucket) grain.
 dstd::Optional<index::Snapshot> covering_index(const ViewPlan& plan) {
     if (plan.files.empty()) return dstd::nullopt;
-    const std::string& index_path = plan.files.front().index_path;
+    const dstd::String& index_path = plan.files.front().index_path;
     if (index_path.empty()) return dstd::nullopt;
     try {
         auto snapshot = common::unwrap(index::plan::open_snapshot(index_path));
         const auto config = common::unwrap(agg::tier::read_config(snapshot));
         if (!config) return dstd::nullopt;
-        std::set<std::string, std::less<>> current;
+        dstd::Set<dstd::String, std::less<>> current;
         for (const auto& file : common::unwrap(snapshot.files())) {
             if (snapshot.extension(file, store::IndexExtension::Agg,
                                    config->params_hash) ==
@@ -67,7 +64,7 @@ dstd::Optional<index::Snapshot> covering_index(const ViewPlan& plan) {
             if (f.index_path != index_path) return dstd::nullopt;
             const dstd::String logical =
                 store::internal::get_logical_path(f.file_path);
-            if (current.find(std::string_view(logical)) == current.end())
+            if (current.find(dstd::StringView(logical)) == current.end())
                 return dstd::nullopt;
         }
         return snapshot;
@@ -165,7 +162,7 @@ dataframe::DataFrame build_counters_frame(const Groups& groups, int shard_begin,
         return static_cast<std::int64_t>(key.shard) >= begin &&
                static_cast<std::int64_t>(key.shard) < end;
     };
-    std::set<dstd::String> name_set;
+    dstd::Set<dstd::String> name_set;
     for (const auto& [key, metrics] : groups) {
         if (!kept(key)) continue;
         if (metrics.metrics)

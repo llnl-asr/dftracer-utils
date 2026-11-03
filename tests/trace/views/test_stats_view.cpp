@@ -64,11 +64,12 @@ TEST_SUITE("stats via View") {
         std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        dataframe::DataFrame cats = View::from_file(gz, idx)
-                                        .group_by({GroupKey::cat()})
-                                        .agg({{AggOp::Count, "", "n"}})
-                                        .collect()
-                                        .get();
+        dataframe::DataFrame cats =
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get();
 
         // num_categories == distinct groups; total events == sum of counts.
         CHECK(cats.num_rows() == 2);      // posix, stdio
@@ -81,16 +82,17 @@ TEST_SUITE("stats via View") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        dataframe::DataFrame names = View::from_file(gz, idx)
-                                         .group_by({GroupKey::name()})
-                                         .agg({{AggOp::Count, "", "n"}})
-                                         .collect()
-                                         .get();
+        dataframe::DataFrame names =
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::name()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get();
         CHECK(names.num_rows() > 0);  // num_unique_names
         CHECK(sum_i64(names, "n") == 50);
 
         dataframe::DataFrame pt =
-            View::from_file(gz, idx)
+            View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::pid(), GroupKey::tid()})
                 .agg({{AggOp::Count, "", "n"}})
                 .collect()
@@ -105,7 +107,8 @@ TEST_SUITE("stats via View") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        stats::ViewStats s = run_stats(stats::StatsView::from_file(gz, idx));
+        stats::ViewStats s = run_stats(
+            stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
 
         CHECK(s.total_events == 50);
         CHECK(s.category_counts.size() == 2);
@@ -131,7 +134,8 @@ TEST_SUITE("stats via View") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        stats::ViewStats s = run_stats(stats::StatsView::from_file(gz, idx));
+        stats::ViewStats s = run_stats(
+            stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
         dftracer::utils::index::schemas::dft::ChunkStatistics cs;
         stats::fill_chunk_statistics(cs, s);
 
@@ -153,7 +157,8 @@ TEST_SUITE("stats via View") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        stats::ViewStats cold = run_stats(stats::StatsView::from_file(gz, idx));
+        stats::ViewStats cold = run_stats(
+            stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
 
         // Persist the rollups, then read them back.
         dftracer::utils::Runtime rt;
@@ -161,9 +166,12 @@ TEST_SUITE("stats via View") {
             "materialize",
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
-                    co_await stats::StatsView::from_file(gz, idx).materialize();
+                    co_await stats::StatsView::from_file(dstd::String(gz),
+                                                         dstd::String(idx))
+                        .materialize();
                 })));
-        stats::ViewStats warm = run_stats(stats::StatsView::from_file(gz, idx));
+        stats::ViewStats warm = run_stats(
+            stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
 
         CHECK(warm.total_events == cold.total_events);
         CHECK(warm.category_counts.size() == cold.category_counts.size());
@@ -186,23 +194,24 @@ TEST_SUITE("stats via View") {
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
                     dataframe::LazyFrame plan =
-                        View::from_file(gz, idx).branch([](ViewSession& s) {
-                            s.materialize({GroupKey::cat()},
-                                          {{AggOp::Count, "", "n"}});
-                            s.materialize({GroupKey::name()},
-                                          {{AggOp::Count, "", "n"}});
-                            return std::function<void(const ExportStats&)>(
-                                [](const ExportStats&) {});
-                        });
+                        View::from_file(dstd::String(gz), dstd::String(idx))
+                            .branch([](ViewSession& s) {
+                                s.materialize({GroupKey::cat()},
+                                              {{AggOp::Count, "", "n"}});
+                                s.materialize({GroupKey::name()},
+                                              {{AggOp::Count, "", "n"}});
+                                return std::function<void(const ExportStats&)>(
+                                    [](const ExportStats&) {});
+                            });
                     co_await plan.collect();
                 })));
 
         // Both rollups are now reconstructable with no scan.
-        auto cat = View::from_file(gz, idx)
+        auto cat = View::from_file(dstd::String(gz), dstd::String(idx))
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
                        .reconstruct_if_cached();
-        auto name = View::from_file(gz, idx)
+        auto name = View::from_file(dstd::String(gz), dstd::String(idx))
                         .group_by({GroupKey::name()})
                         .agg({{AggOp::Count, "", "n"}})
                         .reconstruct_if_cached();
@@ -224,14 +233,15 @@ TEST_SUITE("stats via View") {
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
                     dataframe::LazyFrame plan =
-                        View::from_file(gz, idx).branch([](ViewSession& s) {
-                            s.materialize({GroupKey::cat()},
-                                          {{AggOp::Count, "", "n"}});
-                            s.materialize({GroupKey::name()},
-                                          {{AggOp::Count, "", "n"}});
-                            return std::function<void(const ExportStats&)>(
-                                [](const ExportStats&) {});
-                        });
+                        View::from_file(dstd::String(gz), dstd::String(idx))
+                            .branch([](ViewSession& s) {
+                                s.materialize({GroupKey::cat()},
+                                              {{AggOp::Count, "", "n"}});
+                                s.materialize({GroupKey::name()},
+                                              {{AggOp::Count, "", "n"}});
+                                return std::function<void(const ExportStats&)>(
+                                    [](const ExportStats&) {});
+                            });
                     co_await plan.collect();
                 })));
 
@@ -242,17 +252,19 @@ TEST_SUITE("stats via View") {
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
                     dataframe::LazyFrame plan =
-                        View::from_file(gz, idx).branch([&](ViewSession& s) {
-                            auto cat = s.collect({GroupKey::cat()},
-                                                 {{AggOp::Count, "", "n"}});
-                            auto name = s.collect({GroupKey::name()},
-                                                  {{AggOp::Count, "", "n"}});
-                            return std::function<void(const ExportStats&)>(
-                                [&, cat](const ExportStats& st) {
-                                    stats = st;
-                                    cat_sum = sum_i64(cat.get(), "n");
-                                });
-                        });
+                        View::from_file(dstd::String(gz), dstd::String(idx))
+                            .branch([&](ViewSession& s) {
+                                auto cat = s.collect({GroupKey::cat()},
+                                                     {{AggOp::Count, "", "n"}});
+                                auto name =
+                                    s.collect({GroupKey::name()},
+                                              {{AggOp::Count, "", "n"}});
+                                return std::function<void(const ExportStats&)>(
+                                    [&, cat](const ExportStats& st) {
+                                        stats = st;
+                                        cat_sum = sum_i64(cat.get(), "n");
+                                    });
+                            });
                     co_await plan.collect();
                 })));
 
@@ -277,8 +289,9 @@ TEST_SUITE("stats via View") {
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
                     dataframe::LazyFrame plan =
-                        View::from_file(gz, idx).memory_budget(1).branch(
-                            [&](ViewSession& s) {
+                        View::from_file(dstd::String(gz), dstd::String(idx))
+                            .memory_budget(1)
+                            .branch([&](ViewSession& s) {
                                 auto c = s.collect({GroupKey::cat()},
                                                    {{AggOp::Count, "", "n"}});
                                 return std::function<void(const ExportStats&)>(
@@ -314,9 +327,10 @@ TEST_SUITE("stats via View") {
         (void)dstd::fs::remove(pfw);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        stats::ViewStats s = run_stats(stats::StatsView::from_file(gz, idx));
+        stats::ViewStats s = run_stats(
+            stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
         std::map<std::string, std::uint64_t> m;
-        for (auto& [k, v] : s.pid_tid_counts) m[k] = v;
+        for (auto& [k, v] : s.pid_tid_counts) m[std::string(k)] = v;
         CHECK(m.count("1000:5000") == 1);
         CHECK(m.count("1001:5001") == 1);
         CHECK(m["1000:5000"] == 10);
@@ -329,15 +343,16 @@ TEST_SUITE("stats via View") {
         std::string gz = create_mixed_trace(env, 30, 20);
         std::string idx = std::string(determine_index_path(gz, ""));
 
-        dataframe::DataFrame d = View::from_file(gz, idx)
-                                     .group_by({GroupKey::cat()})
-                                     .agg({{AggOp::Mean, "dur", "mean"},
-                                           {AggOp::Min, "dur", "dmin"},
-                                           {AggOp::Max, "dur", "dmax"},
-                                           {AggOp::Min, "ts", "tmin"},
-                                           {AggOp::Max, "ts", "tmax"}})
-                                     .collect()
-                                     .get();
+        dataframe::DataFrame d =
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Mean, "dur", "mean"},
+                      {AggOp::Min, "dur", "dmin"},
+                      {AggOp::Max, "dur", "dmax"},
+                      {AggOp::Min, "ts", "tmin"},
+                      {AggOp::Max, "ts", "tmax"}})
+                .collect()
+                .get();
         REQUIRE(d.num_rows() == 2);
         const double* mean = d.columns[col(d, "mean")].data<double>();
         const std::int64_t* dmin =

@@ -50,10 +50,11 @@ TEST_SUITE("ViewDefinition") {
         original.include_metadata = true;
         original.metadata_records = true;
 
-        std::string json = original.to_json();
+        std::string json = std::string(original.to_json());
         CHECK(!json.empty());
 
-        auto restored = ViewDefinition::from_json(json);
+        auto restored =
+            ViewDefinition::from_json(dftracer::utils::dstd::String(json));
         CHECK(restored.name == "test_roundtrip");
         CHECK(restored.description == "Round-trip test");
         CHECK(restored.query.has_value());
@@ -65,8 +66,9 @@ TEST_SUITE("ViewDefinition") {
         ViewDefinition original;
         original.with_name("empty").with_description("No query");
 
-        std::string json = original.to_json();
-        auto restored = ViewDefinition::from_json(json);
+        std::string json = std::string(original.to_json());
+        auto restored =
+            ViewDefinition::from_json(dftracer::utils::dstd::String(json));
 
         CHECK(restored.name == "empty");
         CHECK_FALSE(restored.query.has_value());

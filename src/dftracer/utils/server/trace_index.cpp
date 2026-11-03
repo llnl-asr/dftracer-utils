@@ -770,8 +770,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
 
                                     auto meta_input =
                                         MetadataCollectorUtilityInput::
-                                            from_file(info->path)
-                                                .with_index(info->index_path);
+                                            from_file(dstd::String(info->path))
+                                                .with_index(dstd::String(
+                                                    info->index_path));
                                     MetadataCollectorUtility collector;
                                     auto metadata =
                                         co_await collector(meta_input);

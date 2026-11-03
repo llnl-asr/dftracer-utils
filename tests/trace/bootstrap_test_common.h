@@ -25,9 +25,11 @@ inline std::map<std::string, std::int64_t> counts(
     return out;
 }
 
-inline std::vector<dftracer::utils::trace::views::ViewFile> view_files_of(
-    const std::vector<std::string>& files, const std::string& index_dir) {
-    std::vector<dftracer::utils::trace::views::ViewFile> view_files;
+inline dftracer::utils::dstd::Vector<dftracer::utils::trace::views::ViewFile>
+view_files_of(const std::vector<std::string>& files,
+              const std::string& index_dir) {
+    dftracer::utils::dstd::Vector<dftracer::utils::trace::views::ViewFile>
+        view_files;
     for (const auto& f : files) {
         dftracer::utils::trace::views::ViewFile vf;
         vf.file_path = f;

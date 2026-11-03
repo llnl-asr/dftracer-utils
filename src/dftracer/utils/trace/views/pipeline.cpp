@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/pipeline.h>
 
 #include <stdexcept>
-#include <vector>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -33,7 +33,7 @@ coro::CoroTask<ExportStats> execute(Pipeline pipeline,
         pipeline.sinks.empty())
         throw std::logic_error("pipeline: incomplete source or no sink");
 
-    std::vector<Fold*> folds;
+    dstd::Vector<Fold*> folds;
     folds.reserve(pipeline.sinks.size());
     for (const PipelineNode& s : pipeline.sinks) {
         if (s.fold == nullptr)

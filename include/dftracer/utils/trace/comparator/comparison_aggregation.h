@@ -15,9 +15,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::trace::comparator {
 
@@ -78,7 +75,7 @@ struct SideAggregate {
 /// Memory is the rows of the per-window query for one cut at a time, then the
 /// collapsed groups.
 coro::CoroTask<common::Result<SideAggregate>> aggregate_side(
-    dstd::Span<const std::string> files, dstd::StringView index_dir,
+    dstd::Span<const dstd::String> files, dstd::StringView index_dir,
     const dstd::Vector<ComparisonFilter>& filters, std::uint64_t window_us,
     std::size_t workers, dstd::StringIntern& strings);
 

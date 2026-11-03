@@ -217,10 +217,8 @@ RowSetFold::RowSetFold(dftracer::utils::dstd::StringIntern& intern,
     }
 }
 
-// keep std: trace::views::detail::Fold::slice returns std::unique_ptr
-std::unique_ptr<trace::views::detail::Fold> RowSetFold::slice() const {
-    // keep std: Fold::slice returns std::unique_ptr
-    return std::make_unique<RowSetFold>(*intern_, rowsets_, budget_);
+dstd::UniquePtr<trace::views::detail::Fold> RowSetFold::slice() const {
+    return dstd::make_unique<RowSetFold>(*intern_, rowsets_, budget_);
 }
 
 void RowSetFold::step(const trace::views::detail::FoldBatch& batch) {

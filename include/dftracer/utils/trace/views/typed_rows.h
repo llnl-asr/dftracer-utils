@@ -2,7 +2,11 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_TYPED_ROWS_H
 #define DFTRACER_UTILS_TRACE_VIEWS_TYPED_ROWS_H
 
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schema_class.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -13,10 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::trace::views {
 
@@ -34,12 +35,9 @@ inline bool find_path(simdjson::dom::element root, dstd::StringView path,
         if (cur.get(obj) == simdjson::SUCCESS) {
             if (obj.at_key(seg).get(cur) != simdjson::SUCCESS) return false;
         } else if (cur.get(arr) == simdjson::SUCCESS) {
-            std::size_t i = 0;
-            auto [end, ec] =
-                std::from_chars(seg.data(), seg.data() + seg.size(), i);
-            if (ec != std::errc{} || end != seg.data() + seg.size() ||
-                arr.at(i).get(cur) != simdjson::SUCCESS)
-                return false;
+            const dstd::Optional<std::size_t> i =
+                dstd::from_chars<std::size_t>(seg);
+            if (!i || arr.at(*i).get(cur) != simdjson::SUCCESS) return false;
         } else {
             return false;
         }
@@ -78,7 +76,7 @@ bool convert(simdjson::dom::element e, V& out) {
         if (e.get(d) != simdjson::SUCCESS) return false;
         out = static_cast<V>(d);
         return true;
-    } else if constexpr (std::same_as<V, std::string>) {
+    } else if constexpr (std::same_as<V, dstd::String>) {
         dstd::StringView s;
         if (e.get(s) != simdjson::SUCCESS) return false;
         out.assign(s);
@@ -147,16 +145,16 @@ T decode_row(simdjson::dom::element record) {
 /// decode_row. Rows are decoded on the scan workers; their order across
 /// workers is unspecified.
 template <typename T>
-dataframe::LazyResult<std::vector<T>> rows(const View& view, Lazy) {
-    return view.branch<std::vector<T>>(
-        std::function<Deferred<std::vector<T>>(ViewSession&)>(
+dataframe::LazyResult<dstd::Vector<T>> rows(const View& view, Lazy) {
+    return view.branch<dstd::Vector<T>>(
+        dstd::Function<Deferred<dstd::Vector<T>>(ViewSession&)>(
             [](ViewSession& s) {
-                return s.fold<std::vector<T>>(
-                    [](std::vector<T>& out, const json::JsonValue& jv,
+                return s.fold<dstd::Vector<T>>(
+                    [](dstd::Vector<T>& out, const json::JsonValue& jv,
                        dstd::StringView) {
                         out.push_back(decode_row<T>(jv.element()));
                     },
-                    [](std::vector<T>&& a, std::vector<T>&& b) {
+                    [](dstd::Vector<T>&& a, dstd::Vector<T>&& b) {
                         if (a.empty()) return std::move(b);
                         a.insert(a.end(), std::make_move_iterator(b.begin()),
                                  std::make_move_iterator(b.end()));
@@ -166,7 +164,7 @@ dataframe::LazyResult<std::vector<T>> rows(const View& view, Lazy) {
 }
 
 template <typename T>
-coro::CoroTask<std::vector<T>> rows(const View& view) {
+coro::CoroTask<dstd::Vector<T>> rows(const View& view) {
     co_return co_await rows<T>(view, LAZY).collect();
 }
 

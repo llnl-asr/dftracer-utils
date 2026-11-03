@@ -7,7 +7,6 @@
 #include <dftracer/utils/json/parser.h>
 
 #include <cstdint>
-#include <string_view>
 
 /// DFTracer on-disk format codecs. The current format writes "ph" and "type" as
 /// small integers; legacy traces wrote "ph" as a single-letter Chrome-tracing

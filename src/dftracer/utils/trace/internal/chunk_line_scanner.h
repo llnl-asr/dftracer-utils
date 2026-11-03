@@ -3,12 +3,12 @@
 #define DFTRACER_UTILS_TRACE_INTERNAL_CHUNK_LINE_SCANNER_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <string_view>
 
 namespace dftracer::utils::trace::internal {
 
@@ -18,7 +18,7 @@ namespace dftracer::utils::trace::internal {
 // (including empty and skipped ones), matching manifest line-number semantics.
 //
 // The line view aliases the stream's chunk buffer (zero-copy); `per_line` must
-// not co_await and must be a callable that inlines (no std::function). Keeping
+// not co_await and must be a callable that inlines (no dstd::Function). Keeping
 // the callback synchronous keeps this coroutine's frame minimal.
 template <typename Stream, typename Fn>
 dftracer::utils::coro::CoroTask<void> scan_chunk_lines(Stream& stream,

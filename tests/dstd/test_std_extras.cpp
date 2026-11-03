@@ -114,10 +114,10 @@ TEST_CASE("stable_sort sorts and keeps equal elements in order") {
         for (int i = 0; i < n; ++i)
             v.push_back({static_cast<int>(rng() % 17), i});
         dstd::Vector<Keyed> expect = v;
-        std::stable_sort(   // keep std: compares dstd with its std twin
+        std::stable_sort(  // keep std: compares dstd with its std twin
             expect.begin(), expect.end(),
             [](const Keyed& a, const Keyed& b) { return a.key < b.key; });
-        dstd::stable_sort(  // keep std: compares dstd with its std twin
+        dstd::stable_sort(
             v.begin(), v.end(),
             [](const Keyed& a, const Keyed& b) { return a.key < b.key; });
         bool same = true;

@@ -97,7 +97,6 @@ TEST_CASE("a spill file returns what was appended at the returned offsets") {
 TEST_CASE("runs added from several threads merge to the sorted order") {
     const auto in = shuffled(20000);
     dftracer::utils::common::ExternalSorter<Rec, Less> s(Less{}, 1 << 20);
-    // keep std: the test joins its threads itself
     dstd::Vector<dstd::Thread> threads;
     for (std::size_t t = 0; t < 4; ++t) {
         threads.emplace_back([&, t] {

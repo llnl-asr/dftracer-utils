@@ -62,9 +62,7 @@ dstd::String rank(std::int64_t pid, std::int64_t start, std::int64_t end) {
 
 void write_gz(const dstd::Path& p, const dstd::String& content) {
     REQUIRE(dstd::fs::create_directories(p.view().parent()).has_value());
-    // keep std: write_gz_trace takes dstd::String
-    dftu_utils_test::write_gz_trace(
-        dstd::String(p.str()), dstd::String(content.data(), content.size()));
+    dftu_utils_test::write_gz_trace(dstd::String(p.str()), content);
 }
 
 void write_text(const dstd::Path& p, const dstd::String& content) {

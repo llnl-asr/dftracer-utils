@@ -123,7 +123,6 @@ dstd::String get(Served& s, const dstd::String& target) {
     return body;
 }
 
-// keep std: the test helper returns dstd::String
 dstd::String file_of(Served& s) {
     return dstd::String(s.index->files().front().path);
 }

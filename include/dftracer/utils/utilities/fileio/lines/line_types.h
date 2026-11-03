@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINE_TYPES_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINE_TYPES_H
 
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
@@ -132,21 +133,26 @@ struct Lines {
 
 // Hash specializations for using Line and LineReadInput in hash-based
 // containers
-namespace std {
+namespace dftracer::utils::dstd {
 
 template <>
-struct hash<dftracer::utils::utilities::fileio::lines::Line> {
+struct Hash<dftracer::utils::utilities::fileio::lines::Line> {
+    using is_avalanching = void;
+
     std::size_t operator()(
         const dftracer::utils::utilities::fileio::lines::Line& line) const {
         ::dftracer::utils::utilities::hash::HasherUtility hasher;
         hasher.update(line.content);
         hasher.update(line.line_number);
-        return hasher.get_hash().value;
+        return static_cast<std::size_t>(
+            hash::splitmix64(hasher.get_hash().value));
     }
 };
 
 template <>
-struct hash<dftracer::utils::utilities::fileio::lines::LineReadInput> {
+struct Hash<dftracer::utils::utilities::fileio::lines::LineReadInput> {
+    using is_avalanching = void;
+
     std::size_t operator()(
         const dftracer::utils::utilities::fileio::lines::LineReadInput& req)
         const {
@@ -155,25 +161,29 @@ struct hash<dftracer::utils::utilities::fileio::lines::LineReadInput> {
         hasher.update(req.index_path);
         hasher.update(req.start_line);
         hasher.update(req.end_line);
-        return hasher.get_hash().value;
+        return static_cast<std::size_t>(
+            hash::splitmix64(hasher.get_hash().value));
     }
 };
 
 template <>
-struct hash<dftracer::utils::utilities::fileio::lines::Lines> {
+struct Hash<dftracer::utils::utilities::fileio::lines::Lines> {
+    using is_avalanching = void;
+
     std::size_t operator()(
         const dftracer::utils::utilities::fileio::lines::Lines& lines)
         const noexcept {
         ::dftracer::utils::utilities::hash::HasherUtility hasher;
         for (const auto& line : lines.lines) {
             hasher.update(
-                std::hash<::dftracer::utils::utilities::fileio::lines::Line>{}(
+                Hash<::dftracer::utils::utilities::fileio::lines::Line>{}(
                     line));
         }
-        return hasher.get_hash().value;
+        return static_cast<std::size_t>(
+            hash::splitmix64(hasher.get_hash().value));
     }
 };
 
-}  // namespace std
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINE_TYPES_H

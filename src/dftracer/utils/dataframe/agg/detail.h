@@ -1410,7 +1410,7 @@ class AggState {
             const std::size_t cv =
                 get_null(k)
                     ? std::size_t{dftracer::utils::dstd::hash::GOLDEN_RATIO}
-                : key_is_bytes[k] ? std::hash<dstd::StringView>{}(get_str(k))
+                : key_is_bytes[k] ? dstd::Hash<dstd::StringView>{}(get_str(k))
                                   : static_cast<std::size_t>(get_int(k));
             dftracer::utils::dstd::hash_combine(h, cv);
         }
@@ -1492,7 +1492,7 @@ class AggState {
                 other.nkey_cols[k][sj] != 0
                     ? std::size_t{dftracer::utils::dstd::hash::GOLDEN_RATIO}
                 : key_is_bytes[k]
-                    ? std::hash<dstd::StringView>{}(other.skey_cols[k][sj])
+                    ? dstd::Hash<dstd::StringView>{}(other.skey_cols[k][sj])
                     : static_cast<std::size_t>(other.ikey_cols[k][sj]);
             dftracer::utils::dstd::hash_combine(h, cv);
         }
@@ -1542,7 +1542,7 @@ class AggState {
                     nkey_cols[k][static_cast<std::size_t>(g)]
                         ? std::size_t{dftracer::utils::dstd::hash::GOLDEN_RATIO}
                     : key_is_bytes[k]
-                        ? std::hash<dstd::StringView>{}(
+                        ? dstd::Hash<dstd::StringView>{}(
                               skey_cols[k][static_cast<std::size_t>(g)])
                         : static_cast<std::size_t>(
                               ikey_cols[k][static_cast<std::size_t>(g)]);

@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -473,7 +474,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             const std::uint32_t id = intern_->entry_id(n);
             digest = digest * dstd::hash::FNV1A_PRIME + id;
             digest = digest * dstd::hash::FNV1A_PRIME +
-                     std::hash<dstd::StringView>{}(intern_->resolve(id));
+                     dstd::Hash<dstd::StringView>{}(intern_->resolve(id));
         }
         g_intern_order_digest.fetch_xor(digest);
     }

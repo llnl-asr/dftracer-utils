@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_MANIFEST_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_MANIFEST_H
 
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/types/chunk_spec.h>
 
@@ -34,9 +35,11 @@ struct ChunkManifest {
 }  // namespace dftracer::utils::utilities::fileio
 
 // Hash specialization for caching
-namespace std {
+namespace dftracer::utils::dstd {
 template <>
-struct hash<dftracer::utils::utilities::fileio::ChunkManifest> {
+struct Hash<dftracer::utils::utilities::fileio::ChunkManifest> {
+    using is_avalanching = void;
+
     std::size_t operator()(
         const dftracer::utils::utilities::fileio::ChunkManifest& manifest)
         const noexcept {
@@ -44,12 +47,12 @@ struct hash<dftracer::utils::utilities::fileio::ChunkManifest> {
         hasher.update(manifest.total_size_mb);
         for (const auto& spec : manifest.specs) {
             hasher.update(
-                std::hash<::dftracer::utils::utilities::fileio::ChunkSpec>{}(
-                    spec));
+                Hash<::dftracer::utils::utilities::fileio::ChunkSpec>{}(spec));
         }
-        return hasher.get_hash().value;
+        return static_cast<std::size_t>(
+            hash::splitmix64(hasher.get_hash().value));
     }
 };
-}  // namespace std
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_MANIFEST_H

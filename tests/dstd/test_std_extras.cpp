@@ -373,6 +373,7 @@ TEST_CASE("SharedPtr array forms come from our heap and free everything") {
 // keep std: compares dstd with its std twin
 TEST_CASE("std::hash of a dstd::String matches std::string") {
     const dstd::String text = "trace-000.pfw.gz";
+    // keep std: tests std::hash use
     CHECK(std::hash<dstd::String>{}(text) ==
           // keep std: compares dstd with its std twin
           std::hash<std::string>{}(std::string("trace-000.pfw.gz")));

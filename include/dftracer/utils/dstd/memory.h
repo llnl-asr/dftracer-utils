@@ -206,9 +206,4 @@ SharedPtr<T> adopt_shared_ptr(T* p, D deleter) {
 
 }  // namespace dftracer::utils::dstd
 
-template <class T>
-struct std::hash<dftracer::utils::dstd::SharedPtr<T>>
-    // keep std: defines dstd::UniquePtr and dstd::SharedPtr
-    : std::hash<std::shared_ptr<T>> {};
-
 #endif  // DFTRACER_UTILS_DSTD_MEMORY_H

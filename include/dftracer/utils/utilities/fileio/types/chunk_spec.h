@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_SPEC_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_SPEC_H
 
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
@@ -48,9 +49,11 @@ struct ChunkSpec {
 }  // namespace dftracer::utils::utilities::fileio
 
 // Hash specialization for caching
-namespace std {
+namespace dftracer::utils::dstd {
 template <>
-struct hash<dftracer::utils::utilities::fileio::ChunkSpec> {
+struct Hash<dftracer::utils::utilities::fileio::ChunkSpec> {
+    using is_avalanching = void;
+
     std::size_t operator()(const dftracer::utils::utilities::fileio::ChunkSpec&
                                spec) const noexcept {
         ::dftracer::utils::utilities::hash::HasherUtility hasher;
@@ -59,9 +62,10 @@ struct hash<dftracer::utils::utilities::fileio::ChunkSpec> {
         hasher.update(spec.size_mb);
         hasher.update(spec.start_byte);
         hasher.update(spec.end_byte);
-        return hasher.get_hash().value;
+        return static_cast<std::size_t>(
+            hash::splitmix64(hasher.get_hash().value));
     }
 };
-}  // namespace std
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_SPEC_H

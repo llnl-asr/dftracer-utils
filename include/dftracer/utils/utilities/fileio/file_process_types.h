@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_H
 
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
@@ -184,10 +185,12 @@ struct BatchFileProcessOutput {
 }  // namespace dftracer::utils::utilities::fileio
 
 /// Hash specializations for using workflow types in hash-based containers
-namespace std {
+namespace dftracer::utils::dstd {
 
 template <>
-struct hash<dftracer::utils::utilities::fileio::DirectoryProcessInput> {
+struct Hash<dftracer::utils::utilities::fileio::DirectoryProcessInput> {
+    using is_avalanching = void;
+
     std::size_t operator()(
         const dftracer::utils::utilities::fileio::DirectoryProcessInput& input)
         const {
@@ -197,10 +200,11 @@ struct hash<dftracer::utils::utilities::fileio::DirectoryProcessInput> {
         for (const auto& ext : input.extensions) {
             hasher.update(ext);
         }
-        return hasher.get_hash().value;
+        return static_cast<std::size_t>(
+            hash::splitmix64(hasher.get_hash().value));
     }
 };
 
-}  // namespace std
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_H

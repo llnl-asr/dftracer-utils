@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -142,7 +143,7 @@ struct KeyView {
                 std::memcpy(&bits, p,
                             width < sizeof(bits) ? width : sizeof(bits));
                 if (width > sizeof(bits))
-                    bits ^= std::hash<dstd::StringView>{}(dstd::StringView(
+                    bits ^= dstd::Hash<dstd::StringView>{}(dstd::StringView(
                         reinterpret_cast<const char*>(p), width));
                 return bits;
             }
@@ -150,7 +151,7 @@ struct KeyView {
                 return (data[i >> 3] >> (i & 7)) & 1;
             case Str32:
             case Str64:
-                return std::hash<dstd::StringView>{}(bytes(i));
+                return dstd::Hash<dstd::StringView>{}(bytes(i));
         }
         return 0;
     }

@@ -51,7 +51,7 @@ struct DensityKeyHash {
         mix(static_cast<std::uint64_t>(k.pid));
         mix(static_cast<std::uint64_t>(k.tid));
         mix(static_cast<std::uint64_t>(k.col));
-        mix(std::hash<dstd::String>{}(k.group));
+        mix(dstd::Hash<dstd::String>{}(k.group));
         return h;
     }
 };

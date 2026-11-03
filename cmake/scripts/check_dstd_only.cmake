@@ -98,10 +98,11 @@ FNR == 1 { kept = 0 }
     hits++
     next
   }
-  if (line ~ /(^|[^A-Za-z0-9_:])std::(string|string_view|vector|span|map|set|multimap|multiset|unordered_map|unordered_set|deque|list|queue|priority_queue|unique_ptr|make_unique|shared_ptr|make_shared|weak_ptr|optional|nullopt|variant|monostate|pair|make_pair|tuple|any|any_cast|function|thread|promise|future|shared_future|to_string|stoi|stol|stoll|stoul|stoull|stod|stof|stable_sort|ofstream|ifstream|fstream|ostringstream|stringstream|istringstream|to_chars|from_chars)([^A-Za-z0-9_]|$)/) {
+  if (line ~ /(^|[^A-Za-z0-9_:])std::(string|string_view|vector|span|map|set|multimap|multiset|unordered_map|unordered_set|deque|list|queue|priority_queue|unique_ptr|make_unique|shared_ptr|make_shared|weak_ptr|optional|nullopt|variant|monostate|pair|make_pair|tuple|any|any_cast|function|thread|promise|future|shared_future|to_string|stoi|stol|stoll|stoul|stoull|stod|stof|stable_sort|ofstream|ifstream|fstream|ostringstream|stringstream|istringstream|to_chars|from_chars|hash)([^A-Za-z0-9_]|$)/) {
     print FILENAME ":" FNR ": " $0
     hits++
-  } else if (line ~ /UniquePtr<.*>[ \t]*([A-Za-z_][A-Za-z0-9_]*)?[ \t]*[({][ \t]*new[ \t]/) {
+  } else if (line ~ /UniquePtr<.*>[ \t]*([A-Za-z_][A-Za-z0-9_]*)?[ \t]*[({][ \t]*new[ \t]/ ||
+             line ~ /[A-Za-z0-9]_[ \t]*[({][ \t]*new[ \t]+[A-Za-z_:]/) {
     print FILENAME ":" FNR ": " $0 "  (raw new: use dstd::make_unique)"
     hits++
   }
@@ -125,15 +126,20 @@ if(SELF_TEST)
        "std::deque<int> e;\n"
        "dstd::UniquePtr<int> f(new int(1));\n"
        "ankerl::unordered_dense::map<int, int> g;\n"
-       "#include <dftracer/utils/dstd/vendor/unordered_dense.h>\n")
+       "#include <dftracer/utils/dstd/vendor/unordered_dense.h>\n"
+       "std::hash<int> h;\n"
+       "dstd::hash::splitmix64(1);\n"
+       "A() : m_(new int(1)) {}\n"
+       "void *p = new (mem) T();\n")
   execute_process(COMMAND ${_awk} -f "${_awk_file}" "${_sample}"
                   RESULT_VARIABLE _rc OUTPUT_VARIABLE _out)
   string(REGEX REPLACE "[^\n]" "" _newlines "${_out}")
   string(LENGTH "${_newlines}" _n)
-  if(NOT _rc OR NOT _n EQUAL 4 OR NOT _out MATCHES ":1: std::vector"
+  if(NOT _rc OR NOT _n EQUAL 6 OR NOT _out MATCHES ":1: std::vector"
      OR NOT _out MATCHES ":9: dstd::UniquePtr" OR NOT _out MATCHES ":10: ankerl"
-     OR NOT _out MATCHES ":11: #include")
-    message(FATAL_ERROR "dstd_only self test: expected hits on lines 1, 9, 10 and 11, got:\n${_out}")
+     OR NOT _out MATCHES ":11: #include" OR NOT _out MATCHES ":12: std::hash"
+     OR NOT _out MATCHES ":14: A\\(\\)")
+    message(FATAL_ERROR "dstd_only self test: expected hits on lines 1, 9, 10, 11, 12 and 14, got:\n${_out}")
   endif()
   return()
 endif()

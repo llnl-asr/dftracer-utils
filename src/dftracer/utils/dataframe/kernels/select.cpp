@@ -181,7 +181,7 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
     const Series v = flatten(v_in);
     const Series values = flatten(values_in);
     const bool is_bytes = value_domain(v.type()) == ValueDomain::Bytes;
-    dstd::HashSet<double, std::hash<double>> num_set;
+    dstd::HashSet<double> num_set;
     dstd::HashSet<dstd::String> str_set;
     const std::int64_t m = values.length();
     const bool vals_null = values.null_count() > 0;

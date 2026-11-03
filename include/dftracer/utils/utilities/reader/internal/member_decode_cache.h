@@ -38,8 +38,7 @@ struct MemberKey {
     }
 };
 
-/// Hasher of the shard tables. The std::hash below only picks a shard and
-/// feeds the eviction policy.
+/// Hasher of the shard tables. It also picks the shard.
 struct MemberKeyHash {
     using is_avalanching = void;
 
@@ -56,20 +55,6 @@ template <>
 struct Hash<utilities::reader::internal::MemberKey>
     : utilities::reader::internal::MemberKeyHash {};
 }  // namespace dftracer::utils::dstd
-
-namespace std {
-template <>
-struct hash<dftracer::utils::utilities::reader::internal::MemberKey> {
-    std::size_t operator()(
-        const dftracer::utils::utilities::reader::internal::MemberKey& k)
-        const noexcept {
-        std::uint64_t h = k.file * dftracer::utils::dstd::hash::GOLDEN_RATIO;
-        h ^= k.member + dftracer::utils::dstd::hash::GOLDEN_RATIO + (h << 6) +
-             (h >> 2);
-        return static_cast<std::size_t>(h);
-    }
-};
-}  // namespace std
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -121,8 +106,8 @@ class MemberDecodeCache {
                                         std::uint64_t member_idx,
                                         Producer produce) {
         const MemberKey key{file_token, member_idx};
-        const std::size_t h = std::hash<MemberKey>{}(key);
-        Shard& shard = shards_[h & (NSHARDS - 1)];
+        const std::size_t h = dstd::Hash<MemberKey>{}(key);
+        Shard& shard = shards_[(h >> 32) & (NSHARDS - 1)];
 
         requests_.fetch_add(1, std::memory_order_relaxed);
         dstd::SharedPtr<Entry> entry;
@@ -157,7 +142,7 @@ class MemberDecodeCache {
                 total_bytes_.fetch_add(entry->size, std::memory_order_relaxed);
                 // This key is not in a policy yet, so it is never the victim
                 // of its own insert. One shard lock at a time: no lock order.
-                const std::size_t own = h & (NSHARDS - 1);
+                const std::size_t own = (h >> 32) & (NSHARDS - 1);
                 for (std::size_t i = 0; i < NSHARDS && over_budget(); ++i) {
                     Shard& s = shards_[(own + i) & (NSHARDS - 1)];
                     std::lock_guard<std::mutex> g(s.mu);

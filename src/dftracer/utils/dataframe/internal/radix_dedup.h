@@ -43,7 +43,7 @@ dstd::Vector<std::uint8_t> radix_first_seen_by(std::int64_t m, KeyOf&& key_of) {
     }
     const std::size_t p = RADIX_DEDUP_PARTITIONS;
     dstd::Vector<dstd::Vector<std::int64_t>> buckets(p);
-    std::hash<Key> hasher;
+    dstd::Hash<Key> hasher;
     for (std::int64_t j = 0; j < m; ++j)
         buckets[hasher(key_of(j)) % p].push_back(j);
     parallel_for(
@@ -75,7 +75,7 @@ dstd::Vector<std::int64_t> radix_counts_by(std::int64_t m, KeyOf&& key_of) {
     }
     const std::size_t p = RADIX_DEDUP_PARTITIONS;
     dstd::Vector<dstd::Vector<std::int64_t>> buckets(p);
-    std::hash<Key> hasher;
+    dstd::Hash<Key> hasher;
     for (std::int64_t j = 0; j < m; ++j)
         buckets[hasher(key_of(j)) % p].push_back(j);
     parallel_for(

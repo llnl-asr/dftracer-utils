@@ -7,6 +7,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -72,8 +73,8 @@ TEST_SUITE("ChunkVerifier") {
                 -> std::uint64_t {
                 std::uint64_t hash = 0;
                 for (const auto& meta : metadata) {
-                    hash ^= std::hash<dstd::String>{}(meta.name);
-                    hash ^= std::hash<std::size_t>{}(meta.total_events);
+                    hash ^= dstd::Hash<dstd::String>{}(meta.name);
+                    hash ^= dstd::Hash<std::size_t>{}(meta.total_events);
                 }
                 printf("Input hasher calculated hash: %lu\n",
                        (unsigned long)hash);
@@ -90,8 +91,8 @@ TEST_SUITE("ChunkVerifier") {
             auto event_hasher =
                 [](const dstd::Vector<TestEvent>& /*events*/) -> std::uint64_t {
                 std::uint64_t hash = 0;
-                hash ^= std::hash<dstd::String>{}("test");
-                hash ^= std::hash<std::size_t>{}(9);  // total events
+                hash ^= dstd::Hash<dstd::String>{}("test");
+                hash ^= dstd::Hash<std::size_t>{}(9);  // total events
                 printf("Event hasher calculated hash: %lu\n",
                        (unsigned long)hash);
                 return hash;

@@ -2,9 +2,12 @@
 #ifndef DFTRACER_UTILS_DSTD_HASHER_H
 #define DFTRACER_UTILS_DSTD_HASHER_H
 
+#include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/tuple.h>
 // keep std: the vendored hash backs dstd::Hash
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
@@ -88,6 +91,47 @@ struct Hash<T, std::enable_if_t<std::is_floating_point_v<T>>> {
 
 template <class T>
 struct Hash<T*, void> : PtrHash {};
+
+/// Hashes the underlying integer.
+template <class T>
+struct Hash<T, std::enable_if_t<std::is_enum_v<T>>> {
+    using is_avalanching = void;
+
+    std::size_t operator()(T value) const noexcept {
+        return Hash<std::underlying_type_t<T>>{}(
+            static_cast<std::underlying_type_t<T>>(value));
+    }
+};
+
+/// Combines the element hashes in order, then avalanches the result.
+template <class A, class B>
+struct Hash<Pair<A, B>, void> {
+    using is_avalanching = void;
+
+    std::size_t operator()(const Pair<A, B>& p) const
+        noexcept(noexcept(Hash<A>{}(p.first)) &&
+                 noexcept(Hash<B>{}(p.second))) {
+        std::size_t seed = Hash<A>{}(p.first);
+        hash_combine(seed, Hash<B>{}(p.second));
+        return static_cast<std::size_t>(hash::splitmix64(seed));
+    }
+};
+
+/// Combines the element hashes in order, then avalanches the result.
+template <class... Ts>
+struct Hash<Tuple<Ts...>, void> {
+    using is_avalanching = void;
+
+    std::size_t operator()(const Tuple<Ts...>& t) const {
+        std::size_t seed = 0;
+        std::apply(
+            [&seed](const Ts&... elems) {
+                (hash_combine(seed, Hash<Ts>{}(elems)), ...);
+            },
+            t);
+        return static_cast<std::size_t>(hash::splitmix64(seed));
+    }
+};
 
 }  // namespace dftracer::utils::dstd
 

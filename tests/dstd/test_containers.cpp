@@ -5,9 +5,11 @@
 #include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
@@ -222,6 +224,29 @@ TEST_CASE("Hash agrees across the string types and avalanches integers") {
     CHECK(ints(1) != ints(2));
     CHECK((ints(1) >> 32) != 0);
     CHECK(dstd::Hash<int>{}(-1) == dstd::Hash<std::int64_t>{}(-1));
+}
+
+enum class Color : std::uint8_t { Red, Green };
+
+TEST_CASE("Hash covers enums, pairs and tuples") {
+    CHECK(dstd::Hash<Color>{}(Color::Red) == dstd::Hash<std::uint8_t>{}(0));
+    CHECK(dstd::Hash<Color>{}(Color::Green) != dstd::Hash<Color>{}(Color::Red));
+
+    using P = dstd::Pair<int, dstd::String>;
+    CHECK(dstd::Hash<P>{}(P{1, "a"}) == dstd::Hash<P>{}(P{1, "a"}));
+    CHECK(dstd::Hash<P>{}(P{1, "a"}) != dstd::Hash<P>{}(P{2, "a"}));
+    CHECK(dstd::Hash<P>{}(P{1, "a"}) != dstd::Hash<P>{}(P{1, "b"}));
+
+    using T = dstd::Tuple<int, Color, dstd::String>;
+    const T t{1, Color::Green, "x"};
+    CHECK(dstd::Hash<T>{}(t) == dstd::Hash<T>{}(T{1, Color::Green, "x"}));
+    CHECK(dstd::Hash<T>{}(t) != dstd::Hash<T>{}(T{1, Color::Red, "x"}));
+
+    dstd::HashSet<P> seen;
+    seen.insert(P{1, "a"});
+    seen.insert(P{1, "a"});
+    seen.insert(P{2, "a"});
+    CHECK(seen.size() == 2);
 }
 
 // keep std: test name and size check against the std twin

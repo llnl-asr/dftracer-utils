@@ -10,6 +10,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -337,19 +338,22 @@ dstd::Vector<FileEntry> scan_on_pool(std::size_t executor_threads,
 
 }  // namespace dftracer::utils::utilities::filesystem
 
-namespace std {
+namespace dftracer::utils::dstd {
 template <>
-struct hash<
+struct Hash<
     dftracer::utils::utilities::filesystem::DirectoryScannerUtilityInput> {
+    using is_avalanching = void;
+
     std::size_t operator()(
         const dftracer::utils::utilities::filesystem::
             DirectoryScannerUtilityInput& dir) const noexcept {
         ::dftracer::utils::utilities::hash::HasherUtility hasher;
         hasher.update(dir.path.str());
         hasher.update(dir.recursive);
-        return hasher.get_hash().value;
+        return static_cast<std::size_t>(
+            hash::splitmix64(hasher.get_hash().value));
     }
 };
-}  // namespace std
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_UTILITIES_FILESYSTEM_DIRECTORY_SCANNER_UTILITY_H

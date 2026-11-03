@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 
 namespace dftracer::utils::dstd {
 
@@ -18,12 +17,6 @@ inline constexpr std::uint64_t HASH_GOLDEN_RATIO = hash::GOLDEN_RATIO;
 /// https://www.boost.org/doc/libs/1_33_1/doc/html/hash_combine.html
 inline void hash_combine(std::size_t& seed, std::size_t value) {
     seed ^= value + HASH_GOLDEN_RATIO + (seed << 6) + (seed >> 2);
-}
-
-/// Fold the std::hash of value into seed.
-template <typename T>
-inline void hash_combine_value(std::size_t& seed, const T& value) {
-    hash_combine(seed, std::hash<T>{}(value));
 }
 
 }  // namespace dftracer::utils::dstd

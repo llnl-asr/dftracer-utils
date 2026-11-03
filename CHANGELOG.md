@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Use `-f`/`--force` in every tool that forces a rebuild, where `dftracer_info` had `-f`/`--force-rebuild`.
 - Use `-o`/`--output` in every tool that writes output, where `dftracer_gen_fake_trace` had `-o`/`--output-dir`.
 - Use `-q`/`--query` for duql text in every tool, and remove `--duql`.
+- Make replay sampling with a fixed seed pick the same events on every platform.
+  The same seed now picks a different set of events than older versions did.
 - Choose the `dftracer_info` report with `--report summary|detailed`, where `--query` did.
 - Remove the short forms `-e`, `-H`, `-p` and `-s` of `dftracer_gen_fake_trace`, `-c`, `-n` and `-s` of `dftracer_split`, and `-l` of `dftracer_pgzip`.
   The tools keep `-h`, `-v`, `-o`, `-f`, `-q`, `-t`, and `-b` and `-p` of `dftracer_server`.

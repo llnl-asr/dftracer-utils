@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dstd/hash/partition.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -154,9 +155,9 @@ dstd::Vector<dstd::Vector<std::int64_t>> agg_split_groups(const AggState& st,
             std::size_t cell = dftracer::utils::dstd::hash::GOLDEN_RATIO;
             if (!st.nkey_cols[k][static_cast<std::size_t>(g)])
                 cell = st.key_is_bytes[k]
-                           ? std::hash<dstd::StringView>{}(
+                           ? dstd::Hash<dstd::StringView>{}(
                                  st.skey_cols[k][static_cast<std::size_t>(g)])
-                           : std::hash<std::int64_t>{}(
+                           : dstd::Hash<std::int64_t>{}(
                                  st.ikey_cols[k][static_cast<std::size_t>(g)]);
             dftracer::utils::dstd::hash_combine(h, cell);
         }

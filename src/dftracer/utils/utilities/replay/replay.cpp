@@ -558,7 +558,7 @@ bool ReplayEngine::should_execute_trace(const Trace& trace) const {
     // Apply sampling
     if (config_.sampling_rate < 1.0) {
         if (config_.sample_deterministic) {
-            std::hash<std::uint64_t> hasher;
+            dstd::Hash<std::uint64_t> hasher;
             std::size_t hash = hasher(trace.pid + trace.tid + trace.time_start +
                                       config_.sample_seed);
             double normalized = static_cast<double>(hash % 10000) / 10000.0;

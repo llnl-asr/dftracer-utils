@@ -26,7 +26,7 @@ struct KeyHash {
     std::size_t operator()(const Key& k) const {
         std::size_t h = dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
         for (const dstd::Optional<dstd::String>& s : k) {
-            std::size_t sh = std::hash<dstd::Optional<dstd::String>>{}(s);
+            std::size_t sh = s ? dstd::Hash<dstd::String>{}(*s) : 0;
             h ^= sh + dftracer::utils::dstd::hash::GOLDEN_RATIO + (h << 6) +
                  (h >> 2);
         }

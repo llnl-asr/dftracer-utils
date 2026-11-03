@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_H
 
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
@@ -54,18 +55,21 @@ struct StreamWriteResult {
 }  // namespace dftracer::utils::utilities::fileio
 
 // Hash specializations to enable caching
-namespace std {
+namespace dftracer::utils::dstd {
 template <>
-struct hash<dftracer::utils::utilities::fileio::StreamReadInput> {
+struct Hash<dftracer::utils::utilities::fileio::StreamReadInput> {
+    using is_avalanching = void;
+
     std::size_t operator()(
         const dftracer::utils::utilities::fileio::StreamReadInput& req)
         const noexcept {
         ::dftracer::utils::utilities::hash::HasherUtility hasher;
         hasher.update(req.path.str());
         hasher.update(req.chunk_size);
-        return hasher.get_hash().value;
+        return static_cast<std::size_t>(
+            hash::splitmix64(hasher.get_hash().value));
     }
 };
-}  // namespace std
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_H

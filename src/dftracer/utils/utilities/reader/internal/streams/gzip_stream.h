@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -186,7 +187,7 @@ class GzipStream : public StreamBase {
         // different fds to the same file coalesce.
         if (auto *cache = global_member_decode_cache()) {
             inflater_.set_cache(
-                cache, std::hash<dstd::StringView>{}(current_gz_path_));
+                cache, dstd::Hash<dstd::StringView>{}(current_gz_path_));
         }
 
         if (indexer_) {

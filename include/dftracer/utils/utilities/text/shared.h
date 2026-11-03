@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_TEXT_SHARED_H
 
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/hash/hash.h>
@@ -46,14 +47,16 @@ struct FilterableLine {
 }  // namespace dftracer::utils::utilities::text
 
 // Hash specializations to enable caching
-namespace std {
+namespace dftracer::utils::dstd {
 template <>
-struct hash<dftracer::utils::utilities::hash::Hash> {
+struct Hash<dftracer::utils::utilities::hash::Hash> {
+    using is_avalanching = void;
+
     std::size_t operator()(
         const dftracer::utils::utilities::hash::Hash& hash_val) const noexcept {
-        return std::hash<std::size_t>{}(hash_val.value);
+        return Hash<std::size_t>{}(hash_val.value);
     }
 };
-}  // namespace std
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_UTILITIES_TEXT_SHARED_H

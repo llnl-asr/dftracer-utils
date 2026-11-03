@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstddef>
+#include <utility>
 
 namespace dftracer::utils::utilities::fileio::compress {
 
@@ -131,7 +132,10 @@ GzipMemberCompressor::~GzipMemberCompressor() {
 
 GzipMemberCompressor::GzipMemberCompressor(
     GzipMemberCompressor&& other) noexcept
-    : c_(other.c_) {
+    : scratch_(std::move(other.scratch_)),
+      scratch_cap_(other.scratch_cap_),
+      c_(other.c_) {
+    other.scratch_cap_ = 0;
     other.c_ = nullptr;
 }
 
@@ -139,6 +143,9 @@ GzipMemberCompressor& GzipMemberCompressor::operator=(
     GzipMemberCompressor&& other) noexcept {
     if (this != &other) {
         if (c_) libdeflate_free_compressor(c_);
+        scratch_ = std::move(other.scratch_);
+        scratch_cap_ = other.scratch_cap_;
+        other.scratch_cap_ = 0;
         c_ = other.c_;
         other.c_ = nullptr;
     }
@@ -159,26 +166,24 @@ dstd::Optional<std::size_t> GzipMemberCompressor::compress(
 
 bool GzipMemberCompressor::compress_member_into(dstd::Vector<std::uint8_t>& out,
                                                 const void* data,
-                                                std::size_t len) const {
+                                                std::size_t len) {
     if (!c_) return false;
     // The worst-case buffer is a member's size again, and a vector would zero
-    // fill and fault in all of it to keep a few percent. A per-thread scratch
-    // buffer is reused across members and only its used part is written.
+    // fill and fault in all of it to keep a few percent. The scratch buffer is
+    // reused across members and only its used part is written.
     const std::size_t cap = bound(len);
-    thread_local dstd::UniquePtr<std::uint8_t[]> scratch;
-    thread_local std::size_t scratch_cap = 0;
-    if (scratch_cap < cap) {
-        scratch = dstd::make_unique_for_overwrite<std::uint8_t[]>(cap);
-        scratch_cap = cap;
+    if (scratch_cap_ < cap) {
+        scratch_ = dstd::make_unique_for_overwrite<std::uint8_t[]>(cap);
+        scratch_cap_ = cap;
     }
-    auto n = compress(data, len, scratch.get(), cap);
+    auto n = compress(data, len, scratch_.get(), cap);
     if (!n) return false;
-    out.assign(scratch.get(), scratch.get() + *n);
+    out.assign(scratch_.get(), scratch_.get() + *n);
     return true;
 }
 
 dstd::Optional<dstd::Vector<std::uint8_t>>
-GzipMemberCompressor::compress_member(const void* data, std::size_t len) const {
+GzipMemberCompressor::compress_member(const void* data, std::size_t len) {
     dstd::Vector<std::uint8_t> out;
     if (!compress_member_into(out, data, len)) return dstd::nullopt;
     return out;

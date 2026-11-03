@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_LIBDEFLATE_GZIP_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_LIBDEFLATE_GZIP_H
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -98,17 +99,20 @@ class GzipMemberCompressor {
     /// `out`'s capacity is reused when large enough and the worst-case buffer
     /// is never allocated in `out`. Returns false on failure, leaving `out` in
     /// an unspecified state. Prefer this over compress_member() on hot paths.
+    /// The worst-case buffer is kept in this compressor until it is destroyed.
     bool compress_member_into(dstd::Vector<std::uint8_t>& out, const void* data,
-                              std::size_t len) const;
+                              std::size_t len);
 
     /// One-shot convenience: allocates a fresh buffer per call. Prefer
     /// compress_member_into() when compressing repeatedly.
-    dstd::Optional<dstd::Vector<std::uint8_t>> compress_member(
-        const void* data, std::size_t len) const;
+    dstd::Optional<dstd::Vector<std::uint8_t>> compress_member(const void* data,
+                                                               std::size_t len);
 
     bool valid() const { return c_ != nullptr; }
 
    private:
+    dstd::UniquePtr<std::uint8_t[]> scratch_;
+    std::size_t scratch_cap_ = 0;
     libdeflate_compressor* c_;
 };
 

@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 
@@ -14,6 +15,12 @@ using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
 using dftracer::utils::utilities::fileio::compress::GzipMemberDecompressor;
 
 namespace {
+
+std::size_t root_live() {
+    for (const memory::PoolStats& p : memory::pool_stats())
+        if (p.path == "root") return p.live;
+    return 0;
+}
 
 dstd::Vector<std::uint8_t> make_payload(std::size_t n, unsigned seed) {
     // Deterministic, compressible-ish bytes (no Math.random equivalent needed).
@@ -145,5 +152,17 @@ TEST_SUITE("libdeflate_gzip") {
         auto r =
             dec.decompress(junk.data(), junk.size(), out.data(), out.size());
         CHECK_FALSE(r.has_value());
+    }
+
+    TEST_CASE("a destroyed compressor frees its worst-case buffer") {
+        const auto payload = make_payload(std::size_t{8} << 20, 7);
+        const std::size_t before = root_live();
+        {
+            GzipMemberCompressor comp(1);
+            dstd::Vector<std::uint8_t> member;
+            REQUIRE(comp.compress_member_into(member, payload.data(),
+                                              payload.size()));
+        }
+        CHECK(root_live() < before + (std::size_t{1} << 20));
     }
 }

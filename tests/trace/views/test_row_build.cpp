@@ -20,12 +20,10 @@
 
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <utility>
 
 using namespace dftracer::utils;
 
-using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::trace::RecordPhase;
 using dftracer::utils::trace::views::detail::ArgKinds;
 using dftracer::utils::trace::views::detail::ArgType;
@@ -34,6 +32,7 @@ using dftracer::utils::trace::views::detail::FoldBatch;
 using dftracer::utils::trace::views::detail::FoldEvent;
 using dftracer::utils::trace::views::detail::ScanUnit;
 using dftracer::utils::trace::views::detail::StreamRowFold;
+using dstd::StringIntern;
 
 namespace df = dftracer::utils::dataframe;
 

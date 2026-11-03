@@ -2,6 +2,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/memory/manager.h>
@@ -15,10 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <memory>
 #include <sstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace dataframe = dftracer::utils::dataframe;
@@ -45,9 +45,9 @@ constexpr int FEW_FILES = 64;
 constexpr int BIG_EVENTS = 2000;
 constexpr std::size_t NOTE_BYTES = 600;
 
-std::string big_trace_text() {
-    std::ostringstream out;
-    const std::string note(NOTE_BYTES, 'x');
+dstd::String big_trace_text() {
+    dftu_utils_test::TextOut out;
+    const dstd::String note(NOTE_BYTES, 'x');
     out << "[\n";
     for (int i = 0; i < BIG_EVENTS; ++i) {
         out << R"({"id":)" << i << R"(,"name":"op)" << i % 40
@@ -64,8 +64,8 @@ std::string big_trace_text() {
 
 // Every file has the same text, so a run spends its time in the bootstrap and
 // not in making the input.
-std::string write_big_trace(const std::string& dir, int n) {
-    static const std::string text = big_trace_text();
+dstd::String write_big_trace(const dstd::String& dir, int n) {
+    static const dstd::String text = big_trace_text();
     char name[32];
     std::snprintf(name, sizeof(name), "/b%04d.pfw.gz", n);
     return dftu_utils_test::write_gz_trace(dir + name, text);
@@ -99,13 +99,13 @@ struct BootstrapRun {
 
 // One bootstrap of `files` big files in a new process of this binary.
 BootstrapRun run_bootstrap(int files) {
-    ::setenv(FILES_ENV, std::to_string(files).c_str(), 1);
+    ::setenv(FILES_ENV, dstd::to_string(files).c_str(), 1);
     const auto child = fresh_process::run("one bootstrap of big files");
     ::unsetenv(FILES_ENV);
     REQUIRE(child.ok());
     BootstrapRun out;
     const auto at = child.output.find("PEAK ");
-    REQUIRE(at != std::string::npos);
+    REQUIRE(at != dstd::String::npos);
     unsigned long long peak = 0;
     long long events = 0;
     REQUIRE(std::sscanf(child.output.c_str() + at, "PEAK %llu EVENTS %lld",
@@ -120,7 +120,7 @@ BootstrapRun run_bootstrap(int files) {
 TEST_SUITE("BootstrapPeak") {
     TEST_CASE("the peak grows by a fixed budget for each extra worker") {
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < PEAK_FILES; ++i)
             files.push_back(write_big_trace(env.get_dir(), i));
 
@@ -153,7 +153,7 @@ TEST_SUITE("BootstrapPeak") {
         const auto n = common::Env::get<int>(FILES_ENV);
         REQUIRE(n.has_value());
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < *n; ++i)
             files.push_back(write_big_trace(env.get_dir(), i));
         build::g_max_sink_bytes.store(SINK_LIMIT);

@@ -3,6 +3,9 @@
 #include <dftracer/utils/coro/frame.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -15,9 +18,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <memory>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftracer::utils::index::gzip::GzipIndexer;
@@ -35,7 +35,7 @@ namespace {
 // full of 0xFF, as a long run leaves them after other coroutines finish.
 void dirty_frame_pool() {
     for (std::size_t size = 8; size <= 2048; size += 8) {
-        std::vector<void*> blocks;
+        dstd::Vector<void*> blocks;
         for (int i = 0; i < 16; ++i) {
             void* p = memory::allocate(size, coro::FRAME_ALIGN);
             std::memset(p, 0xFF, size);
@@ -45,11 +45,11 @@ void dirty_frame_pool() {
     }
 }
 
-std::string numbered_lines(std::size_t bytes) {
-    std::string s;
+dstd::String numbered_lines(std::size_t bytes) {
+    dstd::String s;
     s.reserve(bytes + 64);
     for (std::size_t i = 0; s.size() < bytes; ++i) {
-        s += "{\"id\":" + std::to_string(i) + ",\"pad\":\"";
+        s += "{\"id\":" + dstd::to_string(i) + ",\"pad\":\"";
         s.append(40, 'x');
         s += "\"}\n";
     }
@@ -64,13 +64,13 @@ TEST_SUITE("sigill_regression") {
         "recycled coroutine frames") {
         const auto text = numbered_lines(1u << 20);
         gz::GzipMemberCompressor c;
-        std::vector<std::uint8_t> comp(c.bound(text.size()));
+        dstd::Vector<std::uint8_t> comp(c.bound(text.size()));
         auto n = c.compress(text.data(), text.size(), comp.data(), comp.size());
         REQUIRE(n.has_value());
         comp.resize(*n);
 
         ScopedTestDir dir("sigill");
-        const std::string gz_path = dir.file("t.gz");
+        const dstd::String gz_path = dir.file("t.gz");
         std::FILE* f = std::fopen(gz_path.c_str(), "wb");
         REQUIRE(f != nullptr);
         REQUIRE(std::fwrite(comp.data(), 1, comp.size(), f) == comp.size());
@@ -94,9 +94,9 @@ TEST_SUITE("sigill_regression") {
                               .range_type(RangeType::ByteRange)
                               .from(start)
                               .to(reader.get_max_bytes()));
-        std::string out;
+        dstd::String out;
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            std::vector<char> buf(1u << 20);
+            dstd::Vector<char> buf(1u << 20);
             while (true) {
                 const auto got =
                     co_await stream->read_async(buf.data(), buf.size());

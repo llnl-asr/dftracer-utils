@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -117,7 +116,7 @@ TEST_CASE("a move-only capture works") {
     memory::PoolHandle pool = root().child("move-only");
     memory::Scope s{*pool};
     {
-        auto owned = std::make_unique<int>(7);
+        auto owned = dstd::make_unique<int>(7);
         dstd::Function<int()> f = [p = std::move(owned)] { return *p; };
         CHECK(f() == 7);
         dstd::Function<int()> g = std::move(f);
@@ -143,13 +142,13 @@ TEST_CASE("an empty Function throws when called") {
 }
 
 TEST_CASE("arguments and results pass through") {
-    dstd::Function<std::unique_ptr<int>(std::unique_ptr<int>, int&)> f =
-        [](std::unique_ptr<int> p, int& out) {
+    dstd::Function<dstd::UniquePtr<int>(dstd::UniquePtr<int>, int&)> f =
+        [](dstd::UniquePtr<int> p, int& out) {
             out = *p;
             return p;
         };
     int out = 0;
-    auto back = f(std::make_unique<int>(5), out);
+    auto back = f(dstd::make_unique<int>(5), out);
     CHECK(out == 5);
     CHECK(*back == 5);
 

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -16,11 +18,11 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
     TestEnvironment env(100, Format::GZIP);
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_file();
+    dstd::String gz_file = env.create_test_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
-    std::string db_root = std::string(determine_index_path(gz_file, ""));
+    dstd::String idx_file = env.get_index_path(gz_file);
+    dstd::String db_root = dstd::String(determine_index_path(gz_file, ""));
 
     SUBCASE("CheckpointIndexerFactory creates valid indexer") {
         auto indexer =
@@ -61,10 +63,10 @@ TEST_CASE("Basic Reading Operations") {
     TestEnvironment env(50, Format::GZIP);
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_file();
+    dstd::String gz_file = env.create_test_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     auto indexer =
         CheckpointIndexerFactory::create(gz_file, idx_file, 512 * 1024);
@@ -87,14 +89,14 @@ TEST_CASE("Basic Reading Operations") {
             dstd::String content = reader->read_lines(
                 1, std::min(num_lines, static_cast<std::size_t>(5)));
             CHECK(!content.empty());
-            CHECK(content.find("\"id\":") != std::string::npos);
+            CHECK(content.find("\"id\":") != dstd::String::npos);
         }
     }
 
     SUBCASE("Byte-based reading") {
         std::size_t max_bytes = reader->get_max_bytes();
         if (max_bytes > 0) {
-            std::vector<char> buffer(1024);
+            dstd::Vector<char> buffer(1024);
             std::size_t bytes_read = reader->read(
                 0, std::min(max_bytes, static_cast<std::size_t>(1024)),
                 buffer.data(), buffer.size());

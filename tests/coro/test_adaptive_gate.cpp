@@ -8,6 +8,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
+#include <testing_utilities.h>
 
 #include <atomic>
 #include <chrono>

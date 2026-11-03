@@ -2,9 +2,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/fold.h>
 #include <dftracer/utils/store/snapshot.h>
@@ -20,21 +23,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <map>
-#include <string>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
 using dftracer::utils::Runtime;
 using dftracer::utils::TypedTaskHandle;
-using dftracer::utils::dstd::ByteView;
+using dstd::ByteView;
 using store::Batch;
 using store::FoldKind;
 using store::NamespaceSpec;
@@ -82,78 +81,70 @@ constexpr int FOLD_KEYS = 2;
 constexpr int DURABLE_BATCHES = SANITIZED ? 4 : 20;
 constexpr int SHARED_BATCHES = SANITIZED ? 2 : 5;
 
-ByteView view_of(const std::string& bytes) {
+ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::String dstring(const std::string& value) {
-    return dstd::String(value.data(), value.size());
+dstd::String to_std(ByteView bytes) {
+    return dstd::String(reinterpret_cast<const char*>(bytes.data()),
+                        bytes.size());
 }
 
-std::string to_std(ByteView bytes) {
-    return std::string(reinterpret_cast<const char*>(bytes.data()),
-                       bytes.size());
-}
-
-std::string to_std(const dstd::String& value) {
-    return std::string(value.data(), value.size());
-}
-
-std::string i64_bytes(std::int64_t value) {
-    std::string bytes(8, '\0');
-    dftracer::utils::dstd::write_u64_le(
-        reinterpret_cast<std::uint8_t*>(bytes.data()),
-        static_cast<std::uint64_t>(value));
+dstd::String i64_bytes(std::int64_t value) {
+    dstd::String bytes(8, '\0');
+    dstd::write_u64_le(reinterpret_cast<std::uint8_t*>(bytes.data()),
+                       static_cast<std::uint64_t>(value));
     return bytes;
 }
 
-NamespaceSpec put_spec(const std::string& name) {
+NamespaceSpec put_spec(const dstd::String& name) {
     NamespaceSpec spec;
-    spec.name = dstring(name);
+    spec.name = dstd::String(name);
     spec.format_version = 0;
     spec.fold = FoldKind::None;
     return spec;
 }
 
-NamespaceSpec durable_spec(const std::string& name) {
+NamespaceSpec durable_spec(const dstd::String& name) {
     NamespaceSpec spec = put_spec(name);
     spec.durable = true;
     return spec;
 }
 
-NamespaceSpec fold_spec(const std::string& name) {
+NamespaceSpec fold_spec(const dstd::String& name) {
     NamespaceSpec spec;
-    spec.name = dstring(name);
+    spec.name = dstd::String(name);
     spec.format_version = 0;
     spec.fold = FoldKind::SumI64;
     return spec;
 }
 
-ScopeKey file_scope(const std::string& path) {
-    return ScopeKey::file(dstring(path));
+ScopeKey file_scope(const dstd::String& path) {
+    return ScopeKey::file(dstd::String(path));
 }
 
-std::string own_scope_path(int child, int file) {
-    return "/p" + std::to_string(child) + "/f" + std::to_string(file) + ".pfw";
+dstd::String own_scope_path(int child, int file) {
+    return "/p" + dstd::to_string(child) + "/f" + dstd::to_string(file) +
+           ".pfw";
 }
 
-std::string durable_scope_path(int child) {
-    return "/p" + std::to_string(child) + "/durable.pfw";
+dstd::String durable_scope_path(int child) {
+    return "/p" + dstd::to_string(child) + "/durable.pfw";
 }
 
-std::string raw_key(int child, int file, int n) {
-    return "r" + std::to_string(child) + "-" + std::to_string(file) + "-" +
-           std::to_string(n);
+dstd::String raw_key(int child, int file, int n) {
+    return "r" + dstd::to_string(child) + "-" + dstd::to_string(file) + "-" +
+           dstd::to_string(n);
 }
 
-std::string raw_value(int child, int file, int n, int round) {
-    return "raw-c" + std::to_string(child) + "-i" + std::to_string(file) + "-" +
-           raw_key(child, file, n) + "-g" + std::to_string(round);
+dstd::String raw_value(int child, int file, int n, int round) {
+    return "raw-c" + dstd::to_string(child) + "-i" + dstd::to_string(file) +
+           "-" + raw_key(child, file, n) + "-g" + dstd::to_string(round);
 }
 
-std::string fold_key(int child, int file, int k) {
-    return "s" + std::to_string(child) + "-" + std::to_string(file) + "-" +
-           std::to_string(k);
+dstd::String fold_key(int child, int file, int k) {
+    return "s" + dstd::to_string(child) + "-" + dstd::to_string(file) + "-" +
+           dstd::to_string(k);
 }
 
 std::int64_t fold_unit(int child, int round) {
@@ -161,41 +152,41 @@ std::int64_t fold_unit(int child, int round) {
            static_cast<std::int64_t>(round - 1) * ROUND_STEP;
 }
 
-std::string shared_key(int batch) { return "dup-" + std::to_string(batch); }
+dstd::String shared_key(int batch) { return "dup-" + dstd::to_string(batch); }
 
 std::int64_t shared_unit(int round) {
     return SHARED_BASE + static_cast<std::int64_t>(round - 1) * ROUND_STEP;
 }
 
-std::string durable_key(int child, int n) {
-    return "d" + std::to_string(child) + "-" + std::to_string(n);
+dstd::String durable_key(int child, int n) {
+    return "d" + dstd::to_string(child) + "-" + dstd::to_string(n);
 }
 
-std::string durable_value(int child, int n, int round) {
-    return "dur-c" + std::to_string(child) + "-" + std::to_string(n) + "-g" +
-           std::to_string(round);
+dstd::String durable_value(int child, int n, int round) {
+    return "dur-c" + dstd::to_string(child) + "-" + dstd::to_string(n) + "-g" +
+           dstd::to_string(round);
 }
 
-std::string row_id(const std::string& scope, const std::string& key) {
+dstd::String row_id(const dstd::String& scope, const dstd::String& key) {
     return scope + '\x1f' + key;
 }
 
-std::string visible(const std::string& id) {
-    std::string out = id;
+dstd::String visible(const dstd::String& id) {
+    dstd::String out = id;
     for (char& c : out) {
         if (c == '\x1f') c = '/';
     }
     return out;
 }
 
-using Expected = std::map<std::string, std::string>;
+using Expected = dstd::Map<dstd::String, dstd::String>;
 
 struct ScanDump {
     std::size_t rows = 0;
-    std::map<std::string, std::size_t> counts;
-    std::map<std::string, std::string> values;
+    dstd::Map<dstd::String, std::size_t> counts;
+    dstd::Map<dstd::String, dstd::String> values;
 
-    void add(const std::string& id, const std::string& value) {
+    void add(const dstd::String& id, const dstd::String& value) {
         ++rows;
         ++counts[id];
         values[id] = value;
@@ -215,14 +206,14 @@ struct ScanDump {
         return true;
     }
 
-    std::string report(const Expected& expected) const {
-        std::string out = "rows " + std::to_string(rows) + " keys " +
-                          std::to_string(counts.size()) + " expected " +
-                          std::to_string(expected.size()) + "\n";
+    dstd::String report(const Expected& expected) const {
+        dstd::String out = "rows " + dstd::to_string(rows) + " keys " +
+                           dstd::to_string(counts.size()) + " expected " +
+                           dstd::to_string(expected.size()) + "\n";
         std::size_t shown = 0;
         for (const auto& entry : counts) {
             if (entry.second != 1 && shown++ < 20) {
-                out += "duplicate x" + std::to_string(entry.second) + ": " +
+                out += "duplicate x" + dstd::to_string(entry.second) + ": " +
                        visible(entry.first) + "\n";
             }
         }
@@ -255,8 +246,9 @@ ScanDump dump_namespace(const Snapshot& snapshot, const NamespaceSpec& spec) {
     while (!cursor.at_end()) {
         auto value = cursor.value();
         REQUIRE(value.has_value());
-        dump.add(row_id(to_std(cursor.scope().paths[0]), to_std(cursor.key())),
-                 to_std(*value));
+        dump.add(
+            row_id(dstd::String(cursor.scope().paths[0]), to_std(cursor.key())),
+            to_std(*value));
         cursor.next();
     }
     return dump;
@@ -266,7 +258,7 @@ Expected expected_raw(int round) {
     Expected out;
     for (int child = 0; child < CHILDREN; ++child) {
         for (int file = 0; file < RAW_SCOPES; ++file) {
-            const std::string scope = own_scope_path(child, file);
+            const dstd::String scope = own_scope_path(child, file);
             for (int n = 0; n < RAW_BATCHES_PER_SCOPE; ++n) {
                 out[row_id(scope, raw_key(child, file, n))] =
                     raw_value(child, file, n, round);
@@ -279,16 +271,16 @@ Expected expected_raw(int round) {
 Expected expected_fold(int round) {
     Expected out;
     for (int child = 0; child < CHILDREN; ++child) {
-        const std::string sum =
+        const dstd::String sum =
             i64_bytes(fold_unit(child, round) * FOLD_BATCHES_PER_SCOPE);
         for (int file = 0; file < FOLD_SCOPES; ++file) {
-            const std::string scope = own_scope_path(child, file);
+            const dstd::String scope = own_scope_path(child, file);
             for (int k = 0; k < FOLD_KEYS; ++k) {
                 out[row_id(scope, fold_key(child, file, k))] = sum;
             }
         }
     }
-    const std::string shared = i64_bytes(shared_unit(round));
+    const dstd::String shared = i64_bytes(shared_unit(round));
     for (int batch = 0; batch < SHARED_BATCHES; ++batch) {
         out[row_id(SHARED_SCOPE, shared_key(batch))] = shared;
     }
@@ -298,7 +290,7 @@ Expected expected_fold(int round) {
 Expected expected_durable(int round) {
     Expected out;
     for (int child = 0; child < CHILDREN; ++child) {
-        const std::string scope = durable_scope_path(child);
+        const dstd::String scope = durable_scope_path(child);
         for (int n = 0; n < DURABLE_BATCHES; ++n) {
             out[row_id(scope, durable_key(child, n))] =
                 durable_value(child, n, round);
@@ -307,10 +299,10 @@ Expected expected_durable(int round) {
     return out;
 }
 
-std::size_t count_data_files(const std::string& root) {
+std::size_t count_data_files(const dstd::String& root) {
     std::size_t count = 0;
     for (const auto& e : dftu_utils_test::list_dir(root)) {
-        const std::string name(e.path.view().filename());
+        const dstd::String name(e.path.view().filename());
         if (name.size() > 4 && name.compare(name.size() - 4, 4, ".dfs") == 0) {
             ++count;
         }
@@ -318,11 +310,11 @@ std::size_t count_data_files(const std::string& root) {
     return count;
 }
 
-std::string skipped_report(const Snapshot& snapshot) {
-    std::string out;
+dstd::String skipped_report(const Snapshot& snapshot) {
+    dstd::String out;
     for (const SkippedFile& file : snapshot.skipped()) {
-        out += "skipped " + to_std(file.name) + ": " +
-               std::string(file.error.message()) + "\n";
+        out += "skipped " + dstd::String(file.name) + ": " +
+               dstd::String(file.error.message()) + "\n";
     }
     return out;
 }
@@ -330,16 +322,16 @@ std::string skipped_report(const Snapshot& snapshot) {
 void check_shared_scope(const Snapshot& snapshot, const NamespaceSpec& sum,
                         int round) {
     ScanCursor cursor = snapshot.scan(sum, file_scope(SHARED_SCOPE), {});
-    std::map<std::string, std::string> rows;
-    std::string duplicate;
+    dstd::Map<dstd::String, dstd::String> rows;
+    dstd::String duplicate;
     while (!cursor.at_end()) {
         auto value = cursor.value();
         REQUIRE(value.has_value());
-        const std::string key = to_std(cursor.key());
+        const dstd::String key = to_std(cursor.key());
         if (!rows.emplace(key, to_std(*value)).second) duplicate = key;
         cursor.next();
     }
-    const std::string expected = i64_bytes(shared_unit(round));
+    const dstd::String expected = i64_bytes(shared_unit(round));
     CHECK_MESSAGE(duplicate.empty(),
                   "the shared scope returned key " << duplicate << " twice");
     CHECK(rows.size() == static_cast<std::size_t>(SHARED_BATCHES));
@@ -366,7 +358,7 @@ void check_states(const Snapshot& snapshot, const NamespaceSpec& raw,
     CHECK(snapshot.state(sum, file_scope(SHARED_SCOPE)) == ScopeState::Ready);
 }
 
-void check_root(const std::string& root, int round) {
+void check_root(const dstd::String& root, int round) {
     auto opened = Snapshot::open(root);
     REQUIRE(opened.has_value());
     const Snapshot& snapshot = *opened;
@@ -410,11 +402,11 @@ struct Namespaces {
 /// What the child reports for a failing workload. The child never returns into
 /// doctest: it writes one line and exits.
 struct ChildFailure {
-    std::string message;
+    dstd::String message;
 };
 
-[[noreturn]] void child_fail(const std::string& message) {
-    const std::string line = "store_processes child: " + message + "\n";
+[[noreturn]] void child_fail(const dstd::String& message) {
+    const dstd::String line = "store_processes child: " + message + "\n";
     std::fputs(line.c_str(), stderr);
     std::fflush(stderr);
     ::_exit(1);
@@ -439,8 +431,8 @@ coro::CoroTask<int> run_workload(Writer& writer, const Namespaces& ids,
     for (int batch = 0; batch < RAW_BATCHES; ++batch) {
         const int file = batch % RAW_SCOPES;
         const int n = batch / RAW_SCOPES;
-        const std::string key = raw_key(child, file, n);
-        const std::string value = raw_value(child, file, n, round);
+        const dstd::String key = raw_key(child, file, n);
+        const dstd::String value = raw_value(child, file, n, round);
         Batch entries =
             writer.batch(ids.raw, file_scope(own_scope_path(child, file)), 0);
         entries.put(view_of(key), view_of(value));
@@ -448,46 +440,46 @@ coro::CoroTask<int> run_workload(Writer& writer, const Namespaces& ids,
                                                   RETRY_ATTEMPTS);
         if (!committed.has_value()) {
             failure.message =
-                "raw " + key + ": " + std::string(committed.error().message());
+                "raw " + key + ": " + dstd::String(committed.error().message());
             co_return 1;
         }
     }
 
     for (int batch = 0; batch < FOLD_SCOPES * FOLD_BATCHES_PER_SCOPE; ++batch) {
         const int file = batch % FOLD_SCOPES;
-        const std::string value = i64_bytes(fold_unit(child, round));
+        const dstd::String value = i64_bytes(fold_unit(child, round));
         Batch entries =
             writer.batch(ids.sum, file_scope(own_scope_path(child, file)), 0);
         for (int k = 0; k < FOLD_KEYS; ++k) {
-            const std::string key = fold_key(child, file, k);
+            const dstd::String key = fold_key(child, file, k);
             entries.fold(view_of(key), view_of(value));
         }
         auto committed = co_await commit_retrying(writer, std::move(entries),
                                                   RETRY_ATTEMPTS);
         if (!committed.has_value()) {
-            failure.message = "sum scope " + std::to_string(file) + ": " +
-                              std::string(committed.error().message());
+            failure.message = "sum scope " + dstd::to_string(file) + ": " +
+                              dstd::String(committed.error().message());
             co_return 1;
         }
     }
 
     for (int batch = 0; batch < SHARED_BATCHES; ++batch) {
-        const std::string key = shared_key(batch);
-        const std::string value = i64_bytes(shared_unit(round));
+        const dstd::String key = shared_key(batch);
+        const dstd::String value = i64_bytes(shared_unit(round));
         Batch entries = writer.batch(ids.sum, file_scope(SHARED_SCOPE), 0);
         entries.fold(view_of(key), view_of(value));
         auto committed = co_await commit_retrying(writer, std::move(entries),
                                                   RETRY_ATTEMPTS);
         if (!committed.has_value()) {
             failure.message = "shared " + key + ": " +
-                              std::string(committed.error().message());
+                              dstd::String(committed.error().message());
             co_return 1;
         }
     }
 
     for (int batch = 0; batch < DURABLE_BATCHES; ++batch) {
-        const std::string key = durable_key(child, batch);
-        const std::string value = durable_value(child, batch, round);
+        const dstd::String key = durable_key(child, batch);
+        const dstd::String value = durable_value(child, batch, round);
         Batch entries =
             writer.batch(ids.durable, file_scope(durable_scope_path(child)), 0);
         entries.put(view_of(key), view_of(value));
@@ -495,14 +487,14 @@ coro::CoroTask<int> run_workload(Writer& writer, const Namespaces& ids,
                                                   RETRY_ATTEMPTS);
         if (!committed.has_value()) {
             failure.message = "durable " + key + ": " +
-                              std::string(committed.error().message());
+                              dstd::String(committed.error().message());
             co_return 1;
         }
         if (batch == DURABLE_BATCHES / 2 - 1) {
             auto flushed = co_await writer.flush();
             if (!flushed.has_value()) {
                 failure.message =
-                    "durable flush: " + std::string(flushed.error().message());
+                    "durable flush: " + dstd::String(flushed.error().message());
                 co_return 1;
             }
         }
@@ -511,7 +503,7 @@ coro::CoroTask<int> run_workload(Writer& writer, const Namespaces& ids,
     co_return 0;
 }
 
-void run_child(const std::string& root, int child, int round,
+void run_child(const dstd::String& root, int child, int round,
                int barrier_read) {
     // The runtime is built before the barrier so the create that follows the
     // barrier is the first store call this process makes.
@@ -530,12 +522,12 @@ void run_child(const std::string& root, int child, int round,
     options.extent_quota_bytes = EXTENT_QUOTA_BYTES;
     options.commit_bytes = std::uint64_t{1} << 20;
     options.commit_interval = std::chrono::milliseconds{20};
-    options.host = dstring("proc");
-    options.label = dstring("round" + std::to_string(round));
+    options.host = dstd::String("proc");
+    options.label = dstd::String("round" + dstd::to_string(round));
 
     auto created = Writer::create(root, *runtime.executor(), options);
     if (!created.has_value()) {
-        child_fail("create: " + std::string(created.error().message()));
+        child_fail("create: " + dstd::String(created.error().message()));
     }
     dstd::UniquePtr<Writer> writer = std::move(*created);
 
@@ -565,7 +557,7 @@ void run_child(const std::string& root, int child, int round,
     }
     auto closed = closing.get();
     if (!closed.has_value()) {
-        child_fail("close: " + std::string(closed.error().message()));
+        child_fail("close: " + dstd::String(closed.error().message()));
     }
     ::_exit(0);
 }
@@ -574,26 +566,26 @@ bool child_succeeded(int status) {
     return WIFEXITED(status) != 0 && WEXITSTATUS(status) == 0;
 }
 
-std::string exit_report(pid_t pid, int status) {
+dstd::String exit_report(pid_t pid, int status) {
     if (WIFEXITED(status)) {
-        return "child pid " + std::to_string(pid) + " exited with code " +
-               std::to_string(WEXITSTATUS(status));
+        return "child pid " + dstd::to_string(pid) + " exited with code " +
+               dstd::to_string(WEXITSTATUS(status));
     }
     if (WIFSIGNALED(status)) {
-        return "child pid " + std::to_string(pid) + " was killed by signal " +
-               std::to_string(WTERMSIG(status));
+        return "child pid " + dstd::to_string(pid) + " was killed by signal " +
+               dstd::to_string(WTERMSIG(status));
     }
-    return "child pid " + std::to_string(pid) + " ended with status " +
-           std::to_string(status);
+    return "child pid " + dstd::to_string(pid) + " ended with status " +
+           dstd::to_string(status);
 }
 
-void reap_children(const std::vector<pid_t>& pids) {
+void reap_children(const dstd::Vector<pid_t>& pids) {
     struct ChildExit {
         pid_t pid;
         bool done;
         int status;
     };
-    std::vector<ChildExit> exits;
+    dstd::Vector<ChildExit> exits;
     exits.reserve(pids.size());
     for (const pid_t pid : pids) exits.push_back({pid, false, 0});
 
@@ -633,13 +625,13 @@ void reap_children(const std::vector<pid_t>& pids) {
     }
 }
 
-void run_round(const std::string& root, int round) {
+void run_round(const dstd::String& root, int round) {
     int barrier[2];
     if (::pipe(barrier) != 0) {
         FAIL("pipe failed: " << std::strerror(errno));
     }
 
-    std::vector<pid_t> pids;
+    dstd::Vector<pid_t> pids;
     bool forked = true;
     for (int child = 0; child < CHILDREN && forked; ++child) {
         const pid_t pid = ::fork();
@@ -666,16 +658,13 @@ void run_round(const std::string& root, int round) {
     reap_children(pids);
 }
 
-void copy_files(const std::string& from, const std::string& to) {
+void copy_files(const dstd::String& from, const dstd::String& to) {
     for (const auto& entry : dftu_utils_test::list_dir(from)) {
-        if (!(entry.kind == dftracer::utils::dstd::fs::FileKind::File))
-            continue;
-        REQUIRE(
-            dftracer::utils::dstd::fs::copy_file(
-                entry.path,
-                dftracer::utils::dstd::Path(to) / entry.path.view().filename(),
-                dftracer::utils::dstd::fs::CopyMode::Overwrite)
-                .has_value());
+        if (!(entry.kind == dstd::fs::FileKind::File)) continue;
+        REQUIRE(dstd::fs::copy_file(
+                    entry.path, dstd::Path(to) / entry.path.view().filename(),
+                    dstd::fs::CopyMode::Overwrite)
+                    .has_value());
     }
 }
 
@@ -698,7 +687,7 @@ TEST_CASE("processes: eight writers on one root read back once") {
 }
 
 TEST_CASE("processes: the exactly-once check rejects a duplicate row") {
-    const std::string id = row_id("/p0/f0.pfw", "k");
+    const dstd::String id = row_id("/p0/f0.pfw", "k");
     ScanDump dump;
     dump.add(id, "v");
     const Expected expected{{id, "v"}};

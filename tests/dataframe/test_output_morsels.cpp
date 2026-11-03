@@ -23,7 +23,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <string>
 
 using namespace dftracer::utils;
 

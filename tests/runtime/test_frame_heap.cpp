@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
@@ -12,7 +13,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <string>
 
 using namespace dftracer::utils;
 namespace memory = dftracer::utils::memory;
@@ -87,5 +87,5 @@ TEST_CASE("a resumed destroyed frame crashes in debug mode") {
     CHECK(WIFEXITED(result.status));
     CHECK(WEXITSTATUS(result.status) == 70);
     CHECK(result.output.find("resume word 0xdddddddddddddddd") !=
-          std::string::npos);
+          dstd::String::npos);
 }

@@ -17,11 +17,14 @@ namespace {
 
 constexpr std::size_t MIB = 1024 * 1024;
 
+// keep std: memory tests link only memory
 const std::vector<std::size_t> SIZES = {
     0,  1,    7,    15,   16,      17,          63,      64,
     65, 4095, 4096, 4097, 1 * MIB, 1 * MIB + 1, 64 * MIB};
 
+// keep std: memory tests link only memory
 std::vector<std::size_t> alignments() {
+    // keep std: memory tests link only memory
     std::vector<std::size_t> out;
     for (std::size_t a = 1; a <= 4096; a *= 2) out.push_back(a);
     return out;
@@ -87,7 +90,9 @@ TEST_CASE("the header holds the size, the scope pool id and the offset") {
 }
 
 TEST_CASE("zero-size blocks are distinct") {
+    // keep std: memory tests link only memory
     std::set<void*> seen;
+    // keep std: memory tests link only memory
     std::vector<void*> blocks;
     for (int i = 0; i < 64; ++i) {
         void* p = allocate(0, 16);

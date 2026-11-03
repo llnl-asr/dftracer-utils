@@ -4,11 +4,14 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::Series;
@@ -18,9 +21,9 @@ using dftracer::utils::dataframe::field::FieldExpr;
 namespace {
 
 DataFrame make_frame() {
-    std::vector<std::int64_t> a{1, 2, 3, 4};
-    std::vector<std::int64_t> b{10, 20, 30, 40};
-    std::vector<std::int64_t> dur{50, 150, 200, 80};
+    dstd::Vector<std::int64_t> a{1, 2, 3, 4};
+    dstd::Vector<std::int64_t> b{10, 20, 30, 40};
+    dstd::Vector<std::int64_t> dur{50, 150, 200, 80};
     DataFrame df;
     df.names = {"a", "b", "dur", "cat"};
     df.columns.push_back(Series::flat_i64(a.data(), 4));
@@ -49,9 +52,7 @@ TEST_SUITE("unified field F") {
 
     TEST_CASE("string-match and membership push down") {
         CHECK((F("name").like("read%")).to_duql().references("name"));
-        CHECK((F("cat").in(
-                   dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                       "io", "net"}))
+        CHECK((F("cat").in(dstd::Vector<dstd::String>{"io", "net"}))
                   .to_duql()
                   .references("cat"));
     }

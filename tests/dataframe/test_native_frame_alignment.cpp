@@ -15,25 +15,24 @@
 #include <cstdint>
 #include <cstring>
 
+using namespace dftracer::utils;
+
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
-const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> TEXT = {
-    "alpha", "", "b", "gamma-delta"};
+const dstd::Vector<dstd::String> TEXT = {"alpha", "", "b", "gamma-delta"};
 const std::int32_t INT32S[] = {-7, 0, 2147483647, 42};
 const std::int64_t INT64S[] = {-9000000000LL, 0, 1, 9000000000LL};
 const double DOUBLES[] = {1.5, -2.25, 0.0, 1e300};
 
-Series large_strings(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&
-        values) {
+Series large_strings(const dstd::Vector<dstd::String>& values) {
     auto* col = new dftu_series();
     col->type = TypeId::LargeString;
     col->encoding = Encoding::Flat;
     col->length = static_cast<std::int64_t>(values.size());
-    dftracer::utils::dstd::Vector<std::int64_t> offsets(values.size() + 1, 0);
-    dftracer::utils::dstd::String data;
+    dstd::Vector<std::int64_t> offsets(values.size() + 1, 0);
+    dstd::String data;
     for (std::size_t i = 0; i < values.size(); ++i) {
         data += values[i];
         offsets[i + 1] = static_cast<std::int64_t>(data.size());
@@ -46,17 +45,14 @@ Series large_strings(
     return Series{col};
 }
 
-Series binaries(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&
-        values) {
+Series binaries(const dstd::Vector<dstd::String>& values) {
     Series s = Series::strings(values);
     s.handle()->type = TypeId::Binary;
     return s;
 }
 
-dftracer::utils::dstd::String name_of(std::size_t length, std::size_t index) {
-    return dftracer::utils::dstd::String(length - 1, 'n') +
-           static_cast<char>('a' + index);
+dstd::String name_of(std::size_t length, std::size_t index) {
+    return dstd::String(length - 1, 'n') + static_cast<char>('a' + index);
 }
 
 DataFrame frame_with_name_length(std::size_t length) {
@@ -96,7 +92,7 @@ TEST_SUITE("native frame alignment") {
             CAPTURE(length);
             const DataFrame f = frame_with_name_length(length);
             for (const Series& c : f.columns) REQUIRE(c.valid());
-            const dftracer::utils::dstd::String bytes = frame_to_native(f);
+            const dstd::String bytes = frame_to_native(f);
             const auto back = frame_from_native(bytes);
             REQUIRE(back);
             CHECK(back->names == f.names);
@@ -124,7 +120,7 @@ TEST_SUITE("native frame alignment") {
             f.columns.push_back(large_strings(TEXT));
             for (std::size_t c = 0; c < f.columns.size(); ++c)
                 f.names.push_back(name_of(length, c));
-            const dftracer::utils::dstd::String bytes = frame_to_native(f);
+            const dstd::String bytes = frame_to_native(f);
             const auto back = frame_from_native(bytes);
             REQUIRE(back);
             CHECK(back->columns[0].is_null(1));

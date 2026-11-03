@@ -108,11 +108,10 @@ TEST_SUITE("shard_manifest") {
         write_shard_manifest(root, sample());
         CHECK(resolve_shard_set_root(dstd::String(dir.path().str())) == root);
         CHECK(resolve_shard_set_root(root) == root);
-        CHECK(dftracer::utils::dstd::fs::exists(shard_manifest_path(root))
-                  .value());
-        CHECK_FALSE(dftracer::utils::dstd::fs::exists(
-                        dir.path() / dstd::String(".dftindex-shards"))
-                        .value());
+        CHECK(dstd::fs::exists(shard_manifest_path(root)).value());
+        CHECK_FALSE(
+            dstd::fs::exists(dir.path() / dstd::String(".dftindex-shards"))
+                .value());
     }
 
     TEST_CASE("a manifest with no format version has none, not 0") {

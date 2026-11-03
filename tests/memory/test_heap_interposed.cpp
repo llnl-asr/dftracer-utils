@@ -23,6 +23,7 @@ extern "C" int munmap(void* addr, std::size_t len) {
     using Real = int (*)(void*, std::size_t);
     static const Real real = reinterpret_cast<Real>(dlsym(RTLD_NEXT, "munmap"));
     WRAPPED.fetch_add(1, std::memory_order_relaxed);
+    // keep std: memory tests link only memory
     auto record = std::make_unique<std::vector<char>>(64);
     asm volatile("" : : "r"(record.get()) : "memory");
     return real(addr, len);
@@ -32,6 +33,7 @@ TEST_SUITE("HeapInterposed") {
     TEST_CASE(
         "a new thread's first allocation does not reach a wrapped munmap") {
         unsigned long during = 0;
+        // keep std: memory tests link only memory
         std::thread worker([&during] {
             const unsigned long before = WRAPPED.load();
             for (int i = 0; i < 64; ++i) {

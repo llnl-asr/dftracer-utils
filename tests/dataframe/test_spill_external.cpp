@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -24,10 +25,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <string>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -57,18 +54,19 @@ std::size_t spill_slot_bytes() {
 // One splitmix64 step to spread bits, so spill files do not compress and their
 // size follows the row count on every codec.
 std::int64_t mix(std::uint64_t x) {
-    return static_cast<std::int64_t>(
-        dftracer::utils::dstd::hash::splitmix64(x));
+    return static_cast<std::int64_t>(dstd::hash::splitmix64(x));
 }
 
 // `morsels` morsels of `rows` rows of two columns of mixed bits. `hook` runs
 // before morsel i is made.
 class Hooked : public Source {
    public:
-    using Hook = std::function<void(std::int64_t)>;
+    using Hook = dstd::Function<void(std::int64_t)>;
 
     Hooked(std::int64_t morsels, std::int64_t rows, Hook hook)
-        : morsels_(morsels), rows_(rows), hook_(std::move(hook)) {}
+        : morsels_(morsels),
+          rows_(rows),
+          hook_(dstd::make_shared<Hook>(std::move(hook))) {}
 
     Schema schema() const override {
         const std::int64_t zero = 0;
@@ -88,11 +86,12 @@ class Hooked : public Source {
    private:
     class Rows : public Cursor {
        public:
-        Rows(std::int64_t morsels, std::int64_t rows, Hook hook)
+        Rows(std::int64_t morsels, std::int64_t rows,
+             dstd::SharedPtr<Hook> hook)
             : morsels_(morsels), rows_(rows), hook_(std::move(hook)) {}
         coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
             if (at_ >= morsels_) co_return dstd::nullopt;
-            if (hook_) hook_(at_);
+            if (*hook_) (*hook_)(at_);
             dstd::Vector<std::int64_t> k(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_));
             for (std::int64_t i = 0; i < rows_; ++i) {
@@ -112,12 +111,12 @@ class Hooked : public Source {
 
        private:
         std::int64_t morsels_, rows_;
-        Hook hook_;
+        dstd::SharedPtr<Hook> hook_;
         std::int64_t at_ = 0;
     };
 
     std::int64_t morsels_, rows_;
-    Hook hook_;
+    dstd::SharedPtr<Hook> hook_;
 };
 
 struct Budget {
@@ -132,17 +131,17 @@ struct Budget {
 // A spill directory under the working directory, which is a disk in a build
 // tree. The system temp directory may be tmpfs.
 struct SpillDirVar {
-    dftracer::utils::dstd::Path dir;
+    dstd::Path dir;
     SpillDirVar() {
-        dir = dftracer::utils::dstd::fs::current_path().value() /
+        dir = dstd::fs::current_path().value() /
               ("spill_external_" + dstd::to_string(::getpid()));
-        REQUIRE(dftracer::utils::dstd::fs::remove_all(dir).has_value());
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+        REQUIRE(dstd::fs::remove_all(dir).has_value());
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         ::setenv("DFTRACER_UTILS_SPILL_DIR", dir.c_str(), 1);
     }
     ~SpillDirVar() {
         ::unsetenv("DFTRACER_UTILS_SPILL_DIR");
-        (void)dftracer::utils::dstd::fs::remove_all(dir);
+        (void)dstd::fs::remove_all(dir);
     }
 };
 

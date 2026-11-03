@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
-
-#include <map>
-#include <set>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -31,17 +28,17 @@ const char* op_of(int i) {
 
 // NDJSON records of no trace format: `op` cycles read/write/close, `lat` is
 // i % 50, `io.off` is i * 4096 and `name` cycles x0..x4.
-std::string write_ndjson(TestEnvironment& env, const std::string& name) {
-    const std::string plain = env.get_dir() + "/" + name + ".ndjson";
+dstd::String write_ndjson(TestEnvironment& env, const dstd::String& name) {
+    const dstd::String plain = env.get_dir() + "/" + name + ".ndjson";
     {
-        std::ofstream out(plain.c_str());
+        dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i)
             out << R"({"op":")" << op_of(i) << R"(","host":"n)" << i % 4
                 << R"(","t":)" << 1000 + i * 10 << R"(,"lat":)" << i % 50
                 << R"(,"io":{"off":)" << static_cast<std::int64_t>(i) * 4096
                 << R"(},"name":"x)" << i % 5 << R"("})" << "\n";
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     (void)dstd::fs::remove(plain);
@@ -50,13 +47,13 @@ std::string write_ndjson(TestEnvironment& env, const std::string& name) {
     return gz;
 }
 
-View view_of(const std::string& gz) {
+View view_of(const dstd::String& gz) {
     return View::from_file(
         dstd::String(gz),
-        dstd::String(std::string(determine_index_path(gz, ""))));
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-std::set<std::string> names_of(const dataframe::DataFrame& df) {
+dstd::Set<dstd::String> names_of(const dataframe::DataFrame& df) {
     return {df.names.begin(), df.names.end()};
 }
 
@@ -66,8 +63,8 @@ TEST_SUITE("GenericView") {
     TEST_CASE("rows are named by path and filter on paths") {
         TestEnvironment env(10);
         const auto gz = write_ndjson(env, "g");
-        const std::set<std::string> paths{"host", "io.off", "lat",
-                                          "name", "op",     "t"};
+        const dstd::Set<dstd::String> paths{"host", "io.off", "lat",
+                                            "name", "op",     "t"};
 
         auto all = view_of(gz).collect().get();
         CHECK(all.num_rows() == RECORDS);
@@ -84,9 +81,9 @@ TEST_SUITE("GenericView") {
             view_of(gz).duql("io.off > 12000000").collect().get().num_rows() ==
             deep);
 
-        std::set<std::string> schema;
+        dstd::Set<dstd::String> schema;
         for (const auto& c : view_of(gz).column_info())
-            schema.insert(std::string(c.name));
+            schema.insert(dstd::String(c.name));
         CHECK(schema == paths);
     }
 
@@ -111,7 +108,7 @@ TEST_SUITE("GenericView") {
     TEST_CASE("group_by and aggregates read paths") {
         TestEnvironment env(10);
         const auto gz = write_ndjson(env, "a");
-        std::map<std::string, double> sum;
+        dstd::Map<dstd::String, double> sum;
         for (int i = 0; i < RECORDS; ++i) sum[op_of(i)] += i % 50;
 
         for (bool streamed : {false, true}) {
@@ -125,7 +122,7 @@ TEST_SUITE("GenericView") {
             REQUIRE(df.num_rows() == 3);
             double total = 0;
             for (std::int64_t r = 0; r < 3; ++r) {
-                const std::string op = bstr(df, r, "op");
+                const dstd::String op = bstr(df, r, "op");
                 CAPTURE(op);
                 CHECK(bnum(df, r, "s") == sum[op]);
                 total += bnum(df, r, "n");
@@ -146,12 +143,12 @@ TEST_SUITE("GenericView") {
     TEST_CASE("trace operations need roles the schema binds") {
         TestEnvironment env(10);
         const auto gz = write_ndjson(env, "r");
-        auto fails_with = [](auto&& fn, const std::string& text) {
+        auto fails_with = [](auto&& fn, const dstd::String& text) {
             try {
                 fn();
             } catch (const std::exception& e) {
                 CAPTURE(e.what());
-                CHECK(std::string(e.what()).find(text) != std::string::npos);
+                CHECK(dstd::String(e.what()).find(text) != dstd::String::npos);
                 return;
             }
             FAIL("no error");
@@ -177,17 +174,17 @@ TEST_SUITE("GenericView") {
             .build();
         View v = View::from_files(
             {{dstd::String(gz),
-              dstd::String(std::string(determine_index_path(gz, "")))},
+              dstd::String(dstd::String(determine_index_path(gz, "")))},
              {dstd::String(dft),
-              dstd::String(std::string(determine_index_path(dft, "")))}});
+              dstd::String(dstd::String(determine_index_path(dft, "")))}});
         try {
             v.collect().get();
             FAIL("no error");
         } catch (const std::exception& e) {
-            const std::string what = e.what();
+            const dstd::String what = e.what();
             CAPTURE(what);
-            CHECK(what.find("dftracer") != std::string::npos);
-            CHECK(what.find("generic") != std::string::npos);
+            CHECK(what.find("dftracer") != dstd::String::npos);
+            CHECK(what.find("generic") != dstd::String::npos);
         }
     }
 
@@ -202,10 +199,10 @@ TEST_SUITE("GenericView") {
         TestEnvironment env(10);
         const auto dft = create_mixed_trace(env, 5, 5);
         const dstd::Path dir(dstd::PathView(dft).parent().str());
-        std::ofstream((dir / "rank_1.pfw.gz").c_str());
+        dftu_utils_test::FileOut(dir / "rank_1.pfw.gz");
         {
-            const std::string meta((dir / "rank_2.pfw").str());
-            std::ofstream(meta.c_str())
+            const dstd::String meta((dir / "rank_2.pfw").str());
+            dftu_utils_test::FileOut(meta)
                 << R"({"name":"HH","cat":"dftracer","pid":2,"tid":2,)"
                    R"("ph":"M","args":{"name":"host","value":"h1"}})"
                 << "\n";
@@ -215,20 +212,20 @@ TEST_SUITE("GenericView") {
         // Unindexed, then indexed with each file's own detection.
         auto rows = [&] {
             return run(View::from_directory(
-                           dstd::String(std::string(dir.str()))))
+                           dstd::String(dstd::String(dir.str()))))
                 .collect()
                 .get()
                 .num_rows();
         };
         CHECK(rows() == 10);
         dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(std::string(dir.str())))})
+            {dstd::String(dstd::StringView(dstd::String(dir.str())))})
             .build();
         CHECK(rows() == 10);
 
         TestEnvironment empty_env(10);
-        std::ofstream((empty_env.get_dir() + "/a.pfw.gz").c_str());
-        std::ofstream((empty_env.get_dir() + "/b.pfw.gz").c_str());
+        dftu_utils_test::FileOut(empty_env.get_dir() + "/a.pfw.gz");
+        dftu_utils_test::FileOut(empty_env.get_dir() + "/b.pfw.gz");
         View empty =
             run(View::from_directory(dstd::String(empty_env.get_dir())));
         CHECK(empty.collect().get().num_rows() == 0);
@@ -236,7 +233,7 @@ TEST_SUITE("GenericView") {
 
     TEST_CASE("from_directory reads plain files as an error, not as empty") {
         TestEnvironment env(10);
-        std::ofstream((env.get_dir() + "/plain.jsonl").c_str())
+        dftu_utils_test::FileOut(env.get_dir() + "/plain.jsonl")
             << R"({"k":1})" << "\n";
         try {
             run(View::from_directory(dstd::String(env.get_dir())))
@@ -245,8 +242,8 @@ TEST_SUITE("GenericView") {
             FAIL("no error");
         } catch (const std::exception& e) {
             CAPTURE(e.what());
-            CHECK(std::string(e.what()).find("Not a gzip trace") !=
-                  std::string::npos);
+            CHECK(dstd::String(e.what()).find("Not a gzip trace") !=
+                  dstd::String::npos);
         }
     }
 }

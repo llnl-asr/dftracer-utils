@@ -7,11 +7,16 @@
 // DFTRACER_UTILS_PRUNE_ORACLE_RECORD=<path> to write a new recording instead.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -34,13 +39,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
-#include <map>
-#include <optional>
-#include <sstream>
-#include <string>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace plan = dftracer::utils::index::plan;
@@ -80,19 +79,22 @@ struct Lcg {
 // large members, so its name dictionaries overflow and postings and blooms have
 // to answer; every trace jumps in time mid-run so the ts histogram prunes where
 // min/max cannot.
-std::string write_trace(const std::string& dir, int seed, int events) {
+dstd::String write_trace(const dstd::String& dir, int seed, int events) {
     Lcg rng{static_cast<std::uint64_t>(seed) * 7919};
-    std::ostringstream out;
-    out << "[\n";
+    dstd::String out;
+    out += "[\n";
     for (int f = 0; f < 3; ++f)
-        out << R"({"name":"FH","ph":"M","pid":1,"tid":1,"args":{"name":")"
-            << FILES[f] << R"(","value":")" << FHASH[f] << "\"}}\n";
+        out += common::str_cat(
+            R"({"name":"FH","ph":"M","pid":1,"tid":1,"args":{"name":")",
+            FILES[f], R"(","value":")", FHASH[f], "\"}}\n");
     for (int h = 0; h < 2; ++h)
-        out << R"({"name":"HH","ph":"M","pid":1,"tid":1,"args":{"name":")"
-            << HOSTS[h] << R"(","value":")" << HHASH[h] << "\"}}\n";
+        out += common::str_cat(
+            R"({"name":"HH","ph":"M","pid":1,"tid":1,"args":{"name":")",
+            HOSTS[h], R"(","value":")", HHASH[h], "\"}}\n");
     for (int x = 0; x < 2; ++x)
-        out << R"({"name":"SH","ph":"M","pid":1,"tid":1,"args":{"name":")"
-            << EXECS[x] << R"(","value":")" << SHASH[x] << "\"}}\n";
+        out += common::str_cat(
+            R"({"name":"SH","ph":"M","pid":1,"tid":1,"args":{"name":")",
+            EXECS[x], R"(","value":")", SHASH[x], "\"}}\n");
     std::uint64_t ts = 1000000 + static_cast<std::uint64_t>(seed) * 50000;
     int run_left = 0, name = 0, cat = 0, pid = 1, file = 0, host = 0;
     for (int i = 0; i < events; ++i) {
@@ -107,14 +109,14 @@ std::string write_trace(const std::string& dir, int seed, int events) {
         --run_left;
         if (seed == 2 && i == events / 3)
             for (int t = 0; t < 2000; ++t)
-                out << R"({"name":"thread_name","ph":"M","pid":1,"tid":)"
-                    << 1000 + t << R"(,"args":{"name":"worker-)" << t
-                    << "\"}}\n";
+                out += common::str_cat(
+                    R"({"name":"thread_name","ph":"M","pid":1,"tid":)",
+                    1000 + t, R"(,"args":{"name":"worker-)", t, "\"}}\n");
         ts += 5 + rng.next() % 50;
         if (i == events / 2) ts += 400000;
         const auto dur = 10 + (rng.next() % 1000);
         const auto size = (rng.next() % 64) * 128;
-        std::string op = NAMES[name];
+        dstd::String op = NAMES[name];
         if (seed == 3) {
             // Three draws in a fixed order; argument evaluation order is
             // unspecified and differs between compilers.
@@ -125,16 +127,16 @@ std::string write_trace(const std::string& dir, int seed, int events) {
             std::snprintf(buf, sizeof(buf), "n%08llx%08llx%08llx", a, b, c);
             op = (i < 200 && i % 5 == 0) ? "target_op" : buf;
         }
-        out << R"({"id":)" << i << R"(,"name":")" << op << R"(","cat":")"
-            << CATS[cat] << R"(","pid":)" << pid << R"(,"tid":)" << pid * 10
-            << R"(,"ph":"X","ts":)" << ts << R"(,"dur":)" << dur
-            << R"(,"args":{"size":)" << size << R"(,"fhash":")" << FHASH[file]
-            << R"(","hhash":")" << HHASH[host] << R"(","shash":")"
-            << SHASH[pid % 2] << "\"}}\n";
+        out += common::str_cat(
+            R"({"id":)", i, R"(,"name":")", op, R"(","cat":")", CATS[cat],
+            R"(","pid":)", pid, R"(,"tid":)", pid * 10, R"(,"ph":"X","ts":)",
+            ts, R"(,"dur":)", dur, R"(,"args":{"size":)", size, R"(,"fhash":")",
+            FHASH[file], R"(","hhash":")", HHASH[host], R"(","shash":")",
+            SHASH[pid % 2], "\"}}\n");
     }
-    out << "]\n";
-    const auto plain = dir + "/trace" + std::to_string(seed) + ".pfw";
-    std::ofstream(plain.c_str()) << out.str();
+    out += "]\n";
+    const auto plain = dir + "/trace" + dstd::to_string(seed) + ".pfw";
+    (void)dstd::fs::write_file(dstd::PathView(plain), out);
     const auto gz = plain + ".gz";
     const std::size_t member = seed == 3 ? LARGE_MEMBER_BYTES : MEMBER_BYTES;
     REQUIRE(
@@ -143,7 +145,7 @@ std::string write_trace(const std::string& dir, int seed, int events) {
     return gz;
 }
 
-const std::vector<std::string> QUERIES = {
+const dstd::Vector<dstd::String> QUERIES = {
     R"(name == "read")",
     R"(name == "absent")",
     R"(name != "read")",
@@ -188,33 +190,33 @@ const std::vector<std::string> QUERIES = {
 };
 
 using TimeRange = dstd::Optional<dstd::Pair<double, double>>;
-const std::vector<TimeRange> TIME_RANGES = {
+const dstd::Vector<TimeRange> TIME_RANGES = {
     dstd::nullopt,
-    std::make_pair(1050000.0, 1150000.0),
-    std::make_pair(0.0, 1020000.0),
-    std::make_pair(1300000.0, 0.0),
+    dstd::Pair<double, double>{1050000.0, 1150000.0},
+    dstd::Pair<double, double>{0.0, 1020000.0},
+    dstd::Pair<double, double>{1300000.0, 0.0},
 };
 
 template <class Values>
-std::string join(const Values& v) {
-    std::string s;
+dstd::String join(const Values& v) {
+    dstd::String s;
     for (auto x : v) {
         if (!s.empty()) s += ',';
-        s += std::to_string(x);
+        s += dstd::to_string(x);
     }
     return s;
 }
 
-std::string range_str(const TimeRange& r) {
+dstd::String range_str(const TimeRange& r) {
     if (!r) return "-";
-    return std::to_string(static_cast<long long>(r->first)) + ".." +
-           std::to_string(static_cast<long long>(r->second));
+    return dstd::to_string(static_cast<long long>(r->first)) + ".." +
+           dstd::to_string(static_cast<long long>(r->second));
 }
 
 struct Corpus {
     dftu_utils_test::TestEnvironment env{10};
-    std::string index_dir;
-    std::vector<std::string> traces;
+    dstd::String index_dir;
+    dstd::Vector<dstd::String> traces;
 
     Corpus() {
         index_dir = env.get_dir() + "/idx";
@@ -224,16 +226,16 @@ struct Corpus {
         opts.index_dir = index_dir;
         index::Indexer::open(dftu_utils_test::dstd_paths(traces), opts).build();
     }
-    std::string index_of(const std::string& trace) const {
-        return std::string(
+    dstd::String index_of(const dstd::String& trace) const {
+        return dstd::String(
             trace::internal::determine_index_path(trace, index_dir));
     }
 };
 
-std::vector<std::string> run_oracle(const Corpus& c) {
-    std::vector<std::string> lines;
+dstd::Vector<dstd::String> run_oracle(const Corpus& c) {
+    dstd::Vector<dstd::String> lines;
     for (const auto& trace : c.traces) {
-        const std::string base(dstd::PathView(trace).filename());
+        const dstd::String base(dstd::PathView(trace).filename());
         const auto index_path = c.index_of(trace);
         const auto snapshot = dftu_utils_test::index_snapshot(index_path);
         const auto file =
@@ -246,17 +248,19 @@ std::vector<std::string> run_oracle(const Corpus& c) {
 
         for (const auto& text : QUERIES) {
             const auto q = duql::parse_or_throw(text);
-            const std::string key = base + "|" + text + "|";
+            const dstd::String key = base + "|" + text + "|";
 
             plan::ChunkPruner pruner;
             auto one = pruner(plan::ChunkPrunerInput{
                                   dstd::String(dstd::StringView(index_path)),
                                   dstd::String(dstd::StringView(trace)), q})
                            .get();
-            lines.push_back(key + "-|pruner|" + std::to_string(one.success) +
-                            "/" + std::to_string(one.file_may_match) + "/" +
-                            std::to_string(one.total_checkpoints) + "|" +
-                            join(one.candidate_checkpoints));
+            lines.push_back(
+                key + "-|pruner|" +
+                dstd::to_string(static_cast<int>(one.success)) + "/" +
+                dstd::to_string(static_cast<int>(one.file_may_match)) + "/" +
+                dstd::to_string(one.total_checkpoints) + "|" +
+                join(one.candidate_checkpoints));
 
             plan::ChunkPrunerBatchInput batch;
             batch.index_path = index_path;
@@ -264,10 +268,12 @@ std::vector<std::string> run_oracle(const Corpus& c) {
             auto many = pruner.process_batch(batch);
             REQUIRE(many);
             const auto& b = many->outputs.at(0);
-            lines.push_back(key + "-|batch|" + std::to_string(b.success) + "/" +
-                            std::to_string(b.file_may_match) + "/" +
-                            std::to_string(b.total_checkpoints) + "|" +
-                            join(b.candidate_checkpoints));
+            lines.push_back(
+                key + "-|batch|" +
+                dstd::to_string(static_cast<int>(b.success)) + "/" +
+                dstd::to_string(static_cast<int>(b.file_may_match)) + "/" +
+                dstd::to_string(b.total_checkpoints) + "|" +
+                join(b.candidate_checkpoints));
 
             for (const auto& tr : TIME_RANGES) {
                 trace::views::detail::ViewPlan vp;
@@ -279,25 +285,26 @@ std::vector<std::string> run_oracle(const Corpus& c) {
                 std::uint64_t skipped = 0;
                 auto units =
                     trace::views::detail::gather_units(vp, vdef, skipped).get();
-                std::vector<std::uint64_t> ckpts;
+                dstd::Vector<std::uint64_t> ckpts;
                 for (const auto& u : units) ckpts.push_back(u.checkpoint_idx);
-                lines.push_back(key + range_str(tr) + "|view|" +
-                                std::to_string(!units.empty()) + "/" +
-                                std::to_string(skipped) + "|" + join(ckpts));
+                lines.push_back(
+                    key + range_str(tr) + "|view|" +
+                    dstd::to_string(static_cast<int>(!units.empty())) + "/" +
+                    dstd::to_string(skipped) + "|" + join(ckpts));
             }
         }
     }
     return lines;
 }
 
-std::string recording_path() {
-    return std::string((dstd::Path(DFTRACER_UTILS_TEST_SOURCE_DIR) / "index" /
-                        "data" / "prune_oracle.txt")
-                           .str());
+dstd::String recording_path() {
+    return dstd::String((dstd::Path(DFTRACER_UTILS_TEST_SOURCE_DIR) / "index" /
+                         "data" / "prune_oracle.txt")
+                            .str());
 }
 
-std::size_t count_json(const std::string& trace, const std::string& index_dir,
-                       const std::string& text, bool skip_pruning) {
+std::size_t count_json(const dstd::String& trace, const dstd::String& index_dir,
+                       const dstd::String& text, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
         utilities::reader::TraceReader reader(
             {.file_path = dstd::String(trace),
@@ -326,9 +333,9 @@ coro::CoroTask<std::uint64_t> scan_unit(
     co_return n;
 }
 
-std::uint64_t count_view(const std::string& trace,
-                         const std::string& index_path,
-                         const std::string& text) {
+std::uint64_t count_view(const dstd::String& trace,
+                         const dstd::String& index_path,
+                         const dstd::String& text) {
     trace::views::detail::ViewPlan vp;
     vp.files.push_back(
         {dstd::String(trace), dstd::String(index_path), 0, 0, 0});
@@ -346,9 +353,9 @@ std::uint64_t count_view(const std::string& trace,
 }
 
 // The View scan without pruning: the whole file as one unit.
-std::uint64_t count_view_unpruned(const std::string& trace,
-                                  const std::string& index_path,
-                                  const std::string& text) {
+std::uint64_t count_view_unpruned(const dstd::String& trace,
+                                  const dstd::String& index_path,
+                                  const dstd::String& text) {
     trace::views::detail::ViewPlan vp;
     vp.query = duql::parse_or_throw(text);
     const auto vdef = trace::views::detail::make_vdef(vp, false);
@@ -376,17 +383,24 @@ TEST_CASE("prune decisions match the recording") {
     const auto lines = run_oracle(corpus);
 
     if (const char* out = std::getenv("DFTRACER_UTILS_PRUNE_ORACLE_RECORD")) {
-        std::ofstream f(out);
-        for (const auto& l : lines) f << l << "\n";
+        dstd::String f;
+        for (const auto& l : lines) f += common::str_cat(l, "\n");
         MESSAGE("recorded " << lines.size() << " lines to "
-                            << std::string(out));
+                            << dstd::String(out));
+        (void)dstd::fs::write_file(dstd::PathView(out), f);
         return;
     }
 
-    std::ifstream f((recording_path()).c_str());
-    REQUIRE_MESSAGE(f.good(), "missing " << recording_path());
-    std::vector<std::string> expected;
-    for (std::string l; std::getline(f, l);) expected.push_back(l);
+    const auto recorded = dstd::fs::read_file(dstd::PathView(recording_path()));
+    REQUIRE_MESSAGE(recorded.has_value(), "missing " << recording_path());
+    dstd::Vector<dstd::String> expected;
+    dstd::StringView rest = *recorded;
+    while (!rest.empty()) {
+        const std::size_t eol = rest.find('\n');
+        expected.push_back(dstd::String(rest.substr(0, eol)));
+        rest = eol == dstd::StringView::npos ? dstd::StringView{}
+                                             : rest.substr(eol + 1);
+    }
     REQUIRE(expected.size() == lines.size());
     for (std::size_t i = 0; i < lines.size(); ++i) {
         CAPTURE(i);
@@ -410,9 +424,9 @@ TEST_CASE("pruning never drops a matching event") {
 
 namespace {
 
-dstd::Vector<std::uint64_t> view_chunks(const std::string& trace,
-                                        const std::string& index_path,
-                                        const std::string& text) {
+dstd::Vector<std::uint64_t> view_chunks(const dstd::String& trace,
+                                        const dstd::String& index_path,
+                                        const dstd::String& text) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     trace::views::detail::ViewPlan vp;
@@ -434,7 +448,7 @@ dstd::Vector<std::uint64_t> view_chunks(const std::string& trace,
 
 using Manifest = dstd::Map<dstd::String, index::ExtensionEntry>;
 
-Manifest manifest_of(const index::Indexer& ix, const std::string& trace) {
+Manifest manifest_of(const index::Indexer& ix, const dstd::String& trace) {
     Manifest out;
     for (const auto& f : ix.manifest())
         if (dstd::StringView(f.path) == dstd::StringView(trace))
@@ -443,12 +457,12 @@ Manifest manifest_of(const index::Indexer& ix, const std::string& trace) {
 }
 
 // One query per pruning kind: postings, counts, zonemap, bloom, time.
-const std::vector<std::string> ROW_QUERIES = {
+const dstd::Vector<dstd::String> ROW_QUERIES = {
     R"(name == "read")", R"(cat == "COMPUTE")", R"(args.size > 8000)",
     R"(name == "target_op")", R"(ts >= 1200000)"};
 
-std::vector<std::uint64_t> rows(const Corpus& c) {
-    std::vector<std::uint64_t> out;
+dstd::Vector<std::uint64_t> rows(const Corpus& c) {
+    dstd::Vector<std::uint64_t> out;
     for (const auto& trace : c.traces)
         for (const auto& text : ROW_QUERIES)
             out.push_back(count_view(trace, c.index_of(trace), text));
@@ -476,8 +490,8 @@ TEST_CASE("explain reads the chunks a View scan reads") {
             CAPTURE(text);
             CHECK(f.indexed);
             const auto view =
-                view_chunks(std::string(f.path),
-                            corpus.index_of(std::string(f.path)), text);
+                view_chunks(dstd::String(f.path),
+                            corpus.index_of(dstd::String(f.path)), text);
             CHECK(f.may_match == !view.empty());
             if (f.may_match) CHECK(f.read == view);
             for (const auto& e : f.extensions)
@@ -567,15 +581,15 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     // The aggregation tier keys its rows by interned string ids that follow the
     // build's file order, and a memory budget changes that order. Its bytes may
     // differ, its answers may not.
-    auto contents = [](const std::string& index_path) {
-        std::vector<dftu_utils_test::IndexRecord> out;
+    auto contents = [](const dstd::String& index_path) {
+        dstd::Vector<dftu_utils_test::IndexRecord> out;
         for (auto& record : dftu_utils_test::dump_index(index_path))
             if (record.name != "dftu.idx.dftracer.agg")
                 out.push_back(std::move(record));
         return out;
     };
     const auto& trace = corpus.traces.front();
-    const auto spilled = std::string(
+    const auto spilled = dstd::String(
         trace::internal::determine_index_path(trace, spill.index_dir));
     const auto a = contents(corpus.index_of(trace));
     const auto b = contents(spilled);
@@ -584,7 +598,7 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
 
     using trace::views::AggOp;
     using trace::views::GroupKey;
-    const auto summary = [&](const std::string& index_path) {
+    const auto summary = [&](const dstd::String& index_path) {
         const auto df = trace::views::View::from_files(
                             {{dstd::String(trace), dstd::String(index_path)}})
                             .group_by({GroupKey::cat(), GroupKey::name(),
@@ -597,10 +611,10 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
                                   {AggOp::Max, "ts", "tmax"}})
                             .collect()
                             .get();
-        std::map<std::string, std::vector<double>> rows;
+        dstd::Map<dstd::String, dstd::Vector<double>> rows;
         for (std::int64_t r = 0; r < df.num_rows(); ++r) {
-            std::string key;
-            std::vector<double> values;
+            dstd::String key;
+            dstd::Vector<double> values;
             for (std::size_t i = 0; i < df.columns.size(); ++i) {
                 const auto c = df.columns[i].materialize();
                 double v = 0;
@@ -619,7 +633,7 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
                         v = c.data<double>()[r];
                 }
                 if (df.names[i] == "pid" || df.names[i] == "tid")
-                    key.append(std::to_string(v)).push_back('|');
+                    key.append(dstd::to_string(v)).push_back('|');
                 else
                     values.push_back(v);
             }
@@ -636,19 +650,20 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
 TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
     dftu_utils_test::TestEnvironment env{10};
     const auto index_dir = env.get_dir() + "/idx";
-    std::vector<std::string> traces;
+    dstd::Vector<dstd::String> traces;
     for (const char* hash : {"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"}) {
-        std::ostringstream out;
-        out << R"({"name":"FH","ph":"M","pid":1,"tid":1,"args":{"name":"/x",)"
-            << R"("value":")" << hash << "\"}}\n";
+        dstd::String out;
+        out += common::str_cat(
+            R"({"name":"FH","ph":"M","pid":1,"tid":1,"args":{"name":"/x",)",
+            R"("value":")", hash, "\"}}\n");
         for (int i = 0; i < 20; ++i)
-            out << R"({"id":)" << i
-                << R"(,"name":"read","cat":"POSIX","pid":1,)"
-                << R"("tid":1,"ph":"X","ts":)" << 1000 + i
-                << R"(,"dur":5,"args":{"fhash":")" << hash << "\"}}\n";
+            out += common::str_cat(
+                R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":1,)",
+                R"("tid":1,"ph":"X","ts":)", 1000 + i,
+                R"(,"dur":5,"args":{"fhash":")", hash, "\"}}\n");
         const auto plain =
-            env.get_dir() + "/t" + std::to_string(traces.size()) + ".pfw";
-        std::ofstream(plain.c_str()) << out.str();
+            env.get_dir() + "/t" + dstd::to_string(traces.size()) + ".pfw";
+        (void)dstd::fs::write_file(dstd::PathView(plain), out);
         const auto gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    1024));
@@ -658,7 +673,7 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
     index::IndexerOptions opts;
     opts.index_dir = index_dir;
     index::Indexer::open(dftu_utils_test::dstd_paths(traces), opts).build();
-    const auto index_path = std::string(
+    const auto index_path = dstd::String(
         trace::internal::determine_index_path(traces[0], index_dir));
     const auto rows = index::plan::stored_rowset(
         {{dstd::String(dstd::StringView(traces[0])),

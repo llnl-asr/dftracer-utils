@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -18,8 +19,6 @@
 #include <coroutine>
 #include <cstddef>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -231,7 +230,7 @@ TEST_CASE("when_any delivers the exception of a winner that threw") {
         try {
             co_await when_any(std::move(children));
         } catch (const std::runtime_error& e) {
-            if (std::string(e.what()) == "child failed") caught.fetch_add(1);
+            if (dstd::String(e.what()) == "child failed") caught.fetch_add(1);
         } catch (...) {
             other.fetch_add(1);
         }

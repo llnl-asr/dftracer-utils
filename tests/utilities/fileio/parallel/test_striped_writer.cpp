@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -12,9 +13,6 @@
 #include <testing_utilities.h>
 
 #include <cstdio>
-#include <fstream>
-#include <sstream>
-#include <string>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -27,10 +25,7 @@ dstd::String tmp_path(const char* name) {
 }
 
 dstd::String read_all(const dstd::String& path) {
-    std::ifstream f(path.c_str(), std::ios::binary);
-    std::stringstream ss;
-    ss << f.rdbuf();
-    return dstd::String(ss.str());
+    return dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
 }
 
 dstd::ByteView sv(const dstd::String& s) {
@@ -65,9 +60,13 @@ TEST_CASE("StripedWriter - header, chunks, footer land in single file") {
           dstd::String("HDR\nworker0\nworker1\nworker2\nEND\n").size());
 
     dstd::Set<dstd::String> lines;
-    std::stringstream ss(content);
-    dstd::String line;
-    while (std::getline(ss, line)) lines.insert(line);
+    dstd::StringView rest = content;
+    while (!rest.empty()) {
+        const std::size_t eol = rest.find('\n');
+        lines.insert(dstd::String(rest.substr(0, eol)));
+        rest = eol == dstd::StringView::npos ? dstd::StringView{}
+                                             : rest.substr(eol + 1);
+    }
     CHECK(lines.count("HDR") == 1);
     CHECK(lines.count("worker0") == 1);
     CHECK(lines.count("worker1") == 1);

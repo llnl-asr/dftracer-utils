@@ -2,14 +2,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_line_generator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils::utilities::fileio::lines::sources;
 using namespace dftracer::utils::utilities::fileio::lines;
@@ -20,27 +19,27 @@ using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftu_utils_test;
 
 // Helper: consume an AsyncGenerator<Line> into a vector of strings
-static CoroTask<std::vector<std::string>> collect_lines(
+static CoroTask<dstd::Vector<dstd::String>> collect_lines(
     AsyncGenerator<Line> gen) {
-    std::vector<std::string> result;
+    dstd::Vector<dstd::String> result;
     while (auto line = co_await gen.next()) {
-        result.push_back(std::string(line->content));
+        result.push_back(dstd::String(line->content));
     }
     co_return result;
 }
 
 // Helper: consume an AsyncGenerator<Line> into a vector of Line copies
 struct LineCopy {
-    std::string content;
+    dstd::String content;
     std::size_t line_number;
 };
 
-static CoroTask<std::vector<LineCopy>> collect_line_copies(
+static CoroTask<dstd::Vector<LineCopy>> collect_line_copies(
     AsyncGenerator<Line> gen) {
-    std::vector<LineCopy> result;
+    dstd::Vector<LineCopy> result;
     while (auto line = co_await gen.next()) {
         result.push_back(
-            LineCopy{std::string(line->content), line->line_number});
+            LineCopy{dstd::String(line->content), line->line_number});
     }
     co_return result;
 }
@@ -49,7 +48,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
     TEST_CASE("Basic Operations with Line Range" * doctest::test_suite("vg")) {
         SUBCASE("Read entire indexed file") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -71,7 +70,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
         SUBCASE("Read partial line range") {
             TestEnvironment env(20);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -93,7 +92,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
         SUBCASE("Read single line") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -116,7 +115,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
         SUBCASE("Auto-detect end line") {
             TestEnvironment env(15);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -141,7 +140,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
     TEST_CASE("Configuration with Reader") {
         SUBCASE("Use existing reader") {
             TestEnvironment env(5);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -169,7 +168,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
     TEST_CASE("Byte Range") {
         SUBCASE("Read with byte range") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -191,7 +190,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
     TEST_CASE("Line Number Tracking") {
         SUBCASE("Line numbers match expected positions") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -251,7 +250,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
     TEST_CASE("Large Files") {
         SUBCASE("Large line range") {
             TestEnvironment env(valgrind_scale(1000, 4));
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 4096, true);
@@ -278,7 +277,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
     TEST_CASE("Consistency with Sync Iterator") {
         SUBCASE("Async and sync produce same results") {
             TestEnvironment env(20);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -291,10 +290,10 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
             // Sync path
             IndexedFileLineIterator sync_iter(config);
-            std::vector<std::string> sync_lines;
+            dstd::Vector<dstd::String> sync_lines;
             while (sync_iter.has_next()) {
                 Line line = sync_iter.next();
-                sync_lines.push_back(std::string(line.content));
+                sync_lines.push_back(dstd::String(line.content));
             }
 
             // Async path
@@ -312,7 +311,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
     TEST_CASE("Generator Lifecycle" * doctest::test_suite("vg")) {
         SUBCASE("Generator done() after exhaustion") {
             TestEnvironment env(3);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -349,7 +348,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
         SUBCASE("Move semantics") {
             TestEnvironment env(5);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);

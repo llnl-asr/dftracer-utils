@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -20,33 +21,30 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <map>
-#include <memory>
-#include <set>
-#include <string>
 #include <string_view>
 #include <utility>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::index::schemas::dft::agg;
 using dftracer::utils::dataframe::FieldStat;
 using dftracer::utils::dataframe::FieldStatDomain;
-using dftracer::utils::dstd::Span;
-using dftracer::utils::dstd::Vector;
+using dstd::Span;
+using dstd::Vector;
 
 namespace {
 
 struct Ev {
     bool counter = false;
-    std::string cat;
-    std::string name;
+    dstd::String cat;
+    dstd::String name;
     std::uint64_t pid = 0;
     std::uint64_t tid = 0;
     std::uint64_t ts = 0;
     std::uint64_t dur = 0;
     bool has_dur = true;
-    std::string fhash;
-    std::vector<dftracer::utils::dstd::Pair<std::string, std::uint64_t>> args;
+    dstd::String fhash;
+    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> args;
 };
 
 class Acc {
@@ -58,21 +56,19 @@ class Acc {
     bool is_counter() const { return e_.counter; }
     bool is_profile() const { return e_.counter && e_.cat != "sys"; }
     bool is_system() const { return e_.counter && e_.cat == "sys"; }
-    dftracer::utils::dstd::StringView name() const { return e_.name; }
-    dftracer::utils::dstd::StringView cat() const { return e_.cat; }
+    dstd::StringView name() const { return e_.name; }
+    dstd::StringView cat() const { return e_.cat; }
     std::uint64_t pid() const { return e_.pid; }
     std::uint64_t tid() const { return e_.tid; }
     std::uint64_t ts() const { return e_.ts; }
     std::uint64_t dur() const { return e_.dur; }
     bool has_dur() const { return e_.has_dur; }
 
-    bool arg_is_number(dftracer::utils::dstd::StringView k) const {
+    bool arg_is_number(dstd::StringView k) const {
         return k != "fhash" && find(k) != nullptr;
     }
-    dftracer::utils::dstd::StringView arg_string(
-        dftracer::utils::dstd::StringView k) const {
-        return k == "fhash" ? dftracer::utils::dstd::StringView(e_.fhash)
-                            : dftracer::utils::dstd::StringView{};
+    dstd::StringView arg_string(dstd::StringView k) const {
+        return k == "fhash" ? dstd::StringView(e_.fhash) : dstd::StringView{};
     }
     void metric_args(MetricArgs& m) const {
         for (const auto& [name, v] : e_.args) {
@@ -85,7 +81,7 @@ class Acc {
     }
 
    private:
-    const std::uint64_t* find(dftracer::utils::dstd::StringView k) const {
+    const std::uint64_t* find(dstd::StringView k) const {
         for (const auto& [name, v] : e_.args)
             if (name == k) return &v;
         return nullptr;
@@ -93,7 +89,7 @@ class Acc {
     const Ev& e_;
 };
 
-using Key = dftracer::utils::dstd::Pair<std::string, std::string>;
+using Key = dstd::Pair<dstd::String, dstd::String>;
 
 std::uint64_t next(std::uint64_t& s) {
     s = mmix_lcg_step(s);
@@ -111,11 +107,11 @@ AggregationConfig make_config(bool percentiles) {
 // ret that is a descriptor and must not count as a size. Compute carries
 // numeric args only. "rare" has fewer than 64 events, so its quantiles stay
 // exact. Every 17th POSIX transfer is a pre-aggregated counter.
-std::vector<Ev> make_events(std::size_t n, std::uint64_t seed) {
+dstd::Vector<Ev> make_events(std::size_t n, std::uint64_t seed) {
     static const char* const FILES[] = {"1a2b3c4d", "deadbeef", "0badf00d",
                                         "cafe1234", "feed5678", "abcdef01",
                                         "13572468"};
-    std::vector<Ev> out;
+    dstd::Vector<Ev> out;
     out.reserve(n);
     std::uint64_t s = seed;
     for (std::size_t i = 0; i < n; ++i) {
@@ -179,7 +175,7 @@ std::vector<Ev> make_events(std::size_t n, std::uint64_t seed) {
     return out;
 }
 
-std::string lower(std::string s) {
+dstd::String lower(dstd::String s) {
     for (char& c : s)
         if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
     return s;
@@ -188,23 +184,21 @@ std::string lower(std::string s) {
 Key key_of(const Ev& e) { return {lower(e.cat), e.name}; }
 
 bool is_transfer(const Ev& e) {
-    const std::string c = lower(e.cat);
+    const dstd::String c = lower(e.cat);
     return (c == "posix" || c == "stdio") &&
            (e.name == "read" || e.name == "write" || e.name == "fread" ||
             e.name == "fwrite");
 }
 
 struct Truth {
-    std::set<std::uint64_t> pids, tids, files;
-    std::map<std::uint64_t,
-             dftracer::utils::dstd::Pair<std::uint64_t, std::uint64_t>>
-        spans;
-    std::vector<double> dur, size, off;
+    dstd::Set<std::uint64_t> pids, tids, files;
+    dstd::Map<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>> spans;
+    dstd::Vector<double> dur, size, off;
 };
 
-std::map<Key, Truth> truth_of(const std::vector<Ev>& events,
-                              const AggregationConfig& cfg) {
-    std::map<Key, Truth> out;
+dstd::Map<Key, Truth> truth_of(const dstd::Vector<Ev>& events,
+                               const AggregationConfig& cfg) {
+    dstd::Map<Key, Truth> out;
     for (const Ev& e : events) {
         Truth& t = out[key_of(e)];
         t.pids.insert(e.pid);
@@ -228,9 +222,9 @@ std::map<Key, Truth> truth_of(const std::vector<Ev>& events,
     return out;
 }
 
-std::map<Key, AggregationMetrics> reference(const std::vector<Ev>& events,
-                                            const AggregationConfig& cfg) {
-    std::map<Key, AggregationMetrics> out;
+dstd::Map<Key, AggregationMetrics> reference(const dstd::Vector<Ev>& events,
+                                             const AggregationConfig& cfg) {
+    dstd::Map<Key, AggregationMetrics> out;
     for (const Ev& e : events) {
         auto it = out.try_emplace(key_of(e), cfg.sketch_accuracy).first;
         oracle_event(Acc(e), it->second, cfg);
@@ -238,9 +232,9 @@ std::map<Key, AggregationMetrics> reference(const std::vector<Ev>& events,
     return out;
 }
 
-using Partials = std::map<Key, AggPartial>;
+using Partials = dstd::Map<Key, AggPartial>;
 
-void feed(Partials& into, const std::vector<Ev>& events, std::size_t b,
+void feed(Partials& into, const dstd::Vector<Ev>& events, std::size_t b,
           std::size_t e, const AggregationConfig& cfg) {
     for (std::size_t i = b; i < e; ++i) {
         auto it =
@@ -286,7 +280,7 @@ void check_stat(const FieldStat& a, const FieldStat& b, double tol,
                std::max(std::abs(a.moment_mean()), 1.0), tol));
 }
 
-double exact_rule(std::vector<double> v, double q) {
+double exact_rule(dstd::Vector<double> v, double q) {
     std::sort(v.begin(), v.end());
     const std::size_t n = v.size();
     if (q <= 0.0) return v.front();
@@ -301,7 +295,7 @@ double exact_rule(std::vector<double> v, double q) {
 constexpr double QS[] = {0.1, 0.5, 0.9, 0.99};
 constexpr double SKETCH_BOUND = 0.03;
 
-void check_quantiles(const QuantileStore& q, const std::vector<double>& truth,
+void check_quantiles(const QuantileStore& q, const dstd::Vector<double>& truth,
                      const char* what) {
     INFO("quantiles of ", what);
     REQUIRE(q.count() == truth.size());
@@ -376,20 +370,20 @@ void check_same(const AggPartial& a, const AggPartial& b, double tol) {
     }
 }
 
-std::vector<std::size_t> bounds(std::size_t n, std::size_t chunks) {
-    std::vector<std::size_t> out{0};
+dstd::Vector<std::size_t> bounds(std::size_t n, std::size_t chunks) {
+    dstd::Vector<std::size_t> out{0};
     for (std::size_t c = 1; c < chunks; ++c)
         out.push_back(n * (c * c) / (chunks * chunks) + c);
     out.push_back(n);
     return out;
 }
 
-Partials merged_chunks(const std::vector<Ev>& events,
+Partials merged_chunks(const dstd::Vector<Ev>& events,
                        const AggregationConfig& cfg, std::size_t chunks,
-                       const std::vector<std::size_t>& order,
+                       const dstd::Vector<std::size_t>& order,
                        bool through_wire) {
     const auto cut = bounds(events.size(), chunks);
-    std::vector<Partials> per_chunk(chunks);
+    dstd::Vector<Partials> per_chunk(chunks);
     for (std::size_t c = 0; c < chunks; ++c)
         feed(per_chunk[c], events, cut[c], cut[c + 1], cfg);
     Partials out;
@@ -421,7 +415,7 @@ TEST_SUITE("AggPartial") {
 
         for (std::size_t chunks : {3u, 4u, 5u}) {
             INFO("chunks: ", chunks);
-            std::vector<std::size_t> order;
+            dstd::Vector<std::size_t> order;
             for (std::size_t c = 0; c < chunks; ++c) order.push_back(c);
             const auto merged = merged_chunks(events, cfg, chunks, order, true);
             REQUIRE(merged.size() == ref.size());
@@ -448,9 +442,9 @@ TEST_SUITE("AggPartial") {
     }
 
     TEST_CASE("the metric args of a POD event clamp like get<uint64>") {
-        dftracer::utils::dstd::StringIntern intern;
+        dstd::StringIntern intern;
         const MetricArgIds ids(intern);
-        const auto id = [&intern](dftracer::utils::dstd::StringView name) {
+        const auto id = [&intern](dstd::StringView name) {
             return intern.get_or_insert(name);
         };
         dftracer::utils::trace::views::detail::FoldEvent ev;
@@ -744,7 +738,7 @@ TEST_SUITE("AggPartial") {
     TEST_CASE("distinct ids are exact up to 256 and an estimate past it") {
         const auto cfg = make_config(false);
         auto tid_events = [&](std::uint64_t lo, std::uint64_t hi) {
-            std::vector<Ev> out;
+            dstd::Vector<Ev> out;
             for (std::uint64_t t = lo; t < hi; ++t) {
                 Ev e;
                 e.cat = "app";
@@ -844,7 +838,7 @@ TEST_SUITE("AggPartial") {
         // DFTRACER_UTILS_MEMORY_DEBUG=1.
         const auto cfg = make_config(true);
         auto events = [&](std::size_t n) {
-            std::vector<Ev> out;
+            dstd::Vector<Ev> out;
             std::uint64_t s = 99;
             for (std::size_t i = 0; i < n; ++i) {
                 Ev e;
@@ -870,7 +864,7 @@ TEST_SUITE("AggPartial") {
         }
         REQUIRE(dftracer::utils::memory::debug_allocation_count() > 0);
 
-        auto count_for = [&](const std::vector<Ev>& evs) {
+        auto count_for = [&](const dstd::Vector<Ev>& evs) {
             const auto before =
                 dftracer::utils::memory::debug_allocation_count();
             AggPartial p;

@@ -7,15 +7,15 @@
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/abi.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <fstream>
-#include <string>
-#include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -66,12 +66,12 @@ double abi_num(dftu_dataframe* df, std::int64_t row, const char* name) {
     return v;
 }
 
-std::string abi_str(dftu_dataframe* df, std::int64_t row, const char* name) {
+dstd::String abi_str(dftu_dataframe* df, std::int64_t row, const char* name) {
     dftu_series* c = dftu_dataframe_column(df, name);
     REQUIRE(c != nullptr);
     int64_t len = 0;
     const char* data = dftu_series_string_at(c, row, &len);
-    std::string s(data ? data : "", static_cast<std::size_t>(len));
+    dstd::String s(data ? data : "", static_cast<std::size_t>(len));
     dftu_series_free(c);
     return s;
 }
@@ -79,9 +79,9 @@ std::string abi_str(dftu_dataframe* df, std::int64_t row, const char* name) {
 // A trace with two distinct (pid, name, dur) groups, for group_by/agg
 // coverage: pid 1 has two "read" events at dur=10, pid 2 has two "write"
 // events at dur=20.
-std::string write_group_trace(TestEnvironment& env) {
-    std::string pfw = env.get_dir() + "/grp.pfw";
-    std::ofstream ofs(pfw.c_str());
+dstd::String write_group_trace(TestEnvironment& env) {
+    dstd::String pfw = env.get_dir() + "/grp.pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
         << "\n";
     ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":10,"args":{}})"
@@ -91,7 +91,7 @@ std::string write_group_trace(TestEnvironment& env) {
     ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1100,"dur":20,"args":{}})"
         << "\n";
     ofs.close();
-    std::string gz = pfw + ".gz";
+    dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dstd::fs::remove(pfw);
     return gz;
@@ -104,9 +104,9 @@ std::string write_group_trace(TestEnvironment& env) {
 // event here is disjoint from its groupmates, it equals sum(dur)).
 // pid 1: "read" dur=10, "readv" dur=50, "pread" dur=20 (total 80).
 // pid 2: "write" dur=5, "writev" dur=30, "pwrite" dur=15 (total 50).
-std::string write_argmax_trace(TestEnvironment& env) {
-    std::string pfw = env.get_dir() + "/argmax.pfw";
-    std::ofstream ofs(pfw.c_str());
+dstd::String write_argmax_trace(TestEnvironment& env) {
+    dstd::String pfw = env.get_dir() + "/argmax.pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
         << "\n";
     ofs << R"({"ph":"X","name":"readv","cat":"POSIX","pid":1,"tid":1,"ts":1050,"dur":50,"args":{}})"
@@ -120,7 +120,7 @@ std::string write_argmax_trace(TestEnvironment& env) {
     ofs << R"({"ph":"X","name":"pwrite","cat":"POSIX","pid":2,"tid":1,"ts":1100,"dur":15,"args":{}})"
         << "\n";
     ofs.close();
-    std::string gz = pfw + ".gz";
+    dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dstd::fs::remove(pfw);
     return gz;
@@ -128,20 +128,20 @@ std::string write_argmax_trace(TestEnvironment& env) {
 
 // Writes a small trace of `n` "ev" events at `dir`/name.pfw.gz and builds its
 // index, for the directory-scan test.
-std::string write_and_index(const std::string& dir, const std::string& name,
-                            int n, int pid) {
+dstd::String write_and_index(const dstd::String& dir, const dstd::String& name,
+                             int n, int pid) {
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    std::string pfw = dir + "/" + name + ".pfw";
-    std::ofstream ofs(pfw.c_str());
+    dstd::String pfw = dir + "/" + name + ".pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i)
         ofs << R"({"ph":"X","name":")" << name << R"(","cat":"POSIX","pid":)"
             << pid << R"(,"tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
             << (10 + i) << R"(,"args":{}})" << "\n";
     ofs.close();
-    std::string gz = pfw + ".gz";
+    dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dstd::fs::remove(pfw);
-    std::string idx = std::string(determine_index_path(gz, ""));
+    dstd::String idx = dstd::String(determine_index_path(gz, ""));
     StringSink sink;
     View::from_file(dstd::String(gz), dstd::String(idx)).sink_json(sink).get();
     return gz;
@@ -212,14 +212,14 @@ TEST_SUITE("View C ABI") {
 
         char* plan = dftu_view_explain_duql(v, text, names, values, 2, nullptr);
         REQUIRE(plan != nullptr);
-        CHECK(std::string(plan).find("head 3") != std::string::npos);
+        CHECK(dstd::String(plan).find("head 3") != dstd::String::npos);
         dftu_view_string_free(plan);
 
         const char* bad[1] = {"n"};
         const char* bad_value[1] = {"three"};
         CHECK(dftu_view_duql(v, text, bad, bad_value, 1, &error) == nullptr);
         REQUIRE(error != nullptr);
-        CHECK(std::string(error).find("$n") != std::string::npos);
+        CHECK(dstd::String(error).find("$n") != dstd::String::npos);
         dftu_view_string_free(error);
 
         const char* list_name[1] = {"names"};
@@ -231,9 +231,8 @@ TEST_SUITE("View C ABI") {
         dftu_dataframe* names_df = dftu_lazyframe_collect(listed, 0);
         REQUIRE(names_df != nullptr);
         duql::Params lp;
-        lp.emplace("names", dftracer::utils::dstd::Vector<duql::LiteralValue>{
-                                dftracer::utils::dstd::String("read"),
-                                dftracer::utils::dstd::String("write")});
+        lp.emplace("names", dstd::Vector<duql::LiteralValue>{
+                                dstd::String("read"), dstd::String("write")});
         CHECK(dftu_dataframe_num_rows(names_df) ==
               run(View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                       .duql("where name in $names | select name", lp)
@@ -289,8 +288,8 @@ TEST_SUITE("View C ABI") {
         char* plan = dftu_view_explain_duql(v, cases[1].text, nullptr, nullptr,
                                             0, nullptr);
         REQUIRE(plan != nullptr);
-        CHECK(std::string(plan).find("name in (keys of cats) (pushed)") !=
-              std::string::npos);
+        CHECK(dstd::String(plan).find("name in (keys of cats) (pushed)") !=
+              dstd::String::npos);
         dftu_view_string_free(plan);
         dftu_view_free(v);
     }
@@ -360,9 +359,9 @@ TEST_SUITE("View C ABI") {
         dftu_view_free(v);
 
         TestEnvironment env;
-        const std::string pfw = env.get_dir() + "/hosts.pfw";
+        const dstd::String pfw = env.get_dir() + "/hosts.pfw";
         {
-            std::ofstream o(pfw.c_str());
+            dftu_utils_test::FileOut o(pfw);
             o << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,"ts":1,)"
                  R"("dur":1,"args":{"hosts":[4,5]}})"
               << "\n"
@@ -370,9 +369,9 @@ TEST_SUITE("View C ABI") {
                  R"("dur":1,"args":{"hosts":[6]}})"
               << "\n";
         }
-        const std::string gz = pfw + ".gz";
+        const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         const char* p2[1] = {gz.c_str()};
         const char* i2[1] = {idx.c_str()};
         dftu_view* w = dftu_view_from_files(p2, i2, 1);
@@ -395,8 +394,8 @@ TEST_SUITE("View C ABI") {
 
     TEST_CASE("group_by + agg via the C ABI matches the C++ equivalent") {
         TestEnvironment env(50);
-        std::string gz = write_group_trace(env);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = write_group_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         StringSink sink;
         View::from_file(dstd::String(gz), dstd::String(idx))
             .sink_json(sink)
@@ -507,8 +506,8 @@ TEST_SUITE("View C ABI") {
         }
 
         SUBCASE("Kind::ArgMax with by") {
-            std::string am_gz = write_argmax_trace(env);
-            std::string am_idx = std::string(determine_index_path(am_gz, ""));
+            dstd::String am_gz = write_argmax_trace(env);
+            dstd::String am_idx = dstd::String(determine_index_path(am_gz, ""));
             StringSink am_sink;
             View::from_file(dstd::String(am_gz), dstd::String(am_idx))
                 .sink_json(am_sink)
@@ -554,8 +553,8 @@ TEST_SUITE("View C ABI") {
         }
 
         SUBCASE("Kind::Pct with q") {
-            std::string am_gz = write_argmax_trace(env);
-            std::string am_idx = std::string(determine_index_path(am_gz, ""));
+            dstd::String am_gz = write_argmax_trace(env);
+            dstd::String am_idx = dstd::String(determine_index_path(am_gz, ""));
             StringSink am_sink;
             View::from_file(dstd::String(am_gz), dstd::String(am_idx))
                 .sink_json(am_sink)
@@ -596,8 +595,8 @@ TEST_SUITE("View C ABI") {
         }
 
         SUBCASE("Kind::Busy occupancy") {
-            std::string am_gz = write_argmax_trace(env);
-            std::string am_idx = std::string(determine_index_path(am_gz, ""));
+            dstd::String am_gz = write_argmax_trace(env);
+            dstd::String am_idx = dstd::String(determine_index_path(am_gz, ""));
             StringSink am_sink;
             View::from_file(dstd::String(am_gz), dstd::String(am_idx))
                 .sink_json(am_sink)
@@ -644,18 +643,18 @@ TEST_SUITE("View C ABI") {
 
     TEST_CASE("phase any reads metadata records, the default does not") {
         TestEnvironment env(50);
-        std::string pfw = env.get_dir() + "/meta.pfw";
+        dstd::String pfw = env.get_dir() + "/meta.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"name":"EH","cat":"dftracer","type":1,"pid":1,"tid":1,"ph":4,"args":{"hhash":"ab"}})"
                 << "\n";
             ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
                 << "\n";
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         StringSink sink;
         View::from_file(dstd::String(gz), dstd::String(idx))
             .sink_json(sink)
@@ -812,9 +811,9 @@ TEST_SUITE("View C ABI") {
         "from_directory scans recursively, matching an explicit "
         "from_files listing") {
         TestEnvironment env(10);
-        std::string root = env.get_dir() + "/root";
-        std::string gz_a = write_and_index(root + "/a", "eva", 3, 1);
-        std::string gz_b = write_and_index(root + "/b", "evb", 4, 2);
+        dstd::String root = env.get_dir() + "/root";
+        dstd::String gz_a = write_and_index(root + "/a", "eva", 3, 1);
+        dstd::String gz_b = write_and_index(root + "/b", "evb", 4, 2);
 
         dftu_view* dirv =
             dftu_view_from_directory(root.c_str(), nullptr, nullptr);
@@ -835,7 +834,7 @@ TEST_SUITE("View C ABI") {
         // interleave in an order neither listing controls. Only the multiset
         // of rows is defined.
         auto rows = [](dftu_dataframe* df) {
-            std::vector<dstd::Pair<std::string, double>> out;
+            dstd::Vector<dstd::Pair<dstd::String, double>> out;
             for (std::int64_t i = 0; i < dftu_dataframe_num_rows(df); ++i)
                 out.emplace_back(abi_str(df, i, "name"), abi_num(df, i, "pid"));
             std::sort(out.begin(), out.end());

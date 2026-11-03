@@ -53,6 +53,7 @@ class Mailbox {
    private:
     std::mutex mutex_;
     std::condition_variable ready_;
+    // keep std: memory tests link only memory
     std::deque<Item> queue_;
     bool closed_ = false;
 };
@@ -71,14 +72,18 @@ std::size_t random_size(std::mt19937_64& rng) {
 TEST_CASE("blocks freed on other threads credit the pool that was charged") {
     constexpr int THREADS = 6;
     constexpr int PER_THREAD = 3000;
+    // keep std: memory tests link only memory
     std::vector<PoolHandle> pools;
     for (int i = 0; i < THREADS; ++i) pools.push_back(root().child("worker"));
     std::size_t before = root().live();
     std::size_t before_blocks = root().blocks();
 
+    // keep std: memory tests link only memory
     std::vector<std::vector<Item>> made(THREADS);
+    // keep std: memory tests link only memory
     std::vector<std::size_t> asked(THREADS, 0);
     {
+        // keep std: memory tests link only memory
         std::vector<std::thread> producers;
         for (int t = 0; t < THREADS; ++t) {
             producers.emplace_back([&, t] {
@@ -92,6 +97,7 @@ TEST_CASE("blocks freed on other threads credit the pool that was charged") {
                 }
             });
         }
+        // keep std: memory tests link only memory
         for (std::thread& th : producers) th.join();
     }
     std::size_t total = 0;
@@ -105,6 +111,7 @@ TEST_CASE("blocks freed on other threads credit the pool that was charged") {
     CHECK(root().blocks() == before_blocks + THREADS * PER_THREAD);
 
     {
+        // keep std: memory tests link only memory
         std::vector<std::thread> consumers;
         for (int t = 0; t < THREADS; ++t) {
             consumers.emplace_back([&, t] {
@@ -113,6 +120,7 @@ TEST_CASE("blocks freed on other threads credit the pool that was charged") {
                 for (const Item& item : made[owner]) deallocate(item.p);
             });
         }
+        // keep std: memory tests link only memory
         for (std::thread& th : consumers) th.join();
     }
     for (const PoolHandle& p : pools) {
@@ -126,12 +134,15 @@ TEST_CASE("blocks freed on other threads credit the pool that was charged") {
 TEST_CASE("producers and consumers running together end exact") {
     constexpr int PAIRS = 4;
     constexpr int PER_PRODUCER = 20000;
+    // keep std: memory tests link only memory
     std::vector<PoolHandle> pools;
     for (int i = 0; i < PAIRS; ++i) pools.push_back(root().child("pair"));
     std::size_t before = root().live();
     std::size_t before_blocks = root().blocks();
 
+    // keep std: memory tests link only memory
     std::vector<Mailbox> boxes(PAIRS);
+    // keep std: memory tests link only memory
     std::vector<std::thread> threads;
     for (int t = 0; t < PAIRS; ++t) {
         threads.emplace_back([&, t] {
@@ -153,6 +164,7 @@ TEST_CASE("producers and consumers running together end exact") {
             }
         });
     }
+    // keep std: memory tests link only memory
     for (std::thread& th : threads) th.join();
 
     for (const PoolHandle& p : pools) {
@@ -168,6 +180,7 @@ TEST_CASE("pools opened and closed on many threads end with clean slots") {
     constexpr int ROUNDS = 400;
     std::size_t before = root().live();
     std::atomic<int> failures{0};
+    // keep std: memory tests link only memory
     std::vector<std::thread> threads;
     for (int t = 0; t < THREADS; ++t) {
         threads.emplace_back([&] {
@@ -188,6 +201,7 @@ TEST_CASE("pools opened and closed on many threads end with clean slots") {
             }
         });
     }
+    // keep std: memory tests link only memory
     for (std::thread& th : threads) th.join();
     CHECK(failures.load() == 0);
     CHECK(root().live() == before);

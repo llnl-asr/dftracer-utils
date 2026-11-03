@@ -4,6 +4,10 @@
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
@@ -13,6 +17,7 @@
 #include <dftracer/utils/store/segment.h>
 #include <dftracer/utils/store/varint.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -24,9 +29,9 @@
 #include <fstream>
 #include <iterator>
 #include <random>
-#include <string>
 #include <utility>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace dftracer::utils::store::engine {
 
@@ -41,11 +46,10 @@ struct DataFileWriterTestHook {
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 namespace memory = dftracer::utils::memory;
 
-using dftracer::utils::dstd::ByteView;
+using dstd::ByteView;
 using store::ScopeKind;
 using store::SourceStat;
 using store::engine::CopyItem;
@@ -65,7 +69,7 @@ using store::engine::SegmentBuilder;
 
 constexpr std::size_t EXTENT_SIZE = 4096;
 
-ByteView view_of(const std::string& bytes) {
+ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
@@ -73,29 +77,17 @@ ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
-ByteView view_of(const std::vector<std::uint8_t>& bytes) {
-    return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
-}
-
-std::string to_std(const dstd::String& value) {
-    return std::string(value.data(), value.size());
-}
-
-dstd::String dstring(const std::string& value) {
-    return dstd::String(value.data(), value.size());
-}
-
 dstd::Vector<std::uint8_t> bytes_of(ByteView bytes) {
     const auto* begin = reinterpret_cast<const std::uint8_t*>(bytes.data());
     return dstd::Vector<std::uint8_t>(begin, begin + bytes.size());
 }
 
-dstd::Vector<std::uint8_t> bytes_of_string(const std::string& value) {
+dstd::Vector<std::uint8_t> bytes_of_string(const dstd::String& value) {
     return bytes_of(view_of(value));
 }
 
-std::vector<std::uint8_t> std_bytes(const dstd::Vector<std::uint8_t>& bytes) {
-    return std::vector<std::uint8_t>(bytes.begin(), bytes.end());
+dstd::Vector<std::uint8_t> std_bytes(const dstd::Vector<std::uint8_t>& bytes) {
+    return dstd::Vector<std::uint8_t>(bytes.begin(), bytes.end());
 }
 
 bool same_bytes(ByteView a, ByteView b) {
@@ -103,7 +95,7 @@ bool same_bytes(ByteView a, ByteView b) {
            (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
 }
 
-std::uint32_t read_u32_le_at(const std::vector<std::uint8_t>& bytes,
+std::uint32_t read_u32_le_at(const dstd::Vector<std::uint8_t>& bytes,
                              std::size_t offset) {
     const auto* data = bytes.data();
     return static_cast<std::uint32_t>(data[offset]) |
@@ -112,24 +104,24 @@ std::uint32_t read_u32_le_at(const std::vector<std::uint8_t>& bytes,
            (static_cast<std::uint32_t>(data[offset + 3U]) << 24U);
 }
 
-std::uint64_t read_u64_le_at(const std::vector<std::uint8_t>& bytes,
+std::uint64_t read_u64_le_at(const dstd::Vector<std::uint8_t>& bytes,
                              std::size_t offset) {
     return static_cast<std::uint64_t>(read_u32_le_at(bytes, offset)) |
            (static_cast<std::uint64_t>(read_u32_le_at(bytes, offset + 4U))
             << 32U);
 }
 
-void write_u32_le_at(std::vector<std::uint8_t>& bytes, std::size_t offset,
+void write_u32_le_at(dstd::Vector<std::uint8_t>& bytes, std::size_t offset,
                      std::uint32_t value) {
-    dftracer::utils::dstd::write_u32_le(bytes.data() + offset, value);
+    dstd::write_u32_le(bytes.data() + offset, value);
 }
 
-void write_u64_le_at(std::vector<std::uint8_t>& bytes, std::size_t offset,
+void write_u64_le_at(dstd::Vector<std::uint8_t>& bytes, std::size_t offset,
                      std::uint64_t value) {
-    dftracer::utils::dstd::write_u64_le(bytes.data() + offset, value);
+    dstd::write_u64_le(bytes.data() + offset, value);
 }
 
-std::size_t header_tail_field_offset(const std::vector<std::uint8_t>& file) {
+std::size_t header_tail_field_offset(const dstd::Vector<std::uint8_t>& file) {
     const std::size_t host_length =
         std::size_t{file[44]} | (std::size_t{file[45]} << 8U);
     const std::size_t label_length =
@@ -137,11 +129,11 @@ std::size_t header_tail_field_offset(const std::vector<std::uint8_t>& file) {
     return 48U + host_length + label_length;
 }
 
-std::uint64_t header_tail_offset(const std::vector<std::uint8_t>& file) {
+std::uint64_t header_tail_offset(const dstd::Vector<std::uint8_t>& file) {
     return read_u64_le_at(file, header_tail_field_offset(file));
 }
 
-void rewrite_header_crc(std::vector<std::uint8_t>& header) {
+void rewrite_header_crc(dstd::Vector<std::uint8_t>& header) {
     REQUIRE(header.size() >= store::engine::FILE_HEADER_BYTES);
     write_u32_le_at(header, 12, 0);
     const std::uint32_t crc = store::engine::crc32(
@@ -149,14 +141,14 @@ void rewrite_header_crc(std::vector<std::uint8_t>& header) {
     write_u32_le_at(header, 12, crc);
 }
 
-std::size_t record_crc_offset(const std::vector<std::uint8_t>& file,
+std::size_t record_crc_offset(const dstd::Vector<std::uint8_t>& file,
                               std::uint64_t record_offset) {
     const std::uint32_t body_length =
         read_u32_le_at(file, static_cast<std::size_t>(record_offset) + 12U);
     return static_cast<std::size_t>(record_offset) + 40U + body_length;
 }
 
-void rewrite_record_crc(std::vector<std::uint8_t>& file,
+void rewrite_record_crc(dstd::Vector<std::uint8_t>& file,
                         std::uint64_t record_offset) {
     const std::size_t crc_at = record_crc_offset(file, record_offset);
     const std::size_t record_at = static_cast<std::size_t>(record_offset);
@@ -167,49 +159,47 @@ void rewrite_record_crc(std::vector<std::uint8_t>& file,
 
 // 40-byte record header, the body codec byte, then the one-byte varint item
 // tag and length. A test that edits the payload needs a body stored raw.
-std::size_t first_item_payload_offset(const std::vector<std::uint8_t>& record) {
+std::size_t first_item_payload_offset(
+    const dstd::Vector<std::uint8_t>& record) {
     REQUIRE(record.size() > 40U);
     REQUIRE(record[40] == 0U);
     return 43U;
 }
 
-std::vector<std::uint8_t> read_file(dftracer::utils::dstd::PathView path) {
-    const dftracer::utils::dstd::Path owned(path.str());
-    std::ifstream input(owned.c_str(), std::ios::binary);
-    return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(input),
-                                     std::istreambuf_iterator<char>());
+dstd::Vector<std::uint8_t> read_file(dstd::PathView path) {
+    const dstd::Path owned(path.str());
+    const dstd::String text = dftu_utils_test::read_text(owned);
+    return dstd::Vector<std::uint8_t>(text.begin(), text.end());
 }
 
-void write_file(dftracer::utils::dstd::PathView path,
-                const std::vector<std::uint8_t>& bytes) {
-    const dftracer::utils::dstd::Path owned(path.str());
-    std::ofstream output(owned.c_str(), std::ios::binary);
+void write_file(dstd::PathView path, const dstd::Vector<std::uint8_t>& bytes) {
+    const dstd::Path owned(path.str());
+    dftu_utils_test::FileOut output(owned);
     output.write(reinterpret_cast<const char*>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));
 }
 
-void corrupt_header(std::vector<std::uint8_t>& bytes) {
+void corrupt_header(dstd::Vector<std::uint8_t>& bytes) {
     REQUIRE(bytes.size() > 16);
     bytes[1] ^= 1;
 }
 
 struct TempDir {
-    dftracer::utils::dstd::Path path;
+    dstd::Path path;
 
     TempDir() {
         const auto now =
             std::chrono::steady_clock::now().time_since_epoch().count();
-        path = dftracer::utils::dstd::fs::temp_directory() /
-               ("dftu_store_file_" + std::to_string(::getpid()) + "_" +
-                std::to_string(now));
-        REQUIRE(
-            dftracer::utils::dstd::fs::create_directories(path).has_value());
+        path = dstd::fs::temp_directory() /
+               ("dftu_store_file_" + dstd::to_string(::getpid()) + "_" +
+                dstd::to_string(now));
+        REQUIRE(dstd::fs::create_directories(path).has_value());
     }
 
-    ~TempDir() { (void)dftracer::utils::dstd::fs::remove_all(path); }
+    ~TempDir() { (void)dstd::fs::remove_all(path); }
 
-    std::string file(const std::string& name) const {
-        return std::string((path / name).str());
+    dstd::String file(const dstd::String& name) const {
+        return dstd::String((path / name).str());
     }
 };
 
@@ -223,9 +213,9 @@ struct SegmentData {
 SegmentData make_segment(std::uint32_t seed, std::size_t entry_count) {
     SegmentBuilder builder;
     for (std::size_t i = 0; i < entry_count; ++i) {
-        const std::string key =
-            "key-" + std::to_string(seed) + "-" + std::to_string(i);
-        const std::string value(
+        const dstd::String key =
+            "key-" + dstd::to_string(seed) + "-" + dstd::to_string(i);
+        const dstd::String value(
             64, static_cast<char>('a' + static_cast<int>((seed + i) % 26U)));
         builder.add(view_of(key), view_of(value));
     }
@@ -238,7 +228,7 @@ SegmentData make_segment(std::uint32_t seed, std::size_t entry_count) {
 NamespaceItem make_namespace(std::uint32_t local_id) {
     NamespaceItem item;
     item.local_id = local_id;
-    item.name = dstring("test.ns." + std::to_string(local_id));
+    item.name = dstd::String("test.ns." + dstd::to_string(local_id));
     item.format_version = 7;
     item.fold_kind = 0;
     item.codec = 0;
@@ -251,7 +241,7 @@ ScopeItem make_scope(std::uint32_t local_id) {
     item.local_id = local_id;
     item.kind = local_id % 2 == 0 ? ScopeKind::File : ScopeKind::Files;
     item.paths.push_back(
-        dstring("/traces/run" + std::to_string(local_id) + ".pfw"));
+        dstd::String("/traces/run" + dstd::to_string(local_id) + ".pfw"));
     return item;
 }
 
@@ -283,8 +273,9 @@ DropItem make_drop(std::uint32_t namespace_id, std::uint32_t scope_id,
     item.scope_id = scope_id;
     item.generation = generation;
     if (generation % 2 != 0) {
-        item.begin_key = bytes_of_string("begin-" + std::to_string(generation));
-        item.end_key = bytes_of_string("end-" + std::to_string(generation));
+        item.begin_key =
+            bytes_of_string("begin-" + dstd::to_string(generation));
+        item.end_key = bytes_of_string("end-" + dstd::to_string(generation));
     }
     return item;
 }
@@ -310,9 +301,9 @@ ExtentRefItem make_extent_ref(const ExtentRef& extent,
 
 SegmentData make_wide_segment(std::uint32_t seed, std::size_t key_bytes) {
     SegmentBuilder builder;
-    std::string key = std::to_string(seed);
+    dstd::String key = dstd::to_string(seed);
     key.resize(key_bytes, 'k');
-    const std::string value = "v" + std::to_string(seed);
+    const dstd::String value = "v" + dstd::to_string(seed);
     builder.add(view_of(key), view_of(value));
     auto sealed = builder.seal(nullptr, nullptr, nullptr);
     if (!sealed) return {};
@@ -330,14 +321,14 @@ struct SegmentBlockEntry {
     std::uint32_t length = 0;
     std::uint64_t entry_count = 0;
     std::uint64_t ordinal = 0;
-    std::string first_key;
-    std::string last_key;
+    dstd::String first_key;
+    dstd::String last_key;
 };
 
 struct SegmentBlockView {
     store::engine::BlockHandle handle;
     std::size_t raw_bytes = 0;
-    std::vector<SegmentBlockEntry> entries;
+    dstd::Vector<SegmentBlockEntry> entries;
 };
 
 struct ClosedRun {
@@ -346,8 +337,8 @@ struct ClosedRun {
     store::engine::BlockHandle handle;
 };
 
-std::vector<ClosedRun> closed_runs(const DataFileReader& reader) {
-    std::vector<ClosedRun> runs;
+dstd::Vector<ClosedRun> closed_runs(const DataFileReader& reader) {
+    dstd::Vector<ClosedRun> runs;
     const FileIndex& index = reader.index();
     REQUIRE(index.tail.has_value());
     REQUIRE(index.tail->directory_levels == 1);
@@ -382,7 +373,7 @@ SegmentBlockView read_segment_block(const DataFileReader& reader,
     block.handle = handle;
     auto bytes = reader.read_block(handle, nullptr);
     REQUIRE(bytes.has_value());
-    const std::vector<std::uint8_t> raw = std_bytes(*bytes);
+    const dstd::Vector<std::uint8_t> raw = std_bytes(*bytes);
     block.raw_bytes = raw.size();
     const std::uint32_t count = read_u32_le_at(raw, 0);
     std::size_t at = 4;
@@ -399,7 +390,7 @@ SegmentBlockView read_segment_block(const DataFileReader& reader,
         entry.entry_count = read_u64_le_at(raw, at + 36U);
         entry.ordinal = read_u64_le_at(raw, at + 44U);
         at += 52;
-        for (std::string* key : {&entry.first_key, &entry.last_key}) {
+        for (dstd::String* key : {&entry.first_key, &entry.last_key}) {
             ByteView body = view_of(raw);
             auto length = store::engine::decode_varint(body, at);
             REQUIRE(length.has_value());
@@ -417,7 +408,7 @@ SegmentBlockView read_segment_block(const DataFileReader& reader,
 void check_namespace(const NamespaceItem& actual,
                      const NamespaceItem& expected) {
     CHECK(actual.local_id == expected.local_id);
-    CHECK(to_std(actual.name) == to_std(expected.name));
+    CHECK(dstd::String(actual.name) == dstd::String(expected.name));
     CHECK(actual.format_version == expected.format_version);
     CHECK(actual.fold_kind == expected.fold_kind);
     CHECK(actual.codec == expected.codec);
@@ -429,7 +420,7 @@ void check_scope(const ScopeItem& actual, const ScopeItem& expected) {
     CHECK(actual.kind == expected.kind);
     REQUIRE(actual.paths.size() == expected.paths.size());
     for (std::size_t i = 0; i < actual.paths.size(); ++i) {
-        CHECK(to_std(actual.paths[i]) == to_std(expected.paths[i]));
+        CHECK(dstd::String(actual.paths[i]) == dstd::String(expected.paths[i]));
     }
 }
 
@@ -560,9 +551,9 @@ struct RecordMeta {
 
 std::uint64_t commit_record_offset(std::uint32_t commit_id);
 
-std::vector<RecordMeta> scan_record_metas(
-    const std::vector<std::uint8_t>& file) {
-    std::vector<RecordMeta> records;
+dstd::Vector<RecordMeta> scan_record_metas(
+    const dstd::Vector<std::uint8_t>& file) {
+    dstd::Vector<RecordMeta> records;
     for (std::size_t offset = store::engine::FILE_HEADER_BYTES;
          offset + 40U <= file.size();
          offset += store::engine::FILE_HEADER_BYTES) {
@@ -590,7 +581,7 @@ std::vector<RecordMeta> scan_record_metas(
     return records;
 }
 
-bool chain_is_valid(const std::vector<RecordMeta>& records,
+bool chain_is_valid(const dstd::Vector<RecordMeta>& records,
                     std::uint64_t start_sequence,
                     std::uint64_t flipped_sequence) {
     std::uint64_t sequence = start_sequence;
@@ -610,7 +601,7 @@ bool chain_is_valid(const std::vector<RecordMeta>& records,
     }
 }
 
-std::uint64_t newest_visible_sequence(const std::vector<RecordMeta>& records,
+std::uint64_t newest_visible_sequence(const dstd::Vector<RecordMeta>& records,
                                       std::uint64_t flipped_sequence) {
     for (std::uint64_t sequence = records.back().sequence; sequence >= 1;
          --sequence) {
@@ -621,10 +612,10 @@ std::uint64_t newest_visible_sequence(const std::vector<RecordMeta>& records,
     return 0;
 }
 
-std::vector<std::size_t> record_flip_offsets(const RecordMeta& record) {
+dstd::Vector<std::size_t> record_flip_offsets(const RecordMeta& record) {
     const std::size_t begin = static_cast<std::size_t>(record.offset);
     const std::size_t end = record.crc_end + 4U;
-    std::vector<std::size_t> offsets;
+    dstd::Vector<std::size_t> offsets;
     for (std::size_t i = 0; i < 8; ++i) {
         offsets.push_back(begin + ((end - begin) * i) / 8U);
     }
@@ -672,9 +663,9 @@ std::uint64_t commit_record_offset(std::uint32_t commit_id) {
 TEST_SUITE("index store file") {
     TEST_CASE("five commits round-trip through a footer") {
         TempDir temp;
-        const std::string path = temp.file("footer.dfs");
-        const std::string host = "host.example";
-        const std::string label = "rank-0";
+        const dstd::String path = temp.file("footer.dfs");
+        const dstd::String host = "host.example";
+        const dstd::String label = "rank-0";
 
         auto created = DataFileWriter::create(path, EXTENT_SIZE, host, label);
         REQUIRE(created.has_value());
@@ -682,8 +673,8 @@ TEST_SUITE("index store file") {
 
         FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
-        expected.host = dstring(host);
-        expected.label = dstring(label);
+        expected.host = dstd::String(host);
+        expected.label = dstd::String(label);
         dstd::Vector<ExtentRef> extents;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             add_five_commit(writer, expected, commit_id, &extents);
@@ -696,8 +687,8 @@ TEST_SUITE("index store file") {
         CHECK(opened->records_read() == 1);
         const FileIndex& actual = opened->index();
         CHECK(actual.extent_size == EXTENT_SIZE);
-        CHECK(to_std(actual.host) == host);
-        CHECK(to_std(actual.label) == label);
+        CHECK(dstd::String(actual.host) == host);
+        CHECK(dstd::String(actual.label) == label);
         CHECK(actual.pid == static_cast<std::uint32_t>(::getpid()));
         CHECK(actual.writer_random != 0);
         CHECK(actual.creation_time != 0);
@@ -716,9 +707,9 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("five commits recover from the tail without a footer") {
         TempDir temp;
-        const std::string path = temp.file("tail.dfs");
-        const std::string host = "host.example";
-        const std::string label = "rank-0";
+        const dstd::String path = temp.file("tail.dfs");
+        const dstd::String host = "host.example";
+        const dstd::String label = "rank-0";
 
         auto created = DataFileWriter::create(path, EXTENT_SIZE, host, label);
         REQUIRE(created.has_value());
@@ -726,8 +717,8 @@ TEST_SUITE("index store file") {
 
         FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
-        expected.host = dstring(host);
-        expected.label = dstring(label);
+        expected.host = dstd::String(host);
+        expected.label = dstd::String(label);
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             add_five_commit(writer, expected, commit_id);
         }
@@ -741,7 +732,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("200 commits recover through the newest checkpoint") {
         TempDir temp;
-        const std::string path = temp.file("checkpoints.dfs");
+        const dstd::String path = temp.file("checkpoints.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
@@ -752,8 +743,8 @@ TEST_SUITE("index store file") {
         dstd::Vector<ExtentRef> expected_extents;
         for (std::uint32_t commit_id = 1; commit_id <= 200; ++commit_id) {
             const NamespaceItem ns = make_namespace(commit_id);
-            const std::string extent_bytes =
-                "extent-" + std::to_string(commit_id);
+            const dstd::String extent_bytes =
+                "extent-" + dstd::to_string(commit_id);
             auto extent = writer.append_extent(view_of(extent_bytes));
             REQUIRE(extent.has_value());
             ExtentRefItem ref;
@@ -794,7 +785,7 @@ TEST_SUITE("index store file") {
     TEST_CASE(
         "truncated files open as exactly the commit prefix before the cut") {
         TempDir temp;
-        const std::string path = temp.file("crash.dfs");
+        const dstd::String path = temp.file("crash.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
@@ -803,18 +794,18 @@ TEST_SUITE("index store file") {
 
         FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
-        expected.host = dstring("host");
-        expected.label = dstring("label");
+        expected.host = dstd::String("host");
+        expected.label = dstd::String("label");
         dstd::Vector<ExtentRef> expected_extents;
         for (std::uint32_t commit_id = 1; commit_id <= 20; ++commit_id) {
             add_five_commit(writer, expected, commit_id, &expected_extents);
         }
         expected.last_sequence = 20;
 
-        const std::vector<std::uint8_t> original = read_file(path);
+        const dstd::Vector<std::uint8_t> original = read_file(path);
         REQUIRE_FALSE(original.empty());
 
-        std::vector<std::size_t> lengths;
+        dstd::Vector<std::size_t> lengths;
         for (std::size_t length = 0; length <= original.size();
              length += EXTENT_SIZE) {
             lengths.push_back(length);
@@ -826,8 +817,8 @@ TEST_SUITE("index store file") {
         }
 
         for (const std::size_t length : lengths) {
-            const std::string copy_path = temp.file("crash_copy.dfs");
-            std::vector<std::uint8_t> truncated(
+            const dstd::String copy_path = temp.file("crash_copy.dfs");
+            dstd::Vector<std::uint8_t> truncated(
                 original.begin(),
                 original.begin() + static_cast<std::ptrdiff_t>(length));
             write_file(copy_path, truncated);
@@ -861,7 +852,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("a missing middle record recovers to the exact earlier commit") {
         TempDir temp;
-        const std::string path = temp.file("missing_middle.dfs");
+        const dstd::String path = temp.file("missing_middle.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
@@ -874,12 +865,12 @@ TEST_SUITE("index store file") {
         }
         expected.last_sequence = 6;
 
-        const std::vector<std::uint8_t> original = read_file(path);
+        const dstd::Vector<std::uint8_t> original = read_file(path);
         const std::uint64_t record_offset = commit_record_offset(3);
         REQUIRE(record_offset + EXTENT_SIZE <= original.size());
 
         for (const bool bad_header : {false, true}) {
-            std::vector<std::uint8_t> corrupted = original;
+            dstd::Vector<std::uint8_t> corrupted = original;
             std::fill(
                 corrupted.begin() + static_cast<std::ptrdiff_t>(record_offset),
                 corrupted.begin() +
@@ -887,7 +878,7 @@ TEST_SUITE("index store file") {
                 0);
             if (bad_header) corrupt_header(corrupted);
 
-            const std::string copy_path = temp.file("missing_middle_copy.dfs");
+            const dstd::String copy_path = temp.file("missing_middle_copy.dfs");
             write_file(copy_path, corrupted);
 
             auto opened = DataFileReader::open(copy_path);
@@ -898,7 +889,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("a record copied inside an extent is not applied") {
         TempDir temp;
-        const std::string path = temp.file("copied_record.dfs");
+        const dstd::String path = temp.file("copied_record.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
@@ -911,7 +902,7 @@ TEST_SUITE("index store file") {
         }
         expected.last_sequence = 5;
 
-        std::vector<std::uint8_t> corrupted = read_file(path);
+        dstd::Vector<std::uint8_t> corrupted = read_file(path);
         const std::uint64_t record_offset = commit_record_offset(1);
         REQUIRE(record_offset + EXTENT_SIZE <= corrupted.size());
         const std::size_t append_offset = corrupted.size();
@@ -923,7 +914,7 @@ TEST_SUITE("index store file") {
         REQUIRE(corrupted.size() == append_offset + EXTENT_SIZE);
         corrupt_header(corrupted);
 
-        const std::string copy_path = temp.file("copied_record_copy.dfs");
+        const dstd::String copy_path = temp.file("copied_record_copy.dfs");
         write_file(copy_path, corrupted);
 
         auto opened = DataFileReader::open(copy_path);
@@ -933,7 +924,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("an empty file opens as an empty index with and without close") {
         TempDir temp;
-        const std::string no_close_path = temp.file("empty_no_close.dfs");
+        const dstd::String no_close_path = temp.file("empty_no_close.dfs");
         auto created =
             DataFileWriter::create(no_close_path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
@@ -948,7 +939,7 @@ TEST_SUITE("index store file") {
         CHECK(opened_no_close->index().drops.size() == 0);
         CHECK(opened_no_close->index().extent_refs.size() == 0);
 
-        const std::string close_path = temp.file("empty_close.dfs");
+        const dstd::String close_path = temp.file("empty_close.dfs");
         auto close_created =
             DataFileWriter::create(close_path, EXTENT_SIZE, "host", "label");
         REQUIRE(close_created.has_value());
@@ -967,14 +958,14 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("a header with version 1 opens as unsupported") {
         TempDir temp;
-        const std::string path = temp.file("version.dfs");
+        const dstd::String path = temp.file("version.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         REQUIRE(created->close().has_value());
 
-        std::vector<std::uint8_t> bytes = read_file(path);
+        dstd::Vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(bytes.size() >= 12);
         bytes[8] = 1;
         bytes[9] = 0;
@@ -990,7 +981,7 @@ TEST_SUITE("index store file") {
     TEST_CASE(
         "a writer latches its first write error and writes no duplicates") {
         TempDir temp;
-        const std::string path = temp.file("latched.dfs");
+        const dstd::String path = temp.file("latched.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
@@ -1009,7 +1000,7 @@ TEST_SUITE("index store file") {
         REQUIRE_FALSE(second.has_value());
         CHECK(second.error().is(dstd::Condition::Io));
 
-        auto append = writer.append_extent(view_of(std::string("never")));
+        auto append = writer.append_extent(view_of(dstd::String("never")));
         REQUIRE_FALSE(append.has_value());
         CHECK(append.error().is(dstd::Condition::Io));
 
@@ -1017,13 +1008,13 @@ TEST_SUITE("index store file") {
         REQUIRE_FALSE(closed.has_value());
         CHECK(closed.error().is(dstd::Condition::Io));
 
-        const std::vector<std::uint8_t> bytes = read_file(path);
+        const dstd::Vector<std::uint8_t> bytes = read_file(path);
         CHECK(bytes.size() == store::engine::FILE_HEADER_BYTES);
     }
 
     TEST_CASE("a bad header with a checkpoint still scans the full state") {
         TempDir temp;
-        const std::string path = temp.file("checkpoint_bad_header.dfs");
+        const dstd::String path = temp.file("checkpoint_bad_header.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
@@ -1036,9 +1027,9 @@ TEST_SUITE("index store file") {
         }
         expected.last_sequence = 70;
 
-        std::vector<std::uint8_t> corrupted = read_file(path);
+        dstd::Vector<std::uint8_t> corrupted = read_file(path);
         corrupt_header(corrupted);
-        const std::string copy_path =
+        const dstd::String copy_path =
             temp.file("checkpoint_bad_header_copy.dfs");
         write_file(copy_path, corrupted);
 
@@ -1050,26 +1041,26 @@ TEST_SUITE("index store file") {
     TEST_CASE("garbage and truncated headers open with an error") {
         TempDir temp;
 
-        const std::string garbage_path = temp.file("garbage.dfs");
-        std::vector<std::uint8_t> garbage(store::engine::FILE_HEADER_BYTES * 2,
-                                          'g');
+        const dstd::String garbage_path = temp.file("garbage.dfs");
+        dstd::Vector<std::uint8_t> garbage(store::engine::FILE_HEADER_BYTES * 2,
+                                           'g');
         write_file(garbage_path, garbage);
         auto opened_garbage = DataFileReader::open(garbage_path);
         REQUIRE_FALSE(opened_garbage.has_value());
         CHECK((opened_garbage.error().is(dstd::Condition::Parse) ||
                opened_garbage.error().is(dstd::Condition::Io)));
 
-        const std::string valid_path = temp.file("valid.dfs");
+        const dstd::String valid_path = temp.file("valid.dfs");
         auto created =
             DataFileWriter::create(valid_path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         REQUIRE(created->commit().has_value());
-        const std::vector<std::uint8_t> valid = read_file(valid_path);
+        const dstd::Vector<std::uint8_t> valid = read_file(valid_path);
         REQUIRE(valid.size() > 100);
 
-        const std::string short_path = temp.file("short_header.dfs");
-        write_file(short_path, std::vector<std::uint8_t>(valid.begin(),
-                                                         valid.begin() + 100));
+        const dstd::String short_path = temp.file("short_header.dfs");
+        write_file(short_path, dstd::Vector<std::uint8_t>(valid.begin(),
+                                                          valid.begin() + 100));
         auto opened_short = DataFileReader::open(short_path);
         REQUIRE_FALSE(opened_short.has_value());
         CHECK((opened_short.error().is(dstd::Condition::Parse) ||
@@ -1078,14 +1069,14 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("a zeroed extent passes open and fails the extent crc") {
         TempDir temp;
-        const std::string path = temp.file("zero_extent.dfs");
+        const dstd::String path = temp.file("zero_extent.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        const std::string extent_bytes(64, 'p');
+        const dstd::String extent_bytes(64, 'p');
         auto extent = writer.append_extent(view_of(extent_bytes));
         REQUIRE(extent.has_value());
         ExtentRefItem ref;
@@ -1097,7 +1088,7 @@ TEST_SUITE("index store file") {
         writer.add(ref);
         REQUIRE(writer.commit().has_value());
 
-        std::vector<std::uint8_t> corrupted = read_file(path);
+        dstd::Vector<std::uint8_t> corrupted = read_file(path);
         REQUIRE(corrupted.size() >= extent->offset + extent->length);
         std::fill(
             corrupted.begin() + static_cast<std::ptrdiff_t>(extent->offset),
@@ -1105,7 +1096,7 @@ TEST_SUITE("index store file") {
                 static_cast<std::ptrdiff_t>(extent->offset + extent->length),
             0);
 
-        const std::string copy_path = temp.file("zero_extent_copy.dfs");
+        const dstd::String copy_path = temp.file("zero_extent_copy.dfs");
         write_file(copy_path, corrupted);
 
         auto opened = DataFileReader::open(copy_path);
@@ -1121,7 +1112,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("a corrupt header falls back to the boundary scan") {
         TempDir temp;
-        const std::string path = temp.file("bad_header.dfs");
+        const dstd::String path = temp.file("bad_header.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
@@ -1129,8 +1120,8 @@ TEST_SUITE("index store file") {
         auto& writer = *created;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             const NamespaceItem ns = make_namespace(commit_id);
-            const std::string extent_bytes =
-                "extent-" + std::to_string(commit_id);
+            const dstd::String extent_bytes =
+                "extent-" + dstd::to_string(commit_id);
             auto extent = writer.append_extent(view_of(extent_bytes));
             REQUIRE(extent.has_value());
             ExtentRefItem ref;
@@ -1143,10 +1134,10 @@ TEST_SUITE("index store file") {
             REQUIRE(writer.commit().has_value());
         }
 
-        std::vector<std::uint8_t> corrupted = read_file(path);
+        dstd::Vector<std::uint8_t> corrupted = read_file(path);
         corrupt_header(corrupted);
 
-        const std::string copy_path = temp.file("bad_header_copy.dfs");
+        const dstd::String copy_path = temp.file("bad_header_copy.dfs");
         write_file(copy_path, corrupted);
 
         auto opened = DataFileReader::open(copy_path);
@@ -1161,7 +1152,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("a corrupt newest commit uses the previous commit") {
         TempDir temp;
-        const std::string path = temp.file("bad_tail.dfs");
+        const dstd::String path = temp.file("bad_tail.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
@@ -1169,8 +1160,8 @@ TEST_SUITE("index store file") {
         auto& writer = *created;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             const NamespaceItem ns = make_namespace(commit_id);
-            const std::string extent_bytes =
-                "extent-" + std::to_string(commit_id);
+            const dstd::String extent_bytes =
+                "extent-" + dstd::to_string(commit_id);
             auto extent = writer.append_extent(view_of(extent_bytes));
             REQUIRE(extent.has_value());
             ExtentRefItem ref;
@@ -1183,13 +1174,13 @@ TEST_SUITE("index store file") {
             REQUIRE(writer.commit().has_value());
         }
 
-        std::vector<std::uint8_t> corrupted = read_file(path);
+        dstd::Vector<std::uint8_t> corrupted = read_file(path);
         const std::uint64_t tail = header_tail_offset(corrupted);
         REQUIRE(tail >= store::engine::FILE_HEADER_BYTES);
         REQUIRE(tail + 40 <= corrupted.size());
         corrupted[tail + 20] ^= 1;
 
-        const std::string copy_path = temp.file("bad_tail_copy.dfs");
+        const dstd::String copy_path = temp.file("bad_tail_copy.dfs");
         write_file(copy_path, corrupted);
 
         auto opened = DataFileReader::open(copy_path);
@@ -1201,16 +1192,16 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("extents without a commit open as an empty index") {
         TempDir temp;
-        const std::string path = temp.file("extents_no_commit.dfs");
+        const dstd::String path = temp.file("extents_no_commit.dfs");
 
         {
             auto created =
                 DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
             REQUIRE(created.has_value());
             auto& writer = *created;
-            REQUIRE(writer.append_extent(view_of(std::string(64, 'a')))
+            REQUIRE(writer.append_extent(view_of(dstd::String(64, 'a')))
                         .has_value());
-            REQUIRE(writer.append_extent(view_of(std::string(64, 'b')))
+            REQUIRE(writer.append_extent(view_of(dstd::String(64, 'b')))
                         .has_value());
         }
 
@@ -1268,7 +1259,7 @@ TEST_SUITE("index store file") {
                 store::engine::encode_record(store::engine::RecordKind::Commit,
                                              1, 0, record_offset, {scope});
             REQUIRE(encoded.has_value());
-            std::vector<std::uint8_t> record = std_bytes(*encoded);
+            dstd::Vector<std::uint8_t> record = std_bytes(*encoded);
             write_u32_le_at(record, first_item_payload_offset(record) + 5U,
                             0xFFFFFFF0U);
             rewrite_record_crc(record, 0);
@@ -1284,7 +1275,7 @@ TEST_SUITE("index store file") {
             auto encoded = store::engine::encode_record(
                 store::engine::RecordKind::Commit, 1, 0, record_offset, {ref});
             REQUIRE(encoded.has_value());
-            std::vector<std::uint8_t> record = std_bytes(*encoded);
+            dstd::Vector<std::uint8_t> record = std_bytes(*encoded);
             write_u32_le_at(record, first_item_payload_offset(record) + 24U,
                             0xFFFFFFF0U);
             rewrite_record_crc(record, 0);
@@ -1301,7 +1292,7 @@ TEST_SUITE("index store file") {
             REQUIRE(encoded.has_value());
             return std_bytes(*encoded);
         };
-        const auto decode = [](const std::vector<std::uint8_t>& record) {
+        const auto decode = [](const dstd::Vector<std::uint8_t>& record) {
             return store::engine::decode_record(
                 ByteView{record.data(), record.size()});
         };
@@ -1336,7 +1327,7 @@ TEST_SUITE("index store file") {
         // The begin length sits at payload offset 12 and does not fit, and the
         // record is the reader's only view of the range.
         {
-            std::vector<std::uint8_t> record = encode(item);
+            dstd::Vector<std::uint8_t> record = encode(item);
             record[first_item_payload_offset(record) + 12U] = 0x7FU;
             rewrite_record_crc(record, 0);
             auto decoded = decode(record);
@@ -1347,7 +1338,7 @@ TEST_SUITE("index store file") {
         }
 
         {
-            std::vector<std::uint8_t> record = encode(item);
+            dstd::Vector<std::uint8_t> record = encode(item);
             write_u32_le_at(record, first_item_payload_offset(record), 0U);
             rewrite_record_crc(record, 0);
             auto decoded = decode(record);
@@ -1358,7 +1349,7 @@ TEST_SUITE("index store file") {
         }
 
         {
-            std::vector<std::uint8_t> record = encode(item);
+            dstd::Vector<std::uint8_t> record = encode(item);
             write_u64_le_at(record, first_item_payload_offset(record) + 4U, 0U);
             rewrite_record_crc(record, 0);
             auto decoded = decode(record);
@@ -1377,7 +1368,7 @@ TEST_SUITE("index store file") {
             REQUIRE(encoded.has_value());
             return std_bytes(*encoded);
         };
-        const auto decode = [](const std::vector<std::uint8_t>& record) {
+        const auto decode = [](const dstd::Vector<std::uint8_t>& record) {
             auto decoded = store::engine::decode_record(
                 ByteView{record.data(), record.size()});
             return decoded;
@@ -1423,7 +1414,7 @@ TEST_SUITE("index store file") {
         // The source count is at payload offset 29: u32 id, namespace and
         // scope, two u64 and the state byte.
         {
-            std::vector<std::uint8_t> record = encode(item);
+            dstd::Vector<std::uint8_t> record = encode(item);
             write_u32_le_at(record, first_item_payload_offset(record) + 29U,
                             3U);
             rewrite_record_crc(record, 0);
@@ -1435,7 +1426,7 @@ TEST_SUITE("index store file") {
         }
 
         {
-            std::vector<std::uint8_t> record = encode(item);
+            dstd::Vector<std::uint8_t> record = encode(item);
             write_u32_le_at(record, first_item_payload_offset(record) + 29U,
                             0xFFFFFFF0U);
             rewrite_record_crc(record, 0);
@@ -1449,7 +1440,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("a newest record with a forward prev offset falls back cleanly") {
         TempDir temp;
-        const std::string path = temp.file("forward_prev.dfs");
+        const dstd::String path = temp.file("forward_prev.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
@@ -1458,14 +1449,14 @@ TEST_SUITE("index store file") {
 
         FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
-        expected.host = dstring("host");
-        expected.label = dstring("label");
+        expected.host = dstd::String("host");
+        expected.label = dstd::String("label");
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             add_five_commit(writer, expected, commit_id);
         }
         expected.last_sequence = 5;
 
-        std::vector<std::uint8_t> corrupted = read_file(path);
+        dstd::Vector<std::uint8_t> corrupted = read_file(path);
         const std::uint64_t tail_offset = commit_record_offset(5);
         const std::uint64_t copied_offset =
             static_cast<std::uint64_t>(corrupted.size());
@@ -1493,7 +1484,7 @@ TEST_SUITE("index store file") {
                                                       corrupted, tail_offset)));
         rewrite_header_crc(corrupted);
 
-        const std::string copy_path = temp.file("forward_prev_copy.dfs");
+        const dstd::String copy_path = temp.file("forward_prev_copy.dfs");
         write_file(copy_path, corrupted);
 
         auto opened = DataFileReader::open(copy_path);
@@ -1503,7 +1494,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("record bit flips recover to the newest intact chain") {
         TempDir temp;
-        const std::string path = temp.file("bit_flips.dfs");
+        const dstd::String path = temp.file("bit_flips.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
@@ -1512,24 +1503,24 @@ TEST_SUITE("index store file") {
 
         FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
-        expected.host = dstring("host");
-        expected.label = dstring("label");
+        expected.host = dstd::String("host");
+        expected.label = dstd::String("label");
         for (std::uint32_t commit_id = 1; commit_id <= 70; ++commit_id) {
             add_five_commit(writer, expected, commit_id);
         }
         expected.last_sequence = 70;
 
-        const std::vector<std::uint8_t> original = read_file(path);
-        const std::vector<RecordMeta> records = scan_record_metas(original);
+        const dstd::Vector<std::uint8_t> original = read_file(path);
+        const dstd::Vector<RecordMeta> records = scan_record_metas(original);
         REQUIRE(records.size() == 70);
 
         for (const RecordMeta& record : records) {
             if (record.sequence < 64) continue;
             for (const std::size_t flip_at : record_flip_offsets(record)) {
                 REQUIRE(flip_at < original.size());
-                std::vector<std::uint8_t> corrupted = original;
+                dstd::Vector<std::uint8_t> corrupted = original;
                 corrupted[flip_at] ^= 1;
-                const std::string copy_path = temp.file("flip_record.dfs");
+                const dstd::String copy_path = temp.file("flip_record.dfs");
                 write_file(copy_path, corrupted);
 
                 auto opened = DataFileReader::open(copy_path);
@@ -1550,9 +1541,9 @@ TEST_SUITE("index store file") {
             const std::size_t end = begin + extent_ref.ref.length - 1U;
             for (const std::size_t flip_at : {begin, middle, end}) {
                 REQUIRE(flip_at < original.size());
-                std::vector<std::uint8_t> corrupted = original;
+                dstd::Vector<std::uint8_t> corrupted = original;
                 corrupted[flip_at] ^= 1;
-                const std::string copy_path = temp.file("flip_extent.dfs");
+                const dstd::String copy_path = temp.file("flip_extent.dfs");
                 write_file(copy_path, corrupted);
 
                 auto opened = DataFileReader::open(copy_path);
@@ -1564,7 +1555,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("torn headers still open the newest commit") {
         TempDir temp;
-        const std::string path = temp.file("torn_header.dfs");
+        const dstd::String path = temp.file("torn_header.dfs");
 
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
@@ -1573,40 +1564,40 @@ TEST_SUITE("index store file") {
 
         FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
-        expected.host = dstring("host");
-        expected.label = dstring("label");
+        expected.host = dstd::String("host");
+        expected.label = dstd::String("label");
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             add_five_commit(writer, expected, commit_id);
         }
         expected.last_sequence = 5;
 
-        const std::vector<std::uint8_t> current = read_file(path);
+        const dstd::Vector<std::uint8_t> current = read_file(path);
         REQUIRE(current.size() >= store::engine::FILE_HEADER_BYTES);
         const std::size_t tail_at = header_tail_field_offset(current);
         const std::uint64_t stale_tail = commit_record_offset(3);
         const std::size_t stale_crc_at = record_crc_offset(current, stale_tail);
         REQUIRE(stale_crc_at + 4 <= current.size());
 
-        std::vector<std::uint8_t> stale_header = current;
+        dstd::Vector<std::uint8_t> stale_header = current;
         write_u64_le_at(stale_header, tail_at, stale_tail);
         write_u32_le_at(stale_header, tail_at + 8U, 1);
         write_u32_le_at(stale_header, tail_at + 12U,
                         read_u32_le_at(current, stale_crc_at));
         rewrite_header_crc(stale_header);
 
-        const std::string stale_path = temp.file("torn_header_stale.dfs");
+        const dstd::String stale_path = temp.file("torn_header_stale.dfs");
         write_file(stale_path, stale_header);
         auto opened_stale = DataFileReader::open(stale_path);
         REQUIRE(opened_stale.has_value());
         check_index_equal(*opened_stale, prefix_state(expected, 3));
 
-        std::vector<std::uint8_t> torn = stale_header;
+        dstd::Vector<std::uint8_t> torn = stale_header;
         write_u64_le_at(torn, tail_at, read_u64_le_at(current, tail_at));
         write_u32_le_at(torn, tail_at + 8U,
                         read_u32_le_at(current, tail_at + 8U));
         write_u32_le_at(torn, tail_at + 12U,
                         read_u32_le_at(current, tail_at + 12U));
-        const std::string torn_path = temp.file("torn_header_new_tail.dfs");
+        const dstd::String torn_path = temp.file("torn_header_new_tail.dfs");
         write_file(torn_path, torn);
         auto opened_torn = DataFileReader::open(torn_path);
         REQUIRE(opened_torn.has_value());
@@ -1616,19 +1607,20 @@ TEST_SUITE("index store file") {
     TEST_CASE("data file names keep only safe characters") {
         const auto name = store::engine::data_file_name(
             "my host.example_", 42, 0x0123456789ABCDEFULL, "a/b:c+d");
-        CHECK(to_std(name) == "w-myhost.example_-42-0123456789abcdef-abcd.dfs");
+        CHECK(dstd::String(name) ==
+              "w-myhost.example_-42-0123456789abcdef-abcd.dfs");
     }
 
     TEST_CASE("a scope directory finds every scope in scope order") {
         dstd::Vector<NamespaceItem> namespaces(2);
         namespaces[0].local_id = 1;
-        namespaces[0].name = dstring("b.space");
+        namespaces[0].name = dstd::String("b.space");
         namespaces[0].fold_kind = 1;
         namespaces[1].local_id = 2;
-        namespaces[1].name = dstring("a.space");
+        namespaces[1].name = dstd::String("a.space");
         namespaces[1].format_version = 3;
 
-        const std::vector<std::vector<std::string>> scope_paths = {
+        const dstd::Vector<dstd::Vector<dstd::String>> scope_paths = {
             {"/t/b.pfw"}, {"/t/a.pfw"}, {"/t/a.pfw", "/t/c.pfw"}, {"/t/a"}};
         dstd::Vector<ScopeItem> scopes;
         for (std::size_t i = 0; i < scope_paths.size(); ++i) {
@@ -1636,8 +1628,8 @@ TEST_SUITE("index store file") {
             scope.local_id = static_cast<std::uint32_t>(10 + i);
             scope.kind =
                 scope_paths[i].size() > 1 ? ScopeKind::Files : ScopeKind::File;
-            for (const std::string& path : scope_paths[i]) {
-                scope.paths.push_back(dstring(path));
+            for (const dstd::String& path : scope_paths[i]) {
+                scope.paths.push_back(dstd::String(path));
             }
             scopes.push_back(std::move(scope));
         }
@@ -1651,9 +1643,9 @@ TEST_SUITE("index store file") {
         dstd::Vector<DropItem> drops;
         drops.push_back({1, 10, 9, {}, {}});
 
-        const std::string low = "k0";
-        const std::string mid = "k5";
-        const std::string high = "k9";
+        const dstd::String low = "k0";
+        const dstd::String mid = "k5";
+        const dstd::String high = "k9";
         dstd::Vector<EraseItem> erases;
         EraseItem erase;
         erase.copy_id = 100;
@@ -1662,7 +1654,7 @@ TEST_SUITE("index store file") {
         erase.end_key = bytes_of_string(high);
         erases.push_back(std::move(erase));
         erases.push_back({999, 4, bytes_of_string(low), bytes_of_string(mid)});
-        const std::vector<store::engine::DirectoryCommit> commits = {
+        const dstd::Vector<store::engine::DirectoryCommit> commits = {
             {4, 100, view_of(mid), view_of(high), {}},
             {4, 100, view_of(low), view_of(mid), {}},
             {2, 100, view_of(low), view_of(low), {}},
@@ -1676,7 +1668,7 @@ TEST_SUITE("index store file") {
         REQUIRE(directory.has_value());
         REQUIRE(directory->size() == 5);
 
-        const std::vector<dstd::Pair<std::string, std::vector<std::string>>>
+        const dstd::Vector<dstd::Pair<dstd::String, dstd::Vector<dstd::String>>>
             order = {{"a.space", {"/t/b.pfw"}},
                      {"b.space", {"/t/a"}},
                      {"b.space", {"/t/a.pfw"}},
@@ -1685,14 +1677,14 @@ TEST_SUITE("index store file") {
         for (std::size_t i = 0; i < order.size(); ++i) {
             auto key = directory->key(i);
             REQUIRE(key.has_value());
-            CHECK(std::string(key->name) == order[i].first);
+            CHECK(dstd::String(key->name) == order[i].first);
             REQUIRE(key->paths.size() == order[i].second.size());
             for (std::size_t p = 0; p < key->paths.size(); ++p) {
-                CHECK(std::string(key->paths[p]) == order[i].second[p]);
+                CHECK(dstd::String(key->paths[p]) == order[i].second[p]);
             }
             dstd::Vector<dstd::String> paths;
-            for (const std::string& path : order[i].second) {
-                paths.push_back(dstring(path));
+            for (const dstd::String& path : order[i].second) {
+                paths.push_back(dstd::String(path));
             }
             CHECK(directory->find(key->name, key->format_version, key->kind,
                                   paths) == i);
@@ -1704,7 +1696,7 @@ TEST_SUITE("index store file") {
         CHECK(directory->namespace_range("a.space", 0).first ==
               directory->namespace_range("a.space", 0).second);
         dstd::Vector<dstd::String> absent;
-        absent.push_back(dstring("/t/z.pfw"));
+        absent.push_back(dstd::String("/t/z.pfw"));
         CHECK(directory->find("b.space", 0, ScopeKind::File, absent) ==
               directory->size());
 
@@ -1742,8 +1734,8 @@ TEST_SUITE("index store file") {
         dstd::Vector<ScopeItem> scopes(1);
         scopes[0].local_id = 10;
         scopes[0].kind = ScopeKind::Files;
-        scopes[0].paths.push_back(dstring("/t/a.pfw"));
-        scopes[0].paths.push_back(dstring("/t/b.pfw"));
+        scopes[0].paths.push_back(dstd::String("/t/a.pfw"));
+        scopes[0].paths.push_back(dstd::String("/t/b.pfw"));
 
         dstd::Vector<CopyItem> copies;
         copies.push_back({100, 1, 10, 5, 1, CopyState::Ready, {}});
@@ -1785,7 +1777,7 @@ TEST_SUITE("index store file") {
     TEST_CASE("a scope directory whose slot leaves its bytes does not open") {
         dstd::Vector<NamespaceItem> namespaces(1);
         namespaces[0].local_id = 1;
-        namespaces[0].name = dstring("ns");
+        namespaces[0].name = dstd::String("ns");
         dstd::Vector<ScopeItem> scopes(1);
         scopes[0].local_id = 2;
         dstd::Vector<CopyItem> copies;
@@ -1795,7 +1787,7 @@ TEST_SUITE("index store file") {
         REQUIRE(built.has_value());
         CHECK(store::engine::ScopeDirectory::open(view_of(*built)).has_value());
         dstd::Vector<std::uint8_t> broken = *built;
-        dftracer::utils::dstd::write_u32_le(broken.data() + 4 + 12, 1U << 20);
+        dstd::write_u32_le(broken.data() + 4 + 12, 1U << 20);
         CHECK_FALSE(
             store::engine::ScopeDirectory::open(view_of(broken)).has_value());
         CHECK(store::engine::ScopeDirectory::open(ByteView{}).has_value());
@@ -1803,7 +1795,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("segment runs pack into blocks of one copy") {
         TempDir temp;
-        const std::string path = temp.file("segment_blocks.dfs");
+        const dstd::String path = temp.file("segment_blocks.dfs");
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host.example", "rank-0");
         REQUIRE(created.has_value());
@@ -1840,8 +1832,8 @@ TEST_SUITE("index store file") {
 
         constexpr std::size_t WIDE_SEGMENTS = 640;
         constexpr std::size_t WIDE_KEY_BYTES = 200;
-        std::vector<SegmentData> wide;
-        std::vector<ExtentRef> wide_extents;
+        dstd::Vector<SegmentData> wide;
+        dstd::Vector<ExtentRef> wide_extents;
         wide.reserve(WIDE_SEGMENTS);
         wide_extents.reserve(WIDE_SEGMENTS);
         for (std::size_t i = 0; i < WIDE_SEGMENTS; ++i) {
@@ -1875,7 +1867,7 @@ TEST_SUITE("index store file") {
 
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
-        const std::vector<ClosedRun> runs = closed_runs(*reader);
+        const dstd::Vector<ClosedRun> runs = closed_runs(*reader);
 
         const std::size_t wide_entry_bytes = 52 + 2 * (2 + WIDE_KEY_BYTES);
         REQUIRE(WIDE_SEGMENTS * wide_entry_bytes >
@@ -1914,9 +1906,10 @@ TEST_SUITE("index store file") {
         CHECK(small_block.entries[0].offset_in_extent == 0);
         CHECK(small_block.entries[0].length == first.bytes.size());
         CHECK(small_block.entries[0].entry_count == first.entry_count);
-        CHECK(small_block.entries[0].first_key ==
-              std::string(reinterpret_cast<const char*>(first.first_key.data()),
-                          first.first_key.size()));
+        CHECK(
+            small_block.entries[0].first_key ==
+            dstd::String(reinterpret_cast<const char*>(first.first_key.data()),
+                         first.first_key.size()));
 
         const SegmentBlockView wide_block =
             read_segment_block(*reader, wide_handle);
@@ -1939,7 +1932,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("a space report accounts for every byte of a closed file") {
         TempDir temp;
-        const std::string path = temp.file("space.dfs");
+        const dstd::String path = temp.file("space.dfs");
         constexpr std::size_t SPACE_EXTENT_SIZE = std::size_t{1} << 20;
         auto created = DataFileWriter::create(path, SPACE_EXTENT_SIZE,
                                               "host.example", "rank-0");
@@ -2024,8 +2017,8 @@ TEST_SUITE("index store file") {
         }
 
         SegmentBuilder large;
-        const std::string large_key = "large-key";
-        const std::string large_value(300U * 1024U, 'x');
+        const dstd::String large_key = "large-key";
+        const dstd::String large_value(300U * 1024U, 'x');
         large.add(view_of(large_key), view_of(large_value));
         auto large_bytes = large.seal(nullptr, nullptr, nullptr);
         REQUIRE(large_bytes.has_value());
@@ -2051,8 +2044,7 @@ TEST_SUITE("index store file") {
         auto report = store::engine::space_report(path);
         REQUIRE(report.has_value());
         const store::engine::SpaceReport& space = *report;
-        CHECK(space.file_bytes ==
-              dftracer::utils::dstd::fs::file_size(path).value());
+        CHECK(space.file_bytes == dstd::fs::file_size(path).value());
         CHECK(space.header_bytes == store::engine::FILE_HEADER_BYTES);
         CHECK(space.header_bytes + space.extent_bytes + space.record_bytes +
                   space.gap_bytes + space.segment_block_bytes +
@@ -2108,7 +2100,7 @@ TEST_SUITE("index store file") {
                   space.extent_page_table_bytes + space.page_bytes +
                   space.extent_padding_bytes);
 
-        const std::vector<ClosedRun> runs = closed_runs(*opened);
+        const dstd::Vector<ClosedRun> runs = closed_runs(*opened);
         CHECK(space.segment_entries == EXPECTED_SEGMENT_ENTRIES);
         CHECK(space.segment_entries == runs.size());
         CHECK(space.segment_key_bytes > 0);
@@ -2137,7 +2129,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("a space report reads every leaf of a directory") {
         TempDir temp;
-        const std::string path = temp.file("space_leaves.dfs");
+        const dstd::String path = temp.file("space_leaves.dfs");
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
@@ -2163,8 +2155,7 @@ TEST_SUITE("index store file") {
         auto report = store::engine::space_report(path);
         REQUIRE(report.has_value());
         const store::engine::SpaceReport& space = *report;
-        CHECK(space.file_bytes ==
-              dftracer::utils::dstd::fs::file_size(path).value());
+        CHECK(space.file_bytes == dstd::fs::file_size(path).value());
         CHECK(space.extents == 0);
         CHECK(space.extent_bytes == 0);
         CHECK(space.pages == 0);
@@ -2185,7 +2176,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("a space report refuses a file that is not closed") {
         TempDir temp;
-        const std::string path = temp.file("space_open.dfs");
+        const dstd::String path = temp.file("space_open.dfs");
         auto created =
             DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());

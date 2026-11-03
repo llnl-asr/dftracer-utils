@@ -3,36 +3,36 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/group_fold.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <optional>
-#include <string>
 #include <string_view>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace df = dftracer::utils::dataframe;
 using dftracer::utils::duql::FoldAgg;
 using dftracer::utils::duql::FoldOp;
 using dftracer::utils::duql::GroupFold;
-using Cells =
-    std::vector<dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>>;
+using Cells = dstd::Vector<dstd::Optional<dstd::String>>;
 
 namespace {
 
 df::Series strs(const Cells& cells) {
-    std::vector<dftracer::utils::dstd::StringView> v;
-    std::vector<std::uint8_t> valid((cells.size() + 7) / 8, 0);
+    dstd::Vector<dstd::StringView> v;
+    dstd::Vector<std::uint8_t> valid((cells.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < cells.size(); ++i) {
-        v.emplace_back(cells[i] ? dftracer::utils::dstd::StringView(*cells[i])
-                                : dftracer::utils::dstd::StringView());
+        v.emplace_back(cells[i] ? dstd::StringView(*cells[i])
+                                : dstd::StringView());
         if (cells[i]) valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     }
     return df::Series::strings(v, valid.data());
 }
 
-df::Series ints(const std::vector<std::int64_t>& v) {
+df::Series ints(const dstd::Vector<std::int64_t>& v) {
     return df::Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
@@ -55,7 +55,7 @@ df::DataFrame fold(df::DataType key_type, Batches... bs) {
     return g.finish({"k", "d"});
 }
 
-std::vector<std::int64_t> counts(const df::DataFrame& f) {
+dstd::Vector<std::int64_t> counts(const df::DataFrame& f) {
     const df::Series& d = f.columns[1];
     return {d.data<std::int64_t>(), d.data<std::int64_t>() + d.length()};
 }
@@ -63,75 +63,70 @@ std::vector<std::int64_t> counts(const df::DataFrame& f) {
 }  // namespace
 
 TEST_CASE("count_distinct by a string key keeps first-seen order and nulls") {
-    const df::DataFrame out = fold(
-        df::scalar(df::TypeId::String),
-        batch(strs({"a", "b", "a", dftracer::utils::dstd::nullopt, "b", "a"}),
-              strs({"x", "y", "x", "z", dftracer::utils::dstd::nullopt, "w"})),
-        batch(strs({"c", dftracer::utils::dstd::nullopt, "a", "b"}),
-              strs({"x", "z", "x", "y"})));
+    const df::DataFrame out =
+        fold(df::scalar(df::TypeId::String),
+             batch(strs({"a", "b", "a", dstd::nullopt, "b", "a"}),
+                   strs({"x", "y", "x", "z", dstd::nullopt, "w"})),
+             batch(strs({"c", dstd::nullopt, "a", "b"}),
+                   strs({"x", "z", "x", "y"})));
     REQUIRE(out.num_rows() == 4);
     CHECK(out.columns[0].string_at(0) == "a");
     CHECK(out.columns[0].string_at(1) == "b");
     CHECK(out.columns[0].is_null(2));
     CHECK(out.columns[0].string_at(3) == "c");
-    CHECK(counts(out) == std::vector<std::int64_t>{2, 1, 1, 1});
+    CHECK(counts(out) == dstd::Vector<std::int64_t>{2, 1, 1, 1});
 }
 
 TEST_CASE("a string that spells the null key is its own group") {
     const df::DataFrame out =
         fold(df::scalar(df::TypeId::String),
-             batch(strs({dftracer::utils::dstd::String(1, '\0'),
-                         dftracer::utils::dstd::nullopt, ""}),
+             batch(strs({dstd::String(1, '\0'), dstd::nullopt, ""}),
                    strs({"p", "q", "r"})));
     REQUIRE(out.num_rows() == 3);
-    CHECK(counts(out) == std::vector<std::int64_t>{1, 1, 1});
+    CHECK(counts(out) == dstd::Vector<std::int64_t>{1, 1, 1});
 }
 
 TEST_CASE("count_distinct over a JSON column reads values, not text") {
     const df::DataFrame out =
         fold(df::scalar(df::TypeId::String),
              batch(strs({"a", "a", "a", "a"}),
-                   strs({"1", "1.0", "\"1\"", dftracer::utils::dstd::nullopt})
-                       .as_json()));
+                   strs({"1", "1.0", "\"1\"", dstd::nullopt}).as_json()));
     REQUIRE(out.num_rows() == 1);
-    CHECK(counts(out) == std::vector<std::int64_t>{2});
+    CHECK(counts(out) == dstd::Vector<std::int64_t>{2});
 }
 
 TEST_CASE("count_distinct by an integer key takes the general path") {
-    const df::DataFrame out =
-        fold(df::scalar(df::TypeId::Int64),
-             batch(ints({2, 1, 2, 1, 3}),
-                   strs({"a", "a", "a", "b", dftracer::utils::dstd::nullopt})),
-             batch(ints({3, 2}), strs({"c", "b"})));
+    const df::DataFrame out = fold(
+        df::scalar(df::TypeId::Int64),
+        batch(ints({2, 1, 2, 1, 3}), strs({"a", "a", "a", "b", dstd::nullopt})),
+        batch(ints({3, 2}), strs({"c", "b"})));
     REQUIRE(out.num_rows() == 3);
     const std::int64_t* k = out.columns[0].data<std::int64_t>();
     CHECK(k[0] == 2);
     CHECK(k[1] == 1);
     CHECK(k[2] == 3);
-    CHECK(counts(out) == std::vector<std::int64_t>{2, 2, 1});
+    CHECK(counts(out) == dstd::Vector<std::int64_t>{2, 2, 1});
 }
 
 TEST_CASE("a JSON batch and a plain batch share groups and distinct values") {
-    const df::DataFrame mixed =
-        fold(df::scalar(df::TypeId::String),
-             batch(strs({"a", "a\"b", "a", dftracer::utils::dstd::nullopt}),
-                   strs({"x", "q\"r", "x", "z"})),
-             batch(strs({"\"a\"", "\"a\\\"b\"", dftracer::utils::dstd::nullopt,
-                         "\"c\""})
-                       .as_json(),
-                   strs({"\"x\"", "\"q\\\"r\"", "\"z\"", "\"x\""}).as_json()));
+    const df::DataFrame mixed = fold(
+        df::scalar(df::TypeId::String),
+        batch(strs({"a", "a\"b", "a", dstd::nullopt}),
+              strs({"x", "q\"r", "x", "z"})),
+        batch(strs({"\"a\"", "\"a\\\"b\"", dstd::nullopt, "\"c\""}).as_json(),
+              strs({"\"x\"", "\"q\\\"r\"", "\"z\"", "\"x\""}).as_json()));
     const df::DataFrame plain =
         fold(df::scalar(df::TypeId::String),
-             batch(strs({"a", "a\"b", "a", dftracer::utils::dstd::nullopt}),
+             batch(strs({"a", "a\"b", "a", dstd::nullopt}),
                    strs({"x", "q\"r", "x", "z"})),
-             batch(strs({"a", "a\"b", dftracer::utils::dstd::nullopt, "c"}),
+             batch(strs({"a", "a\"b", dstd::nullopt, "c"}),
                    strs({"x", "q\"r", "z", "x"})));
     REQUIRE(mixed.num_rows() == 4);
     REQUIRE(plain.num_rows() == 4);
     for (std::int64_t i = 0; i < 4; ++i)
         CHECK(mixed.columns[0].is_null(i) == plain.columns[0].is_null(i));
     CHECK(counts(mixed) == counts(plain));
-    CHECK(counts(mixed) == std::vector<std::int64_t>{1, 1, 1, 1});
+    CHECK(counts(mixed) == dstd::Vector<std::int64_t>{1, 1, 1, 1});
 }
 
 TEST_CASE("a JSON number and the same text stay distinct") {
@@ -142,5 +137,5 @@ TEST_CASE("a JSON number and the same text stay distinct") {
              batch(strs({"5", "5"}), strs({"5", "7"})));
     REQUIRE(out.num_rows() == 2);
     CHECK(out.columns[0].string_at(0) == "5");
-    CHECK(counts(out) == std::vector<std::int64_t>{2, 2});
+    CHECK(counts(out) == dstd::Vector<std::int64_t>{2, 2});
 }

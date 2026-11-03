@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/index.h>
@@ -21,8 +24,6 @@
 #include <testing_utilities.h>
 
 #include <atomic>
-#include <fstream>
-#include <sstream>
 #include <thread>
 
 using namespace dftracer::utils;
@@ -35,23 +36,23 @@ constexpr std::uint64_t MIB = std::uint64_t{1} << 20;
 
 // Small gzip members, so the file has about a thousand chunks and a small
 // budget forces the bloom tier to spill.
-std::string write_trace(const std::string& dir, const std::string& name,
-                        int events) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
+                         int events) {
+    dstd::String out;
+    out += "[\n";
     std::uint64_t ts = 1000000;
     for (int i = 0; i < events; ++i) {
         ts += 7 + static_cast<std::uint64_t>(i % 13);
-        out << R"({"id":)" << i << R"(,"name":"op)" << (i / 50) % 7
-            << R"(","cat":"C)" << i % 3 << R"(","pid":)" << 1 + i % 4
-            << R"(,"tid":)" << 10 + i % 4 << R"(,"ph":"X","ts":)" << ts
-            << R"(,"dur":)" << 5 + i % 97 << R"(,"args":{"k)" << i % 600
-            << R"(":)" << i % 50 << "}}\n";
+        out += common::str_cat(R"({"id":)", i, R"(,"name":"op)", (i / 50) % 7,
+                               R"(","cat":"C)", i % 3, R"(","pid":)", 1 + i % 4,
+                               R"(,"tid":)", 10 + i % 4, R"(,"ph":"X","ts":)",
+                               ts, R"(,"dur":)", 5 + i % 97, R"(,"args":{"k)",
+                               i % 600, R"(":)", i % 50, "}}\n");
     }
-    out << "]\n";
+    out += "]\n";
     const auto plain = dir + "/" + name + ".pfw";
     {
-        std::ofstream(plain.c_str()) << out.str();
+        (void)dstd::fs::write_file(dstd::PathView(plain), out);
     }
     const auto gz = plain + ".gz";
     REQUIRE(
@@ -61,7 +62,7 @@ std::string write_trace(const std::string& dir, const std::string& name,
 }
 
 build::IndexBuildBatchResult run_build(
-    const std::string& file, const std::string& index_dir,
+    const dstd::String& file, const dstd::String& index_dir,
     std::uint64_t memory_budget,
     build::IndexBuildBatchConfig::AggFoldFactory agg_fold_factory = {}) {
     build::IndexBuildBatchResult out;
@@ -82,8 +83,8 @@ build::IndexBuildBatchResult run_build(
     return out;
 }
 
-std::string index_root(const std::string& file, const std::string& dir) {
-    return std::string(idx::store::internal::normalize_index_root(
+dstd::String index_root(const dstd::String& file, const dstd::String& dir) {
+    return dstd::String(idx::store::internal::normalize_index_root(
         trace::internal::determine_index_path(file, dir)));
 }
 
@@ -101,7 +102,7 @@ TEST_SUITE("SpillPublish") {
         std::atomic<bool> stop{false};
         std::atomic<int> visible{0};
         std::atomic<int> without_tier{0};
-        std::thread poller([&] {
+        dstd::Thread poller([&] {
             while (!stop.load()) {
                 auto snapshot = index->snapshot();
                 if (snapshot) {
@@ -139,7 +140,7 @@ TEST_SUITE("SpillPublish") {
         const auto dir = env.get_dir() + "/idx";
         const auto logical = idx::store::internal::get_logical_path(file);
         const auto path =
-            std::string(trace::internal::determine_index_path(file, dir));
+            dstd::String(trace::internal::determine_index_path(file, dir));
         auto index = idx::Index::open(index_root(file, dir));
         REQUIRE(index);
 
@@ -152,7 +153,7 @@ TEST_SUITE("SpillPublish") {
         std::atomic<bool> stop{false};
         std::atomic<int> visible{0};
         std::atomic<int> without_rows{0};
-        std::thread poller([&] {
+        dstd::Thread poller([&] {
             while (!stop.load()) {
                 auto read = idx::plan::open_snapshot(path);
                 if (read) {

@@ -15,6 +15,8 @@
 
 #include <initializer_list>
 
+using namespace dftracer::utils;
+
 namespace dataframe = dftracer::utils::dataframe;
 
 namespace views = dftracer::utils::trace::views;
@@ -24,10 +26,9 @@ using views::JoinType;
 namespace {
 
 // A DataFrame of cat(String) + one Float64 value column.
-dataframe::DataFrame make(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& cats,
-    const dftracer::utils::dstd::String& vname,
-    const dftracer::utils::dstd::Vector<double>& vals) {
+dataframe::DataFrame make(const dstd::Vector<dstd::String>& cats,
+                          const dstd::String& vname,
+                          const dstd::Vector<double>& vals) {
     dataframe::DataFrame b;
     b.names = {"cat", vname};
     b.columns.push_back(dataframe::Series::strings(cats));
@@ -36,52 +37,46 @@ dataframe::DataFrame make(
     return b;
 }
 
-std::int64_t col_of(const dataframe::DataFrame& b,
-                    const dftracer::utils::dstd::String& name) {
+std::int64_t col_of(const dataframe::DataFrame& b, const dstd::String& name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return static_cast<std::int64_t>(i);
     return -1;
 }
-std::int64_t row_of(const dataframe::DataFrame& b,
-                    const dftracer::utils::dstd::String& cat) {
+std::int64_t row_of(const dataframe::DataFrame& b, const dstd::String& cat) {
     for (std::int64_t i = 0; i < b.num_rows(); ++i)
         if (b.columns[0].string_at(i) == cat) return i;
     return -1;
 }
-dftracer::utils::dstd::Set<dftracer::utils::dstd::String> keys_of(
-    const dataframe::DataFrame& b) {
-    dftracer::utils::dstd::Set<dftracer::utils::dstd::String> out;
+dstd::Set<dstd::String> keys_of(const dataframe::DataFrame& b) {
+    dstd::Set<dstd::String> out;
     for (std::int64_t i = 0; i < b.num_rows(); ++i)
-        out.insert(dftracer::utils::dstd::String(b.columns[0].string_at(i)));
+        out.insert(dstd::String(b.columns[0].string_at(i)));
     return out;
 }
-double num(const dataframe::DataFrame& b,
-           const dftracer::utils::dstd::String& col, std::int64_t row) {
+double num(const dataframe::DataFrame& b, const dstd::String& col,
+           std::int64_t row) {
     return b.columns[static_cast<std::size_t>(col_of(b, col))]
         .data<double>()[row];
 }
-bool is_null(const dataframe::DataFrame& b,
-             const dftracer::utils::dstd::String& col, std::int64_t row) {
+bool is_null(const dataframe::DataFrame& b, const dstd::String& col,
+             std::int64_t row) {
     return b.columns[static_cast<std::size_t>(col_of(b, col))].is_null(row);
 }
 
 // left = cat -> count over {a,b,c}; right = cat -> sum over {b,c,d}.
-dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cats_of(
-    std::initializer_list<const char*> names) {
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
+dstd::Vector<dstd::String> cats_of(std::initializer_list<const char*> names) {
+    dstd::Vector<dstd::String> out;
     out.reserve(names.size());
     for (const char* n : names) out.emplace_back(n);
     return out;
 }
 
 dataframe::DataFrame build_left() {
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cats =
-        cats_of({"a", "b", "c"});
+    const dstd::Vector<dstd::String> cats = cats_of({"a", "b", "c"});
     return make(cats, "count", {10, 25, 30});
 }
 dataframe::DataFrame build_right() {
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cats =
-        cats_of({"b", "c", "d"});
+    const dstd::Vector<dstd::String> cats = cats_of({"b", "c", "d"});
     return make(cats, "sum", {2.5, 3.5, 4.0});
 }
 
@@ -91,9 +86,7 @@ TEST_SUITE("ResultJoin") {
     TEST_CASE("INNER keeps only the key intersection") {
         dataframe::DataFrame j =
             join_batches(build_left(), build_right(), 1, JoinType::Inner);
-        CHECK(keys_of(j) ==
-              dftracer::utils::dstd::Set<dftracer::utils::dstd::String>{"b",
-                                                                        "c"});
+        CHECK(keys_of(j) == dstd::Set<dstd::String>{"b", "c"});
         CHECK(col_of(j, "l_count") >= 0);
         CHECK(col_of(j, "r_sum") >= 0);
         CHECK(num(j, "l_count", row_of(j, "b")) == doctest::Approx(25.0));
@@ -104,9 +97,7 @@ TEST_SUITE("ResultJoin") {
     TEST_CASE("LEFT keeps all left keys; unmatched null the right side") {
         dataframe::DataFrame j =
             join_batches(build_left(), build_right(), 1, JoinType::Left);
-        CHECK(keys_of(j) ==
-              dftracer::utils::dstd::Set<dftracer::utils::dstd::String>{
-                  "a", "b", "c"});
+        CHECK(keys_of(j) == dstd::Set<dstd::String>{"a", "b", "c"});
         CHECK(num(j, "l_count", row_of(j, "a")) == doctest::Approx(10.0));
         CHECK(is_null(j, "r_sum", row_of(j, "a")));
         CHECK_FALSE(is_null(j, "r_sum", row_of(j, "b")));
@@ -116,9 +107,7 @@ TEST_SUITE("ResultJoin") {
     TEST_CASE("RIGHT keeps all right keys; unmatched null the left side") {
         dataframe::DataFrame j =
             join_batches(build_left(), build_right(), 1, JoinType::Right);
-        CHECK(keys_of(j) ==
-              dftracer::utils::dstd::Set<dftracer::utils::dstd::String>{
-                  "b", "c", "d"});
+        CHECK(keys_of(j) == dstd::Set<dstd::String>{"b", "c", "d"});
         CHECK(is_null(j, "l_count", row_of(j, "d")));
         CHECK(num(j, "r_sum", row_of(j, "d")) == doctest::Approx(4.0));
         CHECK(num(j, "l_count", row_of(j, "c")) == doctest::Approx(30.0));
@@ -127,9 +116,7 @@ TEST_SUITE("ResultJoin") {
     TEST_CASE("FULL keeps the key union, nulling each absent side") {
         dataframe::DataFrame j =
             join_batches(build_left(), build_right(), 1, JoinType::Full);
-        CHECK(keys_of(j) ==
-              dftracer::utils::dstd::Set<dftracer::utils::dstd::String>{
-                  "a", "b", "c", "d"});
+        CHECK(keys_of(j) == dstd::Set<dstd::String>{"a", "b", "c", "d"});
         CHECK(is_null(j, "r_sum", row_of(j, "a")));
         CHECK(is_null(j, "l_count", row_of(j, "d")));
         CHECK_FALSE(is_null(j, "l_count", row_of(j, "b")));
@@ -139,9 +126,7 @@ TEST_SUITE("ResultJoin") {
     TEST_CASE("LEFT_SEMI keeps matched left rows, left columns only") {
         dataframe::DataFrame j =
             join_batches(build_left(), build_right(), 1, JoinType::LeftSemi);
-        CHECK(keys_of(j) ==
-              dftracer::utils::dstd::Set<dftracer::utils::dstd::String>{"b",
-                                                                        "c"});
+        CHECK(keys_of(j) == dstd::Set<dstd::String>{"b", "c"});
         CHECK(col_of(j, "l_count") >= 0);
         CHECK(col_of(j, "r_sum") == -1);  // no right columns
         CHECK(num(j, "l_count", row_of(j, "b")) == doctest::Approx(25.0));
@@ -150,8 +135,7 @@ TEST_SUITE("ResultJoin") {
     TEST_CASE("LEFT_ANTI keeps unmatched left rows, left columns only") {
         dataframe::DataFrame j =
             join_batches(build_left(), build_right(), 1, JoinType::LeftAnti);
-        CHECK(keys_of(j) ==
-              dftracer::utils::dstd::Set<dftracer::utils::dstd::String>{"a"});
+        CHECK(keys_of(j) == dstd::Set<dstd::String>{"a"});
         CHECK(col_of(j, "r_sum") == -1);
         CHECK(num(j, "l_count", row_of(j, "a")) == doctest::Approx(10.0));
     }
@@ -172,14 +156,14 @@ TEST_SUITE("ResultJoin") {
         l.columns.push_back(dataframe::Series::strings({"1", "1", "2"}));
         l.columns.push_back(
             dataframe::Series::strings({"read", "write", "read"}));
-        dftracer::utils::dstd::Vector<double> lv{1.0, 2.0, 3.0};
+        dstd::Vector<double> lv{1.0, 2.0, 3.0};
         l.columns.push_back(dataframe::Series::flat_f64(lv.data(), 3));
         dataframe::DataFrame r;
         r.names = {"pid", "name", "sum"};
         r.columns.push_back(dataframe::Series::strings({"1", "2", "2"}));
         r.columns.push_back(
             dataframe::Series::strings({"write", "read", "open"}));
-        dftracer::utils::dstd::Vector<double> rv{9.0, 8.0, 7.0};
+        dstd::Vector<double> rv{9.0, 8.0, 7.0};
         r.columns.push_back(dataframe::Series::flat_f64(rv.data(), 3));
 
         dataframe::DataFrame j = join_batches(l, r, 2, JoinType::Inner);

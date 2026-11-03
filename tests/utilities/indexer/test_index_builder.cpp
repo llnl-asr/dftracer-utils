@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
@@ -21,8 +26,6 @@
 #include <testing_utilities.h>
 #include <unistd.h>
 
-#include <memory>
-
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::store;
@@ -35,14 +38,14 @@ namespace {
 // caller concern (resolve_and_build pre-filters), so `success` == indexed.
 struct BuildOutcome {
     bool success = false;
-    std::string index_path;
+    dstd::String index_path;
     std::size_t total_lines = 0;
 };
 
-BuildOutcome build_one(const std::string& gz, bool force = false) {
+BuildOutcome build_one(const dstd::String& gz, bool force = false) {
     BuildOutcome out;
     run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto cfg = std::make_shared<IndexBuildBatchConfig>();
+        auto cfg = dstd::make_shared<IndexBuildBatchConfig>();
         cfg->file_paths = {dstd::String(dstd::StringView(gz))};
         cfg->force_rebuild = force;
         auto r = co_await BatchBuilder::process(std::move(cfg));
@@ -58,11 +61,11 @@ BuildOutcome build_one(const std::string& gz, bool force = false) {
 
 // Build a gzip file out of `member_texts`, one gzip member each, and return
 // its path plus the compressed offset of every member.
-dstd::Pair<std::string, std::vector<std::uint64_t>> write_multi_member_gz(
-    const std::vector<std::string>& member_texts) {
+dstd::Pair<dstd::String, dstd::Vector<std::uint64_t>> write_multi_member_gz(
+    const dstd::Vector<dstd::String>& member_texts) {
     using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
-    std::vector<std::uint8_t> bytes;
-    std::vector<std::uint64_t> offsets;
+    dstd::Vector<std::uint8_t> bytes;
+    dstd::Vector<std::uint64_t> offsets;
     for (const auto& text : member_texts) {
         offsets.push_back(bytes.size());
         GzipMemberCompressor comp;
@@ -77,22 +80,22 @@ dstd::Pair<std::string, std::vector<std::uint64_t>> write_multi_member_gz(
     auto dir = make_unique_test_path("members");
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     auto path = dir / "members.pfw.gz";
-    std::ofstream ofs(path.c_str(), std::ios::binary);
-    ofs.write(reinterpret_cast<const char*>(bytes.data()),
-              static_cast<std::streamsize>(bytes.size()));
-    ofs.close();
-    return {std::string(path.str()), offsets};
+    dstd::String ofs;
+    ofs.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    (void)dstd::fs::write_file(dstd::PathView(path), ofs);
+    return {dstd::String(path.str()), offsets};
 }
 
-std::string dftu_lines(int start_id, int count,
-                       const std::string& name = "op") {
-    std::string out;
+dstd::String dftu_lines(int start_id, int count,
+                        const dstd::String& name = "op") {
+    dstd::String out;
     for (int i = 0; i < count; ++i) {
-        out +=
-            "{\"id\":" + std::to_string(start_id + i) + ",\"name\":\"" + name +
-            "\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
-            "\"ts\":" +
-            std::to_string(1000 + start_id + i) + ",\"dur\":10,\"ph\":\"X\"}\n";
+        out += "{\"id\":" + dstd::to_string(start_id + i) + ",\"name\":\"" +
+               name +
+               "\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
+               "\"ts\":" +
+               dstd::to_string(1000 + start_id + i) +
+               ",\"dur\":10,\"ph\":\"X\"}\n";
     }
     return out;
 }
@@ -110,7 +113,7 @@ TEST_SUITE("IndexBuilder") {
         using dftracer::utils::index::gzip::GzipMember;
 
         // Members deliberately end mid-line so lines straddle boundaries.
-        const std::vector<std::string> texts = {
+        const dstd::Vector<dstd::String> texts = {
             "line1\nlineA_par",      // ends mid-line
             "t1\nlineB\nlineC_par",  // starts + ends mid-line
             "t2\nline4\n",           // starts mid-line
@@ -156,7 +159,7 @@ TEST_SUITE("IndexBuilder") {
 
     TEST_CASE("Build checkpoint-only index") {
         TestEnvironment env(valgrind_scale(1000, 10));
-        std::string gz_file = env.create_dft_test_gzip_file(
+        dstd::String gz_file = env.create_dft_test_gzip_file(
             static_cast<int>(valgrind_scale(1000, 10)));
 
         auto result = build_one(gz_file);
@@ -166,24 +169,25 @@ TEST_SUITE("IndexBuilder") {
     }
 
     TEST_CASE("Files under different index roots each build into their own") {
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (const char* name : {"a", "b"}) {
             auto dir = make_unique_test_path(name);
             REQUIRE(dstd::fs::create_directories(dir).has_value());
-            const std::string path = std::string((dir / "t.pfw.gz").str());
-            const std::string text = dftu_lines(0, 20);
+            const dstd::String path = dstd::String((dir / "t.pfw.gz").str());
+            const dstd::String text = dftu_lines(0, 20);
             dftracer::utils::utilities::fileio::compress::GzipMemberCompressor
                 comp;
             auto member = comp.compress_member(text.data(), text.size());
             REQUIRE(member.has_value());
-            std::ofstream(path.c_str(), std::ios::binary)
-                .write(reinterpret_cast<const char*>(member->data()),
-                       static_cast<std::streamsize>(member->size()));
+            (void)dstd::fs::write_file(
+                dstd::PathView(path),
+                dstd::StringView(reinterpret_cast<const char*>(member->data()),
+                                 member->size()));
             files.push_back(path);
         }
         IndexBuildBatchResult r;
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto cfg = std::make_shared<IndexBuildBatchConfig>();
+            auto cfg = dstd::make_shared<IndexBuildBatchConfig>();
             for (const auto& file : files) cfg->file_paths.emplace_back(file);
             r = co_await BatchBuilder::process(std::move(cfg));
             co_return;
@@ -192,7 +196,7 @@ TEST_SUITE("IndexBuilder") {
         REQUIRE(r.results.size() == 2);
         for (std::size_t i = 0; i < files.size(); ++i) {
             CAPTURE(files[i]);
-            const std::string idx = std::string(
+            const dstd::String idx = dstd::String(
                 dftracer::utils::trace::internal::determine_index_path(files[i],
                                                                        ""));
             CHECK(dstd::StringView(r.results[i].index_path) ==
@@ -204,7 +208,7 @@ TEST_SUITE("IndexBuilder") {
 
     TEST_CASE("Build with bloom") {
         TestEnvironment env(valgrind_scale(1000, 10));
-        std::string gz_file = env.create_dft_test_gzip_file(
+        dstd::String gz_file = env.create_dft_test_gzip_file(
             static_cast<int>(valgrind_scale(1000, 10)));
 
         auto result = build_one(gz_file);
@@ -218,7 +222,7 @@ TEST_SUITE("IndexBuilder") {
     }
 
     TEST_CASE("Member table covers every gzip member") {
-        const std::vector<std::string> texts = {
+        const dstd::Vector<dstd::String> texts = {
             dftu_lines(0, 40), dftu_lines(40, 25), dftu_lines(65, 35)};
         auto [gz_file, c_offsets] = write_multi_member_gz(texts);
         const std::uint64_t file_size = dstd::fs::file_size(gz_file).value();
@@ -251,10 +255,10 @@ TEST_SUITE("IndexBuilder") {
     TEST_CASE("Member scan finds every member across scan windows") {
         // Hex text compresses to about half, so the members span several
         // scan windows and many headers sit near a window edge.
-        std::vector<std::string> texts;
+        dstd::Vector<dstd::String> texts;
         std::uint64_t state = 0x9E3779B97F4A7C15ULL;
         while (texts.size() < 400) {
-            std::string t;
+            dstd::String t;
             const std::size_t lines = 600 + texts.size() % 97;
             for (std::size_t l = 0; l < lines; ++l) {
                 for (int k = 0; k < 6; ++k) {
@@ -296,7 +300,7 @@ TEST_SUITE("IndexBuilder") {
     }
 
     TEST_CASE("Pruner chunks are gzip members") {
-        const std::vector<std::string> texts = {
+        const dstd::Vector<dstd::String> texts = {
             dftu_lines(0, 40), dftu_lines(40, 25, "rare"), dftu_lines(65, 35)};
         auto [gz_file, c_offsets] = write_multi_member_gz(texts);
 
@@ -353,7 +357,7 @@ TEST_SUITE("IndexBuilder") {
     // No builder-level skip: a repeat build re-indexes and must stay valid.
     TEST_CASE("Repeat build re-indexes and stays valid") {
         TestEnvironment env(valgrind_scale(1000, 10));
-        std::string gz_file = env.create_dft_test_gzip_file(
+        dstd::String gz_file = env.create_dft_test_gzip_file(
             static_cast<int>(valgrind_scale(1000, 10)));
 
         auto first = build_one(gz_file);
@@ -369,7 +373,7 @@ TEST_SUITE("IndexBuilder") {
 
     TEST_CASE("Force rebuild") {
         TestEnvironment env(valgrind_scale(1000, 10));
-        std::string gz_file = env.create_dft_test_gzip_file(
+        dstd::String gz_file = env.create_dft_test_gzip_file(
             static_cast<int>(valgrind_scale(1000, 10)));
 
         auto first = build_one(gz_file);
@@ -382,7 +386,7 @@ TEST_SUITE("IndexBuilder") {
     TEST_CASE("Result has correct line count") {
         const std::size_t n_idx_lines = valgrind_scale(1000, 10);
         TestEnvironment env(n_idx_lines);
-        std::string gz_file =
+        dstd::String gz_file =
             env.create_dft_test_gzip_file(static_cast<int>(n_idx_lines));
 
         auto result = build_one(gz_file);

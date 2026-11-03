@@ -3,11 +3,14 @@
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/coro/join_handle.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <coroutine>
 #include <stdexcept>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::coro;
 
@@ -62,7 +65,7 @@ TEST_CASE("Coro - Exception captured in promise") {
         std::rethrow_exception(promise.exception);
     } catch (const std::runtime_error& e) {
         caught = true;
-        CHECK(std::string(e.what()) == "coro error");
+        CHECK(dstd::String(e.what()) == "coro error");
     }
     CHECK(caught == true);
 }
@@ -177,7 +180,7 @@ TEST_CASE("JoinHandle - One coro, waits then completes") {
 TEST_CASE("JoinHandle - N coros, completes when last finishes") {
     JoinHandle jh;
 
-    std::vector<Coro> coros;
+    dstd::Vector<Coro> coros;
     // Must keep lambdas alive -- but these are stateless, so temporaries
     // would be fine. However, for consistency, use a named maker.
     auto make = []() -> Coro { co_return; };

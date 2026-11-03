@@ -9,6 +9,8 @@
 
 #include <cstring>
 
+using namespace dftracer::utils;
+
 using namespace dftracer::utils::duql;
 using dftracer::utils::json::JsonValue;
 
@@ -265,7 +267,7 @@ TEST_CASE("Query::fields - no duplicates for repeated field") {
 }
 
 TEST_CASE("Query copies own their field views and any paths") {
-    dftracer::utils::dstd::Optional<Query> copy;
+    dstd::Optional<Query> copy;
     {
         auto q = Query::from_string(R"(any(tags) == "a" and cat == "POSIX")");
         REQUIRE(q.has_value());
@@ -273,8 +275,7 @@ TEST_CASE("Query copies own their field views and any paths") {
     }
     CHECK(copy->references("cat"));
     CHECK(copy->references("tags"));
-    CHECK(copy->any_paths() ==
-          dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"tags"});
+    CHECK(copy->any_paths() == dstd::Vector<dstd::String>{"tags"});
 }
 
 TEST_CASE("Query::evaluate keeps only TRUE records") {
@@ -295,6 +296,6 @@ TEST_CASE("Query::evaluate keeps only TRUE records") {
     CHECK_FALSE(q->evaluate(m));
     m["x"] = std::int64_t{2};
     CHECK(q->evaluate(m));
-    m["x"] = dftracer::utils::dstd::String();
+    m["x"] = dstd::String();
     CHECK_FALSE(q->evaluate(m));
 }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/any.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
 
@@ -8,9 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <stdexcept>
-#include <string>
 #include <typeinfo>
 #include <utility>
 
@@ -107,20 +107,20 @@ TEST_CASE("copy and move keep the value and destroy each one once") {
 }
 
 TEST_CASE("any_cast returns the value or throws bad_any_cast") {
-    dstd::Any a = std::string("text");
-    CHECK(a.type() == typeid(std::string));
-    CHECK(dstd::any_cast<std::string>(a) == "text");
-    CHECK(dstd::any_cast<const std::string&>(a) == "text");
-    dstd::any_cast<std::string&>(a) += "!";
-    CHECK(*dstd::any_cast<std::string>(&a) == "text!");
+    dstd::Any a = dstd::String("text");
+    CHECK(a.type() == typeid(dstd::String));
+    CHECK(dstd::any_cast<dstd::String>(a) == "text");
+    CHECK(dstd::any_cast<const dstd::String&>(a) == "text");
+    dstd::any_cast<dstd::String&>(a) += "!";
+    CHECK(*dstd::any_cast<dstd::String>(&a) == "text!");
     const dstd::Any& ca = a;
-    CHECK(*dstd::any_cast<std::string>(&ca) == "text!");
+    CHECK(*dstd::any_cast<dstd::String>(&ca) == "text!");
 
     CHECK(dstd::any_cast<int>(&a) == nullptr);
     CHECK_THROWS_AS(dstd::any_cast<int>(a), std::bad_any_cast);
     CHECK_THROWS_AS(dstd::any_cast<const int&>(ca), std::bad_any_cast);
 
-    std::string taken = dstd::any_cast<std::string>(std::move(a));
+    dstd::String taken = dstd::any_cast<dstd::String>(std::move(a));
     CHECK(taken == "text!");
 
     dstd::Any empty;
@@ -212,5 +212,5 @@ TEST_CASE("swap, self-assignment and a non-copyable cast") {
     }
     CHECK(g_alive == 0);
     dstd::Any a = 1;
-    CHECK(dstd::any_cast<std::unique_ptr<int>>(&a) == nullptr);
+    CHECK(dstd::any_cast<dstd::UniquePtr<int>>(&a) == nullptr);
 }

@@ -22,7 +22,9 @@
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -43,12 +45,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <string>
-#include <thread>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -87,9 +84,7 @@ constexpr std::uint64_t BOUND_BUDGETS = 5;  // macOS malloc keeps freed pages
 constexpr std::uint64_t BOUND_BUDGETS = 3;
 #endif
 
-std::uint64_t mix(std::uint64_t x) {
-    return dftracer::utils::dstd::hash::fnv1a_mix(x);
-}
+std::uint64_t mix(std::uint64_t x) { return dstd::hash::fnv1a_mix(x); }
 
 // Columns: k (a key with about `keys` distinct values), t (increasing), v
 // (pseudo-random), s (a short string, or one of about `pad` more bytes, unique
@@ -245,7 +240,7 @@ LazyFrame gen(std::int64_t rows, std::int64_t keys, std::uint64_t seed = 1,
     return LazyFrame::scan(dstd::make_shared<GenSource>(rows, keys, seed, pad));
 }
 
-using Recipe = std::function<LazyFrame(const LazyFrame& base)>;
+using Recipe = LazyFrame (*)(const LazyFrame& base);
 
 // Keys are nearly unique (many groups) so a group-by or a distinct cannot fit
 // the budget; `few` has a handful of keys.
@@ -655,8 +650,6 @@ dstd::Set<dstd::String> registry_ops() {
     dstd::Set<dstd::String> names;
 #define DFTU_LAZY_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6) \
     names.insert(#name);
-#include <dftracer/utils/dstd/optional.h>
-
 #include <dftracer/utils/dataframe/exported_lazy_ops.def>
 
     return names;
@@ -836,15 +829,15 @@ TEST_CASE("each op stays within its bound at a small budget" *
             results[entry.first];
         }
         std::atomic<std::size_t> next{0};
-        dstd::Vector<std::thread> workers;
+        dstd::Vector<dstd::Thread> workers;
         const std::size_t width = std::clamp<std::size_t>(
-            std::thread::hardware_concurrency(), 1, MAX_PARALLEL_CHILDREN);
+            dstd::Thread::hardware_concurrency(), 1, MAX_PARALLEL_CHILDREN);
         for (std::size_t w = 0; w < width; ++w)
             workers.emplace_back([&] {
                 for (std::size_t i; (i = next.fetch_add(1)) < names.size();)
                     results.at(names[i]) = run_child(names[i]);
             });
-        for (std::thread& t : workers) t.join();
+        for (dstd::Thread& t : workers) t.join();
     }
     for (const auto& [name, recipe] : recipes()) {
         const Expect& want = expectations().at(name);

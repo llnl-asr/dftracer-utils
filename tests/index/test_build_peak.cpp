@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -16,7 +18,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <sstream>
 #include <thread>
 
 using namespace dftracer::utils;
@@ -27,28 +28,28 @@ namespace {
 
 constexpr int EVENTS = 3000;
 
-std::string write_trace(const std::string& dir, int n) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String write_trace(const dstd::String& dir, int n) {
+    dstd::String out;
+    out += "[\n";
     for (int i = 0; i < EVENTS; ++i) {
-        out << R"({"id":)" << i << R"(,"name":"op)" << (i + n) % 40
-            << R"(","cat":"POSIX","pid":)" << 1 + n % 7 << R"(,"tid":)"
-            << 10 + i % 5 << R"(,"ph":"X","ts":)" << 1000 + i * 10 + n * 7
-            << R"(,"dur":)" << 3 + i % 50 << R"(,"args":{"fname":"/data/d)"
-            << n % 9 << "/f" << (i * 31 + n) % 700 << R"(","size":)"
-            << (i * 17) % 4096 << R"(,"hhash":"h)" << n << R"("}})"
-            << "\n";
+        out += common::str_cat(
+            R"({"id":)", i, R"(,"name":"op)", (i + n) % 40,
+            R"(","cat":"POSIX","pid":)", 1 + n % 7, R"(,"tid":)", 10 + i % 5,
+            R"(,"ph":"X","ts":)", 1000 + i * 10 + n * 7, R"(,"dur":)",
+            3 + i % 50, R"(,"args":{"fname":"/data/d)", n % 9, "/f",
+            (i * 31 + n) % 700, R"(","size":)", (i * 17) % 4096,
+            R"(,"hhash":"h)", n, R"("}})", "\n");
     }
-    out << "]\n";
+    out += "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/t" + std::string(dstd::to_string(n)) + ".pfw.gz", out.str());
+        dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz", out);
 }
 
 std::size_t peak_live(const dstd::Vector<dstd::String>& files,
-                      const std::string& index_dir) {
+                      const dstd::String& index_dir) {
     std::atomic<bool> done{false};
     std::atomic<std::size_t> peak{0};
-    std::thread sampler([&] {
+    dstd::Thread sampler([&] {
         while (!done.load(std::memory_order_relaxed)) {
             const auto live = memory::Manager::get().stats().live;
             auto seen = peak.load(std::memory_order_relaxed);

@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <doctest/doctest.h>
 
+#include <any>
 #include <atomic>
 #include <chrono>
-#include <memory>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -37,7 +38,7 @@ TEST_CASE("CoroTask - then() combinator") {
 
 TEST_CASE("CoroTask - then() with transformation inside coroutine") {
     auto parent_task = make_task(
-        []() -> CoroTask<std::string> {
+        []() -> CoroTask<dstd::String> {
             // Create a coroutine that returns int
             auto compute = []() -> CoroTask<int> { co_return 21; };
 
@@ -45,7 +46,7 @@ TEST_CASE("CoroTask - then() with transformation inside coroutine") {
             auto transformed = compute().then([](int x) { return x * 2; });
 
             int result = co_await std::move(transformed);
-            co_return std::to_string(result);
+            co_return dstd::to_string(result);
         },
         "Parent");
 
@@ -56,7 +57,7 @@ TEST_CASE("CoroTask - then() with transformation inside coroutine") {
     pipeline.set_source(parent_task);
     auto output = pipeline.execute();
 
-    std::string result = parent_task->get<std::string>();
+    dstd::String result = parent_task->get<dstd::String>();
     CHECK(result == "42");
 }
 
@@ -112,10 +113,10 @@ TEST_CASE("CoroTask - tap() for inspection without transformation") {
 }
 
 TEST_CASE("CoroTask - tap() chained with then()") {
-    std::vector<int> log;
+    dstd::Vector<int> log;
 
     auto parent_task = make_task(
-        [&log]() -> CoroTask<std::string> {
+        [&log]() -> CoroTask<dstd::String> {
             auto compute = []() -> CoroTask<int> { co_return 5; };
 
             // Chain tap and then
@@ -124,7 +125,7 @@ TEST_CASE("CoroTask - tap() chained with then()") {
                               .tap([&log](int x) { log.push_back(x); })
                               .then([](int x) { return x * 10; })
                               .tap([&log](int x) { log.push_back(x); })
-                              .then([](int x) { return std::to_string(x); }));
+                              .then([](int x) { return dstd::to_string(x); }));
 
             co_return result;
         },
@@ -137,7 +138,7 @@ TEST_CASE("CoroTask - tap() chained with then()") {
     pipeline.set_source(parent_task);
     auto output = pipeline.execute();
 
-    std::string result = parent_task->get<std::string>();
+    dstd::String result = parent_task->get<dstd::String>();
     CHECK(result == "50");
     CHECK(log.size() == 2);
     CHECK(log[0] == 5);
@@ -204,12 +205,12 @@ TEST_CASE("CoroTask<void> - tap() for side effects") {
 
 TEST_CASE("CoroTask - operator< reverse composition") {
     auto parent_task = make_task(
-        []() -> CoroTask<std::string> {
+        []() -> CoroTask<dstd::String> {
             auto compute = []() -> CoroTask<int> { co_return 7; };
 
             // Reverse composition: func < task
             auto result = co_await (
-                [](int x) { return std::to_string(x * 3); } < compute());
+                [](int x) { return dstd::to_string(x * 3); } < compute());
 
             co_return result;
         },
@@ -222,7 +223,7 @@ TEST_CASE("CoroTask - operator< reverse composition") {
     pipeline.set_source(parent_task);
     auto output = pipeline.execute();
 
-    std::string result = parent_task->get<std::string>();
+    dstd::String result = parent_task->get<dstd::String>();
     CHECK(result == "21");
 }
 
@@ -231,7 +232,7 @@ TEST_CASE("CoroTask - operator< reverse composition") {
 // ============================================================================
 
 TEST_CASE("Task - then() creates dependent task") {
-    std::vector<int> execution_order;
+    dstd::Vector<int> execution_order;
 
     auto task1 = make_task(
         [&execution_order](CoroScope&) -> CoroTask<int> {
@@ -258,7 +259,7 @@ TEST_CASE("Task - then() creates dependent task") {
 
     int result = task2->get<int>();
     CHECK(result == 20);
-    CHECK(execution_order == std::vector<int>{1, 2});
+    CHECK(execution_order == dstd::Vector<int>{1, 2});
 }
 
 TEST_CASE("Task - operator> for chaining") {
@@ -301,8 +302,8 @@ TEST_CASE("Task - operator<< reverse composition") {
         make_task([](CoroScope&) -> CoroTask<int> { co_return 8; }, "Task1");
 
     // Reverse composition: func < task
-    auto task2 = [](CoroScope&, int x) -> CoroTask<std::string> {
-        co_return std::to_string(x * 5);
+    auto task2 = [](CoroScope&, int x) -> CoroTask<dstd::String> {
+        co_return dstd::to_string(x * 5);
     } < task1;
 
     auto config =
@@ -314,18 +315,20 @@ TEST_CASE("Task - operator<< reverse composition") {
 
     auto output = pipeline.execute();
 
-    std::string result = task2->get<std::string>();
+    dstd::String result = task2->get<dstd::String>();
     CHECK(result == "40");
 }
 
 TEST_CASE("Task - tap() for logging without transformation") {
-    std::vector<int> log;
+    dstd::Vector<int> log;
 
     auto task1 =
         make_task([](CoroScope&) -> CoroTask<int> { co_return 123; }, "Source");
 
     auto task2 = task1->tap(
+        // keep std: the Task API passes std::any
         [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
+            // keep std: the Task API passes std::any
             int value = std::any_cast<int>(input);
             log.push_back(value);
             co_return;
@@ -350,7 +353,7 @@ TEST_CASE("Task - tap() for logging without transformation") {
 }
 
 TEST_CASE("Task - Complex chaining with tap and then") {
-    std::vector<std::string> log;
+    dstd::Vector<dstd::String> log;
 
     auto task1 =
         make_task([](CoroScope&) -> CoroTask<int> { co_return 3; }, "Start");
@@ -358,27 +361,33 @@ TEST_CASE("Task - Complex chaining with tap and then") {
     auto pipeline_task =
         task1
             ->tap(
+                // keep std: the Task API passes std::any
                 [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
+                    // keep std: the Task API passes std::any
                     int val = std::any_cast<int>(input);
-                    log.push_back("tap1: " + std::to_string(val));
+                    log.push_back("tap1: " + dstd::to_string(val));
                     co_return;
                 },
                 "Log1")
             ->then([](CoroScope&, int x) -> CoroTask<int> { co_return x + 7; },
                    "Add7")
             ->tap(
+                // keep std: the Task API passes std::any
                 [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
+                    // keep std: the Task API passes std::any
                     int val = std::any_cast<int>(input);
-                    log.push_back("tap2: " + std::to_string(val));
+                    log.push_back("tap2: " + dstd::to_string(val));
                     co_return;
                 },
                 "Log2")
             ->then([](CoroScope&, int x) -> CoroTask<int> { co_return x * 10; },
                    "Multiply10")
             ->tap(
+                // keep std: the Task API passes std::any
                 [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
+                    // keep std: the Task API passes std::any
                     int val = std::any_cast<int>(input);
-                    log.push_back("tap3: " + std::to_string(val));
+                    log.push_back("tap3: " + dstd::to_string(val));
                     co_return;
                 },
                 "Log3");
@@ -438,7 +447,7 @@ TEST_CASE("Mixed - CoroTask combinators within Task") {
 }
 
 TEST_CASE("Mixed - Task chaining with internal CoroTask operations") {
-    std::vector<std::string> log;
+    dstd::Vector<dstd::String> log;
 
     auto task1 = make_task(
         [&log](CoroScope&) -> CoroTask<int> {
@@ -460,7 +469,7 @@ TEST_CASE("Mixed - Task chaining with internal CoroTask operations") {
             auto inner = [x]() -> CoroTask<int> { co_return x * 2; };
 
             int val = co_await (inner().tap([&log](int v) {
-                log.push_back("task2_tap: " + std::to_string(v));
+                log.push_back("task2_tap: " + dstd::to_string(v));
             }));
 
             log.push_back("task2_end");
@@ -612,8 +621,8 @@ TEST_CASE("CoroTask - operator& parallel composition") {
         []() -> CoroTask<int> {
             auto compute1 = []() -> CoroTask<int> { co_return 10; };
 
-            auto compute2 = []() -> CoroTask<std::string> {
-                co_return std::string("hello");
+            auto compute2 = []() -> CoroTask<dstd::String> {
+                co_return dstd::String("hello");
             };
 
             // Use operator& to combine both
@@ -681,8 +690,11 @@ TEST_CASE("Task - operator& parallel composition") {
     auto output = pipeline.execute();
 
     // Combined result is a tuple wrapped in std::any
+    // keep std: the Task API passes std::any
     auto result = combined->get<dstd::Tuple<std::any, std::any>>();
+    // keep std: the Task API passes std::any
     int val1 = std::any_cast<int>(std::get<0>(result));
+    // keep std: the Task API passes std::any
     int val2 = std::any_cast<int>(std::get<1>(result));
 
     CHECK(val1 == 20);

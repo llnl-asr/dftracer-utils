@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <utility>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::concat;
 using dftracer::utils::dataframe::concat_columns;
 using dftracer::utils::dataframe::ConcatHow;
@@ -23,36 +25,34 @@ using dftracer::utils::dataframe::TypeId;
 
 namespace {
 
-Series i64s(const dftracer::utils::dstd::Vector<std::int64_t>& v) {
+Series i64s(const dstd::Vector<std::int64_t>& v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
                             nullptr);
 }
 
-Series f64s(const dftracer::utils::dstd::Vector<double>& v) {
+Series f64s(const dstd::Vector<double>& v) {
     return Series::flat_f64(v.data(), static_cast<std::int64_t>(v.size()),
                             nullptr);
 }
 
-Series st(dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names,
-          dftracer::utils::dstd::Vector<Series> f) {
+Series st(dstd::Vector<dstd::String> names, dstd::Vector<Series> f) {
     return Series::structs(std::move(names), std::move(f));
 }
 
-dftracer::utils::dstd::Vector<Series> one(Series s) {
-    dftracer::utils::dstd::Vector<Series> v;
+dstd::Vector<Series> one(Series s) {
+    dstd::Vector<Series> v;
     v.push_back(std::move(s));
     return v;
 }
 
-dftracer::utils::dstd::Vector<Series> two(Series a, Series b) {
-    dftracer::utils::dstd::Vector<Series> v;
+dstd::Vector<Series> two(Series a, Series b) {
+    dstd::Vector<Series> v;
     v.push_back(std::move(a));
     v.push_back(std::move(b));
     return v;
 }
 
-std::int64_t field_index(const Series& s,
-                         const dftracer::utils::dstd::String& name) {
+std::int64_t field_index(const Series& s, const dstd::String& name) {
     for (std::int64_t f = 0; f < s.num_children(); ++f)
         if (s.field_name(f) == name) return f;
     return -1;

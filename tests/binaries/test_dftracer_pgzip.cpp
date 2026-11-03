@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -9,8 +12,8 @@
 
 #include <cstdlib>
 #include <fstream>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 // ============================================================================
 // Helpers
@@ -19,29 +22,30 @@
 namespace {
 
 // Create a plain (uncompressed) .pfw file with DFTracer events.
-std::string create_plain_pfw(dftu_utils_test::TestEnvironment& env,
-                             int num_events, int id) {
+dstd::String create_plain_pfw(dftu_utils_test::TestEnvironment& env,
+                              int num_events, int id) {
     auto trace = env.create_dft_test_file(num_events);
     if (trace.empty()) return "";
 
-    std::string pfw_path =
-        env.get_dir() + "/trace_" + std::to_string(id) + ".pfw";
-    REQUIRE(dftracer::utils::dstd::fs::rename(trace, pfw_path).has_value());
+    dstd::String pfw_path =
+        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw";
+    REQUIRE(dstd::fs::rename(trace, pfw_path).has_value());
     return pfw_path;
 }
 
-std::string find_pgzip_binary() {
+dstd::String find_pgzip_binary() {
     return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_PGZIP_PATH",
                                                 "dftracer_pgzip");
 }
 
-int run_pgzip(const std::string& binary, const std::vector<std::string>& args) {
+int run_pgzip(const dstd::String& binary,
+              const dstd::Vector<dstd::String>& args) {
     return dftu_utils_test::run_process(binary, args);
 }
 
-std::string gunzip_all(const std::string& path) {
+dstd::String gunzip_all(const dstd::String& path) {
     gzFile gz = gzopen(path.c_str(), "rb");
-    std::string out;
+    dstd::String out;
     if (!gz) return out;
     char b[65536];
     int n;
@@ -84,10 +88,10 @@ TEST_SUITE("DFTracerPgzip") {
         int rc = run_pgzip(binary, {env.get_dir(), "--disable-watchdog"});
         CHECK(rc == 0);
 
-        std::string gz_path = pfw + ".gz";
-        CHECK(dftracer::utils::dstd::fs::exists(gz_path).value());
+        dstd::String gz_path = pfw + ".gz";
+        CHECK(dstd::fs::exists(gz_path).value());
         // Original plain file must be removed after successful compression.
-        CHECK(!dftracer::utils::dstd::fs::exists(pfw).value());
+        CHECK(!dstd::fs::exists(pfw).value());
     }
 
     TEST_CASE("compressed file is valid gzip with JSON content") {
@@ -106,8 +110,8 @@ TEST_SUITE("DFTracerPgzip") {
         int rc = run_pgzip(binary, {env.get_dir(), "--disable-watchdog"});
         CHECK(rc == 0);
 
-        std::string gz_path = pfw + ".gz";
-        REQUIRE(dftracer::utils::dstd::fs::exists(gz_path).value());
+        dstd::String gz_path = pfw + ".gz";
+        REQUIRE(dstd::fs::exists(gz_path).value());
 
         auto first = dftu_utils_test::gz_first_line(gz_path);
         REQUIRE(!first.empty());
@@ -130,7 +134,7 @@ TEST_SUITE("DFTracerPgzip") {
         int rc = run_pgzip(binary, {env.get_dir(), "--compression-level", "1",
                                     "--disable-watchdog"});
         CHECK(rc == 0);
-        CHECK(dftracer::utils::dstd::fs::exists(pfw + ".gz").value());
+        CHECK(dstd::fs::exists(pfw + ".gz").value());
     }
 
     TEST_CASE("compression level 9 (best) succeeds") {
@@ -149,7 +153,7 @@ TEST_SUITE("DFTracerPgzip") {
         int rc = run_pgzip(binary, {env.get_dir(), "--compression-level", "9",
                                     "--disable-watchdog"});
         CHECK(rc == 0);
-        CHECK(dftracer::utils::dstd::fs::exists(pfw + ".gz").value());
+        CHECK(dstd::fs::exists(pfw + ".gz").value());
     }
 
     TEST_CASE("compress multiple files") {
@@ -169,10 +173,10 @@ TEST_SUITE("DFTracerPgzip") {
 
         int rc = run_pgzip(binary, {env.get_dir(), "--disable-watchdog"});
         CHECK(rc == 0);
-        CHECK(dftracer::utils::dstd::fs::exists(pfw0 + ".gz").value());
-        CHECK(dftracer::utils::dstd::fs::exists(pfw1 + ".gz").value());
-        CHECK(!dftracer::utils::dstd::fs::exists(pfw0).value());
-        CHECK(!dftracer::utils::dstd::fs::exists(pfw1).value());
+        CHECK(dstd::fs::exists(pfw0 + ".gz").value());
+        CHECK(dstd::fs::exists(pfw1 + ".gz").value());
+        CHECK(!dstd::fs::exists(pfw0).value());
+        CHECK(!dstd::fs::exists(pfw1).value());
     }
 
     TEST_CASE("empty directory succeeds with nothing to do") {
@@ -200,13 +204,13 @@ TEST_SUITE("DFTracerPgzip") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        std::string pfw = env.get_dir() + "/tail.pfw";
-        std::string content;
+        dstd::String pfw = env.get_dir() + "/tail.pfw";
+        dstd::String content;
         for (int i = 0; i < 2000; ++i)
-            content += "{\"id\":" + std::to_string(i) + ",\"name\":\"e\"}\n";
+            content += "{\"id\":" + dstd::to_string(i) + ",\"name\":\"e\"}\n";
         content += "{\"id\":-1,\"name\":\"no newline\"}";
         {
-            std::ofstream f(pfw.c_str(), std::ios::binary);
+            dftu_utils_test::FileOut f(pfw);
             f << content;
         }
 
@@ -214,7 +218,7 @@ TEST_SUITE("DFTracerPgzip") {
                                     "--disable-watchdog"});
         CHECK(rc == 0);
         CHECK(gunzip_all(pfw + ".gz") == content);
-        CHECK(!dftracer::utils::dstd::fs::exists(pfw).value());
+        CHECK(!dstd::fs::exists(pfw).value());
     }
 
     TEST_CASE("empty file fails and is left in place") {
@@ -227,14 +231,14 @@ TEST_SUITE("DFTracerPgzip") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        std::string pfw = env.get_dir() + "/empty.pfw";
+        dstd::String pfw = env.get_dir() + "/empty.pfw";
         {
-            std::ofstream f(pfw.c_str(), std::ios::binary);
+            dftu_utils_test::FileOut f(pfw);
         }
 
         int rc = run_pgzip(binary, {env.get_dir(), "--disable-watchdog"});
         CHECK(rc != 0);
-        CHECK(dftracer::utils::dstd::fs::exists(pfw).value());
-        CHECK(!dftracer::utils::dstd::fs::exists(pfw + ".gz").value());
+        CHECK(dstd::fs::exists(pfw).value());
+        CHECK(!dstd::fs::exists(pfw + ".gz").value());
     }
 }

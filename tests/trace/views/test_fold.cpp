@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <array>
-#include <map>
 #include <memory>
-#include <string>
 #include <utility>
 #include <variant>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -22,7 +24,7 @@ using namespace dftu_utils_test;
 using namespace test_view_common;
 
 using namespace dftracer::utils::trace::views::detail;
-using dftracer::utils::dstd::StringIntern;
+using dstd::StringIntern;
 
 namespace {
 
@@ -36,7 +38,7 @@ FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
     return ev;
 }
 
-std::string padded(std::string s) {
+dstd::String padded(dstd::String s) {
     s.resize(s.size() + simdjson::SIMDJSON_PADDING, '\0');
     return s;
 }
@@ -81,7 +83,7 @@ TEST_SUITE("Fold") {
         StringIntern intern;
         simdjson::dom::parser parser;
 
-        std::string a = padded(
+        dstd::String a = padded(
             R"({"ph":"X","name":"read","cat":"POSIX","pid":7,"tid":9,"ts":100,"dur":5,"args":{"fhash":"fhA"}})");
         std::size_t a_len = a.size() - simdjson::SIMDJSON_PADDING;
         auto ra = parser.parse(a.data(), a_len, false);
@@ -90,7 +92,7 @@ TEST_SUITE("Fold") {
 
         // Reuse the parser on a different document: this is what invalidates a
         // string_view held into the parser buffer.
-        std::string b = padded(
+        dstd::String b = padded(
             R"({"ph":"X","name":"write","cat":"STDIO","pid":1,"tid":1,"ts":200,"dur":3,"args":{"fhash":"fhB"}})");
         auto rb = parser.parse(b.data(), b.size() - simdjson::SIMDJSON_PADDING,
                                false);
@@ -116,7 +118,7 @@ TEST_SUITE("Fold") {
     TEST_CASE("args are captured only when asked, fhash always") {
         StringIntern intern;
         simdjson::dom::parser parser;
-        std::string line = padded(
+        dstd::String line = padded(
             R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"fhash":"fh1","size":4096,"mode":"r"}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
@@ -154,7 +156,7 @@ TEST_SUITE("Fold") {
         StringIntern intern;
         simdjson::dom::parser parser;
         // 2^53 + 1 is the smallest positive integer a double cannot represent.
-        std::string line = padded(
+        dstd::String line = padded(
             R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"offset":9007199254740993,"ratio":0.5}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
@@ -182,8 +184,8 @@ TEST_SUITE("Fold") {
     TEST_CASE("fuse drives a fold over every event exactly once") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);  // 50 events
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 20);  // 50 events
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         {
             StringSink s;
             View::from_file(dstd::String(gz), dstd::String(idx))
@@ -214,9 +216,9 @@ TEST_SUITE("Fold") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // One FH and one HH metadata record, then data events.
-        std::string pfw = env.get_dir() + "/meta.pfw";
+        dstd::String pfw = env.get_dir() + "/meta.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"node0","value":"hh1"}})"
                 << "\n";
             ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/a.bin","value":"fh1"}})"
@@ -226,10 +228,10 @@ TEST_SUITE("Fold") {
                     << (100 + i) << R"(,"dur":2,"args":{"fhash":"fh1"}})"
                     << "\n";
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         dstd::fs::remove(pfw).has_value();
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         {
             StringSink s;
             View::from_file(dstd::String(gz), dstd::String(idx))
@@ -241,7 +243,7 @@ TEST_SUITE("Fold") {
         // metadata FoldEvents.
         struct DictProbe : Fold {
             const StringIntern* in;
-            std::map<std::string, dstd::Pair<std::string, std::string>> got;
+            dstd::Map<dstd::String, dstd::Pair<dstd::String, dstd::String>> got;
             explicit DictProbe(const StringIntern& i) : in(&i) {}
             bool accepts(const ScanShape&) const override { return true; }
             bool needs_args() const override { return true; }
@@ -253,15 +255,15 @@ TEST_SUITE("Fold") {
                     if (e.phase !=
                         dftracer::utils::trace::RecordPhase::Metadata)
                         continue;
-                    std::string type(in->resolve(e.name_id));
-                    std::string name, value;
+                    dstd::String type(in->resolve(e.name_id));
+                    dstd::String name, value;
                     for (const auto& [k, v] : e.args) {
                         auto key = in->resolve(k);
                         if (const auto* id = std::get_if<std::uint32_t>(&v)) {
                             if (key == "name")
-                                name = std::string(in->resolve(*id));
+                                name = dstd::String(in->resolve(*id));
                             else if (key == "value")
-                                value = std::string(in->resolve(*id));
+                                value = dstd::String(in->resolve(*id));
                         }
                     }
                     if (!name.empty()) got[type] = {name, value};
@@ -305,7 +307,7 @@ TEST_SUITE("Fold") {
     TEST_CASE("a metadata event's type, name and value are captured") {
         StringIntern intern;
         simdjson::dom::parser parser;
-        std::string line = padded(
+        dstd::String line = padded(
             R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"hh9","name":"/data/x.bin","value":"fh7"}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
@@ -337,7 +339,7 @@ TEST_SUITE("Fold") {
         StringIntern intern;
         simdjson::dom::parser parser;
         // No cat, no args.
-        std::string line =
+        dstd::String line =
             padded(R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
@@ -354,16 +356,16 @@ TEST_SUITE("Fold") {
     TEST_CASE("nested and array args flatten to dotted keys, bools to 0/1") {
         StringIntern intern;
         simdjson::dom::parser parser;
-        std::string line = padded(
+        dstd::String line = padded(
             R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"args":{"dur":{"p99":7000},"hosts":["a","b"],"ok":true,"no":false,"nil":null,"x":[{"y":1.5}]}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(r.error());
         FoldEvent e = extract_fold_event(r.value_unsafe(), intern, true);
 
-        std::map<std::string, FoldEvent::ArgValue> got;
+        dstd::Map<dstd::String, FoldEvent::ArgValue> got;
         for (const auto& [k, v] : e.args)
-            CHECK(got.emplace(std::string(intern.resolve(k)), v).second);
+            CHECK(got.emplace(dstd::String(intern.resolve(k)), v).second);
         CHECK(got.size() == 6);
         CHECK(std::get<std::int64_t>(got.at("dur.p99")) == 7000);
         CHECK(intern.resolve(std::get<std::uint32_t>(got.at("hosts.0"))) ==
@@ -381,13 +383,12 @@ TEST_SUITE("Fold") {
     TEST_CASE("an extra field without the args. prefix resolves under args") {
         StringIntern intern;
         simdjson::dom::parser parser;
-        std::string line = padded(
+        dstd::String line = padded(
             R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"dur":42,"args":{"dur":{"p99":7000},"type":"arg"}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(r.error());
-        const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
-            extra = {"dur.p99", "type"};
+        const dstd::Vector<dstd::String> extra = {"dur.p99", "type"};
         FoldEvent e =
             extract_fold_event(r.value_unsafe(), intern, false, &extra);
 
@@ -401,28 +402,28 @@ TEST_SUITE("Fold") {
     TEST_CASE("schema leaves list every array element") {
         StringIntern intern;
         simdjson::dom::parser parser;
-        std::string line = padded(
+        dstd::String line = padded(
             R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"args":{"hosts":["a","b","c"]}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(r.error());
         FoldEvent e =
             extract_fold_event(r.value_unsafe(), intern, false, nullptr, true);
-        std::vector<std::string> leaves;
+        dstd::Vector<dstd::String> leaves;
         for (const auto& [id, tag] : e.schema_leaves)
             if (intern.resolve(id).rfind("args.hosts.", 0) == 0)
                 leaves.emplace_back(intern.resolve(id));
-        CHECK(leaves == std::vector<std::string>{"args.hosts.0", "args.hosts.1",
-                                                 "args.hosts.2"});
+        CHECK(leaves == dstd::Vector<dstd::String>{
+                            "args.hosts.0", "args.hosts.1", "args.hosts.2"});
     }
 
     TEST_CASE(
         "a reused buffer slot decodes as a fresh event and keeps capacity") {
         StringIntern intern;
         simdjson::dom::parser parser;
-        std::string wide = padded(
+        dstd::String wide = padded(
             R"({"ph":"X","name":"read","cat":"POSIX","pid":7,"tid":9,"ts":100,"dur":5,"args":{"a":1,"b":2,"c":"x","d":null,"e":true,"f":3.5}})");
-        std::string narrow = padded(
+        dstd::String narrow = padded(
             R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":1,"args":{"a":9}})");
         auto rw = parser.parse(wide.data(),
                                wide.size() - simdjson::SIMDJSON_PADDING, false);
@@ -518,12 +519,12 @@ TEST_SUITE("Fold") {
     TEST_CASE("EventRows over a pick list reads only the picked events") {
         dstd::Vector<FoldEvent> evs(5);
         for (std::size_t i = 0; i < evs.size(); ++i) evs[i].ts = 10 * i;
-        const std::vector<std::uint32_t> pick{1, 3, 4};
+        const dstd::Vector<std::uint32_t> pick{1, 3, 4};
         EventRows rows(evs, pick);
         REQUIRE(rows.size() == 3);
-        std::vector<std::uint64_t> seen;
+        dstd::Vector<std::uint64_t> seen;
         for (const FoldEvent& e : rows) seen.push_back(e.ts);
-        CHECK(seen == std::vector<std::uint64_t>{10, 30, 40});
+        CHECK(seen == dstd::Vector<std::uint64_t>{10, 30, 40});
         CHECK(EventRows(evs).size() == 5);
     }
 }

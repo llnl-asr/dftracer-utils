@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -12,11 +16,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <map>
 #include <regex>
 #include <sstream>
 #include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 // ============================================================================
 // Helpers
@@ -24,36 +28,37 @@
 
 namespace {
 
-std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
-                          int id) {
+dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
+                           int num_events, int id) {
     auto trace_gz = env.create_dft_test_gzip_file(num_events);
     if (trace_gz.empty()) return "";
 
-    std::string pfw_path =
-        env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    REQUIRE(dftracer::utils::dstd::fs::rename(trace_gz, pfw_path).has_value());
+    dstd::String pfw_path =
+        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+    REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
 
-std::string find_stats_binary() {
+dstd::String find_stats_binary() {
     return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_STATS_PATH",
                                                 "dftracer_stats");
 }
 
-int run_stats(const std::string& binary, const std::vector<std::string>& args) {
+int run_stats(const dstd::String& binary,
+              const dstd::Vector<dstd::String>& args) {
     return dftu_utils_test::run_process(binary, args);
 }
 
-std::string run_stats_capture(const std::string& binary,
-                              const std::vector<std::string>& args,
-                              int* exit_code = nullptr) {
+dstd::String run_stats_capture(const dstd::String& binary,
+                               const dstd::Vector<dstd::String>& args,
+                               int* exit_code = nullptr) {
     return dftu_utils_test::run_process_capture(binary, args, true, exit_code);
 }
 
 struct Fixture {
-    std::map<std::string, std::uint64_t> categories;
-    std::map<std::string, std::uint64_t> names;
-    std::map<std::string, std::uint64_t> pid_tids;
+    dstd::Map<dstd::String, std::uint64_t> categories;
+    dstd::Map<dstd::String, std::uint64_t> names;
+    dstd::Map<dstd::String, std::uint64_t> pid_tids;
     std::uint64_t events = 0;
     std::uint64_t dur_count = 0;
     std::uint64_t dur_sum = 0;
@@ -64,7 +69,7 @@ struct Fixture {
 // Writes files of 60, 120 and 180 events. Counts per category (3:2:1), name
 // (4:3:2:1) and the presence of "dur" (three of four events) are fixed, so the
 // expected report values follow from the loop below.
-Fixture write_fixture(const std::string& dir) {
+Fixture write_fixture(const dstd::String& dir) {
     static const char* const CATS[] = {"POSIX", "STDIO", "app"};
     static const int CAT_AT[] = {0, 0, 0, 1, 1, 2};
     static const char* const NAMES[] = {"read", "write", "open", "close"};
@@ -72,7 +77,7 @@ Fixture write_fixture(const std::string& dir) {
     Fixture fx;
     for (int f = 0; f < 3; ++f) {
         const int count = 60 * (f + 1);
-        std::string text = "[\n";
+        dstd::String text = "[\n";
         for (int i = 0; i < count; ++i) {
             const char* cat = CATS[CAT_AT[i % 6]];
             const char* name = NAMES[NAME_AT[i % 10]];
@@ -81,19 +86,19 @@ Fixture write_fixture(const std::string& dir) {
             const std::uint64_t ts = 1000000 + i * 100 + f * 50000;
             const bool has_dur = (i % 4) != 0;
             const std::uint64_t dur = has_dur ? 7 + (i % 5) * 3 : 0;
-            text += R"({"id":)" + std::to_string(i) + R"(,"pid":)" +
-                    std::to_string(pid) + R"(,"tid":)" + std::to_string(tid) +
+            text += R"({"id":)" + dstd::to_string(i) + R"(,"pid":)" +
+                    dstd::to_string(pid) + R"(,"tid":)" + dstd::to_string(tid) +
                     R"(,"name":")" + name + R"(","cat":")" + cat +
-                    R"(","ph":"X","ts":)" + std::to_string(ts);
-            if (has_dur) text += R"(,"dur":)" + std::to_string(dur);
+                    R"(","ph":"X","ts":)" + dstd::to_string(ts);
+            if (has_dur) text += R"(,"dur":)" + dstd::to_string(dur);
             text += "}\n";
 
-            std::string lower = cat;
+            dstd::String lower = cat;
             std::transform(lower.begin(), lower.end(), lower.begin(),
                            [](unsigned char c) { return std::tolower(c); });
             ++fx.categories[lower];
             ++fx.names[name];
-            ++fx.pid_tids[std::to_string(pid) + ":" + std::to_string(tid)];
+            ++fx.pid_tids[dstd::to_string(pid) + ":" + dstd::to_string(tid)];
             ++fx.events;
             if (has_dur) {
                 ++fx.dur_count;
@@ -103,8 +108,8 @@ Fixture write_fixture(const std::string& dir) {
             fx.max_end = std::max(fx.max_end, ts + dur);
         }
         text += "]\n";
-        const std::string path =
-            dir + "/fixture_" + std::to_string(f) + ".pfw.gz";
+        const dstd::String path =
+            dir + "/fixture_" + dstd::to_string(f) + ".pfw.gz";
         gzFile out = gzopen(path.c_str(), "wb");
         gzwrite(out, text.data(), static_cast<unsigned>(text.size()));
         gzclose(out);
@@ -113,22 +118,26 @@ Fixture write_fixture(const std::string& dir) {
 }
 
 // The "    key   count" lines of a text report.
-std::map<std::string, std::uint64_t> parse_counts(const std::string& output) {
-    std::map<std::string, std::uint64_t> counts;
-    std::istringstream in(output);
-    std::string line;
+dstd::Map<dstd::String, std::uint64_t> parse_counts(
+    const dstd::String& output) {
+    dstd::Map<dstd::String, std::uint64_t> counts;
+    dftu_utils_test::LineStream in(output);
+    dstd::String line;
     const std::regex row(R"(^    (\S+)\s+(\d+)$)");
-    std::smatch m;
-    while (std::getline(in, line))
-        if (std::regex_match(line, m, row)) counts[m[1]] = std::stoull(m[2]);
+    std::match_results<dstd::String::const_iterator> m;
+    while (in.next(line))
+        if (std::regex_match(line, m, row))
+            counts[dstd::String(m[1].first, m[1].second)] =
+                dftu_utils_test::to_number<unsigned long long>(
+                    dstd::String(m[2].first, m[2].second));
     return counts;
 }
 
-std::map<std::string, std::uintmax_t> snapshot(const std::string& dir) {
-    std::map<std::string, std::uintmax_t> files;
+dstd::Map<dstd::String, std::uintmax_t> snapshot(const dstd::String& dir) {
+    dstd::Map<dstd::String, std::uintmax_t> files;
     for (const auto& e : dftu_utils_test::walk_dir(dir))
-        if ((e.kind == dftracer::utils::dstd::fs::FileKind::File))
-            files[std::string(e.path.str())] = e.size;
+        if ((e.kind == dstd::fs::FileKind::File))
+            files[dstd::String(e.path.str())] = e.size;
     return files;
 }
 
@@ -168,7 +177,7 @@ TEST_SUITE("DFTracerStats") {
         auto output = run_stats_capture(binary, {env.get_dir()}, &rc);
         CHECK(rc == 0);
         // Text summary always prints "Events Scanned:".
-        CHECK(output.find("Events Scanned") != std::string::npos);
+        CHECK(output.find("Events Scanned") != dstd::String::npos);
     }
 
     TEST_CASE("json output") {
@@ -188,9 +197,9 @@ TEST_SUITE("DFTracerStats") {
         auto output = run_stats_capture(binary, {env.get_dir(), "--json"}, &rc);
         CHECK(rc == 0);
         // JSON output is a JSON array; each element is an object.
-        CHECK(output.find('{') != std::string::npos);
+        CHECK(output.find('{') != dstd::String::npos);
         // The JSON object always contains "total_events".
-        CHECK(output.find("total_events") != std::string::npos);
+        CHECK(output.find("total_events") != dstd::String::npos);
     }
 
     TEST_CASE("multiple files") {
@@ -219,11 +228,11 @@ TEST_SUITE("DFTracerStats") {
             return;
         }
 
-        auto total_events = [](const std::string& json) -> long {
+        auto total_events = [](const dstd::String& json) -> long {
             auto p = json.find("total_events");
-            if (p == std::string::npos) return -1;
+            if (p == dstd::String::npos) return -1;
             p = json.find_first_of("0123456789", p);
-            return p == std::string::npos ? -1 : std::atol(json.c_str() + p);
+            return p == dstd::String::npos ? -1 : std::atol(json.c_str() + p);
         };
 
         dftu_utils_test::TestEnvironment env(100);
@@ -240,8 +249,8 @@ TEST_SUITE("DFTracerStats") {
         // Rewrite the same file with more events; the index is now stale.
         auto raw = env.create_dft_test_gzip_file(300);
         REQUIRE(!raw.empty());
-        (void)dftracer::utils::dstd::fs::remove(f);
-        REQUIRE(dftracer::utils::dstd::fs::rename(raw, f).has_value());
+        (void)dstd::fs::remove(f);
+        REQUIRE(dstd::fs::rename(raw, f).has_value());
 
         long n2 = total_events(
             run_stats_capture(binary, {env.get_dir(), "--json"}, &rc));
@@ -265,9 +274,9 @@ TEST_SUITE("DFTracerStats") {
         REQUIRE(rc == 0);
         const auto before = snapshot(env.get_dir());
 
-        auto report = [&](const std::string& name,
-                          std::vector<std::string> extra = {}) {
-            std::vector<std::string> args{env.get_dir(), "--report", name};
+        auto report = [&](const dstd::String& name,
+                          dstd::Vector<dstd::String> extra = {}) {
+            dstd::Vector<dstd::String> args{env.get_dir(), "--report", name};
             args.insert(args.end(), extra.begin(), extra.end());
             auto out = run_stats_capture(binary, args, &rc);
             CHECK(rc == 0);
@@ -280,22 +289,22 @@ TEST_SUITE("DFTracerStats") {
 
         const auto top_names =
             parse_counts(report("top-names", {"--top-n", "2"}));
-        CHECK(top_names == std::map<std::string, std::uint64_t>{
+        CHECK(top_names == dstd::Map<dstd::String, std::uint64_t>{
                                {"read", fx.names.at("read")},
                                {"write", fx.names.at("write")}});
         const auto top_cats =
             parse_counts(report("top-categories", {"--top-n", "2"}));
-        CHECK(top_cats == std::map<std::string, std::uint64_t>{
+        CHECK(top_cats == dstd::Map<dstd::String, std::uint64_t>{
                               {"posix", fx.categories.at("posix")},
                               {"stdio", fx.categories.at("stdio")}});
 
         const auto summary = report("summary", {"--top-n-pid-tid", "0"});
-        CHECK(summary.find("Events Scanned: " + std::to_string(fx.events)) !=
-              std::string::npos);
+        CHECK(summary.find("Events Scanned: " + dstd::to_string(fx.events)) !=
+              dstd::String::npos);
         char span[64];
         std::snprintf(span, sizeof(span), "Time Span: %.6f seconds",
                       static_cast<double>(fx.max_end - fx.min_ts) / 1e6);
-        CHECK(summary.find(span) != std::string::npos);
+        CHECK(summary.find(span) != dstd::String::npos);
         auto summary_counts = parse_counts(summary);
         for (const auto& [k, v] : fx.categories) CHECK(summary_counts[k] == v);
         for (const auto& [k, v] : fx.pid_tids) CHECK(summary_counts[k] == v);
@@ -306,13 +315,13 @@ TEST_SUITE("DFTracerStats") {
                       static_cast<unsigned long long>(fx.dur_count),
                       static_cast<double>(fx.dur_sum) /
                           static_cast<double>(fx.dur_count));
-        CHECK(duration.find(dur_line) != std::string::npos);
+        CHECK(duration.find(dur_line) != dstd::String::npos);
 
         // A warm unfiltered run neither folds nor writes: the index and the
         // rollup cache beside it keep the same files and sizes.
         CHECK(snapshot(env.get_dir()) == before);
         for (const auto& [path, size] : before)
-            CHECK(path.find("-cache") == std::string::npos);
+            CHECK(path.find("-cache") == dstd::String::npos);
     }
 
     TEST_CASE("per-file json counts match the fixture") {
@@ -333,7 +342,8 @@ TEST_SUITE("DFTracerStats") {
         for (const char* total :
              {"\"total_events\":60,", "\"total_events\":120,",
               "\"total_events\":180,"})
-            CHECK(out.find(total) != std::string::npos);
-        CHECK(out.find("\"name\":\"posix\",\"count\":30") != std::string::npos);
+            CHECK(out.find(total) != dstd::String::npos);
+        CHECK(out.find("\"name\":\"posix\",\"count\":30") !=
+              dstd::String::npos);
     }
 }

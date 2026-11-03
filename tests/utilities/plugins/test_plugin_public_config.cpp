@@ -8,7 +8,9 @@
 // add().
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/plugins/plugins.h>
@@ -19,9 +21,6 @@
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
-
-#include <fstream>
-#include <string>
 
 using dftracer::utils::plugins::PluginRun;
 using dftracer::utils::plugins::Plugins;
@@ -41,18 +40,18 @@ namespace {
 constexpr int NUM_EVENTS = 5;
 
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
-    const std::string pfw = env.get_dir() + "/public_config.pfw";
-    std::ofstream ofs(pfw.c_str());
+    const dstd::String pfw = env.get_dir() + "/public_config.pfw";
+    dstd::String ofs;
     for (int i = 0; i < NUM_EVENTS; ++i) {
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
-            << (1000 + i * 100) << R"(,"dur":10,"args":{}})"
-            << "\n";
+        ofs += common::str_cat(
+            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
+            (1000 + i * 100), R"(,"dur":10,"args":{}})", "\n");
     }
-    ofs.close();
+    (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
 
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
 
     return index_trace(gz);
 }
@@ -66,8 +65,8 @@ TEST_CASE(
                    .add(CONFIG_KEYS_PLUGIN_PATH,
                         dstd::String(R"({"label": "rows", "stride": 3})"))
                    .build();
-    INFO(
-        (set.has_value() ? std::string{} : std::string(set.error().message())));
+    INFO((set.has_value() ? dstd::String{}
+                          : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
 
     dftu_utils_test::TestEnvironment env(0);
@@ -88,5 +87,5 @@ TEST_CASE("add(path, json) fails at build(), not at add()") {
 
     auto set = builder.build();
     REQUIRE(!set.has_value());
-    CHECK(set.error().message().find("does not parse") != std::string::npos);
+    CHECK(set.error().message().find("does not parse") != dstd::String::npos);
 }

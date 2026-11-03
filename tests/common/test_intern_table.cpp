@@ -3,15 +3,17 @@
 #include <dftracer/utils/common/intern_table.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
 #include <cstddef>
-#include <string>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace memory = dftracer::utils::memory;
@@ -22,7 +24,7 @@ constexpr int HOPS = 8;
 constexpr int TASKS = 64;
 constexpr int STRINGS = 300;
 
-std::string name_of(int i) { return "string_" + std::to_string(i); }
+dstd::String name_of(int i) { return "string_" + dstd::to_string(i); }
 
 coro::CoroTask<void> hop_and_check(common::InternTable* expected,
                                    std::atomic<int>* bad) {
@@ -39,7 +41,7 @@ coro::CoroTask<void> intern_and_read(common::InternTable* table, int seed,
                                      std::atomic<int>* bad) {
     for (int round = 0; round < STRINGS; ++round) {
         const int k = (round * 7 + seed) % STRINGS;
-        const std::string text = name_of(k);
+        const dstd::String text = name_of(k);
         const common::InternId id = table->intern(text);
         if (id == common::InternId::NONE) ++*bad;
         if (round % 16 == 0) co_await coro::yield();
@@ -81,7 +83,7 @@ TEST_CASE("a big string and many strings are freed with the table") {
     common::InternRef table = common::InternTable::create();
     memory::Pool& pool = table->pool();
     for (int i = 0; i < 20000; ++i) table->intern(name_of(i));
-    const std::string big(dstd::StringIntern::CHUNK_BYTES + 1000, 'x');
+    const dstd::String big(dstd::StringIntern::CHUNK_BYTES + 1000, 'x');
     const common::InternId id = table->intern(big);
     CHECK(table->get(id) == big);
     CHECK(pool.live() > dstd::StringIntern::CHUNK_BYTES);
@@ -165,7 +167,7 @@ TEST_CASE("tasks on many threads intern and read one table") {
     std::atomic<int> bad{0};
     {
         Runtime rt(8);
-        std::vector<TaskHandle> handles;
+        dstd::Vector<TaskHandle> handles;
         {
             common::InternScope scope{table};
             for (int i = 0; i < TASKS; ++i) {
@@ -189,7 +191,7 @@ TEST_CASE("threads share and drop references to one table") {
     common::InternRef table = common::InternTable::create();
     memory::Pool& pool = table->pool();
     std::atomic<int> bad{0};
-    std::vector<std::thread> threads;
+    dstd::Vector<dstd::Thread> threads;
     for (int t = 0; t < 8; ++t) {
         threads.emplace_back([&, copy = table, t]() mutable {
             for (int i = 0; i < 200; ++i) {

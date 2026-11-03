@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <latch>
-#include <thread>
 
 using namespace dftracer::utils;
 using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
@@ -44,7 +44,7 @@ TEST_SUITE("libdeflate_gzip") {
         constexpr int THREADS = 8;
         std::latch start(THREADS);
         dstd::Vector<int> ok(THREADS, 0);
-        dstd::Vector<std::thread> threads;
+        dstd::Vector<dstd::Thread> threads;
         for (int t = 0; t < THREADS; ++t)
             threads.emplace_back([&, t] {
                 start.arrive_and_wait();

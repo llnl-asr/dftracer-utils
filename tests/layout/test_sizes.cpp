@@ -12,13 +12,15 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/term.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
-#include <string>
+
+using namespace dftracer::utils;
 
 namespace df = dftracer::utils::dataframe;
 
@@ -34,9 +36,9 @@ constexpr bool within() {
 // 3 BufferViews of 24 B replace 3 shared_ptrs of 16 B.
 constexpr std::size_t SERIES_BUDGET = 144;
 constexpr std::size_t DATA_TYPE_BUDGET = 40;
-// std::string is 24 bytes in libc++ and 32 in libstdc++, so a budget counts
+// dstd::String is 24 bytes in libc++ and 32 in libstdc++, so a budget counts
 // its strings by sizeof and stays tight on both.
-constexpr std::size_t STR = sizeof(std::string);
+constexpr std::size_t STR = sizeof(dstd::String);
 constexpr std::size_t FIELD_BUDGET = 48 + 1 * STR;
 constexpr std::size_t MORSEL_BUDGET = 56;
 constexpr std::size_t AGG_SPEC_BUDGET = 24 + 1 * STR;
@@ -60,14 +62,12 @@ static_assert(within<df::WindowColumn, WINDOW_COLUMN_BUDGET, 8>());
 static_assert(within<dftracer::utils::trace::views::detail::FoldEvent,
                      FOLD_EVENT_BUDGET, 8>());
 static_assert(within<dftracer::utils::duql::TLookup, LOOKUP_BUDGET, 8>());
-static_assert(
-    within<dftracer::utils::dstd::Error, ERROR_BUDGET, alignof(void*)>());
+static_assert(within<dstd::Error, ERROR_BUDGET, alignof(void*)>());
 static_assert(within<dftracer::utils::common::Result<void>, RESULT_VOID_BUDGET,
                      alignof(void*)>());
 static_assert(within<dftracer::utils::store::engine::RecordItem,
                      RECORD_ITEM_BUDGET, 8>());
-static_assert(
-    within<dftracer::utils::dstd::fs::FileStat, FILE_STAT_BUDGET, 8>());
+static_assert(within<dstd::fs::FileStat, FILE_STAT_BUDGET, 8>());
 
 }  // namespace
 
@@ -81,9 +81,9 @@ TEST_CASE("the layout budgets hold") {
     CHECK(sizeof(dftracer::utils::trace::views::detail::FoldEvent) <=
           FOLD_EVENT_BUDGET);
     CHECK(sizeof(dftracer::utils::duql::TLookup) <= LOOKUP_BUDGET);
-    CHECK(sizeof(dftracer::utils::dstd::Error) <= ERROR_BUDGET);
+    CHECK(sizeof(dstd::Error) <= ERROR_BUDGET);
     CHECK(sizeof(dftracer::utils::common::Result<void>) <= RESULT_VOID_BUDGET);
     CHECK(sizeof(dftracer::utils::store::engine::RecordItem) <=
           RECORD_ITEM_BUDGET);
-    CHECK(sizeof(dftracer::utils::dstd::fs::FileStat) <= FILE_STAT_BUDGET);
+    CHECK(sizeof(dstd::fs::FileStat) <= FILE_STAT_BUDGET);
 }

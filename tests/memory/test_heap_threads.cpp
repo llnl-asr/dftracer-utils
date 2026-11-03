@@ -87,6 +87,7 @@ class Mailbox {
 
    private:
     std::mutex mutex_;
+    // keep std: memory tests link only memory
     std::deque<Block> queue_;
 };
 
@@ -115,15 +116,19 @@ std::size_t live() { return page_stats().live; }
 TEST_CASE("the owner takes remote frees back on its slow path") {
     constexpr std::size_t SIZE = 4096;
     constexpr int COUNT = 64;
+    // keep std: memory tests link only memory
     std::vector<void*> first;
+    // keep std: memory tests link only memory
     std::set<void*> second;
     Gate allocated;
     Gate freed;
+    // keep std: memory tests link only memory
     std::thread owner([&] {
         for (int i = 0; i < COUNT; ++i)
             first.push_back(page_allocate(SIZE, 16));
         allocated.open();
         freed.wait();
+        // keep std: memory tests link only memory
         std::vector<void*> again;
         for (int i = 0; i < COUNT; ++i) {
             again.push_back(page_allocate(SIZE, 16));
@@ -138,14 +143,17 @@ TEST_CASE("the owner takes remote frees back on its slow path") {
     CHECK(base - live() == COUNT * SIZE);
     freed.open();
     owner.join();
+    // keep std: memory tests link only memory
     CHECK(second == std::set<void*>(first.begin(), first.end()));
 }
 
 TEST_CASE("a returned heap is adopted and its pending frees are drained") {
     constexpr int COUNT = 100;
     std::size_t start = live();
+    // keep std: memory tests link only memory
     std::vector<void*> small;
     void* medium = nullptr;
+    // keep std: memory tests link only memory
     std::thread first([&] {
         for (int i = 0; i < COUNT; ++i) small.push_back(page_allocate(64, 16));
         medium = page_allocate(200 * KIB, 16);
@@ -159,8 +167,10 @@ TEST_CASE("a returned heap is adopted and its pending frees are drained") {
     page_flush_remote();
     CHECK(live() < base);
 
+    // keep std: memory tests link only memory
     std::set<void*> reused;
     void* medium_again = nullptr;
+    // keep std: memory tests link only memory
     std::thread second([&] {
         for (int i = 0; i < COUNT; ++i) reused.insert(page_allocate(64, 16));
         medium_again = page_allocate(200 * KIB, 16);
@@ -169,6 +179,7 @@ TEST_CASE("a returned heap is adopted and its pending frees are drained") {
     });
     second.join();
     CHECK(page_heap_count() == heaps);
+    // keep std: memory tests link only memory
     CHECK(reused == std::set<void*>(small.begin(), small.end()));
     CHECK(medium_again == medium);
     CHECK(live() == start);
@@ -180,6 +191,7 @@ TEST_CASE("threads allocate and free each other's blocks of every tier") {
     std::size_t base = live();
     Mailbox box;
     std::atomic<int> bad{0};
+    // keep std: memory tests link only memory
     std::vector<std::thread> threads;
     for (int id = 0; id < THREADS; ++id) {
         threads.emplace_back([&, id] {
@@ -211,7 +223,9 @@ TEST_CASE("threads exit with live blocks that others free later") {
     constexpr int THREADS = 4;
     constexpr int BLOCKS = 500;
     std::size_t base = live();
+    // keep std: memory tests link only memory
     std::vector<std::vector<Block>> held(THREADS);
+    // keep std: memory tests link only memory
     std::vector<std::thread> threads;
     for (int id = 0; id < THREADS; ++id) {
         threads.emplace_back([&held, id] {
@@ -224,6 +238,7 @@ TEST_CASE("threads exit with live blocks that others free later") {
     CHECK(live() > base);
 
     std::atomic<int> bad{0};
+    // keep std: memory tests link only memory
     std::vector<std::thread> freers;
     for (int id = 0; id < THREADS; ++id) {
         freers.emplace_back([&held, &bad, id] {
@@ -242,6 +257,7 @@ TEST_CASE("short-lived threads reuse heaps") {
     std::size_t heaps = page_heap_count();
     std::size_t base = live();
     for (int wave = 0; wave < 100; ++wave) {
+        // keep std: memory tests link only memory
         std::vector<std::thread> threads;
         for (int i = 0; i < 8; ++i) {
             threads.emplace_back([] {
@@ -269,10 +285,12 @@ TEST_CASE("a free from a later thread-exit destructor still reaches its page") {
     constexpr std::size_t SIZE = 20480;
     page_deallocate(page_allocate(1, 16), 1);
     REQUIRE(pthread_key_create(&g_late_key, late_destructor) == 0);
+    // keep std: memory tests link only memory
     std::vector<void*> blocks;
     for (int i = 0; i < 3; ++i) blocks.push_back(page_allocate(SIZE, 16));
     g_late_block = blocks[0];
     g_late_size = SIZE;
+    // keep std: memory tests link only memory
     std::thread([] {
         page_deallocate(page_allocate(8, 16), 8);
         pthread_setspecific(g_late_key, &g_late_size);
@@ -288,6 +306,7 @@ TEST_CASE("a free from a later thread-exit destructor still reaches its page") {
 TEST_CASE("a fork child allocates and frees") {
     void* parent_block = page_allocate(300, 16);
     std::memset(parent_block, 0x42, 300);
+    // keep std: memory tests link only memory
     std::thread([] {
         void* p = page_allocate(5000, 16);
         page_deallocate(p, 5000);
@@ -298,14 +317,17 @@ TEST_CASE("a fork child allocates and frees") {
         int code = 0;
         page_deallocate(parent_block, 300);
         std::mt19937_64 rng(7);
+        // keep std: memory tests link only memory
         std::vector<Block> blocks;
         for (int i = 0; i < 300; ++i) blocks.push_back(make_block(rng));
         for (const Block& b : blocks) {
             if (!intact(b)) code = 1;
             page_deallocate(b.p, b.size);
         }
+        // keep std: memory tests link only memory
         std::thread worker([&code] {
             std::mt19937_64 local(9);
+            // keep std: memory tests link only memory
             std::vector<Block> mine;
             for (int i = 0; i < 100; ++i) mine.push_back(make_block(local));
             for (const Block& b : mine) {

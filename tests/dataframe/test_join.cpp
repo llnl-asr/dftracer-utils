@@ -18,8 +18,6 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
 #include <stdexcept>
 #include <utility>
 

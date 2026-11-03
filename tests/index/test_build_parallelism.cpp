@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -14,7 +15,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdio>
-#include <sstream>
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
@@ -25,23 +25,23 @@ namespace {
 constexpr int FILES = 64;
 constexpr std::size_t WORKERS = 8;
 
-std::string write_small_trace(const std::string& dir, int n) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String write_small_trace(const dstd::String& dir, int n) {
+    dstd::String out;
+    out += "[\n";
     for (int i = 0; i < 40; ++i) {
-        out << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":1,)"
-            << R"("tid":1,"ph":"X","ts":)" << 1000 + i * 10
-            << R"(,"dur":3,"args":{"fname":"/data/f)" << n << R"("}})"
-            << "\n";
+        out += common::str_cat(
+            R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":1,)",
+            R"("tid":1,"ph":"X","ts":)", 1000 + i * 10,
+            R"(,"dur":3,"args":{"fname":"/data/f)", n, R"("}})", "\n");
     }
-    out << "]\n";
+    out += "]\n";
     char name[32];
     std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
-    return dftu_utils_test::write_gz_trace(dir + name, out.str());
+    return dftu_utils_test::write_gz_trace(dir + name, out);
 }
 
 build::IndexBuildBatchResult build_with(const dstd::Vector<dstd::String>& files,
-                                        const std::string& index_dir,
+                                        const dstd::String& index_dir,
                                         std::size_t workers) {
     build::IndexBuildBatchResult result;
     Runtime rt(workers);

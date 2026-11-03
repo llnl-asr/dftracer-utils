@@ -37,9 +37,11 @@ constexpr int ROUNDS = 16;
 struct Hops {
     memory::Pool* enqueuer_pool = nullptr;
     std::mutex mutex;
+    // keep std: a dstd container or thread would charge the pool under test
     std::vector<std::thread> threads;
 
     void join() {
+        // keep std: threads is a std::vector<std::thread>
         for (std::thread& t : threads) t.join();
         threads.clear();
     }
@@ -64,6 +66,7 @@ struct ResumeFromThread {
 
 struct Blocks {
     std::size_t size = BLOCK;
+    // keep std: a dstd container would charge the pool under test
     std::vector<void*> held;
     bool moved = false;
 
@@ -75,6 +78,7 @@ struct Blocks {
 
 CoroTask<void> allocate_across_workers(Blocks* out, Hops* hops) {
     out->held.push_back(memory::allocate(out->size, ALIGN));
+    // keep std: ids are compared with the std::set in the pool test
     const std::thread::id first = std::this_thread::get_id();
     for (int i = 0; i < MAX_HOPS && std::this_thread::get_id() == first; ++i)
         co_await ResumeFromThread{*hops};
@@ -82,6 +86,7 @@ CoroTask<void> allocate_across_workers(Blocks* out, Hops* hops) {
     out->held.push_back(memory::allocate(out->size, ALIGN));
 }
 
+// keep std: a dstd container would charge the pool under test
 CoroTask<void> allocate_and_yield(Blocks* out, std::set<std::thread::id>* seen,
                                   std::mutex* seen_mutex) {
     for (int i = 0; i < ROUNDS; ++i) {
@@ -173,6 +178,7 @@ TEST_CASE("two tasks with different pools on one worker do not mix") {
     memory::PoolHandle pool_b = open_pool("b");
     Blocks blocks_a;
     Blocks blocks_b;
+    // keep std: a dstd container would charge the pool under test
     std::set<std::thread::id> seen;
     std::mutex seen_mutex;
 

@@ -145,9 +145,10 @@ TEST_SUITE("index kinds") {
             dftu_utils_test::mark_built(w);
             dftu_utils_test::commit_test_build(w);
         }
-        auto result = index::plan::prune_file({path, trace, nullptr, nullptr,
-                                               std::make_pair(50.0, 0.0), 2})
-                          .get();
+        auto result =
+            index::plan::prune_file({path, trace, nullptr, nullptr,
+                                     dstd::Pair<double, double>{50.0, 0.0}, 2})
+                .get();
         REQUIRE(result.has_value());
         CHECK(result->candidates == dstd::Vector<std::uint64_t>{1});
     }

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/cache/cache_store.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
@@ -7,7 +9,8 @@
 #include <testing_utilities.h>
 
 #include <cstdlib>
-#include <string>
+
+using namespace dftracer::utils;
 
 namespace cache = dftracer::utils::index::cache;
 
@@ -17,13 +20,13 @@ constexpr const char* TEST_DIR_ENV = "DFTRACER_UTILS_EXIT_SHUTDOWN_DIR";
 constexpr const char* CHILD_CASE =
     "index: writes an index and a cache then returns";
 
-std::string trace_text() {
-    std::string text = "[\n";
+dstd::String trace_text() {
+    dstd::String text = "[\n";
     for (int i = 0; i < 8; ++i) {
         text +=
-            R"({"id":)" + std::to_string(i + 1) +
+            R"({"id":)" + dstd::to_string(i + 1) +
             R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X","ts":)" +
-            std::to_string(1000 + i * 100) +
+            dstd::to_string(1000 + i * 100) +
             R"(,"dur":10,"args":{"ret":0,"fhash":"a1b2c3d4e5f60718"}})"
             "\n";
     }
@@ -37,8 +40,8 @@ TEST_CASE("index: writes an index and a cache then returns" * doctest::skip()) {
     fresh_process::announce();
     const char* dir = std::getenv(TEST_DIR_ENV);
     REQUIRE(dir != nullptr);
-    const std::string root(dir);
-    const std::string trace =
+    const dstd::String root(dir);
+    const dstd::String trace =
         dftu_utils_test::write_gz_trace(root + "/t.pfw.gz", trace_text());
     REQUIRE(!trace.empty());
     REQUIRE(dftu_utils_test::build_index(trace, root + "/.dftindex"));
@@ -59,7 +62,7 @@ TEST_CASE("index: a process that wrote an index and a cache exits clean") {
     ::unsetenv(TEST_DIR_ENV);
 
     REQUIRE(result.announced);
-    CHECK(result.output.find("exit check failed") == std::string::npos);
+    CHECK(result.output.find("exit check failed") == dstd::String::npos);
     int status = result.status;
     CHECK(WIFEXITED(status));
     CHECK(WEXITSTATUS(status) == 0);

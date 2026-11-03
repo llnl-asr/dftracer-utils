@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::index::schemas::dft::agg;
 
@@ -40,7 +43,7 @@ TEST_SUITE("MetricStats") {
         // Values: [2, 4, 4, 4, 5, 5, 7, 9]
         // Mean = 40/8 = 5.0
         MetricStats stats;
-        std::vector<std::uint64_t> values = {2, 4, 4, 4, 5, 5, 7, 9};
+        dstd::Vector<std::uint64_t> values = {2, 4, 4, 4, 5, 5, 7, 9};
         for (auto v : values) {
             stats.update(v);
         }
@@ -73,7 +76,7 @@ TEST_SUITE("MetricStats") {
     TEST_CASE("MetricStats - Merge equivalence") {
         // Single-pass
         MetricStats single;
-        std::vector<std::uint64_t> all_values = {2, 4, 6, 8, 10, 12, 14, 16};
+        dstd::Vector<std::uint64_t> all_values = {2, 4, 6, 8, 10, 12, 14, 16};
         for (auto v : all_values) {
             single.update(v);
         }

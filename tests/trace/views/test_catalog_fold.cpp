@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
-#include <map>
-#include <string>
 #include <tuple>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -27,37 +29,37 @@ namespace st = dftracer::utils::index::store;
 
 constexpr int RECORDS = 400;
 
-using Catalog = std::map<std::string,
-                         dftracer::utils::dstd::Tuple<int, int, std::uint64_t>>;
+using Catalog = dstd::Map<dstd::String, dstd::Tuple<int, int, std::uint64_t>>;
 
-std::string write_gz(TestEnvironment& env, const std::string& dir,
-                     const std::vector<std::string>& lines) {
-    const std::string d = env.get_dir() + "/" + dir;
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(d).has_value());
-    const std::string plain = d + "/t.ndjson";
+dstd::String write_gz(TestEnvironment& env, const dstd::String& dir,
+                      const dstd::Vector<dstd::String>& lines) {
+    const dstd::String d = env.get_dir() + "/" + dir;
+    REQUIRE(dstd::fs::create_directories(d).has_value());
+    const dstd::String plain = d + "/t.ndjson";
     {
-        std::ofstream out(plain.c_str());
+        dftu_utils_test::FileOut out(plain);
         for (const auto& l : lines) out << l << "\n";
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, 2048));
-    (void)dftracer::utils::dstd::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     return gz;
 }
 
-std::vector<std::string> dftracer_lines() {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> dftracer_lines() {
+    dstd::Vector<dstd::String> out;
     for (int i = 0; i < RECORDS; ++i) {
-        std::string l =
-            R"({"ph":"X","name":")" + std::string(i % 2 ? "read" : "write") +
-            R"(","cat":"POSIX","pid":1,"tid":)" + std::to_string(1 + i % 3) +
-            R"(,"ts":)" + std::to_string(1000 + i * 10) +
-            R"(,"dur":5,"args":{"fhash":"f)" + std::to_string(i % 4) +
-            R"(","size":)" + std::to_string(i) + R"(,"opt":)" +
+        dstd::String l =
+            R"({"ph":"X","name":")" + dstd::String(i % 2 ? "read" : "write") +
+            R"(","cat":"POSIX","pid":1,"tid":)" + dstd::to_string(1 + i % 3) +
+            R"(,"ts":)" + dstd::to_string(1000 + i * 10) +
+            R"(,"dur":5,"args":{"fhash":"f)" + dstd::to_string(i % 4) +
+            R"(","size":)" + dstd::to_string(i) + R"(,"opt":)" +
             (i % 5 ? "null" : "1.5") + R"(,"nest":{"a":)" +
-            std::to_string(i % 7) + R"(,"b":"x"},"arr":[)" + std::to_string(i) +
-            "," + std::to_string(i + 1) + R"(],"hhash":"h","e":{},"z":[]}})";
+            dstd::to_string(i % 7) + R"(,"b":"x"},"arr":[)" +
+            dstd::to_string(i) + "," + dstd::to_string(i + 1) +
+            R"(],"hhash":"h","e":{},"z":[]}})";
         if (i % 11 == 0)
             l = l.substr(0, l.find(R"("args":)")) + R"("args":{}})";
         out.push_back(std::move(l));
@@ -65,26 +67,26 @@ std::vector<std::string> dftracer_lines() {
     return out;
 }
 
-std::vector<std::string> log_lines() {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> log_lines() {
+    dstd::Vector<dstd::String> out;
     for (int i = 0; i < RECORDS; ++i)
-        out.push_back(R"({"op":")" + std::string(i % 2 ? "read" : "write") +
-                      R"(","took":)" + std::to_string(i % 7) +
-                      R"(.5,"worker":"w)" + std::to_string(i % 3) +
+        out.push_back(R"({"op":")" + dstd::String(i % 2 ? "read" : "write") +
+                      R"(","took":)" + dstd::to_string(i % 7) +
+                      R"(.5,"worker":"w)" + dstd::to_string(i % 3) +
                       R"(","status":)" + (i % 11 ? "200" : R"("n/a")") +
-                      R"(,"extra":{"k":)" + std::to_string(i) + "}}");
+                      R"(,"extra":{"k":)" + dstd::to_string(i) + "}}");
     return out;
 }
 
-std::vector<std::string> genesis_lines() {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> genesis_lines() {
+    dstd::Vector<dstd::String> out;
     out.push_back(R"({"gtype":"run","run":"ab","app":"laghos","nodes":4})");
     for (int i = 0; i < RECORDS; ++i)
         out.push_back(R"({"gtype":"func","run":"ab","ts":)" +
-                      std::to_string(i) + R"(,"v":{"p50":)" +
-                      std::to_string(i / 30) + R"(,"p99":)" +
-                      std::to_string(i / 30 + 5) + R"(},"count":)" +
-                      std::to_string(i % 7) + "}");
+                      dstd::to_string(i) + R"(,"v":{"p50":)" +
+                      dstd::to_string(i / 30) + R"(,"p99":)" +
+                      dstd::to_string(i / 30 + 5) + R"(},"count":)" +
+                      dstd::to_string(i % 7) + "}");
     return out;
 }
 
@@ -99,45 +101,45 @@ void register_log_schema() {
         "test_catalog_fold");
 }
 
-bool has_catalog(const std::string& gz) {
+bool has_catalog(const dstd::String& gz) {
     const auto snapshot = dftu_utils_test::index_snapshot(
-        std::string(determine_index_path(gz, "")));
+        dstd::String(determine_index_path(gz, "")));
     const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
     return file &&
            ix::extension_current(snapshot, *file, st::IndexExtension::Catalog);
 }
 
-Catalog catalog_of(const std::string& gz) {
+Catalog catalog_of(const dstd::String& gz) {
     const auto snapshot = dftu_utils_test::index_snapshot(
-        std::string(determine_index_path(gz, "")));
+        dstd::String(determine_index_path(gz, "")));
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
     Catalog out;
     for (const auto& [path, stat] :
          dftu_utils_test::index_take(ix::catalog(snapshot, file)))
-        out[std::string(path.data(), path.size())] = {
+        out[dstd::String(path.data(), path.size())] = {
             static_cast<int>(stat.type), stat.seen, stat.count};
     return out;
 }
 
-View view_of(const std::string& gz, const std::string& schema = "") {
+View view_of(const dstd::String& gz, const dstd::String& schema = "") {
     View v = View::from_file(
         dstd::String(gz),
-        dstd::String(std::string(determine_index_path(gz, ""))));
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
     return schema.empty() ? v : v.record_schema(dstd::String(schema));
 }
 
-void build_full(const std::string& gz, const std::string& schema = "") {
+void build_full(const dstd::String& gz, const dstd::String& schema = "") {
     ix::IndexerOptions o;
     o.checkpoint_size = 2048;
     o.schema = schema;
     ix::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
 }
 
-void expect_scan_catalog_equals_build(const std::vector<std::string>& lines,
-                                      const std::string& schema) {
+void expect_scan_catalog_equals_build(const dstd::Vector<dstd::String>& lines,
+                                      const dstd::String& schema) {
     TestEnvironment env(10);
-    const std::string scanned = write_gz(env, "scanned", lines);
-    const std::string built = write_gz(env, "built", lines);
+    const dstd::String scanned = write_gz(env, "scanned", lines);
+    const dstd::String built = write_gz(env, "built", lines);
     build_full(built, schema);
     REQUIRE(has_catalog(built));
 
@@ -149,9 +151,9 @@ void expect_scan_catalog_equals_build(const std::vector<std::string>& lines,
 }
 
 // Rewrites the file's catalog with one more path, as the build wrote it.
-void plant_sentinel(const std::string& gz) {
+void plant_sentinel(const dstd::String& gz) {
     const auto index = dftu_utils_test::open_test_index(
-        std::string(determine_index_path(gz, "")));
+        dstd::String(determine_index_path(gz, "")));
     const auto snapshot = dftu_utils_test::index_take(index.snapshot());
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
     const auto state =
@@ -166,7 +168,7 @@ void plant_sentinel(const std::string& gz) {
     dftu_utils_test::commit_test_build(build);
 }
 
-bool has_sentinel(const std::string& gz) {
+bool has_sentinel(const dstd::String& gz) {
     return catalog_of(gz).count("zz.sentinel") == 1;
 }
 
@@ -184,7 +186,7 @@ TEST_SUITE("CatalogFold") {
 
     TEST_CASE("a filtered first query writes no catalog until a full scan") {
         TestEnvironment env(10);
-        const std::string gz = write_gz(env, "f", dftracer_lines());
+        const dstd::String gz = write_gz(env, "f", dftracer_lines());
         (void)view_of(gz).duql(R"(name == "read")").collect().get();
         CHECK_FALSE(has_catalog(gz));
         (void)view_of(gz).collect().get();
@@ -193,7 +195,7 @@ TEST_SUITE("CatalogFold") {
 
     TEST_CASE("a second collect leaves the catalog alone") {
         TestEnvironment env(10);
-        const std::string gz = write_gz(env, "s", dftracer_lines());
+        const dstd::String gz = write_gz(env, "s", dftracer_lines());
         (void)view_of(gz).collect().get();
         REQUIRE(has_catalog(gz));
         plant_sentinel(gz);
@@ -203,7 +205,7 @@ TEST_SUITE("CatalogFold") {
 
     TEST_CASE("columns on a fresh trace list every path and scan once") {
         TestEnvironment env(10);
-        const std::string gz = write_gz(env, "c", dftracer_lines());
+        const dstd::String gz = write_gz(env, "c", dftracer_lines());
         {
             // A query-built index holds no catalog.
             (void)view_of(gz).duql(R"(name == "read")").collect().get();
@@ -211,7 +213,7 @@ TEST_SUITE("CatalogFold") {
         }
         const auto cols = view_of(gz).columns();
         REQUIRE(has_catalog(gz));
-        const std::string built = write_gz(env, "cb", dftracer_lines());
+        const dstd::String built = write_gz(env, "cb", dftracer_lines());
         build_full(built);
         CHECK(cols.size() > 7);
         CHECK(cols == view_of(built).columns());
@@ -224,8 +226,8 @@ TEST_SUITE("CatalogFold") {
 
     TEST_CASE("only the file without a catalog is scanned") {
         TestEnvironment env(10);
-        const std::string have = write_gz(env, "have", dftracer_lines());
-        const std::string fresh = write_gz(env, "fresh", dftracer_lines());
+        const dstd::String have = write_gz(env, "have", dftracer_lines());
+        const dstd::String fresh = write_gz(env, "fresh", dftracer_lines());
         (void)view_of(have).collect().get();
         REQUIRE(has_catalog(have));
         plant_sentinel(have);
@@ -242,8 +244,8 @@ TEST_SUITE("CatalogFold") {
 
     TEST_CASE("columns on a fresh genesis trace list its paths") {
         TestEnvironment env(10);
-        const std::string gz = write_gz(env, "g", genesis_lines());
-        const std::string built = write_gz(env, "gb", genesis_lines());
+        const dstd::String gz = write_gz(env, "g", genesis_lines());
+        const dstd::String built = write_gz(env, "gb", genesis_lines());
         build_full(built);
         REQUIRE(has_catalog(built));
         const auto cols = view_of(gz).columns();

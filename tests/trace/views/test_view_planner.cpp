@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view_definition.h>
@@ -8,8 +10,6 @@
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <testing_utilities.h>
-
-#include <string>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;
@@ -21,15 +21,15 @@ using namespace dftracer::utils::index::extensions;
 //   1: name={open,close}, cat={POSIX}
 //   2: name={train}, cat={compute}
 //   3: name={forward}, cat={compute,ai_framework}
-static void populate_test_idx(const std::string& index_path,
-                              const std::string& file_path) {
+static void populate_test_idx(const dstd::String& index_path,
+                              const dstd::String& file_path) {
     auto index = dftu_utils_test::open_test_index(index_path);
     auto writer = dftu_utils_test::register_test_file(
         index, dftu_utils_test::index_key(file_path), 40000);
 
     struct ChunkDims {
-        std::vector<std::string> names;
-        std::vector<std::string> cats;
+        dstd::Vector<dstd::String> names;
+        dstd::Vector<dstd::String> cats;
     };
 
     ChunkDims chunks[] = {
@@ -94,13 +94,13 @@ static void populate_test_idx(const std::string& index_path,
 
 TEST_SUITE("ViewPlannerUtility") {
     TEST_CASE("ViewPlanner - IO view filters to POSIX chunks") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_view_builder_io")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         ViewPlannerInput input;
@@ -130,13 +130,13 @@ TEST_SUITE("ViewPlannerUtility") {
     }
 
     TEST_CASE("ViewPlanner - Compute view filters to compute chunks") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_view_builder_compute")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         ViewPlannerInput input;
@@ -160,13 +160,13 @@ TEST_SUITE("ViewPlannerUtility") {
     }
 
     TEST_CASE("ViewPlanner - File-level skip for absent values") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_view_builder_skip")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         ViewDefinition view;
@@ -191,13 +191,13 @@ TEST_SUITE("ViewPlannerUtility") {
     }
 
     TEST_CASE("ViewPlanner - No bloom predicates returns all chunks") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_view_builder_nobl")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         ViewDefinition view;
@@ -265,13 +265,13 @@ TEST_SUITE("ViewPlannerUtility") {
     }
 
     TEST_CASE("ViewPlanner - Dimension alias resolution") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_view_builder_alias")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
 
         {
             auto index = dftu_utils_test::open_test_index(index_path);
@@ -314,13 +314,13 @@ TEST_SUITE("ViewPlannerUtility") {
     }
 
     TEST_CASE("ViewPlanner - several chunks without a chunk table fail") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_view_builder_no_table")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
 
         {
             auto index = dftu_utils_test::open_test_index(index_path);
@@ -343,8 +343,8 @@ TEST_SUITE("ViewPlannerUtility") {
         auto output = builder(input).get();
 
         REQUIRE_FALSE(output);
-        CHECK(std::string(output.error().message()).find("chunk table") !=
-              std::string::npos);
+        CHECK(dstd::String(output.error().message()).find("chunk table") !=
+              dstd::String::npos);
 
         (void)dstd::fs::remove_all(test_dir);
     }

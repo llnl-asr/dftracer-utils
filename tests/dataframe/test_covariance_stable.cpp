@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <random>
 
+using namespace dftracer::utils;
+
 namespace df = dftracer::utils::dataframe;
 using df::AggOp;
 using df::AggSpec;
@@ -25,7 +27,7 @@ namespace {
 constexpr std::size_t N = 1000000;
 constexpr std::int32_t VC_Y = 0;  // value column indices
 constexpr std::int32_t VC_X = 1;
-const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> G{"g"};
+const dstd::Vector<dstd::String> G{"g"};
 
 struct Ref {
     double cov_pop, cov_samp, corr, slope, intercept, r2;
@@ -33,7 +35,7 @@ struct Ref {
 
 // Neumaier-compensated sum: the reference must not lose digits to the very
 // cancellation under test (on some targets `long double` is a plain double).
-double compensated_sum(const dftracer::utils::dstd::Vector<double>& v) {
+double compensated_sum(const dstd::Vector<double>& v) {
     double sum = 0.0, c = 0.0;
     for (double x : v) {
         const double t = sum + x;
@@ -46,8 +48,7 @@ double compensated_sum(const dftracer::utils::dstd::Vector<double>& v) {
 // The corrected two-pass value over the pairs: deviations from the compensated
 // means, with the (sum dx)(sum dy) / n term removing the rounding error of the
 // means themselves.
-Ref two_pass(const dftracer::utils::dstd::Vector<double>& x,
-             const dftracer::utils::dstd::Vector<double>& y) {
+Ref two_pass(const dstd::Vector<double>& x, const dstd::Vector<double>& y) {
     const double n = static_cast<double>(x.size());
     const double mx = compensated_sum(x) / n;
     const double my = compensated_sum(y) / n;
@@ -77,8 +78,7 @@ double rel(double a, double b) { return std::fabs(a - b) / std::fabs(b); }
 
 // z ~ N(0,1); x = mean_x + spread_x z; y = mean_y + 0.5 spread_x z + e.
 void pairs(double mean_x, double mean_y, double spread, std::size_t n,
-           unsigned seed, dftracer::utils::dstd::Vector<double>& x,
-           dftracer::utils::dstd::Vector<double>& y) {
+           unsigned seed, dstd::Vector<double>& x, dstd::Vector<double>& y) {
     std::mt19937_64 rng(seed);
     std::normal_distribution<double> z(0.0, 1.0);
     x.resize(n);
@@ -90,7 +90,7 @@ void pairs(double mean_x, double mean_y, double spread, std::size_t n,
     }
 }
 
-dftracer::utils::dstd::Vector<AggSpec> all_specs() {
+dstd::Vector<AggSpec> all_specs() {
     return {
         AggSpec{AggOp::Corr, VC_Y, "corr", 0.0, VC_X},
         AggSpec{AggOp::CovarPop, VC_Y, "covar_pop", 0.0, VC_X},
@@ -114,22 +114,21 @@ void check_against(const DataFrame& r, const Ref& ref, std::int64_t row = 0) {
     CHECK(rel(at(r, "regr_r2", row), ref.r2) < 1e-9);
 }
 
-DataFrame one_group(const dftracer::utils::dstd::Vector<double>& x,
-                    const dftracer::utils::dstd::Vector<double>& y) {
+DataFrame one_group(const dstd::Vector<double>& x,
+                    const dstd::Vector<double>& y) {
     const std::int64_t n = static_cast<std::int64_t>(x.size());
-    dftracer::utils::dstd::Vector<std::int64_t> keys(x.size(), 7);
+    dstd::Vector<std::int64_t> keys(x.size(), 7);
     Series k = Series::flat_i64(keys.data(), n);
     Series sy = Series::flat_f64(y.data(), n);
     Series sx = Series::flat_f64(x.data(), n);
-    return df::group_agg(
-        {&k}, {&sy, &sx}, all_specs(),
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"g"});
+    return df::group_agg({&k}, {&sy, &sx}, all_specs(),
+                         dstd::Vector<dstd::String>{"g"});
 }
 
 }  // namespace
 
 TEST_CASE("a large offset keeps the covariance and correlation") {
-    dftracer::utils::dstd::Vector<double> x, y;
+    dstd::Vector<double> x, y;
     pairs(1e9, 5e8, 1.0, N, 0, x, y);
     const Ref ref = two_pass(x, y);
     DataFrame r = one_group(x, y);
@@ -142,23 +141,23 @@ TEST_CASE("a large offset keeps the covariance and correlation") {
 }
 
 TEST_CASE("a tiny spread keeps the covariance and correlation") {
-    dftracer::utils::dstd::Vector<double> x, y;
+    dstd::Vector<double> x, y;
     pairs(1e3, 1e3, 1e-3, N, 1, x, y);
     check_against(one_group(x, y), two_pass(x, y));
 }
 
 TEST_CASE("a very large mean next to a spread of one") {
-    dftracer::utils::dstd::Vector<double> x, y;
+    dstd::Vector<double> x, y;
     pairs(6e11, 6e11, 1.0, 200000, 2, x, y);
     check_against(one_group(x, y), two_pass(x, y));
 }
 
 TEST_CASE("every group keeps its own accuracy at different offsets") {
-    dftracer::utils::dstd::Vector<double> x0, y0, x1, y1;
+    dstd::Vector<double> x0, y0, x1, y1;
     pairs(1e9, 5e8, 1.0, 100000, 3, x0, y0);
     pairs(2e3, -4e4, 1e-2, 100000, 4, x1, y1);
-    dftracer::utils::dstd::Vector<std::int64_t> keys;
-    dftracer::utils::dstd::Vector<double> x, y;
+    dstd::Vector<std::int64_t> keys;
+    dstd::Vector<double> x, y;
     for (std::size_t i = 0; i < x0.size(); ++i) {
         keys.push_back(0);
         x.push_back(x0[i]);
@@ -171,9 +170,8 @@ TEST_CASE("every group keeps its own accuracy at different offsets") {
     Series k = Series::flat_i64(keys.data(), n);
     Series sy = Series::flat_f64(y.data(), n);
     Series sx = Series::flat_f64(x.data(), n);
-    DataFrame r = df::group_agg(
-        {&k}, {&sy, &sx}, all_specs(),
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"g"});
+    DataFrame r = df::group_agg({&k}, {&sy, &sx}, all_specs(),
+                                dstd::Vector<dstd::String>{"g"});
     REQUIRE(r.num_rows() == 2);
     const std::int64_t* g = r.column("g").data<std::int64_t>();
     check_against(r, two_pass(x0, y0), g[0] == 0 ? 0 : 1);
@@ -181,16 +179,16 @@ TEST_CASE("every group keeps its own accuracy at different offsets") {
 }
 
 TEST_CASE("partitions merge to the one-pass value for any split") {
-    dftracer::utils::dstd::Vector<double> x, y;
+    dstd::Vector<double> x, y;
     pairs(1e9, 5e8, 1.0, 400000, 5, x, y);
     const Ref ref = two_pass(x, y);
     const std::int64_t n = static_cast<std::int64_t>(x.size());
-    dftracer::utils::dstd::Vector<std::int64_t> keys(x.size(), 7);
+    dstd::Vector<std::int64_t> keys(x.size(), 7);
     Series k = Series::flat_i64(keys.data(), n);
     Series sy = Series::flat_f64(y.data(), n);
     Series sx = Series::flat_f64(x.data(), n);
-    const dftracer::utils::dstd::Vector<const Series*> kc = {&k};
-    const dftracer::utils::dstd::Vector<const Series*> vc = {&sy, &sx};
+    const dstd::Vector<const Series*> kc = {&k};
+    const dstd::Vector<const Series*> vc = {&sy, &sx};
     const std::int64_t cuts[] = {0, 90000, 90001, 250000, n};
     auto part = [&](int i) {
         auto st = df::agg_new(all_specs());
@@ -210,15 +208,15 @@ TEST_CASE("partitions merge to the one-pass value for any split") {
 }
 
 TEST_CASE("a serialized partial reads back to the same values") {
-    dftracer::utils::dstd::Vector<double> x, y;
+    dstd::Vector<double> x, y;
     pairs(1e9, 5e8, 1.0, 100000, 6, x, y);
     const std::int64_t n = static_cast<std::int64_t>(x.size());
-    dftracer::utils::dstd::Vector<std::int64_t> keys(x.size(), 7);
+    dstd::Vector<std::int64_t> keys(x.size(), 7);
     Series k = Series::flat_i64(keys.data(), n);
     Series sy = Series::flat_f64(y.data(), n);
     Series sx = Series::flat_f64(x.data(), n);
-    const dftracer::utils::dstd::Vector<const Series*> kc = {&k};
-    const dftracer::utils::dstd::Vector<const Series*> vc = {&sy, &sx};
+    const dstd::Vector<const Series*> kc = {&k};
+    const dstd::Vector<const Series*> vc = {&sy, &sx};
     auto st = df::agg_new(all_specs());
     df::agg_accumulate(*st, kc, vc);
     auto back = df::agg_deserialize(df::agg_serialize(*st));
@@ -230,7 +228,7 @@ TEST_CASE("a serialized partial reads back to the same values") {
 }
 
 TEST_CASE("a column with no spread and a single pair read 0") {
-    dftracer::utils::dstd::Vector<double> x(1000, 5e8), y(1000), z;
+    dstd::Vector<double> x(1000, 5e8), y(1000), z;
     pairs(1e9, 5e8, 1.0, 1000, 7, z, y);
     DataFrame r = one_group(x, y);
     CHECK(at(r, "corr") == 0.0);

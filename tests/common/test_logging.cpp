@@ -2,13 +2,15 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
-#include <string>
+
+using namespace dftracer::utils;
 
 namespace {
 
@@ -16,7 +18,7 @@ namespace {
 // it emitted. Ambient logging env vars are cleared first so cfg alone drives
 // behavior; a safe stderr sink is restored before the memory stream is closed.
 template <typename F>
-std::string capture_log(dftracer::utils::common::logger::Config cfg, F&& fn) {
+dstd::String capture_log(dftracer::utils::common::logger::Config cfg, F&& fn) {
     ::unsetenv("DFTRACER_UTILS_LOG_LEVEL");
     ::unsetenv("DFTRACER_UTILS_LOG_COLOR");
     ::unsetenv("DFTRACER_UTILS_LOG_FILE");
@@ -33,7 +35,7 @@ std::string capture_log(dftracer::utils::common::logger::Config cfg, F&& fn) {
     dftracer::utils::common::logger::init(cfg);
     fn();
     std::fflush(fp);
-    std::string out(buf, size);
+    dstd::String out(buf, size);
 
     dftracer::utils::common::logger::init(
         dftracer::utils::common::logger::
@@ -43,8 +45,8 @@ std::string capture_log(dftracer::utils::common::logger::Config cfg, F&& fn) {
     return out;
 }
 
-bool contains(const std::string& hay, const char* needle) {
-    return hay.find(needle) != std::string::npos;
+bool contains(const dstd::String& hay, const char* needle) {
+    return hay.find(needle) != dstd::String::npos;
 }
 
 }  // namespace
@@ -159,7 +161,7 @@ TEST_CASE("TRACE_SCOPE emits nested enter/exit with timing") {
     // outer's.
     auto outer = out.find("-> ");
     auto inner = out.find("k=7");
-    CHECK(inner != std::string::npos);
+    CHECK(inner != dstd::String::npos);
     CHECK(inner > outer);
 }
 

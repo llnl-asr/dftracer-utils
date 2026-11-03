@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <sys/resource.h>
@@ -11,9 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <memory>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -42,7 +42,7 @@ coro::CoroTask<void> busy(Concurrency* c, std::chrono::milliseconds hold) {
 
 int most_at_once(int tasks) {
     Concurrency c;
-    std::vector<TaskHandle> handles;
+    dstd::Vector<TaskHandle> handles;
     for (int i = 0; i < tasks; ++i)
         handles.push_back(default_runtime().submit(
             busy(&c, std::chrono::milliseconds(50)), "busy"));
@@ -74,8 +74,8 @@ coro::CoroTask<void> wait_for(std::atomic<bool>* go, std::atomic<bool>* done) {
 
 TEST_SUITE("ProcessRuntime") {
     TEST_CASE("threads that ask at once all get one runtime") {
-        std::vector<dstd::SharedPtr<Runtime>> got(16);
-        std::vector<std::thread> threads;
+        dstd::Vector<dstd::SharedPtr<Runtime>> got(16);
+        dstd::Vector<dstd::Thread> threads;
         for (std::size_t i = 0; i < got.size(); ++i)
             threads.emplace_back([&, i] { got[i] = default_runtime_shared(); });
         for (auto& t : threads) t.join();
@@ -84,8 +84,8 @@ TEST_SUITE("ProcessRuntime") {
 
     TEST_CASE("configure from many threads at once keeps one runtime") {
         Runtime* before = &default_runtime();
-        std::vector<Runtime*> got(8);
-        std::vector<std::thread> threads;
+        dstd::Vector<Runtime*> got(8);
+        dstd::Vector<dstd::Thread> threads;
         for (std::size_t i = 0; i < got.size(); ++i)
             threads.emplace_back([&, i] {
                 got[i] = &configure_default_runtime({.threads = i + 1});
@@ -125,7 +125,7 @@ TEST_SUITE("ProcessRuntime") {
         "workers wait, not spin, after a shrink below the running tasks") {
         configure_default_runtime({.threads = 8, .eager = true});
         Concurrency held;
-        std::vector<TaskHandle> long_tasks;
+        dstd::Vector<TaskHandle> long_tasks;
         for (int i = 0; i < 3; ++i)
             long_tasks.push_back(default_runtime().submit(
                 busy(&held, std::chrono::milliseconds(600)), "long"));
@@ -134,7 +134,7 @@ TEST_SUITE("ProcessRuntime") {
         // Three tasks hold permits of a cap of two: no permit is free until
         // two of them end.
         configure_default_runtime({.threads = 2});
-        std::vector<TaskHandle> waiting;
+        dstd::Vector<TaskHandle> waiting;
         for (int i = 0; i < 4; ++i)
             waiting.push_back(default_runtime().submit(tiny(), "tiny"));
         const auto before = cpu_time();

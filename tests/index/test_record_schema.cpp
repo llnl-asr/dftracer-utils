@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
@@ -16,8 +18,6 @@
 #include <testing_utilities.h>
 
 #include <algorithm>
-#include <fstream>
-#include <sstream>
 
 using namespace dftracer::utils;
 namespace istore = dftracer::utils::index::store;
@@ -28,16 +28,17 @@ const char* OPS[] = {"read", "write", "open", "close"};
 
 // Generic NDJSON over small gzip members: `op` is constant for runs of 400
 // records, so chunks hold disjoint ops; `io.off` grows with the record.
-std::string write_ndjson(const std::string& dir, int records) {
-    std::ostringstream out;
+dstd::String write_ndjson(const dstd::String& dir, int records) {
+    dstd::String out;
     for (int i = 0; i < records; ++i)
-        out << R"({"host":"n)" << i % 3 << R"(","lat":)" << i % 17 << ".5"
-            << R"(,"op":")" << OPS[(i / 400) % 4] << R"(","io":{"off":)" << i
-            << R"(},"hosts":["h1","h2"],"ok":)" << (i % 2 ? "true" : "false")
-            << "}\n";
+        out += common::str_cat(R"({"host":"n)", i % 3, R"(","lat":)", i % 17,
+                               ".5", R"(,"op":")", OPS[(i / 400) % 4],
+                               R"(","io":{"off":)", i,
+                               R"(},"hosts":["h1","h2"],"ok":)",
+                               (i % 2 ? "true" : "false"), "}\n");
     const auto plain = dir + "/generic.ndjson";
     {
-        std::ofstream(plain.c_str()) << out.str();
+        (void)dstd::fs::write_file(dstd::PathView(plain), out);
     }
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
@@ -46,8 +47,8 @@ std::string write_ndjson(const std::string& dir, int records) {
     return gz;
 }
 
-std::size_t count_rows(const std::string& trace, const std::string& index_dir,
-                       const std::string& query, bool skip_pruning) {
+std::size_t count_rows(const dstd::String& trace, const dstd::String& index_dir,
+                       const dstd::String& query, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
         utilities::reader::TraceReader reader(
             {.file_path = dstd::String(trace),
@@ -63,7 +64,7 @@ std::size_t count_rows(const std::string& trace, const std::string& index_dir,
     return run().get();
 }
 
-index::IndexerOptions options(const std::string& dir,
+index::IndexerOptions options(const dstd::String& dir,
                               dstd::String schema = "") {
     index::IndexerOptions o;
     o.index_dir = dir;

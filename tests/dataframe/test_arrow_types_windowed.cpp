@@ -13,7 +13,11 @@
 #include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <nanoarrow/nanoarrow.h>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;
@@ -129,7 +133,7 @@ TEST_SUITE("dataframe_arrow_types_windowed") {
 
     TEST_CASE("variance, stddev, skewness, kurtosis") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             if (row.support == Support::Refuses) {
@@ -150,7 +154,7 @@ TEST_SUITE("dataframe_arrow_types_windowed") {
 
     TEST_CASE("quantile and median") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             if (row.support == Support::Refuses) {
@@ -166,7 +170,7 @@ TEST_SUITE("dataframe_arrow_types_windowed") {
 
     TEST_CASE("rolling sum, mean, min, max") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             Series sum = s.rolling(RollingOp::Sum, 2);
@@ -209,7 +213,7 @@ TEST_SUITE("dataframe_arrow_types_windowed") {
 
     TEST_CASE("rolling_var, rolling_std, rolling_median, rolling_quantile") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             Series var = s.rolling_var(2);
@@ -253,7 +257,7 @@ TEST_SUITE("dataframe_arrow_types_windowed") {
 
     TEST_CASE("ewm_mean and ewm_std") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             Series mean = s.ewm_mean(0.5);
@@ -284,11 +288,11 @@ TEST_SUITE("dataframe_arrow_types_windowed") {
 
     TEST_CASE("cut and qcut") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             const double k = scale(row.id);
-            std::vector<double> edge_vals = {1.5 * k};
+            dstd::Vector<double> edge_vals = {1.5 * k};
             Series edges = Series::flat_f64(edge_vals.data(), 1);
             Series binned = s.cut(edges);
             Series q = s.qcut(2);

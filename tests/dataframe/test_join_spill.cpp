@@ -19,10 +19,7 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string>
 #include <utility>
 
 using namespace dftracer::utils;

@@ -21,8 +21,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <memory>
-#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -52,8 +50,8 @@ struct Counters {
 // Rows id = lo..hi-1, val = id * 10, kept in memory.
 class RangeSource {
    public:
-    RangeSource(dftracer::utils::dstd::SharedPtr<Counters> c, std::int64_t lo,
-                std::int64_t hi, bool fail = false)
+    RangeSource(dstd::SharedPtr<Counters> c, std::int64_t lo, std::int64_t hi,
+                bool fail = false)
         : c_(std::move(c)), lo_(lo), hi_(hi), fail_(fail) {
         ++c_->sources_alive;
     }
@@ -69,21 +67,20 @@ class RangeSource {
 
     class Cursor {
        public:
-        Cursor(pl::OwnedFrame f, bool fail,
-               dftracer::utils::dstd::SharedPtr<Counters> c)
+        Cursor(pl::OwnedFrame f, bool fail, dstd::SharedPtr<Counters> c)
             : f_(std::move(f)), fail_(fail), c_(std::move(c)) {}
         Cursor(const Cursor&) = delete;
         ~Cursor() { ++c_->cursors_destroyed; }
-        dftracer::utils::dstd::Optional<pl::OwnedFrame> next(std::int64_t) {
+        dstd::Optional<pl::OwnedFrame> next(std::int64_t) {
             if (fail_) throw std::runtime_error("range cursor broke");
-            if (!f_) return dftracer::utils::dstd::nullopt;
+            if (!f_) return dstd::nullopt;
             return std::move(f_);
         }
 
        private:
         pl::OwnedFrame f_;
         bool fail_;
-        dftracer::utils::dstd::SharedPtr<Counters> c_;
+        dstd::SharedPtr<Counters> c_;
     };
 
     pl::ScanResult<Cursor> scan(const pl::ScanView& req) const {
@@ -97,7 +94,7 @@ class RangeSource {
         dstd::Vector<dftu_series*> cols;
         auto want = [&](const char* name) {
             if (req.projection.empty()) return true;
-            for (dftracer::utils::dstd::StringView p : req.projection)
+            for (dstd::StringView p : req.projection)
                 if (p == name) return true;
             return false;
         };
@@ -117,47 +114,47 @@ class RangeSource {
     }
 
     // `id > k` (and `id >= k`) narrows the range exactly.
-    dftracer::utils::dstd::Optional<pl::Applied<RangeSource>> apply_filter(
+    dstd::Optional<pl::Applied<RangeSource>> apply_filter(
         pl::ExprView pred) const {
         auto cmp = pred.as_compare();
         if (!cmp || cmp->column != 0 || cmp->rhs.kind != DFTU_SCALAR_TAG_I64)
-            return dftracer::utils::dstd::nullopt;
+            return dstd::nullopt;
         std::int64_t lo = lo_;
         if (cmp->op == DFTU_CMP_GT)
             lo = cmp->rhs.value.i + 1;
         else if (cmp->op == DFTU_CMP_GE)
             lo = cmp->rhs.value.i;
         else
-            return dftracer::utils::dstd::nullopt;
-        if (lo <= lo_) return dftracer::utils::dstd::nullopt;
+            return dstd::nullopt;
+        if (lo <= lo_) return dstd::nullopt;
         ++c_->filters_absorbed;
         return pl::Applied<RangeSource>{
             dstd::make_unique<RangeSource>(c_, lo, hi_, fail_),
             pl::Apply::Exact};
     }
 
-    dftracer::utils::dstd::Optional<pl::Applied<RangeSource>> apply_limit(
-        std::int64_t offset, std::int64_t n) const {
+    dstd::Optional<pl::Applied<RangeSource>> apply_limit(std::int64_t offset,
+                                                         std::int64_t n) const {
         const std::int64_t lo = lo_ + offset;
         const std::int64_t hi = std::min(hi_, lo + n);
-        if (lo == lo_ && hi == hi_) return dftracer::utils::dstd::nullopt;
+        if (lo == lo_ && hi == hi_) return dstd::nullopt;
         return pl::Applied<RangeSource>{
             dstd::make_unique<RangeSource>(c_, lo, hi, fail_),
             pl::Apply::Exact};
     }
 
     // Records the offer of an inner join on id, then leaves it to the engine.
-    dftracer::utils::dstd::Optional<pl::Applied<RangeSource>> apply_join(
+    dstd::Optional<pl::Applied<RangeSource>> apply_join(
         const pl::JoinView<RangeSource>& j) const {
         if (j.how != DFTU_JOIN_INNER || j.left_on.size() != 1 ||
             j.left_on[0] != "id" || j.right_on[0] != "id")
-            return dftracer::utils::dstd::nullopt;
+            return dstd::nullopt;
         ++c_->joins_absorbed;
-        return dftracer::utils::dstd::nullopt;
+        return dstd::nullopt;
     }
 
    private:
-    dftracer::utils::dstd::SharedPtr<Counters> c_;
+    dstd::SharedPtr<Counters> c_;
     std::int64_t lo_;
     std::int64_t hi_;
     bool fail_;
@@ -167,10 +164,10 @@ class RangeSource {
 struct Root {
     const dftu_source_vt* vt = pl::source_vtable<RangeSource>();
     void* self;
-    dftracer::utils::dstd::SharedPtr<df::Source> source;
+    dstd::SharedPtr<df::Source> source;
 
-    Root(dftracer::utils::dstd::SharedPtr<Counters> c, std::int64_t lo,
-         std::int64_t hi, bool fail = false)
+    Root(dstd::SharedPtr<Counters> c, std::int64_t lo, std::int64_t hi,
+         bool fail = false)
         : self(pl::make_source_self(
               dstd::make_unique<RangeSource>(std::move(c), lo, hi, fail))),
           source(df::make_provider_source(*vt, self)) {}
@@ -262,14 +259,12 @@ class DoubleVal {
 
     class Cursor {
        public:
-        explicit Cursor(dftracer::utils::dstd::Optional<pl::InputCursor> in)
+        explicit Cursor(dstd::Optional<pl::InputCursor> in)
             : in_(std::move(in)) {}
-        dftracer::utils::dstd::Optional<pl::OwnedFrame> next(
-            std::int64_t max_rows) {
-            if (!in_) return dftracer::utils::dstd::nullopt;
-            dftracer::utils::dstd::Optional<pl::OwnedFrame> f =
-                in_->next(max_rows);
-            if (!f) return dftracer::utils::dstd::nullopt;
+        dstd::Optional<pl::OwnedFrame> next(std::int64_t max_rows) {
+            if (!in_) return dstd::nullopt;
+            dstd::Optional<pl::OwnedFrame> f = in_->next(max_rows);
+            if (!f) return dstd::nullopt;
             dftu_series* id = dftu_dataframe_column(f->get(), "id");
             dftu_series* val = dftu_dataframe_column(f->get(), "val");
             const std::int64_t n = dftu_series_length(val);
@@ -286,14 +281,14 @@ class DoubleVal {
         }
 
        private:
-        dftracer::utils::dstd::Optional<pl::InputCursor> in_;
+        dstd::Optional<pl::InputCursor> in_;
     };
 
     dstd::UniquePtr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
                                  std::uint64_t) const {
         if (mode_ == OpenMode::Throw) throw std::runtime_error("no open");
         if (mode_ == OpenMode::DropInput)
-            return dstd::make_unique<Cursor>(dftracer::utils::dstd::nullopt);
+            return dstd::make_unique<Cursor>(dstd::nullopt);
         return dstd::make_unique<Cursor>(std::move(in));
     }
 
@@ -359,25 +354,22 @@ TEST_SUITE("plugin SDK node") {
 
 TEST_SUITE("plugin sdk batch strings") {
     TEST_CASE("Event reads dictionary and selection string columns") {
-        const dstd::Vector<dftracer::utils::dstd::StringView> cats{
-            "POSIX", "", "STDIO", "POSIX"};
+        const dstd::Vector<dstd::StringView> cats{"POSIX", "", "STDIO",
+                                                  "POSIX"};
         const std::uint8_t cat_valid = 0b1101;
-        df::Series cat = df::Series::strings(
-                             dftracer::utils::dstd::Span<
-                                 const dftracer::utils::dstd::StringView>(cats),
-                             &cat_valid)
-                             .dictionary_encode();
+        df::Series cat =
+            df::Series::strings(dstd::Span<const dstd::StringView>(cats),
+                                &cat_valid)
+                .dictionary_encode();
         REQUIRE(cat.encoding() == df::Encoding::Dictionary);
 
-        const dstd::Vector<dftracer::utils::dstd::StringView> names{
-            "a", "open", "b", "read", "c", "write", "d", "close"};
+        const dstd::Vector<dstd::StringView> names{"a", "open",  "b", "read",
+                                                   "c", "write", "d", "close"};
         const std::uint8_t keep_odd = 0b10101010;
         const df::Series mask =
             df::Series::flat(df::TypeId::Bool, &keep_odd, 8);
         df::Series name =
-            df::Series::strings(
-                dftracer::utils::dstd::Span<
-                    const dftracer::utils::dstd::StringView>(names))
+            df::Series::strings(dstd::Span<const dstd::StringView>(names))
                 .filter(mask);
         REQUIRE(name.encoding() == df::Encoding::Selection);
         REQUIRE(name.length() == 4);

@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::TypeId;
@@ -21,7 +23,7 @@ Series mask(std::uint8_t bits, std::int64_t n) {
 }  // namespace
 
 TEST_CASE("where with an all-null arm gives null where the mask is false") {
-    std::vector<double> x{1.0, 2.0, 3.0, 5.0};
+    dstd::Vector<double> x{1.0, 2.0, 3.0, 5.0};
     Series s = Series::flat_f64(x.data(), 4);
     Series r = s.where(mask(0b1101, 4), Series::nulls(TypeId::Float64, 4));
     REQUIRE(r.valid());
@@ -33,7 +35,7 @@ TEST_CASE("where with an all-null arm gives null where the mask is false") {
 }
 
 TEST_CASE("where with a null arm keeps an integer column integer") {
-    std::vector<std::int64_t> x{1, 2, 3};
+    dstd::Vector<std::int64_t> x{1, 2, 3};
     Series r = Series::flat_i64(x.data(), 3)
                    .where(mask(0b101, 3), Series::nulls(TypeId::Int64, 3));
     REQUIRE(r.valid());
@@ -43,8 +45,8 @@ TEST_CASE("where with a null arm keeps an integer column integer") {
 }
 
 TEST_CASE("where with a null arm: a null in the source stays null") {
-    std::vector<double> x{1.0, 0.0, 3.0};
-    std::vector<std::uint8_t> valid{0x05};  // row 1 is null
+    dstd::Vector<double> x{1.0, 0.0, 3.0};
+    dstd::Vector<std::uint8_t> valid{0x05};  // row 1 is null
     Series s = Series::flat_f64(x.data(), 3, valid.data());
     Series r = s.where(mask(0b111, 3), Series::nulls(TypeId::Float64, 3));
     REQUIRE(r.valid());
@@ -54,10 +56,10 @@ TEST_CASE("where with a null arm: a null in the source stays null") {
 
 TEST_CASE("clip bounds at a dtype's limits leave the other side alone") {
     const double inf = std::numeric_limits<double>::infinity();
-    std::vector<double> x{-2.5, 0.0, 3.5, 0.0};
-    std::vector<std::uint8_t> valid{0x07};  // row 3 is null
+    dstd::Vector<double> x{-2.5, 0.0, 3.5, 0.0};
+    dstd::Vector<std::uint8_t> valid{0x07};  // row 3 is null
     Series f = Series::flat_f64(x.data(), 4, valid.data());
-    Series lower = f.clip(0.0, inf);        // clip(lower=0)
+    Series lower = f.clip(0.0, inf);         // clip(lower=0)
     REQUIRE(lower.valid());
     CHECK(lower.data<double>()[0] == 0.0);
     CHECK(lower.data<double>()[2] == 3.5);
@@ -66,7 +68,7 @@ TEST_CASE("clip bounds at a dtype's limits leave the other side alone") {
     CHECK(upper.data<double>()[0] == -2.5);
     CHECK(upper.data<double>()[2] == 1.0);
 
-    std::vector<std::int32_t> i{-5, 0, 7};
+    dstd::Vector<std::int32_t> i{-5, 0, 7};
     Series si = Series::flat(TypeId::Int32, i.data(), 3);
     Series ci = si.clip(std::int64_t{0},
                         std::int64_t{std::numeric_limits<std::int32_t>::max()});

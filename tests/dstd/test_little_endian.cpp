@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -85,7 +84,7 @@ TEST_SUITE("little_endian") {
         for (std::size_t i = 0; i < 14; ++i) CHECK(v[i] == i + 1);
         CHECK(dstd::read_f64_le(v.data() + 14) == 1.0);
 
-        std::vector<std::uint8_t> plain;
+        dstd::Vector<std::uint8_t> plain;
         dstd::append_u32_le(plain, 7U);
         CHECK(plain.size() == 4);
         CHECK(dstd::read_u32_le(plain.data()) == 7U);

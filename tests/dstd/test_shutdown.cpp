@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
-#include <string>
-#include <vector>
 
-using dftracer::utils::dstd::add_shutdown_hook;
-using dftracer::utils::dstd::shutdown;
-using dftracer::utils::dstd::ShutdownStage;
+using namespace dftracer::utils;
+
+using dstd::add_shutdown_hook;
+using dstd::shutdown;
+using dstd::ShutdownStage;
 
 namespace {
 
-std::vector<std::string> g_ran;
+dstd::Vector<dstd::String> g_ran;
 
 void record(const char* what) { g_ran.emplace_back(what); }
 
@@ -34,14 +36,14 @@ TEST_CASE("shutdown runs the stages in order and each stage in reverse") {
 
     shutdown();
 
-    const std::vector<std::string> want = {"close 2", "close 1", "stop 2",
-                                           "stop 1",  "nested",  "nested done",
-                                           "free 2",  "free 1"};
+    const dstd::Vector<dstd::String> want = {
+        "close 2", "close 1",     "stop 2", "stop 1",
+        "nested",  "nested done", "free 2", "free 1"};
     CHECK(g_ran == want);
 }
 
 TEST_CASE("a second shutdown runs nothing") {
-    const std::vector<std::string> after_first = g_ran;
+    const dstd::Vector<dstd::String> after_first = g_ran;
 
     shutdown();
 

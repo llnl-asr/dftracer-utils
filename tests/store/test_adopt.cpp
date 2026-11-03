@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/store.h>
 #include <doctest/doctest.h>
@@ -9,14 +10,12 @@
 
 #include <cstddef>
 #include <optional>
-#include <string>
 #include <utility>
 
 using namespace dftracer::utils;
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
 using store::Namespace;
@@ -24,15 +23,15 @@ using store::NamespaceSpec;
 using store::ScopeKey;
 using store::Store;
 
-dstd::ByteView view_of(const std::string& bytes) {
+dstd::ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::StringView sv(const std::string& text) {
+dstd::StringView sv(const dstd::String& text) {
     return dstd::StringView(text.data(), text.size());
 }
 
-NamespaceSpec spec_of(const std::string& name) {
+NamespaceSpec spec_of(const dstd::String& name) {
     NamespaceSpec spec;
     spec.name = dstd::String(name.data(), name.size());
     return spec;
@@ -43,14 +42,14 @@ dstd::Expected<void, dstd::Error> run(
     return dftracer::utils::default_runtime().submit(std::move(task)).get();
 }
 
-Store open_store(const std::string& dir) {
+Store open_store(const dstd::String& dir) {
     auto opened = Store::open(sv(dir));
     REQUIRE(opened.has_value());
     return std::move(*opened);
 }
 
 void write_scope(Store& store, const NamespaceSpec& spec,
-                 const std::string& path, const std::string& value) {
+                 const dstd::String& path, const dstd::String& value) {
     auto ns = store.ns(spec);
     REQUIRE(ns.has_value());
     auto batch = store.batch(
@@ -60,8 +59,8 @@ void write_scope(Store& store, const NamespaceSpec& spec,
     REQUIRE(run(store.close()).has_value());
 }
 
-dstd::Optional<std::string> read_scope(Store& store, const NamespaceSpec& spec,
-                                       const std::string& path) {
+dstd::Optional<dstd::String> read_scope(Store& store, const NamespaceSpec& spec,
+                                        const dstd::String& path) {
     auto ns = store.ns(spec);
     REQUIRE(ns.has_value());
     auto snapshot = store.snapshot();
@@ -72,8 +71,8 @@ dstd::Optional<std::string> read_scope(Store& store, const NamespaceSpec& spec,
     REQUIRE(found.has_value());
     if (!found->has_value()) return dstd::nullopt;
     const auto bytes = (*found)->bytes();
-    return std::string(reinterpret_cast<const char*>(bytes.data()),
-                       bytes.size());
+    return dstd::String(reinterpret_cast<const char*>(bytes.data()),
+                        bytes.size());
 }
 
 }  // namespace
@@ -81,8 +80,8 @@ dstd::Optional<std::string> read_scope(Store& store, const NamespaceSpec& spec,
 TEST_SUITE("store adopt") {
     TEST_CASE("adopt moves the data files and an open target sees them") {
         dftu_utils_test::ScopedTestDir root("store_adopt");
-        const std::string from = root.str() + "/from";
-        const std::string to = root.str() + "/to";
+        const dstd::String from = root.str() + "/from";
+        const dstd::String to = root.str() + "/to";
         const NamespaceSpec spec = spec_of("dftu.test.adopt");
 
         Store target = open_store(to);
@@ -100,9 +99,9 @@ TEST_SUITE("store adopt") {
         CHECK(*moved == 1);
 
         CHECK(read_scope(target, spec, "/traces/moved.pfw") ==
-              dstd::Optional<std::string>("moved"));
+              dstd::Optional<dstd::String>("moved"));
         CHECK(read_scope(target, spec, "/traces/own.pfw") ==
-              dstd::Optional<std::string>("own"));
+              dstd::Optional<dstd::String>("own"));
 
         auto again = Store::adopt(sv(from), sv(to));
         REQUIRE(again.has_value());
@@ -111,8 +110,8 @@ TEST_SUITE("store adopt") {
 
     TEST_CASE("adopt of a folder that cannot be listed is an Io error") {
         dftu_utils_test::ScopedTestDir root("store_adopt_missing");
-        const std::string from = root.str() + "/absent";
-        const std::string to = root.str() + "/to";
+        const dstd::String from = root.str() + "/absent";
+        const dstd::String to = root.str() + "/to";
         auto moved = Store::adopt(sv(from), sv(to));
         REQUIRE_FALSE(moved.has_value());
         CHECK(moved.error().is(dstd::Condition::Io));

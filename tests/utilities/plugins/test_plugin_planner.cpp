@@ -6,9 +6,11 @@
 // plugin's result.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -23,9 +25,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <fstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -96,23 +95,24 @@ dftu_plugin make_count_plugin(CountState* st) {
 }
 
 // A single-category, single-name trace so a cat filter prunes the whole file.
-std::string make_homog_trace(dftu_utils_test::TestEnvironment& env,
-                             const std::string& tag, const char* name,
-                             const char* cat, int n) {
+dstd::String make_homog_trace(dftu_utils_test::TestEnvironment& env,
+                              const dstd::String& tag, const char* name,
+                              const char* cat, int n) {
     // Own subdir per trace: the index root is keyed off the parent directory,
     // so same-dir traces would share (and clobber) one index.
-    std::string dir = env.get_dir() + "/" + tag;
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-    std::string pfw = dir + "/trace.pfw";
-    std::ofstream ofs(pfw.c_str());
+    dstd::String dir = env.get_dir() + "/" + tag;
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    dstd::String pfw = dir + "/trace.pfw";
+    dstd::String ofs;
     for (int i = 0; i < n; ++i)
-        ofs << R"({"ph":"X","name":")" << name << R"(","cat":")" << cat
-            << R"(","pid":1,"tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
-            << (10 + i) << R"(,"args":{}})" << "\n";
-    ofs.close();
-    std::string gz = pfw + ".gz";
+        ofs +=
+            common::str_cat(R"({"ph":"X","name":")", name, R"(","cat":")", cat,
+                            R"(","pid":1,"tid":1,"ts":)", (1000 + i * 100),
+                            R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
+    (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
+    dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -154,11 +154,11 @@ TEST_SUITE("PluginPlannerUnion") {
         // either side selects.
         CHECK(u->references("cat"));
         dftracer::utils::duql::ValueMap posix;
-        posix["cat"] = dftracer::utils::dstd::String("POSIX");
+        posix["cat"] = dstd::String("POSIX");
         dftracer::utils::duql::ValueMap stdio;
-        stdio["cat"] = dftracer::utils::dstd::String("STDIO");
+        stdio["cat"] = dstd::String("STDIO");
         dftracer::utils::duql::ValueMap other;
-        other["cat"] = dftracer::utils::dstd::String("OTHER");
+        other["cat"] = dstd::String("OTHER");
         CHECK(u->evaluate(posix));
         CHECK(u->evaluate(stdio));
         CHECK_FALSE(u->evaluate(other));
@@ -168,7 +168,7 @@ TEST_SUITE("PluginPlannerUnion") {
         const char* q = R"(cat == "STDIO")";
         auto u = plugin_union_prune_query(qs({q, q, q}));
         REQUIRE(u.has_value());
-        CHECK(u->source() == dftracer::utils::dstd::String(q));
+        CHECK(u->source() == dstd::String(q));
     }
 
     TEST_CASE("a plugin without a plan_duql disables the prune") {
@@ -323,7 +323,7 @@ TEST_SUITE("PluginAttachHandle") {
         ExportStats scan{};
         auto plugin_branch = [&](ViewSession& s) {
             Deferred<PluginRun> h = set->attach(s);
-            return std::function<void(const ExportStats&)>(
+            return dstd::Function<void(const ExportStats&)>(
                 [&, h](const ExportStats& stats) mutable {
                     h.get();
                     scan = stats;
@@ -369,7 +369,7 @@ TEST_SUITE("PluginAttachHandle") {
         ExportStats scan{};
         auto plugin_branch = [&](ViewSession& s) {
             Deferred<PluginRun> h = set->attach(s);
-            return std::function<void(const ExportStats&)>(
+            return dstd::Function<void(const ExportStats&)>(
                 [&, h](const ExportStats& stats) mutable {
                     h.get();
                     scan = stats;

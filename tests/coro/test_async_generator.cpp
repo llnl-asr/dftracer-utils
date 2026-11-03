@@ -2,13 +2,15 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <chrono>
-#include <string>
 #include <thread>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::coro;
 
@@ -35,7 +37,7 @@ static AsyncGenerator<int> async_fibonacci(int n) {
     }
 }
 
-static AsyncGenerator<std::string> async_words() {
+static AsyncGenerator<dstd::String> async_words() {
     co_await async_delay(10);
     co_yield "hello";
     co_await async_delay(10);
@@ -44,18 +46,18 @@ static AsyncGenerator<std::string> async_words() {
     co_yield "world";
 }
 
-static CoroTask<std::vector<int>> consume_int_generator(
+static CoroTask<dstd::Vector<int>> consume_int_generator(
     AsyncGenerator<int> gen) {
-    std::vector<int> result;
+    dstd::Vector<int> result;
     while (auto value = co_await gen.next()) {
         result.push_back(*value);
     }
     co_return result;
 }
 
-static CoroTask<std::vector<std::string>> consume_string_generator(
-    AsyncGenerator<std::string> gen) {
-    std::vector<std::string> result;
+static CoroTask<dstd::Vector<dstd::String>> consume_string_generator(
+    AsyncGenerator<dstd::String> gen) {
+    dstd::Vector<dstd::String> result;
     while (auto value = co_await gen.next()) {
         result.push_back(*value);
     }
@@ -157,8 +159,8 @@ static AsyncGenerator<int> async_throwing_generator() {
 TEST_CASE("AsyncGenerator - Exception propagation") {
     auto gen = async_throwing_generator();
 
-    auto task = [](AsyncGenerator<int> g) -> CoroTask<std::vector<int>> {
-        std::vector<int> result;
+    auto task = [](AsyncGenerator<int> g) -> CoroTask<dstd::Vector<int>> {
+        dstd::Vector<int> result;
         try {
             while (auto value = co_await g.next()) {
                 result.push_back(*value);
@@ -217,8 +219,8 @@ static AsyncGenerator<Point> async_points() {
 TEST_CASE("AsyncGenerator - Complex types with async operations") {
     auto gen = async_points();
 
-    auto task = [](AsyncGenerator<Point> g) -> CoroTask<std::vector<Point>> {
-        std::vector<Point> result;
+    auto task = [](AsyncGenerator<Point> g) -> CoroTask<dstd::Vector<Point>> {
+        dstd::Vector<Point> result;
         while (auto value = co_await g.next()) {
             result.push_back(*value);
         }

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <doctest/doctest.h>
 
-#include <string>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace::views;
 
@@ -50,11 +51,10 @@ TEST_SUITE("ViewDefinition") {
         original.include_metadata = true;
         original.metadata_records = true;
 
-        std::string json = std::string(original.to_json());
+        dstd::String json = dstd::String(original.to_json());
         CHECK(!json.empty());
 
-        auto restored =
-            ViewDefinition::from_json(dftracer::utils::dstd::String(json));
+        auto restored = ViewDefinition::from_json(dstd::String(json));
         CHECK(restored.name == "test_roundtrip");
         CHECK(restored.description == "Round-trip test");
         CHECK(restored.query.has_value());
@@ -66,9 +66,8 @@ TEST_SUITE("ViewDefinition") {
         ViewDefinition original;
         original.with_name("empty").with_description("No query");
 
-        std::string json = std::string(original.to_json());
-        auto restored =
-            ViewDefinition::from_json(dftracer::utils::dstd::String(json));
+        dstd::String json = dstd::String(original.to_json());
+        auto restored = ViewDefinition::from_json(dstd::String(json));
 
         CHECK(restored.name == "empty");
         CHECK_FALSE(restored.query.has_value());

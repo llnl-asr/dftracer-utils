@@ -17,6 +17,7 @@
 
 namespace fresh_process {
 
+// keep std: memory tests link only memory
 inline std::string self_path() {
     char buffer[4096];
 #if defined(__APPLE__)
@@ -36,6 +37,7 @@ struct Result {
     bool announced = false;
     /// What the process wrote to standard error. run() also copies it to this
     /// process's standard error.
+    // keep std: memory tests link only memory
     std::string output;
 
     bool ok() const {
@@ -58,7 +60,9 @@ inline void announce() {
 /// process, so it starts with no heap, cache or thread state from the tests
 /// that ran before it.
 inline Result run(const char* test_case) {
+    // keep std: memory tests link only memory
     std::string self = self_path();
+    // keep std: memory tests link only memory
     std::string filter = std::string("--test-case=") + test_case;
     int fds[2];
     int err[2];
@@ -77,6 +81,7 @@ inline Result run(const char* test_case) {
         ::dup2(err[1], STDERR_FILENO);
         ::close(err[1]);
         ::setenv("DFTRACER_UTILS_FRESH_PROCESS_FD",
+                 // keep std: memory tests link only memory
                  std::to_string(fds[1]).c_str(), 1);
         ::execl(self.c_str(), self.c_str(), filter.c_str(), "--no-skip",
                 static_cast<char*>(nullptr));

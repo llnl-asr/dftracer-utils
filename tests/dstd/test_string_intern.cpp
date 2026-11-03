@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <map>
-#include <memory>
-#include <set>
 #include <stdexcept>
-#include <string>
-#include <string_view>
-#include <thread>
-#include <vector>
 
-using dftracer::utils::dstd::StringIntern;
+using namespace dftracer::utils;
+
+using dstd::StringIntern;
 using Status = StringIntern::InsertStatus;
 
 TEST_SUITE("StringIntern") {
@@ -32,7 +31,7 @@ TEST_SUITE("StringIntern") {
         {
             StringIntern intern(pool.get());
             for (int i = 0; i < 100; ++i)
-                intern.get_or_insert("s" + std::to_string(i));
+                intern.get_or_insert("s" + dstd::to_string(i));
             MESSAGE("bytes for 100 strings: " << pool->live());
             CHECK(pool->live() < 128 * 1024);
         }
@@ -41,12 +40,12 @@ TEST_SUITE("StringIntern") {
 
     TEST_CASE("StringIntern - round trips every string it is given") {
         StringIntern intern;
-        std::vector<std::uint32_t> ids;
+        dstd::Vector<std::uint32_t> ids;
         constexpr int N = 200000;
         for (int i = 0; i < N; ++i)
-            ids.push_back(intern.get_or_insert("value_" + std::to_string(i)));
+            ids.push_back(intern.get_or_insert("value_" + dstd::to_string(i)));
         for (int i = 0; i < N; ++i) {
-            CHECK(intern.resolve(ids[i]) == "value_" + std::to_string(i));
+            CHECK(intern.resolve(ids[i]) == "value_" + dstd::to_string(i));
         }
         CHECK(intern.get_or_insert("value_7") == ids[7]);
     }
@@ -98,9 +97,9 @@ TEST_SUITE("StringIntern") {
         StringIntern intern;
         CHECK(intern.insert_at_id(42, "loaded") == Status::Ok);
         for (int i = 0; i < 100; ++i) {
-            auto id = intern.get_or_insert("fresh_" + std::to_string(i));
+            auto id = intern.get_or_insert("fresh_" + dstd::to_string(i));
             CHECK(id != 42u);
-            CHECK(intern.resolve(id) == "fresh_" + std::to_string(i));
+            CHECK(intern.resolve(id) == "fresh_" + dstd::to_string(i));
         }
         CHECK(intern.resolve(42) == "loaded");
     }
@@ -121,9 +120,9 @@ TEST_SUITE("StringIntern") {
         // persisting the dictionary must walk the log, not the id range.
         StringIntern intern;
         intern.enable_deterministic_ids();
-        std::vector<std::string> inserted;
+        dstd::Vector<dstd::String> inserted;
         for (int i = 0; i < 1000; ++i) {
-            inserted.push_back("value_" + std::to_string(i));
+            inserted.push_back("value_" + dstd::to_string(i));
             intern.get_or_insert(inserted.back());
         }
         intern.get_or_insert("value_0");
@@ -137,26 +136,26 @@ TEST_SUITE("StringIntern") {
         StringIntern intern;
         constexpr int THREADS = 8;
         constexpr int PER_THREAD = 20000;
-        std::vector<std::thread> threads;
-        std::vector<std::vector<std::uint32_t>> ids(THREADS);
+        dstd::Vector<dstd::Thread> threads;
+        dstd::Vector<dstd::Vector<std::uint32_t>> ids(THREADS);
         for (int t = 0; t < THREADS; ++t) {
             threads.emplace_back([&, t] {
                 for (int i = 0; i < PER_THREAD; ++i)
                     ids[t].push_back(intern.get_or_insert(
-                        std::to_string(t) + "_" + std::to_string(i)));
+                        dstd::to_string(t) + "_" + dstd::to_string(i)));
             });
         }
         for (auto& th : threads) th.join();
         for (int t = 0; t < THREADS; ++t) {
             for (int i = 0; i < PER_THREAD; ++i) {
                 CHECK(intern.resolve(ids[t][i]) ==
-                      std::to_string(t) + "_" + std::to_string(i));
+                      dstd::to_string(t) + "_" + dstd::to_string(i));
             }
         }
     }
 
     TEST_CASE("StringIntern - a chunk outlives the intern") {
-        dftracer::utils::dstd::SharedPtr<StringIntern::Chunk> chunk;
+        dstd::SharedPtr<StringIntern::Chunk> chunk;
         std::uint32_t len, off;
         {
             StringIntern intern;
@@ -167,18 +166,17 @@ TEST_SUITE("StringIntern") {
             len = loc.len;
             off = loc.offset;
         }
-        CHECK(dftracer::utils::dstd::StringView(chunk->data() + off, len) ==
-              "kept alive");
+        CHECK(dstd::StringView(chunk->data() + off, len) == "kept alive");
     }
 
     TEST_CASE("StringIntern - locate agrees with resolve under threads") {
         StringIntern intern;
         constexpr int THREADS = 8;
         constexpr int PER_THREAD = 100000;
-        std::vector<std::thread> threads;
-        std::vector<std::vector<std::uint32_t>> ids(THREADS);
+        dstd::Vector<dstd::Thread> threads;
+        dstd::Vector<dstd::Vector<std::uint32_t>> ids(THREADS);
         auto name = [](int t, int i) {
-            return "s" + std::to_string((t % 2) * 1000000 + i);
+            return "s" + dstd::to_string((t % 2) * 1000000 + i);
         };
         for (int t = 0; t < THREADS; ++t) {
             threads.emplace_back([&, t] {
@@ -186,8 +184,7 @@ TEST_SUITE("StringIntern") {
                     auto id = intern.get_or_insert(name(t, i));
                     ids[t].push_back(id);
                     auto loc = intern.locate(id);
-                    if (dftracer::utils::dstd::StringView(loc.data, loc.len) !=
-                        name(t, i))
+                    if (dstd::StringView(loc.data, loc.len) != name(t, i))
                         ids[t].push_back(StringIntern::NO_ID);
                 }
             });
@@ -199,8 +196,7 @@ TEST_SUITE("StringIntern") {
                 auto id = ids[t][k++];
                 REQUIRE(id != StringIntern::NO_ID);
                 auto loc = intern.locate(id);
-                CHECK(dftracer::utils::dstd::StringView(loc.data, loc.len) ==
-                      name(t, i));
+                CHECK(dstd::StringView(loc.data, loc.len) == name(t, i));
                 CHECK(intern.resolve(id) == name(t, i));
                 auto c = intern.chunk(loc.chunk);
                 CHECK(c->data() + loc.offset == loc.data);
@@ -212,14 +208,14 @@ TEST_SUITE("StringIntern") {
     TEST_CASE("StringIntern - a string over a chunk gets its own chunk") {
         StringIntern intern;
         auto small = intern.get_or_insert("small");
-        std::string big(StringIntern::CHUNK_BYTES + 1000, 'x');
+        dstd::String big(StringIntern::CHUNK_BYTES + 1000, 'x');
         big[12345] = 'y';
         auto big_id = intern.get_or_insert(big);
         auto after = intern.get_or_insert("after");
         auto lb = intern.locate(big_id);
         CHECK(lb.len == big.size());
         CHECK(lb.offset == 8);
-        CHECK(dftracer::utils::dstd::StringView(lb.data, lb.len) == big);
+        CHECK(dstd::StringView(lb.data, lb.len) == big);
         CHECK(intern.chunk(lb.chunk)->size() >= big.size());
         CHECK(lb.chunk != intern.locate(small).chunk);
         CHECK(intern.resolve(after) == "after");
@@ -229,8 +225,8 @@ TEST_SUITE("StringIntern") {
 
     TEST_CASE("StringIntern - records stay inside their chunk") {
         StringIntern intern;
-        std::string v(1000, 'a');
-        std::vector<std::uint32_t> ids;
+        dstd::String v(1000, 'a');
+        dstd::Vector<std::uint32_t> ids;
         for (int i = 0; i < 3000; ++i) {
             v[0] = static_cast<char>('a' + i % 26);
             v[1] = static_cast<char>('a' + (i / 26) % 26);
@@ -251,9 +247,9 @@ TEST_SUITE("StringIntern") {
         constexpr int THREADS = 14;
         constexpr int PER_THREAD = 100000;
         constexpr int STRIDE = 5000;
-        auto name = [](int k) { return "overlap_" + std::to_string(k); };
-        std::vector<std::thread> threads;
-        std::vector<std::vector<std::uint32_t>> ids(THREADS);
+        auto name = [](int k) { return "overlap_" + dstd::to_string(k); };
+        dstd::Vector<dstd::Thread> threads;
+        dstd::Vector<dstd::Vector<std::uint32_t>> ids(THREADS);
         for (int t = 0; t < THREADS; ++t) {
             threads.emplace_back([&, t] {
                 ids[t].reserve(PER_THREAD);
@@ -264,7 +260,7 @@ TEST_SUITE("StringIntern") {
         }
         for (auto& th : threads) th.join();
 
-        std::map<int, std::uint32_t> id_of;
+        dstd::Map<int, std::uint32_t> id_of;
         for (int t = 0; t < THREADS; ++t) {
             for (int i = 0; i < PER_THREAD; ++i) {
                 const int k = t * STRIDE + i;
@@ -273,13 +269,13 @@ TEST_SUITE("StringIntern") {
                 REQUIRE(intern.resolve(ids[t][i]) == name(k));
             }
         }
-        std::set<std::uint32_t> distinct_ids;
+        dstd::Set<std::uint32_t> distinct_ids;
         for (const auto& [k, id] : id_of) distinct_ids.insert(id);
         CHECK(distinct_ids.size() == id_of.size());
         CHECK(intern.entry_count() == id_of.size());
         CHECK(intern.size() == id_of.size());
 
-        std::set<std::uint32_t> logged;
+        dstd::Set<std::uint32_t> logged;
         for (std::size_t n = 0; n < intern.entry_count(); ++n)
             logged.insert(intern.entry_id(n));
         CHECK(logged == distinct_ids);
@@ -288,19 +284,18 @@ TEST_SUITE("StringIntern") {
     TEST_CASE("StringIntern - deterministic ids keep their fixed values") {
         StringIntern intern;
         intern.enable_deterministic_ids();
-        const dftracer::utils::dstd::Pair<const char*, std::uint32_t>
-            expected[] = {
-                {"hello", 229782084},
-                {"world", 62348693},
-                {"read", 100861361},
-                {"write", 33496659},
-                {"args.size", 97378550},
-                {"cat", 208581076},
-                {"POSIX", 130800590},
-                {"/UqBWr9S8D8AAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAA"
-                 "AAA",
-                 218384236},
-            };
+        const dstd::Pair<const char*, std::uint32_t> expected[] = {
+            {"hello", 229782084},
+            {"world", 62348693},
+            {"read", 100861361},
+            {"write", 33496659},
+            {"args.size", 97378550},
+            {"cat", 208581076},
+            {"POSIX", 130800590},
+            {"/UqBWr9S8D8AAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAA"
+             "AAA",
+             218384236},
+        };
         for (const auto& [text, id] : expected) {
             CHECK(intern.get_or_insert(text) == id);
             CHECK(intern.resolve(id) == text);
@@ -313,16 +308,16 @@ TEST_SUITE("StringIntern") {
         StringIntern serial;
         serial.enable_deterministic_ids();
         constexpr int N = 20000;
-        std::vector<std::thread> threads;
+        dstd::Vector<dstd::Thread> threads;
         for (int t = 0; t < 8; ++t) {
             threads.emplace_back([&] {
                 for (int i = 0; i < N; ++i)
-                    intern.get_or_insert("det_" + std::to_string(i));
+                    intern.get_or_insert("det_" + dstd::to_string(i));
             });
         }
         for (auto& th : threads) th.join();
         for (int i = 0; i < N; ++i) {
-            const auto key = "det_" + std::to_string(i);
+            const auto key = "det_" + dstd::to_string(i);
             CHECK(intern.get_or_insert(key) == serial.get_or_insert(key));
         }
         CHECK(intern.entry_count() == static_cast<std::size_t>(N));
@@ -331,10 +326,10 @@ TEST_SUITE("StringIntern") {
     TEST_CASE("StringIntern - a deterministic id collision throws") {
         StringIntern intern;
         intern.enable_deterministic_ids();
-        std::vector<std::string> kept;
+        dstd::Vector<dstd::String> kept;
         bool threw = false;
         for (int i = 0; i < 2000000 && !threw; ++i) {
-            const auto key = "collide_" + std::to_string(i);
+            const auto key = "collide_" + dstd::to_string(i);
             try {
                 intern.get_or_insert(key);
                 kept.push_back(key);
@@ -364,9 +359,10 @@ TEST_SUITE("StringIntern") {
 
     TEST_CASE("StringIntern - the log is in insertion order") {
         StringIntern intern;
-        std::vector<std::uint32_t> ids;
+        dstd::Vector<std::uint32_t> ids;
         for (int i = 0; i < 5000; ++i)
-            ids.push_back(intern.get_or_insert("ordered_" + std::to_string(i)));
+            ids.push_back(
+                intern.get_or_insert("ordered_" + dstd::to_string(i)));
         intern.get_or_insert("ordered_3");
         REQUIRE(intern.entry_count() == ids.size());
         for (std::size_t n = 0; n < ids.size(); ++n)
@@ -377,19 +373,19 @@ TEST_SUITE("StringIntern") {
         StringIntern intern;
         std::atomic<bool> done{false};
         std::atomic<int> bad{0};
-        std::thread reader([&] {
+        dstd::Thread reader([&] {
             while (!done.load()) {
                 const auto count = intern.entry_count();
                 for (std::size_t n = 0; n < count; ++n)
                     if (intern.resolve(intern.entry_id(n)).empty()) ++bad;
             }
         });
-        std::vector<std::thread> writers;
+        dstd::Vector<dstd::Thread> writers;
         for (int t = 0; t < 4; ++t) {
             writers.emplace_back([&, t] {
                 for (int i = 0; i < 5000; ++i)
-                    intern.get_or_insert(std::to_string(t) + "_w_" +
-                                         std::to_string(i));
+                    intern.get_or_insert(dstd::to_string(t) + "_w_" +
+                                         dstd::to_string(i));
             });
         }
         for (auto& w : writers) w.join();

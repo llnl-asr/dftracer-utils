@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -14,14 +15,15 @@
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <random>
 #include <regex>
-#include <set>
 #include <string>
 #include <variant>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace duql = dftracer::utils::duql;
 
@@ -29,12 +31,11 @@ namespace {
 
 struct Leaf {
     duql::MatchOp op;
-    dftracer::utils::dstd::String pattern;
+    dstd::String pattern;
     duql::PatternPtr compiled;
 };
 
-void leaves(const duql::QueryNode& node,
-            dftracer::utils::dstd::Vector<Leaf>& out) {
+void leaves(const duql::QueryNode& node, dstd::Vector<Leaf>& out) {
     std::visit(
         [&](const auto& n) {
             using T = std::decay_t<decltype(n)>;
@@ -51,9 +52,8 @@ void leaves(const duql::QueryNode& node,
         node.data);
 }
 
-void append_escaped(dftracer::utils::dstd::String& out, char c) {
-    if (dftracer::utils::dstd::StringView(".\\+*?()[]{}^$|").find(c) !=
-        dftracer::utils::dstd::StringView::npos)
+void append_escaped(dstd::String& out, char c) {
+    if (dstd::StringView(".\\+*?()[]{}^$|").find(c) != dstd::StringView::npos)
         out += '\\';
     out += c;
 }
@@ -61,7 +61,7 @@ void append_escaped(dftracer::utils::dstd::String& out, char c) {
 // The std::regex each operator used before this engine.
 std::regex old_regex(const Leaf& l) {
     auto flags = std::regex::ECMAScript;
-    dftracer::utils::dstd::String src;
+    dstd::String src;
     switch (l.op) {
         case duql::MatchOp::Ilike:
             flags |= std::regex::icase;
@@ -93,21 +93,20 @@ std::regex old_regex(const Leaf& l) {
 }
 
 // ASCII strings built from the pattern's own characters, so matches occur.
-dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> strings_for(
-    const dftracer::utils::dstd::String& pattern, std::mt19937& rng) {
-    dftracer::utils::dstd::String pool = "abcXYZ_-./019 ";
+dstd::Vector<dstd::String> strings_for(const dstd::String& pattern,
+                                       std::mt19937& rng) {
+    dstd::String pool = "abcXYZ_-./019 ";
     for (char c : pattern)
         if (c >= 0x20 && c < 0x7F) pool += c;
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out = {
-        "", pattern};
-    dftracer::utils::dstd::String plain;
+    dstd::Vector<dstd::String> out = {"", pattern};
+    dstd::String plain;
     for (char c : pattern)
         if (c != '%' && c != '_' && c != '\\' && c != '^' && c != '$')
             plain += c;
     out.push_back(plain);
     out.push_back("x" + plain + "y");
     for (int k = 0; k < 40; ++k) {
-        dftracer::utils::dstd::String s;
+        dstd::String s;
         for (int n = rng() % 16; n > 0; --n) s += pool[rng() % pool.size()];
         out.push_back(s);
     }
@@ -117,24 +116,23 @@ dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> strings_for(
 }  // namespace
 
 TEST_CASE("golden patterns keep their results") {
-    std::ifstream in(DUQL_GOLDEN_PATH);
-    REQUIRE(in);
+    const auto golden = dstd::fs::read_file(DUQL_GOLDEN_PATH);
+    REQUIRE(golden.has_value());
+    dftu_utils_test::LineStream in(*golden);
     simdjson::dom::parser json;
     std::mt19937 rng(12);
-    dftracer::utils::dstd::Set<
-        dftracer::utils::dstd::Pair<int, dftracer::utils::dstd::String>>
-        seen;
+    dstd::Set<dstd::Pair<int, dstd::String>> seen;
     std::size_t compared = 0;
-    for (dftracer::utils::dstd::String line; std::getline(in, line);) {
+    for (dstd::String line; in.next(line);) {
         if (line.empty()) continue;
         simdjson::dom::element row;
         const simdjson::padded_string padded(line);
         REQUIRE(json.parse(padded).get(row) == simdjson::SUCCESS);
         if (!row["ok"].get_bool().value()) continue;
-        const auto tree = duql::parse(
-            dftracer::utils::dstd::String(row["q"].get_string().value()));
+        const auto tree =
+            duql::parse(dstd::String(row["q"].get_string().value()));
         REQUIRE(tree);
-        dftracer::utils::dstd::Vector<Leaf> found;
+        dstd::Vector<Leaf> found;
         leaves(**tree, found);
         for (const Leaf& l : found) {
             if (!seen.emplace(static_cast<int>(l.op), l.pattern).second)
@@ -159,32 +157,32 @@ TEST_CASE("golden patterns keep their results") {
 
 TEST_CASE("DataFrame kernels and duql agree on the golden patterns") {
     namespace df = dftracer::utils::dataframe;
-    std::ifstream in(DUQL_GOLDEN_PATH);
-    REQUIRE(in);
+    const auto golden = dstd::fs::read_file(DUQL_GOLDEN_PATH);
+    REQUIRE(golden.has_value());
+    dftu_utils_test::LineStream in(*golden);
     simdjson::dom::parser json;
     std::mt19937 rng(34);
-    for (dftracer::utils::dstd::String line; std::getline(in, line);) {
+    for (dstd::String line; in.next(line);) {
         if (line.empty()) continue;
         simdjson::dom::element row;
         const simdjson::padded_string padded(line);
         REQUIRE(json.parse(padded).get(row) == simdjson::SUCCESS);
         if (!row["ok"].get_bool().value()) continue;
-        const auto tree = duql::parse(
-            dftracer::utils::dstd::String(row["q"].get_string().value()));
+        const auto tree =
+            duql::parse(dstd::String(row["q"].get_string().value()));
         REQUIRE(tree);
-        dftracer::utils::dstd::Vector<Leaf> found;
+        dstd::Vector<Leaf> found;
         leaves(**tree, found);
         for (const Leaf& l : found) {
             const bool regex = l.op == duql::MatchOp::Regex;
             // str_like escapes with `\`; duql like has no escape character.
-            const bool like =
-                l.op == duql::MatchOp::Like &&
-                l.pattern.find('\\') == dftracer::utils::dstd::String::npos;
+            const bool like = l.op == duql::MatchOp::Like &&
+                              l.pattern.find('\\') == dstd::String::npos;
             if (!regex && !like) continue;
             CAPTURE(l.pattern);
             const auto strings = strings_for(l.pattern, rng);
-            dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView>
-                views(strings.begin(), strings.end());
+            dstd::Vector<dstd::StringView> views(strings.begin(),
+                                                 strings.end());
             const df::Series col = df::Series::strings(views);
             const df::Series m =
                 regex ? col.str_search(l.pattern) : col.str_like(l.pattern);
@@ -218,36 +216,35 @@ TEST_CASE("DataFrame kernels and duql agree on the golden patterns") {
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
 namespace {
 
-const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> WIDE = {
+const dstd::Vector<dstd::String> WIDE = {
     "\xC3\xA9",     "\xC3\x89",         "\xCE\xB1",         "\xCE\x91",
     "\xE4\xB8\xAD", "\xF0\x9F\x98\x80", "\xC3\xA9\xCE\xB1", "\xC4\xB0"};
 
-dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> wide_strings(
-    const dftracer::utils::dstd::String& pattern, std::mt19937& rng) {
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out = {
-        "caf\xC3\xA9",
-        "CAF\xC3\x89",
-        "\xCE\xB1\xCE\xB2\xCE\xB3",
-        "\xCE\x91\xCE\x92",
-        "\xE4\xB8\xAD\xE6\x96\x87",
-        "a\xF0\x9F\x98\x80z",
-        "\xF0\x9F\x98\x80",
-        "x\xC3\xA9\nY",
-        "\xC3\xA9\n",
-        "ab\xE4\xB8\xAD"
-        "cd",
-        "foo \xC3\xA9 bar",
-        "\xCE\xB1 1",
-        "\xC2\xA0",
-        "\xE2\x80\xA8"};
-    dftracer::utils::dstd::String plain;
+dstd::Vector<dstd::String> wide_strings(const dstd::String& pattern,
+                                        std::mt19937& rng) {
+    dstd::Vector<dstd::String> out = {"caf\xC3\xA9",
+                                      "CAF\xC3\x89",
+                                      "\xCE\xB1\xCE\xB2\xCE\xB3",
+                                      "\xCE\x91\xCE\x92",
+                                      "\xE4\xB8\xAD\xE6\x96\x87",
+                                      "a\xF0\x9F\x98\x80z",
+                                      "\xF0\x9F\x98\x80",
+                                      "x\xC3\xA9\nY",
+                                      "\xC3\xA9\n",
+                                      "ab\xE4\xB8\xAD"
+                                      "cd",
+                                      "foo \xC3\xA9 bar",
+                                      "\xCE\xB1 1",
+                                      "\xC2\xA0",
+                                      "\xE2\x80\xA8"};
+    dstd::String plain;
     for (char c : pattern)
         if (c != '%' && c != '_' && c != '\\' && c != '^' && c != '$')
             plain += c;
     for (const auto& base : strings_for(pattern, rng)) {
         for (int k = 0; k < 2; ++k) {
-            dftracer::utils::dstd::String s = base;
-            const dftracer::utils::dstd::String& w = WIDE[rng() % WIDE.size()];
+            dstd::String s = base;
+            const dstd::String& w = WIDE[rng() % WIDE.size()];
             const std::size_t at = s.empty() ? 0 : rng() % (s.size() + 1);
             if (k == 0 || s.empty())
                 s.insert(at, w);
@@ -263,37 +260,34 @@ dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> wide_strings(
     return out;
 }
 
-const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> INVALID = {
-    "\xC0\xAF",
-    "\xE0\x80\xAF",
-    "\xED\xA0\x80",
-    "\xE4\xB8",
-    "\x80",
-    "\xF4\x90\x80\x80",
-    "\xF8",
-    "a\xC0\xAF"
-    "b",
-    "abcdefgh\xE4\xB8",
-    "\xC3",
-    "x\xFF",
-    "\xF0\x80\x80\x80",
-    "\xC1\xBF",
-    "abc\x80"
-    "def"};
+const dstd::Vector<dstd::String> INVALID = {"\xC0\xAF",
+                                            "\xE0\x80\xAF",
+                                            "\xED\xA0\x80",
+                                            "\xE4\xB8",
+                                            "\x80",
+                                            "\xF4\x90\x80\x80",
+                                            "\xF8",
+                                            "a\xC0\xAF"
+                                            "b",
+                                            "abcdefgh\xE4\xB8",
+                                            "\xC3",
+                                            "x\xFF",
+                                            "\xF0\x80\x80\x80",
+                                            "\xC1\xBF",
+                                            "abc\x80"
+                                            "def"};
 
 }  // namespace
 
 TEST_CASE("Vectorscan and PCRE2 agree on every golden regex") {
-    std::ifstream in(DUQL_GOLDEN_PATH);
-    REQUIRE(in);
+    const auto golden = dstd::fs::read_file(DUQL_GOLDEN_PATH);
+    REQUIRE(golden.has_value());
+    dftu_utils_test::LineStream in(*golden);
     simdjson::dom::parser json;
     std::mt19937 rng(31);
-    dftracer::utils::dstd::Set<
-        dftracer::utils::dstd::Pair<int, dftracer::utils::dstd::String>>
-        seen;
+    dstd::Set<dstd::Pair<int, dstd::String>> seen;
     std::size_t compared = 0;
-    auto agree = [&](const duql::CompiledPattern& p,
-                     const dftracer::utils::dstd::String& s) {
+    auto agree = [&](const duql::CompiledPattern& p, const dstd::String& s) {
         CAPTURE(s);
         CHECK(duql::detail::match_regex(p, s) ==
               duql::detail::match_regex_pcre2(p, s));
@@ -302,8 +296,8 @@ TEST_CASE("Vectorscan and PCRE2 agree on every golden regex") {
              {duql::detail::HS_MIN_VALUE - 1, duql::detail::HS_MIN_VALUE,
               duql::detail::HS_MIN_VALUE + 1}) {
             if (s.size() >= len) continue;
-            const dftracer::utils::dstd::String pad(len - s.size(), 'x');
-            for (const dftracer::utils::dstd::String& v : {s + pad, pad + s}) {
+            const dstd::String pad(len - s.size(), 'x');
+            for (const dstd::String& v : {s + pad, pad + s}) {
                 CAPTURE(v.size());
                 CHECK(duql::detail::match_regex(p, v) ==
                       duql::detail::match_regex_pcre2(p, v));
@@ -311,54 +305,52 @@ TEST_CASE("Vectorscan and PCRE2 agree on every golden regex") {
             }
         }
     };
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> extra = {
-        "",
-        "\n",
-        "a\n",
-        "\na",
-        "a\nb",
-        "a\n\n",
-        "ab\n",
-        "foo bar",
-        "foo_bar",
-        "a1 b2\tc",
-        "AbC",
-        "abc",
-        "\x0b",
-        "caf\xc3\xa9",
-        "\xc3\xa9",
-        "a\xc3\xa9"
-        "b",
-        "\xff\xfe",
-        dftracer::utils::dstd::String("a\0b", 3)};
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> shapes = {
-        "a*",        "",
-        "a",         "^a$",
-        "a$",        "^a",
-        "(?m)^b$",   "(?m)a$",
-        "(?m)^",     "(?s)a.b",
-        "a.b",       "a.*",
-        "\\bfoo\\b", "\\w+",
-        "\\d",       "\\s",
-        "\\S+",      "[[:alpha:]]",
-        "^$",        "(?i)abc",
-        "abc",       "a|b",
-        "(a|b)+c",   "a{2,3}",
-        "\\Aa",      "a\\z",
-        "a\\Z",      "\\Bo",
-        "[^a]",      "x?",
-        "\\p{L}",    "caf\xc3\xa9",
-        "."};
-    for (dftracer::utils::dstd::String line; std::getline(in, line);) {
+    dstd::Vector<dstd::String> extra = {"",
+                                        "\n",
+                                        "a\n",
+                                        "\na",
+                                        "a\nb",
+                                        "a\n\n",
+                                        "ab\n",
+                                        "foo bar",
+                                        "foo_bar",
+                                        "a1 b2\tc",
+                                        "AbC",
+                                        "abc",
+                                        "\x0b",
+                                        "caf\xc3\xa9",
+                                        "\xc3\xa9",
+                                        "a\xc3\xa9"
+                                        "b",
+                                        "\xff\xfe",
+                                        dstd::String("a\0b", 3)};
+    dstd::Vector<dstd::String> shapes = {"a*",        "",
+                                         "a",         "^a$",
+                                         "a$",        "^a",
+                                         "(?m)^b$",   "(?m)a$",
+                                         "(?m)^",     "(?s)a.b",
+                                         "a.b",       "a.*",
+                                         "\\bfoo\\b", "\\w+",
+                                         "\\d",       "\\s",
+                                         "\\S+",      "[[:alpha:]]",
+                                         "^$",        "(?i)abc",
+                                         "abc",       "a|b",
+                                         "(a|b)+c",   "a{2,3}",
+                                         "\\Aa",      "a\\z",
+                                         "a\\Z",      "\\Bo",
+                                         "[^a]",      "x?",
+                                         "\\p{L}",    "caf\xc3\xa9",
+                                         "."};
+    for (dstd::String line; in.next(line);) {
         if (line.empty()) continue;
         simdjson::dom::element row;
         const simdjson::padded_string padded(line);
         REQUIRE(json.parse(padded).get(row) == simdjson::SUCCESS);
         if (!row["ok"].get_bool().value()) continue;
-        const auto tree = duql::parse(
-            dftracer::utils::dstd::String(row["q"].get_string().value()));
+        const auto tree =
+            duql::parse(dstd::String(row["q"].get_string().value()));
         REQUIRE(tree);
-        dftracer::utils::dstd::Vector<Leaf> found;
+        dstd::Vector<Leaf> found;
         leaves(**tree, found);
         for (const Leaf& l : found) {
             if (l.op != duql::MatchOp::Regex && l.op != duql::MatchOp::Iregex)
@@ -391,21 +383,21 @@ TEST_CASE("Vectorscan and PCRE2 agree on every golden regex") {
 }
 
 TEST_CASE("Vectorscan and PCRE2 agree on non-ASCII and invalid UTF-8") {
-    std::ifstream in(DUQL_GOLDEN_PATH);
-    REQUIRE(in);
+    const auto golden = dstd::fs::read_file(DUQL_GOLDEN_PATH);
+    REQUIRE(golden.has_value());
+    dftu_utils_test::LineStream in(*golden);
     simdjson::dom::parser json;
     std::mt19937 rng(77);
-    dftracer::utils::dstd::Set<dftracer::utils::dstd::String> seen;
+    dstd::Set<dstd::String> seen;
     std::size_t compared = 0;
     std::size_t invalid = 0;
-    auto agree = [&](const duql::CompiledPattern& p,
-                     const dftracer::utils::dstd::String& s) {
+    auto agree = [&](const duql::CompiledPattern& p, const dstd::String& s) {
         CAPTURE(s);
         CHECK(duql::detail::match_regex(p, s) ==
               duql::detail::match_regex_pcre2(p, s));
         ++compared;
     };
-    auto run = [&](const dftracer::utils::dstd::String& pat, bool icase) {
+    auto run = [&](const dstd::String& pat, bool icase) {
         for (const bool whole : {false, true}) {
             auto p = duql::compile_regex(pat, icase, whole);
             if (!p) continue;
@@ -419,16 +411,16 @@ TEST_CASE("Vectorscan and PCRE2 agree on non-ASCII and invalid UTF-8") {
             }
         }
     };
-    for (dftracer::utils::dstd::String line; std::getline(in, line);) {
+    for (dstd::String line; in.next(line);) {
         if (line.empty()) continue;
         simdjson::dom::element row;
         const simdjson::padded_string padded(line);
         REQUIRE(json.parse(padded).get(row) == simdjson::SUCCESS);
         if (!row["ok"].get_bool().value()) continue;
-        const auto tree = duql::parse(
-            dftracer::utils::dstd::String(row["q"].get_string().value()));
+        const auto tree =
+            duql::parse(dstd::String(row["q"].get_string().value()));
         REQUIRE(tree);
-        dftracer::utils::dstd::Vector<Leaf> found;
+        dstd::Vector<Leaf> found;
         leaves(**tree, found);
         for (const Leaf& l : found) {
             if (l.op != duql::MatchOp::Regex && l.op != duql::MatchOp::Iregex)
@@ -487,8 +479,7 @@ TEST_CASE("Vectorscan and PCRE2 agree on non-ASCII and invalid UTF-8") {
 namespace {
 
 // Reference decoder: returns the length of the first scalar value at s, or 0.
-std::size_t ref_scalar_len(const dftracer::utils::dstd::String& s,
-                           std::size_t i) {
+std::size_t ref_scalar_len(const dstd::String& s, std::size_t i) {
     const auto b = [&](std::size_t k) {
         return static_cast<unsigned char>(s[i + k]);
     };
@@ -520,7 +511,7 @@ std::size_t ref_scalar_len(const dftracer::utils::dstd::String& s,
     return len;
 }
 
-bool ref_valid(const dftracer::utils::dstd::String& s) {
+bool ref_valid(const dstd::String& s) {
     for (std::size_t i = 0; i < s.size();) {
         const std::size_t n = ref_scalar_len(s, i);
         if (n == 0) return false;
@@ -529,13 +520,12 @@ bool ref_valid(const dftracer::utils::dstd::String& s) {
     return true;
 }
 
-void check_utf8(const dftracer::utils::dstd::String& core) {
+void check_utf8(const dstd::String& core) {
     for (const std::size_t pad : {0u, 5u, 8u}) {
         for (const bool tail : {false, true}) {
-            const dftracer::utils::dstd::String s =
-                dftracer::utils::dstd::String(pad, 'a') + core +
-                (tail ? dftracer::utils::dstd::String(9, 'b')
-                      : dftracer::utils::dstd::String());
+            const dstd::String s =
+                dstd::String(pad, 'a') + core +
+                (tail ? dstd::String(9, 'b') : dstd::String());
             CAPTURE(pad);
             CAPTURE(tail);
             CAPTURE(core);
@@ -551,18 +541,17 @@ TEST_CASE("valid_utf8 matches a reference decoder") {
     for (std::size_t n = 0; n <= 200; ++n)
         for (const char* bad :
              {"", "\xC3\xA9", "\x80", "\xE4\xB8", "\xF0\x9F\x98\x80"}) {
-            const dftracer::utils::dstd::String tail(bad);
+            const dstd::String tail(bad);
             for (std::size_t at = 0; at <= n; at += (n < 40 ? 1 : 7)) {
-                const dftracer::utils::dstd::String s =
-                    dftracer::utils::dstd::String(at, 'a') + tail +
-                    dftracer::utils::dstd::String(n - at, 'b');
+                const dstd::String s =
+                    dstd::String(at, 'a') + tail + dstd::String(n - at, 'b');
                 CAPTURE(n);
                 CAPTURE(at);
                 CHECK(duql::detail::valid_utf8(s) == ref_valid(s));
             }
         }
     for (const std::size_t n : {4096u, 100000u}) {
-        dftracer::utils::dstd::String s(n, 'a');
+        dstd::String s(n, 'a');
         CHECK(duql::detail::valid_utf8(s));
         s[n - 1] = '\x80';
         CHECK_FALSE(duql::detail::valid_utf8(s));
@@ -572,17 +561,17 @@ TEST_CASE("valid_utf8 matches a reference decoder") {
         CHECK(duql::detail::valid_utf8(s));
     }
     for (unsigned a = 0; a < 256; ++a) {
-        check_utf8(dftracer::utils::dstd::String(1, static_cast<char>(a)));
+        check_utf8(dstd::String(1, static_cast<char>(a)));
         for (unsigned b = 0; b < 256; ++b)
-            check_utf8(dftracer::utils::dstd::String{static_cast<char>(a),
-                                                     static_cast<char>(b)});
+            check_utf8(
+                dstd::String{static_cast<char>(a), static_cast<char>(b)});
     }
     for (unsigned a = 0xE0; a < 0xF0; ++a)
         for (unsigned b = 0; b < 256; ++b)
             for (unsigned c = 0; c < 256; ++c)
-                check_utf8(dftracer::utils::dstd::String{static_cast<char>(a),
-                                                         static_cast<char>(b),
-                                                         static_cast<char>(c)});
+                check_utf8(dstd::String{static_cast<char>(a),
+                                        static_cast<char>(b),
+                                        static_cast<char>(c)});
     for (const char* s :
          {"\xF0\x9F\x98\x80", "\xF0\x90\x80\x80", "\xF0\x8F\xBF\xBF",
           "\xF4\x8F\xBF\xBF", "\xF4\x90\x80\x80", "\xF5\x80\x80\x80",
@@ -593,8 +582,8 @@ TEST_CASE("valid_utf8 matches a reference decoder") {
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
 namespace {
 
-dftracer::utils::dstd::String encode(unsigned cp) {
-    dftracer::utils::dstd::String s;
+dstd::String encode(unsigned cp) {
+    dstd::String s;
     if (cp < 0x80) {
         s += static_cast<char>(cp);
     } else if (cp < 0x800) {
@@ -616,7 +605,7 @@ dftracer::utils::dstd::String encode(unsigned cp) {
 }  // namespace
 
 TEST_CASE("Vectorscan and PCRE2 agree on every code point") {
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> subjects;
+    dstd::Vector<dstd::String> subjects;
     auto range = [&](unsigned lo, unsigned hi) {
         for (unsigned c = lo; c < hi; ++c) subjects.push_back(encode(c));
     };
@@ -635,10 +624,10 @@ TEST_CASE("Vectorscan and PCRE2 agree on every code point") {
     for (unsigned a : pair)
         for (unsigned b : pair) subjects.push_back(encode(a) + encode(b));
 
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> patterns;
+    dstd::Vector<dstd::String> patterns;
     for (char c = 'a'; c <= 'z'; ++c) {
-        patterns.push_back(dftracer::utils::dstd::String("(?i)") + c);
-        patterns.push_back(dftracer::utils::dstd::String("(?i)[") + c + "]");
+        patterns.push_back(dstd::String("(?i)") + c);
+        patterns.push_back(dstd::String("(?i)[") + c + "]");
     }
     for (unsigned c = 0x80; c < 0x600; c += 3)
         patterns.push_back("(?i)" + encode(c));

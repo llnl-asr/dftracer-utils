@@ -3,14 +3,13 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
-
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -26,15 +25,15 @@ constexpr int RECORDS = 3000;
 // and p75, c with a scalar `meta` one segment short of the pattern) and an
 // array of 12 positions. a.p50 climbs with the record, so only the last
 // chunks hold a value above 92.
-std::string write_counters(TestEnvironment& env, const std::string& dir = "",
-                           bool build = true) {
+dstd::String write_counters(TestEnvironment& env, const dstd::String& dir = "",
+                            bool build = true) {
     if (!dir.empty())
         dstd::fs::create_directories(env.get_dir() + "/" + dir).has_value();
-    const std::string plain = env.get_dir() + "/" +
-                              (dir.empty() ? "" : dir + "/") +
-                              "counters.ndjson";
+    const dstd::String plain = env.get_dir() + "/" +
+                               (dir.empty() ? "" : dir + "/") +
+                               "counters.ndjson";
     {
-        std::ofstream out(plain.c_str());
+        dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i) {
             out << R"({"name":"ev)" << i << R"(","args":{"counters":{"a":)"
                 << R"({"p50":)" << i / 30 << R"(,"p99":)" << i / 30 + 5
@@ -45,7 +44,7 @@ std::string write_counters(TestEnvironment& env, const std::string& dir = "",
             out << "]}}\n";
         }
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     (void)dstd::fs::remove(plain);
@@ -56,10 +55,10 @@ std::string write_counters(TestEnvironment& env, const std::string& dir = "",
     return gz;
 }
 
-View view_of(const std::string& gz) {
+View view_of(const dstd::String& gz) {
     return View::from_file(
         dstd::String(gz),
-        dstd::String(std::string(determine_index_path(gz, ""))));
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
 dataframe::DataFrame frame(const View& v) { return v.collect().get(); }
@@ -68,7 +67,8 @@ dstd::Vector<dstd::String> names(const dataframe::DataFrame& f) {
     return f.names;
 }
 
-void same(const View& v, const std::string& wild, const std::string& spelled) {
+void same(const View& v, const dstd::String& wild,
+          const dstd::String& spelled) {
     CAPTURE(wild);
     CAPTURE(spelled);
     const auto a = frame(v.duql(wild));
@@ -85,7 +85,7 @@ void same(const View& v, const std::string& wild, const std::string& spelled) {
         }
 }
 
-std::string error_of(const View& v, const std::string& q) {
+dstd::String error_of(const View& v, const dstd::String& q) {
     try {
         (void)v.duql(q);
     } catch (const std::exception& e) {
@@ -158,30 +158,29 @@ TEST_SUITE("DuqlWildcards") {
         TestEnvironment env(10);
         const auto v = view_of(write_counters(env));
         for (const auto& [q, pattern] :
-             std::vector<dstd::Pair<std::string, std::string>>{
+             dstd::Vector<dstd::Pair<dstd::String, dstd::String>>{
                  {"select args.nope.*", "args.nope.*"},
                  {"drop args.counters.*.p42", "args.counters.*.p42"},
                  {"where any(args.counters.*.zz) > 1", "args.counters.*.zz"},
                  {"unpivot args.nope.* as k, v", "args.nope.*"}}) {
             CAPTURE(q);
-            const std::string e = error_of(v, q);
+            const dstd::String e = error_of(v, q);
             CHECK(e.find("no field matches the pattern '" + pattern + "'") !=
-                  std::string::npos);
+                  dstd::String::npos);
         }
     }
 
     TEST_CASE("the expanded comparisons prune chunks") {
         TestEnvironment env(10);
         const auto gz = write_counters(env);
-        const std::string wild = "any(args.counters.*.p50) > 92";
-        const std::string spelled =
+        const dstd::String wild = "any(args.counters.*.p50) > 92";
+        const dstd::String spelled =
             "args.counters.a.p50 > 92 or args.counters.b.p50 > 92 or "
             "args.counters.c.p50 > 92";
-        const dftracer::utils::dstd::String plan =
-            view_of(gz).explain_duql(wild);
-        CHECK(plan.find("args.counters.a.p50") != std::string::npos);
-        CHECK(plan.find("args.counters.c.p50") != std::string::npos);
-        CHECK(plan.find("*") == std::string::npos);
+        const dstd::String plan = view_of(gz).explain_duql(wild);
+        CHECK(plan.find("args.counters.a.p50") != dstd::String::npos);
+        CHECK(plan.find("args.counters.c.p50") != dstd::String::npos);
+        CHECK(plan.find("*") == dstd::String::npos);
         NullSink a;
         NullSink b;
         const auto sw = view_of(gz).duql(wild).sink_json(a).get();
@@ -194,19 +193,19 @@ TEST_SUITE("DuqlWildcards") {
 
     TEST_CASE("a wildcard on a trace with no catalog builds it first") {
         TestEnvironment env(10);
-        const std::string plain = env.get_dir() + "/first.ndjson";
+        const dstd::String plain = env.get_dir() + "/first.ndjson";
         {
-            std::ofstream out(plain.c_str());
+            dftu_utils_test::FileOut out(plain);
             for (int i = 0; i < 300; ++i)
                 out << R"({"name":"e","args":{"counters":{"a":{"p50":)" << i
                     << R"(},"b":{"p50":)" << i % 5 << "}}}}\n";
         }
-        const std::string gz = plain + ".gz";
+        const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    2048));
         const View v = View::from_file(
             dstd::String(gz),
-            dstd::String(std::string(determine_index_path(gz, ""))));
+            dstd::String(dstd::String(determine_index_path(gz, ""))));
         CHECK(error_of(v, "select args.counters.*.p50").empty());
         same(v, "select name, args.counters.*.p50 | take 40",
              "select name, args.counters.a.p50, args.counters.b.p50 | "
@@ -220,13 +219,13 @@ TEST_SUITE("DuqlWildcards") {
         int n = 0;
         // Each query is the first on its own trace, indexed only by a query.
         const auto fresh = [&] {
-            const auto gz = write_counters(env, "f" + std::to_string(n++),
+            const auto gz = write_counters(env, "f" + dstd::to_string(n++),
                                            /*build=*/false);
             (void)view_of(gz).duql("name == \"ev1\"").collect().get();
             return view_of(gz);
         };
         for (const auto& [wild, spelled] :
-             std::vector<dstd::Pair<std::string, std::string>>{
+             dstd::Vector<dstd::Pair<dstd::String, dstd::String>>{
                  {"select name, args.counters.*.p50 | take 40",
                   "select name, args.counters.a.p50, args.counters.b.p50, "
                   "args.counters.c.p50 | take 40"},
@@ -258,18 +257,18 @@ TEST_SUITE("DuqlWildcards") {
 
     TEST_CASE("a pattern on a fresh genesis trace builds the catalog") {
         TestEnvironment env(10);
-        const auto mk = [&](const std::string& dir, bool build) {
+        const auto mk = [&](const dstd::String& dir, bool build) {
             REQUIRE(dstd::fs::create_directories(env.get_dir() + "/" + dir)
                         .has_value());
-            const std::string plain = env.get_dir() + "/" + dir + "/g.ndjson";
+            const dstd::String plain = env.get_dir() + "/" + dir + "/g.ndjson";
             {
-                std::ofstream out(plain.c_str());
+                dftu_utils_test::FileOut out(plain);
                 for (int i = 0; i < 600; ++i)
                     out << R"({"gtype":"func","run":"ab","ts":)" << i
                         << R"(,"v":{"p50":)" << i / 30 << R"(,"p99":)"
                         << i / 30 + 5 << R"(},"count":)" << i % 7 << "}\n";
             }
-            const std::string gz = plain + ".gz";
+            const dstd::String gz = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, gz, 2048));
             (void)dstd::fs::remove(plain);

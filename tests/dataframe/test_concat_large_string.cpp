@@ -8,13 +8,7 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <span>
 #include <stdexcept>
-#include <string>
-#include <string_view>
-#include <vector>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/abi.h>
@@ -22,11 +16,15 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <nanoarrow/nanoarrow.h>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::InMemorySource;
@@ -46,7 +44,7 @@ struct BuiltArrow {
     }
 };
 
-using Cells = std::vector<dftracer::utils::dstd::Optional<std::string>>;
+using Cells = dstd::Vector<dstd::Optional<dstd::String>>;
 
 Series make_large_utf8(const Cells& values) {
     BuiltArrow b;
@@ -71,29 +69,25 @@ Series make_large_utf8(const Cells& values) {
 
 // A String column with a null where `values[i]` is nullopt.
 Series make_string(const Cells& values) {
-    std::vector<std::string> data;
-    std::vector<std::uint8_t> validity((values.size() + 7) / 8, 0);
+    dstd::Vector<dstd::String> data;
+    dstd::Vector<std::uint8_t> validity((values.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < values.size(); ++i) {
         data.push_back(values[i].value_or(""));
         if (values[i])
             validity[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     }
-    std::vector<dftracer::utils::dstd::StringView> views(data.begin(),
-                                                         data.end());
-    return Series::strings(
-        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
-            views),
-        validity.data());
+    dstd::Vector<dstd::StringView> views(data.begin(), data.end());
+    return Series::strings(dstd::Span<const dstd::StringView>(views),
+                           validity.data());
 }
 
 Cells cells_of(const Series& s) {
     const Series m = s.materialize();
     Cells out;
     for (std::int64_t i = 0; i < m.length(); ++i)
-        out.push_back(m.is_null(i)
-                          ? dftracer::utils::dstd::nullopt
-                          : dftracer::utils::dstd::Optional<std::string>(
-                                std::string(m.string_at(i))));
+        out.push_back(m.is_null(i) ? dstd::nullopt
+                                   : dstd::Optional<dstd::String>(
+                                         dstd::String(m.string_at(i))));
     return out;
 }
 
@@ -123,12 +117,12 @@ TEST_SUITE("concat string and large_string") {
     }
 
     TEST_CASE("nulls are kept at the same rows") {
-        Series a = make_large_utf8({"a", dftracer::utils::dstd::nullopt, "c"});
-        Series b = make_string({dftracer::utils::dstd::nullopt, "e"});
+        Series a = make_large_utf8({"a", dstd::nullopt, "c"});
+        Series b = make_string({dstd::nullopt, "e"});
         Series out = dfops::concat_columns({&a, &b});
         CHECK(out.null_count() == 2);
-        CHECK(cells_of(out) == Cells{"a", dftracer::utils::dstd::nullopt, "c",
-                                     dftracer::utils::dstd::nullopt, "e"});
+        CHECK(cells_of(out) ==
+              Cells{"a", dstd::nullopt, "c", dstd::nullopt, "e"});
     }
 
     TEST_CASE("empty values and an empty part") {
@@ -140,15 +134,15 @@ TEST_SUITE("concat string and large_string") {
 
     TEST_CASE("string parts alone stay string") {
         Series a = make_string({"a"});
-        Series b = make_string({"b", dftracer::utils::dstd::nullopt});
+        Series b = make_string({"b", dstd::nullopt});
         Series out = dfops::concat_columns({&a, &b});
         CHECK(out.type() == TypeId::String);
-        CHECK(cells_of(out) == Cells{"a", "b", dftracer::utils::dstd::nullopt});
+        CHECK(cells_of(out) == Cells{"a", "b", dstd::nullopt});
     }
 
     TEST_CASE("a string next to an integer still fails") {
         Series a = make_large_utf8({"a"});
-        const std::vector<std::int64_t> v{1};
+        const dstd::Vector<std::int64_t> v{1};
         Series i = Series::flat_i64(v.data(), 1);
         CHECK_THROWS_AS(dfops::concat_columns({&a, &i}), std::invalid_argument);
         CHECK_THROWS_AS(dfops::concat_columns({&i, &a}), std::invalid_argument);
@@ -158,7 +152,7 @@ TEST_SUITE("concat string and large_string") {
         DataFrame x, y;
         x.names = {"s", "v"};
         y.names = {"s", "v"};
-        const std::vector<std::int64_t> v0{1, 2}, v1{3};
+        const dstd::Vector<std::int64_t> v0{1, 2}, v1{3};
         x.columns.push_back(make_large_utf8({"a", "b"}));
         x.columns.push_back(Series::flat_i64(v0.data(), 2));
         y.columns.push_back(make_string({"c"}));
@@ -175,9 +169,9 @@ TEST_SUITE("concat string and large_string") {
         x.columns.push_back(make_string({"a", "b"}));
         y.columns.push_back(make_large_utf8({"c"}));
         LazyFrame lx =
-            LazyFrame::scan(std::make_shared<InMemorySource>(std::move(x)));
+            LazyFrame::scan(dstd::make_shared<InMemorySource>(std::move(x)));
         LazyFrame ly =
-            LazyFrame::scan(std::make_shared<InMemorySource>(std::move(y)));
+            LazyFrame::scan(dstd::make_shared<InMemorySource>(std::move(y)));
         DataFrame out = dftracer::utils::default_runtime()
                             .submit(lx.concat(ly).collect())
                             .get();

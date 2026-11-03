@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -8,8 +9,6 @@
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-
-#include <fstream>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::fileio::lines::sources;
@@ -36,12 +35,10 @@ void append_member(dstd::Vector<std::uint8_t>& out, const dstd::String& text) {
 }
 
 dstd::String write_gz(const dstd::Vector<std::uint8_t>& bytes) {
-    dftracer::utils::dstd::Path p =
-        dftu_utils_test::make_unique_test_path("stream_gz.pfw.gz");
-    std::ofstream ofs(p.c_str(), std::ios::binary);
-    ofs.write(reinterpret_cast<const char*>(bytes.data()),
-              static_cast<std::streamsize>(bytes.size()));
-    ofs.close();
+    dstd::Path p = dftu_utils_test::make_unique_test_path("stream_gz.pfw.gz");
+    dstd::String ofs;
+    ofs.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    (void)dstd::fs::write_file(dstd::PathView(p), ofs);
     return dstd::String(p.str());
 }
 

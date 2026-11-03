@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
@@ -20,12 +26,8 @@
 
 #include <atomic>
 #include <chrono>
-#include <fstream>
-#include <sstream>
-#include <string>
 #include <thread>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
@@ -35,34 +37,34 @@ namespace {
 // `events` events over small gzip members. Each event carries a few of
 // `paths` distinct args keys (numbers and strings), names from a small set,
 // and a time jump halfway, so chunks differ in every kind.
-std::string write_trace(const std::string& dir, const std::string& name,
-                        int events, int paths,
-                        std::size_t member_bytes = 16 * 1024) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
+                         int events, int paths,
+                         std::size_t member_bytes = 16 * 1024) {
+    dstd::String out;
+    out += "[\n";
     std::uint64_t ts = 1000000;
     for (int i = 0; i < events; ++i) {
         ts += 7 + static_cast<std::uint64_t>(i % 13);
         if (i == events / 2) ts += 500000;
-        out << R"({"id":)" << i << R"(,"name":"op)" << (i / 50) % 7
-            << R"(","cat":"C)" << i % 3 << R"(","pid":)" << 1 + i % 4
-            << R"(,"tid":)" << 10 + i % 4 << R"(,"ph":"X","ts":)" << ts
-            << R"(,"dur":)" << 5 + i % 97 << R"(,"args":{)";
+        out += common::str_cat(R"({"id":)", i, R"(,"name":"op)", (i / 50) % 7,
+                               R"(","cat":"C)", i % 3, R"(","pid":)", 1 + i % 4,
+                               R"(,"tid":)", 10 + i % 4, R"(,"ph":"X","ts":)",
+                               ts, R"(,"dur":)", 5 + i % 97, R"(,"args":{)");
         for (int k = 0; k < 3; ++k) {
             const int p = (i * 7 + k * 131) % paths;
-            if (k) out << ",";
-            out << "\"k" << p << "\":";
+            if (k) out += ",";
+            out += common::str_cat("\"k", p, "\":");
             if (p % 2)
-                out << i % 50;
+                out += common::str_cat(i % 50);
             else
-                out << "\"v" << i % 11 << "\"";
+                out += common::str_cat("\"v", i % 11, "\"");
         }
-        out << "}}\n";
+        out += "}}\n";
     }
-    out << "]\n";
+    out += "]\n";
     const auto plain = dir + "/" + name + ".pfw";
     {
-        std::ofstream(plain.c_str()) << out.str();
+        (void)dstd::fs::write_file(dstd::PathView(plain), out);
     }
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
@@ -71,8 +73,8 @@ std::string write_trace(const std::string& dir, const std::string& name,
     return gz;
 }
 
-build::IndexBuildBatchResult run_build(const std::vector<std::string>& files,
-                                       const std::string& index_dir,
+build::IndexBuildBatchResult run_build(const dstd::Vector<dstd::String>& files,
+                                       const dstd::String& index_dir,
                                        std::uint64_t memory_budget,
                                        std::size_t path_budget = 0,
                                        std::size_t parallelism = 4) {
@@ -96,12 +98,12 @@ build::IndexBuildBatchResult run_build(const std::vector<std::string>& files,
 
 // Every live record of every family, in order.
 dstd::Vector<dftu_utils_test::IndexRecord> contents(
-    const std::string& index_path) {
+    const dstd::String& index_path) {
     return dftu_utils_test::dump_index(index_path);
 }
 
-std::string index_of(const std::string& trace, const std::string& dir) {
-    return std::string(trace::internal::determine_index_path(trace, dir));
+dstd::String index_of(const dstd::String& trace, const dstd::String& dir) {
+    return dstd::String(trace::internal::determine_index_path(trace, dir));
 }
 
 constexpr std::uint64_t MIB = std::uint64_t{1} << 20;
@@ -134,10 +136,10 @@ TEST_SUITE("IndexBuildMemory") {
                 build::g_max_sink_bytes.exchange(std::size_t{32} << 20);
             ~SinkLimit() { build::g_max_sink_bytes.store(previous); }
         } sink_limit;
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < 4; ++i)
             files.push_back(
-                write_trace(env.get_dir(), "t" + std::to_string(i), 2000, 20));
+                write_trace(env.get_dir(), "t" + dstd::to_string(i), 2000, 20));
         constexpr std::size_t WORKERS = 4;
         constexpr std::uint64_t HELD_QUANTUM = MIB;
         const std::uint64_t held =
@@ -171,7 +173,7 @@ TEST_SUITE("IndexBuildMemory") {
         dftu_utils_test::TestEnvironment env(10);
         // Small members are one parse piece each; a 6 MB member is several
         // pieces of one checkpoint.
-        const std::vector<std::string> files = {
+        const dstd::Vector<dstd::String> files = {
             write_trace(env.get_dir(), "small", 6000, 600),
             write_trace(env.get_dir(), "large", 60000, 600, 6u << 20)};
         for (const auto& file : files) {
@@ -179,9 +181,9 @@ TEST_SUITE("IndexBuildMemory") {
                  {memory::NO_SPILL_BUDGET, std::uint64_t{64 << 10}}) {
                 CAPTURE(file);
                 CAPTURE(budget);
-                const auto tag =
-                    std::string(dstd::PathView(file).stem()) +
-                    std::to_string(budget == memory::NO_SPILL_BUDGET);
+                const auto tag = dstd::String(dstd::PathView(file).stem()) +
+                                 dstd::to_string(static_cast<int>(
+                                     budget == memory::NO_SPILL_BUDGET));
                 const auto serial_dir = env.get_dir() + "/serial" + tag;
                 const auto ahead_dir = env.get_dir() + "/ahead" + tag;
                 const auto serial = run_build({file}, serial_dir, budget, 0, 1);
@@ -198,7 +200,7 @@ TEST_SUITE("IndexBuildMemory") {
         // 2 KB members give about 1200 chunks, so the last spill writes them
         // into several runs at once.
         dftu_utils_test::TestEnvironment env(10);
-        const std::vector<std::string> files = {
+        const dstd::Vector<dstd::String> files = {
             write_trace(env.get_dir(), "many", 12000, 600, 2048)};
         const auto big_dir = env.get_dir() + "/big";
         const auto big = run_build(files, big_dir, memory::NO_SPILL_BUDGET);
@@ -209,7 +211,7 @@ TEST_SUITE("IndexBuildMemory") {
         // share has a floor, so the runs stay few.
         for (std::uint64_t budget : {1 * MIB, 8 * MIB}) {
             CAPTURE(budget);
-            const auto dir = env.get_dir() + "/small" + std::to_string(budget);
+            const auto dir = env.get_dir() + "/small" + dstd::to_string(budget);
             const auto small = run_build(files, dir, budget);
             REQUIRE(small.indexed == 1);
             CHECK(small.failed == 0);
@@ -240,15 +242,15 @@ TEST_SUITE("IndexBuildMemory") {
 
     TEST_CASE("a spilled build writes the same index as an unbounded one") {
         dftu_utils_test::TestEnvironment env(10);
-        const std::vector<std::string> files = {
+        const dstd::Vector<dstd::String> files = {
             write_trace(env.get_dir(), "narrow", 6000, 12),
             write_trace(env.get_dir(), "wide", 6000, 600)};
         for (std::size_t path_budget : {std::size_t{0}, std::size_t{40}}) {
             CAPTURE(path_budget);
             const auto big_dir =
-                env.get_dir() + "/big" + std::to_string(path_budget);
+                env.get_dir() + "/big" + dstd::to_string(path_budget);
             const auto small_dir =
-                env.get_dir() + "/small" + std::to_string(path_budget);
+                env.get_dir() + "/small" + dstd::to_string(path_budget);
             const auto big =
                 run_build(files, big_dir, memory::NO_SPILL_BUDGET, path_budget);
             const auto small =
@@ -293,7 +295,7 @@ TEST_SUITE("IndexBuildMemory") {
     TEST_CASE(
         "a build whose fold buffers are asked for writes the same index") {
         dftu_utils_test::TestEnvironment env(10);
-        const std::vector<std::string> files = {
+        const dstd::Vector<dstd::String> files = {
             write_trace(env.get_dir(), "asked", 60000, 600, 1u << 20)};
         const auto plain_dir = env.get_dir() + "/plain";
         const auto asked_dir = env.get_dir() + "/asked";
@@ -306,7 +308,7 @@ TEST_SUITE("IndexBuildMemory") {
         REQUIRE(held);
         const std::uint64_t freed = build::g_fold_buffers_freed.load();
         std::atomic<bool> done{false};
-        std::thread asker([&] {
+        dstd::Thread asker([&] {
             while (!done.load(std::memory_order_acquire)) {
                 (void)ask_for_budget();
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));

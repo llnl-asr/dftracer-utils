@@ -8,21 +8,22 @@
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 
-#include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <vector>
 
-using dftracer::utils::dstd::StringIntern;
+using namespace dftracer::utils;
+
 using dftracer::utils::plugins::Host;
 using dftracer::utils::plugins::PluginFold;
+using dstd::StringIntern;
 
 namespace {
 
@@ -37,8 +38,8 @@ struct HostFixture {
     StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    std::unique_ptr<PluginFold> fold =
-        std::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<PluginFold> fold =
+        dstd::make_unique<PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     ~HostFixture() {
         fold.reset();
@@ -188,15 +189,14 @@ std::int64_t sum_through_data(const dftu_series* v) {
 dftu_series* doubled_through_data(const dftu_series* v) {
     const auto* d = static_cast<const std::int64_t*>(dftu_series_data(v));
     if (!d) return nullptr;
-    std::vector<std::int64_t> out(
+    dstd::Vector<std::int64_t> out(
         static_cast<std::size_t>(dftu_series_length(v)));
     for (std::size_t i = 0; i < out.size(); ++i) out[i] = 2 * d[i];
     return dftu_series_new_flat(DFTU_TYPE_INT64, out.data(),
                                 static_cast<std::int64_t>(out.size()), nullptr);
 }
 
-dftracer::utils::dstd::SharedPtr<dftu_series> flat_chunk(
-    std::vector<std::int64_t> v) {
+dstd::SharedPtr<dftu_series> flat_chunk(dstd::Vector<std::int64_t> v) {
     return adopt_series(
         dftu_series_new_flat(DFTU_TYPE_INT64, v.data(),
                              static_cast<std::int64_t>(v.size()), nullptr));

@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -22,13 +27,8 @@
 #include <cstddef>
 #include <cstdio>
 #include <exception>
-#include <fstream>
 #include <iterator>
-#include <sstream>
-#include <string>
-#include <thread>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
@@ -44,24 +44,23 @@ constexpr std::size_t WORKERS = 8;
 constexpr int VIEW_FILES = 12;
 constexpr std::size_t VIEW_WORKERS = 4;
 
-void write_sized_file(const std::string& path, std::size_t bytes) {
-    std::ofstream out(path.c_str(), std::ios::binary);
-    out << std::string(bytes, 'x');
+void write_sized_file(const dstd::String& path, std::size_t bytes) {
+    (void)dstd::fs::write_file(dstd::PathView(path), dstd::String(bytes, 'x'));
 }
 
-std::string write_small_trace(const std::string& dir, int n) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String write_small_trace(const dstd::String& dir, int n) {
+    dstd::String out;
+    out += "[\n";
     for (int i = 0; i < 40; ++i) {
-        out << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":1,)"
-            << R"("tid":1,"ph":"X","ts":)" << 1000 + i * 10
-            << R"(,"dur":3,"args":{"fname":"/data/f)" << n << R"("}})"
-            << "\n";
+        out += common::str_cat(
+            R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":1,)",
+            R"("tid":1,"ph":"X","ts":)", 1000 + i * 10,
+            R"(,"dur":3,"args":{"fname":"/data/f)", n, R"("}})", "\n");
     }
-    out << "]\n";
+    out += "]\n";
     char name[32];
     std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
-    return dftu_utils_test::write_gz_trace(dir + name, out.str());
+    return dftu_utils_test::write_gz_trace(dir + name, out);
 }
 
 dstd::Vector<scan::FileEntry> scan_dir(dstd::StringView dir) {
@@ -93,28 +92,28 @@ dstd::Vector<scan::FileEntry> cli_scan(dstd::StringView dir) {
     return cli_scan_task(dstd::String(dir)).get();
 }
 
-std::vector<std::string> write_view_traces(const std::string& dir, int count) {
-    std::vector<std::string> files;
+dstd::Vector<dstd::String> write_view_traces(const dstd::String& dir,
+                                             int count) {
+    dstd::Vector<dstd::String> files;
     for (int i = 0; i < count; ++i) files.push_back(write_small_trace(dir, i));
     return files;
 }
 
-std::string write_corrupt_trace(const std::string& dir, int n) {
+dstd::String write_corrupt_trace(const dstd::String& dir, int n) {
     char name[32];
     std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
     const auto path = dir + name;
-    std::ofstream out(path.c_str(), std::ios::binary);
-    out << std::string(4096, 'x');
+    (void)dstd::fs::write_file(dstd::PathView(path), dstd::String(4096, 'x'));
     return path;
 }
 
-std::string view_index_root(const std::string& file,
-                            const std::string& index_dir) {
-    return std::string(trace::internal::determine_index_path(file, index_dir));
+dstd::String view_index_root(const dstd::String& file,
+                             const dstd::String& index_dir) {
+    return dstd::String(trace::internal::determine_index_path(file, index_dir));
 }
 
-void cold_count(const std::vector<std::string>& files,
-                const std::string& index_dir) {
+void cold_count(const dstd::Vector<dstd::String>& files,
+                const dstd::String& index_dir) {
     dstd::Vector<views::ViewFile> view_files;
     for (const auto& f : files) {
         views::ViewFile vf;
@@ -138,7 +137,7 @@ struct ViewRun {
     }
 
     dftu_utils_test::TestEnvironment env;
-    std::vector<std::string> files;
+    dstd::Vector<dstd::String> files;
 };
 
 ViewRun& view_run() {
@@ -151,23 +150,23 @@ ViewRun& view_run() {
 TEST_SUITE("SerialStages") {
     TEST_CASE("a directory scan stats its files in parallel batches") {
         dftu_utils_test::TestEnvironment env(10);
-        const std::string dir = env.get_dir() + "/scan";
+        const dstd::String dir = env.get_dir() + "/scan";
         REQUIRE(dstd::fs::create_directories(dir + "/sub").has_value());
         for (int i = 0; i < SCAN_FILES; ++i)
-            write_sized_file(dir + "/f" + std::to_string(i) + ".pfw",
+            write_sized_file(dir + "/f" + dstd::to_string(i) + ".pfw",
                              static_cast<std::size_t>(i) * 7 + 1);
         for (int i = 0; i < NESTED_FILES; ++i)
-            write_sized_file(dir + "/sub/n" + std::to_string(i) + ".pfw",
+            write_sized_file(dir + "/sub/n" + dstd::to_string(i) + ".pfw",
                              static_cast<std::size_t>(i) + 100);
         write_sized_file(dir + "/skip.txt", 5);
 
-        std::vector<std::string> expected;
+        dstd::Vector<dstd::String> expected;
         for (const auto& e : dftu_utils_test::list_dir(dir))
             if ((e.kind == dstd::fs::FileKind::File) &&
                 e.path.view().extension() == ".pfw")
-                expected.push_back(std::string(e.path.str()));
+                expected.push_back(dstd::String(e.path.str()));
         for (const auto& e : dftu_utils_test::list_dir(dir + "/sub"))
-            expected.push_back(std::string(e.path.str()));
+            expected.push_back(dstd::String(e.path.str()));
 
         const auto before = scan::scan_stat_batches().load();
         const auto entries = scan_dir(dir);
@@ -187,12 +186,12 @@ TEST_SUITE("SerialStages") {
 
     TEST_CASE("a CLI scan stats its files on the pool, not the main thread") {
         dftu_utils_test::TestEnvironment env(10);
-        const std::string dir = env.get_dir() + "/cli_scan";
+        const dstd::String dir = env.get_dir() + "/cli_scan";
         REQUIRE(dstd::fs::create_directories(dir + "/a").has_value());
         REQUIRE(dstd::fs::create_directories(dir + "/b").has_value());
         for (int i = 0; i < SCAN_FILES; ++i)
             write_sized_file(
-                dir + (i % 2 ? "/a/f" : "/b/f") + std::to_string(i) + ".pfw",
+                dir + (i % 2 ? "/a/f" : "/b/f") + dstd::to_string(i) + ".pfw",
                 static_cast<std::size_t>(i) + 1);
 
         scan::scan_stat_threads().clear();

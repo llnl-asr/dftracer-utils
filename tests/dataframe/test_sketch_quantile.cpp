@@ -23,11 +23,10 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string>
 #include <utility>
+
+using namespace dftracer::utils;
 
 namespace df = dftracer::utils::dataframe;
 using df::Agg;
@@ -42,19 +41,17 @@ using df::TypeId;
 
 namespace {
 
-const dftracer::utils::dstd::Vector<double> QUANTILES{0.0, 0.01, 0.5, 0.99,
-                                                      1.0};
+const dstd::Vector<double> QUANTILES{0.0, 0.01, 0.5, 0.99, 1.0};
 
-DDSketch sketch_of(const dftracer::utils::dstd::Vector<double>& values,
-                   double accuracy = 0.01) {
+DDSketch sketch_of(const dstd::Vector<double>& values, double accuracy = 0.01) {
     DDSketch s(accuracy);
     for (double v : values) s.add(v);
     return s;
 }
 
-dftracer::utils::dstd::String text_of(const DDSketch& s) {
+dstd::String text_of(const DDSketch& s) {
     const auto bytes = s.serialize();
-    return dftracer::utils::dstd::base64_encode(bytes.data(), bytes.size());
+    return dstd::base64_encode(bytes.data(), bytes.size());
 }
 
 double clamped(const DDSketch& s, double q) {
@@ -63,19 +60,17 @@ double clamped(const DDSketch& s, double q) {
 
 struct Cell {
     std::int64_t key;
-    dftracer::utils::dstd::Optional<dftracer::utils::dstd::String> text;
+    dstd::Optional<dstd::String> text;
 };
 
-DataFrame frame_of(const dftracer::utils::dstd::Vector<Cell>& cells) {
-    dftracer::utils::dstd::Vector<std::int64_t> keys;
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> views;
-    dftracer::utils::dstd::Vector<std::uint8_t> valid((cells.size() + 7) / 8,
-                                                      0);
+DataFrame frame_of(const dstd::Vector<Cell>& cells) {
+    dstd::Vector<std::int64_t> keys;
+    dstd::Vector<dstd::StringView> views;
+    dstd::Vector<std::uint8_t> valid((cells.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < cells.size(); ++i) {
         keys.push_back(cells[i].key);
-        views.push_back(cells[i].text
-                            ? dftracer::utils::dstd::StringView(*cells[i].text)
-                            : dftracer::utils::dstd::StringView());
+        views.push_back(cells[i].text ? dstd::StringView(*cells[i].text)
+                                      : dstd::StringView());
         if (cells[i].text) valid[i >> 3] |= std::uint8_t(1u << (i & 7));
     }
     DataFrame d;
@@ -86,11 +81,11 @@ DataFrame frame_of(const dftracer::utils::dstd::Vector<Cell>& cells) {
     return d;
 }
 
-dftracer::utils::dstd::Vector<GroupAgg> quantile_aggs() {
-    dftracer::utils::dstd::Vector<GroupAgg> aggs;
+dstd::Vector<GroupAgg> quantile_aggs() {
+    dstd::Vector<GroupAgg> aggs;
     for (double q : QUANTILES)
-        aggs.push_back(GroupAgg{Agg::SketchQuantile, "s",
-                                "q" + dftracer::utils::dstd::to_string(q), q});
+        aggs.push_back(
+            GroupAgg{Agg::SketchQuantile, "s", "q" + dstd::to_string(q), q});
     return aggs;
 }
 
@@ -103,8 +98,8 @@ Series large_copy(const Series& s) {
     const auto n = static_cast<std::size_t>(s.length());
     w->offsets = df::new_buffer((n + 1) * sizeof(std::int64_t));
     auto* off = reinterpret_cast<std::int64_t*>(df::writable(w->offsets));
-    dftracer::utils::dstd::String bytes;
-    dftracer::utils::dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
+    dstd::String bytes;
+    dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
     off[0] = 0;
     for (std::size_t i = 0; i < n; ++i) {
         const auto r = static_cast<std::int64_t>(i);
@@ -142,19 +137,18 @@ LazyFrame scan(const DataFrame& d) {
     copy.names = d.names;
     for (const Series& c : d.columns) copy.columns.push_back(c.share());
     return LazyFrame::scan(
-        dftracer::utils::dstd::make_shared<df::InMemorySource>(
-            std::move(copy)));
+        dstd::make_shared<df::InMemorySource>(std::move(copy)));
 }
 
 // Group 0 and 1 hold valid sketches only. Group 2 mixes valid cells with a
 // null, bad base64, an empty sketch and a sketch of another accuracy. Group 3
 // holds nothing valid.
 struct Fixture {
-    dftracer::utils::dstd::Vector<double> g0a{1, 2, 3, 4, 5};
-    dftracer::utils::dstd::Vector<double> g0b{6, 7, 8, 9, 0};
-    dftracer::utils::dstd::Vector<double> g1a{2.5, 2.5, 2.5};
-    dftracer::utils::dstd::Vector<double> g2a{3, 4, 5};
-    dftracer::utils::dstd::Vector<double> g2b{6, 6, 7};
+    dstd::Vector<double> g0a{1, 2, 3, 4, 5};
+    dstd::Vector<double> g0b{6, 7, 8, 9, 0};
+    dstd::Vector<double> g1a{2.5, 2.5, 2.5};
+    dstd::Vector<double> g2a{3, 4, 5};
+    dstd::Vector<double> g2b{6, 6, 7};
     DataFrame frame;
 
     Fixture() {
@@ -163,21 +157,21 @@ struct Fixture {
             {1, text_of(sketch_of(g1a))},
             {0, text_of(sketch_of(g0b))},
             {2, text_of(sketch_of(g2a))},
-            {2, dftracer::utils::dstd::nullopt},
-            {2, dftracer::utils::dstd::String("not base64!")},
+            {2, dstd::nullopt},
+            {2, dstd::String("not base64!")},
             {2, text_of(DDSketch(0.01))},
             {2, text_of(sketch_of({100, 200}, 0.05))},
             {2, text_of(sketch_of(g2b))},
-            {3, dftracer::utils::dstd::nullopt},
-            {3, dftracer::utils::dstd::String("###")},
+            {3, dstd::nullopt},
+            {3, dstd::String("###")},
             {3, text_of(DDSketch(0.01))},
-            {3, dftracer::utils::dstd::String("AAAA")},
+            {3, dstd::String("AAAA")},
         });
     }
 
-    static DDSketch concat(const dftracer::utils::dstd::Vector<double>& a,
-                           const dftracer::utils::dstd::Vector<double>& b) {
-        dftracer::utils::dstd::Vector<double> all = a;
+    static DDSketch concat(const dstd::Vector<double>& a,
+                           const dstd::Vector<double>& b) {
+        dstd::Vector<double> all = a;
         all.insert(all.end(), b.begin(), b.end());
         return sketch_of(all);
     }
@@ -190,8 +184,7 @@ struct Fixture {
                                  concat(g2a, g2b)};
         for (std::size_t qi = 0; qi < QUANTILES.size(); ++qi) {
             const Series c =
-                r.column("q" + dftracer::utils::dstd::to_string(QUANTILES[qi]))
-                    .materialize();
+                r.column("q" + dstd::to_string(QUANTILES[qi])).materialize();
             REQUIRE(c.type() == TypeId::Float64);
             for (int g = 0; g < 3; ++g) {
                 REQUIRE_FALSE(c.is_null(rows[g]));
@@ -214,8 +207,8 @@ TEST_CASE("sketch_quantile: merged cells equal one sketch over the group") {
     const DataFrame r = d.group_by("k", quantile_aggs());
     REQUIRE(r.num_rows() == 1);
     for (double q : QUANTILES)
-        CHECK(r.column("q" + dftracer::utils::dstd::to_string(q))
-                  .data<double>()[0] == clamped(g0, q));
+        CHECK(r.column("q" + dstd::to_string(q)).data<double>()[0] ==
+              clamped(g0, q));
 }
 
 TEST_CASE(
@@ -236,10 +229,8 @@ TEST_CASE("sketch_quantile: reads large string sketch text") {
 
 TEST_CASE("sketch_quantile: lazy and spilled group_by match eager") {
     Fixture f;
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys{
-        "k"};
-    for (std::int64_t morsel :
-         dftracer::utils::dstd::Vector<std::int64_t>{0, 1, 3}) {
+    const dstd::Vector<dstd::String> keys{"k"};
+    for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1, 3}) {
         f.check(run(scan(f.frame)
                         .group_by(keys, quantile_aggs())
                         .sort_by("k")
@@ -254,7 +245,7 @@ TEST_CASE("sketch_quantile: lazy and spilled group_by match eager") {
 
 TEST_CASE("sketch_quantile: the agg state merges and round-trips") {
     Fixture f;
-    const dftracer::utils::dstd::Vector<AggSpec> specs{
+    const dstd::Vector<AggSpec> specs{
         AggSpec{AggOp::SketchQuantile, 0, "p50", 0.5},
         AggSpec{AggOp::SketchQuantile, 0, "p99", 0.99},
     };
@@ -264,8 +255,8 @@ TEST_CASE("sketch_quantile: the agg state merges and round-trips") {
     const std::int64_t half = n / 2;
     auto a = df::agg_new(specs);
     auto b = df::agg_new(specs);
-    const dftracer::utils::dstd::Vector<const Series*> keys{&k};
-    const dftracer::utils::dstd::Vector<const Series*> values{&s};
+    const dstd::Vector<const Series*> keys{&k};
+    const dstd::Vector<const Series*> values{&s};
     df::agg_accumulate(*a, keys, values, 0, half);
     df::agg_accumulate(*b, keys, values, half, n);
     auto b2 = df::agg_deserialize(df::agg_serialize(*b));
@@ -293,8 +284,8 @@ TEST_CASE("sketch_quantile: the agg state merges and round-trips") {
 }
 
 TEST_CASE("sketch_quantile: a non-String column is refused") {
-    dftracer::utils::dstd::Vector<std::int64_t> k{0, 0};
-    dftracer::utils::dstd::Vector<std::int64_t> v{1, 2};
+    dstd::Vector<std::int64_t> k{0, 0};
+    dstd::Vector<std::int64_t> v{1, 2};
     DataFrame d;
     d.names = {"k", "s"};
     d.columns.push_back(Series::flat_i64(k.data(), 2));
@@ -304,14 +295,14 @@ TEST_CASE("sketch_quantile: a non-String column is refused") {
 
 TEST_CASE("DDSketch::deserialize rejects truncated and hostile bytes") {
     const DDSketch good = sketch_of({1, 2, 3, 4, 5});
-    const dftracer::utils::dstd::Vector<std::uint8_t> bytes = good.serialize();
+    const dstd::Vector<std::uint8_t> bytes = good.serialize();
     REQUIRE_FALSE(DDSketch::deserialize(bytes.data(), bytes.size()).empty());
 
     for (std::size_t len = 0; len < bytes.size(); ++len)
         CHECK(DDSketch::deserialize(bytes.data(), len).empty());
 
     auto poke = [&](std::size_t at, const void* v, std::size_t n) {
-        dftracer::utils::dstd::Vector<std::uint8_t> m = bytes;
+        dstd::Vector<std::uint8_t> m = bytes;
         std::memcpy(m.data() + at, v, n);
         return DDSketch::deserialize(m.data(), m.size());
     };
@@ -333,7 +324,7 @@ TEST_CASE("DDSketch::deserialize rejects truncated and hostile bytes") {
 }
 
 TEST_CASE("DDSketch survives random mutations of a serialized sketch") {
-    const dftracer::utils::dstd::Vector<std::uint8_t> bytes =
+    const dstd::Vector<std::uint8_t> bytes =
         sketch_of({0.5, 1, 2, 3, 40, 500, 7000}).serialize();
     std::uint64_t x = 0x9e3779b97f4a7c15ULL;
     auto next = [&]() {
@@ -343,7 +334,7 @@ TEST_CASE("DDSketch survives random mutations of a serialized sketch") {
         return x;
     };
     for (int round = 0; round < 5000; ++round) {
-        dftracer::utils::dstd::Vector<std::uint8_t> m = bytes;
+        dstd::Vector<std::uint8_t> m = bytes;
         const int edits = 1 + static_cast<int>(next() % 6);
         for (int e = 0; e < edits; ++e)
             m[next() % m.size()] = static_cast<std::uint8_t>(next() & 0xff);

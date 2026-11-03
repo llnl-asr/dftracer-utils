@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -14,30 +15,30 @@
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
-#include <sstream>
 #include <string>
 #include <variant>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace duql = dftracer::utils::duql;
 using duql::syntax::Tok;
 
 namespace {
 
-dftracer::utils::dstd::Vector<Tok> kinds(
-    dftracer::utils::dstd::StringView text) {
+dstd::Vector<Tok> kinds(dstd::StringView text) {
     auto tokens = duql::syntax::lex(text);
     REQUIRE(tokens.has_value());
-    dftracer::utils::dstd::Vector<Tok> out;
+    dstd::Vector<Tok> out;
     for (const auto& t : *tokens) out.push_back(t.kind);
     return out;
 }
 
-duql::syntax::Program parsed(dftracer::utils::dstd::StringView text) {
+duql::syntax::Program parsed(dstd::StringView text) {
     auto q = duql::syntax::parse(text);
     if (!q) FAIL(q.error().format());
     return std::move(*q);
@@ -52,20 +53,18 @@ const duql::syntax::Expr& where_condition(const duql::syntax::Program& q) {
     return *w->condition;
 }
 
-dftracer::utils::dstd::String lowered(dftracer::utils::dstd::StringView text,
-                                      const duql::Params& params = {}) {
+dstd::String lowered(dstd::StringView text, const duql::Params& params = {}) {
     auto node = duql::parse(text, params);
     if (!node) FAIL(node.error().format());
     return duql::to_string(**node);
 }
 
-dftracer::utils::dstd::Expected<duql::Pipeline, duql::DuqlError>
-compile_pipeline(dftracer::utils::dstd::StringView text,
-                 const duql::Params& params, const duql::Roles* roles) {
+dstd::Expected<duql::Pipeline, duql::DuqlError> compile_pipeline(
+    dstd::StringView text, const duql::Params& params,
+    const duql::Roles* roles) {
     duql::PluginCatalog plugins;
-    plugins.kind = [](dftracer::utils::dstd::StringView name) {
-        const dftu_op_desc* op =
-            dftu_op_find(dftracer::utils::dstd::String(name).c_str());
+    plugins.kind = [](dstd::StringView name) {
+        const dftu_op_desc* op = dftu_op_find(dstd::String(name).c_str());
         if (!op) return duql::PluginKind::None;
         if (dftu_op_kind_of(op->sig) == DFTU_OP_KIND_SERIES)
             return duql::PluginKind::Column;
@@ -76,7 +75,7 @@ compile_pipeline(dftracer::utils::dstd::StringView text,
         return duql::PluginKind::Other;
     };
     for (std::uint32_t k = 0; k < dftu_op_count(); ++k) {
-        const dftracer::utils::dstd::StringView op = dftu_op_at(k)->name;
+        const dstd::StringView op = dftu_op_at(k)->name;
         if (op.starts_with("pa.") || op.starts_with("pb."))
             plugins.namespaces.emplace_back(op.substr(0, 2));
     }
@@ -85,22 +84,21 @@ compile_pipeline(dftracer::utils::dstd::StringView text,
         std::unique(plugins.namespaces.begin(), plugins.namespaces.end()),
         plugins.namespaces.end());
     auto p = duql::compile_program(text, params, roles, {}, &plugins);
-    if (!p) return dftracer::utils::dstd::Unexpected(p.error());
+    if (!p) return dstd::Unexpected(p.error());
     return std::move(p->main);
 }
 
-dftracer::utils::dstd::String signature(const duql::Pipeline& p) {
-    dftracer::utils::dstd::String out = "filter=" + p.filter_text;
+dstd::String signature(const duql::Pipeline& p) {
+    dstd::String out = "filter=" + p.filter_text;
     for (const auto& stage : p.stages) {
-        out += " | " + dftracer::utils::dstd::int_text(stage.index());
+        out += " | " + dstd::int_text(stage.index());
         std::visit(
             [&](const auto& n) {
                 using T = std::decay_t<decltype(n)>;
                 if constexpr (std::is_same_v<T, duql::PipelineWhere>) {
                     out += " " + n.text;
                 } else if constexpr (std::is_same_v<T, duql::PipelineBucket>) {
-                    out += " " + dftracer::utils::dstd::int_text(n.width) +
-                           " " + n.text;
+                    out += " " + dstd::int_text(n.width) + " " + n.text;
                 } else if constexpr (std::is_same_v<T, duql::PipelineGroup>) {
                     for (const auto& k : n.keys) out += " k:" + k.text;
                     for (const auto& a : n.aggs)
@@ -109,7 +107,7 @@ dftracer::utils::dstd::String signature(const duql::Pipeline& p) {
                     for (const auto& k : n.keys)
                         out += " " + k.key.text + (k.descending ? " d" : " a");
                 } else if constexpr (std::is_same_v<T, duql::PipelineTake>) {
-                    out += " " + dftracer::utils::dstd::int_text(n.count);
+                    out += " " + dstd::int_text(n.count);
                 }
             },
             stage);
@@ -127,39 +125,36 @@ duql::Roles time_roles() {
     return roles;
 }
 
-dftracer::utils::dstd::String compiled(dftracer::utils::dstd::StringView text) {
+dstd::String compiled(dstd::StringView text) {
     const duql::Roles roles = time_roles();
     auto p = duql::compile_program(text, {}, &roles);
     if (!p) FAIL(p.error().format());
-    dftracer::utils::dstd::String out = signature(p->main);
+    dstd::String out = signature(p->main);
     for (const auto& side : p->sides)
         out += " side " + side.name + " (" + signature(side.pipeline) + ")";
     return out;
 }
 
-dftracer::utils::dstd::String compile_error(
-    dftracer::utils::dstd::StringView text) {
+dstd::String compile_error(dstd::StringView text) {
     const duql::Roles roles = time_roles();
     auto p = compile_pipeline(text, {}, &roles);
     REQUIRE_FALSE(p.has_value());
     return p.error().message;
 }
 
-bool has(const dftracer::utils::dstd::String& text,
-         dftracer::utils::dstd::StringView part) {
-    return text.find(part) != dftracer::utils::dstd::String::npos;
+bool has(const dstd::String& text, dstd::StringView part) {
+    return text.find(part) != dstd::String::npos;
 }
 
 }  // namespace
 
 TEST_CASE("lex - minus is always an operator") {
-    CHECK(kinds("5-3") == dftracer::utils::dstd::Vector<Tok>{
-                              Tok::Int, Tok::Minus, Tok::Int, Tok::End});
-    CHECK(kinds("x > -5") ==
-          dftracer::utils::dstd::Vector<Tok>{Tok::Name, Tok::Gt, Tok::Minus,
-                                             Tok::Int, Tok::End});
-    CHECK(kinds("a->b") == dftracer::utils::dstd::Vector<Tok>{
-                               Tok::Name, Tok::Arrow, Tok::Name, Tok::End});
+    CHECK(kinds("5-3") ==
+          dstd::Vector<Tok>{Tok::Int, Tok::Minus, Tok::Int, Tok::End});
+    CHECK(kinds("x > -5") == dstd::Vector<Tok>{Tok::Name, Tok::Gt, Tok::Minus,
+                                               Tok::Int, Tok::End});
+    CHECK(kinds("a->b") ==
+          dstd::Vector<Tok>{Tok::Name, Tok::Arrow, Tok::Name, Tok::End});
 }
 
 TEST_CASE("lex - backtick keys") {
@@ -173,8 +168,7 @@ TEST_CASE("lex - backtick keys") {
 }
 
 TEST_CASE("lex - comments are skipped") {
-    CHECK(kinds("# only a comment") ==
-          dftracer::utils::dstd::Vector<Tok>{Tok::End});
+    CHECK(kinds("# only a comment") == dstd::Vector<Tok>{Tok::End});
     CHECK(kinds("a == 1 # trailing\nand b == 2") == kinds("a == 1 and b == 2"));
     CHECK(kinds("a # mid\n== 1") == kinds("a == 1"));
 }
@@ -220,22 +214,20 @@ TEST_CASE("parse - duql pragma") {
     using duql::syntax::DUQL_VERSION_MAJOR;
     using duql::syntax::DUQL_VERSION_MINOR;
     const auto with = [](int major, int minor) {
-        return "duql " + dftracer::utils::dstd::int_text(major) + "." +
-               dftracer::utils::dstd::int_text(minor) + "\nwhere a == 1";
+        return "duql " + dstd::int_text(major) + "." + dstd::int_text(minor) +
+               "\nwhere a == 1";
     };
     auto q = duql::syntax::parse(with(DUQL_VERSION_MAJOR, DUQL_VERSION_MINOR));
     REQUIRE(q.has_value());
     CHECK(q->pipeline);
 
     auto major_only = duql::syntax::parse(
-        "duql " + dftracer::utils::dstd::int_text(DUQL_VERSION_MAJOR) +
-        "\nwhere a == 1");
+        "duql " + dstd::int_text(DUQL_VERSION_MAJOR) + "\nwhere a == 1");
     REQUIRE(major_only.has_value());
 
-    for (const auto& text :
-         {with(DUQL_VERSION_MAJOR + 1, 0),
-          with(DUQL_VERSION_MAJOR, DUQL_VERSION_MINOR + 1),
-          dftracer::utils::dstd::String("duql 1e2\nwhere a == 1")}) {
+    for (const auto& text : {with(DUQL_VERSION_MAJOR + 1, 0),
+                             with(DUQL_VERSION_MAJOR, DUQL_VERSION_MINOR + 1),
+                             dstd::String("duql 1e2\nwhere a == 1")}) {
         CAPTURE(text);
         auto bad = duql::syntax::parse(text);
         REQUIRE_FALSE(bad.has_value());
@@ -247,8 +239,7 @@ TEST_CASE("parse - a computed index round-trips and ends the path") {
     for (const char* q : {"xs[i]", "xs[$n]", "xs[i - 3]", "a.b[i]", "a[0].b[i]",
                           "xs[-1]", "xs[0]"}) {
         CAPTURE(q);
-        const auto first =
-            parsed(dftracer::utils::dstd::String("where ") + q + " > 1");
+        const auto first = parsed(dstd::String("where ") + q + " > 1");
         const auto second = parsed(duql::syntax::to_text(first));
         CHECK(duql::syntax::to_text(second) == duql::syntax::to_text(first));
         CHECK(duql::syntax::equal(first, second));
@@ -268,11 +259,9 @@ TEST_CASE("parse - a computed index round-trips and ends the path") {
 
     for (const char* bad : {"xs[i].b", "xs[i][0]"}) {
         CAPTURE(bad);
-        auto r = duql::syntax::parse(dftracer::utils::dstd::String("where ") +
-                                     bad + " == 1");
+        auto r = duql::syntax::parse(dstd::String("where ") + bad + " == 1");
         REQUIRE_FALSE(r.has_value());
-        CHECK(r.error().format().find("ends the path") !=
-              dftracer::utils::dstd::String::npos);
+        CHECK(r.error().format().find("ends the path") != dstd::String::npos);
     }
     CHECK_FALSE(duql::syntax::parse("where xs[] == 1").has_value());
 }
@@ -286,11 +275,10 @@ TEST_CASE("parse - case-insensitive keywords") {
 }
 
 TEST_CASE("parse - string escapes decode and print back") {
-    auto value = [](dftracer::utils::dstd::StringView text) {
-        const auto q = parsed(dftracer::utils::dstd::String("where x == ") +
-                              dftracer::utils::dstd::String(text));
+    auto value = [](dstd::StringView text) {
+        const auto q = parsed(dstd::String("where x == ") + dstd::String(text));
         const auto& b = std::get<duql::syntax::Binary>(where_condition(q).node);
-        return std::get<dftracer::utils::dstd::String>(
+        return std::get<dstd::String>(
             std::get<duql::syntax::Literal>(b.right->node).value);
     };
     CHECK(value(R"("a\"b")") == "a\"b");
@@ -303,13 +291,11 @@ TEST_CASE("parse - string escapes decode and print back") {
     for (const char* bad :
          {R"("\u12")", R"("\ude00")", R"("\ud83d")", R"("\ud83dx")"}) {
         CAPTURE(bad);
-        CHECK_FALSE(duql::syntax::parse(
-                        dftracer::utils::dstd::String("where x == ") + bad)
-                        .has_value());
+        CHECK_FALSE(
+            duql::syntax::parse(dstd::String("where x == ") + bad).has_value());
     }
-    const dftracer::utils::dstd::String all =
-        "q\" s' b\\ n\n t\t c\x01 u\xc3\xa9";
-    const dftracer::utils::dstd::String printed =
+    const dstd::String all = "q\" s' b\\ n\n t\t c\x01 u\xc3\xa9";
+    const dstd::String printed =
         duql::syntax::to_text(parsed("where x == " + duql::quote_string(all)));
     CHECK(value(printed.substr(
               printed.find("== ") + 3,
@@ -375,8 +361,7 @@ TEST_CASE("pipeline - bucket every and at") {
     roles.fields.emplace("ts", 1000);
     auto p =
         compile_pipeline("bucket 2ms at 1ms | agg { n = count() }", {}, &roles);
-    REQUIRE_MESSAGE(p.has_value(),
-                    (p ? dftracer::utils::dstd::String() : p.error().format()));
+    REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
     const auto& b = std::get<duql::PipelineBucket>(p->stages[0]);
     CHECK(duql::term_text(*b.key) == "(((ts - 1000) // 2000) * 2000) + 1000");
     CHECK(b.text == "(((ts - 1000) // 2000) * 2000) + 1000");
@@ -385,8 +370,7 @@ TEST_CASE("pipeline - bucket every and at") {
 
     auto h = compile_pipeline("bucket 5ms every 1ms | agg { n = count() }", {},
                               &roles);
-    REQUIRE_MESSAGE(h.has_value(),
-                    (h ? dftracer::utils::dstd::String() : h.error().format()));
+    REQUIRE_MESSAGE(h.has_value(), (h ? dstd::String() : h.error().format()));
     const auto& hb = std::get<duql::PipelineBucket>(h->stages[0]);
     REQUIRE(hb.every);
     CHECK(*hb.every == 1000);
@@ -415,19 +399,17 @@ TEST_CASE("pipeline - bucket every and at") {
 }
 
 TEST_CASE("parse - unnamed block entries are named from their text") {
-    const dftracer::utils::dstd::Vector<
-        dftracer::utils::dstd::Pair<const char*, const char*>>
-        cases = {
-            {"group k { count() }", "group k { count = count() }"},
-            {"group k { sum(dur) }", "group k { sum_dur = sum(dur) }"},
-            {"agg { quantile(dur, 0.99) }",
-             "agg { quantile_dur_0_99 = quantile(dur, 0.99) }"},
-            {"agg { sum(args.size), n = count() }",
-             "agg { sum_args_size = sum(args.size), n = count() }"},
-            {"window { sum(-x) }", "window { sum_x = sum(-x) }"},
-        };
+    const dstd::Vector<dstd::Pair<const char*, const char*>> cases = {
+        {"group k { count() }", "group k { count = count() }"},
+        {"group k { sum(dur) }", "group k { sum_dur = sum(dur) }"},
+        {"agg { quantile(dur, 0.99) }",
+         "agg { quantile_dur_0_99 = quantile(dur, 0.99) }"},
+        {"agg { sum(args.size), n = count() }",
+         "agg { sum_args_size = sum(args.size), n = count() }"},
+        {"window { sum(-x) }", "window { sum_x = sum(-x) }"},
+    };
     for (const auto& [text, named] : cases) {
-        CAPTURE(dftracer::utils::dstd::String(text));
+        CAPTURE(dstd::String(text));
         CHECK(duql::syntax::equal(parsed(text), parsed(named)));
     }
 }
@@ -481,15 +463,13 @@ TEST_CASE("parse - case block is the positional case") {
     CHECK(duql::syntax::equal(parsed(R"(derive s = CASE { x > 1 => "a" })"),
                               parsed(R"(derive s = case(x > 1, "a", null))")));
     CHECK(kinds("a => b")[1] == Tok::Fatarrow);
-    const dftracer::utils::dstd::Vector<
-        dftracer::utils::dstd::Pair<const char*, const char*>>
-        errors = {
-            {"derive s = case { }", "pair"},
-            {R"(derive s = case { else => 1, x > 1 => 2 })", "last"},
-            {"derive s = case { x > 1 }", "'=>'"},
-        };
+    const dstd::Vector<dstd::Pair<const char*, const char*>> errors = {
+        {"derive s = case { }", "pair"},
+        {R"(derive s = case { else => 1, x > 1 => 2 })", "last"},
+        {"derive s = case { x > 1 }", "'=>'"},
+    };
     for (const auto& [text, want] : errors) {
-        CAPTURE(dftracer::utils::dstd::String(text));
+        CAPTURE(dstd::String(text));
         auto q = duql::syntax::parse(text);
         REQUIRE_FALSE(q.has_value());
         CAPTURE(q.error().message);
@@ -499,36 +479,28 @@ TEST_CASE("parse - case block is the positional case") {
 
 TEST_CASE("lower - regex_replace compile errors") {
     duql::Params params;
-    params.emplace("pat",
-                   duql::LiteralValue{dftracer::utils::dstd::String("(a)")});
-    params.emplace("to",
-                   duql::LiteralValue{dftracer::utils::dstd::String("$1$1")});
-    params.emplace("bad",
-                   duql::LiteralValue{dftracer::utils::dstd::String("$3")});
+    params.emplace("pat", duql::LiteralValue{dstd::String("(a)")});
+    params.emplace("to", duql::LiteralValue{dstd::String("$1$1")});
+    params.emplace("bad", duql::LiteralValue{dstd::String("$3")});
     CHECK(duql::parse(R"re(regex_replace(s, $pat, $to) == "aa")re", params)
               .has_value());
     auto ok = duql::parse(R"re(regex_replace(s, "(a)", "${1}x$$") == "a")re");
-    CHECK_MESSAGE(ok.has_value(),
-                  (ok ? dftracer::utils::dstd::String() : ok.error().message));
-    const dftracer::utils::dstd::Vector<
-        dftracer::utils::dstd::Pair<const char*, const char*>>
-        errors = {
-            {R"re(regex_replace(s, "(a)", "$2") == "x")re", "group 2"},
-            {R"re(regex_replace(s, "(a)", "${nope}") == "x")re", "nope"},
-            {R"re(regex_replace(s, "(a)", "a$") == "x")re", "offset 1"},
-            {R"re(regex_replace(s, "(a)", "$x") == "x")re",
-             "Invalid replacement"},
-            {R"re(regex_replace(s, "(a", "x") == "x")re", "Invalid pattern"},
-            {R"re(regex_replace(s, "(a)\\1", "x") == "x")re",
-             "Invalid pattern"},
-            {R"re(regex_replace(s, "a", t) == "x")re", "string replacement"},
-            {R"re(regex_replace(s, t, "x") == "x")re", "string pattern"},
-            {R"re(regex_replace(s, "a", 5) == "x")re", "string replacement"},
-            {R"re(regex_replace(s, "(a)", $bad) == "x")re", "group 3"},
-            {R"re(regex_replace(s, "a") == "x")re", "regex_replace"},
-        };
+    CHECK_MESSAGE(ok.has_value(), (ok ? dstd::String() : ok.error().message));
+    const dstd::Vector<dstd::Pair<const char*, const char*>> errors = {
+        {R"re(regex_replace(s, "(a)", "$2") == "x")re", "group 2"},
+        {R"re(regex_replace(s, "(a)", "${nope}") == "x")re", "nope"},
+        {R"re(regex_replace(s, "(a)", "a$") == "x")re", "offset 1"},
+        {R"re(regex_replace(s, "(a)", "$x") == "x")re", "Invalid replacement"},
+        {R"re(regex_replace(s, "(a", "x") == "x")re", "Invalid pattern"},
+        {R"re(regex_replace(s, "(a)\\1", "x") == "x")re", "Invalid pattern"},
+        {R"re(regex_replace(s, "a", t) == "x")re", "string replacement"},
+        {R"re(regex_replace(s, t, "x") == "x")re", "string pattern"},
+        {R"re(regex_replace(s, "a", 5) == "x")re", "string replacement"},
+        {R"re(regex_replace(s, "(a)", $bad) == "x")re", "group 3"},
+        {R"re(regex_replace(s, "a") == "x")re", "regex_replace"},
+    };
     for (const auto& [text, want] : errors) {
-        CAPTURE(dftracer::utils::dstd::String(text));
+        CAPTURE(dstd::String(text));
         auto q = duql::parse(text, params);
         REQUIRE_FALSE(q.has_value());
         CAPTURE(q.error().message);
@@ -539,8 +511,7 @@ TEST_CASE("lower - regex_replace compile errors") {
 TEST_CASE("lower - an array index parameter folds to the literal step") {
     duql::Params params;
     params.emplace("n", duql::LiteralValue{std::int64_t{1}});
-    params.emplace("bad",
-                   duql::LiteralValue{dftracer::utils::dstd::String("1")});
+    params.emplace("bad", duql::LiteralValue{dstd::String("1")});
     auto folded = compile_pipeline(R"(where xs[$n] == "a")", params, nullptr);
     auto literal = compile_pipeline(R"(where xs[1] == "a")", {}, nullptr);
     REQUIRE(folded.has_value());
@@ -577,13 +548,11 @@ TEST_CASE("parse - list and pattern parameters print back") {
         const auto a = parsed(q);
         const auto b = parsed(duql::syntax::to_text(a));
         CHECK(duql::syntax::equal(a, b));
-        CHECK(duql::syntax::to_text(a).find("$") !=
-              dftracer::utils::dstd::String::npos);
+        CHECK(duql::syntax::to_text(a).find("$") != dstd::String::npos);
     }
     auto list = duql::parse_param(R"(["a", 2, -3, 1.5, true])");
     REQUIRE(list.has_value());
-    CHECK(std::get<dftracer::utils::dstd::Vector<duql::LiteralValue>>(*list)
-              .size() == 5);
+    CHECK(std::get<dstd::Vector<duql::LiteralValue>>(*list).size() == 5);
     auto scalar = duql::parse_param("7");
     REQUIRE(scalar.has_value());
     CHECK(std::holds_alternative<duql::LiteralValue>(*scalar));
@@ -658,7 +627,7 @@ TEST_CASE("parse - session clauses") {
     CHECK_FALSE(duql::syntax::parse("session pid max 1h").has_value());
     auto r = duql::syntax::parse("session pid");
     REQUIRE_FALSE(r.has_value());
-    CHECK(r.error().indicator == dftracer::utils::dstd::String(11, ' ') + "^");
+    CHECK(r.error().indicator == dstd::String(11, ' ') + "^");
 
     const auto field = parsed("where session == 1");
     const auto& eq =
@@ -674,8 +643,7 @@ TEST_CASE("parse - let and a pipeline") {
     CHECK(std::holds_alternative<duql::syntax::Let>(q.decls[0]));
     REQUIRE(q.pipeline);
     REQUIRE(q.pipeline->sources.size() == 1);
-    CHECK(std::get<dftracer::utils::dstd::String>(
-              q.pipeline->sources[0].name) == "data");
+    CHECK(std::get<dstd::String>(q.pipeline->sources[0].name) == "data");
     const auto& stages = q.pipeline->stages;
     REQUIRE(stages.size() == 4);
     CHECK(std::holds_alternative<duql::syntax::Where>(stages[0].node));
@@ -685,7 +653,7 @@ TEST_CASE("parse - let and a pipeline") {
 }
 
 TEST_CASE("parse - every stage kind") {
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> texts = {
+    const dstd::Vector<dstd::String> texts = {
         "where x > 1",
         "derive y = x * 2",
         "select a, b as c",
@@ -714,7 +682,7 @@ TEST_CASE("parse - every stage kind") {
         R"re(parse name ~ "(?<a>x)")re",
         "from data | io_rate(1ms)",
     };
-    dftracer::utils::dstd::Vector<std::size_t> indexes;
+    dstd::Vector<std::size_t> indexes;
     for (const auto& text : texts) {
         CAPTURE(text);
         auto q = duql::syntax::parse(text);
@@ -755,15 +723,13 @@ TEST_CASE("pipeline macros round trip") {
 }
 
 TEST_CASE("pipeline macros reject bad syntax") {
-    const dftracer::utils::dstd::Vector<
-        dftracer::utils::dstd::Pair<const char*, const char*>>
-        errors = {
-            {"def m = from data | where x; where y", "not 'from'"},
-            {"where x | foo", "Expected a stage after '|'"},
-            {"where x | a.b(1)", "Expected a stage after '|'"},
-        };
+    const dstd::Vector<dstd::Pair<const char*, const char*>> errors = {
+        {"def m = from data | where x; where y", "not 'from'"},
+        {"where x | foo", "Expected a stage after '|'"},
+        {"where x | a.b(1)", "Expected a stage after '|'"},
+    };
     for (const auto& [text, want] : errors) {
-        CAPTURE(dftracer::utils::dstd::String(text));
+        CAPTURE(dstd::String(text));
         auto p = duql::syntax::parse(text);
         REQUIRE_FALSE(p.has_value());
         CHECK(has(p.error().message, want));
@@ -802,11 +768,10 @@ TEST_CASE("parse - as-of lookup") {
     const auto both = duql::syntax::parse("lookup s on pid asof ts into m");
     REQUIRE_FALSE(both.has_value());
     CHECK(both.error().format().find("cannot be combined") !=
-          dftracer::utils::dstd::String::npos);
+          dstd::String::npos);
     for (const char* w : {"5ms", "1.5", "$w", "-1"}) {
-        const auto e = parsed(
-            dftracer::utils::dstd::String("lookup s on pid asof ts within ") +
-            w);
+        const auto e =
+            parsed(dstd::String("lookup s on pid asof ts within ") + w);
         const auto* x =
             std::get_if<duql::syntax::AsofLookup>(&e.pipeline->stages[0].node);
         REQUIRE(x);
@@ -864,12 +829,11 @@ TEST_CASE("parse - lookup kind errors") {
     };
     CHECK(message("lookup r on k anti into x")
               .find("'anti' adds no column, so it takes no 'into'") !=
-          dftracer::utils::dstd::String::npos);
+          dstd::String::npos);
     for (const char* t :
          {"lookup r on k inner asof ts", "lookup r on k anti overlap"})
         CHECK(message(t).find("'inner' and 'anti' do not combine with "
-                              "'asof' or 'overlap'") !=
-              dftracer::utils::dstd::String::npos);
+                              "'asof' or 'overlap'") != dstd::String::npos);
 }
 
 TEST_CASE("parse - inner and anti stay field names") {
@@ -963,7 +927,7 @@ TEST_CASE("errors - caret position") {
     CHECK(e.line == 1);
     CHECK(e.column == 11);
     CHECK(e.source == "where a == ");
-    CHECK(e.indicator == dftracer::utils::dstd::String(11, ' ') + "^");
+    CHECK(e.indicator == dstd::String(11, ' ') + "^");
 
     auto m = duql::syntax::parse("where a == 1\n| derive y = \n| take 5");
     REQUIRE_FALSE(m.has_value());
@@ -974,18 +938,19 @@ TEST_CASE("errors - caret position") {
 }
 
 TEST_CASE("round trip - grammar samples") {
-    std::ifstream in(DUQL_SAMPLES_PATH);
-    REQUIRE(in.good());
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> valid;
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> invalid;
+    const auto samples = dstd::fs::read_file(DUQL_SAMPLES_PATH);
+    REQUIRE(samples.has_value());
+    dftu_utils_test::LineStream in(*samples);
+    dstd::Vector<dstd::String> valid;
+    dstd::Vector<dstd::String> invalid;
     bool in_invalid = false;
-    dftracer::utils::dstd::String current;
-    dftracer::utils::dstd::String line;
+    dstd::String current;
+    dstd::String line;
     auto flush = [&] {
         (in_invalid ? invalid : valid).push_back(current);
         current.clear();
     };
-    while (std::getline(in, line)) {
+    while (in.next(line)) {
         if (line == "---") {
             flush();
         } else if (line == "### invalid") {
@@ -1003,17 +968,15 @@ TEST_CASE("round trip - grammar samples") {
     for (const auto& text : valid) {
         INFO("sample:\n", text);
         auto a = duql::syntax::parse(text);
-        CHECK_MESSAGE(a.has_value(), (a ? dftracer::utils::dstd::String()
-                                        : a.error().format()));
+        CHECK_MESSAGE(a.has_value(), (a ? dstd::String() : a.error().format()));
         if (!a) continue;
-        const dftracer::utils::dstd::String printed = duql::syntax::to_text(*a);
+        const dstd::String printed = duql::syntax::to_text(*a);
         INFO("printed:\n", printed);
-        CHECK(printed.rfind(dftracer::utils::dstd::String(
-                                "duql " DFTRACER_UTILS_DUQL_VERSION_STRING),
-                            0) == 0);
+        CHECK(printed.rfind(
+                  dstd::String("duql " DFTRACER_UTILS_DUQL_VERSION_STRING),
+                  0) == 0);
         auto b = duql::syntax::parse(printed);
-        CHECK_MESSAGE(b.has_value(), (b ? dftracer::utils::dstd::String()
-                                        : b.error().format()));
+        CHECK_MESSAGE(b.has_value(), (b ? dstd::String() : b.error().format()));
         if (!b) continue;
         CHECK(duql::syntax::equal(*a, *b));
     }
@@ -1046,10 +1009,10 @@ TEST_CASE("parse - syntax, printing and errors") {
           R"re(parse args.fname ~ "(?<ext>[a-z]+)$")re", "parse name ~ $p"}) {
         INFO(text);
         const auto q = parsed(text);
-        const dftracer::utils::dstd::String printed = duql::syntax::to_text(q);
-        CHECK(printed == dftracer::utils::dstd::String(
-                             "duql " DFTRACER_UTILS_DUQL_VERSION_STRING) +
-                             "\n" + text + "\n");
+        const dstd::String printed = duql::syntax::to_text(q);
+        CHECK(printed ==
+              dstd::String("duql " DFTRACER_UTILS_DUQL_VERSION_STRING) + "\n" +
+                  text + "\n");
         CHECK(duql::syntax::equal(q, parsed(printed)));
     }
     const auto dotted = parsed(R"re(parse args.fname ~ "(?<a>x)")re");
@@ -1058,19 +1021,17 @@ TEST_CASE("parse - syntax, printing and errors") {
     REQUIRE(p);
     CHECK(p->column.steps.size() == 2);
 
-    const dftracer::utils::dstd::Vector<
-        dftracer::utils::dstd::Pair<const char*, const char*>>
-        errors = {
-            {R"re(parse name ~* "(?<a>x)")re", "~"},
-            {R"re(parse name !~ "(?<a>x)")re", "!~"},
-            {R"re(parse name !~* "(?<a>x)")re", "!~*"},
-            {R"re(parse name "(?<a>x)")re", "Expected '~'"},
-            {"parse name", "Expected '~'"},
-            {"parse name ~", "pattern"},
-            {"parse name ~ 5", "pattern"},
-        };
+    const dstd::Vector<dstd::Pair<const char*, const char*>> errors = {
+        {R"re(parse name ~* "(?<a>x)")re", "~"},
+        {R"re(parse name !~ "(?<a>x)")re", "!~"},
+        {R"re(parse name !~* "(?<a>x)")re", "!~*"},
+        {R"re(parse name "(?<a>x)")re", "Expected '~'"},
+        {"parse name", "Expected '~'"},
+        {"parse name ~", "pattern"},
+        {"parse name ~ 5", "pattern"},
+    };
     for (const auto& [text, want] : errors) {
-        CAPTURE(dftracer::utils::dstd::String(text));
+        CAPTURE(dstd::String(text));
         auto q = duql::syntax::parse(text);
         REQUIRE_FALSE(q.has_value());
         CAPTURE(q.error().message);
@@ -1081,8 +1042,7 @@ TEST_CASE("parse - syntax, printing and errors") {
 TEST_CASE("parse - lowers to a derive of extract per named group") {
     auto p = compile_pipeline(
         R"re(parse name ~ "(?<op>[a-z]+)(\d*)_(?<fd>\d+)")re", {}, nullptr);
-    REQUIRE_MESSAGE(p.has_value(),
-                    (p ? dftracer::utils::dstd::String() : p.error().format()));
+    REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
     REQUIRE(p->stages.size() == 1);
     const auto& d = std::get<duql::PipelineDerive>(p->stages[0]);
     REQUIRE(d.items.size() == 2);
@@ -1092,21 +1052,18 @@ TEST_CASE("parse - lowers to a derive of extract per named group") {
     CHECK(has(d.items[1].text, "3"));
 
     duql::Params params;
-    params.emplace(
-        "p", duql::LiteralValue{dftracer::utils::dstd::String("(?<a>x)")});
+    params.emplace("p", duql::LiteralValue{dstd::String("(?<a>x)")});
     CHECK(compile_pipeline("parse name ~ $p", params, nullptr).has_value());
 
     duql::Params number;
     number.emplace("p", duql::LiteralValue{std::uint64_t{5}});
-    const dftracer::utils::dstd::Vector<
-        dftracer::utils::dstd::Pair<const char*, const char*>>
-        errors = {
-            {R"re(parse name ~ "(\\w+)_(\\d+)")re", "named group"},
-            {R"re(parse name ~ "(?<a>x")re", "Invalid pattern"},
-            {"parse name ~ $p", "string pattern"},
-        };
+    const dstd::Vector<dstd::Pair<const char*, const char*>> errors = {
+        {R"re(parse name ~ "(\\w+)_(\\d+)")re", "named group"},
+        {R"re(parse name ~ "(?<a>x")re", "Invalid pattern"},
+        {"parse name ~ $p", "string pattern"},
+    };
     for (const auto& [text, want] : errors) {
-        CAPTURE(dftracer::utils::dstd::String(text));
+        CAPTURE(dstd::String(text));
         auto q = compile_pipeline(text, number, nullptr);
         REQUIRE_FALSE(q.has_value());
         CAPTURE(q.error().message);
@@ -1122,12 +1079,9 @@ TEST_CASE("pipeline - stages") {
         " | derive ms = dur / 1000 | sort -ms, name nulls first"
         " | distinct name | drop ts | rename d = dur | take $n | skip 1",
         params, nullptr);
-    REQUIRE_MESSAGE(p.has_value(),
-                    (p ? dftracer::utils::dstd::String() : p.error().format()));
+    REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
     CHECK(std::holds_alternative<duql::AndNode>(p->filter->data));
-    CHECK(p->scan_select ==
-          dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-              "name", "dur", "ts"});
+    CHECK(p->scan_select == dstd::Vector<dstd::String>{"name", "dur", "ts"});
     REQUIRE(p->stages.size() == 7);
     const auto& derive = std::get<duql::PipelineDerive>(p->stages[0]);
     CHECK(derive.items[0].name == "ms");
@@ -1136,10 +1090,8 @@ TEST_CASE("pipeline - stages") {
     CHECK(sort.keys[0].key.name == "ms");
     CHECK(sort.keys[0].descending);
     CHECK(sort.keys[1].nulls_first);
-    CHECK(
-        std::get<duql::PipelineRename>(p->stages[4]).pairs[0] ==
-        dftracer::utils::dstd::Pair<dftracer::utils::dstd::String,
-                                    dftracer::utils::dstd::String>{"d", "dur"});
+    CHECK(std::get<duql::PipelineRename>(p->stages[4]).pairs[0] ==
+          dstd::Pair<dstd::String, dstd::String>{"d", "dur"});
     CHECK(std::get<duql::PipelineTake>(p->stages[5]).count == 3);
     CHECK(std::get<duql::PipelineSkip>(p->stages[6]).count == 1);
 
@@ -1158,8 +1110,8 @@ TEST_CASE("pipeline - stages") {
     CHECK(has(later.error().message, "'runs'"));
     CHECK(has(later.error().message, "not a let or a row set"));
     auto by = compile_pipeline("take 5 by name sort -dur", {}, nullptr);
-    REQUIRE_MESSAGE(by.has_value(), (by ? dftracer::utils::dstd::String()
-                                        : by.error().format()));
+    REQUIRE_MESSAGE(by.has_value(),
+                    (by ? dstd::String() : by.error().format()));
     const auto& take_by = std::get<duql::PipelineTakeBy>(by->stages[0]);
     CHECK(take_by.count == 5);
     CHECK(take_by.keys[0].name == "name");
@@ -1183,8 +1135,7 @@ TEST_CASE("pipeline - durations and time functions") {
         " t = as_time(x, \"ms\"), u = as_time(x, \"ns\"), w = dur + 2us"
         " | where dur between 1ms and 1.5ms",
         {}, &roles);
-    REQUIRE_MESSAGE(p.has_value(),
-                    (p ? dftracer::utils::dstd::String() : p.error().format()));
+    REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
     const auto& cmp = std::get<duql::CompareNode>(p->filter->data);
     CHECK(std::get<std::uint64_t>(cmp.value.value) == 250000);
     const auto& d = std::get<duql::PipelineDerive>(p->stages[0]);
@@ -1214,8 +1165,7 @@ TEST_CASE("pipeline - session") {
     us.fields.emplace("dur", 1000);
     auto p =
         compile_pipeline("session pid, tid gap 1ms max 2s as burst", {}, &us);
-    REQUIRE_MESSAGE(p.has_value(),
-                    (p ? dftracer::utils::dstd::String() : p.error().format()));
+    REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
     const auto& s = std::get<duql::PipelineSession>(p->stages[0]);
     CHECK(s.keys.size() == 2);
     CHECK(s.gap == 1000);
@@ -1231,8 +1181,7 @@ TEST_CASE("pipeline - session") {
     secs.fields.emplace("start", 1000000000);
     secs.fields.emplace("took", 1000000);
     auto q = compile_pipeline("session host gap 30s", {}, &secs);
-    REQUIRE_MESSAGE(q.has_value(),
-                    (q ? dftracer::utils::dstd::String() : q.error().format()));
+    REQUIRE_MESSAGE(q.has_value(), (q ? dstd::String() : q.error().format()));
     const auto& t = std::get<duql::PipelineSession>(q->stages[0]);
     CHECK(t.gap == 30);
     CHECK(t.span == 0);
@@ -1254,16 +1203,14 @@ TEST_CASE("pipeline - session") {
 
 TEST_CASE("lower - parameters") {
     duql::Params params;
-    params.emplace("app",
-                   duql::LiteralValue{dftracer::utils::dstd::String("laghos")});
+    params.emplace("app", duql::LiteralValue{dstd::String("laghos")});
     auto node = duql::parse("app == $app", params);
     REQUIRE(node.has_value());
     const auto& cmp = std::get<duql::CompareNode>((*node)->data);
     CHECK(cmp.field.path == "app");
     CHECK(cmp.op == duql::CompareOp::Eq);
-    REQUIRE(
-        std::holds_alternative<dftracer::utils::dstd::String>(cmp.value.value));
-    CHECK(std::get<dftracer::utils::dstd::String>(cmp.value.value) == "laghos");
+    REQUIRE(std::holds_alternative<dstd::String>(cmp.value.value));
+    CHECK(std::get<dstd::String>(cmp.value.value) == "laghos");
 
     auto unbound = duql::parse("app == $app");
     REQUIRE_FALSE(unbound.has_value());
@@ -1311,8 +1258,8 @@ TEST_CASE("lower - expression leaves print text that parses back to them") {
         "\"ab\" in any(tags)",
     };
     for (const char* text : forms) {
-        CAPTURE(dftracer::utils::dstd::String(text));
-        const dftracer::utils::dstd::String once = lowered(text);
+        CAPTURE(dstd::String(text));
+        const dstd::String once = lowered(text);
         CHECK(lowered(once.c_str()) == once);
     }
 }
@@ -1371,44 +1318,39 @@ TEST_CASE("pipeline - reshaping stages") {
 
     const auto u = compiled("unpivot a, b.c as k, v");
     const auto& un = std::get<duql::PipelineUnpivot>(u.stages[0]);
-    CHECK(un.fields ==
-          dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"a",
-                                                                       "b.c"});
+    CHECK(un.fields == dstd::Vector<dstd::String>{"a", "b.c"});
     CHECK(un.key == "k");
     CHECK(un.value == "v");
 }
 
 TEST_CASE("pipeline - reshaping errors name the construct") {
-    const dftracer::utils::dstd::Vector<
-        dftracer::utils::dstd::Pair<const char*, const char*>>
-        cases = {
-            {"derive r = row_number()", "'window' block"},
-            {"derive r = lag(dur)", "'window' block"},
-            {"window name { d = dur * 2 }", "window function"},
-            {"window name { s = quantile(dur, 2) }", "quantile level"},
-            {"window name { s = sketch(dur) }", "does not run"},
-            {"window name { l = lag(dur, -1) }", "distance"},
-            {"window name { l = lag(sum(dur)) }", "argument"},
-            {"pivot k { n = count() } | take 1", "in [...]"},
-            {"pivot k { n = dur }", "'pivot' block"},
-            {"unpivot a, b as k, k", "key and value"},
-            {"expand tags as i with_index i", "index"},
-            {"expand tags[-1]", "negative"},
-            {"where .x > 1", "stand inside any"},
-            {"derive y = ^.x", "stand inside any"},
-            {"where any(a, any(.b, . > 1))", "inside another"},
-            {"where any(a)", "compares with a value"},
-            {"derive s = slice(a)", "'slice' takes 2 to 3 arguments, got 1"},
-            {"group k { a = arg_max(x) }",
-             "'arg_max' takes 2 arguments, got 1"},
-            {"group k { q = quantile(merge(s, t), 0.5) }", "'merge'"},
-            {"derive m = merge(s)", "aggregate"},
-            {"where x > 1 | union (from t)", "not a let or a row set"},
-            {"where x > 1 | call myplug.sessions(gap = 5)",
-             "Unknown function 'myplug.sessions'; no plugin is loaded"},
-        };
+    const dstd::Vector<dstd::Pair<const char*, const char*>> cases = {
+        {"derive r = row_number()", "'window' block"},
+        {"derive r = lag(dur)", "'window' block"},
+        {"window name { d = dur * 2 }", "window function"},
+        {"window name { s = quantile(dur, 2) }", "quantile level"},
+        {"window name { s = sketch(dur) }", "does not run"},
+        {"window name { l = lag(dur, -1) }", "distance"},
+        {"window name { l = lag(sum(dur)) }", "argument"},
+        {"pivot k { n = count() } | take 1", "in [...]"},
+        {"pivot k { n = dur }", "'pivot' block"},
+        {"unpivot a, b as k, k", "key and value"},
+        {"expand tags as i with_index i", "index"},
+        {"expand tags[-1]", "negative"},
+        {"where .x > 1", "stand inside any"},
+        {"derive y = ^.x", "stand inside any"},
+        {"where any(a, any(.b, . > 1))", "inside another"},
+        {"where any(a)", "compares with a value"},
+        {"derive s = slice(a)", "'slice' takes 2 to 3 arguments, got 1"},
+        {"group k { a = arg_max(x) }", "'arg_max' takes 2 arguments, got 1"},
+        {"group k { q = quantile(merge(s, t), 0.5) }", "'merge'"},
+        {"derive m = merge(s)", "aggregate"},
+        {"where x > 1 | union (from t)", "not a let or a row set"},
+        {"where x > 1 | call myplug.sessions(gap = 5)",
+         "Unknown function 'myplug.sessions'; no plugin is loaded"},
+    };
     for (const auto& [text, want] : cases) {
-        CAPTURE(dftracer::utils::dstd::String(text));
+        CAPTURE(dstd::String(text));
         auto p = compile_pipeline(text, {}, nullptr);
         REQUIRE_FALSE(p.has_value());
         CAPTURE(p.error().message);
@@ -1417,24 +1359,20 @@ TEST_CASE("pipeline - reshaping errors name the construct") {
 }
 
 TEST_CASE("macros expand before lowering") {
-    auto filter = [](dftracer::utils::dstd::StringView text) {
-        return lowered(text);
-    };
+    auto filter = [](dstd::StringView text) { return lowered(text); };
     CHECK(filter("def slow(t) = dur > t; slow(250)") == lowered("dur > 250"));
     CHECK(filter("def f(a, b) = a > b; def g(x) = f(x, 1); g(dur)") ==
           lowered("dur > 1"));
     CHECK(filter("def one() = 1; x == one()") == lowered("x == 1"));
-    const dftracer::utils::dstd::Vector<
-        dftracer::utils::dstd::Pair<const char*, const char*>>
-        errors = {
-            {"def a(x) = b(x); def b(x) = a(x); a(1) > 0", "a -> b -> a"},
-            {"def f(x) = x > 1; f(1, 2)", "takes 1 argument(s), got 2"},
-            {"def len(x) = x; len(a) > 1", "built-in"},
-            {"def f(x) = x; def f(y) = y; f(1) > 0", "defined twice"},
-            {"def f(x) = x > 1; f(x = 2)", "named argument"},
-        };
+    const dstd::Vector<dstd::Pair<const char*, const char*>> errors = {
+        {"def a(x) = b(x); def b(x) = a(x); a(1) > 0", "a -> b -> a"},
+        {"def f(x) = x > 1; f(1, 2)", "takes 1 argument(s), got 2"},
+        {"def len(x) = x; len(a) > 1", "built-in"},
+        {"def f(x) = x; def f(y) = y; f(1) > 0", "defined twice"},
+        {"def f(x) = x > 1; f(x = 2)", "named argument"},
+    };
     for (const auto& [text, want] : errors) {
-        CAPTURE(dftracer::utils::dstd::String(text));
+        CAPTURE(dstd::String(text));
         auto node = duql::parse(text, {});
         REQUIRE_FALSE(node.has_value());
         CAPTURE(node.error().message);
@@ -1443,10 +1381,10 @@ TEST_CASE("macros expand before lowering") {
 }
 
 TEST_CASE("pipeline macros splice at a stage") {
-    const dftracer::utils::dstd::String rate =
+    const dstd::String rate =
         "def io_rate(d) = where cat == \"POSIX\" | bucket d | agg { b = "
         "sum(size) }; ";
-    const dftracer::utils::dstd::String hand =
+    const dstd::String hand =
         "where cat == \"POSIX\" | bucket 1ms | agg { b = sum(size) } | sort b";
     CHECK(compiled(rate + "where dur > 0 | io_rate(1ms) | sort b") ==
           compiled("where dur > 0 | " + hand));
@@ -1502,39 +1440,36 @@ TEST_CASE("pipeline macros expand in every pipeline") {
 }
 
 TEST_CASE("pipeline macro errors") {
-    const dftracer::utils::dstd::String defs =
+    const dstd::String defs =
         "def slow(t) = dur > t; def io(d) = where dur > d | take 1; ";
-    const dftracer::utils::dstd::Vector<
-        dftracer::utils::dstd::Pair<dftracer::utils::dstd::String, const char*>>
-        errors = {
-            {defs + "where io(1)",
-             "macro 'io' is a pipeline; call it as a stage"},
-            {defs + "where x > 0 | derive y = io(1)",
-             "macro 'io' is a pipeline; call it as a stage"},
-            {defs + "from data | slow(250)",
-             "macro 'slow' is an expression; write 'where slow(...)'"},
-            {defs + "where x > 0 | slow(250)", "is an expression"},
-            {defs + "where x > 0 | nothing(1)",
-             "Unknown stage or pipeline macro 'nothing'"},
-            {defs + "from data | io(1, 2)", "takes 1 argument(s), got 2"},
-            {defs + "from data | io(d = 1)", "named argument"},
-            {"def sort(x) = x > 1; where y > 0", "has the name of a stage"},
-            {"def a(x) = b(x) | take 1; def b(x) = a(x) | take 1; where y > 0 "
-             "| "
-             "a(1)",
-             "macros call each other: a -> b -> a"},
-            {"def a(x) = where y > 0 | b(x); def b(x) = take 1 | a(x); from d "
-             "| "
-             "a(1)",
-             "a -> b -> a"},
-            {"def f(x) = sort x | slow2(x); def slow2(t) = dur > t; where y > "
-             "0 | "
-             "f(1)",
-             "is an expression"},
-        };
+    const dstd::Vector<dstd::Pair<dstd::String, const char*>> errors = {
+        {defs + "where io(1)", "macro 'io' is a pipeline; call it as a stage"},
+        {defs + "where x > 0 | derive y = io(1)",
+         "macro 'io' is a pipeline; call it as a stage"},
+        {defs + "from data | slow(250)",
+         "macro 'slow' is an expression; write 'where slow(...)'"},
+        {defs + "where x > 0 | slow(250)", "is an expression"},
+        {defs + "where x > 0 | nothing(1)",
+         "Unknown stage or pipeline macro 'nothing'"},
+        {defs + "from data | io(1, 2)", "takes 1 argument(s), got 2"},
+        {defs + "from data | io(d = 1)", "named argument"},
+        {"def sort(x) = x > 1; where y > 0", "has the name of a stage"},
+        {"def a(x) = b(x) | take 1; def b(x) = a(x) | take 1; where y > 0 "
+         "| "
+         "a(1)",
+         "macros call each other: a -> b -> a"},
+        {"def a(x) = where y > 0 | b(x); def b(x) = take 1 | a(x); from d "
+         "| "
+         "a(1)",
+         "a -> b -> a"},
+        {"def f(x) = sort x | slow2(x); def slow2(t) = dur > t; where y > "
+         "0 | "
+         "f(1)",
+         "is an expression"},
+    };
     for (const auto& [text, want] : errors) {
         CAPTURE(text);
-        const dftracer::utils::dstd::String message = compile_error(text);
+        const dstd::String message = compile_error(text);
         CAPTURE(message);
         CHECK(has(message, want));
     }
@@ -1552,7 +1487,7 @@ TEST_CASE("pipeline macros print back to the same program") {
         CAPTURE(text);
         auto a = duql::syntax::parse(text);
         REQUIRE(a.has_value());
-        const dftracer::utils::dstd::String printed = duql::syntax::to_text(*a);
+        const dstd::String printed = duql::syntax::to_text(*a);
         auto b = duql::syntax::parse(printed);
         REQUIRE_MESSAGE(b.has_value(), printed);
         CHECK(duql::syntax::to_text(*b) == printed);
@@ -1630,8 +1565,8 @@ TEST_CASE("pipeline - plugin reducers lower to plugin aggregates") {
     params.emplace("k", duql::LiteralValue{std::uint64_t{7}});
 
     auto one = compile_pipeline("group cat { t = pa.total(dur) }", {}, nullptr);
-    REQUIRE_MESSAGE(one.has_value(), (one ? dftracer::utils::dstd::String()
-                                          : one.error().format()));
+    REQUIRE_MESSAGE(one.has_value(),
+                    (one ? dstd::String() : one.error().format()));
     const auto& g = std::get<duql::PipelineGroup>(one->stages.back());
     REQUIRE(g.aggs.size() == 1);
     CHECK(g.aggs[0].name == "t");
@@ -1643,8 +1578,8 @@ TEST_CASE("pipeline - plugin reducers lower to plugin aggregates") {
     auto ops2 = compile_pipeline(
         "agg { s = pa.scaled(dur, 2.5, $k), r = pa.total(dur) / count() }",
         params, nullptr);
-    REQUIRE_MESSAGE(ops2.has_value(), (ops2 ? dftracer::utils::dstd::String()
-                                            : ops2.error().format()));
+    REQUIRE_MESSAGE(ops2.has_value(),
+                    (ops2 ? dstd::String() : ops2.error().format()));
     const auto& a = std::get<duql::PipelineGroup>(ops2->stages[0]);
     REQUIRE(a.aggs.size() == 3);
     CHECK(a.aggs[0].plugin == "pa.scaled");
@@ -1654,22 +1589,20 @@ TEST_CASE("pipeline - plugin reducers lower to plugin aggregates") {
     CHECK(a.aggs[2].fn == duql::AggFn::Count);
     CHECK(std::holds_alternative<duql::PipelineDerive>(ops2->stages[1]));
 
-    const dftracer::utils::dstd::Pair<dftracer::utils::dstd::StringView,
-                                      dftracer::utils::dstd::StringView>
-        cases[] = {
-            {"derive y = pa.total(x)", "'group' or 'agg'"},
-            {"where pa.total(x) > 1", "'group' or 'agg'"},
-            {"select y = pa.total(x)", "'group' or 'agg'"},
-            {"window { w = pa.total(x) }", "'group' or 'agg'"},
-            {"pivot cat { n = pa.total(x) }", "'group' or 'agg'"},
-            {"agg { r = pa.total() }", "column as its first"},
-            {"agg { r = pa.total(x, n = 1) }", "no named argument"},
-            {"agg { r = pa.total(5ms) }", "duration"},
-            {"agg { r = pa.scaled(x, y) }", "number literal or a parameter"},
-            {"agg { r = pa.scaled(x, \"s\") }", "is a number"},
-        };
+    const dstd::Pair<dstd::StringView, dstd::StringView> cases[] = {
+        {"derive y = pa.total(x)", "'group' or 'agg'"},
+        {"where pa.total(x) > 1", "'group' or 'agg'"},
+        {"select y = pa.total(x)", "'group' or 'agg'"},
+        {"window { w = pa.total(x) }", "'group' or 'agg'"},
+        {"pivot cat { n = pa.total(x) }", "'group' or 'agg'"},
+        {"agg { r = pa.total() }", "column as its first"},
+        {"agg { r = pa.total(x, n = 1) }", "no named argument"},
+        {"agg { r = pa.total(5ms) }", "duration"},
+        {"agg { r = pa.scaled(x, y) }", "number literal or a parameter"},
+        {"agg { r = pa.scaled(x, \"s\") }", "is a number"},
+    };
     for (const auto& [text, want] : cases) {
-        CAPTURE(dftracer::utils::dstd::String(text));
+        CAPTURE(dstd::String(text));
         auto r = compile_pipeline(text, {}, nullptr);
         REQUIRE_FALSE(r.has_value());
         CAPTURE(r.error().message);
@@ -1688,8 +1621,7 @@ TEST_CASE("pipeline - plugin calls lower to plugin stages") {
     auto d = compile_pipeline(
         "where x > 1 | derive a = pa.unary(x) + 1, b = pa.unary(a)", {},
         nullptr);
-    REQUIRE_MESSAGE(d.has_value(),
-                    (d ? dftracer::utils::dstd::String() : d.error().format()));
+    REQUIRE_MESSAGE(d.has_value(), (d ? dstd::String() : d.error().format()));
     REQUIRE(d->stages.size() == 5);
     const auto& first = std::get<duql::PipelinePlugin>(d->stages[0]);
     CHECK(first.op == "pa.unary");
@@ -1701,14 +1633,12 @@ TEST_CASE("pipeline - plugin calls lower to plugin stages") {
     CHECK(second.arg.text == "a");
     CHECK(std::get<duql::PipelineDerive>(d->stages[3]).items[0].name == "b");
     CHECK(std::get<duql::PipelineDrop>(d->stages[4]).names ==
-          dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-              "__duql_p_0", "__duql_p_1"});
+          dstd::Vector<dstd::String>{"__duql_p_0", "__duql_p_1"});
 
     auto operands = compile_pipeline(
         "select y = pb.binary(x, z), w = pa.unary(x)", {}, nullptr);
     REQUIRE_MESSAGE(operands.has_value(),
-                    (operands ? dftracer::utils::dstd::String()
-                              : operands.error().format()));
+                    (operands ? dstd::String() : operands.error().format()));
     REQUIRE(operands->stages.size() == 3);
     const auto& bin = std::get<duql::PipelinePlugin>(operands->stages[0]);
     REQUIRE(bin.arg2.has_value());
@@ -1724,45 +1654,43 @@ TEST_CASE("pipeline - plugin calls lower to plugin stages") {
     CHECK(has(lits.error().message, "at most 2 number"));
     auto ok = compile_pipeline("derive y = pa.unary(x, \"s\", 2, $k)", params,
                                nullptr);
-    REQUIRE_MESSAGE(ok.has_value(), (ok ? dftracer::utils::dstd::String()
-                                        : ok.error().format()));
+    REQUIRE_MESSAGE(ok.has_value(),
+                    (ok ? dstd::String() : ok.error().format()));
     const auto& lit = std::get<duql::PipelinePlugin>(ok->stages[0]);
     CHECK(lit.str == "s");
     CHECK(lit.scalars.size() == 2);
 
     auto call = compile_pipeline("where x > 1 | call pa.frame(5)", {}, nullptr);
-    REQUIRE_MESSAGE(call.has_value(), (call ? dftracer::utils::dstd::String()
-                                            : call.error().format()));
+    REQUIRE_MESSAGE(call.has_value(),
+                    (call ? dstd::String() : call.error().format()));
     const auto& c = std::get<duql::PipelineCall>(call->stages.back());
     CHECK(c.op == "pa.frame");
     CHECK(c.args.size() == 1);
 
-    const dftracer::utils::dstd::Pair<dftracer::utils::dstd::StringView,
-                                      dftracer::utils::dstd::StringView>
-        cases[] = {
-            {"where pa.unary(x) > 1", "'derive' or 'select'"},
-            {"group pa.unary(x) { n = count() }", "'derive' or 'select'"},
-            {"group k { n = sum(pa.unary(x)) }", "'derive' or 'select'"},
-            {"derive y = pa.unary(pa.unary(x))", "'derive' or 'select'"},
-            {"let s = derive y = pa.unary(x); from data | take 1", "sub-query"},
-            {"where x in (from data | derive y = pa.unary(x) | select y)",
-             "sub-query"},
-            {"derive y = nope.f(x)", "loaded plugin namespaces: pa, pb"},
-            {"derive y = pa.unary(x, 1, 2, 3)", "at most 2 number"},
-            {"derive y = pa.unary(x, z, w)", "one second column"},
-            {"derive y = pa.unary(x, \"a\", \"b\")", "one text argument"},
-            {"derive y = pa.unary(x, n = 1)", "no named argument"},
-            {"derive y = pa.unary(x, 5ms)", "duration"},
-            {"derive y = pa.unary()", "column as its first"},
-            {"derive y = pa.frame(x)", "not a column function"},
-            {"call pa.unary(1)", "not a table function"},
-            {"call pa.frame(x)", "literal or a parameter"},
-            {"call pa.frame(5) | take 1", "after 'call'"},
-            {"call pa.frame(5) | union (from data)", "after 'call'"},
-            {"call nope.g(1)", "loaded plugin namespaces: pa, pb"},
-        };
+    const dstd::Pair<dstd::StringView, dstd::StringView> cases[] = {
+        {"where pa.unary(x) > 1", "'derive' or 'select'"},
+        {"group pa.unary(x) { n = count() }", "'derive' or 'select'"},
+        {"group k { n = sum(pa.unary(x)) }", "'derive' or 'select'"},
+        {"derive y = pa.unary(pa.unary(x))", "'derive' or 'select'"},
+        {"let s = derive y = pa.unary(x); from data | take 1", "sub-query"},
+        {"where x in (from data | derive y = pa.unary(x) | select y)",
+         "sub-query"},
+        {"derive y = nope.f(x)", "loaded plugin namespaces: pa, pb"},
+        {"derive y = pa.unary(x, 1, 2, 3)", "at most 2 number"},
+        {"derive y = pa.unary(x, z, w)", "one second column"},
+        {"derive y = pa.unary(x, \"a\", \"b\")", "one text argument"},
+        {"derive y = pa.unary(x, n = 1)", "no named argument"},
+        {"derive y = pa.unary(x, 5ms)", "duration"},
+        {"derive y = pa.unary()", "column as its first"},
+        {"derive y = pa.frame(x)", "not a column function"},
+        {"call pa.unary(1)", "not a table function"},
+        {"call pa.frame(x)", "literal or a parameter"},
+        {"call pa.frame(5) | take 1", "after 'call'"},
+        {"call pa.frame(5) | union (from data)", "after 'call'"},
+        {"call nope.g(1)", "loaded plugin namespaces: pa, pb"},
+    };
     for (const auto& [text, want] : cases) {
-        CAPTURE(dftracer::utils::dstd::String(text));
+        CAPTURE(dstd::String(text));
         auto r = compile_pipeline(text, {}, nullptr);
         REQUIRE_FALSE(r.has_value());
         CAPTURE(r.error().message);

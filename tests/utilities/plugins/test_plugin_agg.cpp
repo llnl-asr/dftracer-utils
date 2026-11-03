@@ -9,13 +9,15 @@
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
 
-#include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_op_codes.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -23,17 +25,12 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <map>
-#include <span>
-#include <string>
 #include <utility>
 #include <variant>
-#include <vector>
 
 using namespace dftracer::utils;
 
 using dftracer::utils::Runtime;
-using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::AggCol;
 using dftracer::utils::plugins::Host;
 using dftracer::utils::plugins::NamedResultRegistry;
@@ -41,6 +38,7 @@ using dftracer::utils::plugins::OwnedDataFrame;
 using dftracer::utils::plugins::PluginFold;
 using dftracer::utils::plugins::SharedResultRegistry;
 using dftracer::utils::trace::RecordPhase;
+using dstd::StringIntern;
 namespace agg = dftracer::utils::plugins::agg;
 namespace views = dftracer::utils::trace::views;
 using views::detail::FoldBatch;
@@ -164,20 +162,20 @@ double num_at(const dftu_series* col, std::int64_t r) {
     return out;
 }
 
-std::string str_at(const dftu_series* col, std::int64_t r) {
+dstd::String str_at(const dftu_series* col, std::int64_t r) {
     dftu_series* flat = dftu_series_materialize(col);
     const std::int32_t* off = dftu_series_offsets(flat);
     const char* data = static_cast<const char*>(dftu_series_data(flat));
-    std::string out(data + off[r],
-                    static_cast<std::size_t>(off[r + 1] - off[r]));
+    dstd::String out(data + off[r],
+                     static_cast<std::size_t>(off[r + 1] - off[r]));
     dftu_series_free(flat);
     return out;
 }
 
 // The elements of row `r` of a list<string> result column (LIST_SORTED, TOPK,
 // BOTTOMK, SAMPLE): the list offsets index the flattened child column.
-std::vector<std::string> list_at(const dftu_series* col, std::int64_t r) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> list_at(const dftu_series* col, std::int64_t r) {
+    dstd::Vector<dstd::String> out;
     const std::int32_t* lo = dftu_series_offsets(col);
     dftu_series* vals = dftu_series_child(col, 0);
     if (!lo || !vals) {
@@ -197,9 +195,9 @@ std::vector<std::string> list_at(const dftu_series* col, std::int64_t r) {
 
 // Row `r` of an APPROX_TOPK result column: a list<struct{value, count}>, so the
 // list child is a struct whose two fields are read side by side.
-std::vector<dstd::Pair<std::string, double>> heavy_at(const dftu_series* col,
-                                                      std::int64_t r) {
-    std::vector<dstd::Pair<std::string, double>> out;
+dstd::Vector<dstd::Pair<dstd::String, double>> heavy_at(const dftu_series* col,
+                                                        std::int64_t r) {
+    dstd::Vector<dstd::Pair<dstd::String, double>> out;
     const std::int32_t* lo = dftu_series_offsets(col);
     dftu_series* rows = dftu_series_child(col, 0);
     if (!lo || !rows) {
@@ -227,7 +225,7 @@ dftu_dataframe* result_frame(NamedResultRegistry& named, const char* name) {
 
 // Group rows come back in accumulate order, not key order, so every assertion
 // looks its group up by key.
-std::int64_t row_of(const dftu_series* keycol, const std::string& key) {
+std::int64_t row_of(const dftu_series* keycol, const dstd::String& key) {
     for (std::int64_t r = 0; r < dftu_series_length(keycol); ++r)
         if (str_at(keycol, r) == key) return r;
     return -1;
@@ -253,7 +251,7 @@ FoldEvent evt_full(StringIntern& intern, const char* cat, const char* name,
 // Two worker slices over one dataset, so every case below also exercises the
 // cross-slice merge. POSIX/pid 1: (ts, dur) = (1,10) (2,20) (3,30), an exact
 // line dur = 10*ts. STDIO/pid 2: (1,5) (2,7), the line dur = 2*ts + 3.
-std::vector<dstd::Vector<FoldEvent>> sample_slices(StringIntern& intern) {
+dstd::Vector<dstd::Vector<FoldEvent>> sample_slices(StringIntern& intern) {
     return {
         {evt_full(intern, "POSIX", "read", 1, 100, 1, 10),
          evt_full(intern, "POSIX", "write", 1, 200, 2, 20),
@@ -288,7 +286,7 @@ dftu_plugin make_columns_plugin(
 }
 
 void run_slices(PluginFold& master,
-                const std::vector<dstd::Vector<FoldEvent>>& slices) {
+                const dstd::Vector<dstd::Vector<FoldEvent>>& slices) {
     for (const auto& evs : slices) {
         auto slice = master.slice();
         auto* pf = static_cast<PluginFold*>(slice.get());
@@ -384,7 +382,7 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     PluginFold master(&p, intern, nullptr, &named);
 
     // Two slices (two workers), each one batch, merged into the master.
-    std::vector<dstd::Vector<FoldEvent>> slices = {
+    dstd::Vector<dstd::Vector<FoldEvent>> slices = {
         {evt(intern, "POSIX", "read", 10), evt(intern, "POSIX", "write", 20),
          evt(intern, "STDIO", "open", 5)},
         {evt(intern, "POSIX", "read", 30), evt(intern, "STDIO", "close", 7)},
@@ -415,11 +413,11 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     REQUIRE(p50);
     REQUIRE(names);
 
-    std::map<std::string, double> got_sum;
-    std::map<std::string, double> got_p50;
-    std::map<std::string, std::string> got_names;
+    dstd::Map<dstd::String, double> got_sum;
+    dstd::Map<dstd::String, double> got_p50;
+    dstd::Map<dstd::String, dstd::String> got_names;
     for (std::int64_t r = 0; r < n; ++r) {
-        std::string k = str_at(cat, r);
+        dstd::String k = str_at(cat, r);
         got_sum[k] = num_at(sum, r);
         got_p50[k] = num_at(p50, r);
         got_names[k] = str_at(names, r);
@@ -436,10 +434,10 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     CHECK(got_p50["STDIO"] <= 7.0);
 
     // SetUnion is the distinct value set the map path could not express.
-    CHECK(got_names["POSIX"].find("read") != std::string::npos);
-    CHECK(got_names["POSIX"].find("write") != std::string::npos);
-    CHECK(got_names["STDIO"].find("open") != std::string::npos);
-    CHECK(got_names["STDIO"].find("close") != std::string::npos);
+    CHECK(got_names["POSIX"].find("read") != dstd::String::npos);
+    CHECK(got_names["POSIX"].find("write") != dstd::String::npos);
+    CHECK(got_names["STDIO"].find("open") != dstd::String::npos);
+    CHECK(got_names["STDIO"].find("close") != dstd::String::npos);
 
     dftu_series_free(cat);
     dftu_series_free(sum);
@@ -450,8 +448,8 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     // over the concatenated rows.
     const char* cats[] = {"POSIX", "POSIX", "STDIO", "POSIX", "STDIO"};
     const std::uint64_t durs[] = {10, 20, 5, 30, 7};
-    std::vector<std::int32_t> offs;
-    std::string blob;
+    dstd::Vector<std::int32_t> offs;
+    dstd::String blob;
     offs.push_back(0);
     for (const char* c : cats) {
         blob += c;
@@ -468,7 +466,7 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     REQUIRE(nout == 1);
     REQUIRE(gk);
     REQUIRE(gv[0]);
-    std::map<std::string, double> ref_sum;
+    dstd::Map<dstd::String, double> ref_sum;
     for (std::int64_t r = 0; r < dftu_series_length(gk); ++r)
         ref_sum[str_at(gk, r)] = num_at(gv[0], r);
     CHECK(ref_sum["POSIX"] == doctest::Approx(got_sum["POSIX"]));
@@ -486,31 +484,31 @@ TEST_CASE(
     const AggCol mean_c = agg::mean("dur", "mean_dur");
     const dftu_agg_col mean_raw = mean_c.raw();
     CHECK(mean_raw.op == DFTU_AGG_MEAN);
-    CHECK(std::string(mean_raw.value) == "dur");
-    CHECK(std::string(mean_raw.out) == "mean_dur");
+    CHECK(dstd::String(mean_raw.value) == "dur");
+    CHECK(dstd::String(mean_raw.out) == "mean_dur");
     CHECK(mean_raw.by == nullptr);
 
     const dftu_agg_col pct_raw = agg::pct("dur", "p50_dur", 0.5).raw();
     CHECK(pct_raw.op == DFTU_AGG_PCT);
-    CHECK(std::string(pct_raw.value) == "dur");
+    CHECK(dstd::String(pct_raw.value) == "dur");
     CHECK(pct_raw.param == doctest::Approx(0.5));
     CHECK(pct_raw.by == nullptr);
 
     const dftu_agg_col count_raw = agg::count("n").raw();
     CHECK(count_raw.op == DFTU_AGG_COUNT);
     CHECK(count_raw.value == nullptr);
-    CHECK(std::string(count_raw.out) == "n");
+    CHECK(dstd::String(count_raw.out) == "n");
 
     const dftu_agg_col argmax_raw =
         agg::argmax("name", "name_at_max", "dur").raw();
     CHECK(argmax_raw.op == DFTU_AGG_ARGMAX);
-    CHECK(std::string(argmax_raw.value) == "name");
-    CHECK(std::string(argmax_raw.by) == "dur");
+    CHECK(dstd::String(argmax_raw.value) == "name");
+    CHECK(dstd::String(argmax_raw.by) == "dur");
 
     const dftu_agg_col busy_raw = agg::busy("ts", "dur", "busy_us", 2.0).raw();
     CHECK(busy_raw.op == DFTU_AGG_BUSY);
-    CHECK(std::string(busy_raw.value) == "ts");
-    CHECK(std::string(busy_raw.by) == "dur");
+    CHECK(dstd::String(busy_raw.value) == "ts");
+    CHECK(dstd::String(busy_raw.by) == "dur");
     CHECK(busy_raw.param == doctest::Approx(2.0));
 }
 
@@ -522,7 +520,7 @@ TEST_CASE(
     NamedResultRegistry named;
     PluginFold master(&p, intern, nullptr, &named);
 
-    std::vector<dstd::Vector<FoldEvent>> slices = {
+    dstd::Vector<dstd::Vector<FoldEvent>> slices = {
         {evt(intern, "POSIX", "read", 10), evt(intern, "POSIX", "write", 20),
          evt(intern, "STDIO", "open", 5)},
         {evt(intern, "POSIX", "read", 30), evt(intern, "STDIO", "close", 7)},
@@ -551,10 +549,10 @@ TEST_CASE(
     REQUIRE(mean_dur);
     REQUIRE(p50_dur);
 
-    std::map<std::string, double> got_mean;
-    std::map<std::string, double> got_p50;
+    dstd::Map<dstd::String, double> got_mean;
+    dstd::Map<dstd::String, double> got_p50;
     for (std::int64_t r = 0; r < n; ++r) {
-        std::string k = str_at(cat, r);
+        dstd::String k = str_at(cat, r);
         got_mean[k] = num_at(mean_dur, r);
         got_p50[k] = num_at(p50_dur, r);
     }
@@ -736,14 +734,17 @@ TEST_CASE("DFTU_SVC_AGG: the appended op codes reduce across merged slices") {
     // LIST_SORTED keeps every repr ordered by `by` ascending, duplicates
     // included.
     CHECK(list_at(by_dur, posix) ==
-          std::vector<std::string>{"read", "write", "read"});
-    CHECK(list_at(by_dur, stdio) == std::vector<std::string>{"open", "close"});
+          dstd::Vector<dstd::String>{"read", "write", "read"});
+    CHECK(list_at(by_dur, stdio) ==
+          dstd::Vector<dstd::String>{"open", "close"});
 
     // TOPK is descending by `by`, BOTTOMK ascending, both capped at k = 2.
-    CHECK(list_at(top2, posix) == std::vector<std::string>{"read", "write"});
-    CHECK(list_at(top2, stdio) == std::vector<std::string>{"close", "open"});
-    CHECK(list_at(bottom2, posix) == std::vector<std::string>{"read", "write"});
-    CHECK(list_at(bottom2, stdio) == std::vector<std::string>{"open", "close"});
+    CHECK(list_at(top2, posix) == dstd::Vector<dstd::String>{"read", "write"});
+    CHECK(list_at(top2, stdio) == dstd::Vector<dstd::String>{"close", "open"});
+    CHECK(list_at(bottom2, posix) ==
+          dstd::Vector<dstd::String>{"read", "write"});
+    CHECK(list_at(bottom2, stdio) ==
+          dstd::Vector<dstd::String>{"open", "close"});
 
     // APPROX_TOPK is exact while the distinct count stays under the counter
     // capacity; POSIX saw "read" twice and "write" once.
@@ -756,8 +757,10 @@ TEST_CASE("DFTU_SVC_AGG: the appended op codes reduce across merged slices") {
     CHECK(heavy_at(heavy, stdio).size() == 2);
 
     // SAMPLE is the sorted distinct repr set once k exceeds the distinct count.
-    CHECK(list_at(sample, posix) == std::vector<std::string>{"read", "write"});
-    CHECK(list_at(sample, stdio) == std::vector<std::string>{"close", "open"});
+    CHECK(list_at(sample, posix) ==
+          dstd::Vector<dstd::String>{"read", "write"});
+    CHECK(list_at(sample, stdio) ==
+          dstd::Vector<dstd::String>{"close", "open"});
 
     // Co-moments over (x = ts, y = dur). POSIX is dur = 10*ts, STDIO is
     // dur = 2*ts + 3, so both correlate perfectly.

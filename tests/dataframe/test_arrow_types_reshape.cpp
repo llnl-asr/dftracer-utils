@@ -18,6 +18,8 @@
 #include <dftracer/utils/dataframe/scalar.h>
 #include <nanoarrow/nanoarrow.h>
 
+using namespace dftracer::utils;
+
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;
 
@@ -159,8 +161,7 @@ constexpr bool is_audited(TypeId t) {
     return false;
 }
 
-DataFrame frame_of(const dftracer::utils::dstd::String& col_name,
-                   const Series& s) {
+DataFrame frame_of(const dstd::String& col_name, const Series& s) {
     DataFrame df;
     df.names = {col_name};
     df.columns.push_back(s.share());
@@ -185,11 +186,11 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
 
     TEST_CASE("sort_by_multi orders by the real value, not a collapsed key") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(dftracer::utils::dstd::String(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             DataFrame df;
             df.names = {"k", "id"};
             df.columns.push_back(row.build().share());
-            dftracer::utils::dstd::Vector<std::int64_t> ids{0, 1, 2, 3};
+            dstd::Vector<std::int64_t> ids{0, 1, 2, 3};
             df.columns.push_back(Series::flat_i64(ids.data(), 4));
 
             if (row.ops[OP_SORT_MULTI] == Support::Refuses) {
@@ -211,7 +212,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
 
     TEST_CASE("unique drops exactly the duplicate row, not more or fewer") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(dftracer::utils::dstd::String(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             DataFrame df = frame_of("k", row.build());
             if (row.ops[OP_UNIQUE] == Support::Refuses) {
                 CHECK_THROWS_AS(df.unique(), std::invalid_argument);
@@ -232,7 +233,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
 
     TEST_CASE("to_dummies names and bit-packs each distinct value") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(dftracer::utils::dstd::String(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             DataFrame df = frame_of("k", row.build());
             if (row.ops[OP_TO_DUMMIES] == Support::Refuses) {
                 CHECK_THROWS_AS(df.to_dummies("k"), std::invalid_argument);
@@ -257,12 +258,12 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
 
     TEST_CASE("pivot keys distinct index values into distinct rows") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(dftracer::utils::dstd::String(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             DataFrame df;
             df.names = {"idx", "on", "val"};
             df.columns.push_back(row.build().share());
-            dftracer::utils::dstd::Vector<std::int64_t> on{0, 1, 0, 1};
-            dftracer::utils::dstd::Vector<std::int64_t> val{0, 1, 2, 3};
+            dstd::Vector<std::int64_t> on{0, 1, 0, 1};
+            dstd::Vector<std::int64_t> val{0, 1, 2, 3};
             df.columns.push_back(Series::flat_i64(on.data(), 4));
             df.columns.push_back(Series::flat_i64(val.data(), 4));
 
@@ -296,10 +297,10 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
 
     TEST_CASE("unpivot concatenates value_vars without losing rows") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(dftracer::utils::dstd::String(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             DataFrame df;
             df.names = {"id", "v1", "v2"};
-            dftracer::utils::dstd::Vector<std::int64_t> id{0, 1, 2, 3};
+            dstd::Vector<std::int64_t> id{0, 1, 2, 3};
             df.columns.push_back(Series::flat_i64(id.data(), 4));
             df.columns.push_back(row.build().share());
             df.columns.push_back(row.build().share());
@@ -335,7 +336,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
 
     TEST_CASE("explode refuses every non-List type by name") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(dftracer::utils::dstd::String(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             DataFrame df = frame_of("k", row.build());
             CHECK_THROWS_AS(df.explode("k"), std::invalid_argument);
             CHECK_THROWS_AS(df.unnest("k"), std::invalid_argument);
@@ -347,7 +348,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         "a struct element") {
         std::int64_t ids[3] = {1, 2, 3};
         std::int64_t counts[3] = {5, 7, 9};
-        dftracer::utils::dstd::Vector<Series> fields;
+        dstd::Vector<Series> fields;
         fields.push_back(Series::strings({"read", "write", "open"}));
         fields.push_back(Series::flat_i64(counts, 3));
         Series elems = Series::structs({"value", "count"}, std::move(fields));
@@ -358,8 +359,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
 
         DataFrame dropped = df.unnest("tk");
         CHECK(dropped.names ==
-              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                  "pid", "value", "count"});
+              dstd::Vector<dstd::String>{"pid", "value", "count"});
         REQUIRE(dropped.num_rows() == 3);
         Series dpid = dropped.column("pid").materialize();
         CHECK(dpid.data<std::int64_t>()[1] == 1);
@@ -378,9 +378,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         CHECK(count.data<std::int64_t>()[3] == 9);
 
         DataFrame plain = df.explode("tk");
-        CHECK(plain.names ==
-              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                  "pid", "tk"});
+        CHECK(plain.names == dstd::Vector<dstd::String>{"pid", "tk"});
         CHECK(plain.num_rows() == 4);
         CHECK_THROWS_AS(df.unnest("nope"), std::out_of_range);
     }

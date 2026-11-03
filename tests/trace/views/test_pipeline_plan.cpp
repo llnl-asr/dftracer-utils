@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/pipeline.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
 
 #include <stdexcept>
-#include <string>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -19,7 +19,7 @@ using scan::ScanPlan;
 
 TEST_SUITE("Pipeline plan") {
     TEST_CASE("execute rejects a shape no lowering handles") {
-        dftracer::utils::dstd::StringIntern intern;
+        dstd::StringIntern intern;
 
         views_detail::Pipeline with_ops;
         with_ops.ops.push_back(
@@ -40,8 +40,8 @@ TEST_SUITE("Pipeline plan") {
 
     TEST_CASE("a row query lowered to the identity pipeline returns its rows") {
         TestEnvironment env(200);
-        std::string gz = test_view_common::create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = test_view_common::create_mixed_trace(env, 30, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         ScanPlan base = scan::from_file(dstd::String(gz), dstd::String(idx));
         dataframe::DataFrame all = run(scan::collect_frame(base));

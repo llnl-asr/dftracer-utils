@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/text/line_filter.h>
 #include <doctest/doctest.h>
 
-#include <memory>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::utilities::text;
 using namespace dftracer::utils::utilities::fileio::lines;
 
 TEST_CASE("LineFilterUtility - Basic functionality") {
-    auto filter = std::make_shared<LineFilterUtility>();
+    auto filter = dstd::make_shared<LineFilterUtility>();
 
     SUBCASE("Filter line that matches predicate") {
         auto predicate = [](const Line& line) {
-            return line.content.find("ERROR") != std::string::npos;
+            return line.content.find("ERROR") != dstd::String::npos;
         };
 
         FilterableLine input{Line{"ERROR: Something went wrong", 1}, predicate};
@@ -26,7 +29,7 @@ TEST_CASE("LineFilterUtility - Basic functionality") {
 
     SUBCASE("Filter line that doesn't match predicate") {
         auto predicate = [](const Line& line) {
-            return line.content.find("ERROR") != std::string::npos;
+            return line.content.find("ERROR") != dstd::String::npos;
         };
 
         FilterableLine input{Line{"INFO: Everything is fine", 1}, predicate};
@@ -45,7 +48,7 @@ TEST_CASE("LineFilterUtility - Basic functionality") {
 }
 
 TEST_CASE("LineFilterUtility - Different predicates") {
-    auto filter = std::make_shared<LineFilterUtility>();
+    auto filter = dstd::make_shared<LineFilterUtility>();
 
     SUBCASE("Filter by prefix") {
         auto has_prefix = [](const Line& line) {
@@ -97,12 +100,12 @@ TEST_CASE("LineFilterUtility - Different predicates") {
 }
 
 TEST_CASE("LineFilterUtility - Complex filtering scenarios") {
-    auto filter = std::make_shared<LineFilterUtility>();
+    auto filter = dstd::make_shared<LineFilterUtility>();
 
     SUBCASE("Multiple conditions - AND") {
         auto error_and_critical = [](const Line& line) {
-            return line.content.find("ERROR") != std::string::npos &&
-                   line.content.find("CRITICAL") != std::string::npos;
+            return line.content.find("ERROR") != dstd::String::npos &&
+                   line.content.find("CRITICAL") != dstd::String::npos;
         };
 
         FilterableLine both{Line{"ERROR: CRITICAL system failure", 1},
@@ -119,8 +122,8 @@ TEST_CASE("LineFilterUtility - Complex filtering scenarios") {
 
     SUBCASE("Multiple conditions - OR") {
         auto error_or_warning = [](const Line& line) {
-            return line.content.find("ERROR") != std::string::npos ||
-                   line.content.find("WARNING") != std::string::npos;
+            return line.content.find("ERROR") != dstd::String::npos ||
+                   line.content.find("WARNING") != dstd::String::npos;
         };
 
         FilterableLine error{Line{"ERROR occurred", 1}, error_or_warning};
@@ -135,7 +138,7 @@ TEST_CASE("LineFilterUtility - Complex filtering scenarios") {
 
     SUBCASE("Negation filter") {
         auto not_debug = [](const Line& line) {
-            return line.content.find("DEBUG") == std::string::npos;
+            return line.content.find("DEBUG") == dstd::String::npos;
         };
 
         FilterableLine debug{Line{"DEBUG: Trace info", 1}, not_debug};
@@ -147,7 +150,7 @@ TEST_CASE("LineFilterUtility - Complex filtering scenarios") {
 }
 
 TEST_CASE("LineFilterUtility - Edge cases") {
-    auto filter = std::make_shared<LineFilterUtility>();
+    auto filter = dstd::make_shared<LineFilterUtility>();
 
     SUBCASE("Empty line content") {
         auto always_true = [](const Line&) { return true; };
@@ -161,29 +164,29 @@ TEST_CASE("LineFilterUtility - Edge cases") {
     }
 
     SUBCASE("Very long line") {
-        std::string very_long(10000, 'x');
+        dstd::String very_long(10000, 'x');
         auto contains_y = [](const Line& line) {
-            return line.content.find('y') != std::string::npos;
+            return line.content.find('y') != dstd::String::npos;
         };
 
         FilterableLine no_y{Line{very_long, 1}, contains_y};
         CHECK_FALSE((*filter)(no_y).get().has_value());
 
-        std::string with_y = very_long + "y";
+        dstd::String with_y = very_long + "y";
         FilterableLine has_y{Line{with_y, 1}, contains_y};
         CHECK((*filter)(has_y).get().has_value());
     }
 
     SUBCASE("Case-sensitive vs case-insensitive filtering") {
         auto case_sensitive = [](const Line& line) {
-            return line.content.find("ERROR") != std::string::npos;
+            return line.content.find("ERROR") != dstd::String::npos;
         };
 
         auto case_insensitive = [](const Line& line) {
-            std::string lower{line.content};
+            dstd::String lower{line.content};
             std::transform(lower.begin(), lower.end(), lower.begin(),
                            ::tolower);
-            return lower.find("error") != std::string::npos;
+            return lower.find("error") != dstd::String::npos;
         };
 
         FilterableLine upper{Line{"ERROR happened", 1}, case_sensitive};
@@ -207,21 +210,21 @@ TEST_CASE("LineFilterUtility - Edge cases") {
 }
 
 TEST_CASE("LineFilterUtility - Practical use cases") {
-    auto filter = std::make_shared<LineFilterUtility>();
+    auto filter = dstd::make_shared<LineFilterUtility>();
 
     SUBCASE("Log level filtering") {
         auto is_error_or_above = [](const Line& line) {
-            return line.content.find("[ERROR]") != std::string::npos ||
-                   line.content.find("[FATAL]") != std::string::npos;
+            return line.content.find("[ERROR]") != dstd::String::npos ||
+                   line.content.find("[FATAL]") != dstd::String::npos;
         };
 
-        std::vector<Line> logs = {Line{"[DEBUG] Starting process", 1},
-                                  Line{"[INFO] Connection established", 2},
-                                  Line{"[ERROR] Failed to read file", 3},
-                                  Line{"[FATAL] System crash", 4},
-                                  Line{"[INFO] Cleanup complete", 5}};
+        dstd::Vector<Line> logs = {Line{"[DEBUG] Starting process", 1},
+                                   Line{"[INFO] Connection established", 2},
+                                   Line{"[ERROR] Failed to read file", 3},
+                                   Line{"[FATAL] System crash", 4},
+                                   Line{"[INFO] Cleanup complete", 5}};
 
-        std::vector<Line> filtered;
+        dstd::Vector<Line> filtered;
         for (const auto& log : logs) {
             auto result =
                 (*filter)(FilterableLine{log, is_error_or_above}).get();
@@ -237,10 +240,10 @@ TEST_CASE("LineFilterUtility - Practical use cases") {
 
     SUBCASE("Comment line filtering") {
         auto not_comment = [](const Line& line) {
-            std::string trimmed{line.content};
+            dstd::String trimmed{line.content};
             // Remove leading whitespace
             auto first_non_ws = trimmed.find_first_not_of(" \t");
-            if (first_non_ws == std::string::npos) {
+            if (first_non_ws == dstd::String::npos) {
                 // Empty or whitespace-only line - not a comment
                 return true;
             }
@@ -248,13 +251,13 @@ TEST_CASE("LineFilterUtility - Practical use cases") {
             return trimmed[0] != '#';
         };
 
-        std::vector<Line> lines = {
+        dstd::Vector<Line> lines = {
             Line{"# This is a comment", 1}, Line{"actual code", 2},
             Line{"  # Indented comment", 3}, Line{"more code", 4},
             Line{"", 5}  // Empty line
         };
 
-        std::vector<Line> filtered;
+        dstd::Vector<Line> filtered;
         for (const auto& line : lines) {
             auto result = (*filter)(FilterableLine{line, not_comment}).get();
             if (result.has_value()) {

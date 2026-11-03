@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <memory>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -24,72 +25,73 @@ namespace {
 
 constexpr int RECORDS = 3000;
 
-std::string gzip_of(TestEnvironment& env, const std::string& stem,
-                    const std::string& body) {
-    const std::string plain = env.get_dir() + "/" + stem + ".ndjson";
+dstd::String gzip_of(TestEnvironment& env, const dstd::String& stem,
+                     const dstd::String& body) {
+    const dstd::String plain = env.get_dir() + "/" + stem + ".ndjson";
     {
-        std::ofstream out(plain.c_str());
+        dftu_utils_test::FileOut out(plain);
         out << body;
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     (void)dstd::fs::remove(plain);
     return gz;
 }
 
-std::string genesis_trace(TestEnvironment& env) {
-    std::string body;
+dstd::String genesis_trace(TestEnvironment& env) {
+    dstd::String body;
     for (int i = 0; i < RECORDS; ++i)
-        body += R"({"gtype":"func","run":"ab","ts":)" + std::to_string(i) +
-                R"(,"v":{"p50":)" + std::to_string(i / 30) + R"(,"p99":)" +
-                std::to_string(i / 30 + 5) + R"(},"count":)" +
-                std::to_string(i % 7) + "}\n";
+        body += R"({"gtype":"func","run":"ab","ts":)" + dstd::to_string(i) +
+                R"(,"v":{"p50":)" + dstd::to_string(i / 30) + R"(,"p99":)" +
+                dstd::to_string(i / 30 + 5) + R"(},"count":)" +
+                dstd::to_string(i % 7) + "}\n";
     return gzip_of(env, "genesis", body);
 }
 
 // A field of text, one that is an int in the first half of the trace and a
 // float in the second, and a timestamp-like int.
-std::string shapes_trace(TestEnvironment& env) {
-    std::string body;
+dstd::String shapes_trace(TestEnvironment& env) {
+    dstd::String body;
     for (int i = 0; i < RECORDS; ++i) {
-        const std::string mix = i < RECORDS / 2 ? std::to_string(i % 40)
-                                                : std::to_string(i % 40) + ".5";
-        body += R"({"gtype":"func","run":"ab","ts":)" + std::to_string(i) +
-                R"(,"sv":"s)" + std::to_string(i % 9) + R"(","mix":)" + mix +
-                R"(,"t0":)" + std::to_string(1700000000000000LL + i * 1000) +
+        const dstd::String mix = i < RECORDS / 2
+                                     ? dstd::to_string(i % 40)
+                                     : dstd::to_string(i % 40) + ".5";
+        body += R"({"gtype":"func","run":"ab","ts":)" + dstd::to_string(i) +
+                R"(,"sv":"s)" + dstd::to_string(i % 9) + R"(","mix":)" + mix +
+                R"(,"t0":)" + dstd::to_string(1700000000000000LL + i * 1000) +
                 "}\n";
     }
     return gzip_of(env, "shapes", body);
 }
 
-std::string dft_trace(TestEnvironment& env) {
-    std::string body;
+dstd::String dft_trace(TestEnvironment& env) {
+    dstd::String body;
     for (int i = 0; i < RECORDS; ++i)
         body +=
             R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-            std::to_string(1000 + i * 100) + R"(,"dur":)" +
-            std::to_string(10 + i) + R"(,"args":{"size":)" +
-            std::to_string(i % 13) + R"(,"offset":)" + std::to_string(i) +
+            dstd::to_string(1000 + i * 100) + R"(,"dur":)" +
+            dstd::to_string(10 + i) + R"(,"args":{"size":)" +
+            dstd::to_string(i % 13) + R"(,"offset":)" + dstd::to_string(i) +
             R"(}})" + "\n";
     return gzip_of(env, "dft", body);
 }
 
-View query_indexed(const std::string& gz, const std::string& schema) {
+View query_indexed(const dstd::String& gz, const dstd::String& schema) {
     return View::from_file(dstd::String(gz))
         .record_schema(dstd::String(schema));
 }
 
-View full_index(const std::string& gz, const std::string& schema) {
+View full_index(const dstd::String& gz, const dstd::String& schema) {
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     return View::from_file(
                dstd::String(gz),
-               dstd::String(std::string(determine_index_path(gz, ""))))
+               dstd::String(dstd::String(determine_index_path(gz, ""))))
         .record_schema(dstd::String(schema));
 }
 
-dataframe::DataFrame frame(const View& v, const std::string& q) {
+dataframe::DataFrame frame(const View& v, const dstd::String& q) {
     return v.duql(q).collect().get();
 }
 
@@ -98,10 +100,10 @@ bool has(const dataframe::DataFrame& f, const dstd::String& n) {
 }
 
 // Reads the catalog as it is: schema_tree() would build a missing one.
-bool declares(const View& v, const std::string& path) {
+bool declares(const View& v, const dstd::String& path) {
     for (const auto& leaf :
          dftracer::utils::trace::views::detail::catalog_leaves(v))
-        if (std::string(leaf.path) == path) return true;
+        if (dstd::String(leaf.path) == path) return true;
     return false;
 }
 
@@ -133,10 +135,10 @@ dstd::String join_names(const dataframe::DataFrame& f) {
 
 namespace st = dftracer::utils::index::store;
 
-bool has_catalog(const std::string& gz) {
+bool has_catalog(const dstd::String& gz) {
     try {
         const auto snapshot = dftu_utils_test::index_snapshot(
-            std::string(determine_index_path(gz, "")));
+            dstd::String(determine_index_path(gz, "")));
         const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
         return file && dftracer::utils::index::extension_current(
                            snapshot, *file, st::IndexExtension::Catalog);
@@ -148,16 +150,16 @@ bool has_catalog(const std::string& gz) {
 // A trace whose index holds no catalog: a full scan writes one, so each
 // query gets its own copy.
 struct Fresh {
-    std::unique_ptr<TestEnvironment> env;
-    std::string gz;
+    dstd::UniquePtr<TestEnvironment> env;
+    dstd::String gz;
     View view;
 };
 
-using Gen = std::string (*)(TestEnvironment&);
+using Gen = dstd::String (*)(TestEnvironment&);
 
-Fresh fresh(Gen gen, const std::string& schema) {
+Fresh fresh(Gen gen, const dstd::String& schema) {
     Fresh f;
-    f.env = std::make_unique<TestEnvironment>(10);
+    f.env = dstd::make_unique<TestEnvironment>(10);
     f.gz = gen(*f.env);
     REQUIRE_FALSE(has_catalog(f.gz));
     f.view = query_indexed(f.gz, schema);
@@ -166,11 +168,11 @@ Fresh fresh(Gen gen, const std::string& schema) {
 
 // The query on a fresh catalog-less view equals the full-index result; an
 // error on one must be the same error on the other.
-void same_as_full(Gen gen, const std::string& schema, const std::string& q) {
+void same_as_full(Gen gen, const dstd::String& schema, const dstd::String& q) {
     TestEnvironment full_env(10);
     const View f = full_index(gen(full_env), schema);
     const Fresh p = fresh(gen, schema);
-    std::string want_error;
+    dstd::String want_error;
     dataframe::DataFrame want;
     try {
         want = frame(f, q);
@@ -226,7 +228,7 @@ TEST_SUITE("DropRenameViews") {
         REQUIRE_FALSE(declares(q, "v.p50"));
         REQUIRE(declares(f, "v.p50"));
 
-        const std::string base = "gtype == \"func\"";
+        const dstd::String base = "gtype == \"func\"";
         const auto all = frame(q, base);
         REQUIRE(has(all, "v.p50"));
         REQUIRE(has(all, "count"));
@@ -240,7 +242,7 @@ TEST_SUITE("DropRenameViews") {
         for (const auto& n : dropped.names)
             same_column(dropped, dropped_full, n);
 
-        const std::string rename = base + " | rename cnt = count, p = v.p99";
+        const dstd::String rename = base + " | rename cnt = count, p = v.p99";
         const auto renamed = frame(q, rename);
         CHECK_FALSE(has(renamed, "count"));
         CHECK_FALSE(has(renamed, "v.p99"));
@@ -261,7 +263,7 @@ TEST_SUITE("DropRenameViews") {
         REQUIRE_FALSE(declares(q, "args.offset"));
         REQUIRE(declares(f, "args.offset"));
 
-        const std::string base = "ph == \"X\"";
+        const dstd::String base = "ph == \"X\"";
         const auto renamed = frame(q, base + " | rename off = args.offset");
         const auto renamed_full =
             frame(f, base + " | rename off = args.offset");
@@ -298,11 +300,11 @@ TEST_SUITE("DropRenameViews") {
     }
 
     TEST_CASE("lookup keeps every left and right column") {
-        const std::string g =
+        const dstd::String g =
             "let r = where gtype == \"func\" | select ts, rc = count; where "
             "count "
             "> 1 | lookup r on ts | sort ts";
-        const std::string d =
+        const dstd::String d =
             "let r = where ph == \"X\" | select ts, rd = dur; where dur > 20 | "
             "lookup r on ts | sort ts";
         same_as_full(genesis_trace, "genesis", g);
@@ -313,7 +315,7 @@ TEST_SUITE("DropRenameViews") {
         // The rows and `r` share gtype, run and count: a lookup that fills a
         // column the rows already hold is the query's error, with or
         // without a catalog.
-        const std::string g =
+        const dstd::String g =
             "let r = where gtype == \"func\"; where count > 1 | lookup r on "
             "ts | sort ts";
         TestEnvironment full_env(10);

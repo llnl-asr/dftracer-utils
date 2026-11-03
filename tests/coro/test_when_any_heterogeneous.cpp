@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -11,7 +12,6 @@
 #include <doctest/doctest.h>
 
 #include <atomic>
-#include <string>
 
 using namespace dftracer::utils;
 
@@ -24,33 +24,32 @@ TEST_CASE("when_any - Two heterogeneous types (int, string)") {
 
     auto task = make_task(
         [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope(
-                [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                    auto f1 = scope.spawn_future(
-                        []() -> coro::CoroTask<int> { co_return 42; });
-                    auto f2 =
-                        scope.spawn_future([]() -> coro::CoroTask<std::string> {
-                            co_return std::string("hello");
-                        });
+            co_await coro::with_scope([&](coro::Scope& scope)
+                                          -> coro::CoroTask<void> {
+                auto f1 = scope.spawn_future(
+                    []() -> coro::CoroTask<int> { co_return 42; });
+                auto f2 =
+                    scope.spawn_future([]() -> coro::CoroTask<dstd::String> {
+                        co_return dstd::String("hello");
+                    });
 
-                    auto result =
-                        co_await coro::when_any(std::move(f1), std::move(f2));
+                auto result =
+                    co_await coro::when_any(std::move(f1), std::move(f2));
 
-                    auto* iv = &index_valid;
-                    auto* vv = &value_valid;
+                auto* iv = &index_valid;
+                auto* vv = &value_valid;
 
-                    iv->store(result.index <= 1, std::memory_order_relaxed);
+                iv->store(result.index <= 1, std::memory_order_relaxed);
 
-                    if (result.index == 0) {
-                        vv->store(result.get<0>() == 42,
-                                  std::memory_order_relaxed);
-                    } else {
-                        vv->store(result.get<1>() == "hello",
-                                  std::memory_order_relaxed);
-                    }
+                if (result.index == 0) {
+                    vv->store(result.get<0>() == 42, std::memory_order_relaxed);
+                } else {
+                    vv->store(result.get<1>() == "hello",
+                              std::memory_order_relaxed);
+                }
 
-                    co_return;
-                });
+                co_return;
+            });
             co_return;
         },
         "HeteroTwoTypes");
@@ -77,9 +76,9 @@ TEST_CASE("when_any - Three heterogeneous types") {
                         []() -> coro::CoroTask<int> { co_return 1; });
                     auto f2 = scope.spawn_future(
                         []() -> coro::CoroTask<float> { co_return 2.0f; });
-                    auto f3 =
-                        scope.spawn_future([]() -> coro::CoroTask<std::string> {
-                            co_return std::string("three");
+                    auto f3 = scope.spawn_future(
+                        []() -> coro::CoroTask<dstd::String> {
+                            co_return dstd::String("three");
                         });
 
                     auto result = co_await coro::when_any(
@@ -178,9 +177,9 @@ TEST_CASE("when_any - Exception propagation") {
                         throw std::runtime_error("boom");
                         co_return 0;
                     });
-                    auto f2 =
-                        scope.spawn_future([]() -> coro::CoroTask<std::string> {
-                            co_return std::string("ok");
+                    auto f2 = scope.spawn_future(
+                        []() -> coro::CoroTask<dstd::String> {
+                            co_return dstd::String("ok");
                         });
 
                     auto* h = &handled;
@@ -197,7 +196,7 @@ TEST_CASE("when_any - Exception propagation") {
                         }
                     } catch (const std::runtime_error& e) {
                         // Throwing task won the race
-                        h->store(std::string(e.what()) == "boom",
+                        h->store(dstd::String(e.what()) == "boom",
                                  std::memory_order_relaxed);
                     }
 
@@ -222,33 +221,32 @@ TEST_CASE("when_any - Index-based get<N>() access") {
 
     auto task = make_task(
         [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope(
-                [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                    auto f1 = scope.spawn_future(
-                        []() -> coro::CoroTask<int> { co_return 42; });
-                    auto f2 =
-                        scope.spawn_future([]() -> coro::CoroTask<std::string> {
-                            co_return std::string("hello");
-                        });
+            co_await coro::with_scope([&](coro::Scope& scope)
+                                          -> coro::CoroTask<void> {
+                auto f1 = scope.spawn_future(
+                    []() -> coro::CoroTask<int> { co_return 42; });
+                auto f2 =
+                    scope.spawn_future([]() -> coro::CoroTask<dstd::String> {
+                        co_return dstd::String("hello");
+                    });
 
-                    auto result =
-                        co_await coro::when_any(std::move(f1), std::move(f2));
+                auto result =
+                    co_await coro::when_any(std::move(f1), std::move(f2));
 
-                    auto* acc = &accessed;
-                    auto* vc = &value_correct;
+                auto* acc = &accessed;
+                auto* vc = &value_correct;
 
-                    acc->store(true, std::memory_order_relaxed);
+                acc->store(true, std::memory_order_relaxed);
 
-                    if (result.index == 0) {
-                        vc->store(result.get<0>() == 42,
-                                  std::memory_order_relaxed);
-                    } else {
-                        vc->store(result.get<1>() == "hello",
-                                  std::memory_order_relaxed);
-                    }
+                if (result.index == 0) {
+                    vc->store(result.get<0>() == 42, std::memory_order_relaxed);
+                } else {
+                    vc->store(result.get<1>() == "hello",
+                              std::memory_order_relaxed);
+                }
 
-                    co_return;
-                });
+                co_return;
+            });
             co_return;
         },
         "HeteroGetAccess");

@@ -2,15 +2,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_bytes_iterator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-
-#include <fstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils::utilities::fileio::lines::sources;
 using namespace dftracer::utils::utilities::fileio::lines;
@@ -24,7 +22,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
               doctest::test_suite("vg")) {
         SUBCASE("Read entire file via byte range") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             // Create index
             auto indexer =
@@ -41,10 +39,10 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
             IndexedFileBytesIterator iter(reader, 0, file_size);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
                 Line line = iter.next();
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             REQUIRE(lines.size() == 10);
@@ -54,7 +52,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Read partial byte range") {
             TestEnvironment env(20);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -67,10 +65,10 @@ TEST_SUITE("IndexedFileBytesIterator") {
             // Read first 300 bytes
             IndexedFileBytesIterator iter(reader, 0, 300);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
                 Line line = iter.next();
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             // Should get some lines (exact count depends on line lengths)
@@ -81,7 +79,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Read middle byte range") {
             TestEnvironment env(20);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -94,10 +92,10 @@ TEST_SUITE("IndexedFileBytesIterator") {
             // Read bytes 200-400 (should skip some initial lines)
             IndexedFileBytesIterator iter(reader, 200, 400);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
                 Line line = iter.next();
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             // Should get some lines in the middle range
@@ -106,7 +104,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Very small byte range") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -121,7 +119,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
             CHECK(iter.has_next());
             Line line = iter.next();
-            CHECK(std::string(line.content) ==
+            CHECK(dstd::String(line.content) ==
                   "{\"id\": 1, \"message\": \"Test message 1\"}");
 
             // May or may not have more lines depending on line length
@@ -131,7 +129,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
     TEST_CASE("IndexedFileBytesIterator - Buffer Size Configuration") {
         SUBCASE("Small buffer size") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -157,7 +155,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Large buffer size") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -185,7 +183,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
     TEST_CASE("IndexedFileBytesIterator - STL Iterator Interface") {
         SUBCASE("Range-based for loop") {
             TestEnvironment env(8);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -199,9 +197,9 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
             IndexedFileBytesIterator iter(reader, 0, file_size);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             for (const auto& line : iter) {
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             REQUIRE(lines.size() == 8);
@@ -211,7 +209,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Iterator comparison") {
             TestEnvironment env(5);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -242,7 +240,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Iterator with partial byte range") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -255,9 +253,9 @@ TEST_SUITE("IndexedFileBytesIterator") {
             // Read first 200 bytes
             IndexedFileBytesIterator iter(reader, 0, 200);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             for (const auto& line : iter) {
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             CHECK(lines.size() > 0);
@@ -268,7 +266,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
     TEST_CASE("IndexedFileBytesIterator - Position Tracking") {
         SUBCASE("Current position updates correctly") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -299,7 +297,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Position with mid-range start") {
             TestEnvironment env(20);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -326,7 +324,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Invalid byte range - start >= end") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -345,7 +343,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Calling next() when no more lines") {
             TestEnvironment env(3);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -370,7 +368,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Byte range beyond file size") {
             TestEnvironment env(5);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -399,7 +397,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
               doctest::test_suite("vg")) {
         SUBCASE("Large file with specific byte range") {
             TestEnvironment env(valgrind_scale(1000, 3));
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 4096, true);
@@ -425,7 +423,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Multiple small byte ranges") {
             TestEnvironment env(100);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -436,7 +434,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(reader != nullptr);
 
             // Test multiple small ranges
-            std::vector<dstd::Pair<std::size_t, std::size_t>> ranges = {
+            dstd::Vector<dstd::Pair<std::size_t, std::size_t>> ranges = {
                 {0, 500}, {500, 1000}, {1000, 1500}};
 
             for (const auto& [start, end] : ranges) {
@@ -457,7 +455,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
     TEST_CASE("IndexedFileBytesIterator - String View Lifetime") {
         SUBCASE("String view validity") {
             TestEnvironment env(5);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -474,12 +472,12 @@ TEST_SUITE("IndexedFileBytesIterator") {
             // Get first line
             CHECK(iter.has_next());
             Line line1 = iter.next();
-            std::string line1_copy(line1.content);  // Must copy immediately
+            dstd::String line1_copy(line1.content);  // Must copy immediately
 
             // Get second line
             CHECK(iter.has_next());
             Line line2 = iter.next();
-            std::string line2_copy(line2.content);
+            dstd::String line2_copy(line2.content);
 
             // Verify the copies are different
             CHECK(line1_copy != line2_copy);
@@ -491,7 +489,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
     TEST_CASE("IndexedFileBytesIterator - Reader Access") {
         SUBCASE("Get underlying reader") {
             TestEnvironment env(5);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -513,7 +511,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
     TEST_CASE("IndexedFileBytesIterator - Byte Range Edge Cases") {
         SUBCASE("Single byte range") {
             TestEnvironment env(5);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -535,7 +533,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Byte range ending mid-line") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -548,10 +546,10 @@ TEST_SUITE("IndexedFileBytesIterator") {
             // Read first 100 bytes (will likely cut mid-line)
             IndexedFileBytesIterator iter(reader, 0, 100);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
                 Line line = iter.next();
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             // Should get at least one line
@@ -560,7 +558,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
         SUBCASE("Byte range starting mid-line") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -575,10 +573,10 @@ TEST_SUITE("IndexedFileBytesIterator") {
             // Start at byte 50 (likely mid-line)
             IndexedFileBytesIterator iter(reader, 50, file_size);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
                 Line line = iter.next();
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             // Should skip partial first line and read complete lines after
@@ -591,7 +589,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
         "Sizes") {
         SUBCASE("Same results with different buffer sizes") {
             TestEnvironment env(20);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -607,16 +605,16 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
             // Read with small buffer
             IndexedFileBytesIterator iter1(reader1, 0, file_size, 256);
-            std::vector<std::string> lines1;
+            dstd::Vector<dstd::String> lines1;
             while (iter1.has_next()) {
-                lines1.push_back(std::string(iter1.next().content));
+                lines1.push_back(dstd::String(iter1.next().content));
             }
 
             // Read with large buffer
             IndexedFileBytesIterator iter2(reader2, 0, file_size, 1024 * 1024);
-            std::vector<std::string> lines2;
+            dstd::Vector<dstd::String> lines2;
             while (iter2.has_next()) {
-                lines2.push_back(std::string(iter2.next().content));
+                lines2.push_back(dstd::String(iter2.next().content));
             }
 
             // Should get same results

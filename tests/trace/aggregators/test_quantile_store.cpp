@@ -13,9 +13,11 @@
 #include <cstdint>
 #include <random>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::MergeSketch;
-using dftracer::utils::dstd::Vector;
 using dftracer::utils::index::schemas::dft::agg::QuantileStore;
+using dstd::Vector;
 
 namespace {
 
@@ -95,8 +97,7 @@ Vector<double> log_uniform(std::size_t n, unsigned seed) {
     return v;
 }
 
-dftracer::utils::dstd::Span<const double> dstd_span(const Vector<double>& v,
-                                                    std::size_t from) {
+dstd::Span<const double> dstd_span(const Vector<double>& v, std::size_t from) {
     return {v.data() + from, v.size() - from};
 }
 

@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using namespace dftracer::utils::memory;
 
 namespace {
@@ -18,10 +20,11 @@ namespace {
 constexpr std::size_t MIB = std::size_t{1} << 20;
 constexpr std::size_t POOL_SLOTS = 65535;
 
+// keep std: memory tests link only memory
 std::string g_reports;
 int g_report_count = 0;
 
-void capture(dftracer::utils::dstd::StringView text) noexcept {
+void capture(dstd::StringView text) noexcept {
     g_reports.append(text.data(), text.size());
     ++g_report_count;
 }
@@ -59,6 +62,7 @@ std::size_t general_live() { return find(1).live; }
 }  // namespace
 
 TEST_CASE("the root and general pools are open at the start") {
+    // keep std: memory tests link only memory
     std::vector<PoolStats> all = pool_stats();
     REQUIRE(all.size() >= 2);
     CHECK(all[0].id == 0);
@@ -152,8 +156,10 @@ TEST_CASE("every size tier is charged and credited to its pool") {
 
 TEST_CASE("a pool the first thread frees into stays exact across entries") {
     // Pool ids 16 apart share an entry in the per-thread cache.
+    // keep std: memory tests link only memory
     std::vector<PoolHandle> pools;
     for (int i = 0; i < 40; ++i) pools.push_back(root().child("many"));
+    // keep std: memory tests link only memory
     std::vector<void*> blocks;
     for (PoolHandle& p : pools) {
         Scope s{*p};
@@ -207,7 +213,9 @@ TEST_CASE("closing a scratch pool with live bytes reports its path") {
     }
     leaky.close();
     CHECK(g_report_count == 1);
+    // keep std: memory tests link only memory
     CHECK(g_reports.find("root/outer/leaky") != std::string::npos);
+    // keep std: memory tests link only memory
     CHECK(g_reports.find("1 blocks") != std::string::npos);
     CHECK(g_reports.back() == '\n');
     CHECK(Manager::get().leaked());
@@ -220,7 +228,9 @@ TEST_CASE("closing a pool with an open child reports the child count") {
     PoolHandle kept = outer->child("kept");
     outer.close();
     CHECK(g_report_count == 1);
+    // keep std: memory tests link only memory
     CHECK(g_reports.find("root/holder") != std::string::npos);
+    // keep std: memory tests link only memory
     CHECK(g_reports.find("1 open children") != std::string::npos);
 }
 
@@ -269,6 +279,7 @@ TEST_CASE("a clean closed slot is reused with a new generation") {
 }
 
 TEST_CASE("a name over 47 bytes is cut") {
+    // keep std: memory tests link only memory
     PoolHandle pool = root().child(std::string(100, 'n'));
     CHECK(pool->name().size() == 47);
 }
@@ -474,6 +485,7 @@ TEST_CASE("the table is full after 65,535 slots") {
 
 TEST_CASE("pool table full scenario" * doctest::skip()) {
     fresh_process::announce();
+    // keep std: memory tests link only memory
     std::vector<PoolHandle> pools;
     pools.reserve(POOL_SLOTS);
     while (true) {

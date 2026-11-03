@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/distinct_sketch.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
-#include <string>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
@@ -17,7 +19,7 @@ double rel_error(std::uint64_t got, std::uint64_t expected) {
 
 void fill(DistinctSketch& s, std::uint64_t begin, std::uint64_t end) {
     for (std::uint64_t i = begin; i < end; ++i)
-        s.add("fhash_" + std::to_string(i));
+        s.add("fhash_" + dstd::to_string(i));
 }
 }  // namespace
 
@@ -116,7 +118,7 @@ TEST_SUITE("DistinctSketch") {
             BasicDistinctSketch<14> h;
             for (std::uint64_t i = 0; i < N; ++i) {
                 auto v =
-                    "t" + std::to_string(t) + "_fhash_" + std::to_string(i);
+                    "t" + dstd::to_string(t) + "_fhash_" + dstd::to_string(i);
                 l.add(v);
                 h.add(v);
             }

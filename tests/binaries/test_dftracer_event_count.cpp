@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -11,7 +14,8 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 // ============================================================================
 // Helpers
@@ -19,37 +23,37 @@
 
 namespace {
 
-std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
-                          int id) {
+dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
+                           int num_events, int id) {
     auto trace_gz = env.create_dft_test_gzip_file(num_events);
     if (trace_gz.empty()) return "";
 
-    std::string pfw_path =
-        env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    REQUIRE(dftracer::utils::dstd::fs::rename(trace_gz, pfw_path).has_value());
+    dstd::String pfw_path =
+        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+    REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
 
-std::string find_event_count_binary() {
+dstd::String find_event_count_binary() {
     return dftu_utils_test::find_binary_by_name(
         "DFTRACER_UTILS_EVENT_COUNT_PATH", "dftracer_event_count");
 }
 
 // Run binary, capture stdout, return it as a string.
-std::string run_event_count_capture(const std::string& binary,
-                                    const std::vector<std::string>& args) {
+dstd::String run_event_count_capture(const dstd::String& binary,
+                                     const dstd::Vector<dstd::String>& args) {
     return dftu_utils_test::run_process_capture(binary, args);
 }
 
-std::string find_index_binary() {
+dstd::String find_index_binary() {
     return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_INDEX_PATH",
                                                 "dftracer_index");
 }
 
-std::string event_line(int id, const char* ph) {
-    return R"({"id":)" + std::to_string(id) + R"(,"pid":1,"tid":1,)" +
+dstd::String event_line(int id, const char* ph) {
+    return R"({"id":)" + dstd::to_string(id) + R"(,"pid":1,"tid":1,)" +
            R"("name":"read","cat":"POSIX","ph":")" + ph + R"(","ts":)" +
-           std::to_string(1000 + id) + R"(,"dur":5,"args":{"ret":1}})";
+           dstd::to_string(1000 + id) + R"(,"dur":5,"args":{"ret":1}})";
 }
 
 // Lines the index counts under the dftracer decoder: 3 X and 2 C. It skips
@@ -57,8 +61,8 @@ std::string event_line(int id, const char* ph) {
 // which has no trailing newline. With `no_phase_line` the file has an object
 // with no "ph", so schema detection picks the path decoder, which counts every
 // object line, metadata included: 8 in all.
-std::string mixed_fixture(bool no_phase_line) {
-    std::string text = "[\n";
+dstd::String mixed_fixture(bool no_phase_line) {
+    dstd::String text = "[\n";
     text += event_line(1, "X") + "\n";
     text += event_line(2, "C") + "\n";
     text += event_line(3, "M") + "\n";
@@ -80,7 +84,7 @@ std::string mixed_fixture(bool no_phase_line) {
 constexpr int DFTRACER_FIXTURE_EVENTS = 5;
 constexpr int PATH_FIXTURE_EVENTS = 8;
 
-bool dir_has_dftindex(const std::string& dir) {
+bool dir_has_dftindex(const dstd::String& dir) {
     for (const auto& entry : dftu_utils_test::walk_dir(dir)) {
         if (entry.path.view().filename() == ".dftindex") return true;
     }
@@ -89,20 +93,18 @@ bool dir_has_dftindex(const std::string& dir) {
 
 // Extract the last non-empty line from a string and parse it as int.
 // Returns -1 on parse failure.
-int parse_event_count(const std::string& output) {
-    std::string last;
-    std::istringstream iss(output);
-    std::string line;
-    while (std::getline(iss, line)) {
+int parse_event_count(const dstd::String& output) {
+    dstd::String last;
+    dftu_utils_test::LineStream iss(output);
+    dstd::String line;
+    while (iss.next(line)) {
         auto start = line.find_first_not_of(" \t\r\n");
-        if (start != std::string::npos) last = line.substr(start);
+        if (start != dstd::String::npos) last = line.substr(start);
     }
-    if (last.empty()) return -1;
-    try {
-        return std::stoi(last);
-    } catch (...) {
-        return -1;
-    }
+    const auto end = last.find_last_not_of(" \t\r\n");
+    const auto count =
+        dstd::from_chars<int>(dstd::StringView(last).substr(0, end + 1));
+    return count.has_value() ? *count : -1;
 }
 
 }  // namespace
@@ -232,9 +234,8 @@ TEST_SUITE("DFTracerEventCount") {
         auto f = create_pfw_gz(env, 20, 0);
         REQUIRE(!f.empty());
 
-        std::string idx_dir = env.get_dir() + "/idx";
-        REQUIRE(
-            dftracer::utils::dstd::fs::create_directories(idx_dir).has_value());
+        dstd::String idx_dir = env.get_dir() + "/idx";
+        REQUIRE(dstd::fs::create_directories(idx_dir).has_value());
 
         auto output = run_event_count_capture(
             binary, {env.get_dir(), "-f", "--index-dir", idx_dir});
@@ -256,12 +257,12 @@ TEST_SUITE("DFTracerEventCount") {
             dftu_utils_test::ScopedTestDir dir("event_count_mixed");
             dftu_utils_test::write_gz_trace(dir.file("mixed.pfw.gz"),
                                             mixed_fixture(no_phase_line));
-            const std::string idx_dir = dir.file("idx");
+            const dstd::String idx_dir = dir.file("idx");
 
             auto cold = run_event_count_capture(
                 binary, {dir.str(), "--index-dir", idx_dir});
             CHECK(parse_event_count(cold) == expected);
-            CHECK(!dftracer::utils::dstd::fs::exists(idx_dir).value());
+            CHECK(!dstd::fs::exists(idx_dir).value());
             CHECK(!dir_has_dftindex(dir.str()));
 
             int exit_code = -1;
@@ -269,7 +270,7 @@ TEST_SUITE("DFTracerEventCount") {
                 index_binary, {dir.str(), "--index-dir", idx_dir}, false,
                 &exit_code);
             REQUIRE(exit_code == 0);
-            REQUIRE(dftracer::utils::dstd::fs::exists(idx_dir).value());
+            REQUIRE(dstd::fs::exists(idx_dir).value());
 
             auto warm = run_event_count_capture(
                 binary, {dir.str(), "--index-dir", idx_dir});
@@ -306,17 +307,17 @@ TEST_SUITE("DFTracerEventCount") {
 
         dftu_utils_test::ScopedTestDir dir("event_count_members");
         constexpr int EVENTS = 300;
-        const std::string plain = dir.file("plain.txt");
+        const dstd::String plain = dir.file("plain.txt");
         {
-            std::ofstream ofs(plain.c_str());
+            dftu_utils_test::FileOut ofs(plain);
             ofs << "[\n";
             for (int i = 1; i <= EVENTS; ++i) ofs << event_line(i, "X") << "\n";
         }
-        const std::string gz = dir.file("members.pfw.gz");
+        const dstd::String gz = dir.file("members.pfw.gz");
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    4096));
-        (void)dftracer::utils::dstd::fs::remove(plain);
-        const std::string idx_dir = dir.file("idx");
+        (void)dstd::fs::remove(plain);
+        const dstd::String idx_dir = dir.file("idx");
 
         auto cold = run_event_count_capture(
             binary, {dir.str(), "--index-dir", idx_dir});

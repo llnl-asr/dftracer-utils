@@ -7,6 +7,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_scan.h>
@@ -14,6 +16,7 @@
 #include <instrumentation.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <testing_utilities.h>
 #include <trace/views/agg_parity_common.h>
 #include <unistd.h>
 
@@ -23,8 +26,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
@@ -51,37 +54,36 @@ constexpr std::size_t KEY_PAD = 0;
 constexpr int EVENTS = 1'500'000;
 #endif
 
-std::string g_self;
+dstd::String g_self;
 
-std::string write_trace(const std::string& dir) {
-    const std::string pfw = dir + "/transform_memory.pfw";
-    const std::string pad = KEY_PAD ? "_" + std::string(KEY_PAD, 'x') : "";
+dstd::String write_trace(const dstd::String& dir) {
+    const dstd::String pfw = dir + "/transform_memory.pfw";
+    const dstd::String pad = KEY_PAD ? "_" + dstd::String(KEY_PAD, 'x') : "";
     {
-        std::ofstream ofs(pfw.c_str());
+        dftu_utils_test::FileOut ofs(pfw);
         for (int i = 0; i < EVENTS; ++i)
             ofs << R"({"ph":"X","name":"read","cat":"category_)" << (i % 500)
                 << pad << R"(","pid":1,"tid":1,"ts":)" << (1000 + i * 10)
                 << R"(,"dur":)" << (5 + i % 17) << R"(,"args":{}})" << "\n";
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
-int child_main(const std::string& mode, const std::string& gz) {
-    const std::string idx = std::string(determine_index_path(gz, ""));
+int child_main(const dstd::String& mode, const dstd::String& gz) {
+    const dstd::String idx = dstd::String(determine_index_path(gz, ""));
     GroupKey key = GroupKey::cat();
     if (mode == "transform") {
         key.transform = GroupKey::Transform::Bucket;
         key.transform_args = {"category_1"};
     }
     scan::ScanPlan plan = scan::agg(
-        scan::group_by(scan::memory_budget(
-                           scan::from_file(dftracer::utils::dstd::String(gz),
-                                           dftracer::utils::dstd::String(idx)),
-                           BUDGET),
-                       {key}),
+        scan::group_by(
+            scan::memory_budget(
+                scan::from_file(dstd::String(gz), dstd::String(idx)), BUDGET),
+            {key}),
         {{AggOp::Sum, "dur", "sum_dur"}});
     static dftracer::utils::Runtime rt;
     std::int64_t rows = 0;
@@ -97,7 +99,7 @@ int child_main(const std::string& mode, const std::string& gz) {
     return 0;
 }
 
-pid_t start_child(const std::string& mode, const std::string& gz) {
+pid_t start_child(const dstd::String& mode, const dstd::String& gz) {
     const pid_t pid = ::fork();
     REQUIRE(pid >= 0);
     if (pid == 0) {
@@ -127,13 +129,13 @@ TEST_CASE("a group-key transform holds no more than one morsel" *
           doctest::skip(instrumentation::active())) {
     TestEnvironment env(200);
     REQUIRE(env.is_valid());
-    const std::string gz = write_trace(env.get_dir());
+    const dstd::String gz = write_trace(env.get_dir());
     // One run's peak swings, so each side is the lowest of a
     // few runs. The first run builds the index; the rest start together, since
     // each child's peak is its own.
     peak_rss(start_child("plain", gz));
-    std::vector<pid_t> plain_runs;
-    std::vector<pid_t> transform_runs;
+    dstd::Vector<pid_t> plain_runs;
+    dstd::Vector<pid_t> transform_runs;
     for (int i = 0; i < RUNS; ++i) {
         plain_runs.push_back(start_child("plain", gz));
         transform_runs.push_back(start_child("transform", gz));
@@ -150,7 +152,7 @@ TEST_CASE("a group-key transform holds no more than one morsel" *
 }
 
 int main(int argc, char** argv) {
-    if (argc >= 4 && std::string(argv[1]) == "--child")
+    if (argc >= 4 && dstd::String(argv[1]) == "--child")
         return child_main(argv[2], argv[3]);
     char* resolved = ::realpath(argv[0], nullptr);
     g_self = resolved ? resolved : argv[0];

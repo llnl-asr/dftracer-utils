@@ -22,8 +22,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <memory>
-#include <optional>
 #include <stdexcept>
 #include <utility>
 

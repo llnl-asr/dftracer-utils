@@ -3,16 +3,17 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <string>
-#include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -28,27 +29,25 @@ using dftracer::utils::index::Json;
 constexpr int RECORDS = 3000;
 
 struct Access {
-    Field<dftracer::utils::dstd::String, "op"> op;
+    Field<dstd::String, "op"> op;
     Field<std::int64_t, "lat"> lat;
-    Field<dftracer::utils::dstd::Optional<std::int64_t>, "io.off"> off;
-    Field<dftracer::utils::dstd::Optional<Json>, "tags"> tags;
-    Field<dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>,
-          "hosts.1">
-        host;
+    Field<dstd::Optional<std::int64_t>, "io.off"> off;
+    Field<dstd::Optional<Json>, "tags"> tags;
+    Field<dstd::Optional<dstd::String>, "hosts.1"> host;
 };
 
 struct Event {
-    Field<dftracer::utils::dstd::String, "name"> name;
+    Field<dstd::String, "name"> name;
     Field<double, "ts"> ts;
-    Field<dftracer::utils::dstd::Optional<std::int64_t>, "args.size"> size;
+    Field<dstd::Optional<std::int64_t>, "args.size"> size;
 };
 
 // Record i: op read on even i, lat i, io.off 10*i on multiples of 3, tags on
 // multiples of 5, and hosts on multiples of 7.
-std::string write_access(TestEnvironment& env, const std::string& extra) {
-    const std::string plain = env.get_dir() + "/access.ndjson";
+dstd::String write_access(TestEnvironment& env, const dstd::String& extra) {
+    const dstd::String plain = env.get_dir() + "/access.ndjson";
     {
-        std::ofstream out(plain.c_str());
+        dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i) {
             out << R"({"op":")" << (i % 2 ? "write" : "read") << R"(","lat":)"
                 << i;
@@ -59,19 +58,19 @@ std::string write_access(TestEnvironment& env, const std::string& extra) {
         }
         out << extra;
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    (void)dftracer::utils::dstd::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     return gz;
 }
 
-View view_of(const std::string& gz) {
+View view_of(const dstd::String& gz) {
     return View::from_file(
         dstd::String(gz),
-        dstd::String(std::string(determine_index_path(gz, ""))));
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
 }  // namespace
@@ -96,13 +95,12 @@ TEST_SUITE("TypedRows") {
             if (i % 5 == 0) CHECK((*r.tags)->text == R"({"a":"x","b":[1,2]})");
             CHECK(r.host->has_value() == (i % 7 == 0));
             if (i % 7 == 0)
-                CHECK(std::string(**r.host) == "h" + std::to_string(i));
+                CHECK(dstd::String(**r.host) == "h" + dstd::to_string(i));
         }
 
         const auto df = view_of(gz).collect().get();
         REQUIRE(df.num_rows() == RECORDS);
-        std::vector<dftracer::utils::dstd::Pair<std::string, std::int64_t>>
-            want, have;
+        dstd::Vector<dstd::Pair<dstd::String, std::int64_t>> want, have;
         for (std::int64_t i = 0; i < RECORDS; ++i)
             want.emplace_back(bstr(df, i, "op"),
                               static_cast<std::int64_t>(bnum(df, i, "lat")));
@@ -136,9 +134,9 @@ TEST_SUITE("TypedRows") {
 
     TEST_CASE("dftracer metadata records are left out unless selected") {
         TestEnvironment env(10);
-        const std::string pfw = env.get_dir() + "/meta.pfw";
+        const dstd::String pfw = env.get_dir() + "/meta.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"M","name":"process_name","pid":1,"tid":1,)"
                    R"("args":{"name":"app"}})"
                 << "\n";
@@ -147,9 +145,9 @@ TEST_SUITE("TypedRows") {
                        R"("tid":1,"ts":)"
                     << 1000 + i << R"(,"dur":5,"args":{"size":)" << i << "}}\n";
         }
-        const std::string gz = pfw + ".gz";
+        const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dftracer::utils::dstd::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         const auto events = run(rows<Event>(view_of(gz)));
         REQUIRE(events.size() == 20);
         for (const Event& e : events) {

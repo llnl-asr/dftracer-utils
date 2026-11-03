@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -13,8 +14,6 @@
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
-
-#include <fstream>
 
 using namespace dftracer::utils;
 using dftracer::utils::index::build::resolve_and_build_index;
@@ -29,9 +28,9 @@ void write_single_member(const dstd::String& path,
     GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
-    std::ofstream ofs(path.c_str(), std::ios::binary);
-    ofs.write(reinterpret_cast<const char*>(member->data()),
-              static_cast<std::streamsize>(member->size()));
+    dstd::String ofs;
+    ofs.append(reinterpret_cast<const char*>(member->data()), member->size());
+    (void)dstd::fs::write_file(dstd::PathView(path), ofs);
 }
 
 // A trace with one FH metadata entry (hash "f00d" -> a file path) plus data

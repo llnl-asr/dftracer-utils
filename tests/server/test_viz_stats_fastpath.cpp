@@ -2,6 +2,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/server/http_request.h>
@@ -15,8 +18,6 @@
 #include <testing_utilities.h>
 
 #include <fstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftracer::utils::server::HttpRequest;
@@ -31,44 +32,46 @@ namespace {
 // two names share a total (keeps the total-sorted output order deterministic).
 // A counter (ph=C, dur:0) is sprinkled in to exercise the has_dur path: the viz
 // stats fold counts a dur:0 event, and so must the stored per-chunk aggregate.
-std::string make_trace(int n) {
+dstd::String make_trace(int n) {
     const char* names[] = {"read", "write", "open"};
     const char* cats[] = {"POSIX", "STDIO", "MPI"};
     const int durs[] = {100, 250, 40};
-    std::string s = "[\n";
+    dstd::String s = "[\n";
     for (int i = 0; i < n; ++i) {
         int k = i % 3;
         // name/cat/pid vary together so each group's per-key totals are
         // distinct (no ties -> deterministic total-sorted output order).
-        s += "{\"id\":" + std::to_string(i) + ",\"name\":\"" + names[k] +
-             "\",\"cat\":\"" + cats[k] + "\",\"pid\":" + std::to_string(1 + k) +
-             ",\"tid\":1,\"ts\":" + std::to_string(1000 + i) +
-             ",\"dur\":" + std::to_string(durs[k]) + ",\"ph\":\"X\"}\n";
+        s += "{\"id\":" + dstd::to_string(i) + ",\"name\":\"" + names[k] +
+             "\",\"cat\":\"" + cats[k] +
+             "\",\"pid\":" + dstd::to_string(1 + k) +
+             ",\"tid\":1,\"ts\":" + dstd::to_string(1000 + i) +
+             ",\"dur\":" + dstd::to_string(durs[k]) + ",\"ph\":\"X\"}\n";
         if (i % 50 == 0) {
-            s += "{\"id\":" + std::to_string(i) +
+            s += "{\"id\":" + dstd::to_string(i) +
                  ",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":9,\"tid\":1,"
                  "\"ts\":" +
-                 std::to_string(1000 + i) + ",\"dur\":0,\"ph\":\"C\"}\n";
+                 dstd::to_string(1000 + i) + ",\"dur\":0,\"ph\":\"C\"}\n";
         }
     }
     return s;
 }
 
-void write_single_member(const std::string& path, const std::string& content) {
+void write_single_member(const dstd::String& path,
+                         const dstd::String& content) {
     using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
     GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
-    std::ofstream ofs(path.c_str(), std::ios::binary);
+    dftu_utils_test::FileOut ofs(path);
     ofs.write(reinterpret_cast<const char*>(member->data()),
               static_cast<std::streamsize>(member->size()));
 }
 
-std::string stats_body(Router& router, const std::string& target) {
+dstd::String stats_body(Router& router, const dstd::String& target) {
     HttpRequest req;
     req.method = "GET";
     req.path = target;
-    std::string body;
+    dstd::String body;
     Runtime rt(4);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
         HttpResponse resp = co_await router.handle(req);
@@ -91,9 +94,9 @@ TEST_SUITE("viz_stats_fastpath") {
         auto dir = dftu_utils_test::make_unique_test_path("viz_stats_fast");
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         // Not *.pfw.gz: TraceIndex scans the dir and must see only the trace.
-        const std::string src = std::string((dir / "src.raw.gz").str());
-        const std::string gz = std::string((dir / "trace.pfw.gz").str());
-        const std::string index_dir = std::string((dir / "idx").str());
+        const dstd::String src = dstd::String((dir / "src.raw.gz").str());
+        const dstd::String gz = dstd::String((dir / "trace.pfw.gz").str());
+        const dstd::String index_dir = dstd::String((dir / "idx").str());
 
         write_single_member(src, make_trace(n));
 
@@ -126,7 +129,7 @@ TEST_SUITE("viz_stats_fastpath") {
             long begin;
             long end;
         };
-        const std::vector<Window> windows = {
+        const dstd::Vector<Window> windows = {
             {0, 1000000},                // whole trace
             {1500, 3500},                // many fully-covered interior members
             {2000, 4000}, {2345, 4111},  // off-boundary edges
@@ -138,12 +141,12 @@ TEST_SUITE("viz_stats_fastpath") {
         const char* groups[] = {"name", "cat", "pid"};
         for (const auto& w : windows) {
             for (const char* g : groups) {
-                std::string q =
-                    "/api/viz/stats?begin=" + std::to_string(w.begin) +
-                    "&end=" + std::to_string(w.end) +
+                dstd::String q =
+                    "/api/viz/stats?begin=" + dstd::to_string(w.begin) +
+                    "&end=" + dstd::to_string(w.end) +
                     "&summary=1&ts_normalize=0&group=" + g;
-                std::string fast = stats_body(router, q);
-                std::string live = stats_body(router, q + "&nofast=1");
+                dstd::String fast = stats_body(router, q);
+                dstd::String live = stats_body(router, q + "&nofast=1");
                 INFO("group=" << g << " window [" << w.begin << ", " << w.end
                               << "]");
                 CHECK(fast == live);

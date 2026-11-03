@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
@@ -224,7 +226,7 @@ TEST_SUITE("DDSketch") {
         // Up grows the store at its end, down shifts it at its start; both
         // must hold the same bins, also after a merge and a round trip.
         Big up(0.01), down(0.01), half_a(0.01), half_b(0.01);
-        std::vector<double> v;
+        dstd::Vector<double> v;
         for (int i = 1; i <= 3000; ++i) v.push_back(i * 0.37);
         for (double x : v) up.add(x);
         for (auto it = v.rbegin(); it != v.rend(); ++it) down.add(*it);
@@ -235,7 +237,7 @@ TEST_SUITE("DDSketch") {
         const Big back = Big::deserialize(bytes.data(), bytes.size());
         const auto want = up.bins();
         CHECK(want.size() > 100);
-        for (const Big* s : std::vector<const Big*>{&down, &half_a, &back}) {
+        for (const Big* s : dstd::Vector<const Big*>{&down, &half_a, &back}) {
             const auto got = s->bins();
             REQUIRE(got.size() == want.size());
             for (std::size_t i = 0; i < want.size(); ++i)

@@ -98,8 +98,11 @@ constexpr std::size_t MEDIUM_BLOCK = MEDIUM_MAX;
 constexpr std::size_t SMALL_BLOCK = 1000;
 
 struct WorkingSet {
+    // keep std: memory tests link only memory
     std::vector<void*> large;
+    // keep std: memory tests link only memory
     std::vector<void*> medium;
+    // keep std: memory tests link only memory
     std::vector<void*> small;
     std::size_t bytes = 0;
 };
@@ -187,9 +190,12 @@ TEST_CASE("spans are cached, purged and reused with exact counters") {
 TEST_CASE("cached span scenario" * doctest::skip()) {
     fresh_process::announce();
     std::size_t base = reserved();
+    // keep std: memory tests link only memory
     std::vector<std::size_t> seen;
+    // keep std: memory tests link only memory
     std::thread worker([&seen] {
         auto run = [&seen] {
+            // keep std: memory tests link only memory
             std::vector<void*> runs;
             for (int i = 0; i < 4; ++i) runs.push_back(page_allocate(MIB, 16));
             seen.push_back(reserved());
@@ -275,6 +281,7 @@ TEST_CASE("decay purges after the delay with no trim call") {
 TEST_CASE("freed memory past the idle cap is purged at once") {
     page_trim(Mode::All);
     std::size_t base = reserved();
+    // keep std: memory tests link only memory
     std::vector<WorkingSet> sets;
     std::size_t bytes = 0;
     while (bytes <= IDLE_BACKED_CAP) {
@@ -326,6 +333,7 @@ class Mailbox {
 
    private:
     std::mutex mutex_;
+    // keep std: memory tests link only memory
     std::deque<Block> queue_;
 };
 
@@ -347,12 +355,14 @@ TEST_CASE("trim runs while other threads allocate and free across tiers") {
     std::atomic<bool> stop{false};
     std::atomic<int> bad{0};
 
+    // keep std: memory tests link only memory
     std::thread trimmer([&stop] {
         for (int i = 0; !stop.load(std::memory_order_relaxed); ++i) {
             page_trim(i % 4 == 0 ? Mode::Decayed : Mode::All);
             std::this_thread::yield();
         }
     });
+    // keep std: memory tests link only memory
     std::vector<std::thread> workers;
     for (int id = 0; id < WORKERS; ++id) {
         workers.emplace_back([&, id] {

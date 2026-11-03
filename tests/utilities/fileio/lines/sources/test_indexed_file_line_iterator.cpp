@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_line_iterator.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
-#include <fstream>
 #include <string>
 #include <vector>
 
@@ -23,7 +24,7 @@ TEST_SUITE("IndexedFileLineIterator") {
         SUBCASE("Read entire indexed file") {
             // Create a test environment with 10 lines
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             // Create index
             auto indexer =
@@ -38,10 +39,10 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             IndexedFileLineIterator iter(config);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
                 Line line = iter.next();
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             REQUIRE(lines.size() == 10);
@@ -51,7 +52,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
         SUBCASE("Read partial line range") {
             TestEnvironment env(20);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -64,10 +65,10 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             IndexedFileLineIterator iter(config);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
                 Line line = iter.next();
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             REQUIRE(lines.size() == 6);
@@ -77,7 +78,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
         SUBCASE("Read single line") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -92,7 +93,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             CHECK(iter.has_next());
             Line line = iter.next();
-            CHECK(std::string(line.content) ==
+            CHECK(dstd::String(line.content) ==
                   "{\"id\": 7, \"message\": \"Test message 7\"}");
             CHECK(line.line_number == 7);
 
@@ -101,7 +102,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
         SUBCASE("Auto-detect end line") {
             TestEnvironment env(15);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -115,10 +116,10 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             IndexedFileLineIterator iter(config);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
                 Line line = iter.next();
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             REQUIRE(lines.size() == 6);  // Lines 10-15
@@ -130,7 +131,7 @@ TEST_SUITE("IndexedFileLineIterator") {
     TEST_CASE("IndexedFileLineIterator - Configuration Builder") {
         SUBCASE("Configuration with reader") {
             TestEnvironment env(5);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -166,7 +167,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
         SUBCASE("Configuration with byte range") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -208,7 +209,7 @@ TEST_SUITE("IndexedFileLineIterator") {
     TEST_CASE("IndexedFileLineIterator - STL Iterator Interface") {
         SUBCASE("Range-based for loop") {
             TestEnvironment env(8);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -221,9 +222,9 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             IndexedFileLineIterator iter(config);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             for (const auto& line : iter) {
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             REQUIRE(lines.size() == 4);
@@ -233,7 +234,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
         SUBCASE("Iterator comparison") {
             TestEnvironment env(5);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -264,7 +265,7 @@ TEST_SUITE("IndexedFileLineIterator") {
     TEST_CASE("IndexedFileLineIterator - Position Tracking") {
         SUBCASE("Current position with line range") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -294,7 +295,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
         SUBCASE("Total count calculation") {
             TestEnvironment env(20);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -315,7 +316,7 @@ TEST_SUITE("IndexedFileLineIterator") {
     TEST_CASE("IndexedFileLineIterator - Error Handling") {
         SUBCASE("Invalid line range") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -341,7 +342,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
         SUBCASE("Invalid byte range") {
             TestEnvironment env(10);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -367,7 +368,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
         SUBCASE("Calling next() when no more lines") {
             TestEnvironment env(3);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -398,8 +399,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             } catch (const std::exception& e) {
                 exception_thrown = true;
                 // Check that the exception message contains expected text
-                std::string msg = e.what();
-                CHECK(msg.find("does not exist") != std::string::npos);
+                dstd::String msg = e.what();
+                CHECK(msg.find("does not exist") != dstd::String::npos);
             }
             CHECK(exception_thrown);
         }
@@ -409,7 +410,7 @@ TEST_SUITE("IndexedFileLineIterator") {
               doctest::test_suite("vg")) {
         SUBCASE("Large line range") {
             TestEnvironment env(valgrind_scale(1000, 4));
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 4096, true);
@@ -423,10 +424,10 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             IndexedFileLineIterator iter(config);
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
                 Line line = iter.next();
-                lines.push_back(std::string(line.content));
+                lines.push_back(dstd::String(line.content));
             }
 
             REQUIRE(lines.size() == 101);  // Lines 100-200 inclusive
@@ -438,7 +439,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
         SUBCASE("Different buffer sizes") {
             TestEnvironment env(50);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -484,7 +485,7 @@ TEST_SUITE("IndexedFileLineIterator") {
     TEST_CASE("IndexedFileLineIterator - String View Lifetime") {
         SUBCASE("String view validity") {
             TestEnvironment env(5);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);
@@ -499,12 +500,12 @@ TEST_SUITE("IndexedFileLineIterator") {
             // Get first line
             CHECK(iter.has_next());
             Line line1 = iter.next();
-            std::string line1_copy(line1.content);  // Must copy immediately
+            dstd::String line1_copy(line1.content);  // Must copy immediately
 
             // Get second line
             CHECK(iter.has_next());
             Line line2 = iter.next();
-            std::string line2_copy(line2.content);
+            dstd::String line2_copy(line2.content);
 
             // Verify the copies are different
             CHECK(line1_copy != line2_copy);
@@ -543,7 +544,7 @@ TEST_SUITE("IndexedFileLineIterator") {
     TEST_CASE("IndexedFileLineIterator - Reader Access") {
         SUBCASE("Get underlying reader") {
             TestEnvironment env(5);
-            std::string gz_path = env.create_test_gzip_file();
+            dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
                 CheckpointIndexerFactory::create(gz_path, "", 1024, true);

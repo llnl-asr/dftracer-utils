@@ -3,6 +3,8 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
@@ -14,10 +16,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <memory>
 #include <random>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftracer::utils::index::gzip::GzipIndexer;
@@ -34,10 +33,10 @@ namespace {
 
 constexpr std::uint64_t CKPT = 1u << 20;
 
-std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
+dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     std::mt19937 rng(seed);
     static const char HEX[] = "0123456789abcdef";
-    std::string s;
+    dstd::String s;
     s.reserve(bytes + 128);
     while (s.size() < bytes) {
         s += "{\"id\":\"";
@@ -47,9 +46,9 @@ std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
     return s;
 }
 
-std::vector<std::uint8_t> gzip(const std::string& text) {
+dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
     gz::GzipMemberCompressor c;
-    std::vector<std::uint8_t> out(c.bound(text.size()));
+    dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
     REQUIRE(n.has_value());
     out.resize(*n);
@@ -57,12 +56,12 @@ std::vector<std::uint8_t> gzip(const std::string& text) {
 }
 
 struct Fixture {
-    std::string dir;
-    std::string gz_path;
-    std::string index_path;
+    dstd::String dir;
+    dstd::String gz_path;
+    dstd::String index_path;
     dstd::SharedPtr<GzipIndexer> indexer;
 
-    explicit Fixture(const std::vector<std::uint8_t>& bytes) {
+    explicit Fixture(const dstd::Vector<std::uint8_t>& bytes) {
         char tmpl[] = "/tmp/dftu_restart_XXXXXX";
         REQUIRE(::mkdtemp(tmpl) != nullptr);
         dir = tmpl;
@@ -81,16 +80,16 @@ struct Fixture {
     }
     ~Fixture() { (void)dstd::fs::remove_all(dir); }
 
-    std::string read_from(std::size_t start) {
+    dstd::String read_from(std::size_t start) {
         GzipReader reader(indexer);
         auto stream = reader.stream(StreamConfig()
                                         .stream_type(StreamType::Bytes)
                                         .range_type(RangeType::ByteRange)
                                         .from(start)
                                         .to(reader.get_max_bytes()));
-        std::string out;
+        dstd::String out;
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            std::vector<char> buf(1u << 20);
+            dstd::Vector<char> buf(1u << 20);
             while (true) {
                 const auto n =
                     co_await stream->read_async(buf.data(), buf.size());
@@ -101,9 +100,9 @@ struct Fixture {
         return out;
     }
 
-    std::string read_lines(std::size_t first, std::size_t last) {
+    dstd::String read_lines(std::size_t first, std::size_t last) {
         GzipReader reader(indexer);
-        std::string out;
+        dstd::String out;
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             out = co_await reader.read_lines_async(first, last);
         });
@@ -121,7 +120,7 @@ void check_pieces_cover(const dstd::Vector<GzipMemberRecord>& pieces,
     CHECK(uc == total);
 }
 
-void check_reads_from_every_piece(Fixture& fx, const std::string& text) {
+void check_reads_from_every_piece(Fixture& fx, const dstd::String& text) {
     for (const auto& p : fx.indexer->get_members()) {
         CAPTURE(p.member_idx);
         CHECK(fx.read_from(p.uc_offset) == text.substr(p.uc_offset));
@@ -167,9 +166,9 @@ TEST_SUITE("gzip_restart_points") {
     }
 
     TEST_CASE("small members give one member record each") {
-        std::vector<std::uint8_t> comp;
-        std::vector<std::size_t> sizes;
-        std::string all;
+        dstd::Vector<std::uint8_t> comp;
+        dstd::Vector<std::size_t> sizes;
+        dstd::String all;
         for (std::uint32_t i = 0; i < 5; ++i) {
             const auto t = hex_lines(i % 2 ? 400u << 10 : 3000, 10 + i);
             const auto m = gzip(t);
@@ -203,7 +202,7 @@ TEST_SUITE("gzip_restart_points") {
     }
 
     TEST_CASE("a cut inside a line longer than a piece keeps whole lines") {
-        std::string long_line(3u << 20, 'a');
+        dstd::String long_line(3u << 20, 'a');
         std::mt19937 rng(9);
         for (auto& c : long_line) c = static_cast<char>('a' + rng() % 26);
         const auto head = hex_lines(4u << 20, 8);
@@ -223,7 +222,7 @@ TEST_SUITE("gzip_restart_points") {
     TEST_CASE("a line range from the split file equals the lines") {
         const auto text = hex_lines(12u << 20, 6);
         Fixture fx(gzip(text));
-        std::vector<std::size_t> starts;
+        dstd::Vector<std::size_t> starts;
         std::size_t pos = 0;
         starts.push_back(0);
         for (std::size_t i = 0; i < text.size(); ++i) {

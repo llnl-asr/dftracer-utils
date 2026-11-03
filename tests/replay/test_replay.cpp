@@ -3,22 +3,22 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <chrono>
-#include <fstream>
 #include <sstream>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace {
 /// Traces must be gzip. Drop-in for the std::ofstream these fixtures used:
 /// same `<<` and close(), but the bytes land compressed.
 class GzTraceWriter {
    public:
-    explicit GzTraceWriter(const std::string& path) : path_(path) {}
+    explicit GzTraceWriter(const dstd::String& path) : path_(path) {}
     ~GzTraceWriter() { close(); }
 
     template <typename T>
@@ -36,8 +36,8 @@ class GzTraceWriter {
     }
 
    private:
-    std::string path_;
-    std::ostringstream buffer_;
+    dstd::String path_;
+    dftu_utils_test::TextOut buffer_;
     bool closed_ = false;
 };
 }  // namespace
@@ -48,13 +48,12 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
     dftracer::utils::common::logger::init();
 
     // Create a temporary trace file with sample data
-    dftracer::utils::dstd::Path temp_dir =
+    dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_test");
-    REQUIRE(
-        dftracer::utils::dstd::fs::create_directories(temp_dir).has_value());
+    REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
 
-    std::string trace_file =
-        std::string((temp_dir / "test_trace.pfw.gz").str());
+    dstd::String trace_file =
+        dstd::String((temp_dir / "test_trace.pfw.gz").str());
 
     SUBCASE("Create sample trace file") {
         GzTraceWriter file(trace_file);
@@ -77,7 +76,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
         file << "]";
         file.close();
 
-        REQUIRE(dftracer::utils::dstd::fs::exists(trace_file).value());
+        REQUIRE(dstd::fs::exists(trace_file).value());
     }
 
     SUBCASE("Test DFTracer sleep-based replay mode") {
@@ -284,7 +283,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
     }
 
     // Cleanup
-    (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+    (void)dstd::fs::remove_all(temp_dir);
 }
 
 TEST_CASE("DFTracer Replay - Trace structure") {
@@ -342,10 +341,10 @@ TEST_CASE("DFTracer Replay - Real trace files") {
     dftracer::utils::common::logger::init();
 
     // Test with real traces from trace_short directory
-    std::string trace_dir = "trace_short/bert_v100-1.pfw";
+    dstd::String trace_dir = "trace_short/bert_v100-1.pfw";
 
     SUBCASE("Test with bert trace file") {
-        if (!dftracer::utils::dstd::fs::exists(trace_dir).value()) {
+        if (!dstd::fs::exists(trace_dir).value()) {
             MESSAGE("Skipping real trace test - file not found: ", trace_dir);
             return;
         }
@@ -378,10 +377,10 @@ TEST_CASE("DFTracer Replay - Call tree integration") {
     dftracer::utils::common::logger::init();
 
     // Test with trace_short/cosmoflow_h100/nodes-1 directory
-    std::string trace_dir = "trace_short/cosmoflow_h100/nodes-1";
+    dstd::String trace_dir = "trace_short/cosmoflow_h100/nodes-1";
 
     SUBCASE("Test call tree replay") {
-        if (!dftracer::utils::dstd::fs::is_directory(trace_dir).value()) {
+        if (!dstd::fs::is_directory(trace_dir).value()) {
             MESSAGE("Skipping call tree test - directory not found: ",
                     trace_dir);
             return;

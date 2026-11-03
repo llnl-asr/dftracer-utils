@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
@@ -197,7 +198,7 @@ PathResult indexer_stream(const dstd::String& path) {
     run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         CrcWindow window;
         art = co_await index::gzip::build_gzip_index_artifacts(
-            std::string(path), CKPT,
+            dstd::String(path), CKPT,
             index::gzip::CheckpointIndexer::VisitorList{}, &scope);
     });
     // A corrupt member ends the build at that member, short of the full text.
@@ -271,7 +272,7 @@ TEST_CASE("the control: a stream that verifies the gzip checksum is counted") {
     Sample s;
     TempFile f(s.bytes);
     const auto before = gz::zlib_checksum_streams_opened();
-    index::detect_file_schema(std::string(f.path));
+    index::detect_file_schema(dstd::String(f.path));
     CHECK(gz::zlib_checksum_streams_opened() > before);
 }
 
@@ -345,7 +346,7 @@ TEST_CASE("a gzip header with FHCRC and optional fields is accepted") {
                        out.size());
         const auto rc = inf.inflate();
         out.resize(out.size() - inf.avail_out());
-        return std::make_pair(rc, out);
+        return dstd::Pair<decltype(rc), dstd::String>{rc, out};
     };
     const auto good = decode(member);
     CHECK(good.first == gz::InflateStatus::StreamEnd);

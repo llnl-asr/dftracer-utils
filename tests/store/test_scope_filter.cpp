@@ -1,43 +1,45 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/scope_filter.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
-using dftracer::utils::dstd::ByteView;
+using dstd::ByteView;
 using store::ScopeKind;
 
 ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
-std::uint64_t file_hash(const std::string& path) {
+std::uint64_t file_hash(const dstd::String& path) {
     const dstd::String held(path.data(), path.size());
     return store::engine::scope_hash("dftu.test", 1, ScopeKind::File,
                                      dstd::Span<const dstd::String>(&held, 1));
 }
 
-std::vector<std::uint64_t> hashes_of(std::size_t first, std::size_t count) {
-    std::vector<std::uint64_t> hashes;
+dstd::Vector<std::uint64_t> hashes_of(std::size_t first, std::size_t count) {
+    dstd::Vector<std::uint64_t> hashes;
     for (std::size_t i = first; i < first + count; ++i) {
-        hashes.push_back(file_hash("/traces/" + std::to_string(i) + ".pfw"));
+        hashes.push_back(file_hash("/traces/" + dstd::to_string(i) + ".pfw"));
     }
     return hashes;
 }
 
-dstd::Vector<std::uint8_t> filter_of(const std::vector<std::uint64_t>& hashes) {
+dstd::Vector<std::uint8_t> filter_of(
+    const dstd::Vector<std::uint64_t>& hashes) {
     return store::engine::build_scope_filter(
         dstd::Span<const std::uint64_t>(hashes.data(), hashes.size()));
 }
@@ -46,7 +48,7 @@ dstd::Vector<std::uint8_t> filter_of(const std::vector<std::uint64_t>& hashes) {
 
 TEST_SUITE("index store scope filter") {
     TEST_CASE("a filter holds every scope it was built over") {
-        const std::vector<std::uint64_t> held = hashes_of(0, 5000);
+        const dstd::Vector<std::uint64_t> held = hashes_of(0, 5000);
         const dstd::Vector<std::uint8_t> filter = filter_of(held);
         CHECK(filter.size() % 8 == 0);
         for (const std::uint64_t hash : held) {
@@ -57,7 +59,7 @@ TEST_SUITE("index store scope filter") {
     TEST_CASE("a filter rules out almost every scope it was not built over") {
         const dstd::Vector<std::uint8_t> filter = filter_of(hashes_of(0, 1000));
         std::size_t passed = 0;
-        const std::vector<std::uint64_t> absent = hashes_of(1000000, 100000);
+        const dstd::Vector<std::uint64_t> absent = hashes_of(1000000, 100000);
         for (const std::uint64_t hash : absent) {
             if (store::engine::scope_filter_may_hold(view_of(filter), hash))
                 ++passed;

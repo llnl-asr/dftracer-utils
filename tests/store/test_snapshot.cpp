@@ -4,12 +4,15 @@
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -36,22 +39,19 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
-#include <map>
 #include <optional>
-#include <set>
-#include <string>
 #include <thread>
 #include <utility>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
 using dftracer::utils::Runtime;
-using dftracer::utils::dstd::ByteView;
-using dftracer::utils::dstd::Condition;
+using dstd::ByteView;
+using dstd::Condition;
 using store::Batch;
 using store::CopyInfo;
 using store::FoldKind;
@@ -72,84 +72,74 @@ constexpr std::size_t HEADER_CRC_AT = 12;
 constexpr std::size_t KEY_COUNT = 1000;
 constexpr int RUNTIME_THREADS = 8;
 
-ByteView view_of(const std::string& bytes) {
+ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-ByteView view_of(const dftracer::utils::dstd::Vector<std::uint8_t>& bytes) {
+ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dftracer::utils::dstd::String dstring(const std::string& value) {
-    return dftracer::utils::dstd::String(value.data(), value.size());
+dstd::String to_std(ByteView bytes) {
+    return dstd::String(reinterpret_cast<const char*>(bytes.data()),
+                        bytes.size());
 }
 
-std::string to_std(ByteView bytes) {
-    return std::string(reinterpret_cast<const char*>(bytes.data()),
-                       bytes.size());
+dstd::String key_of(int index) {
+    const dstd::String digits = dstd::to_string(index);
+    return "key-" + dstd::String(4 - digits.size(), '0') + digits;
 }
 
-std::string to_std(const dftracer::utils::dstd::String& value) {
-    return std::string(value.data(), value.size());
-}
+dstd::String value_of(int index) { return "value-" + dstd::to_string(index); }
 
-std::string key_of(int index) {
-    const std::string digits = std::to_string(index);
-    return "key-" + std::string(4 - digits.size(), '0') + digits;
-}
-
-std::string value_of(int index) { return "value-" + std::to_string(index); }
-
-std::string i64_bytes(std::int64_t value) {
-    std::string bytes(8, '\0');
-    dftracer::utils::dstd::write_u64_le(
-        reinterpret_cast<std::uint8_t*>(bytes.data()),
-        static_cast<std::uint64_t>(value));
+dstd::String i64_bytes(std::int64_t value) {
+    dstd::String bytes(8, '\0');
+    dstd::write_u64_le(reinterpret_cast<std::uint8_t*>(bytes.data()),
+                       static_cast<std::uint64_t>(value));
     return bytes;
 }
 
-std::string f64_bytes(double value) {
-    std::string bytes(8, '\0');
-    dftracer::utils::dstd::write_f64_le(
-        reinterpret_cast<std::uint8_t*>(bytes.data()), value);
+dstd::String f64_bytes(double value) {
+    dstd::String bytes(8, '\0');
+    dstd::write_f64_le(reinterpret_cast<std::uint8_t*>(bytes.data()), value);
     return bytes;
 }
 
 std::int64_t read_i64(ByteView bytes) {
-    return std::bit_cast<std::int64_t>(dftracer::utils::dstd::read_u64_le(
-        reinterpret_cast<const std::uint8_t*>(bytes.data())));
+    return std::bit_cast<std::int64_t>(
+        dstd::read_u64_le(reinterpret_cast<const std::uint8_t*>(bytes.data())));
 }
 
 double read_f64(ByteView bytes) {
-    return dftracer::utils::dstd::read_f64_le(
+    return dstd::read_f64_le(
         reinterpret_cast<const std::uint8_t*>(bytes.data()));
 }
 
-NamespaceSpec put_spec(const std::string& name, std::uint32_t version = 0) {
+NamespaceSpec put_spec(const dstd::String& name, std::uint32_t version = 0) {
     NamespaceSpec spec;
-    spec.name = dstring(name);
+    spec.name = dstd::String(name);
     spec.format_version = version;
     spec.fold = FoldKind::None;
     return spec;
 }
 
-NamespaceSpec fold_spec(const std::string& name, FoldKind kind) {
+NamespaceSpec fold_spec(const dstd::String& name, FoldKind kind) {
     NamespaceSpec spec;
-    spec.name = dstring(name);
+    spec.name = dstd::String(name);
     spec.format_version = 0;
     spec.fold = kind;
     return spec;
 }
 
-ScopeKey file_scope(const std::string& path) {
-    return ScopeKey::file(dstring(path));
+ScopeKey file_scope(const dstd::String& path) {
+    return ScopeKey::file(dstd::String(path));
 }
 
 WriterOptions small_extents() {
     WriterOptions options;
     options.extent_size = SMALL_EXTENT;
-    options.host = dstring("host");
-    options.label = dstring("label");
+    options.host = dstd::String("host");
+    options.label = dstd::String("label");
     return options;
 }
 
@@ -167,19 +157,17 @@ dstd::UniquePtr<Writer> make_writer(
     return std::move(*created);
 }
 
-dftracer::utils::dstd::Expected<void, dftracer::utils::dstd::Error>
-flush_writer(Writer& writer) {
+dstd::Expected<void, dstd::Error> flush_writer(Writer& writer) {
     return store_runtime().submit(writer.flush()).get();
 }
 
-dftracer::utils::dstd::Expected<void, dftracer::utils::dstd::Error>
-close_writer(Writer& writer) {
+dstd::Expected<void, dstd::Error> close_writer(Writer& writer) {
     return store_runtime().submit(writer.close()).get();
 }
 
-std::vector<dftracer::utils::dstd::Pair<std::string, std::string>> collect(
+dstd::Vector<dstd::Pair<dstd::String, dstd::String>> collect(
     store::engine::ScanCursor& cursor) {
-    std::vector<dftracer::utils::dstd::Pair<std::string, std::string>> rows;
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> rows;
     while (!cursor.at_end()) {
         auto value = cursor.value();
         REQUIRE(value.has_value());
@@ -190,53 +178,51 @@ std::vector<dftracer::utils::dstd::Pair<std::string, std::string>> collect(
 }
 
 struct ScopedRow {
-    std::string scope;
-    std::string key;
-    std::string value;
+    dstd::String scope;
+    dstd::String key;
+    dstd::String value;
 };
 
-std::vector<ScopedRow> collect_scoped(store::engine::ScanCursor& cursor) {
-    std::vector<ScopedRow> rows;
+dstd::Vector<ScopedRow> collect_scoped(store::engine::ScanCursor& cursor) {
+    dstd::Vector<ScopedRow> rows;
     while (!cursor.at_end()) {
         auto value = cursor.value();
         REQUIRE(value.has_value());
         REQUIRE_FALSE(cursor.scope().paths.empty());
-        rows.push_back({to_std(cursor.scope().paths[0]), to_std(cursor.key()),
-                        to_std(*value)});
+        rows.push_back({dstd::String(cursor.scope().paths[0]),
+                        to_std(cursor.key()), to_std(*value)});
         cursor.next();
     }
     return rows;
 }
 
-std::vector<std::uint8_t> read_file(dftracer::utils::dstd::PathView path) {
-    const dftracer::utils::dstd::Path owned(path.str());
-    std::ifstream input(owned.c_str(), std::ios::binary);
-    return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(input),
-                                     std::istreambuf_iterator<char>());
+dstd::Vector<std::uint8_t> read_file(dstd::PathView path) {
+    const dstd::Path owned(path.str());
+    const dstd::String text = dftu_utils_test::read_text(owned);
+    return dstd::Vector<std::uint8_t>(text.begin(), text.end());
 }
 
-void write_file(dftracer::utils::dstd::PathView path,
-                const std::vector<std::uint8_t>& bytes) {
-    const dftracer::utils::dstd::Path owned(path.str());
-    std::ofstream output(owned.c_str(), std::ios::binary);
+void write_file(dstd::PathView path, const dstd::Vector<std::uint8_t>& bytes) {
+    const dstd::Path owned(path.str());
+    dftu_utils_test::FileOut output(owned);
     output.write(reinterpret_cast<const char*>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));
 }
 
-std::vector<store::engine::IndexedExtentRef> extent_refs_of(
+dstd::Vector<store::engine::IndexedExtentRef> extent_refs_of(
     const DataFileReader& reader) {
     auto refs = reader.all_extent_refs();
     REQUIRE(refs.has_value());
-    return std::vector<store::engine::IndexedExtentRef>(refs->begin(),
-                                                        refs->end());
+    return dstd::Vector<store::engine::IndexedExtentRef>(refs->begin(),
+                                                         refs->end());
 }
 
 /// The bytes of a data file without its footer and trailer, as a crash before
 /// the close leaves them: the reader recovers the commit chain by a scan, and a
 /// commit that was not durable counts as not synced.
-std::vector<std::uint8_t> without_footer(std::vector<std::uint8_t> bytes) {
+dstd::Vector<std::uint8_t> without_footer(dstd::Vector<std::uint8_t> bytes) {
     REQUIRE(bytes.size() >= store::engine::FILE_TRAILER_BYTES);
-    const std::uint64_t footer = dftracer::utils::dstd::read_u64_le(
+    const std::uint64_t footer = dstd::read_u64_le(
         bytes.data() + bytes.size() - store::engine::FILE_TRAILER_BYTES + 8U);
     REQUIRE(footer >= store::engine::FILE_HEADER_BYTES);
     REQUIRE(footer < bytes.size());
@@ -244,34 +230,32 @@ std::vector<std::uint8_t> without_footer(std::vector<std::uint8_t> bytes) {
     return bytes;
 }
 
-bool is_data_file(const dftracer::utils::dstd::Path& path) {
+bool is_data_file(const dstd::Path& path) {
     return path.view().extension() == ".dfs";
 }
 
-std::string only_data_file(const std::string& dir) {
-    std::vector<std::string> found;
+dstd::String only_data_file(const dstd::String& dir) {
+    dstd::Vector<dstd::String> found;
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (is_data_file(entry.path))
-            found.push_back(std::string(entry.path.str()));
+            found.push_back(dstd::String(entry.path.str()));
     }
     REQUIRE(found.size() == 1);
     return found.front();
 }
 
-void drop_summary(const std::string& dir) {
-    (void)dftracer::utils::dstd::fs::remove(
-        dftracer::utils::dstd::Path(dir) /
-        std::string(store::engine::SUMMARY_FILE_NAME));
+void drop_summary(const dstd::String& dir) {
+    (void)dstd::fs::remove(dstd::Path(dir) /
+                           dstd::String(store::engine::SUMMARY_FILE_NAME));
 }
 
-std::vector<std::uint8_t> with_tail_version(std::vector<std::uint8_t> bytes,
-                                            std::uint32_t version) {
+dstd::Vector<std::uint8_t> with_tail_version(dstd::Vector<std::uint8_t> bytes,
+                                             std::uint32_t version) {
     REQUIRE(bytes.size() >= store::engine::FILE_TRAILER_BYTES);
     const std::uint8_t* trailer =
         bytes.data() + bytes.size() - store::engine::FILE_TRAILER_BYTES;
-    const std::uint64_t at = dftracer::utils::dstd::read_u64_le(trailer + 8U);
-    const std::uint32_t length =
-        dftracer::utils::dstd::read_u32_le(trailer + 16U);
+    const std::uint64_t at = dstd::read_u64_le(trailer + 8U);
+    const std::uint32_t length = dstd::read_u32_le(trailer + 16U);
     REQUIRE(at + length <= bytes.size());
     auto footer = store::engine::decode_record(ByteView{
         reinterpret_cast<const std::byte*>(bytes.data() + at), length});
@@ -294,40 +278,39 @@ std::vector<std::uint8_t> with_tail_version(std::vector<std::uint8_t> bytes,
     return bytes;
 }
 
-void rewrite_header_crc(std::vector<std::uint8_t>& bytes) {
+void rewrite_header_crc(dstd::Vector<std::uint8_t>& bytes) {
     REQUIRE(bytes.size() >= store::engine::FILE_HEADER_BYTES);
-    dftracer::utils::dstd::write_u32_le(bytes.data() + HEADER_CRC_AT, 0);
+    dstd::write_u32_le(bytes.data() + HEADER_CRC_AT, 0);
     const std::uint32_t crc =
         store::engine::crc32(0, bytes.data(), store::engine::FILE_HEADER_BYTES);
-    dftracer::utils::dstd::write_u32_le(bytes.data() + HEADER_CRC_AT, crc);
+    dstd::write_u32_le(bytes.data() + HEADER_CRC_AT, crc);
 }
 
 /// Copies `source` into `target` under `name`, with the header writer id and
 /// the header crc rewritten so the copy verifies, and without its footer, so
 /// the reader takes the writer id from the header.
-std::string forge_copy(const std::string& source,
-                       const dftu_utils_test::ScopedTestDir& target,
-                       const std::string& name, std::uint64_t writer_random) {
-    std::vector<std::uint8_t> bytes = read_file(source);
+dstd::String forge_copy(const dstd::String& source,
+                        const dftu_utils_test::ScopedTestDir& target,
+                        const dstd::String& name, std::uint64_t writer_random) {
+    dstd::Vector<std::uint8_t> bytes = read_file(source);
     REQUIRE(bytes.size() > store::engine::FILE_HEADER_BYTES);
-    dftracer::utils::dstd::write_u64_le(bytes.data() + HEADER_WRITER_RANDOM_AT,
-                                        writer_random);
+    dstd::write_u64_le(bytes.data() + HEADER_WRITER_RANDOM_AT, writer_random);
     rewrite_header_crc(bytes);
-    const std::string path = target.file(name);
+    const dstd::String path = target.file(name);
     write_file(path, without_footer(bytes));
     return path;
 }
 
-std::uint64_t header_writer_random(const std::string& path) {
+std::uint64_t header_writer_random(const dstd::String& path) {
     auto reader = DataFileReader::open(path);
     REQUIRE(reader.has_value());
     return reader->index().writer_random;
 }
 
-std::vector<std::uint64_t> copy_generations(const std::string& path) {
+dstd::Vector<std::uint64_t> copy_generations(const dstd::String& path) {
     auto reader = DataFileReader::open(path);
     REQUIRE(reader.has_value());
-    std::vector<std::uint64_t> out;
+    dstd::Vector<std::uint64_t> out;
     for (const store::engine::CopyItem& copy : reader->index().copies) {
         out.push_back(copy.generation);
     }
@@ -335,10 +318,10 @@ std::vector<std::uint64_t> copy_generations(const std::string& path) {
     return out;
 }
 
-std::vector<std::uint64_t> drop_generations(const std::string& path) {
+dstd::Vector<std::uint64_t> drop_generations(const dstd::String& path) {
     auto reader = DataFileReader::open(path);
     REQUIRE(reader.has_value());
-    std::vector<std::uint64_t> out;
+    dstd::Vector<std::uint64_t> out;
     for (const store::engine::DropItem& drop : reader->index().drops) {
         out.push_back(drop.generation);
     }
@@ -346,7 +329,7 @@ std::vector<std::uint64_t> drop_generations(const std::string& path) {
     return out;
 }
 
-std::uint64_t only_copy_generation(const std::string& path) {
+std::uint64_t only_copy_generation(const dstd::String& path) {
     auto reader = DataFileReader::open(path);
     REQUIRE(reader.has_value());
     REQUIRE(reader->index().copies.size() == 1);
@@ -354,30 +337,27 @@ std::uint64_t only_copy_generation(const std::string& path) {
 }
 
 void check_generation(const Snapshot& snapshot,
-                      const std::string& namespace_name, const ScopeKey& scope,
+                      const dstd::String& namespace_name, const ScopeKey& scope,
                       std::uint64_t expected) {
     auto listed = snapshot.generations();
     REQUIRE(listed.has_value());
-    const dftracer::utils::dstd::Vector<store::engine::ScopeGeneration>& all =
-        *listed;
+    const dstd::Vector<store::engine::ScopeGeneration>& all = *listed;
     REQUIRE(all.size() == 1);
-    CHECK(to_std(all[0].namespace_name) == namespace_name);
+    CHECK(dstd::String(all[0].namespace_name) == namespace_name);
     CHECK(all[0].format_version == 0);
     CHECK(all[0].scope.kind == scope.kind);
     REQUIRE(all[0].scope.paths.size() == 1);
-    CHECK(to_std(all[0].scope.paths[0]) == to_std(scope.paths[0]));
+    CHECK(dstd::String(all[0].scope.paths[0]) == dstd::String(scope.paths[0]));
     CHECK(all[0].generation == expected);
 }
 
-dftracer::utils::dstd::Vector<std::uint8_t> bytes_vector(
-    const std::string& bytes) {
-    return dftracer::utils::dstd::Vector<std::uint8_t>(bytes.begin(),
-                                                       bytes.end());
+dstd::Vector<std::uint8_t> bytes_vector(const dstd::String& bytes) {
+    return dstd::Vector<std::uint8_t>(bytes.begin(), bytes.end());
 }
 
-std::string concat_value(int index) {
-    const std::string digits = std::to_string(index);
-    return "concat-" + std::string(10 - digits.size(), '0') + digits;
+dstd::String concat_value(int index) {
+    const dstd::String digits = dstd::to_string(index);
+    return "concat-" + dstd::String(10 - digits.size(), '0') + digits;
 }
 
 class ScopedDefaultRuntime {
@@ -402,7 +382,7 @@ class ScopedDefaultRuntime {
 /// What one open of a root read, and a text of every scope state and row, so
 /// two opens under different runtimes compare with one string.
 struct OpenDump {
-    std::string text;
+    dstd::String text;
     std::size_t files = 0;
     std::size_t extents = 0;
     std::uint64_t read_calls = 0;
@@ -417,7 +397,7 @@ struct OpenDump {
 
 OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
                    const NamespaceSpec& spec,
-                   const std::vector<ScopeKey>& scopes) {
+                   const dstd::Vector<ScopeKey>& scopes) {
     auto snapshot = Snapshot::open(root.str());
     REQUIRE(snapshot.has_value());
     CHECK(snapshot->skipped().empty());
@@ -426,8 +406,8 @@ OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
     CHECK(snapshot->read_stats().read_calls == 0);
     for (const ScopeKey& scope : scopes) {
         dump.text +=
-            "state " + to_std(scope.paths[0]) + " " +
-            std::to_string(static_cast<int>(snapshot->state(spec, scope))) +
+            "state " + dstd::String(scope.paths[0]) + " " +
+            dstd::to_string(static_cast<int>(snapshot->state(spec, scope))) +
             "\n";
         auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
         for (const ScopedRow& row : collect_scoped(cursor)) {
@@ -448,7 +428,7 @@ OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
     return dump;
 }
 
-int descriptor_of(const std::string& path) {
+int descriptor_of(const dstd::String& path) {
     struct stat file_stat{};
     if (::stat(path.c_str(), &file_stat) != 0) return -1;
     for (int fd = 0; fd < 4096; ++fd) {
@@ -463,7 +443,7 @@ int descriptor_of(const std::string& path) {
 
 void write_scopes_file(const dftu_utils_test::ScopedTestDir& dir,
                        const NamespaceSpec& spec,
-                       const std::vector<ScopeKey>& scopes, int keys,
+                       const dstd::Vector<ScopeKey>& scopes, int keys,
                        bool flushed) {
     auto writer = make_writer(dir);
     auto id = writer->add_namespace(spec);
@@ -471,8 +451,8 @@ void write_scopes_file(const dftu_utils_test::ScopedTestDir& dir,
     for (const ScopeKey& scope : scopes) {
         Batch entries = writer->batch(*id, scope, 0);
         for (int k = 0; k < keys; ++k) {
-            const std::string key = "b0-" + key_of(k);
-            const std::string value = value_of(k);
+            const dstd::String key = "b0-" + key_of(k);
+            const dstd::String value = value_of(k);
             entries.put(view_of(key), view_of(value));
         }
         REQUIRE(writer->commit(std::move(entries)).has_value());
@@ -487,13 +467,13 @@ void write_scoped_file(const dftu_utils_test::ScopedTestDir& dir,
     auto writer = make_writer(dir);
     auto id = writer->add_namespace(spec);
     REQUIRE(id.has_value());
-    const std::string prefix = to_std(scope.paths[0]);
+    const dstd::String prefix = dstd::String(scope.paths[0]);
     for (int batch = 0; batch < batches; ++batch) {
         Batch entries = writer->batch(*id, scope, 0);
         for (int k = 0; k < keys; ++k) {
-            const std::string key =
-                "b" + std::to_string(batch) + "-" + key_of(k);
-            const std::string value = value_of(k);
+            const dstd::String key =
+                "b" + dstd::to_string(batch) + "-" + key_of(k);
+            const dstd::String value = value_of(k);
             entries.put(view_of(key), view_of(value));
         }
         REQUIRE(writer->commit(std::move(entries)).has_value());
@@ -502,12 +482,12 @@ void write_scoped_file(const dftu_utils_test::ScopedTestDir& dir,
     REQUIRE(close_writer(*writer).has_value());
 }
 
-std::vector<std::map<std::string, std::string>> write_many_commits(
+dstd::Vector<dstd::Map<dstd::String, dstd::String>> write_many_commits(
     const dftu_utils_test::ScopedTestDir& dir, const NamespaceSpec& spec,
-    const std::vector<ScopeKey>& scopes, int commits) {
+    const dstd::Vector<ScopeKey>& scopes, int commits) {
     constexpr int PER_COMMIT = 8;
     constexpr int KEY_SPAN = 32;
-    std::vector<std::map<std::string, std::string>> model(scopes.size());
+    dstd::Vector<dstd::Map<dstd::String, dstd::String>> model(scopes.size());
     auto writer = make_writer(dir);
     auto id = writer->add_namespace(spec);
     REQUIRE(id.has_value());
@@ -517,10 +497,10 @@ std::vector<std::map<std::string, std::string>> write_many_commits(
         Batch entries = writer->batch(*id, scopes[which], 0);
         const int base = (commit / static_cast<int>(scopes.size())) * 3 %
                          (KEY_SPAN - PER_COMMIT);
-        const std::string tag = "c" + std::to_string(commit) + "-";
+        const dstd::String tag = "c" + dstd::to_string(commit) + "-";
         for (int k = 0; k < PER_COMMIT; ++k) {
-            const std::string key = key_of(base + k);
-            const std::string value = tag + std::to_string(base + k);
+            const dstd::String key = key_of(base + k);
+            const dstd::String value = tag + dstd::to_string(base + k);
             entries.put(view_of(key), view_of(value));
             model[which][key] = value;
         }
@@ -531,8 +511,8 @@ std::vector<std::map<std::string, std::string>> write_many_commits(
 }
 
 struct ClosedSegments {
-    std::vector<store::engine::BlockHandle> blocks;
-    std::vector<std::uint64_t> runs;
+    dstd::Vector<store::engine::BlockHandle> blocks;
+    dstd::Vector<std::uint64_t> runs;
 };
 
 ClosedSegments closed_segments(const DataFileReader& reader) {
@@ -576,17 +556,15 @@ ClosedSegments closed_segments(const DataFileReader& reader) {
 
 TEST_SUITE("index store snapshot") {
     TEST_CASE("scope keys sort by kind and then by paths") {
-        const std::string a = "/traces/a.pfw";
-        const std::string b = "/traces/b.pfw";
-        const std::vector<dftracer::utils::dstd::StringView> given = {
-            dftracer::utils::dstd::StringView(b),
-            dftracer::utils::dstd::StringView(a),
-            dftracer::utils::dstd::StringView(b)};
+        const dstd::String a = "/traces/a.pfw";
+        const dstd::String b = "/traces/b.pfw";
+        const dstd::Vector<dstd::StringView> given = {
+            dstd::StringView(b), dstd::StringView(a), dstd::StringView(b)};
         const ScopeKey files = ScopeKey::files(given);
         CHECK(files.kind == store::ScopeKind::Files);
         REQUIRE(files.paths.size() == 2);
-        CHECK(to_std(files.paths[0]) == a);
-        CHECK(to_std(files.paths[1]) == b);
+        CHECK(dstd::String(files.paths[0]) == a);
+        CHECK(dstd::String(files.paths[1]) == b);
 
         const ScopeKey root = ScopeKey::root();
         const ScopeKey file = file_scope(a);
@@ -610,8 +588,8 @@ TEST_SUITE("index store snapshot") {
         for (int part = 0; part < 2; ++part) {
             Batch batch = writer->batch(*id, scope, 0);
             for (int i = part * 500; i < (part + 1) * 500; ++i) {
-                const std::string key = key_of(i);
-                const std::string value = value_of(i);
+                const dstd::String key = key_of(i);
+                const dstd::String value = value_of(i);
                 batch.put(view_of(key), view_of(value));
             }
             REQUIRE(writer->commit(std::move(batch)).has_value());
@@ -624,19 +602,19 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
 
         for (int i = 0; i < static_cast<int>(KEY_COUNT); ++i) {
-            const std::string key = key_of(i);
+            const dstd::String key = key_of(i);
             auto found = snapshot->get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             REQUIRE(found->has_value());
             CHECK(to_std((*found)->bytes()) == value_of(i));
         }
 
-        const std::string missing = "key-9999";
+        const dstd::String missing = "key-9999";
         auto absent = snapshot->get(spec, scope, view_of(missing));
         REQUIRE(absent.has_value());
         CHECK_FALSE(absent->has_value());
 
-        const std::string prefix = "key-01";
+        const dstd::String prefix = "key-01";
         auto prefix_cursor = snapshot->scan(spec, scope, view_of(prefix));
         const auto prefix_rows = collect(prefix_cursor);
         REQUIRE(prefix_rows.size() == 100);
@@ -647,8 +625,8 @@ TEST_SUITE("index store snapshot") {
                   value_of(100 + i));
         }
 
-        const std::string begin = key_of(100);
-        const std::string end = key_of(200);
+        const dstd::String begin = key_of(100);
+        const dstd::String end = key_of(200);
         auto range_cursor =
             snapshot->scan(spec, scope, view_of(begin), view_of(end));
         const auto range_rows = collect(range_cursor);
@@ -680,28 +658,28 @@ TEST_SUITE("index store snapshot") {
         constexpr int PER_BATCH = 200;
         constexpr int PER_BIG_BATCH = 2000;
         const auto dict_key = [](int index) {
-            const std::string digits = std::to_string(index);
-            return "key-" + std::string(6 - digits.size(), '0') + digits;
+            const dstd::String digits = dstd::to_string(index);
+            return "key-" + dstd::String(6 - digits.size(), '0') + digits;
         };
         const auto value = [](int index) {
-            std::string out;
+            dstd::String out;
             std::uint64_t state =
                 static_cast<std::uint64_t>(index) * 2654435761U;
             while (out.size() < 1024) {
                 state = mmix_lcg_step(state);
                 out += "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":" +
-                       std::to_string(state >> 52U) +
+                       dstd::to_string(state >> 52U) +
                        ",\"file\":\"/p/lustre/run/" +
-                       std::to_string((state >> 20U) % 97U) +
+                       dstd::to_string((state >> 20U) % 97U) +
                        "/data.h5\",\"size\":" +
-                       std::to_string((state >> 8U) % 65536U) + "}\n";
+                       dstd::to_string((state >> 8U) % 65536U) + "}\n";
             }
             return out;
         };
 
         WriterOptions options;
-        options.host = dstring("host");
-        options.label = dstring("label");
+        options.host = dstd::String("host");
+        options.label = dstd::String("label");
         auto writer = make_writer(dir, options);
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
@@ -711,8 +689,8 @@ TEST_SUITE("index store snapshot") {
                 KEYS - first, ++batches % 10 == 0 ? PER_BIG_BATCH : PER_BATCH);
             Batch batch = writer->batch(*id, scope, 0);
             for (int i = first; i < first + count; ++i) {
-                const std::string key = dict_key(i);
-                const std::string bytes = value(i);
+                const dstd::String key = dict_key(i);
+                const dstd::String bytes = value(i);
                 batch.put(view_of(key), view_of(bytes));
             }
             REQUIRE(writer->commit(std::move(batch)).has_value());
@@ -724,7 +702,7 @@ TEST_SUITE("index store snapshot") {
             auto open = Snapshot::open(dir.str());
             REQUIRE(open.has_value());
             for (int i = 0; i < KEYS; i += 997) {
-                const std::string key = dict_key(i);
+                const dstd::String key = dict_key(i);
                 auto found = open->get(spec, scope, view_of(key));
                 REQUIRE(found.has_value());
                 REQUIRE(found->has_value());
@@ -733,7 +711,7 @@ TEST_SUITE("index store snapshot") {
         }
         REQUIRE(close_writer(*writer).has_value());
 
-        const std::string path = only_data_file(dir.str());
+        const dstd::String path = only_data_file(dir.str());
         auto report = store::engine::space_report(path);
         REQUIRE(report.has_value());
         CHECK(report->dicts == 2);
@@ -769,8 +747,8 @@ TEST_SUITE("index store snapshot") {
         // one a page's extent took.
         auto opened = DataFileReader::open(path);
         REQUIRE(opened.has_value());
-        std::vector<std::uint8_t> bytes = read_file(path);
-        std::set<std::uint64_t> dict_offsets;
+        dstd::Vector<std::uint8_t> bytes = read_file(path);
+        dstd::Set<std::uint64_t> dict_offsets;
         for (const store::engine::IndexedExtentRef& indexed :
              extent_refs_of(*opened)) {
             if (indexed.ref.segments.empty()) continue;
@@ -793,7 +771,7 @@ TEST_SUITE("index store snapshot") {
         std::size_t failed = 0;
         std::size_t read = 0;
         for (int i = 0; i < KEYS; i += 499) {
-            const std::string key = dict_key(i);
+            const dstd::String key = dict_key(i);
             auto found = damaged->get(spec, scope, view_of(key));
             ++read;
             if (!found.has_value()) {
@@ -810,66 +788,61 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_building_copy");
         const ScopeKey scope = file_scope("/traces/building.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.building");
-        const auto get = [&](const Snapshot& snapshot, const std::string& key)
-            -> dftracer::utils::dstd::Optional<std::string> {
+        const auto get =
+            [&](const Snapshot& snapshot,
+                const dstd::String& key) -> dstd::Optional<dstd::String> {
             auto found = snapshot.get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
-            if (!found->has_value()) return dftracer::utils::dstd::nullopt;
+            if (!found->has_value()) return dstd::nullopt;
             return to_std((*found)->bytes());
         };
 
         auto writer = make_writer(dir);
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
-        const dftracer::utils::dstd::Vector<SourceStat> old_sources{
-            SourceStat{1, 2, 3}};
+        const dstd::Vector<SourceStat> old_sources{SourceStat{1, 2, 3}};
         Batch ready = writer->batch(*id, scope, 5, &old_sources);
-        ready.put(view_of(std::string("k1")), view_of(std::string("old1")));
-        ready.put(view_of(std::string("k2")), view_of(std::string("old2")));
+        ready.put(view_of(dstd::String("k1")), view_of(dstd::String("old1")));
+        ready.put(view_of(dstd::String("k2")), view_of(dstd::String("old2")));
         REQUIRE(writer->commit(std::move(ready)).has_value());
         REQUIRE(flush_writer(*writer).has_value());
 
         Batch first = writer->building_batch(*id, scope);
-        first.put(view_of(std::string("k1")), view_of(std::string("new1")));
-        first.put(view_of(std::string("k3")), view_of(std::string("new3")));
+        first.put(view_of(dstd::String("k1")), view_of(dstd::String("new1")));
+        first.put(view_of(dstd::String("k3")), view_of(dstd::String("new3")));
         REQUIRE(writer->commit(std::move(first)).has_value());
         REQUIRE(flush_writer(*writer).has_value());
         {
             auto snapshot = Snapshot::open(dir.str());
             REQUIRE(snapshot.has_value());
-            CHECK(get(*snapshot, "k1") ==
-                  dftracer::utils::dstd::Optional<std::string>("old1"));
-            CHECK(get(*snapshot, "k2") ==
-                  dftracer::utils::dstd::Optional<std::string>("old2"));
+            CHECK(get(*snapshot, "k1") == dstd::Optional<dstd::String>("old1"));
+            CHECK(get(*snapshot, "k2") == dstd::Optional<dstd::String>("old2"));
             CHECK_FALSE(get(*snapshot, "k3").has_value());
             CHECK(snapshot->copy_info(spec, scope).params_hash == 5);
         }
 
         Batch plain = writer->batch(*id, scope, 5, &old_sources);
-        plain.put(view_of(std::string("k9")), view_of(std::string("x")));
+        plain.put(view_of(dstd::String("k9")), view_of(dstd::String("x")));
         CHECK_FALSE(writer->commit(std::move(plain)).has_value());
 
-        const std::string begin = "k3";
-        const std::string end = std::string("k3") + '\0';
+        const dstd::String begin = "k3";
+        const dstd::String end = dstd::String("k3") + '\0';
         REQUIRE(writer->erase(*id, scope, view_of(begin), view_of(end))
                     .has_value());
         Batch second = writer->building_batch(*id, scope);
-        second.put(view_of(std::string("k4")), view_of(std::string("new4")));
+        second.put(view_of(dstd::String("k4")), view_of(dstd::String("new4")));
         REQUIRE(writer->commit(std::move(second)).has_value());
         REQUIRE(flush_writer(*writer).has_value());
 
-        const dftracer::utils::dstd::Vector<SourceStat> new_sources{
-            SourceStat{4, 5, 6}};
+        const dstd::Vector<SourceStat> new_sources{SourceStat{4, 5, 6}};
         const CopyChange target{*id, &scope, 9, &new_sources};
         REQUIRE(writer->apply({&target, 1}).has_value());
         REQUIRE(flush_writer(*writer).has_value());
         const auto check_published = [&](const Snapshot& snapshot) {
-            CHECK(get(snapshot, "k1") ==
-                  dftracer::utils::dstd::Optional<std::string>("new1"));
+            CHECK(get(snapshot, "k1") == dstd::Optional<dstd::String>("new1"));
             CHECK_FALSE(get(snapshot, "k2").has_value());
             CHECK_FALSE(get(snapshot, "k3").has_value());
-            CHECK(get(snapshot, "k4") ==
-                  dftracer::utils::dstd::Optional<std::string>("new4"));
+            CHECK(get(snapshot, "k4") == dstd::Optional<dstd::String>("new4"));
             const CopyInfo info = snapshot.copy_info(spec, scope);
             CHECK(info.state == ScopeState::Ready);
             CHECK(info.params_hash == 9);
@@ -898,16 +871,17 @@ TEST_SUITE("index store snapshot") {
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         Batch ready = writer->batch(*id, scope, 5);
-        ready.put(view_of(std::string("k1")), view_of(std::string("old1")));
+        ready.put(view_of(dstd::String("k1")), view_of(dstd::String("old1")));
         REQUIRE(writer->commit(std::move(ready)).has_value());
         Batch building = writer->building_batch(*id, scope);
-        building.put(view_of(std::string("k1")), view_of(std::string("new1")));
+        building.put(view_of(dstd::String("k1")),
+                     view_of(dstd::String("new1")));
         REQUIRE(writer->commit(std::move(building)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
-        auto found = snapshot->get(spec, scope, view_of(std::string("k1")));
+        auto found = snapshot->get(spec, scope, view_of(dstd::String("k1")));
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == "old1");
@@ -924,22 +898,22 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(id.has_value());
 
         Batch first = writer->batch(*id, scope, 0);
-        first.put(view_of(std::string("key-b")), view_of(std::string("b1")));
-        first.put(view_of(std::string("key-a")), view_of(std::string("a1")));
-        first.put(view_of(std::string("key-b")), view_of(std::string("b2")));
+        first.put(view_of(dstd::String("key-b")), view_of(dstd::String("b1")));
+        first.put(view_of(dstd::String("key-a")), view_of(dstd::String("a1")));
+        first.put(view_of(dstd::String("key-b")), view_of(dstd::String("b2")));
         REQUIRE(writer->commit(std::move(first)).has_value());
 
         Batch second = writer->batch(*id, scope, 0);
-        second.put(view_of(std::string("key-b")), view_of(std::string("b3")));
-        second.put(view_of(std::string("key-c")), view_of(std::string("c1")));
+        second.put(view_of(dstd::String("key-b")), view_of(dstd::String("b3")));
+        second.put(view_of(dstd::String("key-c")), view_of(dstd::String("c1")));
         REQUIRE(writer->commit(std::move(second)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
 
-        const std::vector<dftracer::utils::dstd::Pair<std::string, std::string>>
-            expected = {{"key-a", "a1"}, {"key-b", "b3"}, {"key-c", "c1"}};
+        const dstd::Vector<dstd::Pair<dstd::String, dstd::String>> expected = {
+            {"key-a", "a1"}, {"key-b", "b3"}, {"key-c", "c1"}};
         for (const auto& row : expected) {
             auto found = snapshot->get(spec, scope, view_of(row.first));
             REQUIRE(found.has_value());
@@ -962,11 +936,11 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec put = put_spec("dftu.test.put");
         const NamespaceSpec concat =
             fold_spec("dftu.test.concat", FoldKind::Concat);
-        const std::string key = "same-key";
+        const dstd::String key = "same-key";
         // Longer than the capacity of a small extent, so its segment goes to a
         // run of its own and its write completes at once, while the earlier
         // batch stays in an extent that is sealed only at close.
-        const std::string longer(8000, 'n');
+        const dstd::String longer(8000, 'n');
 
         auto writer = make_writer(dir);
         auto put_id = writer->add_namespace(put);
@@ -974,12 +948,12 @@ TEST_SUITE("index store snapshot") {
         auto concat_id = writer->add_namespace(concat);
         REQUIRE(concat_id.has_value());
 
-        const auto put_value = [&](const std::string& value) {
+        const auto put_value = [&](const dstd::String& value) {
             Batch batch = writer->batch(*put_id, scope, 0);
             batch.put(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(batch)).has_value());
         };
-        const auto fold_value = [&](const std::string& value) {
+        const auto fold_value = [&](const dstd::String& value) {
             Batch batch = writer->batch(*concat_id, scope, 0);
             batch.fold(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(batch)).has_value());
@@ -992,9 +966,9 @@ TEST_SUITE("index store snapshot") {
 
         // The batch that came first is written last, so neither the records nor
         // the extents of the file are in the order of the batches.
-        auto reader = DataFileReader::open(to_std(writer->path()));
+        auto reader = DataFileReader::open(dstd::String(writer->path()));
         REQUIRE(reader.has_value());
-        const std::vector<store::engine::IndexedExtentRef> refs =
+        const dstd::Vector<store::engine::IndexedExtentRef> refs =
             extent_refs_of(*reader);
         const auto ref_of = [&refs](std::uint64_t ordinal) {
             for (const store::engine::IndexedExtentRef& ref : refs) {
@@ -1006,10 +980,9 @@ TEST_SUITE("index store snapshot") {
             FAIL("no extent of the batch with ordinal " << ordinal);
             return store::engine::IndexedExtentRef{};
         };
-        const dftracer::utils::dstd::Pair<std::uint64_t, std::uint64_t>
-            ordinals[] = {{1, 3}, {2, 4}};
-        for (const dftracer::utils::dstd::Pair<std::uint64_t, std::uint64_t>&
-                 pair : ordinals) {
+        const dstd::Pair<std::uint64_t, std::uint64_t> ordinals[] = {{1, 3},
+                                                                     {2, 4}};
+        for (const dstd::Pair<std::uint64_t, std::uint64_t>& pair : ordinals) {
             const store::engine::IndexedExtentRef older = ref_of(pair.first);
             const store::engine::IndexedExtentRef newer = ref_of(pair.second);
             REQUIRE(older.sequence >= newer.sequence);
@@ -1044,12 +1017,12 @@ TEST_SUITE("index store snapshot") {
 
         struct FoldCase {
             FoldKind kind;
-            std::string name;
-            std::vector<std::string> first;
-            std::vector<std::string> second;
-            std::string expected;
+            dstd::String name;
+            dstd::Vector<dstd::String> first;
+            dstd::Vector<dstd::String> second;
+            dstd::String expected;
         };
-        const std::vector<FoldCase> cases = {
+        const dstd::Vector<FoldCase> cases = {
             {FoldKind::SumI64,
              "sum-i64",
              {i64_bytes(5), i64_bytes(7)},
@@ -1095,16 +1068,16 @@ TEST_SUITE("index store snapshot") {
                 fold_spec("dftu.test." + fold_case.name, fold_case.kind);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            const std::string key = "folded";
+            const dstd::String key = "folded";
 
             Batch first = writer->batch(*id, scope, 0);
-            for (const std::string& value : fold_case.first) {
+            for (const dstd::String& value : fold_case.first) {
                 first.fold(view_of(key), view_of(value));
             }
             REQUIRE(writer->commit(std::move(first)).has_value());
 
             Batch second = writer->batch(*id, scope, 0);
-            for (const std::string& value : fold_case.second) {
+            for (const dstd::String& value : fold_case.second) {
                 second.fold(view_of(key), view_of(value));
             }
             REQUIRE(writer->commit(std::move(second)).has_value());
@@ -1117,7 +1090,7 @@ TEST_SUITE("index store snapshot") {
             const NamespaceSpec spec =
                 fold_spec("dftu.test." + fold_case.name, fold_case.kind);
             auto found =
-                snapshot->get(spec, scope, view_of(std::string("folded")));
+                snapshot->get(spec, scope, view_of(dstd::String("folded")));
             REQUIRE(found.has_value());
             REQUIRE(found->has_value());
             CHECK(to_std((*found)->bytes()) == fold_case.expected);
@@ -1125,13 +1098,13 @@ TEST_SUITE("index store snapshot") {
 
         auto sum =
             snapshot->get(fold_spec("dftu.test.sum-i64", FoldKind::SumI64),
-                          scope, view_of(std::string("folded")));
+                          scope, view_of(dstd::String("folded")));
         REQUIRE(sum.has_value());
         REQUIRE(sum->has_value());
         CHECK(read_i64((*sum)->bytes()) == 22);
         auto mean =
             snapshot->get(fold_spec("dftu.test.sum-f64", FoldKind::SumF64),
-                          scope, view_of(std::string("folded")));
+                          scope, view_of(dstd::String("folded")));
         REQUIRE(mean.has_value());
         REQUIRE(mean->has_value());
         CHECK(read_f64((*mean)->bytes()) ==
@@ -1148,8 +1121,9 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(id.has_value());
 
         Batch batch = writer->batch(*id, scope, 0);
-        batch.fold(view_of(std::string("good")), view_of(i64_bytes(1)));
-        batch.fold(view_of(std::string("short")), view_of(std::string("abcd")));
+        batch.fold(view_of(dstd::String("good")), view_of(i64_bytes(1)));
+        batch.fold(view_of(dstd::String("short")),
+                   view_of(dstd::String("abcd")));
         auto rejected = writer->commit(std::move(batch));
         REQUIRE_FALSE(rejected.has_value());
         CHECK(rejected.error().is(Condition::InvalidArgument));
@@ -1157,12 +1131,12 @@ TEST_SUITE("index store snapshot") {
         auto put_id = writer->add_namespace(put_spec("dftu.test.put"));
         REQUIRE(put_id.has_value());
         Batch wrong_fold = writer->batch(*put_id, scope, 0);
-        wrong_fold.fold(view_of(std::string("key")), view_of(i64_bytes(1)));
+        wrong_fold.fold(view_of(dstd::String("key")), view_of(i64_bytes(1)));
         auto folded = writer->commit(std::move(wrong_fold));
         REQUIRE_FALSE(folded.has_value());
         CHECK(folded.error().is(Condition::InvalidArgument));
         Batch wrong_put = writer->batch(*id, scope, 0);
-        wrong_put.put(view_of(std::string("key")), view_of(i64_bytes(1)));
+        wrong_put.put(view_of(dstd::String("key")), view_of(i64_bytes(1)));
         auto put = writer->commit(std::move(wrong_put));
         REQUIRE_FALSE(put.has_value());
         CHECK(put.error().is(Condition::InvalidArgument));
@@ -1171,11 +1145,11 @@ TEST_SUITE("index store snapshot") {
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->state(spec, scope) == ScopeState::Absent);
-        auto good = snapshot->get(spec, scope, view_of(std::string("good")));
+        auto good = snapshot->get(spec, scope, view_of(dstd::String("good")));
         REQUIRE(good.has_value());
         CHECK_FALSE(good->has_value());
         auto short_value =
-            snapshot->get(spec, scope, view_of(std::string("short")));
+            snapshot->get(spec, scope, view_of(dstd::String("short")));
         REQUIRE(short_value.has_value());
         CHECK_FALSE(short_value->has_value());
     }
@@ -1185,7 +1159,7 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/big_raw.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        std::string big(2 * 1024 * 1024, '\0');
+        dstd::String big(2 * 1024 * 1024, '\0');
         std::uint64_t state = 0x9E3779B97F4A7C15ULL;
         for (char& c : big) {
             state ^= state << 13U;
@@ -1198,14 +1172,14 @@ TEST_SUITE("index store snapshot") {
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         Batch batch = writer->batch(*id, scope, 0);
-        batch.put(view_of(std::string("big")), view_of(big));
+        batch.put(view_of(dstd::String("big")), view_of(big));
         REQUIRE(writer->commit(std::move(batch)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
-        CHECK(read_file(to_std(writer->path())).size() > big.size());
+        CHECK(read_file(dstd::String(writer->path())).size() > big.size());
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
-        auto found = snapshot->get(spec, scope, view_of(std::string("big")));
+        auto found = snapshot->get(spec, scope, view_of(dstd::String("big")));
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == big);
@@ -1217,7 +1191,7 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/big.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        std::string big(3 * 1024 * 1024, 'x');
+        dstd::String big(3 * 1024 * 1024, 'x');
         for (std::size_t i = 0; i < big.size(); i += 4096) {
             big[i] = static_cast<char>('a' + static_cast<int>((i / 4096) % 26));
         }
@@ -1226,19 +1200,20 @@ TEST_SUITE("index store snapshot") {
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         Batch batch = writer->batch(*id, scope, 0);
-        batch.put(view_of(std::string("big")), view_of(big));
-        batch.put(view_of(std::string("small")), view_of(std::string("small")));
+        batch.put(view_of(dstd::String("big")), view_of(big));
+        batch.put(view_of(dstd::String("small")),
+                  view_of(dstd::String("small")));
         REQUIRE(writer->commit(std::move(batch)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
-        auto found = snapshot->get(spec, scope, view_of(std::string("big")));
+        auto found = snapshot->get(spec, scope, view_of(dstd::String("big")));
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == big);
 
-        auto reader = DataFileReader::open(to_std(writer->path()));
+        auto reader = DataFileReader::open(dstd::String(writer->path()));
         REQUIRE(reader.has_value());
         store::engine::BigRef ref{};
         bool found_ref = false;
@@ -1270,21 +1245,22 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(found_ref);
         CHECK(ref.length < big.size() / 8);
 
-        std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
+        dstd::Vector<std::uint8_t> bytes =
+            read_file(dstd::String(writer->path()));
         REQUIRE(ref.offset + ref.length <= bytes.size());
         bytes[static_cast<std::size_t>(ref.offset + ref.length / 2)] ^= 0xFFU;
-        const std::string corrupt_path = corrupt_dir.file("w-corrupt.dfs");
+        const dstd::String corrupt_path = corrupt_dir.file("w-corrupt.dfs");
         write_file(corrupt_path, bytes);
 
         {
             auto corrupt = Snapshot::open(corrupt_dir.str());
             REQUIRE(corrupt.has_value());
             CHECK(corrupt->state(spec, scope) == ScopeState::Ready);
-            auto bad = corrupt->get(spec, scope, view_of(std::string("big")));
+            auto bad = corrupt->get(spec, scope, view_of(dstd::String("big")));
             REQUIRE_FALSE(bad.has_value());
             CHECK(bad.error().is(Condition::Parse));
             auto other =
-                corrupt->get(spec, scope, view_of(std::string("small")));
+                corrupt->get(spec, scope, view_of(dstd::String("small")));
             REQUIRE(other.has_value());
             CHECK(other->has_value());
             auto report = corrupt->check();
@@ -1311,10 +1287,10 @@ TEST_SUITE("index store snapshot") {
         auto corrupt = Snapshot::open(corrupt_dir.str());
         REQUIRE(corrupt.has_value());
         CHECK(corrupt->state(spec, scope) == ScopeState::Bad);
-        auto bad = corrupt->get(spec, scope, view_of(std::string("big")));
+        auto bad = corrupt->get(spec, scope, view_of(dstd::String("big")));
         REQUIRE(bad.has_value());
         CHECK_FALSE(bad->has_value());
-        auto other = corrupt->get(spec, scope, view_of(std::string("small")));
+        auto other = corrupt->get(spec, scope, view_of(dstd::String("small")));
         REQUIRE(other.has_value());
         CHECK_FALSE(other->has_value());
     }
@@ -1331,14 +1307,14 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(id.has_value());
         Batch batch = writer->batch(*id, scope, 0);
         for (int i = 0; i < COUNT; ++i) {
-            const std::string key = key_of(i);
-            const std::string value = value_of(i);
+            const dstd::String key = key_of(i);
+            const dstd::String value = value_of(i);
             batch.put(view_of(key), view_of(value));
         }
         REQUIRE(writer->commit(std::move(batch)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
-        auto reader = DataFileReader::open(to_std(writer->path()));
+        auto reader = DataFileReader::open(dstd::String(writer->path()));
         REQUIRE(reader.has_value());
         REQUIRE(extent_refs_of(*reader).size() == 1);
         const store::engine::ExtentRefItem run = extent_refs_of(*reader)[0].ref;
@@ -1372,14 +1348,14 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir by_name("snapshot_generation_name");
         const ScopeKey scope = file_scope("/traces/g.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
-        const std::string key = "shared";
+        const dstd::String key = "shared";
 
         {
             auto first = make_writer(dir);
             auto id = first->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = first->batch(*id, scope, 0);
-            batch.put(view_of(key), view_of(std::string("from-first")));
+            batch.put(view_of(key), view_of(dstd::String("from-first")));
             REQUIRE(first->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*first).has_value());
         }
@@ -1389,7 +1365,7 @@ TEST_SUITE("index store snapshot") {
             auto id = second->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = second->batch(*id, scope, 0);
-            batch.put(view_of(key), view_of(std::string("from-second")));
+            batch.put(view_of(key), view_of(dstd::String("from-second")));
             REQUIRE(second->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*second).has_value());
         }
@@ -1403,34 +1379,34 @@ TEST_SUITE("index store snapshot") {
 
         // A writer in an empty directory starts its scope at generation 1, so
         // the two files below hold the same generation and tie.
-        std::string left_path;
+        dstd::String left_path;
         {
             auto writer = make_writer(left);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            batch.put(view_of(key), view_of(std::string("from-left")));
+            batch.put(view_of(key), view_of(dstd::String("from-left")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*writer).has_value());
-            left_path = to_std(writer->path());
+            left_path = dstd::String(writer->path());
         }
-        std::string right_path;
+        dstd::String right_path;
         {
             auto writer = make_writer(right);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            batch.put(view_of(key), view_of(std::string("from-right")));
+            batch.put(view_of(key), view_of(dstd::String("from-right")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*writer).has_value());
-            right_path = to_std(writer->path());
+            right_path = dstd::String(writer->path());
         }
         CHECK(only_copy_generation(left_path) == 1);
         CHECK(only_copy_generation(right_path) == 1);
 
-        const std::string tied_low =
+        const dstd::String tied_low =
             forge_copy(left_path, by_writer, "w-z.dfs", 100);
-        const std::string tied_high =
+        const dstd::String tied_high =
             forge_copy(right_path, by_writer, "w-a.dfs", 200);
         CHECK(header_writer_random(tied_low) == 100);
         CHECK(header_writer_random(tied_high) == 200);
@@ -1443,9 +1419,9 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(tie_value->has_value());
         CHECK(to_std((*tie_value)->bytes()) == "from-right");
 
-        const std::string named_low =
+        const dstd::String named_low =
             forge_copy(right_path, by_name, "w-a.dfs", 300);
-        const std::string named_high =
+        const dstd::String named_high =
             forge_copy(left_path, by_name, "w-b.dfs", 300);
         CHECK(header_writer_random(named_low) == 300);
         CHECK(header_writer_random(named_high) == 300);
@@ -1469,8 +1445,10 @@ TEST_SUITE("index store snapshot") {
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            batch.put(view_of(std::string("key-a")), view_of(std::string("a")));
-            batch.put(view_of(std::string("key-b")), view_of(std::string("b")));
+            batch.put(view_of(dstd::String("key-a")),
+                      view_of(dstd::String("a")));
+            batch.put(view_of(dstd::String("key-b")),
+                      view_of(dstd::String("b")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*writer).has_value());
         }
@@ -1488,7 +1466,7 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(dropped.has_value());
             CHECK(dropped->state(spec, scope) == ScopeState::Absent);
             auto found =
-                dropped->get(spec, scope, view_of(std::string("key-a")));
+                dropped->get(spec, scope, view_of(dstd::String("key-a")));
             REQUIRE(found.has_value());
             CHECK_FALSE(found->has_value());
             auto cursor = dropped->scan(spec, scope, ByteView{}, ByteView{});
@@ -1500,7 +1478,8 @@ TEST_SUITE("index store snapshot") {
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            batch.put(view_of(std::string("key-z")), view_of(std::string("z")));
+            batch.put(view_of(dstd::String("key-z")),
+                      view_of(dstd::String("z")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*writer).has_value());
         }
@@ -1509,7 +1488,7 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(rewritten.has_value());
         CHECK(rewritten->state(spec, scope) == ScopeState::Ready);
         auto old_key =
-            rewritten->get(spec, scope, view_of(std::string("key-a")));
+            rewritten->get(spec, scope, view_of(dstd::String("key-a")));
         REQUIRE(old_key.has_value());
         CHECK_FALSE(old_key->has_value());
         auto cursor = rewritten->scan(spec, scope, ByteView{}, ByteView{});
@@ -1529,7 +1508,8 @@ TEST_SUITE("index store snapshot") {
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            for (const std::string key : {"key-a", "key-b", "key-c", "key-d"}) {
+            for (const dstd::String key :
+                 {"key-a", "key-b", "key-c", "key-d"}) {
                 batch.put(view_of(key), view_of("v-" + key));
             }
             REQUIRE(writer->commit(std::move(batch)).has_value());
@@ -1540,8 +1520,8 @@ TEST_SUITE("index store snapshot") {
             auto writer = make_writer(dir);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            const std::string begin = "key-b";
-            const std::string end = "key-d";
+            const dstd::String begin = "key-b";
+            const dstd::String end = "key-d";
             REQUIRE(writer->drop(*id, scope, view_of(begin), view_of(end))
                         .has_value());
             REQUIRE(close_writer(*writer).has_value());
@@ -1550,12 +1530,12 @@ TEST_SUITE("index store snapshot") {
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
-        for (const std::string key : {"key-b", "key-c"}) {
+        for (const dstd::String key : {"key-b", "key-c"}) {
             auto found = snapshot->get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             CHECK_FALSE(found->has_value());
         }
-        for (const std::string key : {"key-a", "key-d"}) {
+        for (const dstd::String key : {"key-a", "key-d"}) {
             auto found = snapshot->get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             REQUIRE(found->has_value());
@@ -1575,24 +1555,24 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/e.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        dftracer::utils::dstd::Vector<SourceStat> sources;
+        dstd::Vector<SourceStat> sources;
         sources.push_back(SourceStat{11, 22, 33});
 
         auto writer = make_writer(dir);
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         Batch first = writer->batch(*id, scope, 41, &sources);
-        for (const std::string key : {"key-a", "key-b", "key-c", "key-d"}) {
+        for (const dstd::String key : {"key-a", "key-b", "key-c", "key-d"}) {
             first.put(view_of(key), view_of("v1-" + key));
         }
         REQUIRE(writer->commit(std::move(first)).has_value());
-        const std::string begin = "key-b";
-        const std::string end = "key-d";
+        const dstd::String begin = "key-b";
+        const dstd::String end = "key-d";
         REQUIRE(writer->erase(*id, scope, view_of(begin), view_of(end))
                     .has_value());
         Batch second = writer->batch(*id, scope, 41, &sources);
-        second.put(view_of(std::string("key-c")),
-                   view_of(std::string("v2-key-c")));
+        second.put(view_of(dstd::String("key-c")),
+                   view_of(dstd::String("v2-key-c")));
         REQUIRE(writer->commit(std::move(second)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
@@ -1605,15 +1585,15 @@ TEST_SUITE("index store snapshot") {
             CHECK(info.sources[0].mtime == 11);
 
             auto hidden =
-                snapshot.get(spec, scope, view_of(std::string("key-b")));
+                snapshot.get(spec, scope, view_of(dstd::String("key-b")));
             REQUIRE(hidden.has_value());
             CHECK_FALSE(hidden->has_value());
             auto shown =
-                snapshot.get(spec, scope, view_of(std::string("key-c")));
+                snapshot.get(spec, scope, view_of(dstd::String("key-c")));
             REQUIRE(shown.has_value());
             REQUIRE(shown->has_value());
             CHECK(to_std((*shown)->bytes()) == "v2-key-c");
-            for (const std::string key : {"key-a", "key-d"}) {
+            for (const dstd::String key : {"key-a", "key-d"}) {
                 auto found = snapshot.get(spec, scope, view_of(key));
                 REQUIRE(found.has_value());
                 REQUIRE(found->has_value());
@@ -1623,19 +1603,19 @@ TEST_SUITE("index store snapshot") {
             auto whole = snapshot.scan(spec, scope, ByteView{}, ByteView{});
             const auto rows = collect(whole);
             REQUIRE(rows.size() == 3);
-            CHECK(rows[0] == std::make_pair(std::string("key-a"),
-                                            std::string("v1-key-a")));
-            CHECK(rows[1] == std::make_pair(std::string("key-c"),
-                                            std::string("v2-key-c")));
-            CHECK(rows[2] == std::make_pair(std::string("key-d"),
-                                            std::string("v1-key-d")));
+            CHECK(rows[0] ==
+                  dstd::Pair{dstd::String("key-a"), dstd::String("v1-key-a")});
+            CHECK(rows[1] ==
+                  dstd::Pair{dstd::String("key-c"), dstd::String("v2-key-c")});
+            CHECK(rows[2] ==
+                  dstd::Pair{dstd::String("key-d"), dstd::String("v1-key-d")});
 
             auto prefix =
-                snapshot.scan(spec, scope, view_of(std::string("key-b")));
+                snapshot.scan(spec, scope, view_of(dstd::String("key-b")));
             CHECK(collect(prefix).empty());
 
             auto range = snapshot.scan(spec, scope, view_of(begin),
-                                       view_of(std::string("key-cc")));
+                                       view_of(dstd::String("key-cc")));
             const auto in_range = collect(range);
             REQUIRE(in_range.size() == 1);
             CHECK(in_range[0].first == "key-c");
@@ -1668,12 +1648,13 @@ TEST_SUITE("index store snapshot") {
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         Batch batch = writer->batch(*id, scope, 0);
-        for (const std::string key : {"key-a", "key-b", "key-c"}) {
+        for (const dstd::String key : {"key-a", "key-b", "key-c"}) {
             batch.put(view_of(key), view_of(key));
         }
         REQUIRE(writer->commit(std::move(batch)).has_value());
         REQUIRE(
-            writer->erase(*id, scope, view_of(std::string("key-b")), ByteView{})
+            writer
+                ->erase(*id, scope, view_of(dstd::String("key-b")), ByteView{})
                 .has_value());
         REQUIRE(close_writer(*writer).has_value());
 
@@ -1683,7 +1664,7 @@ TEST_SUITE("index store snapshot") {
         const auto rows = collect(cursor);
         REQUIRE(rows.size() == 1);
         CHECK(rows[0].first == "key-a");
-        for (const std::string key : {"key-b", "key-c"}) {
+        for (const dstd::String key : {"key-b", "key-c"}) {
             auto found = snapshot->get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             CHECK_FALSE(found->has_value());
@@ -1699,8 +1680,8 @@ TEST_SUITE("index store snapshot") {
         auto writer = make_writer(dir);
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
-        const auto fold = [&](const std::string& key,
-                              const std::string& value) {
+        const auto fold = [&](const dstd::String& key,
+                              const dstd::String& value) {
             Batch batch = writer->batch(*id, scope, 0);
             batch.fold(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(batch)).has_value());
@@ -1708,8 +1689,8 @@ TEST_SUITE("index store snapshot") {
         fold("key-x", "x1");
         fold("key-z", "z1");
         REQUIRE(writer
-                    ->erase(*id, scope, view_of(std::string("key-x")),
-                            view_of(std::string("key-y")))
+                    ->erase(*id, scope, view_of(dstd::String("key-x")),
+                            view_of(dstd::String("key-y")))
                     .has_value());
         fold("key-x", "x2");
         fold("key-z", "z2");
@@ -1717,11 +1698,12 @@ TEST_SUITE("index store snapshot") {
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
-        auto folded = snapshot->get(spec, scope, view_of(std::string("key-x")));
+        auto folded =
+            snapshot->get(spec, scope, view_of(dstd::String("key-x")));
         REQUIRE(folded.has_value());
         REQUIRE(folded->has_value());
         CHECK(to_std((*folded)->bytes()) == "x2");
-        auto both = snapshot->get(spec, scope, view_of(std::string("key-z")));
+        auto both = snapshot->get(spec, scope, view_of(dstd::String("key-z")));
         REQUIRE(both.has_value());
         REQUIRE(both->has_value());
         CHECK(to_std((*both)->bytes()) == "z1z2");
@@ -1745,8 +1727,10 @@ TEST_SUITE("index store snapshot") {
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            batch.put(view_of(std::string("key-a")), view_of(std::string("a")));
-            batch.put(view_of(std::string("key-b")), view_of(std::string("b")));
+            batch.put(view_of(dstd::String("key-a")),
+                      view_of(dstd::String("a")));
+            batch.put(view_of(dstd::String("key-b")),
+                      view_of(dstd::String("b")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*writer).has_value());
         }
@@ -1756,15 +1740,15 @@ TEST_SUITE("index store snapshot") {
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             REQUIRE(writer
-                        ->erase(*id, scope, view_of(std::string("key-a")),
-                                view_of(std::string("key-b")))
+                        ->erase(*id, scope, view_of(dstd::String("key-a")),
+                                view_of(dstd::String("key-b")))
                         .has_value());
             REQUIRE(close_writer(*writer).has_value());
         }
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
-        for (const std::string key : {"key-a", "key-b"}) {
+        for (const dstd::String key : {"key-a", "key-b"}) {
             auto found = snapshot->get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             REQUIRE(found->has_value());
@@ -1784,17 +1768,17 @@ TEST_SUITE("index store snapshot") {
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         Batch batch = writer->batch(*id, scope, 0);
-        for (const std::string key : {"key-a", "key-b", "key-c"}) {
+        for (const dstd::String key : {"key-a", "key-b", "key-c"}) {
             batch.put(view_of(key), view_of(key));
         }
         REQUIRE(writer->commit(std::move(batch)).has_value());
         REQUIRE(flush_writer(*writer).has_value());
         // A crash here: the batch is recorded and the erase is not.
-        const std::vector<std::uint8_t> before =
-            read_file(to_std(writer->path()));
+        const dstd::Vector<std::uint8_t> before =
+            read_file(dstd::String(writer->path()));
         REQUIRE(writer
-                    ->erase(*id, scope, view_of(std::string("key-b")),
-                            view_of(std::string("key-c")))
+                    ->erase(*id, scope, view_of(dstd::String("key-b")),
+                            view_of(dstd::String("key-c")))
                     .has_value());
         REQUIRE(close_writer(*writer).has_value());
 
@@ -1807,7 +1791,7 @@ TEST_SUITE("index store snapshot") {
         const auto recovered_rows = collect(recovered_cursor);
         REQUIRE(recovered_rows.size() == 3);
         auto visible =
-            recovered->get(spec, scope, view_of(std::string("key-b")));
+            recovered->get(spec, scope, view_of(dstd::String("key-b")));
         REQUIRE(visible.has_value());
         REQUIRE(visible->has_value());
 
@@ -1818,7 +1802,8 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(rows.size() == 2);
         CHECK(rows[0].first == "key-a");
         CHECK(rows[1].first == "key-c");
-        auto hidden = snapshot->get(spec, scope, view_of(std::string("key-b")));
+        auto hidden =
+            snapshot->get(spec, scope, view_of(dstd::String("key-b")));
         REQUIRE(hidden.has_value());
         CHECK_FALSE(hidden->has_value());
     }
@@ -1837,7 +1822,7 @@ TEST_SUITE("index store snapshot") {
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->state(spec, scope) == ScopeState::Failed);
-        auto found = snapshot->get(spec, scope, view_of(std::string("key-a")));
+        auto found = snapshot->get(spec, scope, view_of(dstd::String("key-a")));
         REQUIRE(found.has_value());
         CHECK_FALSE(found->has_value());
         auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
@@ -1848,17 +1833,17 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_copy_sources");
         const NamespaceSpec spec = put_spec("dftu.test.put");
         const ScopeKey one = file_scope("/traces/a.pfw");
-        const std::vector<dftracer::utils::dstd::StringView> given = {
-            dftracer::utils::dstd::StringView("/traces/b.pfw"),
-            dftracer::utils::dstd::StringView("/traces/a.pfw")};
+        const dstd::Vector<dstd::StringView> given = {
+            dstd::StringView("/traces/b.pfw"),
+            dstd::StringView("/traces/a.pfw")};
         const ScopeKey two = ScopeKey::files(given);
         REQUIRE(two.paths.size() == 2);
-        CHECK(to_std(two.paths[0]) == "/traces/a.pfw");
-        CHECK(to_std(two.paths[1]) == "/traces/b.pfw");
+        CHECK(dstd::String(two.paths[0]) == "/traces/a.pfw");
+        CHECK(dstd::String(two.paths[1]) == "/traces/b.pfw");
 
-        dftracer::utils::dstd::Vector<SourceStat> one_sources;
+        dstd::Vector<SourceStat> one_sources;
         one_sources.push_back(SourceStat{100, 200, 300});
-        dftracer::utils::dstd::Vector<SourceStat> two_sources;
+        dstd::Vector<SourceStat> two_sources;
         two_sources.push_back(SourceStat{400, 500, 600});
         two_sources.push_back(SourceStat{700, 800, 900});
 
@@ -1867,11 +1852,12 @@ TEST_SUITE("index store snapshot") {
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch first = writer->batch(*id, one, 41, &one_sources);
-            first.put(view_of(std::string("key-a")), view_of(std::string("a")));
+            first.put(view_of(dstd::String("key-a")),
+                      view_of(dstd::String("a")));
             REQUIRE(writer->commit(std::move(first)).has_value());
             Batch second = writer->batch(*id, two, 42, &two_sources);
-            second.put(view_of(std::string("key-b")),
-                       view_of(std::string("b")));
+            second.put(view_of(dstd::String("key-b")),
+                       view_of(dstd::String("b")));
             REQUIRE(writer->commit(std::move(second)).has_value());
             REQUIRE(close_writer(*writer).has_value());
         }
@@ -1913,7 +1899,7 @@ TEST_SUITE("index store snapshot") {
         }
 
         drop_summary(dir.str());
-        const std::string path = only_data_file(dir.str());
+        const dstd::String path = only_data_file(dir.str());
         write_file(path, without_footer(read_file(path)));
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -1926,22 +1912,21 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
         const ScopeKey scope = file_scope("/traces/a.pfw");
 
-        dftracer::utils::dstd::Vector<SourceStat> old_sources;
+        dstd::Vector<SourceStat> old_sources;
         old_sources.push_back(SourceStat{1, 2, 3});
-        dftracer::utils::dstd::Vector<SourceStat> new_sources;
+        dstd::Vector<SourceStat> new_sources;
         new_sources.push_back(SourceStat{7, 8, 9});
 
-        const auto write =
-            [&](const dftracer::utils::dstd::Vector<SourceStat>& sources) {
-                auto writer = make_writer(dir);
-                auto id = writer->add_namespace(spec);
-                REQUIRE(id.has_value());
-                Batch batch = writer->batch(*id, scope, 5, &sources);
-                batch.put(view_of(std::string("key-a")),
-                          view_of(std::string("a")));
-                REQUIRE(writer->commit(std::move(batch)).has_value());
-                REQUIRE(close_writer(*writer).has_value());
-            };
+        const auto write = [&](const dstd::Vector<SourceStat>& sources) {
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            Batch batch = writer->batch(*id, scope, 5, &sources);
+            batch.put(view_of(dstd::String("key-a")),
+                      view_of(dstd::String("a")));
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+        };
         write(old_sources);
         write(new_sources);
 
@@ -1974,9 +1959,9 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(other_id.has_value());
             const auto put =
                 [&](store::engine::NamespaceId at, const ScopeKey& scope,
-                    std::uint64_t params_hash, const std::string& value) {
+                    std::uint64_t params_hash, const dstd::String& value) {
                     Batch batch = writer->batch(at, scope, params_hash);
-                    batch.put(view_of(std::string("key")), view_of(value));
+                    batch.put(view_of(dstd::String("key")), view_of(value));
                     REQUIRE(writer->commit(std::move(batch)).has_value());
                 };
             put(*id, root, 10, "root");
@@ -2030,10 +2015,10 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(first.has_value());
             REQUIRE(second.has_value());
             for (const auto& [at, scope] :
-                 {std::pair{*first, a}, std::pair{*second, a}}) {
+                 {dstd::Pair{*first, a}, dstd::Pair{*second, a}}) {
                 Batch batch = writer->batch(at, scope, 0);
-                batch.put(view_of(std::string("key")),
-                          view_of(std::string("v")));
+                batch.put(view_of(dstd::String("key")),
+                          view_of(dstd::String("v")));
                 REQUIRE(writer->commit(std::move(batch)).has_value());
             }
             REQUIRE(close_writer(*writer).has_value());
@@ -2043,7 +2028,7 @@ TEST_SUITE("index store snapshot") {
             auto only = writer->add_namespace(raised);
             REQUIRE(only.has_value());
             Batch batch = writer->batch(*only, b, 0);
-            batch.put(view_of(std::string("key")), view_of(std::string("v")));
+            batch.put(view_of(dstd::String("key")), view_of(dstd::String("v")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*writer).has_value());
         }
@@ -2053,11 +2038,11 @@ TEST_SUITE("index store snapshot") {
         auto listed = snapshot->namespaces();
         REQUIRE(listed.has_value());
         REQUIRE(listed->size() == 3);
-        CHECK(to_std((*listed)[0].name) == "dftu.test.namespaces");
+        CHECK(dstd::String((*listed)[0].name) == "dftu.test.namespaces");
         CHECK((*listed)[0].format_version == 1);
-        CHECK(to_std((*listed)[1].name) == "dftu.test.namespaces");
+        CHECK(dstd::String((*listed)[1].name) == "dftu.test.namespaces");
         CHECK((*listed)[1].format_version == 3);
-        CHECK(to_std((*listed)[2].name) == "dftu.test.namespaces.other");
+        CHECK(dstd::String((*listed)[2].name) == "dftu.test.namespaces.other");
         CHECK((*listed)[2].format_version == 2);
     }
 
@@ -2066,34 +2051,34 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
         const ScopeKey scope = file_scope("/traces/a.pfw");
 
-        dftracer::utils::dstd::Vector<SourceStat> kept_sources;
+        dstd::Vector<SourceStat> kept_sources;
         kept_sources.push_back(SourceStat{1, 2, 3});
-        dftracer::utils::dstd::Vector<SourceStat> other_sources;
+        dstd::Vector<SourceStat> other_sources;
         other_sources.push_back(SourceStat{4, 5, 6});
 
         auto writer = make_writer(dir);
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         Batch first = writer->batch(*id, scope, 9, &kept_sources);
-        first.put(view_of(std::string("key-a")), view_of(std::string("a")));
+        first.put(view_of(dstd::String("key-a")), view_of(dstd::String("a")));
         REQUIRE(writer->commit(std::move(first)).has_value());
 
         Batch sources_changed = writer->batch(*id, scope, 9, &other_sources);
-        sources_changed.put(view_of(std::string("key-b")),
-                            view_of(std::string("b")));
+        sources_changed.put(view_of(dstd::String("key-b")),
+                            view_of(dstd::String("b")));
         auto rejected = writer->commit(std::move(sources_changed));
         REQUIRE_FALSE(rejected.has_value());
         CHECK(rejected.error().is(Condition::InvalidArgument));
 
         Batch hash_changed = writer->batch(*id, scope, 10, &kept_sources);
-        hash_changed.put(view_of(std::string("key-c")),
-                         view_of(std::string("c")));
+        hash_changed.put(view_of(dstd::String("key-c")),
+                         view_of(dstd::String("c")));
         auto rejected_hash = writer->commit(std::move(hash_changed));
         REQUIRE_FALSE(rejected_hash.has_value());
         CHECK(rejected_hash.error().is(Condition::InvalidArgument));
 
         Batch again = writer->batch(*id, scope, 9, &kept_sources);
-        again.put(view_of(std::string("key-d")), view_of(std::string("d")));
+        again.put(view_of(dstd::String("key-d")), view_of(dstd::String("d")));
         REQUIRE(writer->commit(std::move(again)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
@@ -2107,12 +2092,12 @@ TEST_SUITE("index store snapshot") {
         CHECK(info.sources[0].mtime == 1);
         CHECK(info.sources[0].size == 2);
         CHECK(info.sources[0].hash == 3);
-        auto found = snapshot->get(spec, scope, view_of(std::string("key-d")));
+        auto found = snapshot->get(spec, scope, view_of(dstd::String("key-d")));
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == "d");
         auto missing =
-            snapshot->get(spec, scope, view_of(std::string("key-b")));
+            snapshot->get(spec, scope, view_of(dstd::String("key-b")));
         REQUIRE(missing.has_value());
         CHECK_FALSE(missing->has_value());
     }
@@ -2149,8 +2134,8 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(id.has_value());
         for (int batch = 1; batch <= 3; ++batch) {
             Batch entries = writer->batch(*id, broken, 0);
-            const std::string key = "broken-" + std::to_string(batch);
-            const std::string value = "broken-value-" + std::to_string(batch);
+            const dstd::String key = "broken-" + dstd::to_string(batch);
+            const dstd::String value = "broken-value-" + dstd::to_string(batch);
             entries.put(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(entries)).has_value());
         }
@@ -2160,14 +2145,14 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(flush_writer(*writer).has_value());
         for (int batch = 1; batch <= 2; ++batch) {
             Batch entries = writer->batch(*id, sound, 0);
-            const std::string key = "sound-" + std::to_string(batch);
-            const std::string value = "sound-value-" + std::to_string(batch);
+            const dstd::String key = "sound-" + dstd::to_string(batch);
+            const dstd::String value = "sound-value-" + dstd::to_string(batch);
             entries.put(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(entries)).has_value());
         }
         REQUIRE(close_writer(*writer).has_value());
 
-        auto reader = DataFileReader::open(to_std(writer->path()));
+        auto reader = DataFileReader::open(dstd::String(writer->path()));
         REQUIRE(reader.has_value());
         REQUIRE(extent_refs_of(*reader).size() == 2);
         store::engine::ExtentRef broken_extent{};
@@ -2175,17 +2160,18 @@ TEST_SUITE("index store snapshot") {
         broken_extent.length = extent_refs_of(*reader)[0].ref.length;
         broken_extent.crc = extent_refs_of(*reader)[0].ref.crc;
 
-        std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
+        dstd::Vector<std::uint8_t> bytes =
+            read_file(dstd::String(writer->path()));
         REQUIRE(broken_extent.offset + broken_extent.length <= bytes.size());
         bytes[static_cast<std::size_t>(broken_extent.offset) + 4U] ^= 0xFFU;
-        const std::string copy_path = copy_dir.file("w-bad.dfs");
+        const dstd::String copy_path = copy_dir.file("w-bad.dfs");
         write_file(copy_path, without_footer(bytes));
 
         auto snapshot = Snapshot::open(copy_dir.str());
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->state(spec, broken) == ScopeState::Bad);
         auto hidden =
-            snapshot->get(spec, broken, view_of(std::string("broken-1")));
+            snapshot->get(spec, broken, view_of(dstd::String("broken-1")));
         REQUIRE(hidden.has_value());
         CHECK_FALSE(hidden->has_value());
         auto broken_cursor =
@@ -2194,7 +2180,7 @@ TEST_SUITE("index store snapshot") {
 
         CHECK(snapshot->state(spec, sound) == ScopeState::Ready);
         auto visible =
-            snapshot->get(spec, sound, view_of(std::string("sound-2")));
+            snapshot->get(spec, sound, view_of(dstd::String("sound-2")));
         REQUIRE(visible.has_value());
         REQUIRE(visible->has_value());
         CHECK(to_std((*visible)->bytes()) == "sound-value-2");
@@ -2216,8 +2202,8 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(id.has_value());
         for (int batch = 1; batch <= 5; ++batch) {
             Batch entries = writer->batch(*id, scope, 0);
-            const std::string key = "commit-" + std::to_string(batch);
-            const std::string value = "value-" + std::to_string(batch);
+            const dstd::String key = "commit-" + dstd::to_string(batch);
+            const dstd::String value = "value-" + dstd::to_string(batch);
             entries.put(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(entries)).has_value());
             if (batch == 3) {
@@ -2226,7 +2212,7 @@ TEST_SUITE("index store snapshot") {
                 // after.
                 REQUIRE(flush_writer(*writer).has_value());
                 write_file(copy_dir.file("w-crash.dfs"),
-                           read_file(to_std(writer->path())));
+                           read_file(dstd::String(writer->path())));
             }
         }
 
@@ -2234,15 +2220,15 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
         for (int batch = 1; batch <= 3; ++batch) {
-            const std::string key = "commit-" + std::to_string(batch);
+            const dstd::String key = "commit-" + dstd::to_string(batch);
             auto found = snapshot->get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             REQUIRE(found->has_value());
             CHECK(to_std((*found)->bytes()) ==
-                  "value-" + std::to_string(batch));
+                  "value-" + dstd::to_string(batch));
         }
         for (int batch = 4; batch <= 5; ++batch) {
-            const std::string key = "commit-" + std::to_string(batch);
+            const dstd::String key = "commit-" + dstd::to_string(batch);
             auto found = snapshot->get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             CHECK_FALSE(found->has_value());
@@ -2261,13 +2247,14 @@ TEST_SUITE("index store snapshot") {
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         Batch batch = writer->batch(*id, scope, 0);
-        batch.put(view_of(std::string("key-a")), view_of(std::string("a")));
+        batch.put(view_of(dstd::String("key-a")), view_of(dstd::String("a")));
         REQUIRE(writer->commit(std::move(batch)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
-        std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
-        std::vector<std::uint8_t> header_one = bytes;
-        dftracer::utils::dstd::write_u32_le(header_one.data() + 8, 1);
+        dstd::Vector<std::uint8_t> bytes =
+            read_file(dstd::String(writer->path()));
+        dstd::Vector<std::uint8_t> header_one = bytes;
+        dstd::write_u32_le(header_one.data() + 8, 1);
         rewrite_header_crc(header_one);
         write_file(dir.file("w-header-one.dfs"), without_footer(header_one));
         write_file(dir.file("w-tail-one.dfs"), with_tail_version(bytes, 1));
@@ -2275,11 +2262,11 @@ TEST_SUITE("index store snapshot") {
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         REQUIRE(snapshot->skipped().size() == 2);
-        CHECK(to_std(snapshot->skipped()[0].name) == "w-header-one.dfs");
+        CHECK(dstd::String(snapshot->skipped()[0].name) == "w-header-one.dfs");
         CHECK(snapshot->skipped()[0].error.is(Condition::Unsupported));
-        CHECK(to_std(snapshot->skipped()[1].name) == "w-tail-one.dfs");
+        CHECK(dstd::String(snapshot->skipped()[1].name) == "w-tail-one.dfs");
         CHECK(snapshot->skipped()[1].error.is(Condition::Unsupported));
-        auto found = snapshot->get(spec, scope, view_of(std::string("key-a")));
+        auto found = snapshot->get(spec, scope, view_of(dstd::String("key-a")));
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == "a");
@@ -2299,19 +2286,19 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(sum_id.has_value());
 
         Batch first_batch = writer->batch(*put_id, first, 0);
-        first_batch.put(view_of(std::string("a-key")),
-                        view_of(std::string("a")));
+        first_batch.put(view_of(dstd::String("a-key")),
+                        view_of(dstd::String("a")));
         REQUIRE(writer->commit(std::move(first_batch)).has_value());
         Batch second_batch = writer->batch(*put_id, second, 0);
-        second_batch.put(view_of(std::string("b-key")),
-                         view_of(std::string("b")));
+        second_batch.put(view_of(dstd::String("b-key")),
+                         view_of(dstd::String("b")));
         REQUIRE(writer->commit(std::move(second_batch)).has_value());
 
         Batch first_sum = writer->batch(*sum_id, first, 0);
-        first_sum.fold(view_of(std::string("total")), view_of(i64_bytes(1)));
+        first_sum.fold(view_of(dstd::String("total")), view_of(i64_bytes(1)));
         REQUIRE(writer->commit(std::move(first_sum)).has_value());
         Batch second_sum = writer->batch(*sum_id, second, 0);
-        second_sum.fold(view_of(std::string("total")), view_of(i64_bytes(3)));
+        second_sum.fold(view_of(dstd::String("total")), view_of(i64_bytes(3)));
         REQUIRE(writer->commit(std::move(second_sum)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
@@ -2319,7 +2306,7 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(snapshot.has_value());
 
         {
-            dftracer::utils::dstd::Vector<ScopeKey> order;
+            dstd::Vector<ScopeKey> order;
             order.push_back(second);
             order.push_back(first);
             auto cursor = snapshot->scan(put, order, ByteView{}, ByteView{});
@@ -2369,7 +2356,7 @@ TEST_SUITE("index store snapshot") {
         auto id = writer->add_namespace(writer_spec);
         REQUIRE(id.has_value());
         Batch batch = writer->batch(*id, scope, 0);
-        batch.put(view_of(std::string("key-a")), view_of(std::string("a")));
+        batch.put(view_of(dstd::String("key-a")), view_of(dstd::String("a")));
         REQUIRE(writer->commit(std::move(batch)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
@@ -2378,13 +2365,13 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->state(writer_spec, scope) == ScopeState::Ready);
         CHECK(snapshot->state(other_spec, scope) == ScopeState::Absent);
         auto hidden =
-            snapshot->get(other_spec, scope, view_of(std::string("key-a")));
+            snapshot->get(other_spec, scope, view_of(dstd::String("key-a")));
         REQUIRE(hidden.has_value());
         CHECK_FALSE(hidden->has_value());
         auto cursor = snapshot->scan(other_spec, scope, ByteView{}, ByteView{});
         CHECK(cursor.at_end());
         auto visible =
-            snapshot->get(writer_spec, scope, view_of(std::string("key-a")));
+            snapshot->get(writer_spec, scope, view_of(dstd::String("key-a")));
         REQUIRE(visible.has_value());
         REQUIRE(visible->has_value());
         CHECK(to_std((*visible)->bytes()) == "a");
@@ -2397,37 +2384,37 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/order.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        std::string replaced_path;
+        dstd::String replaced_path;
         {
             auto writer = make_writer(replaced);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch first = writer->batch(*id, scope, 0);
-            first.put(view_of(std::string("key-one")),
-                      view_of(std::string("one")));
+            first.put(view_of(dstd::String("key-one")),
+                      view_of(dstd::String("one")));
             REQUIRE(writer->commit(std::move(first)).has_value());
             REQUIRE(writer->drop(*id, scope).has_value());
             Batch second = writer->batch(*id, scope, 0);
-            second.put(view_of(std::string("key-two")),
-                       view_of(std::string("two")));
+            second.put(view_of(dstd::String("key-two")),
+                       view_of(dstd::String("two")));
             REQUIRE(writer->commit(std::move(second)).has_value());
             REQUIRE(close_writer(*writer).has_value());
-            replaced_path = to_std(writer->path());
+            replaced_path = dstd::String(writer->path());
         }
         CHECK((copy_generations(replaced_path) ==
-               std::vector<std::uint64_t>{1, 3}));
-        CHECK(
-            (drop_generations(replaced_path) == std::vector<std::uint64_t>{2}));
+               dstd::Vector<std::uint64_t>{1, 3}));
+        CHECK((drop_generations(replaced_path) ==
+               dstd::Vector<std::uint64_t>{2}));
         {
             auto snapshot = Snapshot::open(replaced.str());
             REQUIRE(snapshot.has_value());
             CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
             auto hidden =
-                snapshot->get(spec, scope, view_of(std::string("key-one")));
+                snapshot->get(spec, scope, view_of(dstd::String("key-one")));
             REQUIRE(hidden.has_value());
             CHECK_FALSE(hidden->has_value());
             auto visible =
-                snapshot->get(spec, scope, view_of(std::string("key-two")));
+                snapshot->get(spec, scope, view_of(dstd::String("key-two")));
             REQUIRE(visible.has_value());
             REQUIRE(visible->has_value());
             CHECK(to_std((*visible)->bytes()) == "two");
@@ -2439,27 +2426,27 @@ TEST_SUITE("index store snapshot") {
             check_generation(*snapshot, "dftu.test.put", scope, 3);
         }
 
-        std::string failed_path;
+        dstd::String failed_path;
         {
             auto writer = make_writer(failed);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             REQUIRE(writer->fail(*id, scope, 7).has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            batch.put(view_of(std::string("key")), view_of(std::string("v")));
+            batch.put(view_of(dstd::String("key")), view_of(dstd::String("v")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*writer).has_value());
-            failed_path = to_std(writer->path());
+            failed_path = dstd::String(writer->path());
         }
         CHECK((copy_generations(failed_path) ==
-               std::vector<std::uint64_t>{1, 2}));
+               dstd::Vector<std::uint64_t>{1, 2}));
         CHECK(drop_generations(failed_path).empty());
         {
             auto snapshot = Snapshot::open(failed.str());
             REQUIRE(snapshot.has_value());
             CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
             auto found =
-                snapshot->get(spec, scope, view_of(std::string("key")));
+                snapshot->get(spec, scope, view_of(dstd::String("key")));
             REQUIRE(found.has_value());
             REQUIRE(found->has_value());
             CHECK(to_std((*found)->bytes()) == "v");
@@ -2471,40 +2458,40 @@ TEST_SUITE("index store snapshot") {
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch first = writer->batch(*id, scope, 0);
-            first.put(view_of(std::string("key-one")),
-                      view_of(std::string("one")));
+            first.put(view_of(dstd::String("key-one")),
+                      view_of(dstd::String("one")));
             REQUIRE(writer->commit(std::move(first)).has_value());
             REQUIRE(writer->drop(*id, scope).has_value());
             Batch second = writer->batch(*id, scope, 0);
-            second.put(view_of(std::string("key-two")),
-                       view_of(std::string("two")));
+            second.put(view_of(dstd::String("key-two")),
+                       view_of(dstd::String("two")));
             REQUIRE(writer->commit(std::move(second)).has_value());
             REQUIRE(close_writer(*writer).has_value());
         }
-        std::string next_path;
+        dstd::String next_path;
         {
             auto writer = make_writer(next);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            batch.put(view_of(std::string("key-three")),
-                      view_of(std::string("three")));
+            batch.put(view_of(dstd::String("key-three")),
+                      view_of(dstd::String("three")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*writer).has_value());
-            next_path = to_std(writer->path());
+            next_path = dstd::String(writer->path());
         }
-        CHECK((copy_generations(next_path) == std::vector<std::uint64_t>{4}));
+        CHECK((copy_generations(next_path) == dstd::Vector<std::uint64_t>{4}));
         {
             auto snapshot = Snapshot::open(next.str());
             REQUIRE(snapshot.has_value());
             CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
             auto found =
-                snapshot->get(spec, scope, view_of(std::string("key-three")));
+                snapshot->get(spec, scope, view_of(dstd::String("key-three")));
             REQUIRE(found.has_value());
             REQUIRE(found->has_value());
             CHECK(to_std((*found)->bytes()) == "three");
             auto gone =
-                snapshot->get(spec, scope, view_of(std::string("key-two")));
+                snapshot->get(spec, scope, view_of(dstd::String("key-two")));
             REQUIRE(gone.has_value());
             CHECK_FALSE(gone->has_value());
             check_generation(*snapshot, "dftu.test.put", scope, 4);
@@ -2518,7 +2505,7 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec last = fold_spec("dftu.test.last", FoldKind::Last);
         const NamespaceSpec concat =
             fold_spec("dftu.test.concat", FoldKind::Concat);
-        const std::string key = "same-key";
+        const dstd::String key = "same-key";
 
         auto writer = make_writer(dir);
         auto last_id = writer->add_namespace(last);
@@ -2527,13 +2514,13 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(concat_id.has_value());
 
         const auto fold_last = [&](const ScopeKey& scope,
-                                   const std::string& value) {
+                                   const dstd::String& value) {
             Batch batch = writer->batch(*last_id, scope, 0);
             batch.fold(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(batch)).has_value());
         };
         const auto fold_concat = [&](const ScopeKey& scope,
-                                     const std::string& value) {
+                                     const dstd::String& value) {
             Batch batch = writer->batch(*concat_id, scope, 0);
             batch.fold(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(batch)).has_value());
@@ -2551,7 +2538,7 @@ TEST_SUITE("index store snapshot") {
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         const auto expect_one = [&key](store::engine::ScanCursor& cursor,
-                                       const std::string& expected) {
+                                       const dstd::String& expected) {
             const auto rows = collect(cursor);
             REQUIRE(rows.size() == 1);
             CHECK(rows[0].first == key);
@@ -2567,28 +2554,28 @@ TEST_SUITE("index store snapshot") {
             expect_one(cursor, "a1a2");
         }
         {
-            dftracer::utils::dstd::Vector<ScopeKey> order;
+            dstd::Vector<ScopeKey> order;
             order.push_back(first);
             order.push_back(second);
             auto cursor = snapshot->scan(last, order, ByteView{}, ByteView{});
             expect_one(cursor, "b2");
         }
         {
-            dftracer::utils::dstd::Vector<ScopeKey> order;
+            dstd::Vector<ScopeKey> order;
             order.push_back(first);
             order.push_back(second);
             auto cursor = snapshot->scan(concat, order, ByteView{}, ByteView{});
             expect_one(cursor, "a1a2b1b2");
         }
         {
-            dftracer::utils::dstd::Vector<ScopeKey> order;
+            dstd::Vector<ScopeKey> order;
             order.push_back(second);
             order.push_back(first);
             auto cursor = snapshot->scan(last, order, ByteView{}, ByteView{});
             expect_one(cursor, "a2");
         }
         {
-            dftracer::utils::dstd::Vector<ScopeKey> order;
+            dstd::Vector<ScopeKey> order;
             order.push_back(second);
             order.push_back(first);
             auto cursor = snapshot->scan(concat, order, ByteView{}, ByteView{});
@@ -2610,43 +2597,43 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir merged("snapshot_equal_drop_merged");
         const ScopeKey scope = file_scope("/traces/e.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
-        const std::string key = "shared";
+        const dstd::String key = "shared";
 
-        std::string drop_path;
+        dstd::String drop_path;
         {
             auto writer = make_writer(dropped);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            batch.put(view_of(key), view_of(std::string("dropped")));
+            batch.put(view_of(key), view_of(dstd::String("dropped")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(writer->drop(*id, scope).has_value());
             REQUIRE(close_writer(*writer).has_value());
-            drop_path = to_std(writer->path());
+            drop_path = dstd::String(writer->path());
         }
-        CHECK((drop_generations(drop_path) == std::vector<std::uint64_t>{2}));
+        CHECK((drop_generations(drop_path) == dstd::Vector<std::uint64_t>{2}));
 
-        std::string first_path;
+        dstd::String first_path;
         {
             auto writer = make_writer(copied);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            batch.put(view_of(key), view_of(std::string("old")));
+            batch.put(view_of(key), view_of(dstd::String("old")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*writer).has_value());
-            first_path = to_std(writer->path());
+            first_path = dstd::String(writer->path());
         }
-        std::string second_path;
+        dstd::String second_path;
         {
             auto writer = make_writer(copied);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            batch.put(view_of(key), view_of(std::string("kept")));
+            batch.put(view_of(key), view_of(dstd::String("kept")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*writer).has_value());
-            second_path = to_std(writer->path());
+            second_path = dstd::String(writer->path());
         }
         CHECK(only_copy_generation(second_path) == 2);
 
@@ -2677,7 +2664,8 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey third = file_scope("/traces/c.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        const auto seal = [](const std::string& key, const std::string& value) {
+        const auto seal = [](const dstd::String& key,
+                             const dstd::String& value) {
             store::engine::SegmentBuilder builder;
             builder.add(view_of(key), view_of(value));
             auto sealed = builder.seal(nullptr, nullptr, nullptr);
@@ -2685,11 +2673,11 @@ TEST_SUITE("index store snapshot") {
             return std::move(*sealed);
         };
         const auto add_scope = [](store::engine::DataFileWriter& file,
-                                  std::uint32_t id, const std::string& path) {
+                                  std::uint32_t id, const dstd::String& path) {
             store::engine::ScopeItem item;
             item.local_id = id;
             item.kind = store::ScopeKind::File;
-            item.paths.push_back(dstring(path));
+            item.paths.push_back(dstd::String(path));
             file.add(std::move(item));
         };
         const auto add_copy = [](store::engine::DataFileWriter& file,
@@ -2704,8 +2692,8 @@ TEST_SUITE("index store snapshot") {
         };
         const auto extent_segment =
             [](std::uint32_t copy_id, std::uint32_t offset,
-               const std::string& key,
-               const dftracer::utils::dstd::Vector<std::uint8_t>& bytes) {
+               const dstd::String& key,
+               const dstd::Vector<std::uint8_t>& bytes) {
                 store::engine::ExtentSegment segment;
                 segment.copy_id = copy_id;
                 segment.offset_in_extent = offset;
@@ -2717,9 +2705,8 @@ TEST_SUITE("index store snapshot") {
             };
         const auto append_extent =
             [](store::engine::DataFileWriter& file, std::uint64_t sequence,
-               const dftracer::utils::dstd::Vector<std::uint8_t>& extent,
-               dftracer::utils::dstd::Vector<store::engine::ExtentSegment>
-                   segments) {
+               const dstd::Vector<std::uint8_t>& extent,
+               dstd::Vector<store::engine::ExtentSegment> segments) {
                 auto reference = file.append_extent(view_of(extent));
                 REQUIRE(reference.has_value());
                 store::engine::ExtentRefItem item;
@@ -2731,7 +2718,7 @@ TEST_SUITE("index store snapshot") {
                 return item;
             };
 
-        const std::string path = built.file("w-built.dfs");
+        const dstd::String path = built.file("w-built.dfs");
         store::engine::ExtentRefItem shared{};
         {
             auto file = store::engine::DataFileWriter::create(
@@ -2740,15 +2727,14 @@ TEST_SUITE("index store snapshot") {
 
             store::engine::NamespaceItem namespaces;
             namespaces.local_id = 1;
-            namespaces.name = dstring("dftu.test.put");
+            namespaces.name = dstd::String("dftu.test.put");
             file->add(std::move(namespaces));
             add_scope(*file, 1, "/traces/a.pfw");
             add_copy(*file, 1, 1);
             const auto segment_a1 = seal("a-1", "a-value-1");
-            dftracer::utils::dstd::Vector<std::uint8_t> first_extent(
-                segment_a1.begin(), segment_a1.end());
-            dftracer::utils::dstd::Vector<store::engine::ExtentSegment>
-                first_segments;
+            dstd::Vector<std::uint8_t> first_extent(segment_a1.begin(),
+                                                    segment_a1.end());
+            dstd::Vector<store::engine::ExtentSegment> first_segments;
             first_segments.push_back(extent_segment(1, 0, "a-1", segment_a1));
             file->add(append_extent(*file, 1, first_extent,
                                     std::move(first_segments)));
@@ -2758,12 +2744,11 @@ TEST_SUITE("index store snapshot") {
             add_copy(*file, 2, 2);
             const auto segment_a2 = seal("a-2", "a-value-2");
             const auto segment_b1 = seal("b-1", "b-value-1");
-            dftracer::utils::dstd::Vector<std::uint8_t> shared_extent(
-                segment_a2.begin(), segment_a2.end());
+            dstd::Vector<std::uint8_t> shared_extent(segment_a2.begin(),
+                                                     segment_a2.end());
             shared_extent.insert(shared_extent.end(), segment_b1.begin(),
                                  segment_b1.end());
-            dftracer::utils::dstd::Vector<store::engine::ExtentSegment>
-                shared_segments;
+            dstd::Vector<store::engine::ExtentSegment> shared_segments;
             shared_segments.push_back(extent_segment(1, 0, "a-2", segment_a2));
             shared_segments.push_back(
                 extent_segment(2, static_cast<std::uint32_t>(segment_a2.size()),
@@ -2776,10 +2761,9 @@ TEST_SUITE("index store snapshot") {
             add_scope(*file, 3, "/traces/c.pfw");
             add_copy(*file, 3, 3);
             const auto segment_c1 = seal("c-1", "c-value-1");
-            dftracer::utils::dstd::Vector<std::uint8_t> third_extent(
-                segment_c1.begin(), segment_c1.end());
-            dftracer::utils::dstd::Vector<store::engine::ExtentSegment>
-                third_segments;
+            dstd::Vector<std::uint8_t> third_extent(segment_c1.begin(),
+                                                    segment_c1.end());
+            dstd::Vector<store::engine::ExtentSegment> third_segments;
             third_segments.push_back(extent_segment(3, 0, "c-1", segment_c1));
             file->add(append_extent(*file, 3, third_extent,
                                     std::move(third_segments)));
@@ -2787,7 +2771,7 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(file->close().has_value());
         }
 
-        std::vector<std::uint8_t> bytes = read_file(path);
+        dstd::Vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(shared.offset + shared.length <= bytes.size());
         bytes[static_cast<std::size_t>(shared.offset) + 4U] ^= 0xFFU;
         write_file(corrupt.file("w-bad.dfs"), without_footer(bytes));
@@ -2797,22 +2781,22 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->state(spec, first) == ScopeState::Bad);
         CHECK(snapshot->state(spec, second) == ScopeState::Bad);
         CHECK(snapshot->state(spec, third) == ScopeState::Ready);
-        for (const auto& hidden : {std::pair{first, std::string("a-1")},
-                                   std::pair{first, std::string("a-2")},
-                                   std::pair{second, std::string("b-1")}}) {
+        for (const auto& hidden : {dstd::Pair{first, dstd::String("a-1")},
+                                   dstd::Pair{first, dstd::String("a-2")},
+                                   dstd::Pair{second, dstd::String("b-1")}}) {
             auto found =
                 snapshot->get(spec, hidden.first, view_of(hidden.second));
             REQUIRE(found.has_value());
             CHECK_FALSE(found->has_value());
         }
         {
-            dftracer::utils::dstd::Vector<ScopeKey> order;
+            dstd::Vector<ScopeKey> order;
             order.push_back(first);
             order.push_back(second);
             auto cursor = snapshot->scan(spec, order, ByteView{}, ByteView{});
             CHECK(cursor.at_end());
         }
-        auto visible = snapshot->get(spec, third, view_of(std::string("c-1")));
+        auto visible = snapshot->get(spec, third, view_of(dstd::String("c-1")));
         REQUIRE(visible.has_value());
         REQUIRE(visible->has_value());
         CHECK(to_std((*visible)->bytes()) == "c-value-1");
@@ -2827,7 +2811,7 @@ TEST_SUITE("index store snapshot") {
         const std::size_t lengths[] = {3900, 3925, 3950, 3975,
                                        4000, 4025, 4050};
         const auto large_key = [&lengths](std::size_t index) {
-            std::string key(lengths[index], 'k');
+            dstd::String key(lengths[index], 'k');
             key[key.size() - 1] = static_cast<char>('a' + index);
             return key;
         };
@@ -2842,12 +2826,12 @@ TEST_SUITE("index store snapshot") {
             for (std::size_t index = 0; index < std::size(lengths); ++index) {
                 Batch batch = writer->batch(*id, scope, 0);
                 batch.put(view_of(large_key(index)),
-                          view_of(std::string("value")));
+                          view_of(dstd::String("value")));
                 REQUIRE(writer->commit(std::move(batch)).has_value());
             }
             REQUIRE(flush_writer(*writer).has_value());
 
-            auto reader = DataFileReader::open(to_std(writer->path()));
+            auto reader = DataFileReader::open(dstd::String(writer->path()));
             REQUIRE(reader.has_value());
             REQUIRE(extent_refs_of(*reader).size() == std::size(lengths));
             for (const store::engine::IndexedExtentRef& extent :
@@ -2884,9 +2868,9 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec =
             fold_spec("dftu.test.concat", FoldKind::Concat);
         constexpr std::size_t VALUE_COUNT = 200;
-        const std::string keys[] = {"dup-a", "dup-b"};
+        const dstd::String keys[] = {"dup-a", "dup-b"};
 
-        std::string expected;
+        dstd::String expected;
         for (std::size_t index = 0; index < VALUE_COUNT; ++index) {
             expected += concat_value(static_cast<int>(index));
         }
@@ -2897,7 +2881,7 @@ TEST_SUITE("index store snapshot") {
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            for (const std::string& key : keys) {
+            for (const dstd::String& key : keys) {
                 for (std::size_t index = 0; index < VALUE_COUNT; ++index) {
                     batch.fold(view_of(key),
                                view_of(concat_value(static_cast<int>(index))));
@@ -2910,7 +2894,7 @@ TEST_SUITE("index store snapshot") {
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
-        for (const std::string& key : keys) {
+        for (const dstd::String& key : keys) {
             auto found = snapshot->get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             REQUIRE(found->has_value());
@@ -2938,22 +2922,22 @@ TEST_SUITE("index store snapshot") {
 
         WriterOptions options;
         options.extent_size = EXTENT;
-        options.host = dstring("host");
-        options.label = dstring("label");
+        options.host = dstd::String("host");
+        options.label = dstd::String("label");
         auto writer = make_writer(dir, options);
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         Batch batch = writer->batch(*id, scope, 0);
-        const std::string small_key("\0\x01", 2);
-        batch.put(view_of(small_key), view_of(std::string(SMALL_VALUE, 's')));
+        const dstd::String small_key("\0\x01", 2);
+        batch.put(view_of(small_key), view_of(dstd::String(SMALL_VALUE, 's')));
         for (std::size_t index = 0; index < BIG_COUNT; ++index) {
-            const std::string key(1, static_cast<char>(index + 1));
-            batch.put(view_of(key), view_of(std::string(BIG_VALUE, 'v')));
+            const dstd::String key(1, static_cast<char>(index + 1));
+            batch.put(view_of(key), view_of(dstd::String(BIG_VALUE, 'v')));
         }
         REQUIRE(writer->commit(std::move(batch)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
-        auto reader = DataFileReader::open(to_std(writer->path()));
+        auto reader = DataFileReader::open(dstd::String(writer->path()));
         REQUIRE(reader.has_value());
         REQUIRE(extent_refs_of(*reader).size() == 1);
         REQUIRE(extent_refs_of(*reader)[0].ref.segments.size() == 1);
@@ -2967,17 +2951,17 @@ TEST_SUITE("index store snapshot") {
         const auto rows = collect(cursor);
         REQUIRE(rows.size() == BIG_COUNT + 1);
         CHECK(rows[0].first == small_key);
-        CHECK(rows[0].second == std::string(SMALL_VALUE, 's'));
+        CHECK(rows[0].second == dstd::String(SMALL_VALUE, 's'));
         for (std::size_t index = 0; index < BIG_COUNT; ++index) {
             CHECK(rows[index + 1].first ==
-                  std::string(1, static_cast<char>(index + 1)));
-            CHECK(rows[index + 1].second == std::string(BIG_VALUE, 'v'));
+                  dstd::String(1, static_cast<char>(index + 1)));
+            CHECK(rows[index + 1].second == dstd::String(BIG_VALUE, 'v'));
         }
         auto found =
-            snapshot->get(spec, scope, view_of(std::string(1, '\x05')));
+            snapshot->get(spec, scope, view_of(dstd::String(1, '\x05')));
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
-        CHECK(to_std((*found)->bytes()) == std::string(BIG_VALUE, 'v'));
+        CHECK(to_std((*found)->bytes()) == dstd::String(BIG_VALUE, 'v'));
     }
 
     TEST_CASE(
@@ -2987,10 +2971,10 @@ TEST_SUITE("index store snapshot") {
         constexpr int WRITERS = 4;
         constexpr int BATCHES = 8;
         constexpr int KEYS = 1000;
-        std::vector<ScopeKey> scopes;
+        dstd::Vector<ScopeKey> scopes;
         for (int w = 0; w < WRITERS; ++w) {
             scopes.push_back(
-                file_scope("/traces/w" + std::to_string(w) + ".pfw"));
+                file_scope("/traces/w" + dstd::to_string(w) + ".pfw"));
         }
         for (int w = 0; w < WRITERS; ++w) {
             write_scoped_file(dir, spec, scopes[static_cast<std::size_t>(w)],
@@ -3011,10 +2995,10 @@ TEST_SUITE("index store snapshot") {
         CHECK(eight.files == WRITERS);
         CHECK(one.extents == eight.extents);
         for (int w = 0; w < WRITERS; ++w) {
-            CHECK(one.text.find("state /traces/w" + std::to_string(w) +
-                                ".pfw 1") != std::string::npos);
+            CHECK(one.text.find("state /traces/w" + dstd::to_string(w) +
+                                ".pfw 1") != dstd::String::npos);
         }
-        CHECK(one.text.find("b0-key-0000=value-0") != std::string::npos);
+        CHECK(one.text.find("b0-key-0000=value-0") != dstd::String::npos);
         CHECK(one.extents >= WRITERS * BATCHES);
         CHECK(one.extents == eight.extents);
         CHECK(eight.read_calls == one.read_calls);
@@ -3038,11 +3022,11 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_open_corrupt");
         dftu_utils_test::ScopedTestDir copy_dir("snapshot_open_corrupt_copy");
         const NamespaceSpec spec = put_spec("dftu.test.put");
-        const std::vector<ScopeKey> scopes = {file_scope("/traces/a.pfw"),
-                                              file_scope("/traces/b.pfw"),
-                                              file_scope("/traces/c.pfw")};
+        const dstd::Vector<ScopeKey> scopes = {file_scope("/traces/a.pfw"),
+                                               file_scope("/traces/b.pfw"),
+                                               file_scope("/traces/c.pfw")};
         write_scopes_file(dir, spec, scopes, 1000, true);
-        const std::string path = only_data_file(dir.str());
+        const dstd::String path = only_data_file(dir.str());
 
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
@@ -3056,7 +3040,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(middle_raw > SMALL_EXTENT);
         CHECK(middle.length % SMALL_EXTENT == 0);
 
-        std::vector<std::uint8_t> bytes = read_file(path);
+        dstd::Vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(middle.offset + middle.length <= bytes.size());
         // The last byte of the reference is padding no segment covers, so only
         // the block crc sees it.
@@ -3073,11 +3057,11 @@ TEST_SUITE("index store snapshot") {
             CHECK(snapshot->state(spec, scopes[0]) == ScopeState::Ready);
             CHECK(snapshot->state(spec, scopes[2]) == ScopeState::Ready);
             auto hidden = snapshot->get(spec, scopes[1],
-                                        view_of(std::string("b0-key-0000")));
+                                        view_of(dstd::String("b0-key-0000")));
             REQUIRE(hidden.has_value());
             CHECK_FALSE(hidden->has_value());
             auto visible = snapshot->get(spec, scopes[2],
-                                         view_of(std::string("b0-key-0000")));
+                                         view_of(dstd::String("b0-key-0000")));
             REQUIRE(visible.has_value());
             REQUIRE(visible->has_value());
             CHECK(to_std((*visible)->bytes()) == "value-0");
@@ -3097,14 +3081,14 @@ TEST_SUITE("index store snapshot") {
     TEST_CASE("a block that cannot be read fails its queries with the error") {
         dftu_utils_test::ScopedTestDir dir("snapshot_read_error");
         const NamespaceSpec spec = put_spec("dftu.test.put");
-        const std::vector<ScopeKey> scopes = {
+        const dstd::Vector<ScopeKey> scopes = {
             file_scope("/traces/a.pfw"), file_scope("/traces/b.pfw"),
             file_scope("/traces/c.pfw"), file_scope("/traces/d.pfw")};
         write_scopes_file(dir, spec, scopes, 1000, true);
-        const std::string path = only_data_file(dir.str());
+        const dstd::String path = only_data_file(dir.str());
         write_file(path, without_footer(read_file(path)));
         drop_summary(dir.str());
-        const std::string key_text = "b0-key-0000";
+        const dstd::String key_text = "b0-key-0000";
         const ByteView key = view_of(key_text);
 
         ScopedDefaultRuntime runtime(1);
@@ -3155,11 +3139,11 @@ TEST_SUITE("index store snapshot") {
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             const auto put = [&](const ScopeKey& scope,
-                                 const std::string& tag) {
+                                 const dstd::String& tag) {
                 Batch entries = writer->batch(*id, scope, 0);
                 for (int k = 0; k < 100; ++k) {
-                    const std::string key = tag + "-" + key_of(k);
-                    const std::string value = value_of(k);
+                    const dstd::String key = tag + "-" + key_of(k);
+                    const dstd::String value = value_of(k);
                     entries.put(view_of(key), view_of(value));
                 }
                 REQUIRE(writer->commit(std::move(entries)).has_value());
@@ -3171,11 +3155,11 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(flush_writer(*writer).has_value());
             REQUIRE(close_writer(*writer).has_value());
         }
-        const std::string path = only_data_file(dir.str());
+        const dstd::String path = only_data_file(dir.str());
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         CHECK(reader->index().closed);
-        const std::vector<store::engine::IndexedExtentRef> refs =
+        const dstd::Vector<store::engine::IndexedExtentRef> refs =
             extent_refs_of(*reader);
         const store::engine::ExtentRefItem* late_extent = nullptr;
         for (const store::engine::IndexedExtentRef& ref : refs) {
@@ -3187,14 +3171,14 @@ TEST_SUITE("index store snapshot") {
             }
         }
         REQUIRE(late_extent != nullptr);
-        std::vector<std::uint8_t> bytes = read_file(path);
+        dstd::Vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(late_extent->offset + late_extent->length <= bytes.size());
         const auto late_at = static_cast<std::size_t>(late_extent->offset);
         auto late_pages = store::engine::ExtentPages::open(
             ByteView{bytes.data() + late_at, late_extent->length});
         REQUIRE(late_pages.has_value());
         bytes[late_at + late_pages->entry(0).stored_offset] ^= 0xFFU;
-        const std::string copy_path = copy_dir.file("w-synced-bad.dfs");
+        const dstd::String copy_path = copy_dir.file("w-synced-bad.dfs");
         write_file(copy_path, bytes);
 
         ScopedDefaultRuntime runtime(1);
@@ -3203,7 +3187,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->state(spec, late) == ScopeState::Ready);
         CHECK(snapshot->read_stats().extents_read == 0);
 
-        const std::string late_key = "late-" + key_of(0);
+        const dstd::String late_key = "late-" + key_of(0);
         auto failed = snapshot->get(spec, late, view_of(late_key));
         REQUIRE_FALSE(failed.has_value());
         CHECK(failed.error().is(Condition::Parse));
@@ -3212,7 +3196,7 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(late_cursor.error().has_value());
         CHECK(late_cursor.error()->is(Condition::Parse));
 
-        const std::string both_key = "b1-" + key_of(0);
+        const dstd::String both_key = "b1-" + key_of(0);
         auto found = snapshot->get(spec, both, view_of(both_key));
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
@@ -3226,7 +3210,7 @@ TEST_SUITE("index store snapshot") {
         const int dir_fd = ::open(copy_dir.str().c_str(), O_RDONLY);
         REQUIRE(dir_fd >= 0);
         REQUIRE(::dup2(dir_fd, data_fd) == data_fd);
-        const std::string first_key = "b0-" + key_of(0);
+        const dstd::String first_key = "b0-" + key_of(0);
         auto unreadable = snapshot->get(spec, both, view_of(first_key));
         REQUIRE_FALSE(unreadable.has_value());
         CHECK(unreadable.error().is(Condition::Io));
@@ -3249,7 +3233,7 @@ TEST_SUITE("index store snapshot") {
         durable_spec.durable = true;
         const NamespaceSpec loose_spec = put_spec("dftu.test.loose");
         const ScopeKey scope = file_scope("/traces/mark.pfw");
-        const std::string key_text = "b0-" + key_of(0);
+        const dstd::String key_text = "b0-" + key_of(0);
 
         auto writer = make_writer(dir);
         auto durable_id = writer->add_namespace(durable_spec);
@@ -3259,8 +3243,8 @@ TEST_SUITE("index store snapshot") {
         const auto put = [&](store::engine::NamespaceId id) {
             Batch entries = writer->batch(id, scope, 0);
             for (int k = 0; k < 100; ++k) {
-                const std::string key = "b0-" + key_of(k);
-                const std::string value = value_of(k);
+                const dstd::String key = "b0-" + key_of(k);
+                const dstd::String value = value_of(k);
                 entries.put(view_of(key), view_of(value));
             }
             REQUIRE(writer->commit(std::move(entries)).has_value());
@@ -3268,7 +3252,7 @@ TEST_SUITE("index store snapshot") {
         };
         put(*durable_id);
         put(*loose_id);
-        const std::string path = to_std(writer->path());
+        const dstd::String path = dstd::String(writer->path());
         {
             auto open_file = DataFileReader::open(path);
             REQUIRE(open_file.has_value());
@@ -3306,9 +3290,9 @@ TEST_SUITE("index store snapshot") {
         "a scan reads each scope's extents only when it reaches the scope") {
         dftu_utils_test::ScopedTestDir dir("snapshot_lazy_scan");
         const NamespaceSpec spec = put_spec("dftu.test.put");
-        const std::vector<ScopeKey> scopes = {file_scope("/traces/a.pfw"),
-                                              file_scope("/traces/b.pfw"),
-                                              file_scope("/traces/c.pfw")};
+        const dstd::Vector<ScopeKey> scopes = {file_scope("/traces/a.pfw"),
+                                               file_scope("/traces/b.pfw"),
+                                               file_scope("/traces/c.pfw")};
         write_scopes_file(dir, spec, scopes, 1000, true);
         ScopedDefaultRuntime runtime(1);
         auto snapshot = Snapshot::open(dir.str());
@@ -3317,10 +3301,8 @@ TEST_SUITE("index store snapshot") {
         // The begin bound is a temporary: the scan keeps its own copy, and
         // reads it each time a segment's extent loads.
         auto cursor = snapshot->scan(
-            spec,
-            dftracer::utils::dstd::Span<const ScopeKey>(scopes.data(),
-                                                        scopes.size()),
-            view_of(std::string("b0-") + key_of(500)), ByteView{});
+            spec, dstd::Span<const ScopeKey>(scopes.data(), scopes.size()),
+            view_of(dstd::String("b0-") + key_of(500)), ByteView{});
         REQUIRE_FALSE(cursor.at_end());
         CHECK(to_std(cursor.key()) == "b0-" + key_of(500));
         CHECK(snapshot->read_stats().extents_read == 1);
@@ -3339,15 +3321,15 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_directory_same");
         dftu_utils_test::ScopedTestDir cut_dir("snapshot_directory_same_cut");
         const NamespaceSpec spec = put_spec("dftu.test.put");
-        const std::vector<ScopeKey> scopes = {
+        const dstd::Vector<ScopeKey> scopes = {
             file_scope("/traces/a.pfw"), file_scope("/traces/b.pfw"),
             file_scope("/traces/c.pfw"), file_scope("/traces/d.pfw")};
         const auto put = [&](Writer& writer, store::engine::NamespaceId id,
-                             const ScopeKey& scope, const std::string& tag) {
+                             const ScopeKey& scope, const dstd::String& tag) {
             Batch entries = writer.batch(id, scope, 0);
             for (int k = 0; k < 50; ++k) {
-                const std::string key = "key-" + key_of(k);
-                const std::string value = tag + "-" + value_of(k);
+                const dstd::String key = "key-" + key_of(k);
+                const dstd::String value = tag + "-" + value_of(k);
                 entries.put(view_of(key), view_of(value));
             }
             REQUIRE(writer.commit(std::move(entries)).has_value());
@@ -3368,8 +3350,8 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(id.has_value());
             put(*writer, *id, scopes[0], "second");
             REQUIRE(writer->drop(*id, scopes[1]).has_value());
-            const std::string begin = "key-" + key_of(10);
-            const std::string end = "key-" + key_of(20);
+            const dstd::String begin = "key-" + key_of(10);
+            const dstd::String end = "key-" + key_of(20);
             REQUIRE(writer->drop(*id, scopes[2], view_of(begin), view_of(end))
                         .has_value());
             put(*writer, *id, scopes[3], "second");
@@ -3381,13 +3363,13 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(id.has_value());
             for (int commit = 0; commit < 150; ++commit) {
                 const ScopeKey scope = file_scope(
-                    "/traces/m" + std::to_string(commit % 4) + ".pfw");
+                    "/traces/m" + dstd::to_string(commit % 4) + ".pfw");
                 Batch entries = writer->batch(*id, scope, 0);
-                const std::string key = "many-" + key_of(commit);
+                const dstd::String key = "many-" + key_of(commit);
                 entries.put(view_of(key), view_of(value_of(commit)));
                 if (commit == 77) {
-                    entries.put(view_of(std::string("many-big")),
-                                view_of(std::string(3 * SMALL_EXTENT, 'b')));
+                    entries.put(view_of(dstd::String("many-big")),
+                                view_of(dstd::String(3 * SMALL_EXTENT, 'b')));
                 }
                 REQUIRE(writer->commit(std::move(entries)).has_value());
                 REQUIRE(flush_writer(*writer).has_value());
@@ -3396,7 +3378,7 @@ TEST_SUITE("index store snapshot") {
         }
         for (const auto& entry : dftu_utils_test::list_dir(dir.str())) {
             if (!is_data_file(entry.path)) continue;
-            const std::string path(entry.path.str());
+            const dstd::String path(entry.path.str());
             auto light = DataFileReader::open(
                 path, store::engine::FooterItems::Directory);
             REQUIRE(light.has_value());
@@ -3410,22 +3392,23 @@ TEST_SUITE("index store snapshot") {
                        without_footer(read_file(path)));
         }
 
-        const auto dump = [&](const std::string& root) {
+        const auto dump = [&](const dstd::String& root) {
             auto snapshot = Snapshot::open(root);
             REQUIRE(snapshot.has_value());
             CHECK(snapshot->skipped().empty());
-            std::string text;
+            dstd::String text;
             auto generations = snapshot->generations();
             REQUIRE(generations.has_value());
             for (const store::engine::ScopeGeneration& generation :
                  *generations) {
-                text += "generation " + to_std(generation.namespace_name) +
-                        " " + to_std(generation.scope.paths[0]) + " " +
-                        std::to_string(generation.generation) + "\n";
+                text += "generation " +
+                        dstd::String(generation.namespace_name) + " " +
+                        dstd::String(generation.scope.paths[0]) + " " +
+                        dstd::to_string(generation.generation) + "\n";
             }
             for (const ScopeKey& scope : scopes) {
-                text += "state " + to_std(scope.paths[0]) + " " +
-                        std::to_string(
+                text += "state " + dstd::String(scope.paths[0]) + " " +
+                        dstd::to_string(
                             static_cast<int>(snapshot->state(spec, scope))) +
                         "\n";
             }
@@ -3435,34 +3418,34 @@ TEST_SUITE("index store snapshot") {
             }
             return text;
         };
-        const std::string closed = dump(dir.str());
+        const dstd::String closed = dump(dir.str());
         CHECK(closed == dump(cut_dir.str()));
         CHECK(closed.find("/traces/m1.pfw many-" + key_of(149)) !=
-              std::string::npos);
+              dstd::String::npos);
         CHECK(closed.find("/traces/m1.pfw many-big=" +
-                          std::string(3 * SMALL_EXTENT, 'b')) !=
-              std::string::npos);
-        const auto checked = [](const std::string& root) {
+                          dstd::String(3 * SMALL_EXTENT, 'b')) !=
+              dstd::String::npos);
+        const auto checked = [](const dstd::String& root) {
             auto snapshot = Snapshot::open(root);
             REQUIRE(snapshot.has_value());
             auto report = snapshot->check();
             REQUIRE(report.has_value());
             CHECK(report->bad_commits.empty());
             CHECK(report->bad_segments.empty());
-            return std::to_string(report->commits) + " " +
-                   std::to_string(report->blocks) + " " +
-                   std::to_string(report->segments);
+            return dstd::to_string(report->commits) + " " +
+                   dstd::to_string(report->blocks) + " " +
+                   dstd::to_string(report->segments);
         };
         CHECK(checked(dir.str()) == checked(cut_dir.str()));
         CHECK(closed.find("/traces/a.pfw key-" + key_of(0) + "=second-") !=
-              std::string::npos);
-        CHECK(closed.find("/traces/b.pfw key-") == std::string::npos);
+              dstd::String::npos);
+        CHECK(closed.find("/traces/b.pfw key-") == dstd::String::npos);
         CHECK(closed.find("/traces/c.pfw key-" + key_of(15)) ==
-              std::string::npos);
+              dstd::String::npos);
         CHECK(closed.find("/traces/c.pfw key-" + key_of(25)) !=
-              std::string::npos);
+              dstd::String::npos);
         CHECK(closed.find("/traces/d.pfw key-" + key_of(0)) !=
-              std::string::npos);
+              dstd::String::npos);
     }
 
     TEST_CASE("a bad commit decides over one that cannot be read") {
@@ -3477,11 +3460,11 @@ TEST_SUITE("index store snapshot") {
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             const auto put = [&](const ScopeKey& scope,
-                                 const std::string& tag) {
+                                 const dstd::String& tag) {
                 Batch entries = writer->batch(*id, scope, 0);
                 for (int k = 0; k < 100; ++k) {
-                    const std::string key = tag + "-" + key_of(k);
-                    const std::string value = value_of(k);
+                    const dstd::String key = tag + "-" + key_of(k);
+                    const dstd::String value = value_of(k);
                     entries.put(view_of(key), view_of(value));
                 }
                 REQUIRE(writer->commit(std::move(entries)).has_value());
@@ -3493,7 +3476,7 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(flush_writer(*writer).has_value());
             REQUIRE(close_writer(*writer).has_value());
         }
-        const std::string path = only_data_file(dir.str());
+        const dstd::String path = only_data_file(dir.str());
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         const auto& refs = extent_refs_of(*reader);
@@ -3508,11 +3491,11 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(oldest->sequence < newest->sequence);
         const store::engine::ExtentRefItem newer = newest->ref;
 
-        std::vector<std::uint8_t> bytes = read_file(path);
+        dstd::Vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(newer.offset + newer.length <= bytes.size());
         bytes[static_cast<std::size_t>(newer.offset) + newer.length - 1U] ^=
             0xFFU;
-        const std::string copy_path = copy_dir.file("w-bad-over-failed.dfs");
+        const dstd::String copy_path = copy_dir.file("w-bad-over-failed.dfs");
         write_file(copy_path, without_footer(bytes));
 
         ScopedDefaultRuntime runtime(1);
@@ -3529,7 +3512,7 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(dir_fd >= 0);
         REQUIRE(::dup2(dir_fd, data_fd) == data_fd);
 
-        const std::string key_text = "b0-key-0000";
+        const dstd::String key_text = "b0-key-0000";
         auto found = snapshot->get(spec, both, view_of(key_text));
         REQUIRE(found.has_value());
         CHECK_FALSE(found->has_value());
@@ -3547,23 +3530,23 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_open_cut");
         dftu_utils_test::ScopedTestDir cut_dir("snapshot_open_cut_copy");
         const NamespaceSpec spec = put_spec("dftu.test.put");
-        const std::vector<ScopeKey> scopes = {file_scope("/traces/a.pfw"),
-                                              file_scope("/traces/b.pfw"),
-                                              file_scope("/traces/c.pfw")};
+        const dstd::Vector<ScopeKey> scopes = {file_scope("/traces/a.pfw"),
+                                               file_scope("/traces/b.pfw"),
+                                               file_scope("/traces/c.pfw")};
         write_scopes_file(dir, spec, scopes, 1000, true);
-        const std::string path = only_data_file(dir.str());
+        const dstd::String path = only_data_file(dir.str());
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         REQUIRE(extent_refs_of(*reader).size() == 3);
         const store::engine::ExtentRefItem middle =
             extent_refs_of(*reader)[1].ref;
 
-        std::vector<std::uint8_t> bytes = read_file(path);
+        dstd::Vector<std::uint8_t> bytes = read_file(path);
         const std::size_t cut =
             static_cast<std::size_t>(middle.offset) + SMALL_EXTENT;
         REQUIRE(cut < bytes.size());
         write_file(cut_dir.file("w-cut.dfs"),
-                   std::vector<std::uint8_t>(
+                   dstd::Vector<std::uint8_t>(
                        bytes.begin(),
                        bytes.begin() + static_cast<std::ptrdiff_t>(cut)));
 
@@ -3576,7 +3559,7 @@ TEST_SUITE("index store snapshot") {
             CHECK(snapshot->state(spec, scopes[1]) == ScopeState::Absent);
             CHECK(snapshot->state(spec, scopes[2]) == ScopeState::Absent);
             auto found = snapshot->get(spec, scopes[0],
-                                       view_of(std::string("b0-key-0999")));
+                                       view_of(dstd::String("b0-key-0999")));
             REQUIRE(found.has_value());
             REQUIRE(found->has_value());
             CHECK(to_std((*found)->bytes()) == "value-999");
@@ -3597,8 +3580,8 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
         const ScopeKey scope = file_scope("/traces/a.pfw");
         write_scopes_file(cut_dir, spec, {scope}, 4000, false);
-        const std::string copied = only_data_file(cut_dir.str());
-        std::vector<std::uint8_t> bytes = read_file(copied);
+        const dstd::String copied = only_data_file(cut_dir.str());
+        dstd::Vector<std::uint8_t> bytes = read_file(copied);
         auto copied_reader = DataFileReader::open(copied);
         REQUIRE(copied_reader.has_value());
         REQUIRE(extent_refs_of(*copied_reader).size() == 1);
@@ -3607,13 +3590,13 @@ TEST_SUITE("index store snapshot") {
         const std::uint64_t cut = run.offset + run.length / 2U;
         REQUIRE(cut < bytes.size());
         write_file(dir.file("w-cut.dfs"),
-                   std::vector<std::uint8_t>(
+                   dstd::Vector<std::uint8_t>(
                        bytes.begin(),
                        bytes.begin() + static_cast<std::ptrdiff_t>(cut)));
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         REQUIRE(snapshot->skipped().size() == 1);
-        CHECK(to_std(snapshot->skipped()[0].name) == "w-cut.dfs");
+        CHECK(dstd::String(snapshot->skipped()[0].name) == "w-cut.dfs");
         CHECK(snapshot->open_stats().files == 0);
         CHECK(snapshot->open_stats().extents == 0);
         CHECK(snapshot->state(spec, scope) == ScopeState::Absent);
@@ -3625,19 +3608,19 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
         WriterOptions options = small_extents();
         options.extent_size = 1U << 20U;
-        std::string path;
+        dstd::String path;
         {
             auto writer = make_writer(dir, options);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             for (int b = 0; b < 40; ++b) {
                 Batch batch = writer->batch(*id, scope, 0);
-                batch.put(view_of("k" + std::to_string(100 + b)),
-                          view_of(std::string("v")));
+                batch.put(view_of("k" + dstd::to_string(100 + b)),
+                          view_of(dstd::String("v")));
                 REQUIRE(writer->commit(std::move(batch)).has_value());
                 REQUIRE(flush_writer(*writer).has_value());
             }
-            path = to_std(writer->path());
+            path = dstd::String(writer->path());
             REQUIRE(close_writer(*writer).has_value());
         }
         auto light =
@@ -3645,9 +3628,7 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(light.has_value());
         REQUIRE(light->index().tail.has_value());
         REQUIRE(light->index().tail->extent_count >
-                dftracer::utils::dstd::fs::file_size(path).value() /
-                        (1U << 20U) +
-                    1);
+                dstd::fs::file_size(path).value() / (1U << 20U) + 1);
         CHECK(light->records_read() == 1);
     }
 
@@ -3655,10 +3636,10 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_summary_open");
         const NamespaceSpec spec = put_spec("dftu.test.put");
         constexpr int FILES = 6;
-        std::vector<ScopeKey> scopes;
+        dstd::Vector<ScopeKey> scopes;
         for (int f = 0; f < FILES; ++f) {
             scopes.push_back(
-                file_scope("/traces/s" + std::to_string(f) + ".pfw"));
+                file_scope("/traces/s" + dstd::to_string(f) + ".pfw"));
             write_scoped_file(dir, spec, scopes.back(), 2, 40, true);
         }
         auto listed = store::engine::read_summary(dir.str());
@@ -3688,17 +3669,17 @@ TEST_SUITE("index store snapshot") {
     TEST_CASE("files the summary does not list open as before") {
         dftu_utils_test::ScopedTestDir dir("snapshot_summary_partial");
         const NamespaceSpec spec = put_spec("dftu.test.put");
-        std::vector<ScopeKey> scopes;
+        dstd::Vector<ScopeKey> scopes;
         for (int f = 0; f < 4; ++f) {
             scopes.push_back(
-                file_scope("/traces/p" + std::to_string(f) + ".pfw"));
+                file_scope("/traces/p" + dstd::to_string(f) + ".pfw"));
             write_scoped_file(dir, spec, scopes.back(), 1, 30, true);
         }
-        const std::string summary =
-            std::string((dftracer::utils::dstd::Path(dir.str()) /
-                         std::string(store::engine::SUMMARY_FILE_NAME))
-                            .str());
-        std::vector<std::uint8_t> bytes = read_file(summary);
+        const dstd::String summary =
+            dstd::String((dstd::Path(dir.str()) /
+                          dstd::String(store::engine::SUMMARY_FILE_NAME))
+                             .str());
+        dstd::Vector<std::uint8_t> bytes = read_file(summary);
         auto listed = store::engine::read_summary(dir.str());
         REQUIRE(listed.has_value());
         REQUIRE(listed->size() == 4);
@@ -3715,8 +3696,7 @@ TEST_SUITE("index store snapshot") {
             }
         };
         SUBCASE("a torn entry ends the summary") {
-            const std::size_t first =
-                12 + dftracer::utils::dstd::read_u32_le(bytes.data() + 4);
+            const std::size_t first = 12 + dstd::read_u32_le(bytes.data() + 4);
             bytes[first + 20] ^= 0xFFU;
             write_file(summary, bytes);
             reads_all(1);
@@ -3742,10 +3722,9 @@ TEST_SUITE("index store snapshot") {
         auto listed = store::engine::read_summary(dir.str());
         REQUIRE(listed.has_value());
         REQUIRE(listed->size() == 2);
-        (void)dftracer::utils::dstd::fs::remove(
-            dftracer::utils::dstd::Path(dir.str()) /
-            std::string(listed->back().name.data(),
-                        listed->back().name.size()));
+        (void)dstd::fs::remove(dstd::Path(dir.str()) /
+                               dstd::String(listed->back().name.data(),
+                                            listed->back().name.size()));
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -3762,8 +3741,8 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
         const ScopeKey scope = file_scope("/traces/short.pfw");
         write_scoped_file(dir, spec, scope, 1, 20, true);
-        const std::string path = only_data_file(dir.str());
-        std::vector<std::uint8_t> bytes = read_file(path);
+        const dstd::String path = only_data_file(dir.str());
+        dstd::Vector<std::uint8_t> bytes = read_file(path);
         bytes.resize(store::engine::FILE_HEADER_BYTES);
         write_file(path, bytes);
 
@@ -3780,7 +3759,7 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
         const ScopeKey scope = file_scope("/traces/lost.pfw");
         write_scoped_file(dir, spec, scope, 3, 60, true);
-        const std::string path = only_data_file(dir.str());
+        const dstd::String path = only_data_file(dir.str());
         write_file(path, without_footer(read_file(path)));
 
         auto snapshot = Snapshot::open(dir.str());
@@ -3798,16 +3777,16 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_summary_threads");
         const NamespaceSpec spec = put_spec("dftu.test.put");
         constexpr int WRITERS = 8;
-        std::vector<std::thread> threads;
+        dstd::Vector<dstd::Thread> threads;
         for (int w = 0; w < WRITERS; ++w) {
             threads.emplace_back([&dir, &spec, w] {
                 write_scoped_file(
                     dir, spec,
-                    file_scope("/traces/t" + std::to_string(w) + ".pfw"), 2, 50,
-                    true);
+                    file_scope("/traces/t" + dstd::to_string(w) + ".pfw"), 2,
+                    50, true);
             });
         }
-        for (std::thread& thread : threads) thread.join();
+        for (dstd::Thread& thread : threads) thread.join();
         auto listed = store::engine::read_summary(dir.str());
         REQUIRE(listed.has_value());
         CHECK(listed->size() == WRITERS);
@@ -3820,10 +3799,10 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_scope_filter");
         const NamespaceSpec spec = put_spec("dftu.test.put");
         constexpr int FILES = 12;
-        std::vector<ScopeKey> scopes;
+        dstd::Vector<ScopeKey> scopes;
         for (int f = 0; f < FILES; ++f) {
             scopes.push_back(
-                file_scope("/traces/f" + std::to_string(f) + ".pfw"));
+                file_scope("/traces/f" + dstd::to_string(f) + ".pfw"));
             write_scoped_file(dir, spec, scopes.back(), 1, 50, true);
         }
 
@@ -3872,7 +3851,7 @@ TEST_SUITE("index store snapshot") {
         ::unsetenv(name);
         REQUIRE(tiny.has_value());
         for (int k = 0; k < 500; k += 37) {
-            const std::string key = "b2-" + key_of(k);
+            const dstd::String key = "b2-" + key_of(k);
             auto found = tiny->get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             REQUIRE(found->has_value());
@@ -3901,7 +3880,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(cold.bytes_read == 0);
 
         auto found =
-            snapshot->get(spec, second, view_of(std::string("b0-key-0000")));
+            snapshot->get(spec, second, view_of(dstd::String("b0-key-0000")));
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == value_of(0));
@@ -3916,7 +3895,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(touched.bytes_read > 0);
 
         auto other =
-            snapshot->get(spec, first, view_of(std::string("b0-key-0499")));
+            snapshot->get(spec, first, view_of(dstd::String("b0-key-0499")));
         REQUIRE(other.has_value());
         REQUIRE(other->has_value());
         CHECK(to_std((*other)->bytes()) == value_of(499));
@@ -3946,22 +3925,23 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(id.has_value());
         for (const ScopeKey& scope : {broken, shared}) {
             Batch entries = writer->batch(*id, scope, 0);
-            const std::string key =
-                to_std(scope.paths[0]) == "/traces/broken.pfw" ? "broken-1"
-                                                               : "shared-1";
-            entries.put(view_of(key), view_of(std::string("value-1")));
+            const dstd::String key =
+                dstd::String(scope.paths[0]) == "/traces/broken.pfw"
+                    ? "broken-1"
+                    : "shared-1";
+            entries.put(view_of(key), view_of(dstd::String("value-1")));
             REQUIRE(writer->commit(std::move(entries)).has_value());
         }
         REQUIRE(flush_writer(*writer).has_value());
         {
             Batch entries = writer->batch(*id, sound, 0);
-            entries.put(view_of(std::string("sound-1")),
-                        view_of(std::string("sound-value-1")));
+            entries.put(view_of(dstd::String("sound-1")),
+                        view_of(dstd::String("sound-value-1")));
             REQUIRE(writer->commit(std::move(entries)).has_value());
         }
         REQUIRE(close_writer(*writer).has_value());
 
-        auto reader = DataFileReader::open(to_std(writer->path()));
+        auto reader = DataFileReader::open(dstd::String(writer->path()));
         REQUIRE(reader.has_value());
         REQUIRE(extent_refs_of(*reader).size() == 2);
         const store::engine::ExtentRef dead{
@@ -3969,7 +3949,8 @@ TEST_SUITE("index store snapshot") {
             extent_refs_of(*reader)[0].ref.length,
             extent_refs_of(*reader)[0].ref.crc};
 
-        std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
+        dstd::Vector<std::uint8_t> bytes =
+            read_file(dstd::String(writer->path()));
         REQUIRE(dead.offset + dead.length <= bytes.size());
         bytes[static_cast<std::size_t>(dead.offset) + 4U] ^= 0xFFU;
         write_file(copy_dir.file("w-bad.dfs"), without_footer(bytes));
@@ -3981,7 +3962,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->read_stats().commits_verified == 1);
 
         auto visible =
-            snapshot->get(spec, sound, view_of(std::string("sound-1")));
+            snapshot->get(spec, sound, view_of(dstd::String("sound-1")));
         REQUIRE(visible.has_value());
         REQUIRE(visible->has_value());
         CHECK(to_std((*visible)->bytes()) == "sound-value-1");
@@ -3991,7 +3972,7 @@ TEST_SUITE("index store snapshot") {
 
         for (const ScopeKey& scope : {broken, shared}) {
             auto hidden =
-                snapshot->get(spec, scope, view_of(std::string("broken-1")));
+                snapshot->get(spec, scope, view_of(dstd::String("broken-1")));
             REQUIRE(hidden.has_value());
             CHECK_FALSE(hidden->has_value());
         }
@@ -4004,20 +3985,20 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey big_scope = file_scope("/traces/big.pfw");
         const ScopeKey sound_scope = file_scope("/traces/sound.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
-        const std::string big(2 * 1024 * 1024, 'x');
+        const dstd::String big(2 * 1024 * 1024, 'x');
 
         auto writer = make_writer(dir);
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         {
             Batch entries = writer->batch(*id, big_scope, 0);
-            entries.put(view_of(std::string("big")), view_of(big));
+            entries.put(view_of(dstd::String("big")), view_of(big));
             REQUIRE(writer->commit(std::move(entries)).has_value());
         }
         REQUIRE(close_writer(*writer).has_value());
         write_scoped_file(copy_dir, spec, sound_scope, 1, 20, true);
 
-        auto reader = DataFileReader::open(to_std(writer->path()));
+        auto reader = DataFileReader::open(dstd::String(writer->path()));
         REQUIRE(reader.has_value());
         bool found_run = false;
         store::engine::ExtentRef run{};
@@ -4031,7 +4012,8 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(found_run);
         CHECK(run.length < big.size());
 
-        std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
+        dstd::Vector<std::uint8_t> bytes =
+            read_file(dstd::String(writer->path()));
         REQUIRE(run.offset + run.length <= bytes.size());
         std::fill(bytes.begin() + static_cast<std::ptrdiff_t>(run.offset),
                   bytes.begin() +
@@ -4044,13 +4026,13 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->read_stats().extents_read == 0);
         CHECK(snapshot->state(spec, big_scope) == ScopeState::Bad);
         auto hidden =
-            snapshot->get(spec, big_scope, view_of(std::string("big")));
+            snapshot->get(spec, big_scope, view_of(dstd::String("big")));
         REQUIRE(hidden.has_value());
         CHECK_FALSE(hidden->has_value());
 
         CHECK(snapshot->state(spec, sound_scope) == ScopeState::Ready);
         auto visible = snapshot->get(spec, sound_scope,
-                                     view_of(std::string("b0-key-0000")));
+                                     view_of(dstd::String("b0-key-0000")));
         REQUIRE(visible.has_value());
         REQUIRE(visible->has_value());
         CHECK(to_std((*visible)->bytes()) == value_of(0));
@@ -4062,10 +4044,10 @@ TEST_SUITE("index store snapshot") {
         constexpr int FILES = 4;
         constexpr int BATCHES = 3;
         constexpr int KEYS = 200;
-        std::vector<ScopeKey> scopes;
+        dstd::Vector<ScopeKey> scopes;
         for (int file = 0; file < FILES; ++file) {
             scopes.push_back(
-                file_scope("/traces/t" + std::to_string(file) + ".pfw"));
+                file_scope("/traces/t" + dstd::to_string(file) + ".pfw"));
         }
         for (const ScopeKey& scope : scopes) {
             write_scoped_file(dir, spec, scope, BATCHES, KEYS, true);
@@ -4077,7 +4059,7 @@ TEST_SUITE("index store snapshot") {
             write_file(cut_dir.file(entry.path.view().filename()),
                        without_footer(read_file(entry.path)));
         }
-        const auto touch_all = [&](const std::string& root, bool synced) {
+        const auto touch_all = [&](const dstd::String& root, bool synced) {
             auto opened = Snapshot::open(root);
             REQUIRE(opened.has_value());
             const Snapshot& snapshot = *opened;
@@ -4085,7 +4067,7 @@ TEST_SUITE("index store snapshot") {
             CHECK(snapshot.read_stats().extents_read == 0);
 
             std::atomic<int> failures{0};
-            std::vector<std::thread> threads;
+            dstd::Vector<dstd::Thread> threads;
             for (int thread = 0; thread < 16; ++thread) {
                 threads.emplace_back([&snapshot, &scopes, &spec, &failures,
                                       thread] {
@@ -4094,8 +4076,8 @@ TEST_SUITE("index store snapshot") {
                                scopes.size()];
                     for (int batch = 0; batch < BATCHES; ++batch) {
                         for (int k = 0; k < KEYS; ++k) {
-                            const std::string key =
-                                "b" + std::to_string(batch) + "-" + key_of(k);
+                            const dstd::String key =
+                                "b" + dstd::to_string(batch) + "-" + key_of(k);
                             auto found =
                                 snapshot.get(spec, scope, view_of(key));
                             if (!found.has_value() || !found->has_value() ||
@@ -4121,7 +4103,7 @@ TEST_SUITE("index store snapshot") {
                     }
                 });
             }
-            for (std::thread& thread : threads) thread.join();
+            for (dstd::Thread& thread : threads) thread.join();
             CHECK(failures.load() == 0);
 
             const store::engine::ReadStats reads = snapshot.read_stats();
@@ -4139,7 +4121,7 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir built("snapshot_check_built");
         const ScopeKey scope = file_scope("/traces/check.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
-        const std::string path = built.file("w-check.dfs");
+        const dstd::String path = built.file("w-check.dfs");
 
         // A segment of two entries of equal size, with the two of them swapped:
         // every offset, length and count in it stays valid, its first key in
@@ -4149,12 +4131,13 @@ TEST_SUITE("index store snapshot") {
         std::uint32_t offset_in_extent = 0;
         {
             store::engine::SegmentBuilder builder;
-            builder.add(view_of(std::string("k1")), view_of(std::string("v1")));
-            builder.add(view_of(std::string("k2")), view_of(std::string("v2")));
+            builder.add(view_of(dstd::String("k1")),
+                        view_of(dstd::String("v1")));
+            builder.add(view_of(dstd::String("k2")),
+                        view_of(dstd::String("v2")));
             auto one = builder.seal(nullptr, nullptr, nullptr);
             REQUIRE(one.has_value());
-            dftracer::utils::dstd::Vector<std::uint8_t> segment =
-                std::move(*one);
+            dstd::Vector<std::uint8_t> segment = std::move(*one);
 
             constexpr std::size_t HEADER = 20;
             constexpr std::size_t GRANULE_INDEX = 8 + 1 + 2;
@@ -4169,13 +4152,13 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(file.has_value());
             store::engine::NamespaceItem namespaces;
             namespaces.local_id = 1;
-            namespaces.name = dstring("dftu.test.put");
+            namespaces.name = dstd::String("dftu.test.put");
             namespaces.format_version = 0;
             file->add(std::move(namespaces));
             store::engine::ScopeItem scope_item;
             scope_item.local_id = 1;
             scope_item.kind = store::ScopeKind::File;
-            scope_item.paths.push_back(dstring("/traces/check.pfw"));
+            scope_item.paths.push_back(dstd::String("/traces/check.pfw"));
             file->add(std::move(scope_item));
             store::engine::CopyItem copy;
             copy.local_id = 1;
@@ -4209,7 +4192,7 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->read_stats().extents_read == 0);
 
-        auto found = snapshot->get(spec, scope, view_of(std::string("k2")));
+        auto found = snapshot->get(spec, scope, view_of(dstd::String("k2")));
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == "v2");
@@ -4224,7 +4207,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(report->bad_commits.empty());
         CHECK(report->segments == 1);
         REQUIRE(report->bad_segments.size() == 1);
-        CHECK(to_std(report->bad_segments[0].file) == "w-check.dfs");
+        CHECK(dstd::String(report->bad_segments[0].file) == "w-check.dfs");
         CHECK(report->bad_segments[0].extent_offset == listed.offset);
         CHECK(report->bad_segments[0].offset_in_extent == offset_in_extent);
         CHECK(snapshot->read_stats().extents_read == before.extents_read + 1);
@@ -4238,7 +4221,7 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
         write_scoped_file(dir, spec, scope, 3, 20, true);
 
-        const std::string path = only_data_file(dir.str());
+        const dstd::String path = only_data_file(dir.str());
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         REQUIRE(extent_refs_of(*reader).size() == 3);
@@ -4247,7 +4230,7 @@ TEST_SUITE("index store snapshot") {
             extent_refs_of(*reader)[1].ref.length,
             extent_refs_of(*reader)[1].ref.crc};
 
-        std::vector<std::uint8_t> bytes = read_file(path);
+        dstd::Vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(dead.offset + dead.length <= bytes.size());
         bytes[static_cast<std::size_t>(dead.offset) + 8U] ^= 0x01U;
         write_file(copy_dir.file("w-check-bad.dfs"), without_footer(bytes));
@@ -4264,7 +4247,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(report->segments == 2);
         CHECK(report->bad_segments.empty());
         REQUIRE(report->bad_commits.size() == 1);
-        CHECK(to_std(report->bad_commits[0].file) == "w-check-bad.dfs");
+        CHECK(dstd::String(report->bad_commits[0].file) == "w-check-bad.dfs");
         CHECK(report->bad_commits[0].sequence ==
               extent_refs_of(*reader)[1].sequence);
         CHECK(report->bytes_read > 0);
@@ -4274,12 +4257,12 @@ TEST_SUITE("index store snapshot") {
     TEST_CASE("a directory too large for the footer reads through its levels") {
         dftu_utils_test::ScopedTestDir dir("snapshot_directory_levels");
         const NamespaceSpec spec = put_spec("dftu.test.put");
-        const std::string path = dir.file("w-levels.dfs");
+        const dstd::String path = dir.file("w-levels.dfs");
         constexpr std::uint32_t SCOPES = 12000;
         const auto scope_path = [](std::uint32_t index) {
-            std::string digits = std::to_string(index);
-            return "/traces/" + std::string(1000, 'p') + "/s" +
-                   std::string(7 - digits.size(), '0') + digits + ".pfw";
+            dstd::String digits = dstd::to_string(index);
+            return "/traces/" + dstd::String(1000, 'p') + "/s" +
+                   dstd::String(7 - digits.size(), '0') + digits + ".pfw";
         };
 
         {
@@ -4288,13 +4271,13 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(file.has_value());
             store::engine::NamespaceItem namespaces;
             namespaces.local_id = 1;
-            namespaces.name = dstring("dftu.test.put");
+            namespaces.name = dstd::String("dftu.test.put");
             file->add(std::move(namespaces));
             for (std::uint32_t i = 0; i < SCOPES; ++i) {
                 store::engine::ScopeItem scope_item;
                 scope_item.local_id = i + 1;
                 scope_item.kind = store::ScopeKind::File;
-                scope_item.paths.push_back(dstring(scope_path(i)));
+                scope_item.paths.push_back(dstd::String(scope_path(i)));
                 file->add(std::move(scope_item));
                 store::engine::CopyItem copy;
                 copy.local_id = i + 1;
@@ -4338,12 +4321,12 @@ TEST_SUITE("index store snapshot") {
 
         auto listed = snapshot->generations();
         REQUIRE(listed.has_value());
-        const dftracer::utils::dstd::Vector<store::engine::ScopeGeneration>&
-            all = *listed;
+        const dstd::Vector<store::engine::ScopeGeneration>& all = *listed;
         REQUIRE(all.size() == SCOPES);
-        CHECK(to_std(all.front().scope.paths[0]) == scope_path(0));
+        CHECK(dstd::String(all.front().scope.paths[0]) == scope_path(0));
         CHECK(all.front().generation == 1);
-        CHECK(to_std(all.back().scope.paths[0]) == scope_path(SCOPES - 1));
+        CHECK(dstd::String(all.back().scope.paths[0]) ==
+              scope_path(SCOPES - 1));
         CHECK(all.back().generation == SCOPES);
     }
 
@@ -4353,15 +4336,16 @@ TEST_SUITE("index store snapshot") {
                                    file_scope("/traces/pages-c.pfw")};
         const NamespaceSpec spec = put_spec("dftu.test.pages");
         constexpr std::size_t KEYS_PER_SCOPE = 300;
-        const std::string value(512, 'v');
+        const dstd::String value(512, 'v');
         const auto key_at = [](std::size_t scope, std::size_t index) {
-            return "key-" + std::to_string(scope) + "-" + std::to_string(index);
+            return "key-" + dstd::to_string(scope) + "-" +
+                   dstd::to_string(index);
         };
 
         dftu_utils_test::ScopedTestDir dir("snapshot_extent_pages");
         WriterOptions options = small_extents();
         options.extent_size = 8U * 1024U * 1024U;
-        std::string path;
+        dstd::String path;
         {
             auto writer = make_writer(dir, options);
             auto id = writer->add_namespace(spec);
@@ -4374,7 +4358,7 @@ TEST_SUITE("index store snapshot") {
                 }
             }
             REQUIRE(flush_writer(*writer).has_value());
-            path = to_std(writer->path());
+            path = dstd::String(writer->path());
             REQUIRE(close_writer(*writer).has_value());
         }
 
@@ -4410,9 +4394,9 @@ TEST_SUITE("index store snapshot") {
     TEST_CASE("a namespace codec decides how its pages are stored") {
         const ScopeKey scope = file_scope("/traces/codec.pfw");
         constexpr std::size_t KEY_COUNT = 200;
-        const std::string value(512, 'v');
+        const dstd::String value(512, 'v');
         const auto key_at = [](std::size_t index) {
-            return "key-" + std::to_string(1000 + index);
+            return "key-" + dstd::to_string(1000 + index);
         };
         const auto codecs_written = [&](store::PageCodec codec) {
             NamespaceSpec spec = put_spec("dftu.test.codec");
@@ -4420,7 +4404,7 @@ TEST_SUITE("index store snapshot") {
             dftu_utils_test::ScopedTestDir dir("snapshot_namespace_codec");
             WriterOptions options = small_extents();
             options.extent_size = 8U * 1024U * 1024U;
-            std::string path;
+            dstd::String path;
             {
                 auto writer = make_writer(dir, options);
                 auto id = writer->add_namespace(spec);
@@ -4431,11 +4415,11 @@ TEST_SUITE("index store snapshot") {
                     REQUIRE(writer->commit(std::move(batch)).has_value());
                 }
                 REQUIRE(flush_writer(*writer).has_value());
-                path = to_std(writer->path());
+                path = dstd::String(writer->path());
                 REQUIRE(close_writer(*writer).has_value());
             }
 
-            std::vector<store::PageCodec> seen;
+            dstd::Vector<store::PageCodec> seen;
             auto reader = DataFileReader::open(path);
             REQUIRE(reader.has_value());
             for (const auto& indexed : extent_refs_of(*reader)) {
@@ -4474,16 +4458,16 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/granules.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.granules");
         constexpr std::size_t KEY_COUNT = 700;
-        const std::string value(400, 'v');
+        const dstd::String value(400, 'v');
         const auto key_at = [](std::size_t index) {
-            const std::string digits = std::to_string(index);
-            return "key-" + std::string(6 - digits.size(), '0') + digits;
+            const dstd::String digits = dstd::to_string(index);
+            return "key-" + dstd::String(6 - digits.size(), '0') + digits;
         };
 
         dftu_utils_test::ScopedTestDir dir("snapshot_segment_granules");
         WriterOptions options = small_extents();
         options.extent_size = 8U * 1024U * 1024U;
-        std::string path;
+        dstd::String path;
         {
             auto writer = make_writer(dir, options);
             auto id = writer->add_namespace(spec);
@@ -4494,7 +4478,7 @@ TEST_SUITE("index store snapshot") {
             }
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(flush_writer(*writer).has_value());
-            path = to_std(writer->path());
+            path = dstd::String(writer->path());
             REQUIRE(close_writer(*writer).has_value());
         }
 
@@ -4519,15 +4503,15 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->read_stats().extents_read == 1);
         CHECK(snapshot->read_stats().pages_decoded == 2);
 
-        const std::string absent = key_at(KEY_COUNT / 2) + "x";
+        const dstd::String absent = key_at(KEY_COUNT / 2) + "x";
         auto missing = snapshot->get(spec, scope, view_of(absent));
         REQUIRE(missing.has_value());
         CHECK_FALSE(missing->has_value());
         CHECK(snapshot->read_stats().pages_decoded <= 2);
 
         auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
-        const std::vector<dftracer::utils::dstd::Pair<std::string, std::string>>
-            rows = collect(cursor);
+        const dstd::Vector<dstd::Pair<dstd::String, dstd::String>> rows =
+            collect(cursor);
         REQUIRE(rows.size() == KEY_COUNT);
         for (std::size_t index = 0; index < rows.size(); ++index) {
             CHECK(rows[index].first == key_at(index));
@@ -4542,16 +4526,16 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/range_granules.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.range_granules");
         constexpr std::size_t KEY_COUNT = 700;
-        const std::string value(400, 'v');
+        const dstd::String value(400, 'v');
         const auto key_at = [](std::size_t index) {
-            const std::string digits = std::to_string(index);
-            return "key-" + std::string(6 - digits.size(), '0') + digits;
+            const dstd::String digits = dstd::to_string(index);
+            return "key-" + dstd::String(6 - digits.size(), '0') + digits;
         };
 
         dftu_utils_test::ScopedTestDir dir("snapshot_range_granules");
         WriterOptions options = small_extents();
         options.extent_size = 8U * 1024U * 1024U;
-        std::string path;
+        dstd::String path;
         {
             auto writer = make_writer(dir, options);
             auto id = writer->add_namespace(spec);
@@ -4562,7 +4546,7 @@ TEST_SUITE("index store snapshot") {
             }
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(flush_writer(*writer).has_value());
-            path = to_std(writer->path());
+            path = dstd::String(writer->path());
             REQUIRE(close_writer(*writer).has_value());
         }
 
@@ -4582,13 +4566,12 @@ TEST_SUITE("index store snapshot") {
                                     bool bounded) {
             auto snapshot = Snapshot::open(dir.str());
             REQUIRE(snapshot.has_value());
-            const std::string begin = key_at(from);
-            const std::string end = bounded ? key_at(to) : std::string();
+            const dstd::String begin = key_at(from);
+            const dstd::String end = bounded ? key_at(to) : dstd::String();
             auto cursor = snapshot->scan(spec, scope, view_of(begin),
                                          bounded ? view_of(end) : ByteView{});
-            const std::vector<
-                dftracer::utils::dstd::Pair<std::string, std::string>>
-                rows = collect(cursor);
+            const dstd::Vector<dstd::Pair<dstd::String, dstd::String>> rows =
+                collect(cursor);
             REQUIRE(rows.size() == to - from);
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 CHECK(rows[i].first == key_at(from + i));
@@ -4610,11 +4593,11 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.range_merge");
         constexpr std::size_t KEY_COUNT = 700;
         const auto key_at = [](std::size_t index) {
-            const std::string digits = std::to_string(index);
-            return "key-" + std::string(6 - digits.size(), '0') + digits;
+            const dstd::String digits = dstd::to_string(index);
+            return "key-" + dstd::String(6 - digits.size(), '0') + digits;
         };
-        const std::string old_value(400, 'a');
-        const std::string new_value(400, 'b');
+        const dstd::String old_value(400, 'a');
+        const dstd::String new_value(400, 'b');
 
         dftu_utils_test::ScopedTestDir dir("snapshot_range_merge");
         WriterOptions options = small_extents();
@@ -4628,8 +4611,8 @@ TEST_SUITE("index store snapshot") {
                 first.put(view_of(key_at(index)), view_of(old_value));
             }
             REQUIRE(writer->commit(std::move(first)).has_value());
-            const std::string erase_begin = key_at(310);
-            const std::string erase_end = key_at(315);
+            const dstd::String erase_begin = key_at(310);
+            const dstd::String erase_end = key_at(315);
             REQUIRE(writer
                         ->erase(*id, scope, view_of(erase_begin),
                                 view_of(erase_end))
@@ -4645,13 +4628,12 @@ TEST_SUITE("index store snapshot") {
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
-        const std::string begin = key_at(300);
-        const std::string end = key_at(330);
+        const dstd::String begin = key_at(300);
+        const dstd::String end = key_at(330);
         auto cursor = snapshot->scan(spec, scope, view_of(begin), view_of(end));
-        const std::vector<dftracer::utils::dstd::Pair<std::string, std::string>>
-            rows = collect(cursor);
-        std::vector<dftracer::utils::dstd::Pair<std::string, std::string>>
-            expected;
+        const dstd::Vector<dstd::Pair<dstd::String, dstd::String>> rows =
+            collect(cursor);
+        dstd::Vector<dstd::Pair<dstd::String, dstd::String>> expected;
         for (std::size_t index = 300; index < 330; ++index) {
             const bool put_again = index % 2 == 0;
             if (index >= 310 && index < 315 && !put_again) continue;
@@ -4667,17 +4649,17 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.wide_head");
         constexpr std::size_t KEY_COUNT = 400;
         // Long keys and two entries per granule make an index over one page.
-        const std::string value(16 * 1024, 'v');
+        const dstd::String value(16 * 1024, 'v');
         const auto key_at = [](std::size_t index) {
-            const std::string digits = std::to_string(index);
-            return std::string(240, 'k') + std::string(6 - digits.size(), '0') +
-                   digits;
+            const dstd::String digits = dstd::to_string(index);
+            return dstd::String(240, 'k') +
+                   dstd::String(6 - digits.size(), '0') + digits;
         };
 
         dftu_utils_test::ScopedTestDir dir("snapshot_wide_head");
         WriterOptions options = small_extents();
         options.extent_size = 16U * 1024U * 1024U;
-        std::string path;
+        dstd::String path;
         {
             auto writer = make_writer(dir, options);
             auto id = writer->add_namespace(spec);
@@ -4688,7 +4670,7 @@ TEST_SUITE("index store snapshot") {
             }
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(flush_writer(*writer).has_value());
-            path = to_std(writer->path());
+            path = dstd::String(writer->path());
             REQUIRE(close_writer(*writer).has_value());
         }
 
@@ -4713,7 +4695,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(to_std((*found)->bytes()) == value);
         CHECK(snapshot->read_stats().pages_decoded <= 6);
 
-        const std::string absent = key_at(KEY_COUNT / 2) + "x";
+        const dstd::String absent = key_at(KEY_COUNT / 2) + "x";
         auto missing = snapshot->get(spec, scope, view_of(absent));
         REQUIRE(missing.has_value());
         CHECK_FALSE(missing->has_value());
@@ -4725,23 +4707,25 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.wide_granule");
         // Two pages of value, below BIG_VALUE_BYTES, so the entry stays in a
         // granule that no page holds alone.
-        const std::string value(2 * store::engine::PAGE_BYTES, 'w');
+        const dstd::String value(2 * store::engine::PAGE_BYTES, 'w');
 
         dftu_utils_test::ScopedTestDir dir("snapshot_wide_granule");
         WriterOptions options = small_extents();
         options.extent_size = 8U * 1024U * 1024U;
-        std::string path;
+        dstd::String path;
         {
             auto writer = make_writer(dir, options);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer->batch(*id, scope, 0);
-            batch.put(view_of(std::string("a")), view_of(std::string("small")));
-            batch.put(view_of(std::string("m")), view_of(value));
-            batch.put(view_of(std::string("z")), view_of(std::string("small")));
+            batch.put(view_of(dstd::String("a")),
+                      view_of(dstd::String("small")));
+            batch.put(view_of(dstd::String("m")), view_of(value));
+            batch.put(view_of(dstd::String("z")),
+                      view_of(dstd::String("small")));
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(flush_writer(*writer).has_value());
-            path = to_std(writer->path());
+            path = dstd::String(writer->path());
             REQUIRE(close_writer(*writer).has_value());
         }
 
@@ -4759,13 +4743,13 @@ TEST_SUITE("index store snapshot") {
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
-        auto head = snapshot->get(spec, scope, view_of(std::string("a")));
+        auto head = snapshot->get(spec, scope, view_of(dstd::String("a")));
         REQUIRE(head.has_value());
         REQUIRE(head->has_value());
         CHECK(to_std((*head)->bytes()) == "small");
         CHECK(snapshot->read_stats().pages_decoded == 2);
 
-        auto wide = snapshot->get(spec, scope, view_of(std::string("m")));
+        auto wide = snapshot->get(spec, scope, view_of(dstd::String("m")));
         REQUIRE(wide.has_value());
         REQUIRE(wide->has_value());
         CHECK(to_std((*wide)->bytes()) == value);
@@ -4777,15 +4761,15 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.many-commits");
         constexpr int COMMITS = 300;
         constexpr std::size_t SCOPES = 3;
-        std::vector<ScopeKey> scopes;
+        dstd::Vector<ScopeKey> scopes;
         for (std::size_t s = 0; s < SCOPES; ++s) {
             scopes.push_back(
-                file_scope("/traces/m" + std::to_string(s) + ".pfw"));
+                file_scope("/traces/m" + dstd::to_string(s) + ".pfw"));
         }
-        const std::vector<std::map<std::string, std::string>> model =
+        const dstd::Vector<dstd::Map<dstd::String, dstd::String>> model =
             write_many_commits(dir, spec, scopes, COMMITS);
         REQUIRE(model.size() == SCOPES);
-        for (const std::map<std::string, std::string>& scope_model : model) {
+        for (const dstd::Map<dstd::String, dstd::String>& scope_model : model) {
             REQUIRE_FALSE(scope_model.empty());
         }
 
@@ -4806,9 +4790,8 @@ TEST_SUITE("index store snapshot") {
                 REQUIRE(found->has_value());
                 CHECK(to_std((*found)->bytes()) == row.second);
             }
-            const std::vector<
-                dftracer::utils::dstd::Pair<std::string, std::string>>
-                expected(model[s].begin(), model[s].end());
+            const dstd::Vector<dstd::Pair<dstd::String, dstd::String>> expected(
+                model[s].begin(), model[s].end());
             auto cursor =
                 snapshot->scan(spec, scopes[s], ByteView{}, ByteView{});
             CHECK(collect(cursor) == expected);
@@ -4824,10 +4807,10 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir damaged_dir("snapshot_shared_block_bad");
         const NamespaceSpec spec = put_spec("dftu.test.many-commits");
         constexpr int COMMITS = 300;
-        const std::vector<ScopeKey> scopes = {file_scope("/traces/one.pfw")};
+        const dstd::Vector<ScopeKey> scopes = {file_scope("/traces/one.pfw")};
         write_many_commits(dir, spec, scopes, COMMITS);
 
-        const std::string path = only_data_file(dir.str());
+        const dstd::String path = only_data_file(dir.str());
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         const ClosedSegments closed = closed_segments(*reader);
@@ -4845,7 +4828,7 @@ TEST_SUITE("index store snapshot") {
 
         // The last byte of the shared block breaks its crc: every commit that
         // points at it is bad, and no segment is walked.
-        std::vector<std::uint8_t> bytes = read_file(path);
+        dstd::Vector<std::uint8_t> bytes = read_file(path);
         const std::size_t last =
             static_cast<std::size_t>(closed.blocks[0].offset) +
             closed.blocks[0].length - 1U;
@@ -4861,7 +4844,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(broken->segments == 0);
         CHECK(broken->bad_commits.size() == closed.runs.size());
         for (const store::engine::BadCommit& bad : broken->bad_commits) {
-            CHECK(to_std(bad.file) == "shared.dfs");
+            CHECK(dstd::String(bad.file) == "shared.dfs");
         }
     }
 }

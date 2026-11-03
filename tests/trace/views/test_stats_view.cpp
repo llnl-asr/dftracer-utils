@@ -2,16 +2,17 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/statistics/stats_view.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <fstream>
-#include <functional>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -61,7 +62,8 @@ TEST_SUITE("stats via View") {
     TEST_CASE("category counts + total events") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
+        dstd::String gz =
+            create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dataframe::DataFrame cats =
@@ -79,7 +81,7 @@ TEST_SUITE("stats via View") {
     TEST_CASE("name and pid/tid group counts") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
+        dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dataframe::DataFrame names =
@@ -104,7 +106,7 @@ TEST_SUITE("stats via View") {
     TEST_CASE("StatsView::stats fills the full stats struct") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
+        dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         stats::ViewStats s = run_stats(
@@ -131,7 +133,7 @@ TEST_SUITE("stats via View") {
     TEST_CASE("fill_chunk_statistics populates the report model") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
+        dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         stats::ViewStats s = run_stats(
@@ -154,7 +156,7 @@ TEST_SUITE("stats via View") {
     TEST_CASE("materialize then collect matches a cold collect") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
+        dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         stats::ViewStats cold = run_stats(
@@ -185,7 +187,7 @@ TEST_SUITE("stats via View") {
     TEST_CASE("one partition scan materializes several rollups") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
+        dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dftracer::utils::Runtime rt;
@@ -200,7 +202,7 @@ TEST_SUITE("stats via View") {
                                               {{AggOp::Count, "", "n"}});
                                 s.materialize({GroupKey::name()},
                                               {{AggOp::Count, "", "n"}});
-                                return std::function<void(const ExportStats&)>(
+                                return dstd::Function<void(const ExportStats&)>(
                                     [](const ExportStats&) {});
                             });
                     co_await plan.collect();
@@ -224,7 +226,7 @@ TEST_SUITE("stats via View") {
     TEST_CASE("execute() serves materialized branches without scanning") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
+        dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dftracer::utils::Runtime rt;
@@ -239,7 +241,7 @@ TEST_SUITE("stats via View") {
                                               {{AggOp::Count, "", "n"}});
                                 s.materialize({GroupKey::name()},
                                               {{AggOp::Count, "", "n"}});
-                                return std::function<void(const ExportStats&)>(
+                                return dstd::Function<void(const ExportStats&)>(
                                     [](const ExportStats&) {});
                             });
                     co_await plan.collect();
@@ -259,7 +261,7 @@ TEST_SUITE("stats via View") {
                                 auto name =
                                     s.collect({GroupKey::name()},
                                               {{AggOp::Count, "", "n"}});
-                                return std::function<void(const ExportStats&)>(
+                                return dstd::Function<void(const ExportStats&)>(
                                     [&, cat](const ExportStats& st) {
                                         stats = st;
                                         cat_sum = sum_i64(cat.get(), "n");
@@ -277,7 +279,7 @@ TEST_SUITE("stats via View") {
     TEST_CASE("session aggregation spills under a tiny memory budget") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
+        dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // A 1-byte budget forces the AggFold to spill every group to a sorted
@@ -294,7 +296,7 @@ TEST_SUITE("stats via View") {
                             .branch([&](ViewSession& s) {
                                 auto c = s.collect({GroupKey::cat()},
                                                    {{AggOp::Count, "", "n"}});
-                                return std::function<void(const ExportStats&)>(
+                                return dstd::Function<void(const ExportStats&)>(
                                     [&, c](const ExportStats&) {
                                         cats = std::move(c.get());
                                     });
@@ -310,9 +312,9 @@ TEST_SUITE("stats via View") {
         REQUIRE(env.is_valid());
         // Distinct pid/tid groups: pid/tid are String group columns, so reading
         // them as int64 would yield garbage keys.
-        std::string pfw = env.get_dir() + "/pt.pfw";
+        dstd::String pfw = env.get_dir() + "/pt.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 10; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1000,)"
                        R"("tid":5000,"ts":)"
@@ -322,7 +324,7 @@ TEST_SUITE("stats via View") {
                        R"("tid":5001,"ts":)"
                     << (2000 + i * 10) << R"(,"dur":10,"args":{}})" << "\n";
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
@@ -340,7 +342,7 @@ TEST_SUITE("stats via View") {
     TEST_CASE("duration stats and time range") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
+        dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dataframe::DataFrame d =

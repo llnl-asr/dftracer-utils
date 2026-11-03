@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
@@ -11,7 +12,6 @@
 
 #include <algorithm>
 #include <fstream>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace;
@@ -34,7 +34,7 @@ struct AdmittedRun {
     std::uint64_t peak_reserved = 0;
 };
 
-AdmittedRun run_admitted(const std::string& file, const std::string& out_dir,
+AdmittedRun run_admitted(const dstd::String& file, const dstd::String& out_dir,
                          std::size_t groups, std::uint64_t total_bytes,
                          std::uint64_t reserve_bytes) {
     ExtractionAdmission admission(total_bytes, reserve_bytes, groups);
@@ -45,8 +45,7 @@ AdmittedRun run_admitted(const std::string& file, const std::string& out_dir,
         for (std::size_t i = 0; i < groups; ++i) {
             tasks.push_back(admitted_extract(
                 &admission, ChunkExtractorUtilityInput::from_files(
-                                static_cast<int>(i + 1),
-                                {dftracer::utils::dstd::String(file)})
+                                static_cast<int>(i + 1), {dstd::String(file)})
                                 .with_output_dir(dstd::String(out_dir))
                                 .with_app_name("bounded")
                                 .with_compression(true)
@@ -69,12 +68,12 @@ TEST_SUITE("ChunkExtractor") {
     TEST_CASE("ChunkExtractor - Basic extraction") {
         TestEnvironment env(100);
 
-        std::string test_file = env.create_dft_test_gzip_file(5);
+        dstd::String test_file = env.create_dft_test_gzip_file(5);
 
-        auto input = ChunkExtractorUtilityInput::from_files(
-                         0, {dftracer::utils::dstd::String(test_file)})
-                         .with_output_dir(dstd::String(env.get_dir()))
-                         .with_app_name("test");
+        auto input =
+            ChunkExtractorUtilityInput::from_files(0, {dstd::String(test_file)})
+                .with_output_dir(dstd::String(env.get_dir()))
+                .with_app_name("test");
 
         ChunkExtractorUtility extractor;
         auto output = extractor(input).get();
@@ -88,17 +87,17 @@ TEST_SUITE("ChunkExtractor") {
     TEST_CASE("ChunkExtractor - Rolls over at the chunk size") {
         TestEnvironment env(100);
 
-        std::string test_file = env.create_dft_test_gzip_file(20000);
+        dstd::String test_file = env.create_dft_test_gzip_file(20000);
 
         // A chunk ends at the first member end past its size, so small
         // members give several chunks.
-        auto input = ChunkExtractorUtilityInput::from_files(
-                         1, {dftracer::utils::dstd::String(test_file)})
-                         .with_output_dir(dstd::String(env.get_dir()))
-                         .with_app_name("test")
-                         .with_compression(true)
-                         .with_member_size(64 * 1024)
-                         .with_chunk_size(128 * 1024);
+        auto input =
+            ChunkExtractorUtilityInput::from_files(1, {dstd::String(test_file)})
+                .with_output_dir(dstd::String(env.get_dir()))
+                .with_app_name("test")
+                .with_compression(true)
+                .with_member_size(64 * 1024)
+                .with_chunk_size(128 * 1024);
 
         ChunkExtractorUtility extractor;
         auto output = extractor(input).get();
@@ -116,26 +115,26 @@ TEST_SUITE("ChunkExtractor") {
     TEST_CASE("ChunkExtractor - Reads files in order into one writer") {
         TestEnvironment env(100);
 
-        std::string first = env.create_dft_test_gzip_file(30);
-        std::string second = env.create_dft_test_gzip_file(40);
+        dstd::String first = env.create_dft_test_gzip_file(30);
+        dstd::String second = env.create_dft_test_gzip_file(40);
 
         ChunkExtractorUtility extractor;
         auto one = extractor(ChunkExtractorUtilityInput::from_files(
-                                 0, {dftracer::utils::dstd::String(first)})
+                                 0, {dstd::String(first)})
                                  .with_output_dir(dstd::String(env.get_dir()))
                                  .with_app_name("one"))
                        .get();
         auto two = extractor(ChunkExtractorUtilityInput::from_files(
-                                 0, {dftracer::utils::dstd::String(second)})
+                                 0, {dstd::String(second)})
                                  .with_output_dir(dstd::String(env.get_dir()))
                                  .with_app_name("two"))
                        .get();
-        auto both = extractor(ChunkExtractorUtilityInput::from_files(
-                                  0, {dftracer::utils::dstd::String(first),
-                                      dftracer::utils::dstd::String(second)})
-                                  .with_output_dir(dstd::String(env.get_dir()))
-                                  .with_app_name("both"))
-                        .get();
+        auto both =
+            extractor(ChunkExtractorUtilityInput::from_files(
+                          0, {dstd::String(first), dstd::String(second)})
+                          .with_output_dir(dstd::String(env.get_dir()))
+                          .with_app_name("both"))
+                .get();
 
         REQUIRE(one.success);
         REQUIRE(two.success);
@@ -146,11 +145,10 @@ TEST_SUITE("ChunkExtractor") {
     TEST_CASE("ChunkExtractor - A missing file fails the group") {
         TestEnvironment env(100);
 
-        auto input =
-            ChunkExtractorUtilityInput::from_files(
-                0, {dftracer::utils::dstd::String(env.get_dir() + "/no")})
-                .with_output_dir(dstd::String(env.get_dir()))
-                .with_app_name("test");
+        auto input = ChunkExtractorUtilityInput::from_files(
+                         0, {dstd::String(env.get_dir() + "/no")})
+                         .with_output_dir(dstd::String(env.get_dir()))
+                         .with_app_name("test");
 
         ChunkExtractorUtility extractor;
         auto output = extractor(input).get();
@@ -162,16 +160,16 @@ TEST_SUITE("ChunkExtractor") {
     TEST_CASE("ChunkExtractor - A file that is not gzip fails the group") {
         TestEnvironment env(100);
 
-        const std::string plain = env.get_dir() + "/plain.pfw.gz";
+        const dstd::String plain = env.get_dir() + "/plain.pfw.gz";
         {
-            std::ofstream out(plain.c_str());
+            dftu_utils_test::FileOut out(plain);
             out << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
         }
 
-        auto input = ChunkExtractorUtilityInput::from_files(
-                         0, {dftracer::utils::dstd::String(plain)})
-                         .with_output_dir(dstd::String(env.get_dir()))
-                         .with_app_name("test");
+        auto input =
+            ChunkExtractorUtilityInput::from_files(0, {dstd::String(plain)})
+                .with_output_dir(dstd::String(env.get_dir()))
+                .with_app_name("test");
 
         ChunkExtractorUtility extractor;
         auto output = extractor(input).get();
@@ -184,7 +182,7 @@ TEST_SUITE("ChunkExtractor") {
         CHECK(event_of_line("[").empty());
         CHECK(event_of_line("]").empty());
 
-        const std::string event = "{\"name\":\"read\",\"cat\":\"POSIX\"}";
+        const dstd::String event = "{\"name\":\"read\",\"cat\":\"POSIX\"}";
         CHECK(event_of_line(event) == event);
     }
 
@@ -205,13 +203,13 @@ TEST_SUITE("ChunkExtractor") {
 
     TEST_CASE("ChunkExtractor - A small budget bounds the extractions held") {
         TestEnvironment env(100);
-        const std::string file = env.create_dft_test_gzip_file(20000);
+        const dstd::String file = env.create_dft_test_gzip_file(20000);
 
         constexpr std::size_t GROUPS = 6;
         constexpr std::uint64_t RESERVE = 8 * 1024 * 1024;
 
-        const std::string loose_dir = env.get_dir() + "/loose";
-        const std::string tight_dir = env.get_dir() + "/tight";
+        const dstd::String loose_dir = env.get_dir() + "/loose";
+        const dstd::String tight_dir = env.get_dir() + "/tight";
         const auto loose =
             run_admitted(file, loose_dir, GROUPS, RESERVE * GROUPS, RESERVE);
         const auto tight =

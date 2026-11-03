@@ -3,9 +3,13 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -19,6 +23,7 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/groupmap_oracle.h>
 #include <trace/views/test_view_common.h>
 
@@ -26,9 +31,7 @@
 #include <array>
 #include <atomic>
 #include <fstream>
-#include <functional>
 #include <limits>
-#include <map>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -79,8 +82,8 @@ struct HistBin {
 };
 
 // Bins of a list<struct<lo,hi,count>> hist column at `row`.
-std::vector<HistBin> hist_bins(const dataframe::DataFrame& b, std::int64_t row,
-                               dstd::StringView name) {
+dstd::Vector<HistBin> hist_bins(const dataframe::DataFrame& b, std::int64_t row,
+                                dstd::StringView name) {
     const dataframe::Series& lc =
         b.columns[static_cast<std::size_t>(bcol(b, name))];
     const std::int32_t* off = lc.offsets();
@@ -91,7 +94,7 @@ std::vector<HistBin> hist_bins(const dataframe::DataFrame& b, std::int64_t row,
     const double* lop = lo.data<double>();
     const double* hip = hi.data<double>();
     const std::uint64_t* cntp = cnt.data<std::uint64_t>();
-    std::vector<HistBin> out;
+    dstd::Vector<HistBin> out;
     for (std::int32_t i = off[row]; i < off[row + 1]; ++i)
         out.push_back({lop[i], hip[i], cntp[i]});
     return out;
@@ -133,7 +136,7 @@ dataframe::DataFrame scan_only(const scan::ScanPlan& v) {
 
 // Build the aggregation tier every build makes, so the chunk partials can
 // answer without a scan.
-void build_tier_index(const std::string& gz) {
+void build_tier_index(const dstd::String& gz) {
     dftracer::utils::index::IndexerOptions options;
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
                                           options)
@@ -143,10 +146,10 @@ void build_tier_index(const std::string& gz) {
 // A trace with a numeric arg ("level") and overlapping durations, so one trace
 // exercises numeric reductions, per-arg dyn, sketches (Pct/Hist), SetUnion, and
 // occupancy at once. Two names per cat make SetUnion(name) non-trivial.
-std::string write_agg_trace(TestEnvironment& env) {
-    std::string pfw = env.get_dir() + "/agg_parity.pfw";
+dstd::String write_agg_trace(TestEnvironment& env) {
+    dstd::String pfw = env.get_dir() + "/agg_parity.pfw";
     {
-        std::ofstream ofs(pfw.c_str());
+        dftu_utils_test::FileOut ofs(pfw);
         for (int i = 0; i < 30; ++i)
             ofs << R"({"ph":"X","name":")" << (i % 2 ? "pread" : "read")
                 << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << (1000 + i)
@@ -156,7 +159,7 @@ std::string write_agg_trace(TestEnvironment& env) {
                 << (2000 + i * 5) << R"(,"dur":300,"args":{"level":)"
                 << (100 + i) << R"(}})" << "\n";
     }
-    std::string gz = pfw + ".gz";
+    dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dstd::fs::remove(pfw);
     return gz;
@@ -165,7 +168,7 @@ std::string write_agg_trace(TestEnvironment& env) {
 // Two aggregation frames equal, pairing rows by their composite key text so a
 // differently-ordered group set still compares row for row.
 void frames_equal(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
-                  const std::vector<std::string>& keys) {
+                  const dstd::Vector<dstd::String>& keys) {
     REQUIRE(a.names.size() == b.names.size());
     for (std::size_t i = 0; i < a.names.size(); ++i) {
         CHECK(a.names[i] == b.names[i]);
@@ -173,9 +176,9 @@ void frames_equal(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
     }
     REQUIRE(a.num_rows() == b.num_rows());
     auto keyed = [&](const dataframe::DataFrame& df) {
-        std::vector<dstd::Pair<std::string, std::int64_t>> rows;
+        dstd::Vector<dstd::Pair<dstd::String, std::int64_t>> rows;
         for (std::int64_t r = 0; r < df.num_rows(); ++r) {
-            std::string s;
+            dstd::String s;
             for (const auto& k : keys) s += bstr(df, r, k) + '\x1f';
             rows.emplace_back(std::move(s), r);
         }
@@ -203,8 +206,9 @@ TEST_SUITE("View") {
         "View - sort_by/topk match the vec kernels applied post-collect") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz =
+            create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto make = [&] {
             return View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::cat()})
@@ -238,8 +242,9 @@ TEST_SUITE("View") {
         "scan") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz =
+            create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         View base = View::from_file(dstd::String(gz), dstd::String(idx));
 
         auto run = base.session();
@@ -268,15 +273,15 @@ TEST_SUITE("View") {
         "View - session fold factory rides the shared scan with a collect") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);  // 50 events
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 20);  // 50 events
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         View base = View::from_file(dstd::String(gz), dstd::String(idx));
 
-        auto total = std::make_shared<std::atomic<std::uint64_t>>(0);
+        auto total = dstd::make_shared<std::atomic<std::uint64_t>>(0);
         dataframe::LazyResult<dataframe::DataFrame> plan =
             base.branch<dataframe::DataFrame>([total](ViewSession& s) {
                 s.attach_fold_factory(
-                    [total](dftracer::utils::dstd::StringIntern&)
+                    [total](dstd::StringIntern&)
                         -> dstd::UniquePtr<
                             dftracer::utils::trace::views::detail::Fold> {
                         return dstd::make_unique<CountFold>(total);
@@ -297,8 +302,9 @@ TEST_SUITE("View") {
         namespace cmp = dftracer::utils::trace::comparator;
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz =
+            create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         View base = View::from_file(dstd::String(gz), dstd::String(idx));
         Query posix = Query::from_string(R"(cat == "POSIX")").value();
         auto by_cat = [] { return dstd::Vector<GroupKey>{GroupKey::cat()}; };
@@ -306,14 +312,14 @@ TEST_SUITE("View") {
             return dstd::Vector<AggSpec>{{AggOp::Count, "", "n"}};
         };
 
-        auto j = std::make_shared<dataframe::DataFrame>();
-        auto c = std::make_shared<dataframe::DataFrame>();
+        auto j = dstd::make_shared<dataframe::DataFrame>();
+        auto c = dstd::make_shared<dataframe::DataFrame>();
         dataframe::LazyFrame plan = base.branch([=](ViewSession& s) {
             auto a = s.collect(by_cat(), count());
             auto b = s.collect(posix, by_cat(), count());
             auto jh = s.join(a, b, JoinType::Inner);  // n_key inferred (1)
             auto ch = s.compare(a, b);
-            return std::function<void(const ExportStats&)>(
+            return dstd::Function<void(const ExportStats&)>(
                 [j, c, jh, ch](const ExportStats&) {
                     *j = std::move(jh.get());
                     *c = std::move(ch.get());
@@ -354,11 +360,11 @@ TEST_SUITE("View") {
     TEST_CASE("View - session join rejects a foreign handle") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         View base = View::from_file(dstd::String(gz), dstd::String(idx));
 
-        auto foreign = std::make_shared<Deferred<dataframe::DataFrame>>();
+        auto foreign = dstd::make_shared<Deferred<dataframe::DataFrame>>();
         dataframe::LazyResult<dataframe::DataFrame> other =
             base.branch<dataframe::DataFrame>([foreign](ViewSession& s) {
                 *foreign =
@@ -381,8 +387,8 @@ TEST_SUITE("View") {
         const auto& F = fld::F;
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // Named field aggregates lower to the matching AggSpec, so the F form
         // and the AggSpec form produce the same table (same default col names).
@@ -403,7 +409,7 @@ TEST_SUITE("View") {
         REQUIRE(bhas(by_expr, "sum_dur"));
         REQUIRE(bhas(by_expr, "mean_dur"));
         REQUIRE(bhas(by_expr, "count"));
-        std::map<std::string, std::array<double, 3>> em, sm;
+        dstd::Map<dstd::String, std::array<double, 3>> em, sm;
         for (std::int64_t i = 0; i < by_expr.num_rows(); ++i)
             em[bstr(by_expr, i, "cat")] = {bnum(by_expr, i, "sum_dur"),
                                            bnum(by_expr, i, "mean_dur"),
@@ -418,9 +424,9 @@ TEST_SUITE("View") {
     TEST_CASE("View - an integer sum that overflows is null") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        const std::string pfw = env.get_dir() + "/overflow.pfw";
+        const dstd::String pfw = env.get_dir() + "/overflow.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             auto event = [&](const char* name, int ts, std::uint64_t dur) {
                 ofs << R"({"ph":"X","name":")" << name
                     << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
@@ -431,10 +437,10 @@ TEST_SUITE("View") {
             event("ok", 2000, 5);
             event("ok", 2001, 7);
         }
-        const std::string gz = pfw + ".gz";
+        const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto out = View::from_file(dstd::String(gz), dstd::String(idx))
                        .group_by({GroupKey::name()})
                        .agg({{AggOp::Sum, "dur", "t"}})
@@ -461,9 +467,9 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // Two cats, each with a numeric arg "level"; mean over the wildcard
         // path must match the mean the AggSpec form computes for that field.
-        std::string pfw = env.get_dir() + "/args.pfw";
+        dstd::String pfw = env.get_dir() + "/args.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 10; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i * 10) << R"(,"dur":5,"args":{"level":)" << i
@@ -473,10 +479,10 @@ TEST_SUITE("View") {
                     << (5000 + i * 10) << R"(,"dur":5,"args":{"level":)"
                     << (100 + i) << R"(}})" << "\n";
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto any = View::from_file(dstd::String(gz), dstd::String(idx))
                        .group_by({GroupKey::cat()})
@@ -487,7 +493,7 @@ TEST_SUITE("View") {
         REQUIRE(
             bhas(any, "level"));  // discovered numeric arg -> per-group mean
         REQUIRE(bhas(any, "count"));
-        std::map<std::string, double> level, count;
+        dstd::Map<dstd::String, double> level, count;
         for (std::int64_t i = 0; i < any.num_rows(); ++i) {
             level[bstr(any, i, "cat")] = bnum(any, i, "level");
             count[bstr(any, i, "cat")] = bnum(any, i, "count");
@@ -504,7 +510,7 @@ TEST_SUITE("View") {
                           .collect()
                           .get();
         REQUIRE(bhas(anysum, "sum_level"));
-        std::map<std::string, double> slevel;
+        dstd::Map<dstd::String, double> slevel;
         for (std::int64_t i = 0; i < anysum.num_rows(); ++i)
             slevel[bstr(anysum, i, "cat")] = bnum(anysum, i, "sum_level");
         CHECK(slevel["posix"] == doctest::Approx(45));   // sum 0..9
@@ -519,7 +525,7 @@ TEST_SUITE("View") {
                 .collect()
                 .get();
         REQUIRE(bhas(anypct, "p90_level"));
-        std::map<std::string, double> plevel;
+        dstd::Map<dstd::String, double> plevel;
         for (std::int64_t i = 0; i < anypct.num_rows(); ++i)
             plevel[bstr(anypct, i, "cat")] = bnum(anypct, i, "p90_level");
         CHECK(plevel["posix"] >= 7.0);
@@ -536,9 +542,9 @@ TEST_SUITE("View") {
     TEST_CASE("View - set_union collects distinct field values per group") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz =
+        dstd::String gz =
             create_mixed_trace(env, 30, 20);  // read/POSIX, fwrite/STDIO
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // Per-cat distinct names: each cat has exactly one name here.
         auto t = View::from_file(dstd::String(gz), dstd::String(idx))
@@ -548,7 +554,7 @@ TEST_SUITE("View") {
                      .collect()
                      .get();
         CHECK(bhas(t, "names"));
-        std::map<std::string, std::string> got;
+        dstd::Map<dstd::String, dstd::String> got;
         for (std::int64_t i = 0; i < t.num_rows(); ++i)
             got[bstr(t, i, "cat")] = bstr(t, i, "names");
         CHECK(got["posix"] == "read");
@@ -560,14 +566,14 @@ TEST_SUITE("View") {
                          .collect()
                          .get();
         REQUIRE(whole.num_rows() == 1);
-        const std::string joined = bstr(whole, 0, "names");
-        std::set<std::string> vals;
+        const dstd::String joined = bstr(whole, 0, "names");
+        dstd::Set<dstd::String> vals;
         for (std::size_t s = 0, i = 0; i <= joined.size(); ++i)
             if (i == joined.size() || joined[i] == '\x1e') {
                 vals.insert(joined.substr(s, i - s));
                 s = i + 1;
             }
-        CHECK(vals == std::set<std::string>{"read", "fwrite"});
+        CHECK(vals == dstd::Set<dstd::String>{"read", "fwrite"});
 
         // Distributed partial + merge preserves the union.
         dstd::String p = (View::from_file(dstd::String(gz), dstd::String(idx))
@@ -590,7 +596,7 @@ TEST_SUITE("View") {
         };
         make().materialize().get();
         auto back = make().collect().get();
-        std::map<std::string, std::string> rb;
+        dstd::Map<dstd::String, dstd::String> rb;
         for (std::int64_t i = 0; i < back.num_rows(); ++i)
             rb[bstr(back, i, "cat")] = bstr(back, i, "names");
         CHECK(rb["posix"] == "read");
@@ -600,8 +606,8 @@ TEST_SUITE("View") {
     TEST_CASE("View - export_counters out-of-core spill matches in-memory") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_bulk_counters(env, 400);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_bulk_counters(env, 400);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto run = [&](std::uint64_t budget) {
             StringSink s;
@@ -645,8 +651,8 @@ TEST_SUITE("View") {
         // SAMPLE convention (matches the dataframe engine and pandas): sample
         // variance of 200 consecutive ints is n(n+1)/12 = 200*201/12 = 3350;
         // mean 109.5.
-        std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 200, 0);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto row = [&](std::uint64_t budget) {
             auto t = View::from_file(dstd::String(gz), dstd::String(idx))
@@ -660,9 +666,9 @@ TEST_SUITE("View") {
                          .collect()
                          .get();
             REQUIRE(t.num_rows() == 1);
-            return std::vector<double>{bnum(t, 0, "m"), bnum(t, 0, "v"),
-                                       bnum(t, 0, "s"), bnum(t, 0, "sk"),
-                                       bnum(t, 0, "ku")};
+            return dstd::Vector<double>{bnum(t, 0, "m"), bnum(t, 0, "v"),
+                                        bnum(t, 0, "s"), bnum(t, 0, "sk"),
+                                        bnum(t, 0, "ku")};
         };
 
         auto in_mem = row(0);
@@ -680,8 +686,8 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // 200 POSIX events, dur = 10..209 (one cat group).
-        std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 200, 0);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto t = View::from_file(dstd::String(gz), dstd::String(idx))
                      .group_by({GroupKey::cat()})
@@ -707,8 +713,8 @@ TEST_SUITE("View") {
         "collect path") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 200, 0);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto make = [&] {
             return View::from_file(dstd::String(gz), dstd::String(idx))
@@ -750,8 +756,8 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // 200 POSIX events, dur = 10..209.
-        std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 200, 0);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto p99 = [&](std::uint64_t budget) {
             auto t = View::from_file(dstd::String(gz), dstd::String(idx))
@@ -775,8 +781,8 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // 200 POSIX events, dur = 10..209.
-        std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 200, 0);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto hist = [&](std::uint64_t budget) {
             auto t = View::from_file(dstd::String(gz), dstd::String(idx))
@@ -812,8 +818,8 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // 200 POSIX events at ts 1000,1100,..; 100us buckets -> ~200 groups,
         // enough that a 1-byte budget spills after nearly every batch.
-        std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 200, 0);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto run = [&](std::uint64_t budget) {
             auto t = View::from_file(dstd::String(gz), dstd::String(idx))
@@ -824,13 +830,13 @@ TEST_SUITE("View") {
                          .memory_budget(budget)
                          .collect()
                          .get();
-            std::vector<std::string> rows;
+            dstd::Vector<dstd::String> rows;
             for (std::int64_t i = 0; i < t.num_rows(); ++i) {
-                std::string s;
+                dstd::String s;
                 s += bstr(t, i, "time_bucket") + "|";
                 s += bstr(t, i, "cat") + "|";
-                s += std::to_string(bnum(t, i, "n")) + "|";
-                s += std::to_string(bnum(t, i, "total")) + "|";
+                s += dstd::to_string(bnum(t, i, "n")) + "|";
+                s += dstd::to_string(bnum(t, i, "total")) + "|";
                 rows.push_back(std::move(s));
             }
             std::sort(rows.begin(), rows.end());
@@ -846,8 +852,8 @@ TEST_SUITE("View") {
     TEST_CASE("trace scan - a transformed-key rollup serves only that key") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         StringSink sink;
         View::from_file(dstd::String(gz), dstd::String(idx))
             .sink_json(sink)
@@ -860,7 +866,7 @@ TEST_SUITE("View") {
         bucketed.transform = GroupKey::Transform::Bucket;
         bucketed.transform_args = {"rea"};
         auto names_of = [](const dataframe::DataFrame& df) {
-            std::vector<std::string> out;
+            dstd::Vector<dstd::String> out;
             for (std::int64_t i = 0; i < df.num_rows(); ++i)
                 out.push_back(bstr(df, i, "name"));
             std::sort(out.begin(), out.end());
@@ -875,7 +881,7 @@ TEST_SUITE("View") {
 
         // Same kind and field, no transform: a different key.
         CHECK(names_of(run(scan::collect_frame(count_by(GroupKey::name())))) ==
-              std::vector<std::string>{"fwrite", "read"});
+              dstd::Vector<dstd::String>{"fwrite", "read"});
         // The transformed key itself is still served, with the same groups.
         CHECK(names_of(run(scan::collect_frame(count_by(bucketed)))) ==
               bucketed_first);
@@ -886,26 +892,26 @@ TEST_SUITE("View") {
         "reads") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 200, 60);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 200, 60);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto canon = [](const dataframe::DataFrame& df) {
-            std::vector<std::string> rows;
+            dstd::Vector<dstd::String> rows;
             for (std::int64_t i = 0; i < df.num_rows(); ++i) {
-                std::string s;
+                dstd::String s;
                 for (const auto& c : df.columns) {
                     if (c.type() == dataframe::TypeId::String) {
-                        s += std::string(c.string_at(i)) + "|";
+                        s += dstd::String(c.string_at(i)) + "|";
                     } else if (c.type() == dataframe::TypeId::Int64) {
-                        s += std::to_string(static_cast<double>(
+                        s += dstd::to_string(static_cast<double>(
                                  c.data<std::int64_t>()[i])) +
                              "|";
                     } else if (c.type() == dataframe::TypeId::Uint64) {
-                        s += std::to_string(static_cast<double>(
+                        s += dstd::to_string(static_cast<double>(
                                  c.data<std::uint64_t>()[i])) +
                              "|";
                     } else {
-                        s += std::to_string(c.data<double>()[i]) + "|";
+                        s += dstd::to_string(c.data<double>()[i]) + "|";
                     }
                 }
                 rows.push_back(std::move(s));
@@ -947,26 +953,26 @@ TEST_SUITE("View") {
     TEST_CASE("View - materialize() builds the rollup without a table") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 200, 60);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 200, 60);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto canon = [](const dataframe::DataFrame& df) {
-            std::vector<std::string> rows;
+            dstd::Vector<dstd::String> rows;
             for (std::int64_t i = 0; i < df.num_rows(); ++i) {
-                std::string s;
+                dstd::String s;
                 for (const auto& c : df.columns) {
                     if (c.type() == dataframe::TypeId::String) {
-                        s += std::string(c.string_at(i)) + "|";
+                        s += dstd::String(c.string_at(i)) + "|";
                     } else if (c.type() == dataframe::TypeId::Int64) {
-                        s += std::to_string(static_cast<double>(
+                        s += dstd::to_string(static_cast<double>(
                                  c.data<std::int64_t>()[i])) +
                              "|";
                     } else if (c.type() == dataframe::TypeId::Uint64) {
-                        s += std::to_string(static_cast<double>(
+                        s += dstd::to_string(static_cast<double>(
                                  c.data<std::uint64_t>()[i])) +
                              "|";
                     } else {
-                        s += std::to_string(c.data<double>()[i]) + "|";
+                        s += dstd::to_string(c.data<double>()[i]) + "|";
                     }
                 }
                 rows.push_back(std::move(s));
@@ -1000,26 +1006,26 @@ TEST_SUITE("View") {
     TEST_CASE("View - a coarser query is served by rolling up a finer view") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 200, 60);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 200, 60);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto canon = [](const dataframe::DataFrame& df) {
-            std::vector<std::string> rows;
+            dstd::Vector<dstd::String> rows;
             for (std::int64_t i = 0; i < df.num_rows(); ++i) {
-                std::string s;
+                dstd::String s;
                 for (const auto& c : df.columns) {
                     if (c.type() == dataframe::TypeId::String) {
-                        s += std::string(c.string_at(i)) + "|";
+                        s += dstd::String(c.string_at(i)) + "|";
                     } else if (c.type() == dataframe::TypeId::Int64) {
-                        s += std::to_string(static_cast<double>(
+                        s += dstd::to_string(static_cast<double>(
                                  c.data<std::int64_t>()[i])) +
                              "|";
                     } else if (c.type() == dataframe::TypeId::Uint64) {
-                        s += std::to_string(static_cast<double>(
+                        s += dstd::to_string(static_cast<double>(
                                  c.data<std::uint64_t>()[i])) +
                              "|";
                     } else {
-                        s += std::to_string(c.data<double>()[i]) + "|";
+                        s += dstd::to_string(c.data<double>()[i]) + "|";
                     }
                 }
                 rows.push_back(std::move(s));
@@ -1055,26 +1061,26 @@ TEST_SUITE("View") {
         "View - a coarser time bucket is served by re-bucketing a finer one") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 200, 60);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 200, 60);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto canon = [](const dataframe::DataFrame& df) {
-            std::vector<std::string> rows;
+            dstd::Vector<dstd::String> rows;
             for (std::int64_t i = 0; i < df.num_rows(); ++i) {
-                std::string s;
+                dstd::String s;
                 for (const auto& c : df.columns) {
                     if (c.type() == dataframe::TypeId::String) {
-                        s += std::string(c.string_at(i)) + "|";
+                        s += dstd::String(c.string_at(i)) + "|";
                     } else if (c.type() == dataframe::TypeId::Int64) {
-                        s += std::to_string(static_cast<double>(
+                        s += dstd::to_string(static_cast<double>(
                                  c.data<std::int64_t>()[i])) +
                              "|";
                     } else if (c.type() == dataframe::TypeId::Uint64) {
-                        s += std::to_string(static_cast<double>(
+                        s += dstd::to_string(static_cast<double>(
                                  c.data<std::uint64_t>()[i])) +
                              "|";
                     } else {
-                        s += std::to_string(c.data<double>()[i]) + "|";
+                        s += dstd::to_string(c.data<double>()[i]) + "|";
                     }
                 }
                 rows.push_back(std::move(s));
@@ -1112,27 +1118,27 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // Two shards sharing one aggregation index (as the tier requires), so
         // the cross-shard rollup has a single anchor.
-        std::string a = create_mixed_trace(env, 100, 30);
-        std::string b = create_mixed_trace(env, 100, 30);
-        std::string shared = env.get_dir() + "/shared_idx";
+        dstd::String a = create_mixed_trace(env, 100, 30);
+        dstd::String b = create_mixed_trace(env, 100, 30);
+        dstd::String shared = env.get_dir() + "/shared_idx";
 
         auto canon = [](const dataframe::DataFrame& df) {
-            std::vector<std::string> rows;
+            dstd::Vector<dstd::String> rows;
             for (std::int64_t i = 0; i < df.num_rows(); ++i) {
-                std::string s;
+                dstd::String s;
                 for (const auto& c : df.columns) {
                     if (c.type() == dataframe::TypeId::String) {
-                        s += std::string(c.string_at(i)) + "|";
+                        s += dstd::String(c.string_at(i)) + "|";
                     } else if (c.type() == dataframe::TypeId::Int64) {
-                        s += std::to_string(static_cast<double>(
+                        s += dstd::to_string(static_cast<double>(
                                  c.data<std::int64_t>()[i])) +
                              "|";
                     } else if (c.type() == dataframe::TypeId::Uint64) {
-                        s += std::to_string(static_cast<double>(
+                        s += dstd::to_string(static_cast<double>(
                                  c.data<std::uint64_t>()[i])) +
                              "|";
                     } else {
-                        s += std::to_string(c.data<double>()[i]) + "|";
+                        s += dstd::to_string(c.data<double>()[i]) + "|";
                     }
                 }
                 rows.push_back(std::move(s));
@@ -1173,10 +1179,10 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // Two shards ("ranks"): user_pct {40,40} and {80,80} -> merged mean 60.
-        std::string a = create_counter_file(env, "a", {40, 40});
-        std::string b = create_counter_file(env, "b", {80, 80});
-        std::string ia = std::string(determine_index_path(a, ""));
-        std::string ib = std::string(determine_index_path(b, ""));
+        dstd::String a = create_counter_file(env, "a", {40, 40});
+        dstd::String b = create_counter_file(env, "b", {80, 80});
+        dstd::String ia = dstd::String(determine_index_path(a, ""));
+        dstd::String ib = dstd::String(determine_index_path(b, ""));
 
         auto view = [](dstd::Vector<ViewFile> files) {
             return View::from_files(std::move(files))
@@ -1210,7 +1216,7 @@ TEST_SUITE("View") {
         std::sort(sl.begin(), sl.end());
         CHECK(ml == sl);
         REQUIRE(ml.size() == 1);
-        CHECK(ml[0].find(R"("user_pct":60)") != std::string::npos);
+        CHECK(ml[0].find(R"("user_pct":60)") != dstd::String::npos);
     }
 
     TEST_CASE(
@@ -1218,8 +1224,8 @@ TEST_SUITE("View") {
         "scan") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = write_agg_trace(env);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = write_agg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         View base = View::from_file(dstd::String(gz), dstd::String(idx));
         scan::ScanPlan plan =
             scan::from_file(dstd::String(gz), dstd::String(idx));
@@ -1261,8 +1267,8 @@ TEST_SUITE("View") {
         "scan") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = write_agg_trace(env);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = write_agg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         scan::ScanPlan base =
             scan::from_file(dstd::String(gz), dstd::String(idx));
         auto by = [&](GroupKey gk, dstd::Vector<AggSpec> specs) {
@@ -1271,7 +1277,7 @@ TEST_SUITE("View") {
         };
 
         auto check = [&](const scan::ScanPlan& v,
-                         const std::vector<std::string>& keys) {
+                         const dstd::Vector<dstd::String>& keys) {
             dstd::String p = run(scan::aggregate_partial(v));
             dataframe::DataFrame merged = scan::merge_partials_to_table(v, {p});
             frames_equal(merged, engine_collect(v), keys);
@@ -1298,7 +1304,7 @@ TEST_SUITE("View") {
             vh, {run(scan::aggregate_partial(vh))});
         dataframe::DataFrame eh = engine_collect(vh);
         REQUIRE(mh.num_rows() == eh.num_rows());
-        std::map<std::string, std::int64_t> mrow, erow;
+        dstd::Map<dstd::String, std::int64_t> mrow, erow;
         for (std::int64_t r = 0; r < mh.num_rows(); ++r)
             mrow[bstr(mh, r, "cat")] = r;
         for (std::int64_t r = 0; r < eh.num_rows(); ++r)
@@ -1319,10 +1325,10 @@ TEST_SUITE("View") {
         "View - counter AggState partial merge matches a single-scan export") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string a = create_counter_file(env, "a", {40, 40});
-        std::string b = create_counter_file(env, "b", {80, 80});
-        std::string ia = std::string(determine_index_path(a, ""));
-        std::string ib = std::string(determine_index_path(b, ""));
+        dstd::String a = create_counter_file(env, "a", {40, 40});
+        dstd::String b = create_counter_file(env, "b", {80, 80});
+        dstd::String ia = dstd::String(determine_index_path(a, ""));
+        dstd::String ib = dstd::String(determine_index_path(b, ""));
         auto view = [](dstd::Vector<ViewFile> files) {
             return View::from_files(std::move(files))
                 .phase(Phase::Counters)
@@ -1357,8 +1363,8 @@ TEST_SUITE("View") {
     TEST_CASE("View - an aggregate partial with a bad wire tag is rejected") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = write_agg_trace(env);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = write_agg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         View v = View::from_file(dstd::String(gz), dstd::String(idx))
                      .group_by({GroupKey::cat()})
                      .agg({{AggOp::Count, "", "n"}});
@@ -1379,8 +1385,8 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // POSIX ts = 1000,1100,..,3900 (span 2900us). 1000us buckets -> 4
         // buckets.
-        std::string gz = create_mixed_trace(env, 30, 0);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 0);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto table = View::from_file(dstd::String(gz), dstd::String(idx))
                          .group_by({GroupKey::cat()})
@@ -1407,15 +1413,16 @@ TEST_SUITE("View") {
         // POSIX ts = 1000,1100,..,3900; trace min ts = 1000. Width 700 does not
         // divide 1000, so absolute vs min alignment land the first bucket
         // differently.
-        std::string gz = create_mixed_trace(env, 30, 0);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 0);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto first_bucket = [&](View v) {
             auto t = v.agg({{AggOp::Count, "", "n"}}).collect().get();
             std::int64_t lo = std::numeric_limits<std::int64_t>::max();
             for (std::int64_t i = 0; i < t.num_rows(); ++i)
                 lo = std::min<std::int64_t>(
-                    lo, std::stoll(bstr(t, i, "time_bucket")));
+                    lo, dftu_utils_test::to_number<long long>(
+                            bstr(t, i, "time_bucket")));
             return lo;
         };
 
@@ -1436,8 +1443,8 @@ TEST_SUITE("View") {
     TEST_CASE("View - collect with no group_by folds whole set into one row") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto table = View::from_file(dstd::String(gz), dstd::String(idx))
                          .agg({{AggOp::Count, "", "n"}})
@@ -1452,9 +1459,9 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // POSIX: read(10), write(99), read(20). The longest is "write".
-        std::string pfw = env.get_dir() + "/am.pfw";
+        dstd::String pfw = env.get_dir() + "/am.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
                 << "\n"
                 << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":99,"args":{}})"
@@ -1462,10 +1469,10 @@ TEST_SUITE("View") {
                 << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1200,"dur":20,"args":{}})"
                 << "\n";
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto table = View::from_file(dstd::String(gz), dstd::String(idx))
                          .group_by({GroupKey::cat()})
@@ -1486,9 +1493,9 @@ TEST_SUITE("View") {
         // Two processes, each declared once by a PR metadata record mapping
         // pid -> rank. Grouping by rank harvests that map during the scan and
         // relabels the pid groups to "0"/"1" at the resolver, like host_name.
-        std::string pfw = env.get_dir() + "/rank.pfw";
+        dstd::String pfw = env.get_dir() + "/rank.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"M","name":"PR","cat":"dftracer","pid":100,"tid":0,"args":{"name":"rank","value":"0"}})"
                 << "\n"
                 << R"({"ph":"M","name":"PR","cat":"dftracer","pid":200,"tid":0,"args":{"name":"rank","value":"1"}})"
@@ -1500,10 +1507,10 @@ TEST_SUITE("View") {
                 ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":200,"tid":1,"ts":)"
                     << (2000 + i * 10) << R"(,"dur":5,"args":{}})" << "\n";
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto table = View::from_file(dstd::String(gz), dstd::String(idx))
                          .group_by({GroupKey::rank()})
@@ -1512,7 +1519,7 @@ TEST_SUITE("View") {
                          .get();
 
         REQUIRE(bhas(table, "rank"));
-        std::map<std::string, double> n;
+        dstd::Map<dstd::String, double> n;
         for (std::int64_t i = 0; i < table.num_rows(); ++i)
             n[bstr(table, i, "rank")] = bnum(table, i, "n");
         CHECK(n["0"] == doctest::Approx(3));
@@ -1527,19 +1534,19 @@ TEST_SUITE("View") {
         // POSIX dur 10..39 (30), STDIO dur 20..39 (20). The custom fold splits
         // small (dur < 25) from big and keeps the big lines aside - the density
         // shape the built-in agg cannot express in one pass.
-        std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         struct Acc {
             std::size_t small = 0;
             double small_sum = 0;
-            std::vector<std::string> big;
+            dstd::Vector<dstd::String> big;
         };
         auto dur_of = [](dstd::StringView e) {
             auto p = e.find("\"dur\":");
             return p == dstd::StringView::npos
                        ? 0.0
-                       : std::strtod(std::string(e.substr(p + 6)).c_str(),
+                       : std::strtod(dstd::String(e.substr(p + 6)).c_str(),
                                      nullptr);
         };
         auto res =
@@ -1578,8 +1585,8 @@ TEST_SUITE("View") {
     TEST_CASE("View - map_batches honors the event limit (truncates)") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         struct Cnt {
             std::size_t n = 0;
@@ -1606,8 +1613,8 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // POSIX dur 10..39 (30), STDIO dur 20..39 (20).
-        std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         struct Small {
             std::size_t n = 0;
@@ -1645,7 +1652,7 @@ TEST_SUITE("View") {
                         {GroupKey::cat()},
                         {{AggOp::Count, "", "n"},
                          {AggOp::Sum, "dur", "sum_dur"}});
-                    return std::function<void(const ExportStats&)>(
+                    return dstd::Function<void(const ExportStats&)>(
                         [&stats](const ExportStats& st) { stats = st; });
                 });
         plan.collect().get();
@@ -1677,8 +1684,8 @@ TEST_SUITE("View") {
         "View - phase(Events) vs phase(Counters) separate ph=X and ph=C") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_trace_with_counters(env);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_trace_with_counters(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // Events: the 10 ph=X reads, no counters.
         StringSink ev;
@@ -1704,8 +1711,8 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // 30 POSIX reads, ts 1000..3900, dur 10..39.
-        std::string gz = create_mixed_trace(env, 30, 0);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 0);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         StringSink sink;
         View::from_file(dstd::String(gz), dstd::String(idx))
@@ -1726,9 +1733,9 @@ TEST_SUITE("View") {
 
         // Re-read the emitted counter trace as a View: phase(Counters) sees
         // them.
-        std::string out = env.get_dir() + "/agg.pfw.gz";
+        dstd::String out = env.get_dir() + "/agg.pfw.gz";
         dftu_utils_test::write_gz_trace(out, sink.buffer);
-        std::string out_idx = std::string(determine_index_path(out, ""));
+        dstd::String out_idx = dstd::String(determine_index_path(out, ""));
         StringSink reread;
         View::from_file(dstd::String(out), dstd::String(out_idx))
             .phase(Phase::Counters)
@@ -1743,9 +1750,9 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // "overlap" has two overlapping intervals (exact union 150 < sum
         // 200); "serial" has two disjoint ones (union == sum(dur)).
-        std::string pfw = env.get_dir() + "/occ.pfw";
+        dstd::String pfw = env.get_dir() + "/occ.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             auto ev = [&](const char* name, long ts, long dur) {
                 ofs << R"({"ph":"X","name":")" << name
                     << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
@@ -1756,10 +1763,10 @@ TEST_SUITE("View") {
             ev("serial", 1000, 100);
             ev("serial", 2000, 100);
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         dataframe::DataFrame b =
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .time_range(900, 2200)
@@ -1774,7 +1781,7 @@ TEST_SUITE("View") {
                 .get();
 
         REQUIRE(bhas(b, "busy_cell_us"));
-        auto row_of = [&](const std::string& nm) {
+        auto row_of = [&](const dstd::String& nm) {
             for (std::int64_t i = 0; i < b.num_rows(); ++i)
                 if (bstr(b, i, "name") == nm) return i;
             return static_cast<std::int64_t>(-1);
@@ -1805,8 +1812,8 @@ TEST_SUITE("View") {
 
     // Exact interval union of half-open [ts, ts+dur) events.
     static std::uint64_t exact_union(
-        const std::vector<dstd::Pair<long, long>>& iv) {
-        std::vector<dstd::Pair<long, long>> spans;
+        const dstd::Vector<dstd::Pair<long, long>>& iv) {
+        dstd::Vector<dstd::Pair<long, long>> spans;
         for (const auto& [ts, dur] : iv) spans.emplace_back(ts, ts + dur);
         std::sort(spans.begin(), spans.end());
         std::uint64_t total = 0;
@@ -1829,10 +1836,10 @@ TEST_SUITE("View") {
         return total;
     }
 
-    static void write_occ_trace(const std::string& pfw,
-                                const std::vector<dstd::Pair<long, long>>& iv,
+    static void write_occ_trace(const dstd::String& pfw,
+                                const dstd::Vector<dstd::Pair<long, long>>& iv,
                                 const char* name = "e") {
-        std::ofstream ofs(pfw.c_str());
+        dftu_utils_test::FileOut ofs(pfw);
         for (const auto& [ts, dur] : iv) {
             ofs << R"({"ph":"X","name":")" << name
                 << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
@@ -1846,19 +1853,19 @@ TEST_SUITE("View") {
         // Heavy overlap: many events over the same window; the old per-bucket
         // coverage bitmap coarsened cells on a wide window and drifted busy
         // toward sum(dur). The exact delta-map sweep must not.
-        std::vector<dstd::Pair<long, long>> iv;
+        dstd::Vector<dstd::Pair<long, long>> iv;
         for (int i = 0; i < 50; ++i) iv.emplace_back(1000 + i, 500);
         const std::uint64_t expect_union = exact_union(iv);
         std::uint64_t sum_dur = 0;
         for (const auto& [s, d] : iv) sum_dur += static_cast<std::uint64_t>(d);
         REQUIRE(expect_union < sum_dur);
 
-        std::string pfw = env.get_dir() + "/occ_dense.pfw";
+        dstd::String pfw = env.get_dir() + "/occ_dense.pfw";
         write_occ_trace(pfw, iv);
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         dataframe::DataFrame b =
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .time_range(0, 1000000)
@@ -1877,16 +1884,16 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // 4 events all overlapping at t=1150: peak depth is exactly 4.
-        std::vector<dstd::Pair<long, long>> iv = {
+        dstd::Vector<dstd::Pair<long, long>> iv = {
             {1000, 300}, {1050, 300}, {1100, 300}, {1149, 300}};
         const std::uint64_t expect_union = exact_union(iv);
 
-        std::string pfw = env.get_dir() + "/occ_peak.pfw";
+        dstd::String pfw = env.get_dir() + "/occ_peak.pfw";
         write_occ_trace(pfw, iv);
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         dataframe::DataFrame b =
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .time_range(0, 1000000)
@@ -1903,16 +1910,16 @@ TEST_SUITE("View") {
         "View - occupancy on non-overlapping intervals is exact and serial") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::vector<dstd::Pair<long, long>> iv = {
+        dstd::Vector<dstd::Pair<long, long>> iv = {
             {1000, 100}, {2000, 100}, {3000, 100}};
         std::uint64_t sum_dur = 300;
 
-        std::string pfw = env.get_dir() + "/occ_serial.pfw";
+        dstd::String pfw = env.get_dir() + "/occ_serial.pfw";
         write_occ_trace(pfw, iv);
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         dataframe::DataFrame b =
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .time_range(0, 1000000)
@@ -1933,15 +1940,15 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // Two intervals with a small gap; a coarse cell can merge them into
         // one covered span, so busy sits in [exact, exact + cell].
-        std::vector<dstd::Pair<long, long>> iv = {{1000, 90}, {1100, 90}};
+        dstd::Vector<dstd::Pair<long, long>> iv = {{1000, 90}, {1100, 90}};
         const std::uint64_t expect_exact = exact_union(iv);
 
-        std::string pfw = env.get_dir() + "/occ_tol.pfw";
+        dstd::String pfw = env.get_dir() + "/occ_tol.pfw";
         write_occ_trace(pfw, iv);
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         {
             dataframe::DataFrame b0 =
@@ -1979,8 +1986,8 @@ TEST_SUITE("View") {
         "scan") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = write_agg_trace(env);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = write_agg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         build_tier_index(gz);  // an EVENT tier answerable() would try
 
         auto make = [&] {
@@ -2007,8 +2014,8 @@ TEST_SUITE("View") {
         "scan") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = write_agg_trace(env);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = write_agg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         build_tier_index(gz);
         const dstd::Vector<AggSpec> occ{{AggOp::Busy, "", "busy"},
                                         {AggOp::Active, "", "active"},
@@ -2036,8 +2043,8 @@ TEST_SUITE("View") {
         "scan") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = write_agg_trace(env);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = write_agg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         build_tier_index(gz);
 
         auto make = [&] {
@@ -2063,9 +2070,9 @@ TEST_SUITE("View") {
     TEST_CASE("View - group_by resolves any field, top-level and nested") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string pfw = env.get_dir() + "/schemaless.pfw";
+        dstd::String pfw = env.get_dir() + "/schemaless.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             auto ev = [&](const char* type, const char* host, const char* tag0,
                           int v, long ts) {
                 ofs << R"({"ph":"X","name":"op","cat":"POSIX","type":")" << type
@@ -2079,18 +2086,18 @@ TEST_SUITE("View") {
             ev("posix", "B", "z", 9, 1200);
             ev("posix", "B", "z", 9, 1300);
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
-        auto counts = [&](const std::string& col, const GroupKey& gk) {
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        auto counts = [&](const dstd::String& col, const GroupKey& gk) {
             dataframe::DataFrame b =
                 View::from_file(dstd::String(gz), dstd::String(idx))
                     .group_by({gk})
                     .agg({{AggOp::Count, "", "n"}})
                     .collect()
                     .get();
-            std::map<std::string, double> m;
+            dstd::Map<dstd::String, double> m;
             for (std::int64_t i = 0; i < b.num_rows(); ++i)
                 m[bstr(b, i, col)] = bnum(b, i, "n");
             return m;
@@ -2119,7 +2126,7 @@ TEST_SUITE("View") {
                 .agg({{AggOp::Mean, "args.n.v", "mv"}})
                 .collect()
                 .get();
-        std::map<std::string, double> mv;
+        dstd::Map<dstd::String, double> mv;
         for (std::int64_t i = 0; i < b.num_rows(); ++i)
             mv[bstr(b, i, "args.meta.host")] = bnum(b, i, "mv");
         CHECK(mv["A"] == doctest::Approx(7.0));
@@ -2130,9 +2137,9 @@ TEST_SUITE("View") {
         "View - a same-named arg never shadows a top-level schema field") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string pfw = env.get_dir() + "/shadow.pfw";
+        dstd::String pfw = env.get_dir() + "/shadow.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             // Top-level type "mpi" on every record; four also carry an
             // unrelated args.type parameter (the shadowing trap).
             for (int i = 0; i < 4; ++i)
@@ -2143,18 +2150,18 @@ TEST_SUITE("View") {
                 ofs << R"({"ph":"X","name":"send","cat":"MPI","type":"mpi","pid":1,"tid":1,"ts":)"
                     << (2000 + i) << R"(,"dur":5,"args":{"count":10}})" << "\n";
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
-        auto counts = [&](const std::string& col, const GroupKey& gk) {
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        auto counts = [&](const dstd::String& col, const GroupKey& gk) {
             dataframe::DataFrame b =
                 View::from_file(dstd::String(gz), dstd::String(idx))
                     .group_by({gk})
                     .agg({{AggOp::Count, "", "n"}})
                     .collect()
                     .get();
-            std::map<std::string, double> m;
+            dstd::Map<dstd::String, double> m;
             for (std::int64_t i = 0; i < b.num_rows(); ++i)
                 m[bstr(b, i, col)] = bnum(b, i, "n");
             return m;
@@ -2177,9 +2184,9 @@ TEST_SUITE("View") {
     TEST_CASE("View - time_metric reads the CM record, no scan") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string pfw = env.get_dir() + "/time_metric.pfw";
+        dstd::String pfw = env.get_dir() + "/time_metric.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"name":"CM","ph":"M","cat":"dftracer","pid":0,"tid":0,)"
                    R"("args":{"name":"time_metric","value":"NS"}})"
                 << "\n";
@@ -2191,10 +2198,10 @@ TEST_SUITE("View") {
                 ts += 100;
             }
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         CHECK(View::from_file(dstd::String(gz), dstd::String(idx))
                   .time_metric() == trace::TimeMetric::Ns);

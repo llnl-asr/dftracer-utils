@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -12,10 +15,6 @@
 #include <testing_utilities.h>
 
 #include <cstddef>
-#include <fstream>
-#include <span>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::reader;
@@ -38,7 +37,7 @@ static CoroTask<std::size_t> count_lines(
 }
 
 static CoroTask<std::size_t> count_raw_bytes(
-    AsyncGenerator<dftracer::utils::dstd::Span<const char>> gen) {
+    AsyncGenerator<dstd::Span<const char>> gen) {
     std::size_t total = 0;
     while (auto chunk = co_await gen.next()) {
         total += chunk->size();
@@ -47,7 +46,7 @@ static CoroTask<std::size_t> count_raw_bytes(
 }
 
 static CoroTask<std::size_t> count_raw_chunks(
-    AsyncGenerator<dftracer::utils::dstd::Span<const char>> gen) {
+    AsyncGenerator<dstd::Span<const char>> gen) {
     std::size_t n = 0;
     while (auto chunk = co_await gen.next()) {
         ++n;
@@ -56,18 +55,18 @@ static CoroTask<std::size_t> count_raw_chunks(
 }
 
 // Collect line numbers from the generator.
-static CoroTask<std::vector<std::size_t>> collect_line_numbers(
+static CoroTask<dstd::Vector<std::size_t>> collect_line_numbers(
     AsyncGenerator<dftracer::utils::utilities::fileio::lines::Line> gen) {
-    std::vector<std::size_t> nums;
+    dstd::Vector<std::size_t> nums;
     while (auto line = co_await gen.next()) {
         nums.push_back(line->line_number);
     }
     co_return nums;
 }
 
-static CoroTask<std::vector<std::string>> collect_lines(
+static CoroTask<dstd::Vector<dstd::String>> collect_lines(
     AsyncGenerator<dftracer::utils::utilities::fileio::lines::Line> gen) {
-    std::vector<std::string> lines;
+    dstd::Vector<dstd::String> lines;
     while (auto line = co_await gen.next()) {
         lines.emplace_back(line->content);
     }
@@ -75,20 +74,20 @@ static CoroTask<std::vector<std::string>> collect_lines(
 }
 
 struct ParsedEvent {
-    std::string name;
-    std::string cat;
-    std::string ph;
+    dstd::String name;
+    dstd::String cat;
+    dstd::String ph;
 };
 
-static CoroTask<std::vector<ParsedEvent>> collect_json_events(
+static CoroTask<dstd::Vector<ParsedEvent>> collect_json_events(
     AsyncGenerator<JsonLine> gen) {
-    std::vector<ParsedEvent> events;
+    dstd::Vector<ParsedEvent> events;
     while (auto opt = co_await gen.next()) {
         auto* p = opt->parser;
         ParsedEvent ev;
-        if (auto v = p->get_string("name")) ev.name = std::string(*v);
-        if (auto v = p->get_string("cat")) ev.cat = std::string(*v);
-        if (auto v = p->get_string("ph")) ev.ph = std::string(*v);
+        if (auto v = p->get_string("name")) ev.name = dstd::String(*v);
+        if (auto v = p->get_string("cat")) ev.cat = dstd::String(*v);
+        if (auto v = p->get_string("ph")) ev.ph = dstd::String(*v);
         events.push_back(std::move(ev));
     }
     co_return events;
@@ -111,17 +110,14 @@ namespace {
 /// The result goes in its own directory: a gzip trace sitting directly in
 /// the temp root would pick up any .dftindex another test left there and be
 /// read through an index that does not list it.
-std::string gzip_fixture(const std::string& plain_path) {
-    const dftracer::utils::dstd::Path dir =
-        make_unique_test_path("trace_fixture");
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-    const std::string gz_path(
-        (dir /
-         (std::string(dftracer::utils::dstd::PathView(plain_path).filename()) +
-          ".gz"))
+dstd::String gzip_fixture(const dstd::String& plain_path) {
+    const dstd::Path dir = make_unique_test_path("trace_fixture");
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    const dstd::String gz_path(
+        (dir / (dstd::String(dstd::PathView(plain_path).filename()) + ".gz"))
             .str());
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain_path, gz_path));
-    (void)dftracer::utils::dstd::fs::remove(plain_path);
+    (void)dstd::fs::remove(plain_path);
     return gz_path;
 }
 }  // namespace
@@ -129,7 +125,7 @@ std::string gzip_fixture(const std::string& plain_path) {
 TEST_SUITE("TraceReader") {
     TEST_CASE("Read all lines without index") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
@@ -142,17 +138,16 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Read all lines with pre-built index") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
-        std::string index_dir = env.get_dir();
-        std::string index_path = env.get_index_path(gz_file);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String index_dir = env.get_dir();
+        dstd::String index_path = env.get_index_path(gz_file);
 
         auto indexer = CheckpointIndexerFactory::create(
             gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
-        REQUIRE(dftracer::utils::dstd::fs::exists(
-                    determine_index_path(gz_file, index_dir))
-                    .value());
+        REQUIRE(
+            dstd::fs::exists(determine_index_path(gz_file, index_dir)).value());
 
         TraceReader reader({.file_path = dstd::String(gz_file),
                             .index_dir = dstd::String(index_dir)});
@@ -165,8 +160,7 @@ TEST_SUITE("TraceReader") {
 
         SUBCASE("Indexed and unindexed counts match") {
             // Remove the index and re-read to compare.
-            dftracer::utils::dstd::fs::remove_all(
-                determine_index_path(gz_file, index_dir))
+            dstd::fs::remove_all(determine_index_path(gz_file, index_dir))
                 .has_value();
             TraceReader plain_reader({.file_path = dstd::String(gz_file)});
             CHECK_FALSE(plain_reader.has_index());
@@ -179,9 +173,9 @@ TEST_SUITE("TraceReader") {
         // Test data events carry args:{"ret":1024*i, ...}. Bare `ret` and
         // dotted `args.ret` must select the same events in the ValueMap path.
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
-        std::string index_dir = env.get_dir();
-        std::string index_path = env.get_index_path(gz_file);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String index_dir = env.get_dir();
+        dstd::String index_path = env.get_index_path(gz_file);
         auto indexer = CheckpointIndexerFactory::create(
             gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
@@ -205,7 +199,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Read with start_line skip") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
@@ -221,7 +215,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Read with end_line limit") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
@@ -235,7 +229,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("read_raw returns non-empty spans") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
         auto total = count_raw_bytes(reader.read_raw()).get();
@@ -244,7 +238,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("read_raw line_aligned=false returns raw bytes") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
         ReadConfig rc;
@@ -255,7 +249,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("read_raw multi_line=false yields single lines") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
         ReadConfig rc;
@@ -279,7 +273,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("read_raw with byte range returns subset") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto total = count_raw_bytes(reader.read_raw()).get();
@@ -295,17 +289,16 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("read_raw byte range works with index") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
-        std::string index_dir = env.get_dir();
-        std::string index_path = env.get_index_path(gz_file);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String index_dir = env.get_dir();
+        dstd::String index_path = env.get_index_path(gz_file);
 
         auto indexer = CheckpointIndexerFactory::create(
             gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
-        REQUIRE(dftracer::utils::dstd::fs::exists(
-                    determine_index_path(gz_file, index_dir))
-                    .value());
+        REQUIRE(
+            dstd::fs::exists(determine_index_path(gz_file, index_dir)).value());
 
         TraceReader reader({.file_path = dstd::String(gz_file),
                             .index_dir = dstd::String(index_dir)});
@@ -324,46 +317,48 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("read_lines plain file byte range completes current line") {
         auto test_file = make_unique_test_path("trace_reader_plain_range.pfw");
-        const std::string first_line =
+        const dstd::String first_line =
             R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":"X","args":{"ret":1}})";
-        const std::string second_line =
+        const dstd::String second_line =
             R"({"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2000,"dur":20,"ph":"X","args":{"ret":2}})";
-        const std::string third_line =
+        const dstd::String third_line =
             R"({"name":"close","cat":"POSIX","pid":1,"tid":1,"ts":3000,"dur":30,"ph":"X","args":{"ret":3}})";
         {
-            std::ofstream out(test_file.c_str());
-            out << first_line << "\n";
-            out << second_line << "\n";
-            out << third_line << "\n";
+            dstd::String out;
+            out += common::str_cat(first_line, "\n");
+            out += common::str_cat(second_line, "\n");
+            out += common::str_cat(third_line, "\n");
+            (void)dstd::fs::write_file(dstd::PathView(test_file), out);
         }
-        auto gz_file = gzip_fixture(std::string(test_file.str()));
+        auto gz_file = gzip_fixture(dstd::String(test_file.str()));
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
         rc.start_byte = 0;
         rc.end_byte =
-            first_line.size() + 1 + std::string(R"({"name":"write")").size();
+            first_line.size() + 1 + dstd::String(R"({"name":"write")").size();
 
         auto lines = collect_lines(reader.read_lines(rc)).get();
 
         REQUIRE(lines.size() == 2);
-        CHECK(lines[0].find(R"("name":"read")") != std::string::npos);
-        CHECK(lines[1].find(R"("name":"write")") != std::string::npos);
+        CHECK(lines[0].find(R"("name":"read")") != dstd::String::npos);
+        CHECK(lines[1].find(R"("name":"write")") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove(gz_file);
+        (void)dstd::fs::remove(gz_file);
     }
 
     TEST_CASE("read_lines plain file byte range skips partial first line") {
         auto test_file =
             make_unique_test_path("trace_reader_plain_skip_partial.pfw");
         {
-            std::ofstream out(test_file.c_str());
-            out << "alpha\n";
-            out << "beta\n";
-            out << "gamma\n";
+            dstd::String out;
+            out += "alpha\n";
+            out += "beta\n";
+            out += "gamma\n";
+            (void)dstd::fs::write_file(dstd::PathView(test_file), out);
         }
-        auto gz_file = gzip_fixture(std::string(test_file.str()));
+        auto gz_file = gzip_fixture(dstd::String(test_file.str()));
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
@@ -376,14 +371,14 @@ TEST_SUITE("TraceReader") {
         CHECK(lines[0] == "beta");
         CHECK(lines[1] == "gamma");
 
-        (void)dftracer::utils::dstd::fs::remove(gz_file);
+        (void)dstd::fs::remove(gz_file);
     }
 
     TEST_CASE("read_raw indexed and unindexed produce same chunk count") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
-        std::string index_dir = env.get_dir();
-        std::string index_path = env.get_index_path(gz_file);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String index_dir = env.get_dir();
+        dstd::String index_path = env.get_index_path(gz_file);
 
         TraceReader plain_reader({.file_path = dstd::String(gz_file)});
         CHECK_FALSE(plain_reader.has_index());
@@ -410,7 +405,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("read_raw small buffer_size produces more chunks") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig large_buf;
@@ -428,7 +423,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Query filters matching events") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto all = count_lines(reader.read_lines()).get();
@@ -443,7 +438,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Query with no matches returns zero lines") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
@@ -454,7 +449,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Query filters by name") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
@@ -462,7 +457,7 @@ TEST_SUITE("TraceReader") {
         auto lines = collect_lines(reader.read_lines(rc)).get();
         CHECK(lines.size() > 0);
         for (const auto& line : lines) {
-            CHECK(line.find("\"name\":\"read\"") != std::string::npos);
+            CHECK(line.find("\"name\":\"read\"") != dstd::String::npos);
         }
     }
 
@@ -470,16 +465,18 @@ TEST_SUITE("TraceReader") {
         auto test_file =
             make_unique_test_path("trace_reader_plain_query_range.pfw");
         {
-            std::ofstream out(test_file.c_str());
-            out << R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":"X","args":{"ret":1}})"
-                << "\n";
-            out << R"({"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2000,"dur":20,"ph":"X","args":{"ret":2}})"
-                << "\n";
+            dstd::String out;
+            out += common::str_cat(
+                R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":"X","args":{"ret":1}})",
+                "\n");
+            out += common::str_cat(
+                R"({"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2000,"dur":20,"ph":"X","args":{"ret":2}})",
+                "\n");
+            (void)dstd::fs::write_file(dstd::PathView(test_file), out);
         }
 
-        const auto uncompressed_size =
-            dftracer::utils::dstd::fs::file_size(test_file).value();
-        auto gz_file = gzip_fixture(std::string(test_file.str()));
+        const auto uncompressed_size = dstd::fs::file_size(test_file).value();
+        auto gz_file = gzip_fixture(dstd::String(test_file.str()));
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
@@ -490,14 +487,14 @@ TEST_SUITE("TraceReader") {
         auto lines = collect_lines(reader.read_lines(rc)).get();
 
         REQUIRE(lines.size() == 1);
-        CHECK(lines[0].find(R"("name":"write")") != std::string::npos);
+        CHECK(lines[0].find(R"("name":"write")") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove(gz_file);
+        (void)dstd::fs::remove(gz_file);
     }
 
     TEST_CASE("Query with AND narrows results") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc_cat;
@@ -514,7 +511,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Query with OR widens results") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc_read;
@@ -534,17 +531,16 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Query works with index") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
-        std::string index_dir = env.get_dir();
-        std::string index_path = env.get_index_path(gz_file);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String index_dir = env.get_dir();
+        dstd::String index_path = env.get_index_path(gz_file);
 
         auto indexer = CheckpointIndexerFactory::create(
             gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
-        REQUIRE(dftracer::utils::dstd::fs::exists(
-                    determine_index_path(gz_file, index_dir))
-                    .value());
+        REQUIRE(
+            dstd::fs::exists(determine_index_path(gz_file, index_dir)).value());
 
         TraceReader reader({.file_path = dstd::String(gz_file),
                             .index_dir = dstd::String(index_dir)});
@@ -555,13 +551,13 @@ TEST_SUITE("TraceReader") {
         auto lines = collect_lines(reader.read_lines(rc)).get();
         CHECK(lines.size() > 0);
         for (const auto& line : lines) {
-            CHECK(line.find("\"name\":\"read\"") != std::string::npos);
+            CHECK(line.find("\"name\":\"read\"") != dstd::String::npos);
         }
     }
 
     TEST_CASE("Query combines with line range") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
@@ -574,7 +570,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Empty query string reads all") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto all = count_lines(reader.read_lines()).get();
@@ -588,21 +584,24 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Query with index filters events per-line") {
         TestEnvironment env(100);
-        std::string pfw = env.get_dir() + "/multi_cat.pfw";
+        dstd::String pfw = env.get_dir() + "/multi_cat.pfw";
         {
-            std::ofstream out(pfw.c_str());
+            dstd::String out;
             for (int i = 0; i < 200; ++i) {
-                out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
-                    << (1000 + i) << R"(,"dur":10,"args":{}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
+                    (1000 + i), R"(,"dur":10,"args":{}})", "\n");
             }
             for (int i = 0; i < 200; ++i) {
-                out << R"({"ph":"X","name":"train","cat":"COMPUTE","pid":1,"tid":1,"ts":)"
-                    << (100000 + i) << R"(,"dur":500,"args":{}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"X","name":"train","cat":"COMPUTE","pid":1,"tid":1,"ts":)",
+                    (100000 + i), R"(,"dur":500,"args":{}})", "\n");
             }
+            (void)dstd::fs::write_file(dstd::PathView(pfw), out);
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dftracer::utils::dstd::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
 
         REQUIRE(dftu_utils_test::build_index(gz));
 
@@ -617,7 +616,7 @@ TEST_SUITE("TraceReader") {
         auto posix_lines = collect_lines(reader.read_lines(rc_posix)).get();
         CHECK(posix_lines.size() == 200);
         for (const auto& line : posix_lines) {
-            CHECK(line.find("\"cat\":\"POSIX\"") != std::string::npos);
+            CHECK(line.find("\"cat\":\"POSIX\"") != dstd::String::npos);
         }
 
         ReadConfig rc_compute;
@@ -633,17 +632,19 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Query file-level skip for raw bytes") {
         TestEnvironment env(100);
-        std::string pfw = env.get_dir() + "/raw_skip.pfw";
+        dstd::String pfw = env.get_dir() + "/raw_skip.pfw";
         {
-            std::ofstream out(pfw.c_str());
+            dstd::String out;
             for (int i = 0; i < 100; ++i) {
-                out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
-                    << (1000 + i) << R"(,"dur":10,"args":{}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
+                    (1000 + i), R"(,"dur":10,"args":{}})", "\n");
             }
+            (void)dstd::fs::write_file(dstd::PathView(pfw), out);
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dftracer::utils::dstd::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
 
         REQUIRE(dftu_utils_test::build_index(gz));
 
@@ -668,7 +669,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Chunk pruning skips non-matching checkpoints") {
         TestEnvironment env(100);
-        std::string pfw = env.get_dir() + "/multi_ckpt.pfw";
+        dstd::String pfw = env.get_dir() + "/multi_ckpt.pfw";
         constexpr int POSIX_BEFORE = 100;
         constexpr int COMPUTE_COUNT = 5;
         constexpr int POSIX_AFTER = 100;
@@ -676,28 +677,32 @@ TEST_SUITE("TraceReader") {
         // Each line is ~550 bytes (padded args). 205 events * 550 = ~112KB.
         // With 32KB checkpoint window -> 3-4 checkpoints.
         // COMPUTE events cluster in one checkpoint in the middle.
-        std::string pad(400, 'x');
+        dstd::String pad(400, 'x');
         {
-            std::ofstream out(pfw.c_str());
+            dstd::String out;
             for (int i = 0; i < POSIX_BEFORE; ++i) {
-                out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
-                    << (1000 + i) << R"(,"dur":10,"args":{"pad":")" << pad
-                    << R"("}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
+                    (1000 + i), R"(,"dur":10,"args":{"pad":")", pad, R"("}})",
+                    "\n");
             }
             for (int i = 0; i < COMPUTE_COUNT; ++i) {
-                out << R"({"ph":"X","name":"train","cat":"COMPUTE","pid":2,"tid":2,"ts":)"
-                    << (100000 + i) << R"(,"dur":500,"args":{"pad":")" << pad
-                    << R"("}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"X","name":"train","cat":"COMPUTE","pid":2,"tid":2,"ts":)",
+                    (100000 + i), R"(,"dur":500,"args":{"pad":")", pad,
+                    R"("}})", "\n");
             }
             for (int i = 0; i < POSIX_AFTER; ++i) {
-                out << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":)"
-                    << (200000 + i) << R"(,"dur":10,"args":{"pad":")" << pad
-                    << R"("}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":)",
+                    (200000 + i), R"(,"dur":10,"args":{"pad":")", pad, R"("}})",
+                    "\n");
             }
+            (void)dstd::fs::write_file(dstd::PathView(pfw), out);
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dftracer::utils::dstd::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
 
         REQUIRE(dftu_utils_test::build_index(gz, "",
                                              /*checkpoint_size=*/32 * 1024));
@@ -715,7 +720,7 @@ TEST_SUITE("TraceReader") {
         auto compute_lines = collect_lines(reader.read_lines(rc_compute)).get();
         CHECK(compute_lines.size() == COMPUTE_COUNT);
         for (const auto& line : compute_lines) {
-            CHECK(line.find("\"cat\":\"COMPUTE\"") != std::string::npos);
+            CHECK(line.find("\"cat\":\"COMPUTE\"") != dstd::String::npos);
         }
 
         // Full category query should still return all POSIX
@@ -735,7 +740,7 @@ TEST_SUITE("TraceReader") {
 TEST_SUITE("TraceReader::read_json") {
     TEST_CASE("read_json returns parsed events") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto events = collect_json_events(reader.read_json()).get();
@@ -747,7 +752,7 @@ TEST_SUITE("TraceReader::read_json") {
 
     TEST_CASE("read_json count matches read_lines count") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto line_count = count_lines(reader.read_lines()).get();
@@ -758,7 +763,7 @@ TEST_SUITE("TraceReader::read_json") {
 
     TEST_CASE("read_json query filters events") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto all = count_json_lines(reader.read_json()).get();
@@ -776,7 +781,7 @@ TEST_SUITE("TraceReader::read_json") {
 
     TEST_CASE("read_json query with no matches returns zero") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
@@ -787,7 +792,7 @@ TEST_SUITE("TraceReader::read_json") {
 
     TEST_CASE("read_json with AND query") {
         TestEnvironment env(100);
-        std::string gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
@@ -802,17 +807,20 @@ TEST_SUITE("TraceReader::read_json") {
 
     TEST_CASE("read_json matches read_lines query count") {
         TestEnvironment env(100);
-        std::string pfw = env.get_dir() + "/json_vs_lines.pfw";
+        dstd::String pfw = env.get_dir() + "/json_vs_lines.pfw";
         {
-            std::ofstream out(pfw.c_str());
+            dstd::String out;
             for (int i = 0; i < 100; ++i) {
-                out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
-                    << (1000 + i) << R"(,"dur":10,"args":{}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
+                    (1000 + i), R"(,"dur":10,"args":{}})", "\n");
             }
             for (int i = 0; i < 50; ++i) {
-                out << R"({"ph":"X","name":"train","cat":"COMPUTE","pid":2,"tid":2,"ts":)"
-                    << (100000 + i) << R"(,"dur":500,"args":{}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"X","name":"train","cat":"COMPUTE","pid":2,"tid":2,"ts":)",
+                    (100000 + i), R"(,"dur":500,"args":{}})", "\n");
             }
+            (void)dstd::fs::write_file(dstd::PathView(pfw), out);
         }
 
         auto gz = gzip_fixture(pfw);
@@ -826,34 +834,38 @@ TEST_SUITE("TraceReader::read_json") {
         CHECK(line_count == json_count);
         CHECK(json_count == 100);
 
-        (void)dftracer::utils::dstd::fs::remove(gz);
+        (void)dstd::fs::remove(gz);
     }
 
     TEST_CASE("read_json works with index and chunk pruning") {
         TestEnvironment env(100);
-        std::string pfw = env.get_dir() + "/json_indexed.pfw";
-        std::string pad(400, 'x');
+        dstd::String pfw = env.get_dir() + "/json_indexed.pfw";
+        dstd::String pad(400, 'x');
         {
-            std::ofstream out(pfw.c_str());
+            dstd::String out;
             for (int i = 0; i < 100; ++i) {
-                out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
-                    << (1000 + i) << R"(,"dur":10,"args":{"pad":")" << pad
-                    << R"("}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
+                    (1000 + i), R"(,"dur":10,"args":{"pad":")", pad, R"("}})",
+                    "\n");
             }
             for (int i = 0; i < 5; ++i) {
-                out << R"({"ph":"X","name":"train","cat":"COMPUTE","pid":2,"tid":2,"ts":)"
-                    << (100000 + i) << R"(,"dur":500,"args":{"pad":")" << pad
-                    << R"("}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"X","name":"train","cat":"COMPUTE","pid":2,"tid":2,"ts":)",
+                    (100000 + i), R"(,"dur":500,"args":{"pad":")", pad,
+                    R"("}})", "\n");
             }
             for (int i = 0; i < 100; ++i) {
-                out << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":)"
-                    << (200000 + i) << R"(,"dur":10,"args":{"pad":")" << pad
-                    << R"("}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":)",
+                    (200000 + i), R"(,"dur":10,"args":{"pad":")", pad, R"("}})",
+                    "\n");
             }
+            (void)dstd::fs::write_file(dstd::PathView(pfw), out);
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dftracer::utils::dstd::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
 
         REQUIRE(dftu_utils_test::build_index(gz, "",
                                              /*checkpoint_size=*/32 * 1024));
@@ -884,12 +896,14 @@ TEST_SUITE("TraceReader::read_json") {
     TEST_CASE("read_json parser fields are accessible") {
         auto test_file = make_unique_test_path("json_parser_fields.pfw");
         {
-            std::ofstream out(test_file.c_str());
-            out << R"({"ph":"X","name":"read","cat":"POSIX","pid":42,"tid":7,"ts":1000,"dur":10,"args":{"ret":1}})"
-                << "\n";
+            (void)dstd::fs::write_file(
+                dstd::PathView(test_file),
+                common::str_cat(
+                    R"({"ph":"X","name":"read","cat":"POSIX","pid":42,"tid":7,"ts":1000,"dur":10,"args":{"ret":1}})",
+                    "\n"));
         }
 
-        auto gz_file = gzip_fixture(std::string(test_file.str()));
+        auto gz_file = gzip_fixture(dstd::String(test_file.str()));
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
         auto events = collect_json_events(reader.read_json()).get();
@@ -898,6 +912,6 @@ TEST_SUITE("TraceReader::read_json") {
         CHECK(events[0].cat == "POSIX");
         CHECK(events[0].ph == "X");
 
-        (void)dftracer::utils::dstd::fs::remove(gz_file);
+        (void)dstd::fs::remove(gz_file);
     }
 }

@@ -11,22 +11,21 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 
-#include <string>
 #include <variant>
-#include <vector>
 
 namespace test_plugin_common {
 
 // Indexes an already-written gzip trace, discarding the export output; the
 // caller only needs the resulting ViewFile.
 inline dftracer::utils::trace::views::ViewFile index_trace(
-    const std::string& gz) {
+    const dftracer::utils::dstd::String& gz) {
     using dftracer::utils::trace::internal::determine_index_path;
     using View = dftracer::utils::trace::views::View;
     using ViewFile = dftracer::utils::trace::views::ViewFile;
     using ExportSink = dftracer::utils::trace::views::ExportSink;
 
-    const std::string idx = std::string(determine_index_path(gz, ""));
+    const dftracer::utils::dstd::String idx =
+        dftracer::utils::dstd::String(determine_index_path(gz, ""));
     struct Sink : ExportSink {
         void write(dftracer::utils::dstd::StringView) override {}
     } sink;
@@ -62,14 +61,14 @@ inline dftracer::utils::plugins::PluginRun run_set(
 }
 
 // Text bytes of a named result, or "(missing)" if `name` is not present.
-inline std::string result_text(dftracer::utils::plugins::PluginRun& run,
-                               const char* name) {
+inline dftracer::utils::dstd::String result_text(
+    dftracer::utils::plugins::PluginRun& run, const char* name) {
     auto it = run.results.results().find(name);
     if (it == run.results.results().end()) return "(missing)";
     const auto& bytes =
         std::get<dftracer::utils::dstd::Vector<std::byte>>(it->second);
-    return std::string(reinterpret_cast<const char*>(bytes.data()),
-                       bytes.size());
+    return dftracer::utils::dstd::String(
+        reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
 }  // namespace test_plugin_common

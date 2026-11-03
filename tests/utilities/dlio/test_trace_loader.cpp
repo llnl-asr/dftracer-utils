@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -8,8 +14,6 @@
 #include <testing_utilities.h>
 
 #include <cstdint>
-#include <fstream>
-#include <string>
 
 using namespace dftracer::utils;
 namespace agg = dftracer::utils::index::schemas::dft::agg;
@@ -35,30 +39,32 @@ constexpr Component COMPONENTS[] = {{"dataloader", "fetch.block", 100, 0},
 
 // One rank per file, all events inside one 5 s window, several gzip members
 // per file.
-std::string write_rank(const std::string& dir, int file,
-                       std::uint64_t& dur_sum) {
-    const std::string pfw = dir + "/rank_" + std::to_string(file) + ".pfw";
+dstd::String write_rank(const dstd::String& dir, int file,
+                        std::uint64_t& dur_sum) {
+    const dstd::String pfw = dir + "/rank_" + dstd::to_string(file) + ".pfw";
     {
-        std::ofstream ofs(pfw.c_str());
+        dstd::String ofs;
         const std::uint64_t pid = 1000 + static_cast<std::uint64_t>(file);
         std::uint64_t ts = BASE_TS;
         std::uint64_t id = 1;
-        ofs << "[\n";
+        ofs += "[\n";
         for (int i = 0; i < EVENTS_PER_NAME; ++i) {
             for (const auto& c : COMPONENTS) {
                 const std::uint64_t dur =
                     c.base_dur + static_cast<std::uint64_t>((i * 7) % 90);
-                if (std::string(c.name) == "fetch.block") dur_sum += dur;
-                ofs << R"({"id":)" << id++ << R"(,"pid":)" << pid
-                    << R"(,"tid":)" << pid << R"(,"name":")" << c.name
-                    << R"(","cat":")" << c.cat << R"(","ph":"X","ts":)" << ts
-                    << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
+                if (dstd::String(c.name) == "fetch.block") dur_sum += dur;
+                ofs += common::str_cat(R"({"id":)", id++, R"(,"pid":)", pid,
+                                       R"(,"tid":)", pid, R"(,"name":")",
+                                       c.name, R"(","cat":")", c.cat,
+                                       R"(","ph":"X","ts":)", ts, R"(,"dur":)",
+                                       dur, R"(,"args":{}})", "\n");
                 ts += dur;
             }
         }
-        ofs << "]\n";
+        ofs += "]\n";
+        (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
     return gz;
@@ -84,12 +90,12 @@ TEST_SUITE("dlio trace loader") {
         o.checkpoint_size = CHECKPOINT_SIZE;
         o.parallelism = 2;
         o.aggregation = config;
-        std::vector<std::string> paths;
+        dstd::Vector<dstd::String> paths;
         for (const auto& f : files) paths.emplace_back(f);
         auto ix = index::Indexer::open(
             dstd::Vector<dstd::String>(paths.begin(), paths.end()), o);
         ix.build();
-        const std::string index_path = std::string(
+        const dstd::String index_path = dstd::String(
             trace::internal::determine_index_path(paths[0], o.index_dir));
 
         const dlio::AggregatedTraces a =

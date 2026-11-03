@@ -3,12 +3,14 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/constants.h>
 #include <doctest/doctest.h>
 
 #include <cstdlib>
 #include <cstring>
-#include <string>
+
+using namespace dftracer::utils;
 
 namespace dut = dftracer::utils;
 namespace mem = dftracer::utils::memory;
@@ -138,8 +140,8 @@ TEST_CASE("a bad value is refused and names its variable") {
             REQUIRE_FALSE(config);
             CHECK(config.error().is_code(
                 dut::common::ErrorCode::InvalidArgument));
-            CHECK(config.error().message().find(name) != std::string::npos);
-            CHECK(config.error().message().find(bad) != std::string::npos);
+            CHECK(config.error().message().find(name) != dstd::String::npos);
+            CHECK(config.error().message().find(bad) != dstd::String::npos);
         }
     }
 }
@@ -164,7 +166,7 @@ TEST_CASE("memory statuses map to error codes") {
     CHECK(dut::common::error_code_of(Status::Cancelled) ==
           dftracer::utils::common::ErrorCode::Unknown);
 
-    CHECK(std::string(dut::common::error_code_name(
+    CHECK(dstd::String(dut::common::error_code_name(
               dftracer::utils::common::ErrorCode::MemoryBudgetExceeded)) ==
           "MEMORY_BUDGET_EXCEEDED");
     CHECK(dut::common::condition_of(

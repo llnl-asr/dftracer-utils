@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <testing_utilities.h>
 #include <trace/views/agg_parity_common.h>
 
 using namespace dftracer::utils;
@@ -19,9 +22,9 @@ TEST_SUITE("View") {
         // Overlapping intervals per name group: same-name events are 150 us
         // apart but each lasts 200 us, so pairs overlap (busy < sum(dur), peak
         // depth 2) while a third never joins them.
-        std::string pfw = env.get_dir() + "/occ_engine.pfw";
+        dstd::String pfw = env.get_dir() + "/occ_engine.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             const char* names[] = {"read", "write", "open"};
             int ts = 1000;
             for (int i = 0; i < 90; ++i) {
@@ -31,10 +34,10 @@ TEST_SUITE("View") {
                 ts += 50;
             }
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         namespace detail = dftracer::utils::trace::views::detail;
         auto collect_engine = [](const scan::ScanPlan& v) {
@@ -53,7 +56,7 @@ TEST_SUITE("View") {
         };
         auto check_match = [](const dataframe::DataFrame& a0,
                               const dataframe::DataFrame& b0,
-                              const dftracer::utils::dstd::String& key) {
+                              const dstd::String& key) {
             dataframe::DataFrame a = a0.sort_by(key, false);
             dataframe::DataFrame b = b0.sort_by(key, false);
             REQUIRE(a.names.size() == b.names.size());
@@ -143,9 +146,9 @@ TEST_SUITE("View") {
     TEST_CASE("View - global aggregation (no group_by) matches GroupMap") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string pfw = env.get_dir() + "/agg_global.pfw";
+        dstd::String pfw = env.get_dir() + "/agg_global.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             const char* names[] = {"read", "write", "open"};
             const char* cats[] = {"POSIX", "STDIO"};
             int ts = 1000;
@@ -157,10 +160,10 @@ TEST_SUITE("View") {
                 ts += 100;
             }
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto build = [&](std::uint64_t mem) {
             scan::ScanPlan v =
@@ -246,8 +249,8 @@ TEST_SUITE("View") {
     TEST_CASE("View - session collect matches a fresh engine scan") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 30, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         View base = View::from_file(dstd::String(gz), dstd::String(idx));
         const dstd::Vector<AggSpec> specs = {
             {AggOp::Count, "", "n"},
@@ -296,9 +299,9 @@ TEST_SUITE("View") {
     TEST_CASE("View - rank harvest resolves identically to the GroupMap path") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string pfw = env.get_dir() + "/agg_rank.pfw";
+        dstd::String pfw = env.get_dir() + "/agg_rank.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             for (int pid : {1, 2, 3})
                 ofs << R"({"name":"PR","cat":"dftracer","pid":)" << pid
                     << R"(,"tid":1,"ph":"M","args":{"name":"rank","value":")"
@@ -311,10 +314,10 @@ TEST_SUITE("View") {
                 ts += 100;
             }
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto q = [&] {
             return scan::agg(

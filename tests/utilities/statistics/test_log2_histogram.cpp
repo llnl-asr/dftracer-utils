@@ -6,7 +6,8 @@
 
 #include <cstdint>
 #include <limits>
-#include <string>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
@@ -105,16 +106,16 @@ TEST_SUITE("Log2Histogram") {
         h.add(1, 10);
         h.add(4, 20);
         h.add(100, 5);
-        dftracer::utils::dstd::String result = h.render_ascii(40, "us");
+        dstd::String result = h.render_ascii(40, "us");
         CHECK(!result.empty());
-        CHECK(result.find("us") != std::string::npos);
-        CHECK(result.find("#") != std::string::npos);
+        CHECK(result.find("us") != dstd::String::npos);
+        CHECK(result.find("#") != dstd::String::npos);
     }
 
     TEST_CASE("render_ascii - empty") {
         Log2Histogram h;
-        dftracer::utils::dstd::String result = h.render_ascii(40, "us");
-        CHECK(result.find("no data") != std::string::npos);
+        dstd::String result = h.render_ascii(40, "us");
+        CHECK(result.find("no data") != dstd::String::npos);
     }
 
     TEST_CASE("to_json / from_json round-trip") {
@@ -124,7 +125,7 @@ TEST_SUITE("Log2Histogram") {
         original.add(100, 10);
         original.add(1000000, 1);
 
-        dftracer::utils::dstd::String json = original.to_json();
+        dstd::String json = original.to_json();
         Log2Histogram restored = Log2Histogram::from_json(json);
 
         CHECK(restored.total_count() == original.total_count());
@@ -136,9 +137,9 @@ TEST_SUITE("Log2Histogram") {
     TEST_CASE("to_json - sparse representation") {
         Log2Histogram h;
         h.add(42, 1);
-        dftracer::utils::dstd::String json = h.to_json();
+        dstd::String json = h.to_json();
         // Should only contain one entry, not 65
-        CHECK(json.find("[[") != std::string::npos);
+        CHECK(json.find("[[") != dstd::String::npos);
     }
 
     TEST_CASE("from_json - empty/invalid") {

@@ -10,7 +10,8 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
-#include <string>
+
+using namespace dftracer::utils;
 
 #ifndef CONFIG_KEYS_PLUGIN_PATH
 #error "CONFIG_KEYS_PLUGIN_PATH must be defined by CMake"
@@ -22,7 +23,7 @@ using dftracer::utils::plugins::Plugins;
 namespace {
 
 // The fixture declares `label` required and `stride` optional.
-ConfigTree config_of(const std::string& json) {
+ConfigTree config_of(const dstd::String& json) {
     return ConfigTree::from_json_string(json);
 }
 
@@ -32,36 +33,32 @@ auto load(ConfigTree cfg) {
         .build();
 }
 
-bool has_substr(dftracer::utils::dstd::StringView hay,
-                dftracer::utils::dstd::StringView needle) {
-    return hay.find(needle) != dftracer::utils::dstd::StringView::npos;
+bool has_substr(dstd::StringView hay, dstd::StringView needle) {
+    return hay.find(needle) != dstd::StringView::npos;
 }
 
 }  // namespace
 
 TEST_CASE("a declared config is accepted and reported by describe()") {
     auto set = load(config_of(R"({"label": "rows", "stride": 2})"));
-    INFO(
-        (set.has_value() ? std::string{} : std::string(set.error().message())));
+    INFO((set.has_value() ? dstd::String{}
+                          : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
 
     auto info = set->describe();
     REQUIRE(info.size() == 1);
     const auto& keys = info[0].config_keys;
-    CHECK(std::any_of(
-        keys.begin(), keys.end(), [](const dftracer::utils::dstd::String& k) {
-            return has_substr(k, "stride (int) - rows counted per row");
-        }));
-    CHECK(std::any_of(keys.begin(), keys.end(),
-                      [](const dftracer::utils::dstd::String& k) {
-                          return has_substr(k, "label (string, required)");
-                      }));
+    CHECK(std::any_of(keys.begin(), keys.end(), [](const dstd::String& k) {
+        return has_substr(k, "stride (int) - rows counted per row");
+    }));
+    CHECK(std::any_of(keys.begin(), keys.end(), [](const dstd::String& k) {
+        return has_substr(k, "label (string, required)");
+    }));
     // The C++ SDK reads `query` off every config, so it is declared too and a
     // caller passing one is not told it is unknown.
-    CHECK(std::any_of(keys.begin(), keys.end(),
-                      [](const dftracer::utils::dstd::String& k) {
-                          return has_substr(k, "duql (string)");
-                      }));
+    CHECK(std::any_of(keys.begin(), keys.end(), [](const dstd::String& k) {
+        return has_substr(k, "duql (string)");
+    }));
 }
 
 TEST_CASE("an undeclared key fails the load instead of being ignored") {
@@ -84,8 +81,8 @@ TEST_CASE("a declared key of the wrong kind fails the load") {
 
 TEST_CASE("a `query` key is accepted alongside the declared ones") {
     auto set = load(config_of(R"({"label": "rows", "duql": "dur > 0"})"));
-    INFO(
-        (set.has_value() ? std::string{} : std::string(set.error().message())));
+    INFO((set.has_value() ? dstd::String{}
+                          : dstd::String(set.error().message())));
     CHECK(set.has_value());
 }
 

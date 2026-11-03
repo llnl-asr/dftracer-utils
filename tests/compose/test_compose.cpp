@@ -4,7 +4,10 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/compose.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -14,10 +17,8 @@
 #include <doctest/doctest.h>
 
 #include <atomic>
-#include <string>
 #include <tuple>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -53,8 +54,8 @@ struct ScopedSum {
     }
 };
 
-auto stringify = [](int x) -> coro::CoroTask<std::string> {
-    co_return std::to_string(x);
+auto stringify = [](int x) -> coro::CoroTask<dstd::String> {
+    co_return dstd::to_string(x);
 };
 
 }  // namespace
@@ -63,7 +64,7 @@ TEST_SUITE("compose") {
     TEST_CASE("pipe (|) chains ops, run on the runtime") {
         Runtime rt;
         auto pipeline = u::op(Doubler{}) | u::op(stringify);
-        std::string out;
+        dstd::String out;
         rt.block_on(coro::named("pipe", [&]() -> coro::CoroTask<void> {
             out = co_await pipeline(21);
         }()));
@@ -73,7 +74,7 @@ TEST_SUITE("compose") {
     TEST_CASE("all (&&) fans out, yields a tuple") {
         Runtime rt;
         auto fan = u::op(Doubler{}) && u::op(stringify);
-        dstd::Tuple<int, std::string> out;
+        dstd::Tuple<int, dstd::String> out;
         rt.block_on(coro::named("all", [&]() -> coro::CoroTask<void> {
             out = co_await fan(21);
         }()));
@@ -144,7 +145,7 @@ TEST_SUITE("compose") {
         dstd::Vector<int> out;
         rt.block_on(coro::named("map", [&]() -> coro::CoroTask<void> {
             // GCC 12.1 rejects a braced list inside co_await.
-            std::vector<int> in{1, 2, 3, 4};
+            dstd::Vector<int> in{1, 2, 3, 4};
             out = co_await doubled(std::move(in));
         }()));
         CHECK(out == dstd::Vector<int>{2, 4, 6, 8});
@@ -157,7 +158,7 @@ TEST_SUITE("compose") {
             u::fold(0, [](int acc, int x) { return acc + x; });
         int out = -1;
         rt.block_on(coro::named("mapreduce", [&]() -> coro::CoroTask<void> {
-            std::vector<int> in{1, 2, 3, 4};
+            dstd::Vector<int> in{1, 2, 3, 4};
             out = co_await sum_of_doubles(std::move(in));
         }()));
         CHECK(out == 20);  // (2+4+6+8)

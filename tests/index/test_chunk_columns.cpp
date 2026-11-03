@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
@@ -25,15 +30,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <limits>
-#include <map>
-#include <set>
-#include <sstream>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace agg = dftracer::utils::index::schemas::dft::agg;
@@ -48,8 +46,8 @@ constexpr std::size_t CHECKPOINT_SIZE = 4096;
 constexpr int RECORDS = 120;
 
 agg::ChunkColumn column_of(std::uint32_t path, agg::ColumnKind kind,
-                           const std::vector<std::uint64_t>& rows,
-                           const std::vector<std::uint64_t>& bits) {
+                           const dstd::Vector<std::uint64_t>& rows,
+                           const dstd::Vector<std::uint64_t>& bits) {
     agg::ChunkColumn column;
     column.path = path;
     column.kind = kind;
@@ -116,14 +114,14 @@ std::uint64_t double_bits_of(double v) {
 }
 
 bool same(const dstd::Vector<std::uint64_t>& got,
-          const std::vector<std::uint64_t>& want) {
+          const dstd::Vector<std::uint64_t>& want) {
     return got.size() == want.size() &&
            std::equal(got.begin(), got.end(), want.begin());
 }
 
 agg::ChunkColumn roundtrip_column(agg::ColumnKind kind,
-                                  const std::vector<std::uint64_t>& bits,
-                                  const std::vector<std::uint64_t>& rows,
+                                  const dstd::Vector<std::uint64_t>& bits,
+                                  const dstd::Vector<std::uint64_t>& rows,
                                   std::size_t block_rows) {
     auto block = core_block(block_rows);
     CHECK(rows.size() == bits.size());
@@ -175,27 +173,28 @@ struct Row {
     std::uint64_t pid = 0;
     std::uint64_t tid = 0;
     std::uint8_t phase = 0;
-    std::string cat;
-    std::string name;
-    std::string host;
-    std::string fhash;
-    std::map<std::string, Num, std::less<>> args;
+    dstd::String cat;
+    dstd::String name;
+    dstd::String host;
+    dstd::String fhash;
+    dstd::Map<dstd::String, Num, std::less<>> args;
 };
 
-dstd::StringView quoted(const std::string& text, dstd::StringView key) {
-    const std::string pattern = "\"" + std::string(key) + "\":\"";
+dstd::StringView quoted(const dstd::String& text, dstd::StringView key) {
+    const dstd::String pattern = "\"" + dstd::String(key) + "\":\"";
     const auto at = text.find(pattern);
-    if (at == std::string::npos) return {};
+    if (at == dstd::String::npos) return {};
     const auto from = at + pattern.size();
     const auto to = text.find('"', from);
-    if (to == std::string::npos) return {};
+    if (to == dstd::String::npos) return {};
     return dstd::StringView(text).substr(from, to - from);
 }
 
-bool number(const std::string& text, dstd::StringView key, std::uint64_t& out) {
-    const std::string pattern = "\"" + std::string(key) + "\":";
+bool number(const dstd::String& text, dstd::StringView key,
+            std::uint64_t& out) {
+    const dstd::String pattern = "\"" + dstd::String(key) + "\":";
     const auto at = text.find(pattern);
-    if (at == std::string::npos) return false;
+    if (at == dstd::String::npos) return false;
     const char* from = text.c_str() + at + pattern.size();
     char* end = nullptr;
     const auto value = std::strtoull(from, &end, 10);
@@ -212,9 +211,9 @@ std::uint8_t phase_of(dstd::StringView letter) {
     return 0;
 }
 
-Num classify(const std::string& text) {
+Num classify(const dstd::String& text) {
     Num n;
-    if (text.find_first_of(".eE") != std::string::npos) {
+    if (text.find_first_of(".eE") != dstd::String::npos) {
         n.kind = NumKind::Double;
         n.d = std::strtod(text.c_str(), nullptr);
     } else if (!text.empty() && text[0] == '-') {
@@ -235,7 +234,7 @@ Num classify(const std::string& text) {
     return n;
 }
 
-std::string trimmed(const std::string& text) {
+dstd::String trimmed(const dstd::String& text) {
     std::size_t begin = 0;
     std::size_t end = text.size();
     while (begin < end && std::isspace(static_cast<unsigned char>(text[begin])))
@@ -246,42 +245,42 @@ std::string trimmed(const std::string& text) {
     return text.substr(begin, end - begin);
 }
 
-Row parse_row(const std::string& line) {
+Row parse_row(const dstd::String& line) {
     Row row;
-    std::string head = line;
-    std::string args;
+    dstd::String head = line;
+    dstd::String args;
     const auto args_at = head.find("\"args\":{");
-    if (args_at != std::string::npos) {
+    if (args_at != dstd::String::npos) {
         const auto close = head.find('}', args_at);
-        REQUIRE(close != std::string::npos);
+        REQUIRE(close != dstd::String::npos);
         args = head.substr(args_at + 8, close - args_at - 8);
         head.erase(args_at, close + 1 - args_at);
     }
-    row.cat = std::string(quoted(head, "cat"));
-    row.name = std::string(quoted(head, "name"));
+    row.cat = dstd::String(quoted(head, "cat"));
+    row.name = dstd::String(quoted(head, "name"));
     row.phase = phase_of(quoted(head, "ph"));
-    row.host = std::string(quoted(args, "hhash"));
-    row.fhash = std::string(quoted(args, "fhash"));
+    row.host = dstd::String(quoted(args, "hhash"));
+    row.fhash = dstd::String(quoted(args, "fhash"));
     number(head, "pid", row.pid);
     number(head, "tid", row.tid);
     number(head, "ts", row.ts);
     row.has_dur = number(head, "dur", row.dur);
 
     std::size_t at = 0;
-    while ((at = args.find('"', at)) != std::string::npos) {
+    while ((at = args.find('"', at)) != dstd::String::npos) {
         const auto key_end = args.find('"', at + 1);
-        REQUIRE(key_end != std::string::npos);
-        const std::string key = args.substr(at + 1, key_end - at - 1);
+        REQUIRE(key_end != dstd::String::npos);
+        const dstd::String key = args.substr(at + 1, key_end - at - 1);
         const auto value_at = key_end + 2;
         REQUIRE(value_at < args.size());
         if (args[value_at] == '"') {
             const auto str_end = args.find('"', value_at + 1);
-            REQUIRE(str_end != std::string::npos);
+            REQUIRE(str_end != dstd::String::npos);
             at = str_end + 1;
             continue;
         }
         auto value_end = args.find(',', value_at);
-        if (value_end == std::string::npos) value_end = args.size();
+        if (value_end == dstd::String::npos) value_end = args.size();
         row.args.emplace(
             key,
             classify(trimmed(args.substr(value_at, value_end - value_at))));
@@ -290,12 +289,15 @@ Row parse_row(const std::string& line) {
     return row;
 }
 
-std::vector<Row> parse_trace(const std::string& text) {
-    std::vector<Row> rows;
-    std::istringstream in(text);
-    std::string line;
-    while (std::getline(in, line)) {
-        const std::string body = trimmed(line);
+dstd::Vector<Row> parse_trace(const dstd::String& text) {
+    dstd::Vector<Row> rows;
+    dstd::StringView rest = text;
+    while (!rest.empty()) {
+        const std::size_t eol = rest.find('\n');
+        const dstd::String line(rest.substr(0, eol));
+        rest = eol == dstd::StringView::npos ? dstd::StringView{}
+                                             : rest.substr(eol + 1);
+        const dstd::String body = trimmed(line);
         if (body.empty() || body[0] == '[' || body[0] == ']') continue;
         Row row = parse_row(body);
         if (row.phase == 4) continue;
@@ -305,85 +307,85 @@ std::vector<Row> parse_trace(const std::string& text) {
 }
 
 // The categories keep their case, so a block that lower-cases one is seen.
-std::string make_trace(int n) {
-    std::ostringstream text;
-    text << "[\n";
+dstd::String make_trace(int n) {
+    dstd::String text;
+    text += "[\n";
     for (int i = 0; i < n; ++i) {
         const int pid = 1 + i % 3;
         const int tid = 10 + i % 2;
         const std::uint64_t ts = 1000000 + static_cast<std::uint64_t>(i) * 997;
         if (i % 20 == 19) {
-            text << R"({"id":)" << i << R"(,"name":"meta","cat":"dftracer")"
-                 << R"(,"ph":"M","ts":)" << ts
-                 << R"(,"args":{"version":"1.0"}})" << "\n";
+            text += common::str_cat(R"({"id":)", i,
+                                    R"(,"name":"meta","cat":"dftracer")",
+                                    R"(,"ph":"M","ts":)", ts,
+                                    R"(,"args":{"version":"1.0"}})", "\n");
             continue;
         }
         switch (i % 5) {
             case 0:
             case 1:
-                text << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX")"
-                     << R"(,"pid":)" << pid << R"(,"tid":)" << tid
-                     << R"(,"ph":"X","ts":)" << ts << R"(,"dur":)" << i * 3 % 71
-                     << R"(,"args":{"ret":)" << (i * 13) % 4096
-                     << R"(,"offset":)" << i * 512
-                     << R"(,"hhash":"a1b2c3d4e5f60718")"
-                     << R"(,"fhash":"0123456789abcdef"}})" << "\n";
+                text += common::str_cat(
+                    R"({"id":)", i, R"(,"name":"read","cat":"POSIX")",
+                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"X","ts":)",
+                    ts, R"(,"dur":)", i * 3 % 71, R"(,"args":{"ret":)",
+                    (i * 13) % 4096, R"(,"offset":)", i * 512,
+                    R"(,"hhash":"a1b2c3d4e5f60718")",
+                    R"(,"fhash":"0123456789abcdef"}})", "\n");
                 break;
             case 2:
-                text << R"({"id":)" << i << R"(,"name":"app","cat":"App")"
-                     << R"(,"pid":)" << pid << R"(,"tid":)" << tid
-                     << R"(,"ph":"C","ts":)" << ts
-                     << R"(,"args":{"dur":0.25,"user_pct":41.25,"n":)" << i % 7
-                     << R"(,"state":"r"}})" << "\n";
+                text += common::str_cat(
+                    R"({"id":)", i, R"(,"name":"app","cat":"App")",
+                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"C","ts":)",
+                    ts, R"(,"args":{"dur":0.25,"user_pct":41.25,"n":)", i % 7,
+                    R"(,"state":"r"}})", "\n");
                 break;
             case 3:
-                text << R"({"id":)" << i << R"(,"name":"cpu","cat":"sys")"
-                     << R"(,"pid":)" << pid << R"(,"tid":)" << tid
-                     << R"(,"ph":"C","ts":)" << ts
-                     << R"(,"args":{"user_pct":41.25,"sys_pct":8.5)"
-                     << R"(,"mem":123456789,"level":)" << i % 4 << "}}\n";
+                text += common::str_cat(
+                    R"({"id":)", i, R"(,"name":"cpu","cat":"sys")",
+                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"C","ts":)",
+                    ts, R"(,"args":{"user_pct":41.25,"sys_pct":8.5)",
+                    R"(,"mem":123456789,"level":)", i % 4, "}}\n");
                 break;
             default:
-                text << R"({"id":)" << i << R"(,"name":"step","cat":"App")"
-                     << R"(,"pid":)" << pid << R"(,"tid":)" << tid
-                     << R"(,"ph":"A","ts":)" << ts << R"(,"dur":)" << i % 11
-                     << R"(,"args":{"offset":)" << 18446744073709551615ULL
-                     << R"(,"delta":-)" << i % 9 << R"(,"count":)" << i * 0.5
-                     << "}}\n";
+                text += common::str_cat(
+                    R"({"id":)", i, R"(,"name":"step","cat":"App")",
+                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"A","ts":)",
+                    ts, R"(,"dur":)", i % 11, R"(,"args":{"offset":)",
+                    18446744073709551615ULL, R"(,"delta":-)", i % 9,
+                    R"(,"count":)", i * 0.5, "}}\n");
                 break;
         }
     }
-    text << "]\n";
-    return text.str();
+    text += "]\n";
+    return text;
 }
 
-std::string write_gzip(const std::string& dir, const std::string& name,
-                       const std::string& text);
+dstd::String write_gzip(const dstd::String& dir, const dstd::String& name,
+                        const dstd::String& text);
 
 // Each trace gets its own name, so each sidecar index is distinct.
-std::string write_trace(const std::string& dir, const std::string& name,
-                        std::string& text) {
+dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
+                         dstd::String& text) {
     text = make_trace(RECORDS);
     return write_gzip(dir, name, text);
 }
 
-std::string write_gzip(const std::string& dir, const std::string& name,
-                       const std::string& text) {
-    const std::string sub = dir + "/" + name;
+dstd::String write_gzip(const dstd::String& dir, const dstd::String& name,
+                        const dstd::String& text) {
+    const dstd::String sub = dir + "/" + name;
     REQUIRE(dstd::fs::create_directories(sub).has_value());
-    const std::string pfw = sub + "/trace.pfw";
+    const dstd::String pfw = sub + "/trace.pfw";
     {
-        std::ofstream file(pfw.c_str());
-        file << text;
+        (void)dstd::fs::write_file(dstd::PathView(pfw), text);
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
     (void)dstd::fs::remove(pfw);
     return gz;
 }
 
-IndexerOptions options(const std::string& index_dir) {
+IndexerOptions options(const dstd::String& index_dir) {
     IndexerOptions o;
     o.index_dir = index_dir;
     o.checkpoint_size = CHECKPOINT_SIZE;
@@ -394,8 +396,8 @@ IndexerOptions options(const std::string& index_dir) {
     return o;
 }
 
-void build(const std::vector<std::string>& files,
-           const std::string& index_dir) {
+void build(const dstd::Vector<dstd::String>& files,
+           const dstd::String& index_dir) {
     dstd::Vector<dstd::String> paths;
     for (const auto& file : files) paths.emplace_back(file);
     Indexer::open(std::move(paths), options(index_dir)).build();
@@ -451,7 +453,7 @@ void check_row_args(const agg::ChunkColumns& block, std::size_t r,
 }
 
 void check_columns_against(const agg::ChunkColumns& block,
-                           const std::vector<Row>& rows, std::size_t at) {
+                           const dstd::Vector<Row>& rows, std::size_t at) {
     for (const agg::ChunkColumn& column : block.columns) {
         const auto& path = block.texts[column.path];
         CHECK_FALSE(path.empty());
@@ -461,7 +463,7 @@ void check_columns_against(const agg::ChunkColumns& block,
         for (std::size_t k = 0; k < column.rows.size(); ++k) {
             REQUIRE(at + column.rows[k] < rows.size());
             const Row& row = rows[at + column.rows[k]];
-            const auto found = row.args.find(std::string(path));
+            const auto found = row.args.find(dstd::String(path));
             REQUIRE_MESSAGE(found != row.args.end(), "no arg ", path.c_str(),
                             " on row ", column.rows[k]);
             CHECK(column.kind == found->second.column_kind());
@@ -473,12 +475,12 @@ void check_columns_against(const agg::ChunkColumns& block,
 struct Decoded {
     std::size_t blocks = 0;
     std::size_t rows = 0;
-    std::vector<std::uint64_t> chunks;
+    dstd::Vector<std::uint64_t> chunks;
 };
 
 Decoded read_and_check(const index::Snapshot& snapshot,
                        const index::FileRef& file,
-                       const std::vector<Row>& rows) {
+                       const dstd::Vector<Row>& rows) {
     Decoded out;
     std::size_t at = 0;
     auto scanned = index::for_each_agg_chunk_columns(
@@ -510,14 +512,14 @@ Decoded read_and_check(const index::Snapshot& snapshot,
     return out;
 }
 
-index::Snapshot open_index(const std::string& index_path) {
+index::Snapshot open_index(const dstd::String& index_path) {
     auto snapshot = index::plan::open_snapshot(index_path);
     REQUIRE_MESSAGE(snapshot.has_value(), "the index opens");
     return std::move(*snapshot);
 }
 
 index::FileRef file_of(const index::Snapshot& snapshot,
-                       const std::string& path) {
+                       const dstd::String& path) {
     auto file = snapshot.file(index::store::internal::get_logical_path(path));
     REQUIRE_MESSAGE(file.has_value(), "the file is in the index");
     return std::move(*file);
@@ -533,34 +535,36 @@ dstd::Span<const std::uint8_t> span_of(dstd::StringView bytes) {
 struct ColumnShape {
     dstd::String path;
     agg::ColumnKind kind = agg::ColumnKind::Int64;
-    std::vector<std::uint64_t> rows;
-    std::vector<std::uint64_t> bits;
+    dstd::Vector<std::uint64_t> rows;
+    dstd::Vector<std::uint64_t> bits;
 
     bool operator==(const ColumnShape&) const = default;
 };
 
 // A real DFTracer record whose args repeat a key. The block keeps the first
 // value of each repeated path.
-std::string repeated_key_trace() {
-    std::ostringstream text;
-    text << "[\n";
-    text << R"({"id":0,"name":"meta","cat":"dftracer","ph":"M","ts":1)"
-         << R"(,"args":{"version":"1.0"}})" << "\n";
+dstd::String repeated_key_trace() {
+    dstd::String text;
+    text += "[\n";
+    text += common::str_cat(
+        R"({"id":0,"name":"meta","cat":"dftracer","ph":"M","ts":1)",
+        R"(,"args":{"version":"1.0"}})", "\n");
     for (int i = 0; i < RECORDS; ++i) {
-        text << R"({"id":)" << i + 1 << R"(,"name":"cpu","cat":"sys")"
-             << R"(,"pid":1,"tid":1,"ph":"C","ts":)" << 5000 + i * 7
-             << R"(,"args":{"hhash":"h1","used":)" << 10 + i << R"(,"used":)"
-             << 90 + i << R"(,"nested":{"CPP_APP":)" << 100 + i
-             << R"(,"CPP_APP":)" << 200 + i << "}}}\n";
+        text +=
+            common::str_cat(R"({"id":)", i + 1, R"(,"name":"cpu","cat":"sys")",
+                            R"(,"pid":1,"tid":1,"ph":"C","ts":)", 5000 + i * 7,
+                            R"(,"args":{"hhash":"h1","used":)", 10 + i,
+                            R"(,"used":)", 90 + i, R"(,"nested":{"CPP_APP":)",
+                            100 + i, R"(,"CPP_APP":)", 200 + i, "}}}\n");
     }
-    text << "]\n";
-    return text.str();
+    text += "]\n";
+    return text;
 }
 
-std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> values_of(
+dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> values_of(
     const agg::ChunkColumns& block, dstd::StringView path,
     agg::ColumnKind kind) {
-    std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> out;
+    dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> out;
     const agg::ChunkColumn* column = column_for(block, path, kind);
     if (column == nullptr) return out;
     REQUIRE(column->rows.size() == column->bits.size());
@@ -569,28 +573,28 @@ std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> values_of(
     return out;
 }
 
-std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> first_values(
+dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> first_values(
     std::size_t rows, std::size_t at, std::int64_t first) {
-    std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> out;
+    dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> out;
     for (std::size_t r = 0; r < rows; ++r)
         out.emplace_back(r, static_cast<std::uint64_t>(
                                 first + static_cast<std::int64_t>(at + r)));
     return out;
 }
 
-std::map<std::uint64_t, std::vector<ColumnShape>> columns_of(
+dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> columns_of(
     const index::Snapshot& snapshot, const index::FileRef& file) {
-    std::map<std::uint64_t, std::vector<ColumnShape>> out;
+    dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> out;
     auto scanned = index::for_each_agg_chunk_columns(
         snapshot, file,
         [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
-            std::vector<ColumnShape> shapes;
+            dstd::Vector<ColumnShape> shapes;
             for (const agg::ChunkColumn& column : block.columns)
                 shapes.push_back({dstd::String(block.texts[column.path]),
                                   column.kind,
-                                  std::vector<std::uint64_t>(
+                                  dstd::Vector<std::uint64_t>(
                                       column.rows.begin(), column.rows.end()),
-                                  std::vector<std::uint64_t>(
+                                  dstd::Vector<std::uint64_t>(
                                       column.bits.begin(), column.bits.end())});
             out[chunk] = shapes;
             return true;
@@ -624,9 +628,9 @@ TEST_SUITE("ChunkColumns") {
     }
 
     TEST_CASE("decimals round trip bit exact") {
-        const std::vector<double> values = {
+        const dstd::Vector<double> values = {
             0.1, 12.5, 1e-7, 123456.789, -0.0, 1e300, 5e-324, 3.14159265358979};
-        std::vector<std::uint64_t> bits;
+        dstd::Vector<std::uint64_t> bits;
         for (const double v : values) bits.push_back(double_bits_of(v));
         const auto column = roundtrip_column(agg::ColumnKind::Double, bits,
                                              {0, 1, 2, 3, 4, 5, 6, 7}, 8);
@@ -635,16 +639,16 @@ TEST_SUITE("ChunkColumns") {
     }
 
     TEST_CASE("values of mixed exponents round trip bit exact") {
-        const std::vector<double> values = {0.1,   1,      1000, 0.001, 2.5,
-                                            1e-12, 1234.5, 7,    0.5,   1e12};
-        std::vector<std::uint64_t> bits;
+        const dstd::Vector<double> values = {0.1,   1,      1000, 0.001, 2.5,
+                                             1e-12, 1234.5, 7,    0.5,   1e12};
+        dstd::Vector<std::uint64_t> bits;
         for (const double v : values) bits.push_back(double_bits_of(v));
         roundtrip_column(agg::ColumnKind::Double, bits,
                          {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, 10);
     }
 
     TEST_CASE("NaN, its payload and the infinities round trip bit exact") {
-        const std::vector<std::uint64_t> bits = {
+        const dstd::Vector<std::uint64_t> bits = {
             0x7ff8000000000001ULL,
             0xfff0000000000000ULL,
             0x7ff0000000000000ULL,
@@ -661,8 +665,8 @@ TEST_SUITE("ChunkColumns") {
             state ^= state << 17;
             return state;
         };
-        std::vector<std::uint64_t> bits;
-        std::vector<std::uint64_t> rows;
+        dstd::Vector<std::uint64_t> bits;
+        dstd::Vector<std::uint64_t> rows;
         for (std::uint64_t k = 0; k < 300; ++k) {
             const std::uint64_t exponent = next() % 0x7fe + 1;
             const std::uint64_t mantissa = next() & 0x000fffffffffffffULL;
@@ -742,7 +746,7 @@ TEST_SUITE("ChunkColumns") {
         dstd::Vector<std::uint8_t> bytes;
         agg::encode_chunk_columns(block, block.columns.size(), bytes);
         const std::size_t ids = block.ids.size();
-        const std::vector<std::uint8_t> values = {2, 3, 4, 0x7f, 0x80, 0xff};
+        const dstd::Vector<std::uint8_t> values = {2, 3, 4, 0x7f, 0x80, 0xff};
         std::size_t accepted = 0;
         std::size_t rejected = 0;
         for (std::size_t at = 0; at < bytes.size(); ++at) {
@@ -778,15 +782,15 @@ TEST_SUITE("ChunkColumns") {
     TEST_CASE("an index stores every numeric field of every chunk") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
-        std::string text;
-        const std::string gz = write_trace(env.get_dir(), "trace", text);
+        dstd::String text;
+        const dstd::String gz = write_trace(env.get_dir(), "trace", text);
         const auto rows = parse_trace(text);
         REQUIRE(rows.size() > 0);
-        const std::string index_dir = env.get_dir() + "/idx";
+        const dstd::String index_dir = env.get_dir() + "/idx";
         build({gz}, index_dir);
 
         const auto index_path =
-            std::string(trace::internal::determine_index_path(gz, index_dir));
+            dstd::String(trace::internal::determine_index_path(gz, index_dir));
         const auto snapshot = open_index(index_path);
         const auto file = file_of(snapshot, gz);
         const auto decoded = read_and_check(snapshot, file, rows);
@@ -800,29 +804,30 @@ TEST_SUITE("ChunkColumns") {
     TEST_CASE("the file column names the file hash of a record, or no file") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
-        std::ostringstream text;
-        text << "[\n";
+        dstd::String text;
+        text += "[\n";
         for (int i = 0; i < RECORDS; ++i) {
-            text << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX")"
-                 << R"(,"pid":1,"tid":1,"ph":"X","ts":)" << 1000 + i * 7
-                 << R"(,"dur":1,"args":{"ret":)" << i;
-            if (i % 3 != 0) text << R"(,"fhash":"0123456789abcdef")";
-            text << "}}\n";
+            text += common::str_cat(
+                R"({"id":)", i, R"(,"name":"read","cat":"POSIX")",
+                R"(,"pid":1,"tid":1,"ph":"X","ts":)", 1000 + i * 7,
+                R"(,"dur":1,"args":{"ret":)", i);
+            if (i % 3 != 0) text += R"(,"fhash":"0123456789abcdef")";
+            text += "}}\n";
         }
-        text << "]\n";
-        const std::string body = text.str();
-        const std::string gz = write_gzip(env.get_dir(), "file_column", body);
-        const std::string index_dir = env.get_dir() + "/idx";
+        text += "]\n";
+        const dstd::String body = text;
+        const dstd::String gz = write_gzip(env.get_dir(), "file_column", body);
+        const dstd::String index_dir = env.get_dir() + "/idx";
         build({gz}, index_dir);
 
         const auto index_path =
-            std::string(trace::internal::determine_index_path(gz, index_dir));
+            dstd::String(trace::internal::determine_index_path(gz, index_dir));
         const auto snapshot = open_index(index_path);
         const auto file = file_of(snapshot, gz);
         const auto rows = parse_trace(body);
         std::size_t at = 0;
         std::size_t blocks = 0;
-        std::set<std::string> texts;
+        dstd::Set<dstd::String> texts;
         std::uint64_t first_chunk = 0;
         dstd::Vector<std::uint32_t> first_file;
         dstd::Vector<dstd::String> first_texts;
@@ -835,14 +840,14 @@ TEST_SUITE("ChunkColumns") {
                     first_file = block.file;
                     first_texts = block.texts;
                 }
-                std::set<std::uint32_t> ids;
+                dstd::Set<std::uint32_t> ids;
                 for (std::size_t r = 0; r < block.rows; ++r) {
                     REQUIRE(at + r < rows.size());
                     REQUIRE(block.file[r] < block.texts.size());
                     CHECK(block.texts[block.file[r]] ==
                           rows[at + r].fhash.c_str());
                     ids.insert(block.file[r]);
-                    texts.insert(std::string(block.texts[block.file[r]]));
+                    texts.insert(dstd::String(block.texts[block.file[r]]));
                 }
                 CHECK(ids.size() == 2);
                 at += block.rows;
@@ -869,21 +874,21 @@ TEST_SUITE("ChunkColumns") {
     TEST_CASE("merge_shard_set copies the column blocks") {
         dftu_utils_test::TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string text_a;
-        std::string text_b;
-        const std::string a = write_trace(env.get_dir(), "alpha", text_a);
-        const std::string b = write_trace(env.get_dir(), "beta", text_b);
+        dstd::String text_a;
+        dstd::String text_b;
+        const dstd::String a = write_trace(env.get_dir(), "alpha", text_a);
+        const dstd::String b = write_trace(env.get_dir(), "beta", text_b);
         const auto rows_a = parse_trace(text_a);
         const auto rows_b = parse_trace(text_b);
-        const std::string ia =
-            std::string(trace::internal::determine_index_path(a, ""));
-        const std::string ib =
-            std::string(trace::internal::determine_index_path(b, ""));
+        const dstd::String ia =
+            dstd::String(trace::internal::determine_index_path(a, ""));
+        const dstd::String ib =
+            dstd::String(trace::internal::determine_index_path(b, ""));
         build({a}, "");
         build({b}, "");
 
-        std::map<std::uint64_t, std::vector<ColumnShape>> before_a;
-        std::map<std::uint64_t, std::vector<ColumnShape>> before_b;
+        dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> before_a;
+        dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> before_b;
         {
             const auto snapshot_a = open_index(ia);
             before_a = columns_of(snapshot_a, file_of(snapshot_a, a));
@@ -895,15 +900,15 @@ TEST_SUITE("ChunkColumns") {
         for (const auto& [chunk, columns] : before_a)
             CHECK_FALSE(columns.empty());
 
-        const std::string root = env.get_dir() + "/set";
+        const dstd::String root = env.get_dir() + "/set";
         views::write_shard_set(dstd::String(root),
                                {dstd::String(ia), dstd::String(ib)});
-        const std::string out = env.get_dir() + "/merged";
+        const dstd::String out = env.get_dir() + "/merged";
         CHECK(views::merge_shard_set(dstd::String(root), dstd::String(out)) ==
               2);
 
-        const std::string merged =
-            std::string(trace::internal::determine_index_path("x", out));
+        const dstd::String merged =
+            dstd::String(trace::internal::determine_index_path("x", out));
         const auto snapshot = open_index(merged);
         const auto file_a = file_of(snapshot, a);
         const auto file_b = file_of(snapshot, b);
@@ -918,13 +923,13 @@ TEST_SUITE("ChunkColumns") {
     TEST_CASE("a record that repeats an arg key keeps its first value") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
-        const std::string text = repeated_key_trace();
-        const std::string gz = write_gzip(env.get_dir(), "repeat", text);
-        const std::string index_dir = env.get_dir() + "/idx";
+        const dstd::String text = repeated_key_trace();
+        const dstd::String gz = write_gzip(env.get_dir(), "repeat", text);
+        const dstd::String index_dir = env.get_dir() + "/idx";
         build({gz}, index_dir);
 
         const auto index_path =
-            std::string(trace::internal::determine_index_path(gz, index_dir));
+            dstd::String(trace::internal::determine_index_path(gz, index_dir));
         const auto snapshot = open_index(index_path);
         const auto file = file_of(snapshot, gz);
         std::size_t at = 0;
@@ -952,13 +957,13 @@ TEST_SUITE("ChunkColumns") {
     TEST_CASE("a stored partial or block is its payload") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
-        std::string text;
-        const std::string gz = write_trace(env.get_dir(), "trace", text);
-        const std::string index_dir = env.get_dir() + "/idx";
+        dstd::String text;
+        const dstd::String gz = write_trace(env.get_dir(), "trace", text);
+        const dstd::String index_dir = env.get_dir() + "/idx";
         build({gz}, index_dir);
 
         const auto index_path =
-            std::string(trace::internal::determine_index_path(gz, index_dir));
+            dstd::String(trace::internal::determine_index_path(gz, index_dir));
         std::size_t blocks = 0;
         std::size_t partials = 0;
         for (const auto& record : dftu_utils_test::dump_index(index_path)) {

@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/root_layout.h>
@@ -32,7 +33,6 @@
 #include <fstream>
 #include <iterator>
 #include <string>
-#include <vector>
 
 // ============================================================================
 // Helpers
@@ -41,40 +41,41 @@
 using namespace dftracer::utils;
 namespace {
 
-std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
-                          int id) {
+dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
+                           int num_events, int id) {
     auto trace_gz = env.create_dft_test_gzip_file(num_events);
     if (trace_gz.empty()) return "";
 
-    std::string pfw_path =
-        env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    REQUIRE(dftracer::utils::dstd::fs::rename(trace_gz, pfw_path).has_value());
+    dstd::String pfw_path =
+        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+    REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
 
 // Rechunk a single-member fixture into a multi-member trace whose members are
 // about `member_bytes` uncompressed, for exercising ingest member handling.
-std::string make_multimember_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                                    int num_events, std::size_t member_bytes,
-                                    int id) {
-    std::string single = create_pfw_gz(env, num_events, id);
+dstd::String make_multimember_pfw_gz(dftu_utils_test::TestEnvironment& env,
+                                     int num_events, std::size_t member_bytes,
+                                     int id) {
+    dstd::String single = create_pfw_gz(env, num_events, id);
     if (single.empty()) return "";
-    std::string mm = env.get_dir() + "/mm_" + std::to_string(id) + ".pfw.gz";
+    dstd::String mm = env.get_dir() + "/mm_" + dstd::to_string(id) + ".pfw.gz";
     namespace gzc = dftracer::utils::utilities::fileio::compress;
     gzc::gzip_rechunk_to_members(dstd::String(single), dstd::String(mm),
                                  member_bytes, 6)
         .get();
-    (void)dftracer::utils::dstd::fs::remove(single);
+    (void)dstd::fs::remove(single);
     return mm;
 }
 
-std::string find_view_binary() {
+dstd::String find_view_binary() {
     return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_VIEW_PATH",
                                                 "dftracer_view");
 }
 
-int run_view(const std::string& binary, const std::vector<std::string>& args) {
-    std::vector<const char*> argv;
+int run_view(const dstd::String& binary,
+             const dstd::Vector<dstd::String>& args) {
+    dstd::Vector<const char*> argv;
     argv.push_back(binary.c_str());
     for (const auto& arg : args) argv.push_back(arg.c_str());
     argv.push_back(nullptr);
@@ -97,10 +98,10 @@ int run_view(const std::string& binary, const std::vector<std::string>& args) {
 
 // Run `binary`, capturing its stdout into `out`. The capture file is opened in
 // the parent; the child only calls async-signal-safe dup2/close/execv.
-int run_view_capture(const std::string& binary,
-                     const std::vector<std::string>& args,
-                     const std::string& capture_path, std::string& out) {
-    std::vector<const char*> argv;
+int run_view_capture(const dstd::String& binary,
+                     const dstd::Vector<dstd::String>& args,
+                     const dstd::String& capture_path, dstd::String& out) {
+    dstd::Vector<const char*> argv;
     argv.push_back(binary.c_str());
     for (const auto& arg : args) argv.push_back(arg.c_str());
     argv.push_back(nullptr);
@@ -120,14 +121,12 @@ int run_view_capture(const std::string& binary,
     ::close(fd);
     int status = 0;
     ::waitpid(pid, &status, 0);
-    std::ifstream ifs(capture_path.c_str());
-    out.assign((std::istreambuf_iterator<char>(ifs)),
-               std::istreambuf_iterator<char>());
+    out = dftu_utils_test::read_text(capture_path);
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     return -1;
 }
 
-std::size_t count_lines(const std::string& s) {
+std::size_t count_lines(const dstd::String& s) {
     return static_cast<std::size_t>(std::count(s.begin(), s.end(), '\n'));
 }
 
@@ -140,7 +139,7 @@ std::size_t count_lines(const std::string& s) {
 namespace df = dftracer::utils::dataframe;
 
 df::Series make_bool_series(const dstd::Vector<bool>& bits) {
-    std::vector<std::uint8_t> packed((bits.size() + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> packed((bits.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < bits.size(); ++i)
         if (bits[i]) packed[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     return df::Series::flat(df::TypeId::Bool, packed.data(),
@@ -149,9 +148,9 @@ df::Series make_bool_series(const dstd::Vector<bool>& bits) {
 
 // A String/Binary FLAT column; dftu_series_new_string supports both dtypes.
 df::Series make_bytes_series(df::TypeId type,
-                             const std::vector<std::string>& values) {
-    std::vector<std::int32_t> offsets(values.size() + 1, 0);
-    std::string data;
+                             const dstd::Vector<dstd::String>& values) {
+    dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
+    dstd::String data;
     for (std::size_t i = 0; i < values.size(); ++i) {
         data += values[i];
         offsets[i + 1] = static_cast<std::int32_t>(data.size());
@@ -161,8 +160,8 @@ df::Series make_bytes_series(df::TypeId type,
         static_cast<std::int64_t>(values.size()), nullptr)};
 }
 
-df::Series make_float16_series(const std::vector<float>& values) {
-    std::vector<std::uint16_t> halves(values.size());
+df::Series make_float16_series(const dstd::Vector<float>& values) {
+    dstd::Vector<std::uint16_t> halves(values.size());
     for (std::size_t i = 0; i < values.size(); ++i)
         halves[i] = df::float_to_half(values[i]);
     return df::Series::flat(df::TypeId::Float16, halves.data(),
@@ -172,9 +171,8 @@ df::Series make_float16_series(const std::vector<float>& values) {
 // Decimal128: exact little-endian two's-complement payload, decimal_scale 0
 // (the only scale a FLAT-constructed decimal column carries; nonzero scale
 // only reaches the engine via Arrow import, unreachable from this CLI).
-df::Series make_decimal128_series(
-    const std::vector<dftracer::utils::dstd::int128_t>& values) {
-    std::vector<std::uint8_t> bytes(values.size() * 16);
+df::Series make_decimal128_series(const dstd::Vector<dstd::int128_t>& values) {
+    dstd::Vector<std::uint8_t> bytes(values.size() * 16);
     for (std::size_t i = 0; i < values.size(); ++i)
         std::memcpy(bytes.data() + i * 16, &values[i], 16);
     return df::Series::flat(df::TypeId::Decimal128, bytes.data(),
@@ -182,9 +180,8 @@ df::Series make_decimal128_series(
 }
 
 // Decimal256: `values` sign-extended from 128 to 256 bits.
-df::Series make_decimal256_series(
-    const std::vector<dftracer::utils::dstd::int128_t>& values) {
-    std::vector<std::uint8_t> bytes(values.size() * 32, 0);
+df::Series make_decimal256_series(const dstd::Vector<dstd::int128_t>& values) {
+    dstd::Vector<std::uint8_t> bytes(values.size() * 32, 0);
     for (std::size_t i = 0; i < values.size(); ++i) {
         std::memcpy(bytes.data() + i * 32, &values[i], 16);
         if (values[i] < 0) std::memset(bytes.data() + i * 32 + 16, 0xFF, 16);
@@ -200,23 +197,23 @@ df::Series make_unknown_series(std::int64_t n) {
     return df::Series(raw);
 }
 
-std::string cell(const df::Series& c, std::int64_t i) {
-    dftracer::utils::dstd::String s;
+dstd::String cell(const df::Series& c, std::int64_t i) {
+    dstd::String s;
     dftracer::utils::binaries::append_cell_json(s, c, i);
-    return std::string(s);
+    return dstd::String(s);
 }
 
 // Create a trace in its own subdir and build its index, with the aggregation
 // tier every build makes, over it; returns the shard's .dftindex path.
-std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
-                                   const std::string& tag, int num_events,
-                                   const std::string& index_dir = "") {
+dstd::String build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
+                                    const dstd::String& tag, int num_events,
+                                    const dstd::String& index_dir = "") {
     namespace internal = dftracer::utils::trace::internal;
-    std::string dir = env.get_dir() + "/" + tag;
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-    std::string src = env.create_dft_test_gzip_file(num_events);
-    std::string gz = dir + "/t.pfw.gz";
-    REQUIRE(dftracer::utils::dstd::fs::rename(src, gz).has_value());
+    dstd::String dir = env.get_dir() + "/" + tag;
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    dstd::String src = env.create_dft_test_gzip_file(num_events);
+    dstd::String gz = dir + "/t.pfw.gz";
+    REQUIRE(dstd::fs::rename(src, gz).has_value());
 
     dftracer::utils::index::IndexerOptions options;
     options.index_dir = index_dir;
@@ -224,15 +221,15 @@ std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
                                           options)
         .build();
     if (index_dir.empty())
-        return std::string(internal::determine_index_path(gz, ""));
-    return std::string(internal::determine_index_path("x", index_dir));
+        return dstd::String(internal::determine_index_path(gz, ""));
+    return dstd::String(internal::determine_index_path("x", index_dir));
 }
 
 // Split into non-empty lines and sort, so two aggregations can be compared
 // regardless of row emission order.
-std::vector<std::string> sorted_lines(const std::string& s) {
-    std::vector<std::string> lines;
-    std::string cur;
+dstd::Vector<dstd::String> sorted_lines(const dstd::String& s) {
+    dstd::Vector<dstd::String> lines;
+    dstd::String cur;
     for (char c : s) {
         if (c == '\n') {
             if (!cur.empty()) lines.push_back(cur);
@@ -347,12 +344,12 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!f.empty());
 
         // File output is always a compressed (.gz) trace.
-        std::string output = env.get_dir() + "/view_output.pfw";
+        dstd::String output = env.get_dir() + "/view_output.pfw";
         int rc = run_view(binary, {"-q", R"(cat == "POSIX")", "--no-index",
                                    env.get_dir(), "-o", output});
         CHECK(rc == 0);
-        REQUIRE(dftracer::utils::dstd::fs::exists(output + ".gz").value());
-        CHECK(dftracer::utils::dstd::fs::file_size(output + ".gz").value() > 0);
+        REQUIRE(dstd::fs::exists(output + ".gz").value());
+        CHECK(dstd::fs::file_size(output + ".gz").value() > 0);
     }
 
     TEST_CASE("fused index round-trips (--merge --verify)") {
@@ -367,26 +364,23 @@ TEST_SUITE("DFTracerView") {
 
         // Inputs in their own dir so the .pfw.gz output is not rescanned as
         // input on a subsequent run.
-        std::string in = env.get_dir() + "/in";
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(in).has_value());
+        dstd::String in = env.get_dir() + "/in";
+        REQUIRE(dstd::fs::create_directories(in).has_value());
         auto trace_gz = env.create_dft_test_gzip_file(50);
         REQUIRE(!trace_gz.empty());
-        REQUIRE(
-            dftracer::utils::dstd::fs::rename(trace_gz, in + "/trace_0.pfw.gz")
-                .has_value());
+        REQUIRE(dstd::fs::rename(trace_gz, in + "/trace_0.pfw.gz").has_value());
 
         // Default write path builds the index during the write (fused).
         // --verify re-scans the written+indexed trace via that index and checks
         // the event count round-trips, so rc==0 proves the fused member index
         // is correct.
-        std::string output = env.get_dir() + "/merged.pfw";
+        dstd::String output = env.get_dir() + "/merged.pfw";
         int rc = run_view(binary, {in, "--merge", "--verify", "-o", output});
         CHECK(rc == 0);
-        REQUIRE(dftracer::utils::dstd::fs::exists(output + ".gz").value());
+        REQUIRE(dstd::fs::exists(output + ".gz").value());
         // The index was built by the write, not a separate pass: its .dftindex
         // directory must exist next to the output.
-        CHECK(dftracer::utils::dstd::fs::exists(env.get_dir() + "/.dftindex")
-                  .value());
+        CHECK(dstd::fs::exists(env.get_dir() + "/.dftindex").value());
     }
 
     TEST_CASE("duql with name filter") {
@@ -421,8 +415,8 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
-        std::string cap = env.get_dir() + "/cap.txt";
-        std::string full, narrow;
+        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String full, narrow;
         CHECK(run_view_capture(binary, {"-q", "ts >= 0", env.get_dir()}, cap,
                                full) == 0);
         CHECK(run_view_capture(binary,
@@ -443,8 +437,8 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
-        std::string cap = env.get_dir() + "/cap.txt";
-        std::string plain, numeric;
+        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String plain, numeric;
         CHECK(run_view_capture(
                   binary,
                   {"--group-by", "cat", "--agg", "count", env.get_dir()}, cap,
@@ -471,33 +465,32 @@ TEST_SUITE("DFTracerView") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        const std::string set = env.get_dir() + "/set";
-        const std::string root =
-            set + "/" + std::string(dftracer::utils::index::INDEX_ROOT_NAME);
-        std::string sa = build_aggregated_shard(
+        const dstd::String set = env.get_dir() + "/set";
+        const dstd::String root =
+            set + "/" + dstd::String(dftracer::utils::index::INDEX_ROOT_NAME);
+        dstd::String sa = build_aggregated_shard(
             env, "sa", 50,
-            std::string(dftracer::utils::index::shard_root(root, 0)));
-        std::string sb = build_aggregated_shard(
+            dstd::String(dftracer::utils::index::shard_root(root, 0)));
+        dstd::String sb = build_aggregated_shard(
             env, "sb", 40,
-            std::string(dftracer::utils::index::shard_root(root, 1)));
+            dstd::String(dftracer::utils::index::shard_root(root, 1)));
         dftracer::utils::trace::views::write_shard_set(
             dstd::String(root), {dstd::String(sa), dstd::String(sb)});
 
         // A flat directory with the same two traces for the baseline query.
-        std::string both = env.get_dir() + "/both";
-        REQUIRE(
-            dftracer::utils::dstd::fs::create_directories(both).has_value());
-        REQUIRE(dftracer::utils::dstd::fs::copy_file(
-                    env.get_dir() + "/sa/t.pfw.gz", both + "/a.pfw.gz",
-                    dftracer::utils::dstd::fs::CopyMode::FailIfExists)
+        dstd::String both = env.get_dir() + "/both";
+        REQUIRE(dstd::fs::create_directories(both).has_value());
+        REQUIRE(dstd::fs::copy_file(env.get_dir() + "/sa/t.pfw.gz",
+                                    both + "/a.pfw.gz",
+                                    dstd::fs::CopyMode::FailIfExists)
                     .has_value());
-        REQUIRE(dftracer::utils::dstd::fs::copy_file(
-                    env.get_dir() + "/sb/t.pfw.gz", both + "/b.pfw.gz",
-                    dftracer::utils::dstd::fs::CopyMode::FailIfExists)
+        REQUIRE(dstd::fs::copy_file(env.get_dir() + "/sb/t.pfw.gz",
+                                    both + "/b.pfw.gz",
+                                    dstd::fs::CopyMode::FailIfExists)
                     .has_value());
 
-        std::string cap = env.get_dir() + "/cap.txt";
-        std::string shard_out, direct_out;
+        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String shard_out, direct_out;
         CHECK(run_view_capture(binary,
                                {"--group-by", "cat", "--agg", "count", set},
                                cap, shard_out) == 0);
@@ -509,14 +502,14 @@ TEST_SUITE("DFTracerView") {
         CHECK(sorted_lines(shard_out) == sorted_lines(direct_out));
 
         // The projection and row window apply to the merged table too.
-        std::string shaped;
+        dstd::String shaped;
         CHECK(run_view_capture(binary,
                                {"--group-by", "cat", "--agg", "count,sum:dur",
                                 "--select", "cat,count", "--limit", "1", set},
                                cap, shaped) == 0);
         CHECK(sorted_lines(shaped).size() == 1);
-        CHECK(shaped.find("\"count\"") != std::string::npos);
-        CHECK(shaped.find("sum_dur") == std::string::npos);
+        CHECK(shaped.find("\"count\"") != dstd::String::npos);
+        CHECK(shaped.find("sum_dur") == dstd::String::npos);
     }
 
     // --select projects raw (non-aggregate) events to the chosen fields,
@@ -529,31 +522,31 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        std::string dir = env.get_dir() + "/sel";
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-        std::string pfw = dir + "/t.pfw";
+        dstd::String dir = env.get_dir() + "/sel";
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        dstd::String pfw = dir + "/t.pfw";
         {
-            std::ofstream out(pfw.c_str());
+            dftu_utils_test::FileOut out(pfw);
             out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{"fhash":"abc","bytes":4096}})"
                 << "\n";
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dftracer::utils::dstd::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
 
-        std::string cap = env.get_dir() + "/cap.txt";
-        std::string out;
+        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String out;
         CHECK(run_view_capture(binary,
                                {gz, "-q", "name == \"read\"", "--select",
                                 "name,fhash,bytes"},
                                cap, out) == 0);
         // Projected to exactly the selected fields (name top-level; fhash/bytes
         // lifted out of args); the unselected cat/pid/ts/dur are gone.
-        CHECK(out.find("\"name\":\"read\"") != std::string::npos);
-        CHECK(out.find("\"fhash\":\"abc\"") != std::string::npos);
-        CHECK(out.find("\"bytes\":4096") != std::string::npos);
-        CHECK(out.find("\"cat\"") == std::string::npos);
-        CHECK(out.find("\"dur\"") == std::string::npos);
+        CHECK(out.find("\"name\":\"read\"") != dstd::String::npos);
+        CHECK(out.find("\"fhash\":\"abc\"") != dstd::String::npos);
+        CHECK(out.find("\"bytes\":4096") != dstd::String::npos);
+        CHECK(out.find("\"cat\"") == dstd::String::npos);
+        CHECK(out.find("\"dur\"") == dstd::String::npos);
     }
 
     TEST_CASE("--query runs a pipeline with --param and --explain") {
@@ -564,23 +557,24 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        const std::string gz = create_pfw_gz(env, 50, 0);
+        const dstd::String gz = create_pfw_gz(env, 50, 0);
         REQUIRE(!gz.empty());
-        const std::string cap = env.get_dir() + "/cap.txt";
-        const std::string q = "sort -ts | take $n | select ts";
+        const dstd::String cap = env.get_dir() + "/cap.txt";
+        const dstd::String q = "sort -ts | take $n | select ts";
 
-        std::string out;
+        dstd::String out;
         CHECK(run_view_capture(binary, {gz, "-q", q, "--param", "n=3"}, cap,
                                out) == 0);
-        std::vector<long long> ts;
-        for (std::size_t at = out.find("\"ts\":"); at != std::string::npos;
+        dstd::Vector<long long> ts;
+        for (std::size_t at = out.find("\"ts\":"); at != dstd::String::npos;
              at = out.find("\"ts\":", at + 1))
-            ts.push_back(std::stoll(out.substr(at + 5)));
+            ts.push_back(
+                dftu_utils_test::to_number<long long>(out.substr(at + 5)));
         REQUIRE(ts.size() == 3);
         CHECK(ts[0] >= ts[1]);
         CHECK(ts[1] >= ts[2]);
 
-        std::string plan;
+        dstd::String plan;
         CHECK(run_view_capture(binary,
                                {gz, "-q", q, "--param", "n=3", "--explain"},
                                cap, plan) == 0);
@@ -600,15 +594,15 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        const std::string gz = create_pfw_gz(env, 50, 0);
+        const dstd::String gz = create_pfw_gz(env, 50, 0);
         REQUIRE(!gz.empty());
-        const std::string cap = env.get_dir() + "/cap.txt";
-        auto rows = [&](const std::string& q) {
-            std::string out;
+        const dstd::String cap = env.get_dir() + "/cap.txt";
+        auto rows = [&](const dstd::String& q) {
+            dstd::String out;
             CHECK(run_view_capture(binary, {gz, "-q", q}, cap, out) == 0);
             std::size_t n = 0;
-            for (std::size_t at = out.find("\"cat\":"); at != std::string::npos;
-                 at = out.find("\"cat\":", at + 1))
+            for (std::size_t at = out.find("\"cat\":");
+                 at != dstd::String::npos; at = out.find("\"cat\":", at + 1))
                 ++n;
             return n;
         };
@@ -618,17 +612,17 @@ TEST_SUITE("DFTracerView") {
             rows(
                 R"(where cat in (from data | where cat == "POSIX" | select cat) | select cat)") ==
             posix);
-        const std::string let =
+        const dstd::String let =
             R"(let one = where cat == "POSIX" | take 1 | select cat, k = 1; )";
         CHECK(rows(let + "where cat -> one.k == 1 | select cat") == posix);
         CHECK(rows(let + "lookup one on cat | where k == 1 | select cat") ==
               posix);
-        std::string plan;
+        dstd::String plan;
         CHECK(run_view_capture(
                   binary,
                   {gz, "-q", let + "where cat -> one.k == 1", "--explain"}, cap,
                   plan) == 0);
-        CHECK(plan.find("side one: from data") != std::string::npos);
+        CHECK(plan.find("side one: from data") != dstd::String::npos);
     }
 
     TEST_CASE("--query writes the events an arrow filter keeps") {
@@ -639,9 +633,9 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        const std::string pfw = env.get_dir() + "/files.pfw";
+        const dstd::String pfw = env.get_dir() + "/files.pfw";
         {
-            std::ofstream o(pfw.c_str());
+            dftu_utils_test::FileOut o(pfw);
             o << R"({"ph":"M","name":"FH","pid":1,"tid":1,"args":{"name":"/scratch/a","value":"f1"}})"
               << "\n"
               << R"({"ph":"M","name":"FH","pid":1,"tid":1,"args":{"name":"/data/b","value":"f2"}})"
@@ -651,21 +645,21 @@ TEST_SUITE("DFTracerView") {
                   << 10 * (i + 1) << R"(,"dur":1,"args":{"fhash":"f)"
                   << 1 + i % 2 << "\"}}\n";
         }
-        const std::string gz = pfw + ".gz";
+        const dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        const std::string cap = env.get_dir() + "/cap.txt";
-        std::string out;
+        const dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String out;
         CHECK(run_view_capture(
                   binary,
                   {gz, "-q", R"(fhash -> files.path like "/scratch/%")"}, cap,
                   out) == 0);
         std::size_t events = 0;
-        for (std::size_t at = out.find(R"("ph":"X")"); at != std::string::npos;
+        for (std::size_t at = out.find(R"("ph":"X")"); at != dstd::String::npos;
              at = out.find(R"("ph":"X")", at + 1))
             ++events;
         CHECK(events == 2);
-        CHECK(out.find(R"("fhash":"f2")") == std::string::npos);
-        CHECK(out.find(R"("ph":"M")") == std::string::npos);
+        CHECK(out.find(R"("fhash":"f2")") == dstd::String::npos);
+        CHECK(out.find(R"("ph":"M")") == dstd::String::npos);
     }
 
     TEST_CASE("--query prints the table of a group with --param") {
@@ -676,29 +670,29 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        const std::string gz = create_pfw_gz(env, 50, 0);
+        const dstd::String gz = create_pfw_gz(env, 50, 0);
         REQUIRE(!gz.empty());
-        const std::string cap = env.get_dir() + "/cap.txt";
-        const std::string q = "where dur >= $min | group cat { n = count() }";
+        const dstd::String cap = env.get_dir() + "/cap.txt";
+        const dstd::String q = "where dur >= $min | group cat { n = count() }";
 
-        std::string out;
+        dstd::String out;
         CHECK(run_view_capture(binary, {gz, "-q", q, "--param", "min=0"}, cap,
                                out) == 0);
         long long total = 0;
         std::size_t groups = 0;
-        for (std::size_t at = out.find("\"n\":"); at != std::string::npos;
+        for (std::size_t at = out.find("\"n\":"); at != dstd::String::npos;
              at = out.find("\"n\":", at + 1), ++groups)
-            total += std::stoll(out.substr(at + 4));
+            total += dftu_utils_test::to_number<long long>(out.substr(at + 4));
         CHECK(groups >= 1);
         CHECK(total == 50);
-        CHECK(out.find("\"cat\":") != std::string::npos);
+        CHECK(out.find("\"cat\":") != dstd::String::npos);
 
-        std::string plan;
+        dstd::String plan;
         CHECK(run_view_capture(binary,
                                {gz, "-q", q, "--param", "min=0", "--explain"},
                                cap, plan) == 0);
         CHECK(plan.find("group (trace plan): keys cat; aggs n = count()") !=
-              std::string::npos);
+              dstd::String::npos);
     }
 
     TEST_CASE("--query runs window and expand") {
@@ -709,34 +703,35 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        const std::string pfw = env.get_dir() + "/hosts.pfw";
+        const dstd::String pfw = env.get_dir() + "/hosts.pfw";
         {
-            std::ofstream o(pfw.c_str());
+            dftu_utils_test::FileOut o(pfw);
             for (int i = 0; i < 3; ++i)
                 o << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,)"
                   << R"("ts":)" << 10 * (i + 1) << R"(,"dur":1,"args":)"
                   << (i == 1 ? R"({"hosts":[]})" : R"({"hosts":["a","b"]})")
                   << "}\n";
         }
-        const std::string gz = pfw + ".gz";
+        const dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        const std::string cap = env.get_dir() + "/cap.txt";
-        const std::string q =
+        const dstd::String cap = env.get_dir() + "/cap.txt";
+        const dstd::String q =
             "window cat sort ts { g = ts - lag(ts) } | expand hosts"
             " | select ts, g, hosts";
-        std::string out;
+        dstd::String out;
         CHECK(run_view_capture(binary, {gz, "-q", q}, cap, out) == 0);
         CHECK(out.find(R"({"ts":10,"g":null,"hosts":"a"})") !=
-              std::string::npos);
-        CHECK(out.find(R"({"ts":30,"g":10,"hosts":"b"})") != std::string::npos);
-        CHECK(out.find(R"("ts":20)") == std::string::npos);
+              dstd::String::npos);
+        CHECK(out.find(R"({"ts":30,"g":10,"hosts":"b"})") !=
+              dstd::String::npos);
+        CHECK(out.find(R"("ts":20)") == dstd::String::npos);
 
-        std::string plan;
+        dstd::String plan;
         CHECK(run_view_capture(binary, {gz, "-q", q, "--explain"}, cap, plan) ==
               0);
         CHECK(plan.find("window keys cat; sort ts; g = ts - lag(ts)\n") !=
-              std::string::npos);
-        CHECK(plan.find("expand hosts as hosts\n") != std::string::npos);
+              dstd::String::npos);
+        CHECK(plan.find("expand hosts as hosts\n") != dstd::String::npos);
     }
 
     // A 1-byte budget forces a spill; the result must match the in-memory run.
@@ -750,13 +745,13 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
-        std::string cap = env.get_dir() + "/cap.txt";
-        std::string spilled, in_mem;
-        std::vector<std::string> agg = {"--group-by", "name", "--agg",
-                                        "count,sum:dur"};
-        std::vector<std::string> a1 = agg;
+        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String spilled, in_mem;
+        dstd::Vector<dstd::String> agg = {"--group-by", "name", "--agg",
+                                          "count,sum:dur"};
+        dstd::Vector<dstd::String> a1 = agg;
         a1.insert(a1.end(), {"--memory-budget", "1", env.get_dir()});
-        std::vector<std::string> a2 = agg;
+        dstd::Vector<dstd::String> a2 = agg;
         a2.insert(a2.end(), {"--no-spill", env.get_dir()});
         CHECK(run_view_capture(binary, a1, cap, spilled) == 0);
         CHECK(run_view_capture(binary, a2, cap, in_mem) == 0);
@@ -788,19 +783,19 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
-        std::string cap = env.get_dir() + "/cap.txt";
-        std::string full, projected;
-        std::vector<std::string> agg = {"--group-by", "cat", "--agg",
-                                        "count,sum:dur"};
-        std::vector<std::string> a1 = agg;
+        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String full, projected;
+        dstd::Vector<dstd::String> agg = {"--group-by", "cat", "--agg",
+                                          "count,sum:dur"};
+        dstd::Vector<dstd::String> a1 = agg;
         a1.insert(a1.end(), {env.get_dir()});
-        std::vector<std::string> a2 = agg;
+        dstd::Vector<dstd::String> a2 = agg;
         a2.insert(a2.end(), {"--select", "cat,count", env.get_dir()});
         CHECK(run_view_capture(binary, a1, cap, full) == 0);
         CHECK(run_view_capture(binary, a2, cap, projected) == 0);
-        CHECK(full.find("sum_dur") != std::string::npos);
-        CHECK(projected.find("sum_dur") == std::string::npos);  // dropped
-        CHECK(projected.find("count") != std::string::npos);    // kept
+        CHECK(full.find("sum_dur") != dstd::String::npos);
+        CHECK(projected.find("sum_dur") == dstd::String::npos);  // dropped
+        CHECK(projected.find("count") != dstd::String::npos);    // kept
     }
 
     // --materialize persists a rollup; the identical query must then return the
@@ -815,15 +810,15 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
-        std::string cap = env.get_dir() + "/cap.txt";
-        std::vector<std::string> q = {"--group-by", "cat", "--agg",
-                                      "count,sum:dur", env.get_dir()};
-        std::string baseline, requery;
+        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::Vector<dstd::String> q = {"--group-by", "cat", "--agg",
+                                        "count,sum:dur", env.get_dir()};
+        dstd::String baseline, requery;
         CHECK(run_view_capture(binary, q, cap, baseline) == 0);
 
-        std::vector<std::string> mat = {"--group-by",    "cat",
-                                        "--agg",         "count,sum:dur",
-                                        "--materialize", env.get_dir()};
+        dstd::Vector<dstd::String> mat = {"--group-by",    "cat",
+                                          "--agg",         "count,sum:dur",
+                                          "--materialize", env.get_dir()};
         CHECK(run_view(binary, mat) == 0);
 
         CHECK(run_view_capture(binary, q, cap, requery) == 0);
@@ -874,20 +869,17 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        std::string orig = create_pfw_gz(env, 50, 0);
+        dstd::String orig = create_pfw_gz(env, 50, 0);
         REQUIRE(!orig.empty());
-        const auto orig_size =
-            dftracer::utils::dstd::fs::file_size(orig).value();
+        const auto orig_size = dstd::fs::file_size(orig).value();
 
         int rc = run_view(binary, {"--group-by", "cat", "--agg", "count",
                                    "--checkpoint-size", "2048", env.get_dir()});
         CHECK(rc == 0);
-        CHECK(dftracer::utils::dstd::fs::file_size(orig).value() == orig_size);
-        CHECK_FALSE(dftracer::utils::dstd::fs::exists(env.get_dir() + "/split")
-                        .value());
-        CHECK_FALSE(dftracer::utils::dstd::fs::exists(env.get_dir() +
-                                                      "/.dftindex.split")
-                        .value());
+        CHECK(dstd::fs::file_size(orig).value() == orig_size);
+        CHECK_FALSE(dstd::fs::exists(env.get_dir() + "/split").value());
+        CHECK_FALSE(
+            dstd::fs::exists(env.get_dir() + "/.dftindex.split").value());
     }
 
     // A multi-member input whose members already fit under the checkpoint size
@@ -906,11 +898,9 @@ TEST_SUITE("DFTracerView") {
             run_view(binary, {"--group-by", "cat", "--agg", "count",
                               "--checkpoint-size", "1048576", env.get_dir()});
         CHECK(rc == 0);
-        CHECK_FALSE(dftracer::utils::dstd::fs::exists(env.get_dir() + "/split")
-                        .value());
-        CHECK_FALSE(dftracer::utils::dstd::fs::exists(env.get_dir() +
-                                                      "/.dftindex.split")
-                        .value());
+        CHECK_FALSE(dstd::fs::exists(env.get_dir() + "/split").value());
+        CHECK_FALSE(
+            dstd::fs::exists(env.get_dir() + "/.dftindex.split").value());
     }
 }
 
@@ -932,45 +922,47 @@ TEST_SUITE("DFTracerView JSON cell printer") {
     }
 
     TEST_CASE("narrow signed ints read at their own width") {
-        auto i8 = df::Series::flat(
-            df::TypeId::Int8, std::vector<std::int8_t>{-128, 127, 5}.data(), 3);
+        auto i8 =
+            df::Series::flat(df::TypeId::Int8,
+                             dstd::Vector<std::int8_t>{-128, 127, 5}.data(), 3);
         CHECK(cell(i8, 0) == "-128");
         CHECK(cell(i8, 1) == "127");
         CHECK(cell(i8, 2) == "5");
 
         auto i16 = df::Series::flat(
             df::TypeId::Int16,
-            std::vector<std::int16_t>{-32768, 32767, 100}.data(), 3);
+            dstd::Vector<std::int16_t>{-32768, 32767, 100}.data(), 3);
         CHECK(cell(i16, 0) == "-32768");
         CHECK(cell(i16, 1) == "32767");
 
         auto i32 = df::Series::flat(
             df::TypeId::Int32,
-            std::vector<std::int32_t>{-2147483647 - 1, 2147483647, 42}.data(),
+            dstd::Vector<std::int32_t>{-2147483647 - 1, 2147483647, 42}.data(),
             3);
         CHECK(cell(i32, 0) == "-2147483648");
         CHECK(cell(i32, 1) == "2147483647");
     }
 
     TEST_CASE("narrow unsigned ints read at their own width") {
-        auto u8 = df::Series::flat(
-            df::TypeId::Uint8, std::vector<std::uint8_t>{0, 255, 10}.data(), 3);
+        auto u8 =
+            df::Series::flat(df::TypeId::Uint8,
+                             dstd::Vector<std::uint8_t>{0, 255, 10}.data(), 3);
         CHECK(cell(u8, 0) == "0");
         CHECK(cell(u8, 1) == "255");
 
         auto u16 = df::Series::flat(
-            df::TypeId::Uint16, std::vector<std::uint16_t>{0, 65535, 10}.data(),
-            3);
+            df::TypeId::Uint16,
+            dstd::Vector<std::uint16_t>{0, 65535, 10}.data(), 3);
         CHECK(cell(u16, 1) == "65535");
 
         auto u32 = df::Series::flat(
             df::TypeId::Uint32,
-            std::vector<std::uint32_t>{0, 4294967295u, 10}.data(), 3);
+            dstd::Vector<std::uint32_t>{0, 4294967295u, 10}.data(), 3);
         CHECK(cell(u32, 1) == "4294967295");
 
         auto u64 = df::Series::flat(
             df::TypeId::Uint64,
-            std::vector<std::uint64_t>{0, 18446744073709551615ull, 10}.data(),
+            dstd::Vector<std::uint64_t>{0, 18446744073709551615ull, 10}.data(),
             3);
         CHECK(cell(u64, 1) == "18446744073709551615");
     }
@@ -978,7 +970,7 @@ TEST_SUITE("DFTracerView JSON cell printer") {
     TEST_CASE("Float32 reads 4 bytes per row, not 8") {
         auto f32 =
             df::Series::flat(df::TypeId::Float32,
-                             std::vector<float>{1.5f, -2.25f, 3.0f}.data(), 3);
+                             dstd::Vector<float>{1.5f, -2.25f, 3.0f}.data(), 3);
         CHECK(cell(f32, 0) == "1.500000");
         CHECK(cell(f32, 1) == "-2.250000");
         // Integral value prints bare, matching the pre-existing convention.
@@ -988,7 +980,7 @@ TEST_SUITE("DFTracerView JSON cell printer") {
     TEST_CASE("Float64 reads correctly") {
         auto f64 =
             df::Series::flat(df::TypeId::Float64,
-                             std::vector<double>{1.5, -2.25, 3.0}.data(), 3);
+                             dstd::Vector<double>{1.5, -2.25, 3.0}.data(), 3);
         CHECK(cell(f64, 0) == "1.500000");
         CHECK(cell(f64, 2) == "3");
     }
@@ -1001,7 +993,7 @@ TEST_SUITE("DFTracerView JSON cell printer") {
 
     TEST_CASE("String escapes quotes, backslashes, and control chars") {
         auto s = make_bytes_series(df::TypeId::String,
-                                   {std::string("a\"b\\c") + '\x01' + "d"});
+                                   {dstd::String("a\"b\\c") + '\x01' + "d"});
         CHECK(cell(s, 0) == "\"a\\\"b\\\\c\\u0001d\"");
     }
 
@@ -1025,43 +1017,41 @@ TEST_SUITE("DFTracerView JSON cell printer") {
 #endif
 
     TEST_CASE("temporal types emit the exact physical integer") {
-        auto date32 = df::Series::flat(
-            df::TypeId::Date32, std::vector<std::int32_t>{19700, -5}.data(), 2);
+        auto date32 =
+            df::Series::flat(df::TypeId::Date32,
+                             dstd::Vector<std::int32_t>{19700, -5}.data(), 2);
         CHECK(cell(date32, 0) == "19700");
         CHECK(cell(date32, 1) == "-5");
 
         auto date64 = df::Series::flat(
             df::TypeId::Date64,
-            std::vector<std::int64_t>{1700000000000LL}.data(), 1);
+            dstd::Vector<std::int64_t>{1700000000000LL}.data(), 1);
         CHECK(cell(date64, 0) == "1700000000000");
 
         auto time32 = df::Series::flat(
-            df::TypeId::Time32, std::vector<std::int32_t>{3600}.data(), 1);
+            df::TypeId::Time32, dstd::Vector<std::int32_t>{3600}.data(), 1);
         CHECK(cell(time32, 0) == "3600");
 
         auto time64 =
             df::Series::flat(df::TypeId::Time64,
-                             std::vector<std::int64_t>{123456789LL}.data(), 1);
+                             dstd::Vector<std::int64_t>{123456789LL}.data(), 1);
         CHECK(cell(time64, 0) == "123456789");
 
         auto ts = df::Series::flat(
             df::TypeId::Timestamp,
-            std::vector<std::int64_t>{1700000000000000LL}.data(), 1);
+            dstd::Vector<std::int64_t>{1700000000000000LL}.data(), 1);
         CHECK(cell(ts, 0) == "1700000000000000");
 
-        auto dur = df::Series::flat(df::TypeId::Duration,
-                                    std::vector<std::int64_t>{-42LL}.data(), 1);
+        auto dur = df::Series::flat(
+            df::TypeId::Duration, dstd::Vector<std::int64_t>{-42LL}.data(), 1);
         CHECK(cell(dur, 0) == "-42");
     }
 
     TEST_CASE("Decimal128/256 render the exact value, not a lossy double") {
         // INT64_MAX * 1000 + 807: 22 digits, well past a double's ~17
         // significant digits, so a lossy path would visibly round this.
-        const dftracer::utils::dstd::int128_t big =
-            static_cast<dftracer::utils::dstd::int128_t>(
-                9223372036854775807LL) *
-                1000 +
-            807;
+        const dstd::int128_t big =
+            static_cast<dstd::int128_t>(9223372036854775807LL) * 1000 + 807;
         // Rendered as a quoted JSON string: a JSON number cannot hold a
         // precision-38 decimal exactly once a double consumer parses it.
         auto d128 = make_decimal128_series({big, -big, 0});
@@ -1086,8 +1076,8 @@ TEST_SUITE("DFTracerView JSON cell printer") {
         CHECK(cell(text, 0) == "null");
 
         dstd::Vector<df::Series> fields;
-        fields.push_back(
-            df::Series::flat_i64(std::vector<std::int64_t>{1, 2, 3}.data(), 3));
+        fields.push_back(df::Series::flat_i64(
+            dstd::Vector<std::int64_t>{1, 2, 3}.data(), 3));
         fields.push_back(df::Series::strings({"a", "b", "c"}));
         auto rec = df::Series::structs({"n", "s"}, std::move(fields));
         auto list = df::Series::list({0, 2, 2, 3}, std::move(rec));

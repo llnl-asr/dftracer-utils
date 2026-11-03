@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
@@ -15,8 +17,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <random>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftracer::utils::utilities::reader::internal::ReaderInflater;
@@ -26,10 +26,10 @@ namespace gz = dftracer::utils::utilities::fileio::compress;
 namespace {
 
 // Random hex compresses about 2:1, so the member spans many 1 MiB reads.
-std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
+dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     std::mt19937 rng(seed);
     static const char HEX[] = "0123456789abcdef";
-    std::string s;
+    dstd::String s;
     s.reserve(bytes + 128);
     while (s.size() < bytes) {
         s += "{\"id\":\"";
@@ -39,9 +39,9 @@ std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
     return s;
 }
 
-std::vector<std::uint8_t> gzip(const std::string& text) {
+dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
     gz::GzipMemberCompressor c;
-    std::vector<std::uint8_t> out(c.bound(text.size()));
+    dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
     REQUIRE(n.has_value());
     out.resize(*n);
@@ -49,8 +49,8 @@ std::vector<std::uint8_t> gzip(const std::string& text) {
 }
 
 struct TempFile {
-    std::string path;
-    explicit TempFile(const std::vector<std::uint8_t>& bytes) {
+    dstd::String path;
+    explicit TempFile(const dstd::Vector<std::uint8_t>& bytes) {
         char tmpl[] = "/tmp/dftu_inflater_XXXXXX";
         const int fd = ::mkstemp(tmpl);
         REQUIRE(fd >= 0);
@@ -62,16 +62,16 @@ struct TempFile {
     ~TempFile() { std::remove(path.c_str()); }
 };
 
-std::string read_all(const std::string& path) {
+dstd::String read_all(const dstd::String& path) {
     const int fd = ::open(path.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
-    std::string out;
+    dstd::String out;
     bool ok = false;
     run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         ReaderInflater inf;
         off_t offset = 0;
         if (!co_await inf.initialize(fd, offset)) co_return;
-        std::vector<unsigned char> buf(1 << 20);
+        dstd::Vector<unsigned char> buf(1 << 20);
         while (true) {
             std::size_t n = 0;
             if (!co_await inf.read(fd, offset, buf.data(), buf.size(), n))
@@ -86,11 +86,11 @@ std::string read_all(const std::string& path) {
     return out;
 }
 
-std::string read_members(const std::string& path) {
+dstd::String read_members(const dstd::String& path) {
     const int fd = ::open(path.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
     const auto size = static_cast<std::uint64_t>(::lseek(fd, 0, SEEK_END));
-    std::string out;
+    dstd::String out;
     run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto gen = gz::decode_gzip_members(fd, size);
         while (auto part = co_await gen.next()) out.append(*part);
@@ -114,7 +114,7 @@ TEST_SUITE("ReaderInflater") {
         const auto a = hex_lines(6u << 20, 2);
         const auto b = hex_lines(1000, 3);
         const auto c = hex_lines(3u << 20, 4);
-        std::vector<std::uint8_t> comp;
+        dstd::Vector<std::uint8_t> comp;
         for (const auto* t : {&a, &b, &c}) {
             const auto m = gzip(*t);
             comp.insert(comp.end(), m.begin(), m.end());
@@ -153,7 +153,7 @@ TEST_SUITE("ReaderInflater") {
             CAPTURE(big_first);
             const auto& first = big_first ? big : small;
             const auto& last = big_first ? small : big;
-            std::vector<std::uint8_t> comp;
+            dstd::Vector<std::uint8_t> comp;
             for (const auto* t : {&first, &small, &last}) {
                 const auto m = gzip(*t);
                 comp.insert(comp.end(), m.begin(), m.end());

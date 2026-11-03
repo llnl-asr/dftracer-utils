@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -12,21 +14,20 @@
 #include <testing_utilities.h>
 
 #include <atomic>
-#include <string>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::server;
 
 /// Helper: create a DFTracer gzip file with .pfw.gz extension
 /// (TraceIndex scans for .pfw and .pfw.gz patterns).
-static std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                                 int num_events, int id) {
+static dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
+                                  int num_events, int id) {
     auto trace_gz = env.create_dft_test_gzip_file(num_events);
     if (trace_gz.empty()) return "";
 
     // Rename to .pfw.gz so TraceIndex discovers it
-    std::string pfw_path =
-        env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
+    dstd::String pfw_path =
+        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
     REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
@@ -83,7 +84,7 @@ TEST_CASE("TraceIndex - find_file by path") {
     Scheduler scheduler(&executor);
 
     std::atomic<bool> found{false};
-    std::string found_path;
+    dstd::String found_path;
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
@@ -218,12 +219,12 @@ TEST_CASE("TraceIndex - directory and index_dir accessors") {
 TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
     dftu_utils_test::TestEnvironment env(10);
     REQUIRE(env.is_valid());
-    std::string text = R"({"gtype":"run","run":"ab","app":"laghos","nodes":4})"
-                       "\n";
+    dstd::String text = R"({"gtype":"run","run":"ab","app":"laghos","nodes":4})"
+                        "\n";
     for (int i = 0; i < 20; ++i)
         text += R"({"gtype":"func","run":"ab","ts":1,"path":"main;f)" +
-                std::to_string(i) + R"(","depth":1,"count":2})" + "\n";
-    const std::string gz = env.get_dir() + "/genesis.pfw.gz";
+                dstd::to_string(i) + R"(","depth":1,"count":2})" + "\n";
+    const dstd::String gz = env.get_dir() + "/genesis.pfw.gz";
     dftu_utils_test::write_gz_trace(gz, text);
     dftracer::utils::index::IndexerOptions o;
     o.index_dir = env.get_dir();
@@ -233,7 +234,7 @@ TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
 
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
     Scheduler scheduler(&executor);
-    std::string schema, app, nodes;
+    dstd::String schema, app, nodes;
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
             TraceIndex index(dstd::String(env.get_dir()),

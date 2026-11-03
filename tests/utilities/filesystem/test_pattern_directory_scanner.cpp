@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -10,18 +11,15 @@
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
-#include <fstream>
-#include <memory>
-#include <vector>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::utilities::filesystem;
 
 // Run a scanner in a Runtime, injecting its scope. Re-raises any exception.
 template <typename Scanner, typename Input>
-static dftracer::utils::dstd::Vector<FileEntry> run_scan(Scanner& scanner,
-                                                         const Input& input) {
+static dstd::Vector<FileEntry> run_scan(Scanner& scanner, const Input& input) {
     dftracer::utils::Runtime rt;
-    dftracer::utils::dstd::Vector<FileEntry> result;
+    dstd::Vector<FileEntry> result;
     rt.block_on(dftracer::utils::coro::named(
         "scan", dftracer::utils::coro::with_scope(
                     [&](dftracer::utils::coro::Scope& s)
@@ -36,7 +34,7 @@ using dftu_utils_test::ScopedTestDir;
 
 TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
     ScopedTestDir fixture("dftracer_test_pattern_scanner");
-    auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
+    auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Scan with no patterns - match all files") {
         fixture.create_file("file1.txt");
@@ -85,7 +83,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
 
         CHECK(result.size() == 3);
         for (const auto& entry : result) {
-            std::string ext(entry.path.view().extension());
+            dstd::String ext(entry.path.view().extension());
             CHECK((ext == ".txt" || ext == ".dat"));
         }
     }
@@ -93,7 +91,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
 
 TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
     ScopedTestDir fixture("dftracer_test_pattern_scanner");
-    auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
+    auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Extension pattern - single extension") {
         fixture.create_file("document.pdf");
@@ -120,7 +118,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
 
         CHECK(result.size() == 2);
         for (const auto& entry : result) {
-            std::string filename(entry.path.view().filename());
+            dstd::String filename(entry.path.view().filename());
             CHECK((filename == "archive.tar.gz" || filename == "data.pfw.gz"));
         }
     }
@@ -181,7 +179,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
 
 TEST_CASE("PatternDirectoryScannerUtility - Recursive Scanning") {
     ScopedTestDir fixture("dftracer_test_pattern_scanner");
-    auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
+    auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Recursive scan with pattern") {
         fixture.create_file("file1.txt");
@@ -237,7 +235,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Recursive Scanning") {
 
 TEST_CASE("PatternDirectoryScannerUtility - Directory Filtering") {
     ScopedTestDir fixture("dftracer_test_pattern_scanner");
-    auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
+    auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Directories are not matched") {
         fixture.create_dir("test.txt");  // Directory named like a file
@@ -325,7 +323,7 @@ TEST_CASE(
 
 TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
     ScopedTestDir fixture("dftracer_test_pattern_scanner");
-    auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
+    auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Empty pattern string") {
         fixture.create_file("file1.txt");
@@ -366,7 +364,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
         // At least one .txt or .TXT file should be matched
         bool found_txt = false;
         for (const auto& entry : result) {
-            std::string ext(entry.path.view().extension());
+            dstd::String ext(entry.path.view().extension());
             if (ext == ".txt" || ext == ".TXT") {
                 found_txt = true;
             }
@@ -404,11 +402,9 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
         fixture.create_file("file.ext50");
         fixture.create_file("file.ext100");
 
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
-            many_patterns;
+        dstd::Vector<dstd::String> many_patterns;
         for (int i = 1; i <= 100; ++i) {
-            many_patterns.push_back(dftracer::utils::dstd::String(".ext") +
-                                    dftracer::utils::dstd::to_string(i));
+            many_patterns.push_back(dstd::String(".ext") + dstd::to_string(i));
         }
 
         PatternDirectoryScannerUtilityInput input{fixture.str(), many_patterns,
@@ -433,17 +429,17 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
 
 TEST_CASE("PatternDirectoryScannerUtility - Performance") {
     ScopedTestDir fixture("dftracer_test_pattern_scanner");
-    auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
+    auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Many files with pattern matching") {
         const int num_txt_files = 50;
         const int num_dat_files = 50;
 
         for (int i = 0; i < num_txt_files; ++i) {
-            fixture.create_file("file" + std::to_string(i) + ".txt");
+            fixture.create_file("file" + dstd::to_string(i) + ".txt");
         }
         for (int i = 0; i < num_dat_files; ++i) {
-            fixture.create_file("data" + std::to_string(i) + ".dat");
+            fixture.create_file("data" + dstd::to_string(i) + ".dat");
         }
 
         PatternDirectoryScannerUtilityInput input{
@@ -456,9 +452,9 @@ TEST_CASE("PatternDirectoryScannerUtility - Performance") {
     SUBCASE("Deep recursive scan with filtering") {
         // Create a deep hierarchy
         for (int level = 0; level < 5; ++level) {
-            std::string path = "level" + std::to_string(level);
+            dstd::String path = "level" + dstd::to_string(level);
             for (int j = level; j > 0; --j) {
-                path = "level" + std::to_string(j - 1) + "/" + path;
+                path = "level" + dstd::to_string(j - 1) + "/" + path;
             }
             fixture.create_file(path + "/data.pfw");
             fixture.create_file(path + "/other.txt");
@@ -474,7 +470,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Performance") {
 
 TEST_CASE("PatternDirectoryScannerUtility - Real World Scenarios") {
     ScopedTestDir fixture("dftracer_test_pattern_scanner");
-    auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
+    auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("DFTracer files - .pfw and .pfw.gz") {
         fixture.create_file("trace1.pfw");

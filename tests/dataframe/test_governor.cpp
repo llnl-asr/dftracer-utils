@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -27,10 +28,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <string>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -65,7 +62,7 @@ std::int64_t key_of(std::int64_t i) { return (i * 7919) % KEYS; }
 // number. `hook` runs before morsel i is made.
 class Hooked : public Source {
    public:
-    using Hook = std::function<void(std::int64_t)>;
+    using Hook = dstd::Function<void(std::int64_t)>;
 
     // An untyped source declares its columns with no type, as a plan whose
     // types are only known once it runs.
@@ -73,7 +70,7 @@ class Hooked : public Source {
            bool typed = true)
         : morsels_(morsels),
           rows_(rows),
-          hook_(std::move(hook)),
+          hook_(dstd::make_shared<Hook>(std::move(hook))),
           typed_(typed) {}
 
     Schema schema() const override {
@@ -112,11 +109,12 @@ class Hooked : public Source {
    private:
     class Rows : public Cursor {
        public:
-        Rows(std::int64_t morsels, std::int64_t rows, Hook hook)
+        Rows(std::int64_t morsels, std::int64_t rows,
+             dstd::SharedPtr<Hook> hook)
             : morsels_(morsels), rows_(rows), hook_(std::move(hook)) {}
         coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
             if (at_ >= morsels_) co_return dstd::nullopt;
-            if (hook_) hook_(at_);
+            if (*hook_) (*hook_)(at_);
             dstd::Vector<std::int64_t> k(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_)),
                 p(static_cast<std::size_t>(rows_));
@@ -137,12 +135,12 @@ class Hooked : public Source {
 
        private:
         std::int64_t morsels_, rows_;
-        Hook hook_;
+        dstd::SharedPtr<Hook> hook_;
         std::int64_t at_ = 0;
     };
 
     std::int64_t morsels_, rows_;
-    Hook hook_;
+    dstd::SharedPtr<Hook> hook_;
     bool typed_;
 };
 
@@ -201,7 +199,7 @@ constexpr std::int64_t ASK_AT = 32;
 // frame stays under.
 constexpr std::uint64_t BUDGET = 4 * MIB;
 
-using Plan = std::function<LazyFrame(LazyFrame)>;
+using Plan = dstd::Function<LazyFrame(LazyFrame)>;
 
 struct Asked {
     DataFrame plain;
@@ -477,11 +475,10 @@ TEST_CASE("a request posted to a join's build side turns it to grace") {
 TEST_CASE("unique and head_by keep their results when a grow is refused") {
     // The external path opens a spill directory of its own while it runs;
     // the in-memory path opens none.
-    const dftracer::utils::dstd::Path dir =
-        dftracer::utils::dstd::fs::temp_directory() /
-        ("dftu_governor_" + dstd::to_string(::getpid()));
-    dftracer::utils::dstd::fs::remove_all(dir).has_value();
-    dftracer::utils::dstd::fs::create_directories(dir).has_value();
+    const dstd::Path dir = dstd::fs::temp_directory() /
+                           ("dftu_governor_" + dstd::to_string(::getpid()));
+    dstd::fs::remove_all(dir).has_value();
+    dstd::fs::create_directories(dir).has_value();
     ::setenv("DFTRACER_UTILS_SPILL_DIR", dir.c_str(), 1);
     auto entries = [&] {
         std::size_t n = 0;
@@ -520,7 +517,7 @@ TEST_CASE("unique and head_by keep their results when a grow is refused") {
         CHECK(rows_of(got, false) == rows_of(plain, false));
     }
     ::unsetenv("DFTRACER_UTILS_SPILL_DIR");
-    dftracer::utils::dstd::fs::remove_all(dir).has_value();
+    dstd::fs::remove_all(dir).has_value();
 }
 
 TEST_CASE("a spool spilled on request replays every morsel in order") {

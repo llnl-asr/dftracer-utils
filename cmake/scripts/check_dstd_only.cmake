@@ -38,9 +38,39 @@ set(_dirs
     src/dftracer/utils/dataframe
     include/dftracer/utils/server
     src/dftracer/utils/server
-    src/dftracer/utils/python
     src/dftracer/utils/binaries
-    benchmarks)
+    src/dftracer/utils/python
+    benchmarks
+    tests/binaries
+    tests/cmake
+    tests/common
+    tests/dataframe
+    tests/dstd
+    tests/compose
+    tests/coro
+    tests/duql
+    tests/index
+    tests/io
+    tests/layering
+    tests/layout
+    tests/memory
+    tests/reader
+    tests/replay
+    tests/runtime
+    tests/server
+    tests/store
+    tests/utilities
+    tests/trace)
+
+set(_extra_files
+    tests/index_test_helpers.h
+    tests/instrumentation.h
+    tests/mmix_lcg.h
+    tests/no_core_dump.h
+    tests/test_testing_utilities.cpp
+    tests/testing_runtime.h
+    tests/testing_utilities.cpp
+    tests/testing_utilities.h)
 
 # The Task, TaskGraph and Pipeline trees move in a later step.
 set(_skip
@@ -100,6 +130,9 @@ foreach(_dir IN LISTS _dirs)
   file(GLOB_RECURSE _found "${SOURCE_DIR}/${_dir}/*.h" "${SOURCE_DIR}/${_dir}/*.cpp"
        "${SOURCE_DIR}/${_dir}/*.inl")
   list(APPEND _files ${_found})
+endforeach()
+foreach(_file IN LISTS _extra_files)
+  list(APPEND _files "${SOURCE_DIR}/${_file}")
 endforeach()
 foreach(_dir IN LISTS _skip)
   file(GLOB_RECURSE _found "${SOURCE_DIR}/${_dir}/*.h" "${SOURCE_DIR}/${_dir}/*.cpp"

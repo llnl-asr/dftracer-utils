@@ -5,11 +5,13 @@
  */
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/plugins/plugin.h>
 
 #include <array>
 #include <cstdint>
-#include <string>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::plugins;
 
@@ -33,7 +35,7 @@ struct Counted {
     }
     void merge(Counted& other) { rows += other.rows; }
     void finalize(Host h) {
-        h.emit_result("config_keys_plugin.rows", std::to_string(rows));
+        h.emit_result("config_keys_plugin.rows", dstd::to_string(rows));
     }
 };
 

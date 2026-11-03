@@ -25,6 +25,8 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <nanoarrow/nanoarrow.h>
 
+using namespace dftracer::utils;
+
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;
 namespace spill = dftracer::utils::dataframe::spill;
@@ -35,20 +37,19 @@ DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
     return dftracer::utils::default_runtime().submit(std::move(t)).get();
 }
 
-dftracer::utils::dstd::Optional<Morsel> run(
-    dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Optional<Morsel>>
-        t) {
+dstd::Optional<Morsel> run(
+    dftracer::utils::coro::CoroTask<dstd::Optional<Morsel>> t) {
     return dftracer::utils::default_runtime().submit(std::move(t)).get();
 }
 
-dftracer::utils::dstd::Vector<const Series*> ptrs(const DataFrame& df) {
-    dftracer::utils::dstd::Vector<const Series*> in;
+dstd::Vector<const Series*> ptrs(const DataFrame& df) {
+    dstd::Vector<const Series*> in;
     for (const Series& c : df.columns) in.push_back(&c);
     return in;
 }
 
 DataFrame keyed(const Series& v) {
-    dftracer::utils::dstd::Vector<std::int64_t> k{1, 2, 3, 4};
+    dstd::Vector<std::int64_t> k{1, 2, 3, 4};
     DataFrame df;
     df.names = {"k", "v"};
     df.columns.push_back(Series::flat_i64(k.data(), 4));
@@ -97,8 +98,7 @@ void check_v_equal(const Series& lazy_v, const Series& eager_v) {
 
 // No shared builder header covers the temporal family, so this file defines
 // its own.
-Series make_timestamp(
-    const dftracer::utils::dstd::Vector<std::int64_t>& values) {
+Series make_timestamp(const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIMESTAMP,
@@ -113,7 +113,7 @@ Series make_timestamp(
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_date32(const dftracer::utils::dstd::Vector<std::int32_t>& values) {
+Series make_date32(const dstd::Vector<std::int32_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_DATE32) ==
@@ -127,7 +127,7 @@ Series make_date32(const dftracer::utils::dstd::Vector<std::int32_t>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_date64(const dftracer::utils::dstd::Vector<std::int64_t>& values) {
+Series make_date64(const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_DATE64) ==
@@ -141,7 +141,7 @@ Series make_date64(const dftracer::utils::dstd::Vector<std::int64_t>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_time32(const dftracer::utils::dstd::Vector<std::int32_t>& values) {
+Series make_time32(const dstd::Vector<std::int32_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIME32,
@@ -156,7 +156,7 @@ Series make_time32(const dftracer::utils::dstd::Vector<std::int32_t>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_time64(const dftracer::utils::dstd::Vector<std::int64_t>& values) {
+Series make_time64(const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIME64,
@@ -171,8 +171,7 @@ Series make_time64(const dftracer::utils::dstd::Vector<std::int64_t>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_duration(
-    const dftracer::utils::dstd::Vector<std::int64_t>& values) {
+Series make_duration(const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_DURATION,
@@ -189,9 +188,8 @@ Series make_duration(
 
 // builders_arrow_types.h's make_decimal128 always uses scale 0, which cannot
 // catch a lost decimal_scale; this one uses a non-zero scale instead.
-Series make_decimal128_scaled(
-    const dftracer::utils::dstd::Vector<std::int64_t>& unscaled,
-    std::int32_t scale) {
+Series make_decimal128_scaled(const dstd::Vector<std::int64_t>& unscaled,
+                              std::int32_t scale) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDecimal(&b.schema, NANOARROW_TYPE_DECIMAL128, 38,
@@ -212,12 +210,11 @@ Series make_decimal128_scaled(
 enum class SpillExpect { RoundTrips, Refuses };
 
 // Spills `col` alone in a one-column morsel and reads it back.
-dftracer::utils::dstd::Optional<Morsel> spill_round_trip(const Series& col,
-                                                         spill::Dir& dir,
-                                                         int id) {
-    dftracer::utils::dstd::Vector<Series> cols;
+dstd::Optional<Morsel> spill_round_trip(const Series& col, spill::Dir& dir,
+                                        int id) {
+    dstd::Vector<Series> cols;
     cols.push_back(col.share());
-    const dftracer::utils::dstd::String path = dir.run_path(id);
+    const dstd::String path = dir.run_path(id);
     spill::Writer w(path);
     w.write(cols, col.length());
     w.close();
@@ -409,7 +406,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     TEST_CASE(
         "lazy filter/select/head/with_column match eager for the "
         "opaque-value types") {
-        dftracer::utils::dstd::Vector<Series> values;
+        dstd::Vector<Series> values;
         values.push_back(make_float16({10.0f, 20.0f, 30.0f, 40.0f}));
         values.push_back(make_decimal128_scaled({100, 200, 300, 400}, 2));
         values.push_back(make_decimal256({100, 200, 300, 400}));
@@ -418,7 +415,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
         values.push_back(make_large_utf8({"a", "b", "c", "d"}));
         values.push_back(make_large_binary({"a", "b", "c", "d"}));
         for (Series& v : values) {
-            INFO(dftracer::utils::dstd::String(type_name(v.type())));
+            INFO(dstd::String(type_name(v.type())));
             DataFrame src = keyed(v);
 
             // filter: k > 2
@@ -460,7 +457,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     }
 
     TEST_CASE("lazy sort_by on the value column matches eager") {
-        dftracer::utils::dstd::Vector<Series> values;
+        dstd::Vector<Series> values;
         values.push_back(make_float16({30.0f, 10.0f, 20.0f, 10.0f}));
         values.push_back(make_decimal128_scaled({300, 100, 200, 100}, 1));
         values.push_back(make_decimal256({300, 100, 200, 100}));
@@ -469,7 +466,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
         values.push_back(make_large_utf8({"c", "a", "b", "a"}));
         values.push_back(make_large_binary({"c", "a", "b", "a"}));
         for (Series& v : values) {
-            INFO(dftracer::utils::dstd::String(type_name(v.type())));
+            INFO(dstd::String(type_name(v.type())));
             DataFrame src = keyed(v);
             LazyFrame lf = src.lazy().sort_by("v", false);
             DataFrame lazy_r = run(lf.collect());
@@ -485,15 +482,14 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     }
 
     TEST_CASE("lazy group_by(Count) on an opaque value column matches eager") {
-        dftracer::utils::dstd::Vector<std::int64_t> k{1, 1, 2, 2};
+        dstd::Vector<std::int64_t> k{1, 1, 2, 2};
         Series vals = make_large_utf8({"p", "q", "r", "s"});
         DataFrame df;
         df.names = {"k", "v"};
         df.columns.push_back(Series::flat_i64(k.data(), 4));
         df.columns.push_back(vals.share());
 
-        dftracer::utils::dstd::Vector<GroupAgg> aggs = {
-            {Agg::Count, "v", "v_count"}};
+        dstd::Vector<GroupAgg> aggs = {{Agg::Count, "v", "v_count"}};
         DataFrame lazy_r = run(df.lazy().group_by("k", aggs).collect(2));
         DataFrame eager_r = df.group_by("k", aggs);
         REQUIRE(lazy_r.num_rows() == eager_r.num_rows());

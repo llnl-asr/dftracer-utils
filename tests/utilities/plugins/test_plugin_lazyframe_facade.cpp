@@ -9,22 +9,23 @@
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 
-#include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <vector>
 
-using dftracer::utils::dstd::StringIntern;
+using namespace dftracer::utils;
+
 using dftracer::utils::plugins::OwnedLazyFrame;
 using dftracer::utils::plugins::PluginFold;
+using dstd::StringIntern;
 
 namespace {
 
@@ -39,8 +40,8 @@ struct HostFixture {
     StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    std::unique_ptr<PluginFold> fold =
-        std::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<PluginFold> fold =
+        dstd::make_unique<PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     ~HostFixture() {
         fold.reset();

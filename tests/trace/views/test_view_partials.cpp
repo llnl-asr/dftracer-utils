@@ -5,7 +5,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/agg_query.h>
@@ -14,13 +16,11 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <cmath>
 #include <fstream>
-#include <map>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -57,8 +57,8 @@ std::uint64_t write_dur(int j) { return 20 + j % 9; }
 // that keeps every arg column.
 struct Fixture {
     TestEnvironment env{200};
-    std::vector<std::string> gz;
-    std::string index_path;
+    dstd::Vector<dstd::String> gz;
+    dstd::String index_path;
     agg::AggregationConfig aggregation;
 
     // `extras` keeps the string args epoch and step as extra group keys and
@@ -67,20 +67,20 @@ struct Fixture {
     explicit Fixture(bool extras = false, bool mixed = false) {
         REQUIRE(env.is_valid());
         for (int i = 0; i < FILES; ++i) {
-            const std::string dir = env.get_dir() + "/f" + std::to_string(i);
+            const dstd::String dir = env.get_dir() + "/f" + dstd::to_string(i);
             REQUIRE(dstd::fs::create_directories(dir).has_value());
-            const std::string plain = dir + "/t.pfw";
-            const std::string pid = std::to_string(100 + i);
-            const std::string host =
-                std::string(R"("hhash":")") + HOSTS[i] + R"(")";
+            const dstd::String plain = dir + "/t.pfw";
+            const dstd::String pid = dstd::to_string(100 + i);
+            const dstd::String host =
+                dstd::String(R"("hhash":")") + HOSTS[i] + R"(")";
             {
-                std::ofstream o(plain.c_str());
+                dftu_utils_test::FileOut o(plain);
                 auto extra_args = [&](int epoch, int step) {
                     return extras
-                               ? std::string(R"(,"epoch":")") +
-                                     std::to_string(epoch) + R"(","step":")" +
-                                     std::to_string(step) + R"(")"
-                               : std::string();
+                               ? dstd::String(R"(,"epoch":")") +
+                                     dstd::to_string(epoch) + R"(","step":")" +
+                                     dstd::to_string(step) + R"(")"
+                               : dstd::String();
                 };
                 for (int j = 0; j < READS; ++j)
                     o << R"({"ph":"X","name":"read","cat":"POSIX","pid":)"
@@ -106,7 +106,7 @@ struct Fixture {
                           << (BASE_TS + 30000 + e * 100) << R"(,"args":{)"
                           << host << R"(,"dur":7}})" << "\n";
             }
-            const std::string out = plain + ".gz";
+            const dstd::String out = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
             dstd::fs::remove(plain).has_value();
@@ -119,7 +119,8 @@ struct Fixture {
         o.checkpoint_size = MEMBER_BYTES;
         o.aggregation = aggregation;
         ix::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
-        index_path = std::string(determine_index_path(gz.front(), o.index_dir));
+        index_path =
+            dstd::String(determine_index_path(gz.front(), o.index_dir));
     }
 
     dstd::Vector<ViewFile> files() const {
@@ -156,17 +157,17 @@ df::DataFrame scan_only(const scan::ScanPlan& p) {
     return detail::apply_agg_post_ops(std::move(out), *p);
 }
 
-using Rows = std::map<std::string, std::map<std::string, double>>;
+using Rows = dstd::Map<dstd::String, dstd::Map<dstd::String, double>>;
 
-Rows rows_of(const df::DataFrame& f, const std::vector<std::string>& keys) {
+Rows rows_of(const df::DataFrame& f, const dstd::Vector<dstd::String>& keys) {
     Rows out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
-        std::string k;
+        dstd::String k;
         for (const auto& c : keys) k += bstr(f, r, c) + '|';
         auto& cells = out[k];
         for (std::size_t c = 0; c < f.names.size(); ++c)
             if (f.columns[c].type() != df::TypeId::String)
-                cells[std::string(f.names[c])] = bnum(f, r, f.names[c]);
+                cells[dstd::String(f.names[c])] = bnum(f, r, f.names[c]);
     }
     return out;
 }
@@ -174,7 +175,7 @@ Rows rows_of(const df::DataFrame& f, const std::vector<std::string>& keys) {
 // `got` has the rows of `expected`: the counts, sums, means and extremes
 // equal, the quantile within the accuracy of its sketch.
 void same_rows(const df::DataFrame& got, const df::DataFrame& expected,
-               const std::vector<std::string>& keys) {
+               const dstd::Vector<dstd::String>& keys) {
     const Rows g = rows_of(got, keys);
     const Rows e = rows_of(expected, keys);
     REQUIRE(e.size() > 0);
@@ -212,12 +213,12 @@ df::DataFrame scan_events(const Fixture& fx, dstd::Vector<GroupKey> keys,
 TEST_SUITE("ViewPartials") {
     TEST_CASE("aggregates answer from the partials with the traces deleted") {
         Fixture fx;
-        const std::vector<dstd::Vector<GroupKey>> groupings{
+        const dstd::Vector<dstd::Vector<GroupKey>> groupings{
             {GroupKey::name()},
             {GroupKey::hhash()},
             {GroupKey::pid(), GroupKey::name()},
             {GroupKey::cat(), GroupKey::hhash()}};
-        const std::vector<std::vector<std::string>> columns{
+        const dstd::Vector<dstd::Vector<dstd::String>> columns{
             {"name"}, {"hhash"}, {"pid", "name"}, {"cat", "hhash"}};
         dstd::Vector<df::DataFrame> expected;
         for (const auto& g : groupings) expected.push_back(scan_events(fx, g));
@@ -352,15 +353,15 @@ TEST_SUITE("ViewPartials") {
                               key, " ", c);
         }
         for (const auto& [key, cells] : events)
-            CHECK_MESSAGE(key.rfind(std::to_string(BASE_TS) + "|", 0) == 0,
+            CHECK_MESSAGE(key.rfind(dstd::to_string(BASE_TS) + "|", 0) == 0,
                           key);
 
         // Each file ran COUNTERS "train" counters of 5 us.
         const Rows profiles = strip(typed.aggregated);
         REQUIRE(profiles.size() == FILES);
         for (int i = 0; i < FILES; ++i) {
-            const std::string key = std::to_string(BASE_TS) + "|train|" +
-                                    std::to_string(100 + i) + "|";
+            const dstd::String key = dstd::to_string(BASE_TS) + "|train|" +
+                                     dstd::to_string(100 + i) + "|";
             const auto it = profiles.find(key);
             REQUIRE_MESSAGE(it != profiles.end(), key);
             CHECK(it->second.at("n") == COUNTERS);
@@ -372,7 +373,7 @@ TEST_SUITE("ViewPartials") {
     TEST_CASE("a query groups by host and keeps the hosts it is asked for") {
         Fixture fx;
         fx.delete_traces();
-        auto ask = [&](bool by_host, std::vector<const char*> hosts) {
+        auto ask = [&](bool by_host, dstd::Vector<const char*> hosts) {
             trace::AggQuery q;
             for (int i = 0; i < FILES; ++i) {
                 trace::AggQuerySource src;
@@ -393,10 +394,10 @@ TEST_SUITE("ViewPartials") {
 
         const auto by_host = ask(true, {});
         CHECK(by_host.stats.chunks_reread == 0);
-        std::map<std::string, std::uint64_t> counts;
+        dstd::Map<dstd::String, std::uint64_t> counts;
         for (const auto& [k, p] : by_host.rows)
-            counts[std::string(by_host.text(k.host))] += p.count;
-        CHECK(counts == std::map<std::string, std::uint64_t>{
+            counts[dstd::String(by_host.text(k.host))] += p.count;
+        CHECK(counts == dstd::Map<dstd::String, std::uint64_t>{
                             {"hosta", 2 * READS}, {"hostb", READS}});
 
         const auto only_b = ask(true, {"hostb"});
@@ -505,11 +506,11 @@ TEST_SUITE("ViewPartials") {
         auto r = run(trace::run_agg_query(q));
         REQUIRE_MESSAGE(r.has_value(), r.error().format());
         CHECK(r->stats.chunks_reread == 0);
-        std::map<int, std::uint64_t> counts;
+        dstd::Map<int, std::uint64_t> counts;
         for (const auto& [k, p] : r->rows)
             counts[static_cast<int>(k.kind)] += p.count;
         CHECK(counts ==
-              std::map<int, std::uint64_t>{
+              dstd::Map<int, std::uint64_t>{
                   {static_cast<int>(trace::AggKind::Event), FILES * READS},
                   {static_cast<int>(trace::AggKind::Profile), FILES * MIXED}});
 

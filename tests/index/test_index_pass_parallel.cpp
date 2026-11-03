@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -12,11 +14,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <optional>
 #include <random>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftracer::utils::index::gzip::GzipBuildArtifacts;
@@ -28,10 +27,10 @@ namespace {
 
 constexpr std::uint64_t CKPT = 1u << 20;
 
-std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
+dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     std::mt19937 rng(seed);
     static const char HEX[] = "0123456789abcdef";
-    std::string s;
+    dstd::String s;
     while (s.size() < bytes) {
         s += "{\"id\":\"";
         for (int i = 0; i < 64; ++i) s += HEX[rng() & 15];
@@ -40,9 +39,9 @@ std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
     return s;
 }
 
-std::vector<std::uint8_t> gzip(const std::string& text) {
+dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
     gz::GzipMemberCompressor c;
-    std::vector<std::uint8_t> out(c.bound(text.size()));
+    dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
     REQUIRE(n.has_value());
     out.resize(*n);
@@ -50,8 +49,8 @@ std::vector<std::uint8_t> gzip(const std::string& text) {
 }
 
 struct TempFile {
-    std::string path;
-    explicit TempFile(const std::vector<std::uint8_t>& bytes) {
+    dstd::String path;
+    explicit TempFile(const dstd::Vector<std::uint8_t>& bytes) {
         char tmpl[] = "/tmp/dftu_index_pass_XXXXXX";
         const int fd = ::mkstemp(tmpl);
         REQUIRE(fd >= 0);
@@ -65,8 +64,8 @@ struct TempFile {
 
 class Recorder : public index::build::IndexVisitor {
    public:
-    std::string bytes;
-    std::vector<std::size_t> checkpoints;
+    dstd::String bytes;
+    dstd::Vector<std::size_t> checkpoints;
     void begin(std::size_t) override {}
     coro::CoroTask<void> on_checkpoint(std::size_t idx) override {
         checkpoints.push_back(idx);
@@ -79,7 +78,7 @@ class Recorder : public index::build::IndexVisitor {
     }
 };
 
-GzipBuildArtifacts build(const std::string& path, Recorder* rec) {
+GzipBuildArtifacts build(const dstd::String& path, Recorder* rec) {
     dstd::Optional<GzipBuildArtifacts> arts;
     run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         index::gzip::CheckpointIndexer::VisitorList visitors;
@@ -112,8 +111,8 @@ void check_same(const GzipBuildArtifacts& a, const GzipBuildArtifacts& b) {
     }
 }
 
-void check_file(const std::vector<std::uint8_t>& comp,
-                const std::string& expected) {
+void check_file(const dstd::Vector<std::uint8_t>& comp,
+                const dstd::String& expected) {
     TempFile f(comp);
     const auto bare = build(f.path, nullptr);
     Recorder rec;
@@ -127,8 +126,8 @@ void check_file(const std::vector<std::uint8_t>& comp,
 
 TEST_SUITE("index pass without visitors") {
     TEST_CASE("many members give the table a visitor sees") {
-        std::string text;
-        std::vector<std::uint8_t> comp;
+        dstd::String text;
+        dstd::Vector<std::uint8_t> comp;
         for (std::uint32_t i = 0; i < 40; ++i) {
             const auto part = hex_lines(200u << 10, i);
             const auto m = gzip(part);
@@ -144,8 +143,8 @@ TEST_SUITE("index pass without visitors") {
     }
 
     TEST_CASE("zero bytes between members are skipped") {
-        std::string text;
-        std::vector<std::uint8_t> comp;
+        dstd::String text;
+        dstd::Vector<std::uint8_t> comp;
         for (std::uint32_t i = 0; i < 40; ++i) {
             const auto part = hex_lines(200u << 10, 300 + i);
             const auto m = gzip(part);
@@ -171,15 +170,15 @@ TEST_SUITE("index pass without visitors") {
         // A stored (level 0) member copies its text verbatim, so a gzip
         // header in the text is a member candidate that starts a range.
         static const char FAKE[] = "\x10\0\0\0\x1f\x8b\x08\0\0\0\0\0\0\x03";
-        const std::string head = hex_lines(CKPT + (100u << 10), 1);
-        const std::string fake =
-            std::string("x") + std::string(FAKE, sizeof(FAKE) - 1) + "\n";
-        const std::string tail = hex_lines(100u << 10, 2);
-        std::string text = hex_lines(CKPT + (200u << 10), 0);
-        std::vector<std::uint8_t> comp = gzip(text);
+        const dstd::String head = hex_lines(CKPT + (100u << 10), 1);
+        const dstd::String fake =
+            dstd::String("x") + dstd::String(FAKE, sizeof(FAKE) - 1) + "\n";
+        const dstd::String tail = hex_lines(100u << 10, 2);
+        dstd::String text = hex_lines(CKPT + (200u << 10), 0);
+        dstd::Vector<std::uint8_t> comp = gzip(text);
         gz::GzipMemberCompressor stored(0);
-        const std::string mid = head + fake + tail;
-        std::vector<std::uint8_t> m(stored.bound(mid.size()));
+        const dstd::String mid = head + fake + tail;
+        dstd::Vector<std::uint8_t> m(stored.bound(mid.size()));
         auto n = stored.compress(mid.data(), mid.size(), m.data(), m.size());
         REQUIRE(n.has_value());
         m.resize(*n);
@@ -213,7 +212,7 @@ TEST_SUITE("index pass without visitors") {
             }
             int chunks = 0;
         };
-        std::vector<std::uint8_t> comp;
+        dstd::Vector<std::uint8_t> comp;
         for (std::uint32_t i = 0; i < 60; ++i) {
             const auto m = gzip(hex_lines(200u << 10, 500 + i));
             comp.insert(comp.end(), m.begin(), m.end());
@@ -228,15 +227,15 @@ TEST_SUITE("index pass without visitors") {
                 co_await index::gzip::build_gzip_index_artifacts(
                     f.path, CKPT, visitors, &scope);
             } catch (const std::runtime_error& e) {
-                threw = std::string(e.what()) == "bad chunk";
+                threw = dstd::String(e.what()) == "bad chunk";
             }
         });
         CHECK(threw);
     }
 
     TEST_CASE("a cut file gives the same table") {
-        std::string text;
-        std::vector<std::uint8_t> comp;
+        dstd::String text;
+        dstd::Vector<std::uint8_t> comp;
         for (std::uint32_t i = 0; i < 8; ++i) {
             const auto part = hex_lines(300u << 10, 200 + i);
             const auto m = gzip(part);

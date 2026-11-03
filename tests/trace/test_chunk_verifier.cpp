@@ -8,6 +8,8 @@
 
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/chunk_verifier_utility.h>
 #include <doctest/doctest.h>
@@ -30,11 +32,11 @@ struct TestChunk {
 };
 
 struct TestMetadata {
-    std::string name;
+    dstd::String name;
     std::size_t total_events;
 
     TestMetadata() : name(""), total_events(0) {}
-    TestMetadata(const std::string& n, std::size_t t)
+    TestMetadata(const dstd::String& n, std::size_t t)
         : name(n), total_events(t) {}
 };
 
@@ -70,7 +72,7 @@ TEST_SUITE("ChunkVerifier") {
                 -> std::uint64_t {
                 std::uint64_t hash = 0;
                 for (const auto& meta : metadata) {
-                    hash ^= std::hash<std::string>{}(meta.name);
+                    hash ^= std::hash<dstd::String>{}(meta.name);
                     hash ^= std::hash<std::size_t>{}(meta.total_events);
                 }
                 printf("Input hasher calculated hash: %lu\n",
@@ -88,7 +90,7 @@ TEST_SUITE("ChunkVerifier") {
             auto event_hasher =
                 [](const dstd::Vector<TestEvent>& /*events*/) -> std::uint64_t {
                 std::uint64_t hash = 0;
-                hash ^= std::hash<std::string>{}("test");
+                hash ^= std::hash<dstd::String>{}("test");
                 hash ^= std::hash<std::size_t>{}(9);  // total events
                 printf("Event hasher calculated hash: %lu\n",
                        (unsigned long)hash);
@@ -145,7 +147,7 @@ TEST_SUITE("ChunkVerifier") {
             CHECK(result.passed == false);
             CHECK(result.input_hash != result.output_hash);
             CHECK(result.error_message.find("Hash mismatch") !=
-                  std::string::npos);
+                  dstd::String::npos);
         }
     }
 

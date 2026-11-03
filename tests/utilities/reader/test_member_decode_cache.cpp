@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
@@ -12,8 +13,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <memory>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftracer::utils::utilities::reader::internal::MemberDecodeCache;
@@ -30,7 +29,7 @@ MemberDecodeCache::Producer counting_producer(std::atomic<int>& calls,
     return [&calls, fill, size]() -> coro::CoroTask<Bytes> {
         calls.fetch_add(1, std::memory_order_relaxed);
         for (int i = 0; i < 4; ++i) co_await coro::yield();
-        auto m = std::make_shared<
+        auto m = dstd::make_shared<
             dftracer::utils::utilities::reader::internal::DecodedMember>();
         m->data.assign(size, fill);
         m->compressed_size = size / 2;
@@ -46,7 +45,7 @@ TEST_SUITE("MemberDecodeCache") {
         std::atomic<int> calls{0};
         const int n = 32;
 
-        std::vector<Bytes> results(n);
+        dstd::Vector<Bytes> results(n);
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<coro::CoroTask<Bytes>> tasks;
             tasks.reserve(n);

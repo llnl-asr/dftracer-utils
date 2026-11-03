@@ -5,8 +5,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <string>
-#include <vector>
 
 // gather_column (kernels/filter.cpp) and dftu_series_slice (abi.cpp) used to
 // copy a source column's TypeId but not its time_unit/timezone/
@@ -21,7 +19,11 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <nanoarrow/nanoarrow.h>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
@@ -41,7 +43,7 @@ void finish(ArrowArray* a) {
     REQUIRE(ArrowArrayFinishBuildingDefault(a, &err) == NANOARROW_OK);
 }
 
-Series make_timestamp(const std::vector<std::int64_t>& values, TimeUnit unit,
+Series make_timestamp(const dstd::Vector<std::int64_t>& values, TimeUnit unit,
                       const char* tz) {
     ArrowTimeUnit au = unit == TimeUnit::Second  ? NANOARROW_TIME_UNIT_SECOND
                        : unit == TimeUnit::Milli ? NANOARROW_TIME_UNIT_MILLI
@@ -60,7 +62,7 @@ Series make_timestamp(const std::vector<std::int64_t>& values, TimeUnit unit,
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_time32(const std::vector<std::int32_t>& values, TimeUnit unit) {
+Series make_time32(const dstd::Vector<std::int32_t>& values, TimeUnit unit) {
     ArrowTimeUnit au = unit == TimeUnit::Second ? NANOARROW_TIME_UNIT_SECOND
                                                 : NANOARROW_TIME_UNIT_MILLI;
     BuiltArrow b;
@@ -76,7 +78,7 @@ Series make_time32(const std::vector<std::int32_t>& values, TimeUnit unit) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_time64(const std::vector<std::int64_t>& values, TimeUnit unit) {
+Series make_time64(const dstd::Vector<std::int64_t>& values, TimeUnit unit) {
     ArrowTimeUnit au = unit == TimeUnit::Micro ? NANOARROW_TIME_UNIT_MICRO
                                                : NANOARROW_TIME_UNIT_NANO;
     BuiltArrow b;
@@ -92,7 +94,7 @@ Series make_time64(const std::vector<std::int64_t>& values, TimeUnit unit) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_duration(const std::vector<std::int64_t>& values, TimeUnit unit) {
+Series make_duration(const dstd::Vector<std::int64_t>& values, TimeUnit unit) {
     ArrowTimeUnit au = unit == TimeUnit::Second  ? NANOARROW_TIME_UNIT_SECOND
                        : unit == TimeUnit::Milli ? NANOARROW_TIME_UNIT_MILLI
                        : unit == TimeUnit::Micro ? NANOARROW_TIME_UNIT_MICRO
@@ -112,7 +114,7 @@ Series make_duration(const std::vector<std::int64_t>& values, TimeUnit unit) {
 
 Series make_decimal(ArrowType arrow_type, int bitwidth, std::int32_t precision,
                     std::int32_t scale,
-                    const std::vector<std::int64_t>& values) {
+                    const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDecimal(&b.schema, arrow_type, precision,
@@ -130,7 +132,7 @@ Series make_decimal(ArrowType arrow_type, int bitwidth, std::int32_t precision,
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_fixed_size_binary(const std::vector<std::string>& values,
+Series make_fixed_size_binary(const dstd::Vector<dstd::String>& values,
                               std::int32_t width) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
@@ -140,7 +142,7 @@ Series make_fixed_size_binary(const std::vector<std::string>& values,
     REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
             NANOARROW_OK);
     REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const std::string& v : values) {
+    for (const dstd::String& v : values) {
         ArrowBufferView bv;
         bv.data.data = v.data();
         bv.size_bytes = width;
@@ -176,7 +178,7 @@ void check_bytes_equal(const Series& a, std::int64_t ai, const Series& b,
 // One parametric-type case: a 5-row source column, the DataType every
 // reachable op must preserve, and a byte width for value comparison.
 struct Case {
-    std::string name;
+    dstd::String name;
     Series source;
     DataType expected;
     std::size_t width;
@@ -185,7 +187,7 @@ struct Case {
 // Every op that gathers/reindexes rows and so must carry type parameters
 // through gather_column or dftu_series_slice.
 void check_op(const Case& c, const Series& result, std::int64_t src_row,
-              const std::string& op = "") {
+              const dstd::String& op = "") {
     CAPTURE(op);
     REQUIRE(result.valid());
     CHECK(result.data_type() == c.expected);
@@ -207,14 +209,14 @@ void check_all_ops(const Case& c) {
     check_op(c, c.source.unique(), -1, "unique");
     check_op(c, c.source.drop_nulls(), -1, "drop_nulls");
 
-    std::vector<std::uint8_t> mask{0b0001'0101};  // keep rows 0, 2, 4
+    dstd::Vector<std::uint8_t> mask{0b0001'0101};  // keep rows 0, 2, 4
     Series m = Series::flat(TypeId::Bool, mask.data(), 5);
     check_op(c, c.source.filter(m), 0, "filter");
 
     DataFrame df;
     df.names = {"id", "col"};
     df.columns.push_back(
-        Series::flat_i64(std::vector<std::int64_t>{0, 1, 2, 3, 4}.data(), 5));
+        Series::flat_i64(dstd::Vector<std::int64_t>{0, 1, 2, 3, 4}.data(), 5));
     df.columns.push_back(c.source.share());
     check_op(c, df.head(3).column("col"), 0, "df.head");
     check_op(c, df.filter(m).column("col"), 0, "df.filter");
@@ -225,14 +227,14 @@ void check_all_ops(const Case& c) {
 
 TEST_SUITE("dataframe_type_parameter_propagation") {
     TEST_CASE("Timestamp(Nano, tz) keeps unit and timezone through every op") {
-        std::vector<std::int64_t> v{1609459200000000000LL, 2, 3, 4, 5};
+        dstd::Vector<std::int64_t> v{1609459200000000000LL, 2, 3, 4, 5};
         check_all_ops({"Timestamp",
                        make_timestamp(v, TimeUnit::Nano, "America/Chicago"),
                        timestamp(TimeUnit::Nano, "America/Chicago"), 8});
     }
 
     TEST_CASE("Time32(Second) keeps its unit through every op") {
-        std::vector<std::int32_t> v{1, 2, 3, 4, 5};
+        dstd::Vector<std::int32_t> v{1, 2, 3, 4, 5};
         DataType expected = time_of(TimeUnit::Second);
         REQUIRE(expected.id == TypeId::Time32);
         check_all_ops(
@@ -240,35 +242,35 @@ TEST_SUITE("dataframe_type_parameter_propagation") {
     }
 
     TEST_CASE("Time64(Nano) keeps its unit through every op") {
-        std::vector<std::int64_t> v{1, 2, 3, 4, 5};
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5};
         DataType expected = time_of(TimeUnit::Nano);
         REQUIRE(expected.id == TypeId::Time64);
         check_all_ops({"Time64", make_time64(v, TimeUnit::Nano), expected, 8});
     }
 
     TEST_CASE("Duration(Milli) keeps its unit through every op") {
-        std::vector<std::int64_t> v{1, 2, 3, 4, 5};
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5};
         check_all_ops({"Duration", make_duration(v, TimeUnit::Milli),
                        duration_of(TimeUnit::Milli), 8});
     }
 
     TEST_CASE("Decimal128(38, 9) keeps precision and scale through every op") {
-        std::vector<std::int64_t> v{1, 2, 3, 4, 5};
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5};
         check_all_ops({"Decimal128",
                        make_decimal(NANOARROW_TYPE_DECIMAL128, 128, 38, 9, v),
                        decimal128(38, 9), 16});
     }
 
     TEST_CASE("Decimal256(38, 9) keeps precision and scale through every op") {
-        std::vector<std::int64_t> v{1, 2, 3, 4, 5};
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5};
         check_all_ops({"Decimal256",
                        make_decimal(NANOARROW_TYPE_DECIMAL256, 256, 38, 9, v),
                        decimal256(38, 9), 32});
     }
 
     TEST_CASE("FixedSizeBinary(7) keeps its width through every op") {
-        std::vector<std::string> v{"aaaaaaa", "bbbbbbb", "ccccccc", "ddddddd",
-                                   "eeeeeee"};
+        dstd::Vector<dstd::String> v{"aaaaaaa", "bbbbbbb", "ccccccc", "ddddddd",
+                                     "eeeeeee"};
         check_all_ops({"FixedSizeBinary", make_fixed_size_binary(v, 7),
                        fixed_size_binary(7), 7});
     }
@@ -277,13 +279,13 @@ TEST_SUITE("dataframe_type_parameter_propagation") {
         // Two rows per key so the group actually folds, not just passes
         // through: id 0 and 2 share key row 0's value, id 1 and 3 share row
         // 1's value.
-        std::vector<std::int64_t> ts{1609459200000000LL, 1700000000000000LL,
-                                     1609459200000000LL, 1700000000000000LL};
+        dstd::Vector<std::int64_t> ts{1609459200000000LL, 1700000000000000LL,
+                                      1609459200000000LL, 1700000000000000LL};
         DataFrame df;
         df.names = {"k", "v"};
         df.columns.push_back(make_timestamp(ts, TimeUnit::Micro, "UTC"));
         df.columns.push_back(Series::flat_i64(
-            std::vector<std::int64_t>{10, 20, 30, 40}.data(), 4));
+            dstd::Vector<std::int64_t>{10, 20, 30, 40}.data(), 4));
 
         DataFrame g = df.group_by("k", {GroupAgg{Agg::Sum, "v", "total"},
                                         GroupAgg{Agg::Count, "", "n"}});

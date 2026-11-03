@@ -3,8 +3,10 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/store/extent_size.h>
 #include <doctest/doctest.h>
 #include <unistd.h>
@@ -12,12 +14,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <string>
 #include <string_view>
+
+using namespace dftracer::utils;
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
 constexpr std::uint32_t ONE_MIB = 1U << 20;
@@ -41,37 +43,33 @@ struct ExtentBytesOverride {
 };
 
 struct TempDir {
-    dftracer::utils::dstd::Path path;
+    dstd::Path path;
     TempDir() {
-        path = dftracer::utils::dstd::fs::temp_directory() /
-               ("dftu_store_extent_size_" + std::to_string(::getpid()));
-        REQUIRE(dftracer::utils::dstd::fs::remove_all(path).has_value());
-        REQUIRE(
-            dftracer::utils::dstd::fs::create_directories(path).has_value());
+        path = dstd::fs::temp_directory() /
+               ("dftu_store_extent_size_" + dstd::to_string(::getpid()));
+        REQUIRE(dstd::fs::remove_all(path).has_value());
+        REQUIRE(dstd::fs::create_directories(path).has_value());
     }
     TempDir(const TempDir&) = delete;
     TempDir& operator=(const TempDir&) = delete;
-    ~TempDir() { (void)dftracer::utils::dstd::fs::remove_all(path); }
+    ~TempDir() { (void)dstd::fs::remove_all(path); }
 };
 
-std::uint32_t chosen(
-    std::size_t stripe_size,
-    dftracer::utils::dstd::Optional<std::uint64_t> override_bytes =
-        dftracer::utils::dstd::Optional<std::uint64_t>{}) {
+std::uint32_t chosen(std::size_t stripe_size,
+                     dstd::Optional<std::uint64_t> override_bytes =
+                         dstd::Optional<std::uint64_t>{}) {
     auto result =
         store::engine::choose_extent_size(stripe_size, override_bytes);
     REQUIRE(result.has_value());
     return *result;
 }
 
-void check_override_error(
-    dftracer::utils::dstd::Expected<std::uint32_t, dftracer::utils::dstd::Error>
-        result) {
+void check_override_error(dstd::Expected<std::uint32_t, dstd::Error> result) {
     REQUIRE_FALSE(result.has_value());
-    CHECK(result.error().is(dftracer::utils::dstd::Condition::InvalidArgument));
+    CHECK(result.error().is(dstd::Condition::InvalidArgument));
     CHECK(result.error().message().find(dftracer::utils::common::constants::
                                             store::STORE_EXTENT_BYTES_ENV) !=
-          dftracer::utils::dstd::StringView::npos);
+          dstd::StringView::npos);
 }
 
 }  // namespace
@@ -126,7 +124,7 @@ TEST_CASE(
     "default") {
     TempDir dir;
     const std::size_t stripe =
-        dftracer::utils::common::lustre_stripe(std::string(dir.path.str()))
+        dftracer::utils::common::lustre_stripe(dstd::String(dir.path.str()))
             .size;
     auto result = store::engine::extent_size_for(dir.path.str());
     REQUIRE(result.has_value());
@@ -151,7 +149,7 @@ TEST_CASE(
         auto result = store::engine::extent_size_for(dir.path.str());
         REQUIRE(result.has_value());
         CHECK(*result == chosen(dftracer::utils::common::lustre_stripe(
-                                    std::string(dir.path.str()))
+                                    dstd::String(dir.path.str()))
                                     .size));
     }
 }

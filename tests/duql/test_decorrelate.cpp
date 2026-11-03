@@ -7,21 +7,19 @@
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <doctest/doctest.h>
 
-#include <string>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::duql;
 
 namespace {
 
-dftracer::utils::dstd::Optional<Decorrelated> run(
-    const dftracer::utils::dstd::String& text, bool scalar) {
+dstd::Optional<Decorrelated> run(const dstd::String& text, bool scalar) {
     auto tree = syntax::parse(text);
     REQUIRE(tree.has_value());
     return decorrelate(*tree->pipeline, scalar);
 }
 
-dftracer::utils::dstd::String refusal(const dftracer::utils::dstd::String& text,
-                                      bool scalar) {
+dstd::String refusal(const dstd::String& text, bool scalar) {
     try {
         (void)run(text, scalar);
     } catch (const Refusal& r) {
@@ -30,10 +28,9 @@ dftracer::utils::dstd::String refusal(const dftracer::utils::dstd::String& text,
     return {};
 }
 
-bool has(const dftracer::utils::dstd::String& text,
-         std::initializer_list<const char*> parts) {
+bool has(const dstd::String& text, std::initializer_list<const char*> parts) {
     for (const char* p : parts)
-        if (text.find(p) == dftracer::utils::dstd::String::npos) {
+        if (text.find(p) == dstd::String::npos) {
             MESSAGE(text);
             return false;
         }
@@ -57,9 +54,7 @@ TEST_SUITE("duql decorrelate") {
         REQUIRE(d);
         REQUIRE(d->outer.size() == 1);
         CHECK(syntax::to_text(*d->outer[0]) == "name");
-        CHECK(d->names ==
-              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                  "__ck0"});
+        CHECK(d->names == dstd::Vector<dstd::String>{"__ck0"});
         CHECK(has(syntax::to_text(*d->side),
                   {"dur > 1", "group __ck0 = name", "__correlated_value"}));
         REQUIRE(d->empty);
@@ -141,7 +136,7 @@ TEST_SUITE("duql decorrelate") {
     }
 
     TEST_CASE("what a range sub-query gives") {
-        auto read = [](const dftracer::utils::dstd::String& agg) {
+        auto read = [](const dstd::String& agg) {
             return run("from data | where ts < ^.ts | agg { v = " + agg + " }",
                        true)
                 ->read;

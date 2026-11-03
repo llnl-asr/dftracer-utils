@@ -2,7 +2,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/server/http_request.h>
@@ -18,8 +22,6 @@
 
 #include <fstream>
 #include <memory>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftracer::utils::server::HttpRequest;
@@ -35,42 +37,43 @@ constexpr long INTERVAL = 5000;  // native units == us (US trace)
 // A SELECTIVE-aggregation record (ph=3): individual events collapsed into
 // count/duration stats plus extra per-arg reductions (tag_min, comm_min) that
 // must survive to the client verbatim.
-std::string agg_event(long ts, int dftu_cnt) {
+dstd::String agg_event(long ts, int dftu_cnt) {
     return "{\"name\":\"MPI_Irecv\",\"cat\":\"p2p\",\"type\":10,\"ts\":" +
-           std::to_string(ts) + ",\"ph\":3,\"pid\":1,\"tid\":1,\"args\":{" +
-           "\"dftu_cnt\":" + std::to_string(dftu_cnt) +
+           dstd::to_string(ts) + ",\"ph\":3,\"pid\":1,\"tid\":1,\"args\":{" +
+           "\"dftu_cnt\":" + dstd::to_string(dftu_cnt) +
            ",\"dur_sum\":38,\"dur_min\":0,\"dur_max\":3,\"tag_min\":-1,"
            "\"comm_min\":-2080374783}}\n";
 }
 
 // end record declaring the aggregation window (trace_interval_ms is in ms).
-std::string end_event(long ts) {
+dstd::String end_event(long ts) {
     return "{\"name\":\"end\",\"cat\":\"dftracer\",\"type\":1,\"ts\":" +
-           std::to_string(ts) +
+           dstd::to_string(ts) +
            ",\"dur\":0,\"ph\":1,\"pid\":1,\"tid\":1,\"args\":{\"cfg\":{"
            "\"trace_interval_ms\":5}}}\n";
 }
 
-std::string regular_event(long ts) {
+dstd::String regular_event(long ts) {
     return "{\"name\":\"read\",\"cat\":\"POSIX\",\"type\":9,\"ts\":" +
-           std::to_string(ts) + ",\"dur\":40,\"ph\":1,\"pid\":1,\"tid\":1}\n";
+           dstd::to_string(ts) + ",\"dur\":40,\"ph\":1,\"pid\":1,\"tid\":1}\n";
 }
 
-void write_single_member(const std::string& path, const std::string& content) {
+void write_single_member(const dstd::String& path,
+                         const dstd::String& content) {
     using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
     GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
-    std::ofstream ofs(path.c_str(), std::ios::binary);
+    dftu_utils_test::FileOut ofs(path);
     ofs.write(reinterpret_cast<const char*>(member->data()),
               static_cast<std::streamsize>(member->size()));
 }
 
-std::string density_body(Router& router, const std::string& target) {
+dstd::String density_body(Router& router, const dstd::String& target) {
     HttpRequest req;
     req.method = "GET";
     req.path = target;
-    std::string body;
+    dstd::String body;
     Runtime rt(4);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
         HttpResponse resp = co_await router.handle(req);
@@ -83,11 +86,11 @@ std::string density_body(Router& router, const std::string& target) {
     return body;
 }
 
-std::unique_ptr<TraceIndex> build_index(const std::string& content,
+dstd::UniquePtr<TraceIndex> build_index(const dstd::String& content,
                                         const dstd::Path& dir) {
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    write_single_member(std::string((dir / "trace.pfw.gz").str()), content);
-    auto index = std::make_unique<TraceIndex>(
+    write_single_member(dstd::String((dir / "trace.pfw.gz").str()), content);
+    auto index = dstd::make_unique<TraceIndex>(
         dstd::String(dir.str()), dstd::String((dir / "idx").str()));
     Runtime rt(4);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -99,8 +102,8 @@ std::unique_ptr<TraceIndex> build_index(const std::string& content,
 }
 
 // Collect the est=true (extrapolated aggregate) events from a response body.
-std::vector<simdjson::dom::element> est_events(simdjson::dom::element root) {
-    std::vector<simdjson::dom::element> out;
+dstd::Vector<simdjson::dom::element> est_events(simdjson::dom::element root) {
+    dstd::Vector<simdjson::dom::element> out;
     for (auto e : root["events"].get_array()) {
         auto a = e["est"];
         if (!a.error() && a.get_bool().value_unsafe()) out.push_back(e);
@@ -116,7 +119,7 @@ TEST_SUITE("viz_aggregated") {
     // the viewport is wider than the window here, extrapolate into one
     // positioned synthetic event per collapsed event, each keeping every arg.
     TEST_CASE("aggregates extrapolate into positioned events with full args") {
-        std::string trace = "[\n";
+        dstd::String trace = "[\n";
         trace += regular_event(100000);
         for (int k = 0; k < 4; ++k)
             trace += agg_event(100000 + k * INTERVAL, 20 + k);
@@ -130,12 +133,13 @@ TEST_SUITE("viz_aggregated") {
         Router router;
         register_viz_api(router, *index);
 
-        std::string body = density_body(
+        dstd::String body = density_body(
             router,
             "/api/viz/density?begin=0&end=1000000&width=100&ts_normalize=0");
 
         simdjson::dom::parser parser;
-        auto root = parser.parse(body);
+        auto root = parser.parse(
+            simdjson::padded_string(simdjson::padded_string(body)));
         auto est = est_events(root.value());
         // dftu_cnt of 20, 21, 22, 23 -> one synthetic event each.
         REQUIRE(est.size() == 20 + 21 + 22 + 23);
@@ -158,7 +162,7 @@ TEST_SUITE("viz_aggregated") {
     // falls back to the trace's declared cfg.trace_interval_ms; the events
     // still extrapolate across that window.
     TEST_CASE("interval falls back to cfg when only one window is present") {
-        std::string trace = "[\n";
+        dstd::String trace = "[\n";
         for (int k = 0; k < 3; ++k) trace += agg_event(100000, 10 + k);
         trace += end_event(105000);
         trace += "]\n";
@@ -168,12 +172,13 @@ TEST_SUITE("viz_aggregated") {
         Router router;
         register_viz_api(router, *index);
 
-        std::string body = density_body(
+        dstd::String body = density_body(
             router,
             "/api/viz/density?begin=0&end=1000000&width=100&ts_normalize=0");
 
         simdjson::dom::parser parser;
-        auto root = parser.parse(body);
+        auto root = parser.parse(
+            simdjson::padded_string(simdjson::padded_string(body)));
         auto est = est_events(root.value());
         REQUIRE(est.size() == 10 + 11 + 12);
         for (auto e : est) {

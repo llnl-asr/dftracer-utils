@@ -192,8 +192,10 @@ TEST_SUITE("lazy_plan") {
             seen.emplace_back(plan_fingerprint(lf), depth);
         });
         REQUIRE(seen.size() == 3);
-        CHECK(seen[0] == std::make_pair(plan_fingerprint(root), 0));
-        CHECK(seen[1] == std::make_pair(plan_fingerprint(inner), 1));
+        CHECK(seen[0] ==
+              dstd::Pair<std::uint64_t, int>{plan_fingerprint(root), 0});
+        CHECK(seen[1] ==
+              dstd::Pair<std::uint64_t, int>{plan_fingerprint(inner), 1});
         CHECK(seen[2].second == 2);
     }
 

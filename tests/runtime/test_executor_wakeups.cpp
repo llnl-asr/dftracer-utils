@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -21,7 +22,6 @@
 #include <chrono>
 #include <cstdint>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace std::chrono_literals;
@@ -56,7 +56,7 @@ TEST_SUITE("ExecutorWakeups") {
 
         Runtime rt(THREADS);
         auto tiny = []() -> coro::CoroTask<void> { co_return; };
-        std::vector<TaskHandle> handles;
+        dstd::Vector<TaskHandle> handles;
         handles.reserve(THREADS);
 
         const auto before = context_switches();
@@ -112,7 +112,7 @@ TEST_SUITE("ExecutorWakeups") {
         std::this_thread::sleep_for(100ms);
         const auto before = context_switches();
         const auto cpu_before = cpu_time();
-        std::vector<std::chrono::nanoseconds> latencies;
+        dstd::Vector<std::chrono::nanoseconds> latencies;
         for (int round = 0; round < ROUNDS; ++round) {
             TaskHandle handle = rt.submit(outer(), "Outer");
             std::this_thread::sleep_for(WAIT);

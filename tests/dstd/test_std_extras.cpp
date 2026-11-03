@@ -103,10 +103,10 @@ TEST_CASE("stable_sort sorts and keeps equal elements in order") {
         for (int i = 0; i < n; ++i)
             v.push_back({static_cast<int>(rng() % 17), i});
         dstd::Vector<Keyed> expect = v;
-        std::stable_sort(
+        std::stable_sort(   // keep std: compares dstd with its std twin
             expect.begin(), expect.end(),
             [](const Keyed& a, const Keyed& b) { return a.key < b.key; });
-        dstd::stable_sort(
+        dstd::stable_sort(  // keep std: compares dstd with its std twin
             v.begin(), v.end(),
             [](const Keyed& a, const Keyed& b) { return a.key < b.key; });
         bool same = true;
@@ -117,6 +117,7 @@ TEST_CASE("stable_sort sorts and keeps equal elements in order") {
     }
 }
 
+// keep std: compares dstd with its std twin
 TEST_CASE("to_string matches std::to_string") {
     CHECK(dstd::to_string(0) == "0");
     CHECK(dstd::to_string(-42) == "-42");
@@ -329,8 +330,10 @@ static_assert(!std::is_constructible_v<dstd::SharedPtr<int>, int*>);
 static_assert(
     !std::is_constructible_v<dstd::SharedPtr<int>, int*, void (*)(int*)>);
 static_assert(
+    // keep std: compares dstd with its std twin
     !std::is_constructible_v<dstd::SharedPtr<int>, std::unique_ptr<int>&&>);
 static_assert(
+    // keep std: compares dstd with its std twin
     std::is_constructible_v<dstd::SharedPtr<int>, std::shared_ptr<int>>);
 
 TEST_CASE("SharedPtr array forms come from our heap and free everything") {
@@ -356,9 +359,11 @@ TEST_CASE("SharedPtr array forms come from our heap and free everything") {
     CHECK(memory::Manager::get().general().blocks() == before);
 }
 
+// keep std: compares dstd with its std twin
 TEST_CASE("std::hash of a dstd::String matches std::string") {
     const dstd::String text = "trace-000.pfw.gz";
     CHECK(std::hash<dstd::String>{}(text) ==
+          // keep std: compares dstd with its std twin
           std::hash<std::string>{}(std::string("trace-000.pfw.gz")));
     std::unordered_set<dstd::String> seen;  // keep std: tests std::hash use
     seen.insert(text);

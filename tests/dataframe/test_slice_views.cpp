@@ -20,10 +20,9 @@
 
 #include <cstdint>
 #include <cstring>
-#include <memory>
-#include <optional>
-#include <string>
 #include <utility>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
@@ -31,9 +30,9 @@ namespace {
 
 constexpr std::int64_t N = 40;
 
-using Row = dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>;
-using Rows = dftracer::utils::dstd::Vector<Row>;
-using Idx = dftracer::utils::dstd::Vector<std::int64_t>;
+using Row = dstd::Optional<dstd::String>;
+using Rows = dstd::Vector<Row>;
+using Idx = dstd::Vector<std::int64_t>;
 
 const char* const POOL[] = {"read",
                             "write",
@@ -52,8 +51,8 @@ Rows rows_for(bool nulls) {
     return r;
 }
 
-dftracer::utils::dstd::Vector<std::uint8_t> bitmap(bool nulls) {
-    dftracer::utils::dstd::Vector<std::uint8_t> v((N + 7) / 8, 0);
+dstd::Vector<std::uint8_t> bitmap(bool nulls) {
+    dstd::Vector<std::uint8_t> v((N + 7) / 8, 0);
     for (std::int64_t i = 0; i < N; ++i)
         if (!null_at(i, nulls))
             v[static_cast<std::size_t>(i >> 3)] |=
@@ -62,13 +61,13 @@ dftracer::utils::dstd::Vector<std::uint8_t> bitmap(bool nulls) {
 }
 
 Series strings_of(const Rows& rows, TypeId type) {
-    dftracer::utils::dstd::Vector<std::int32_t> off{0};
-    dftracer::utils::dstd::String data;
+    dstd::Vector<std::int32_t> off{0};
+    dstd::String data;
     for (const Row& r : rows) {
         if (r) data += *r;
         off.push_back(static_cast<std::int32_t>(data.size()));
     }
-    dftracer::utils::dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
         if (rows[i])
@@ -102,20 +101,19 @@ Series selection_over(const Series& base, const Idx& idx) {
     o->data = new_buffer(idx.size() * sizeof(std::int64_t));
     std::memcpy(writable(o->data), idx.data(),
                 idx.size() * sizeof(std::int64_t));
-    o->set_child(
-        dftracer::utils::dstd::make_shared<dftu_series>(*base.handle()));
+    o->set_child(dstd::make_shared<dftu_series>(*base.handle()));
     return Series{o};
 }
 
 Series int64_of(bool nulls) {
-    dftracer::utils::dstd::Vector<std::int64_t> v;
+    dstd::Vector<std::int64_t> v;
     for (std::int64_t i = 0; i < N; ++i) v.push_back(i * 37 - 100);
     auto valid = bitmap(nulls);
     return Series::flat_i64(v.data(), N, nulls ? valid.data() : nullptr);
 }
 
 Series float64_of(bool nulls) {
-    dftracer::utils::dstd::Vector<double> v;
+    dstd::Vector<double> v;
     for (std::int64_t i = 0; i < N; ++i)
         v.push_back(static_cast<double>(i) * 1.5);
     auto valid = bitmap(nulls);
@@ -123,7 +121,7 @@ Series float64_of(bool nulls) {
 }
 
 Series bool_of(bool nulls) {
-    dftracer::utils::dstd::Vector<std::uint8_t> bits((N + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> bits((N + 7) / 8, 0);
     for (std::int64_t i = 0; i < N; ++i)
         if (i % 3 != 1) bits[static_cast<std::size_t>(i >> 3)] |= 1u << (i & 7);
     auto valid = bitmap(nulls);
@@ -145,14 +143,14 @@ Idx scatter() {
 }
 
 struct Case {
-    dftracer::utils::dstd::String name;
+    dstd::String name;
     Series col;
 };
 
-dftracer::utils::dstd::Vector<Case> cases() {
-    dftracer::utils::dstd::Vector<Case> out;
+dstd::Vector<Case> cases() {
+    dstd::Vector<Case> out;
     for (bool nulls : {false, true}) {
-        const dftracer::utils::dstd::String suffix = nulls ? " nulls" : "";
+        const dstd::String suffix = nulls ? " nulls" : "";
         const Rows rows = rows_for(nulls);
         out.push_back({"int64" + suffix, int64_of(nulls)});
         out.push_back({"float64" + suffix, float64_of(nulls)});
@@ -174,25 +172,24 @@ dftracer::utils::dstd::Vector<Case> cases() {
     return out;
 }
 
-dftracer::utils::dstd::String repr(const Series& in, std::int64_t i) {
+dstd::String repr(const Series& in, std::int64_t i) {
     if (in.is_null(i)) return "<null>";
     switch (in.type()) {
         case TypeId::Int64:
-            return dftracer::utils::dstd::to_string(in.data<std::int64_t>()[i]);
+            return dstd::to_string(in.data<std::int64_t>()[i]);
         case TypeId::Float64:
-            return dftracer::utils::dstd::to_string(in.data<double>()[i]);
+            return dstd::to_string(in.data<double>()[i]);
         case TypeId::Bool:
             return ((in.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1) ? "T"
                                                                       : "F";
         default:
-            return dftracer::utils::dstd::String(in.string_at(i));
+            return dstd::String(in.string_at(i));
     }
 }
 
-dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> reprs(
-    const Series& in) {
+dstd::Vector<dstd::String> reprs(const Series& in) {
     Series flat = in.is_flat() ? in.share() : in.materialize();
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
+    dstd::Vector<dstd::String> out;
     for (std::int64_t i = 0; i < flat.length(); ++i)
         out.push_back(repr(flat, i));
     return out;
@@ -251,21 +248,16 @@ TEST_SUITE("slice views") {
     TEST_CASE("a slice reads after its base is freed") {
         for (const Case& c : cases()) {
             CAPTURE(c.name);
-            auto base =
-                dftracer::utils::dstd::make_unique<Series>(c.col.share());
-            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> want =
-                reprs(c.col.take(range(9, 17)));
+            auto base = dstd::make_unique<Series>(c.col.share());
+            dstd::Vector<dstd::String> want = reprs(c.col.take(range(9, 17)));
             Series got{dftu_series_slice(base->handle(), 9, 17)};
             base.reset();
-            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
-                before = reprs(got);
+            dstd::Vector<dstd::String> before = reprs(got);
             CHECK(before == want);
         }
-        dftracer::utils::dstd::Vector<Case> all = cases();
-        dftracer::utils::dstd::Vector<
-            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>>
-            want;
-        dftracer::utils::dstd::Vector<Series> slices;
+        dstd::Vector<Case> all = cases();
+        dstd::Vector<dstd::Vector<dstd::String>> want;
+        dstd::Vector<Series> slices;
         for (Case& c : all) {
             want.push_back(reprs(c.col.take(range(9, 17))));
             slices.emplace_back(dftu_series_slice(c.col.handle(), 9, 17));
@@ -320,11 +312,11 @@ TEST_SUITE("slice views") {
     }
 
     TEST_CASE("list and struct columns are refused") {
-        dftracer::utils::dstd::Vector<std::int64_t> v{1, 2, 3, 4};
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4};
         Series list = Series::list({0, 1, 3, 4}, Series::flat_i64(v.data(), 4));
         CHECK(dftu_series_slice(list.handle(), 0, 2) == nullptr);
 
-        dftracer::utils::dstd::Vector<Series> fields;
+        dstd::Vector<Series> fields;
         fields.push_back(Series::flat_i64(v.data(), 4));
         Series st = Series::structs({"a"}, std::move(fields));
         CHECK(dftu_series_slice(st.handle(), 0, 2) == nullptr);
@@ -337,8 +329,8 @@ TEST_SUITE("slice views") {
             df.names.push_back(c.name);
             df.columns.push_back(c.col.share());
         }
-        dftracer::utils::dstd::Vector<std::int32_t> off{0};
-        dftracer::utils::dstd::Vector<std::int64_t> vals;
+        dstd::Vector<std::int32_t> off{0};
+        dstd::Vector<std::int64_t> vals;
         for (std::int64_t i = 0; i < N; ++i) {
             for (std::int64_t k = 0; k < i % 4; ++k) vals.push_back(i * 10 + k);
             off.push_back(static_cast<std::int32_t>(vals.size()));
@@ -397,10 +389,10 @@ TEST_SUITE("slice views") {
                                          .collect(7))
                              .get();
 
-        dftracer::utils::dstd::Vector<const Series*> in;
+        dstd::Vector<const Series*> in;
         for (const Series& c : df.columns) in.push_back(&c);
         DataFrame kept = df.filter(eval(col(0) > std::int64_t{10}, in));
-        dftracer::utils::dstd::Vector<const Series*> kin;
+        dstd::Vector<const Series*> kin;
         for (const Series& c : kept.columns) kin.push_back(&c);
         DataFrame want = kept.with_column("j", eval(col(0) + col(0), kin));
 
@@ -421,7 +413,7 @@ TEST_SUITE("slice views") {
             Series s = strings_of(rows, TypeId::String);
             if (layout == 1) s = view_of(rows);
             if (layout == 2) s = s.dictionary_encode();
-            dftracer::utils::dstd::Vector<const Series*> in{&s};
+            dstd::Vector<const Series*> in{&s};
             Series got = eval(
                 expr_str_pred(StrPredOp::Contains, expr_col(0), "name"), in);
             Series want = s.str_contains("name");

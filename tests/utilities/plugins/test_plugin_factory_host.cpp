@@ -5,8 +5,12 @@
 // fails the load instead of running on a host that is not there.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugins.h>
@@ -20,8 +24,8 @@
 
 #include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <string>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::plugins::NamedResult;
 using dftracer::utils::plugins::PluginRun;
@@ -47,19 +51,19 @@ namespace {
 constexpr int EVENTS = 64;
 
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env,
-                    const std::string& tag) {
-    const std::string dir = env.get_dir() + "/" + tag;
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-    const std::string pfw = dir + "/trace.pfw";
-    std::ofstream ofs(pfw.c_str());
+                    const dstd::String& tag) {
+    const dstd::String dir = env.get_dir() + "/" + tag;
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    const dstd::String pfw = dir + "/trace.pfw";
+    dstd::String ofs;
     for (int i = 0; i < EVENTS; ++i)
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
-            << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
-            << "\n";
-    ofs.close();
-    const std::string gz = pfw + ".gz";
+        ofs += common::str_cat(
+            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
+            (1000 + i * 100), R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
+    (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
+    const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
 
     return index_trace(gz);
 }
@@ -68,8 +72,8 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env,
 
 TEST_CASE("an op registered by the factory is live before the scan") {
     auto set = Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
-    INFO(
-        (set.has_value() ? std::string{} : std::string(set.error().message())));
+    INFO((set.has_value() ? dstd::String{}
+                          : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
 
     // Registration happened at load, so the op resolves before any batch has
@@ -84,8 +88,7 @@ TEST_CASE("an op registered by the factory is live before the scan") {
 
     auto it = run.results.results().find("doubled_rows");
     REQUIRE(it != run.results.results().end());
-    const auto& bytes =
-        std::get<dftracer::utils::dstd::Vector<std::byte>>(it->second);
+    const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
     REQUIRE(bytes.size() == sizeof(std::int64_t));
     std::int64_t total = 0;
     std::memcpy(&total, bytes.data(), sizeof(total));
@@ -94,8 +97,8 @@ TEST_CASE("an op registered by the factory is live before the scan") {
 
 TEST_CASE("describe() lists the ops a plugin's factory registered") {
     auto set = Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
-    INFO(
-        (set.has_value() ? std::string{} : std::string(set.error().message())));
+    INFO((set.has_value() ? dstd::String{}
+                          : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
 
     auto info = set->describe();
@@ -115,8 +118,8 @@ TEST_CASE(
     {
         auto set =
             Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
-        INFO((set.has_value() ? std::string{}
-                              : std::string(set.error().message())));
+        INFO((set.has_value() ? dstd::String{}
+                              : dstd::String(set.error().message())));
         REQUIRE(set.has_value());
         REQUIRE(dftu_op_find("factory_registers_op.double_rows") != nullptr);
     }  // `set` destructs here: destroy() then dlclose unmaps the plugin.
@@ -130,16 +133,16 @@ TEST_CASE(
     // shadowing").
     auto set2 =
         Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
-    INFO((set2.has_value() ? std::string{}
-                           : std::string(set2.error().message())));
+    INFO((set2.has_value() ? dstd::String{}
+                           : dstd::String(set2.error().message())));
     REQUIRE(set2.has_value());
     CHECK(dftu_op_find("factory_registers_op.double_rows") != nullptr);
 }
 
 TEST_CASE("the scan-time host refuses to register an op") {
     auto set = Plugins::builder().add(SCAN_REGISTERS_OP_PLUGIN_PATH).build();
-    INFO(
-        (set.has_value() ? std::string{} : std::string(set.error().message())));
+    INFO((set.has_value() ? dstd::String{}
+                          : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
 
     dftu_utils_test::TestEnvironment env(0);
@@ -150,8 +153,7 @@ TEST_CASE("the scan-time host refuses to register an op") {
     // The plugin records whether register_op said no from on_batch.
     auto it = run.results.results().find("scan_register_refused");
     REQUIRE(it != run.results.results().end());
-    const auto& bytes =
-        std::get<dftracer::utils::dstd::Vector<std::byte>>(it->second);
+    const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
     REQUIRE(bytes.size() == sizeof(std::int64_t));
     std::int64_t refused = 0;
     std::memcpy(&refused, bytes.data(), sizeof(refused));
@@ -163,8 +165,8 @@ TEST_CASE("the scan-time host refuses to register an op") {
 
 TEST_CASE("the C++ builder registers a fold, an op and a state at once") {
     auto set = Plugins::builder().add(BUILDER_PLUGIN_PATH).build();
-    INFO(
-        (set.has_value() ? std::string{} : std::string(set.error().message())));
+    INFO((set.has_value() ? dstd::String{}
+                          : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
 
     CHECK(dftu_op_find("builder_plugin.double_rows") != nullptr);
@@ -175,20 +177,20 @@ TEST_CASE("the C++ builder registers a fold, an op and a state at once") {
     PluginRun run = run_set(*set, view, "factory-host");
 
     // The fold half and the registered-state half of the same factory.
-    CHECK(result_text(run, "builder_plugin.rows") == std::to_string(EVENTS));
+    CHECK(result_text(run, "builder_plugin.rows") == dstd::to_string(EVENTS));
     std::uint64_t want_dur = 0;
     for (int i = 0; i < EVENTS; ++i)
         want_dur += static_cast<std::uint64_t>(10 + i);
     CHECK(result_text(run, "builder_plugin.total_dur") ==
-          std::to_string(want_dur));
+          dstd::to_string(want_dur));
 }
 
 TEST_CASE("a factory reaching past the registration surface fails the load") {
     auto set = Plugins::builder().add(FACTORY_ESCAPES_PLUGIN_PATH).build();
 
     REQUIRE_FALSE(set.has_value());
-    CHECK(set.error().message().find(DFTU_SVC_IO) != std::string::npos);
-    CHECK(set.error().message().find("build-phase host") != std::string::npos);
+    CHECK(set.error().message().find(DFTU_SVC_IO) != dstd::String::npos);
+    CHECK(set.error().message().find("build-phase host") != dstd::String::npos);
     CHECK(set.error().message().find(FACTORY_ESCAPES_PLUGIN_PATH) !=
-          std::string::npos);
+          dstd::String::npos);
 }

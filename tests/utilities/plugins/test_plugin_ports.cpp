@@ -4,8 +4,10 @@
 // covering the same-batch delivery, the ordering rule, and the per-batch reset.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
@@ -15,13 +17,12 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <memory>
-#include <span>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace views = dftracer::utils::trace::views;
-using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
+using dstd::StringIntern;
 using views::detail::FoldBatch;
 using views::detail::FoldEvent;
 using views::detail::FoldPortBus;
@@ -65,9 +66,9 @@ struct ConsumerSlice {
 // Owns a plugin plus a PluginFold bound to `bus`, torn down in the right order.
 struct FoldHolder {
     dftu_plugin* plugin;
-    std::unique_ptr<PluginFold> fold;
+    dstd::UniquePtr<PluginFold> fold;
     FoldHolder(dftu_plugin* p, StringIntern& intern, FoldPortBus* bus)
-        : plugin(p), fold(std::make_unique<PluginFold>(p, intern)) {
+        : plugin(p), fold(dstd::make_unique<PluginFold>(p, intern)) {
         fold->bind_port_bus(bus);
     }
     ~FoldHolder() {
@@ -76,9 +77,9 @@ struct FoldHolder {
     }
 };
 
-dftracer::utils::dstd::Vector<FoldEvent> make_events(std::uint64_t with_dur,
-                                                     std::uint64_t total) {
-    dftracer::utils::dstd::Vector<FoldEvent> evs(total);
+dstd::Vector<FoldEvent> make_events(std::uint64_t with_dur,
+                                    std::uint64_t total) {
+    dstd::Vector<FoldEvent> evs(total);
     for (std::uint64_t i = 0; i < total; ++i) {
         // step() drops METADATA/UNKNOWN-phase events before it ever reaches
         // on_batch, and plugins::Event::has_dur() is phase() == Complete;
@@ -137,7 +138,7 @@ TEST_SUITE("PluginPorts") {
 
         auto evs = make_events(/*with_dur=*/3, /*total=*/5);
         ScanUnit unit;
-        FoldBatch fb{dftracer::utils::dstd::Span<const FoldEvent>(evs), unit};
+        FoldBatch fb{dstd::Span<const FoldEvent>(evs), unit};
 
         g_present = false;
         g_consumed = 0;
@@ -160,7 +161,7 @@ TEST_SUITE("PluginPorts") {
 
         auto evs = make_events(3, 5);
         ScanUnit unit;
-        FoldBatch fb{dftracer::utils::dstd::Span<const FoldEvent>(evs), unit};
+        FoldBatch fb{dstd::Span<const FoldEvent>(evs), unit};
 
         g_present = true;
         g_consumed = 123;
@@ -183,7 +184,7 @@ TEST_SUITE("PluginPorts") {
 
         auto evs = make_events(2, 4);
         ScanUnit unit;
-        FoldBatch fb{dftracer::utils::dstd::Span<const FoldEvent>(evs), unit};
+        FoldBatch fb{dstd::Span<const FoldEvent>(evs), unit};
 
         bus.clear();
         prod.fold->step(fb);

@@ -244,6 +244,7 @@ TEST_CASE("a pool at its limit asks the holders") {
 TEST_CASE("the reclaimer table fills and frees") {
     PoolHandle a = root().child("a");
     Holder holder(MIB);
+    // keep std: memory tests link only memory
     std::vector<ReclaimSlot> slots;
     for (std::size_t i = 0; i < RECLAIMER_SLOTS; ++i) {
         slots.push_back(a->attach(holder));

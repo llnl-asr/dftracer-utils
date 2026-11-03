@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/server/http_response.h>
 #include <doctest/doctest.h>
 
-#include <string>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::server;
 
@@ -78,10 +79,10 @@ TEST_CASE("HttpResponse - serialize_headers adds Content-Length") {
     auto resp = HttpResponse::ok("{}", "application/json");
     auto headers = resp.serialize_headers();
 
-    CHECK(headers.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+    CHECK(headers.find("HTTP/1.1 200 OK\r\n") != dstd::String::npos);
     CHECK(headers.find("Content-Type: application/json\r\n") !=
-          std::string::npos);
-    CHECK(headers.find("Content-Length: 2\r\n") != std::string::npos);
+          dstd::String::npos);
+    CHECK(headers.find("Content-Length: 2\r\n") != dstd::String::npos);
     // Ends with blank line
     CHECK(headers.size() >= 4);
     CHECK(headers.substr(headers.size() - 2) == "\r\n");
@@ -93,7 +94,7 @@ TEST_CASE(
     auto resp = HttpResponse::ok();
     auto headers = resp.serialize_headers();
 
-    CHECK(headers.find("Content-Length") == std::string::npos);
+    CHECK(headers.find("Content-Length") == dstd::String::npos);
 }
 
 TEST_CASE(
@@ -109,8 +110,8 @@ TEST_CASE(
     // Should only have one Content-Length header
     auto first = headers.find("Content-Length");
     auto second = headers.find("Content-Length", first + 1);
-    CHECK(first != std::string::npos);
-    CHECK(second == std::string::npos);
+    CHECK(first != dstd::String::npos);
+    CHECK(second == dstd::String::npos);
 }
 
 TEST_CASE("HttpResponse - full serialize") {
@@ -118,11 +119,11 @@ TEST_CASE("HttpResponse - full serialize") {
     auto full = resp.serialize();
 
     CHECK(full.find("HTTP/1.1 200 OK\r\n") == 0);
-    CHECK(full.find("Content-Type: text/plain\r\n") != std::string::npos);
-    CHECK(full.find("Content-Length: 9\r\n") != std::string::npos);
+    CHECK(full.find("Content-Type: text/plain\r\n") != dstd::String::npos);
+    CHECK(full.find("Content-Length: 9\r\n") != dstd::String::npos);
     // Body comes after \r\n\r\n
     auto body_start = full.find("\r\n\r\n");
-    REQUIRE(body_start != std::string::npos);
+    REQUIRE(body_start != dstd::String::npos);
     CHECK(full.substr(body_start + 4) == "test body");
 }
 
@@ -132,7 +133,7 @@ TEST_CASE("HttpResponse - serialize 404") {
 
     CHECK(full.find("HTTP/1.1 404 Not Found\r\n") == 0);
     auto body_start = full.find("\r\n\r\n");
-    REQUIRE(body_start != std::string::npos);
+    REQUIRE(body_start != dstd::String::npos);
     CHECK(full.substr(body_start + 4) == "Not Found");
 }
 
@@ -153,9 +154,9 @@ TEST_CASE("HttpResponse - custom headers") {
 
     auto headers = resp.serialize_headers();
     CHECK(headers.find("Content-Type: application/x-ndjson\r\n") !=
-          std::string::npos);
-    CHECK(headers.find("Transfer-Encoding: chunked\r\n") != std::string::npos);
-    CHECK(headers.find("X-Custom: value\r\n") != std::string::npos);
+          dstd::String::npos);
+    CHECK(headers.find("Transfer-Encoding: chunked\r\n") != dstd::String::npos);
+    CHECK(headers.find("X-Custom: value\r\n") != dstd::String::npos);
     // No Content-Length since body is empty
-    CHECK(headers.find("Content-Length") == std::string::npos);
+    CHECK(headers.find("Content-Length") == dstd::String::npos);
 }

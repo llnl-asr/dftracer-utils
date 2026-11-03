@@ -22,6 +22,8 @@
 #include <dftracer/utils/dataframe/scalar.h>
 #include <nanoarrow/nanoarrow.h>
 
+using namespace dftracer::utils;
+
 namespace df = dftracer::utils::dataframe;
 
 using dftracer::utils::dataframe::Agg;
@@ -53,7 +55,7 @@ void finish(ArrowArray* a) {
     REQUIRE(ArrowArrayFinishBuildingDefault(a, &err) == NANOARROW_OK);
 }
 
-Series make_float16(const dftracer::utils::dstd::Vector<float>& values) {
+Series make_float16(const dstd::Vector<float>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_HALF_FLOAT) ==
@@ -68,9 +70,8 @@ Series make_float16(const dftracer::utils::dstd::Vector<float>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_fixed_size_binary(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& values,
-    std::int32_t width) {
+Series make_fixed_size_binary(const dstd::Vector<dstd::String>& values,
+                              std::int32_t width) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeFixedSize(&b.schema,
@@ -79,7 +80,7 @@ Series make_fixed_size_binary(
     REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
             NANOARROW_OK);
     REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const dftracer::utils::dstd::String& v : values) {
+    for (const dstd::String& v : values) {
         REQUIRE(static_cast<std::int32_t>(v.size()) == width);
         ArrowBufferView bv;
         bv.data.data = v.data();
@@ -90,9 +91,7 @@ Series make_fixed_size_binary(
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_binary(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&
-        values) {
+Series make_binary(const dstd::Vector<dstd::String>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_BINARY) ==
@@ -100,7 +99,7 @@ Series make_binary(
     REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
             NANOARROW_OK);
     REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const dftracer::utils::dstd::String& v : values) {
+    for (const dstd::String& v : values) {
         ArrowBufferView bv;
         bv.data.data = v.data();
         bv.size_bytes = static_cast<int64_t>(v.size());
@@ -110,9 +109,7 @@ Series make_binary(
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_large_binary(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&
-        values) {
+Series make_large_binary(const dstd::Vector<dstd::String>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_BINARY) ==
@@ -120,7 +117,7 @@ Series make_large_binary(
     REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
             NANOARROW_OK);
     REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const dftracer::utils::dstd::String& v : values) {
+    for (const dstd::String& v : values) {
         ArrowBufferView bv;
         bv.data.data = v.data();
         bv.size_bytes = static_cast<int64_t>(v.size());
@@ -130,8 +127,7 @@ Series make_large_binary(
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_timestamp(
-    const dftracer::utils::dstd::Vector<std::int64_t>& values) {
+Series make_timestamp(const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIMESTAMP,
@@ -146,9 +142,8 @@ Series make_timestamp(
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_decimal128(
-    const dftracer::utils::dstd::Vector<std::int64_t>& values,
-    std::int32_t precision = 38, std::int32_t scale = 0) {
+Series make_decimal128(const dstd::Vector<std::int64_t>& values,
+                       std::int32_t precision = 38, std::int32_t scale = 0) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDecimal(&b.schema, NANOARROW_TYPE_DECIMAL128,
@@ -166,9 +161,8 @@ Series make_decimal128(
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_decimal256(
-    const dftracer::utils::dstd::Vector<std::int64_t>& values,
-    std::int32_t precision, std::int32_t scale) {
+Series make_decimal256(const dstd::Vector<std::int64_t>& values,
+                       std::int32_t precision, std::int32_t scale) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDecimal(&b.schema, NANOARROW_TYPE_DECIMAL256,
@@ -186,9 +180,8 @@ Series make_decimal256(
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_timestamp_tz(
-    ArrowTimeUnit unit, const char* tz,
-    const dftracer::utils::dstd::Vector<std::int64_t>& values) {
+Series make_timestamp_tz(ArrowTimeUnit unit, const char* tz,
+                         const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIMESTAMP,
@@ -202,9 +195,8 @@ Series make_timestamp_tz(
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_duration(
-    ArrowTimeUnit unit,
-    const dftracer::utils::dstd::Vector<std::int64_t>& values) {
+Series make_duration(ArrowTimeUnit unit,
+                     const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_DURATION, unit,
@@ -219,7 +211,7 @@ Series make_duration(
 }
 
 Series make_time64(ArrowTimeUnit unit,
-                   const dftracer::utils::dstd::Vector<std::int64_t>& values) {
+                   const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIME64, unit,
@@ -267,10 +259,10 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         REQUIRE(sorted.length() == 4);
         const char* d = sorted.data<char>();
         REQUIRE(d != nullptr);
-        CHECK(dftracer::utils::dstd::String(d, 4) == "aaaa");
-        CHECK(dftracer::utils::dstd::String(d + 4, 4) == "aaaa");
-        CHECK(dftracer::utils::dstd::String(d + 8, 4) == "bbbb");
-        CHECK(dftracer::utils::dstd::String(d + 12, 4) == "cccc");
+        CHECK(dstd::String(d, 4) == "aaaa");
+        CHECK(dstd::String(d + 4, 4) == "aaaa");
+        CHECK(dstd::String(d + 8, 4) == "bbbb");
+        CHECK(dstd::String(d + 12, 4) == "cccc");
     }
 
     TEST_CASE("FixedSizeBinary is_in matches on exact bytes") {
@@ -295,7 +287,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE("FixedSizeBinary groups by exact byte equality") {
         Series keys = make_fixed_size_binary(
             {"aaaa", "bbbb", "aaaa", "cccc", "bbbb", "aaaa"}, 4);
-        dftracer::utils::dstd::Vector<std::int64_t> ones = {1, 1, 1, 1, 1, 1};
+        dstd::Vector<std::int64_t> ones = {1, 1, 1, 1, 1, 1};
         Series values = Series::flat_i64(ones.data(), 6);
         REQUIRE(keys.valid());
         REQUIRE(values.valid());
@@ -340,7 +332,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
 
     TEST_CASE("Decimal128 groups by exact value") {
         Series keys = make_decimal128({100, 300, 100});
-        dftracer::utils::dstd::Vector<std::int64_t> ones = {1, 1, 1};
+        dstd::Vector<std::int64_t> ones = {1, 1, 1};
         Series values = Series::flat_i64(ones.data(), 3);
         REQUIRE(keys.valid());
 
@@ -518,7 +510,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     }
 
     TEST_CASE("Casting INTO a decimal type is refused, not silently wrong") {
-        dftracer::utils::dstd::Vector<double> vals = {1.5, 2.5};
+        dstd::Vector<double> vals = {1.5, 2.5};
         Series a = Series::flat_f64(vals.data(), 2);
         Series casted = a.cast(TypeId::Decimal128);
         CHECK_FALSE(casted.valid());
@@ -586,7 +578,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
 
     TEST_CASE("Timestamp groups on the exact value, via both group_by paths") {
         Series keys = make_timestamp({100, 300, 100});
-        dftracer::utils::dstd::Vector<std::int64_t> ones = {1, 1, 1};
+        dstd::Vector<std::int64_t> ones = {1, 1, 1};
         Series values = Series::flat_i64(ones.data(), 3);
         REQUIRE(keys.valid());
 
@@ -817,7 +809,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE(
         "Date32 arithmetic stays refused: no TimeUnit to reconcile "
         "against a Duration tick") {
-        dftracer::utils::dstd::Vector<std::int32_t> days = {100, 200};
+        dstd::Vector<std::int32_t> days = {100, 200};
         Series a = Series::flat(TypeId::Date32, days.data(), 2);
         Series b = Series::flat(TypeId::Date32, days.data(), 2);
         REQUIRE(a.valid());
@@ -832,7 +824,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "equality, keeping the width") {
         Series keys = make_fixed_size_binary(
             {"aaaa", "bbbb", "aaaa", "cccc", "bbbb", "aaaa"}, 4);
-        dftracer::utils::dstd::Vector<std::int64_t> ones(6, 1);
+        dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = {"k", "v"};
@@ -848,7 +840,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         const char* d = gk.data<char>();
         REQUIRE(d != nullptr);
         for (std::int64_t r = 0; r < 3; ++r) {
-            const dftracer::utils::dstd::String key(d + r * 4, 4);
+            const dstd::String key(d + r * 4, 4);
             if (key == "aaaa")
                 CHECK(n[r] == 3);
             else if (key == "bbbb")
@@ -865,18 +857,16 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "AggStates") {
         Series k1 = make_fixed_size_binary({"aaaa", "bbbb", "aaaa"}, 4);
         Series k2 = make_fixed_size_binary({"cccc", "bbbb", "aaaa"}, 4);
-        dftracer::utils::dstd::Vector<std::int64_t> ones3(3, 1);
+        dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1,
-                           dftracer::utils::dstd::Vector<const Series*>{&k1},
-                           dftracer::utils::dstd::Vector<const Series*>{&v1});
+        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                           dstd::Vector<const Series*>{&v1});
         AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2,
-                           dftracer::utils::dstd::Vector<const Series*>{&k2},
-                           dftracer::utils::dstd::Vector<const Series*>{&v2});
+        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                           dstd::Vector<const Series*>{&v2});
         df::agg_merge(*st1, *st2);
         REQUIRE(df::agg_num_groups(*st1) == 3);
 
@@ -886,8 +876,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         CHECK(out.column("k").data_type().fixed_size() == 4);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
         for (std::int64_t g = 0; g < df::agg_num_groups(*st1); ++g) {
-            const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
-                key = df::agg_group_key(*st1, g);
+            const dstd::Vector<dstd::String> key = df::agg_group_key(*st1, g);
             REQUIRE(key.size() == 1);
             if (key[0] == "aaaa")
                 CHECK(n[g] == 3);
@@ -905,14 +894,13 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "(spill) round trip") {
         Series keys = make_fixed_size_binary(
             {"aaaa", "bbbb", "aaaa", "cccc", "bbbb", "aaaa"}, 4);
-        dftracer::utils::dstd::Vector<std::int64_t> ones(6, 1);
+        dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
 
         AggStatePtr st = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(
-            *st, dftracer::utils::dstd::Vector<const Series*>{&keys},
-            dftracer::utils::dstd::Vector<const Series*>{&values});
-        const dftracer::utils::dstd::String blob = df::agg_serialize(*st);
+        df::agg_accumulate(*st, dstd::Vector<const Series*>{&keys},
+                           dstd::Vector<const Series*>{&values});
+        const dstd::String blob = df::agg_serialize(*st);
         AggStatePtr back = df::agg_deserialize(blob);
 
         REQUIRE(df::agg_num_groups(*back) == 3);
@@ -923,7 +911,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         const std::int64_t* n = out.column("n").data<std::int64_t>();
         const char* d = out.column("k").data<char>();
         for (std::int64_t r = 0; r < 3; ++r) {
-            const dftracer::utils::dstd::String key(d + r * 4, 4);
+            const dstd::String key(d + r * 4, 4);
             if (key == "aaaa")
                 CHECK(n[r] == 3);
             else if (key == "bbbb")
@@ -939,7 +927,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "DataFrame::group_by groups a Decimal128(38, 9) key by exact "
         "value, keeping precision and scale") {
         Series keys = make_decimal128({100, 300, 100, 500, 300, 100}, 38, 9);
-        dftracer::utils::dstd::Vector<std::int64_t> ones(6, 1);
+        dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = {"k", "v"};
@@ -975,24 +963,22 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "AggStates and survive a spill round trip") {
         Series k1 = make_decimal128({100, 300, 100}, 38, 9);
         Series k2 = make_decimal128({500, 300, 100}, 38, 9);
-        dftracer::utils::dstd::Vector<std::int64_t> ones3(3, 1);
+        dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1,
-                           dftracer::utils::dstd::Vector<const Series*>{&k1},
-                           dftracer::utils::dstd::Vector<const Series*>{&v1});
+        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                           dstd::Vector<const Series*>{&v1});
         AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2,
-                           dftracer::utils::dstd::Vector<const Series*>{&k2},
-                           dftracer::utils::dstd::Vector<const Series*>{&v2});
+        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                           dstd::Vector<const Series*>{&v2});
         df::agg_merge(*st1, *st2);
         REQUIRE(df::agg_num_groups(*st1) == 3);
 
         // Round-trip the merged partial through the spill blob before
         // finalizing, exercising the same path agg/serialize.cpp writes.
-        const dftracer::utils::dstd::String blob = df::agg_serialize(*st1);
+        const dstd::String blob = df::agg_serialize(*st1);
         AggStatePtr back = df::agg_deserialize(blob);
         REQUIRE(df::agg_num_groups(*back) == 3);
 
@@ -1022,7 +1008,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "DataFrame::group_by groups a Decimal256 key by exact value, "
         "keeping precision and scale") {
         Series keys = make_decimal256({100, 300, 100, 500, 300, 100}, 50, 20);
-        dftracer::utils::dstd::Vector<std::int64_t> ones(6, 1);
+        dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = {"k", "v"};
@@ -1058,22 +1044,20 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "AggStates and survive a spill round trip") {
         Series k1 = make_decimal256({100, 300, 100}, 50, 20);
         Series k2 = make_decimal256({500, 300, 100}, 50, 20);
-        dftracer::utils::dstd::Vector<std::int64_t> ones3(3, 1);
+        dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1,
-                           dftracer::utils::dstd::Vector<const Series*>{&k1},
-                           dftracer::utils::dstd::Vector<const Series*>{&v1});
+        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                           dstd::Vector<const Series*>{&v1});
         AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2,
-                           dftracer::utils::dstd::Vector<const Series*>{&k2},
-                           dftracer::utils::dstd::Vector<const Series*>{&v2});
+        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                           dstd::Vector<const Series*>{&v2});
         df::agg_merge(*st1, *st2);
         REQUIRE(df::agg_num_groups(*st1) == 3);
 
-        const dftracer::utils::dstd::String blob = df::agg_serialize(*st1);
+        const dstd::String blob = df::agg_serialize(*st1);
         AggStatePtr back = df::agg_deserialize(blob);
         REQUIRE(df::agg_num_groups(*back) == 3);
 
@@ -1103,7 +1087,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "DataFrame::group_by groups a Binary key by exact byte equality") {
         Series keys =
             make_binary({"aaaa", "bbbb", "aaaa", "cccc", "bbbb", "aaaa"});
-        dftracer::utils::dstd::Vector<std::int64_t> ones(6, 1);
+        dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = {"k", "v"};
@@ -1116,7 +1100,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         const std::int64_t* n = grouped.column("n").data<std::int64_t>();
         REQUIRE(n != nullptr);
         for (std::int64_t r = 0; r < 3; ++r) {
-            const dftracer::utils::dstd::String key(gk.string_at(r));
+            const dstd::String key(gk.string_at(r));
             if (key == "aaaa")
                 CHECK(n[r] == 3);
             else if (key == "bbbb")
@@ -1133,22 +1117,20 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "survive a spill round trip") {
         Series k1 = make_binary({"aaaa", "bbbb", "aaaa"});
         Series k2 = make_binary({"cccc", "bbbb", "aaaa"});
-        dftracer::utils::dstd::Vector<std::int64_t> ones3(3, 1);
+        dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1,
-                           dftracer::utils::dstd::Vector<const Series*>{&k1},
-                           dftracer::utils::dstd::Vector<const Series*>{&v1});
+        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                           dstd::Vector<const Series*>{&v1});
         AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2,
-                           dftracer::utils::dstd::Vector<const Series*>{&k2},
-                           dftracer::utils::dstd::Vector<const Series*>{&v2});
+        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                           dstd::Vector<const Series*>{&v2});
         df::agg_merge(*st1, *st2);
         REQUIRE(df::agg_num_groups(*st1) == 3);
 
-        const dftracer::utils::dstd::String blob = df::agg_serialize(*st1);
+        const dstd::String blob = df::agg_serialize(*st1);
         AggStatePtr back = df::agg_deserialize(blob);
         REQUIRE(df::agg_num_groups(*back) == 3);
 
@@ -1158,7 +1140,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         const std::int64_t* n = out.column("n").data<std::int64_t>();
         Series gk = out.column("k");
         for (std::int64_t r = 0; r < 3; ++r) {
-            const dftracer::utils::dstd::String key(gk.string_at(r));
+            const dstd::String key(gk.string_at(r));
             if (key == "aaaa")
                 CHECK(n[r] == 3);
             else if (key == "bbbb")
@@ -1175,7 +1157,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "equality") {
         Series keys =
             make_large_binary({"aaaa", "bbbb", "aaaa", "cccc", "bbbb", "aaaa"});
-        dftracer::utils::dstd::Vector<std::int64_t> ones(6, 1);
+        dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = {"k", "v"};
@@ -1188,7 +1170,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         const std::int64_t* n = grouped.column("n").data<std::int64_t>();
         REQUIRE(n != nullptr);
         for (std::int64_t r = 0; r < 3; ++r) {
-            const dftracer::utils::dstd::String key(gk.string_at(r));
+            const dstd::String key(gk.string_at(r));
             if (key == "aaaa")
                 CHECK(n[r] == 3);
             else if (key == "bbbb")
@@ -1205,22 +1187,20 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "AggStates and survive a spill round trip") {
         Series k1 = make_large_binary({"aaaa", "bbbb", "aaaa"});
         Series k2 = make_large_binary({"cccc", "bbbb", "aaaa"});
-        dftracer::utils::dstd::Vector<std::int64_t> ones3(3, 1);
+        dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1,
-                           dftracer::utils::dstd::Vector<const Series*>{&k1},
-                           dftracer::utils::dstd::Vector<const Series*>{&v1});
+        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                           dstd::Vector<const Series*>{&v1});
         AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2,
-                           dftracer::utils::dstd::Vector<const Series*>{&k2},
-                           dftracer::utils::dstd::Vector<const Series*>{&v2});
+        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                           dstd::Vector<const Series*>{&v2});
         df::agg_merge(*st1, *st2);
         REQUIRE(df::agg_num_groups(*st1) == 3);
 
-        const dftracer::utils::dstd::String blob = df::agg_serialize(*st1);
+        const dstd::String blob = df::agg_serialize(*st1);
         AggStatePtr back = df::agg_deserialize(blob);
         REQUIRE(df::agg_num_groups(*back) == 3);
 
@@ -1230,7 +1210,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         const std::int64_t* n = out.column("n").data<std::int64_t>();
         Series gk = out.column("k");
         for (std::int64_t r = 0; r < 3; ++r) {
-            const dftracer::utils::dstd::String key(gk.string_at(r));
+            const dstd::String key(gk.string_at(r));
             if (key == "aaaa")
                 CHECK(n[r] == 3);
             else if (key == "bbbb")
@@ -1251,7 +1231,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         // (bit-pattern equality, not IEEE float equality where NaN != NaN).
         Series keys =
             make_float16({1.0f, -0.0f, 1.0f, 0.0f, std::nanf(""), -0.0f});
-        dftracer::utils::dstd::Vector<std::int64_t> ones(6, 1);
+        dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = {"k", "v"};
@@ -1297,23 +1277,21 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "and survive a spill round trip") {
         Series k1 = make_float16({1.0f, -0.0f, std::nanf("")});
         Series k2 = make_float16({0.0f, -0.0f, 1.0f});
-        dftracer::utils::dstd::Vector<std::int64_t> ones3(3, 1);
+        dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1,
-                           dftracer::utils::dstd::Vector<const Series*>{&k1},
-                           dftracer::utils::dstd::Vector<const Series*>{&v1});
+        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                           dstd::Vector<const Series*>{&v1});
         AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2,
-                           dftracer::utils::dstd::Vector<const Series*>{&k2},
-                           dftracer::utils::dstd::Vector<const Series*>{&v2});
+        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                           dstd::Vector<const Series*>{&v2});
         df::agg_merge(*st1, *st2);
         // {1.0}x2, {-0.0}x2, {+0.0}x1, {NaN}x1
         REQUIRE(df::agg_num_groups(*st1) == 4);
 
-        const dftracer::utils::dstd::String blob = df::agg_serialize(*st1);
+        const dstd::String blob = df::agg_serialize(*st1);
         AggStatePtr back = df::agg_deserialize(blob);
         REQUIRE(df::agg_num_groups(*back) == 4);
 

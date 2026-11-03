@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <set>
-#include <string>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::index::extensions;
 
@@ -45,19 +46,19 @@ TEST_SUITE("BloomFilter") {
 
         // Insert N elements
         for (std::size_t i = 0; i < N; ++i) {
-            bf.add("item_" + std::to_string(i));
+            bf.add("item_" + dstd::to_string(i));
         }
 
         // Verify no false negatives
         for (std::size_t i = 0; i < N; ++i) {
-            REQUIRE(bf.possibly_contains("item_" + std::to_string(i)));
+            REQUIRE(bf.possibly_contains("item_" + dstd::to_string(i)));
         }
 
         // Check false positive rate with elements we didn't add
         std::size_t false_positives = 0;
         const std::size_t test_count = 10000;
         for (std::size_t i = 0; i < test_count; ++i) {
-            if (bf.possibly_contains("absent_" + std::to_string(i))) {
+            if (bf.possibly_contains("absent_" + dstd::to_string(i))) {
                 false_positives++;
             }
         }

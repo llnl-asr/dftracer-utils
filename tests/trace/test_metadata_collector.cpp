@@ -3,6 +3,9 @@
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -16,17 +19,15 @@
 #include <future>
 #include <mutex>
 #include <sstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace;
 
 // Helper to create a test trace file
-static std::string create_test_trace_file(const std::string& dir,
-                                          int num_events) {
-    std::string file_path = dir + "/test.trace.gz";
-    std::ostringstream ofs;
+static dstd::String create_test_trace_file(const dstd::String& dir,
+                                           int num_events) {
+    dstd::String file_path = dir + "/test.trace.gz";
+    dftu_utils_test::TextOut ofs;
 
     const char* io_names[] = {"pread", "pwrite", "read",
                               "write", "fread",  "fwrite"};
@@ -53,14 +54,14 @@ static std::string create_test_trace_file(const std::string& dir,
 TEST_SUITE("MetadataCollector") {
     TEST_CASE("MetadataCollector - Collect from a gzip trace file") {
         // Create temp directory
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_metadata_collector")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
         SUBCASE("Small trace file") {
             // Create a test trace file with 10 events
-            std::string trace_file = create_test_trace_file(test_dir, 10);
+            dstd::String trace_file = create_test_trace_file(test_dir, 10);
 
             // Create input
             auto input = MetadataCollectorUtilityInput::from_file(
@@ -73,7 +74,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Verify output
             CHECK(output.success == true);
-            CHECK(std::string(output.file_path) == trace_file);
+            CHECK(dstd::String(output.file_path) == trace_file);
             CHECK(output.valid_events == 10);
             CHECK(output.end_line >= 9);  // Should have at least 10 lines (0-9)
             CHECK(output.size_mb > 0);
@@ -82,7 +83,7 @@ TEST_SUITE("MetadataCollector") {
 
         SUBCASE("Large trace file with checkpoint") {
             // Create larger trace file
-            std::string trace_file = create_test_trace_file(test_dir, 1000);
+            dstd::String trace_file = create_test_trace_file(test_dir, 1000);
 
             // Create input with small checkpoint size
             auto input = MetadataCollectorUtilityInput::from_file(
@@ -102,11 +103,11 @@ TEST_SUITE("MetadataCollector") {
         }
 
         SUBCASE("Extended metadata fields") {
-            const std::string own_dir = std::string(
+            const dstd::String own_dir = dstd::String(
                 dftu_utils_test::make_unique_test_path("metadata_no_index")
                     .str());
             REQUIRE(dstd::fs::create_directories(own_dir).has_value());
-            std::string trace_file = create_test_trace_file(own_dir, 100);
+            dstd::String trace_file = create_test_trace_file(own_dir, 100);
 
             // Create input
             auto input = MetadataCollectorUtilityInput::from_file(
@@ -119,7 +120,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Verify extended metadata fields
             CHECK(output.success == true);
-            CHECK(std::string(output.file_path) == trace_file);
+            CHECK(dstd::String(output.file_path) == trace_file);
             CHECK(output.valid_events == 100);
 
             // Collecting metadata for a gzip trace builds its index.
@@ -138,18 +139,18 @@ TEST_SUITE("MetadataCollector") {
 
     TEST_CASE("MetadataCollector - Extended fields for compressed files") {
         // Create temp directory
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_metadata_compressed")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
         SUBCASE("Compressed file with index - extended metadata") {
-            std::string gz_file = create_test_trace_file(test_dir, 50);
+            dstd::String gz_file = create_test_trace_file(test_dir, 50);
             REQUIRE(dstd::fs::exists(gz_file).value());
 
             // Create input with index
-            std::string index_path =
-                std::string(internal::determine_index_path(gz_file, ""));
+            dstd::String index_path =
+                dstd::String(internal::determine_index_path(gz_file, ""));
             auto input =
                 MetadataCollectorUtilityInput::from_file(dstd::String(gz_file))
                     .with_index(dstd::String(index_path))
@@ -163,14 +164,14 @@ TEST_SUITE("MetadataCollector") {
 
             // Verify basic fields
             CHECK(output.success == true);
-            CHECK(std::string(output.file_path) == gz_file);
+            CHECK(dstd::String(output.file_path) == gz_file);
             CHECK(output.valid_events > 0);
 
             // Verify extended fields for compressed files
             CHECK(output.format == common::ArchiveFormat::Gzip);
             CHECK(output.has_index == true);
             CHECK(output.index_valid == true);
-            CHECK(std::string(output.index_path) == index_path);
+            CHECK(dstd::String(output.index_path) == index_path);
             CHECK(output.compressed_size > 0);
             CHECK(output.uncompressed_size > 0);
             CHECK(output.compressed_size <
@@ -184,10 +185,10 @@ TEST_SUITE("MetadataCollector") {
         }
 
         SUBCASE("Reuse existing index") {
-            std::string gz_file = create_test_trace_file(test_dir, 25);
+            dstd::String gz_file = create_test_trace_file(test_dir, 25);
 
-            std::string index_path =
-                std::string(internal::determine_index_path(gz_file, ""));
+            dstd::String index_path =
+                dstd::String(internal::determine_index_path(gz_file, ""));
 
             // First run - build index
             {
@@ -231,13 +232,13 @@ TEST_SUITE("MetadataCollector") {
 
     TEST_CASE(
         "MetadataCollector - force rebuild keeps the other index entries") {
-        const std::string dir = std::string(
+        const dstd::String dir = dstd::String(
             dftu_utils_test::make_unique_test_path("metadata_keep_entries")
                 .str());
         REQUIRE(dstd::fs::create_directories(dir).has_value());
-        const std::string gz_file = create_test_trace_file(dir, 25);
-        const std::string root =
-            std::string(internal::determine_index_path(gz_file, ""));
+        const dstd::String gz_file = create_test_trace_file(dir, 25);
+        const dstd::String root =
+            dstd::String(internal::determine_index_path(gz_file, ""));
 
         auto first =
             MetadataCollectorUtilityInput::from_file(dstd::String(gz_file))
@@ -250,10 +251,11 @@ TEST_SUITE("MetadataCollector") {
                     .has_value());
         REQUIRE(dstd::fs::create_directories(dstd::Path(root) / "views" / "x")
                     .has_value());
-        std::ofstream((dstd::Path(root) / "rollups" / "marker").c_str()) << "r";
-        std::ofstream((dstd::Path(root) / "views" / "x" / "marker").c_str())
+        dftu_utils_test::FileOut(dstd::Path(root) / "rollups" / "marker")
+            << "r";
+        dftu_utils_test::FileOut(dstd::Path(root) / "views" / "x" / "marker")
             << "v";
-        std::ofstream((dstd::Path(root) / "store" / "stale_marker").c_str())
+        dftu_utils_test::FileOut(dstd::Path(root) / "store" / "stale_marker")
             << "s";
 
         auto second =
@@ -291,13 +293,13 @@ TEST_SUITE("MetadataCollector") {
         }
 
         SUBCASE("Empty trace file") {
-            std::string test_dir = std::string(
+            dstd::String test_dir = dstd::String(
                 dftu_utils_test::make_unique_test_path("test_metadata_empty")
                     .str());
             REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-            std::string empty_file = test_dir + "/empty.trace";
-            std::ofstream ofs(empty_file.c_str());
+            dstd::String empty_file = test_dir + "/empty.trace";
+            dftu_utils_test::FileOut ofs(empty_file);
             ofs.close();
 
             auto input = MetadataCollectorUtilityInput::from_file(
@@ -307,7 +309,7 @@ TEST_SUITE("MetadataCollector") {
             auto output = collector(input).get();
 
             // Empty file should still succeed but with 0 events
-            CHECK(std::string(output.file_path) == empty_file);
+            CHECK(dstd::String(output.file_path) == empty_file);
             CHECK(output.valid_events == 0);
             CHECK(output.size_mb == 0);
 
@@ -320,19 +322,19 @@ TEST_SUITE("MetadataCollectorRoot") {
     TEST_CASE(
         "fresh files of one root are checked alongside a reader, and a "
         "build waits for readers") {
-        const std::string dir = std::string(
+        const dstd::String dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_metadata_root").str());
         REQUIRE(dstd::fs::create_directories(dir).has_value());
-        const std::string index_path = dir + "/root.dftindex";
+        const dstd::String index_path = dir + "/root.dftindex";
         constexpr int FILES = 8;
 
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i) {
-            const std::string sub = dir + "/f" + std::to_string(i);
+            const dstd::String sub = dir + "/f" + dstd::to_string(i);
             REQUIRE(dstd::fs::create_directories(sub).has_value());
             files.push_back(create_test_trace_file(sub, 20 + i));
         }
-        auto collect = [&](const std::string& file) {
+        auto collect = [&](const dstd::String& file) {
             MetadataCollectorUtility collector;
             return collector(MetadataCollectorUtilityInput::from_file(
                                  dstd::String(file))
@@ -342,7 +344,7 @@ TEST_SUITE("MetadataCollectorRoot") {
         for (const auto& file : files) REQUIRE(collect(file).success);
 
         // The collector keys the root by its normalized path.
-        auto root = internal::index_root(dstd::String(std::string(
+        auto root = internal::index_root(dstd::String(dstd::String(
             index::store::internal::normalize_index_root(index_path))));
         // Forget what this process saw, so each check reads the index.
         {
@@ -361,9 +363,9 @@ TEST_SUITE("MetadataCollectorRoot") {
             CHECK(out.num_lines == static_cast<std::size_t>(20 + i));
         }
 
-        const std::string sub = dir + "/new";
+        const dstd::String sub = dir + "/new";
         REQUIRE(dstd::fs::create_directories(sub).has_value());
-        const std::string fresh = create_test_trace_file(sub, 7);
+        const dstd::String fresh = create_test_trace_file(sub, 7);
         auto build = std::async(std::launch::async, collect, fresh);
         CHECK(build.wait_for(std::chrono::milliseconds(300)) ==
               std::future_status::timeout);

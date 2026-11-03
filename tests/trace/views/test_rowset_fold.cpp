@@ -3,6 +3,8 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -10,11 +12,10 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <fstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -26,7 +27,7 @@ using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::extensions;
 namespace ix = dftracer::utils::index;
 namespace df = dftracer::utils::dataframe;
-using dftracer::utils::dstd::StringIntern;
+using dstd::StringIntern;
 
 namespace {
 
@@ -40,17 +41,17 @@ FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
     return ev;
 }
 
-std::string padded(std::string s) {
+dstd::String padded(dstd::String s) {
     s.resize(s.size() + simdjson::SIMDJSON_PADDING, '\0');
     return s;
 }
 
-dstd::Vector<FoldEvent> fold_events_of(const std::vector<std::string>& lines,
+dstd::Vector<FoldEvent> fold_events_of(const dstd::Vector<dstd::String>& lines,
                                        StringIntern& intern) {
     dstd::Vector<FoldEvent> out;
     simdjson::dom::parser parser;
     for (const auto& l : lines) {
-        std::string buf = padded(l);
+        dstd::String buf = padded(l);
         auto doc = parser.parse(buf.data(), l.size(), false);
         REQUIRE_FALSE(doc.error());
         out.push_back(extract_fold_event(doc.value_unsafe(), intern, true));
@@ -60,7 +61,7 @@ dstd::Vector<FoldEvent> fold_events_of(const std::vector<std::string>& lines,
 
 // Every kind of dftracer metadata, with `ph` written as a letter and as a
 // number, between data events.
-std::vector<std::string> trace_lines() {
+dstd::Vector<dstd::String> trace_lines() {
     return {
         R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/a.bin","value":"fh1"}})",
         R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"node0","value":"hh1"}})",
@@ -72,24 +73,24 @@ std::vector<std::string> trace_lines() {
     };
 }
 
-std::string write_trace(TestEnvironment& env,
-                        const std::vector<std::string>& lines,
-                        bool build = true) {
-    const std::string pfw = env.get_dir() + "/rows.pfw";
+dstd::String write_trace(TestEnvironment& env,
+                         const dstd::Vector<dstd::String>& lines,
+                         bool build = true) {
+    const dstd::String pfw = env.get_dir() + "/rows.pfw";
     {
-        std::ofstream o(pfw.c_str());
+        dftu_utils_test::FileOut o(pfw);
         for (const auto& l : lines) o << l << "\n";
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     if (build) ix::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
     return gz;
 }
 
 // Row `r` of `f` as text, column by column.
-std::string row_text(const df::DataFrame& f, std::int64_t r) {
-    std::string out;
+dstd::String row_text(const df::DataFrame& f, std::int64_t r) {
+    dstd::String out;
     for (std::size_t c = 0; c < f.columns.size(); ++c) {
         const df::Series col = f.columns[c].materialize();
         out += f.names[c] + "=";
@@ -98,9 +99,9 @@ std::string row_text(const df::DataFrame& f, std::int64_t r) {
         else if (col.type() == df::TypeId::String)
             out += col.string_at(r);
         else if (col.type() == df::TypeId::Int64)
-            out += std::to_string(col.data<std::int64_t>()[r]);
+            out += dstd::to_string(col.data<std::int64_t>()[r]);
         else if (col.type() == df::TypeId::Uint64)
-            out += std::to_string(col.data<std::uint64_t>()[r]);
+            out += dstd::to_string(col.data<std::uint64_t>()[r]);
         else
             out += "?";
         out += ";";
@@ -108,15 +109,14 @@ std::string row_text(const df::DataFrame& f, std::int64_t r) {
     return out;
 }
 
-std::vector<std::string> rows_of(const df::DataFrame& f) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> rows_of(const df::DataFrame& f) {
+    dstd::Vector<dstd::String> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out.push_back(row_text(f, r));
     return out;
 }
 
-bool interned(const StringIntern& intern,
-              dftracer::utils::dstd::StringView text) {
+bool interned(const StringIntern& intern, dstd::StringView text) {
     for (std::size_t i = 0; i < intern.entry_count(); ++i)
         if (intern.resolve(intern.entry_id(i)) == text) return true;
     return false;
@@ -126,11 +126,11 @@ bool interned(const StringIntern& intern,
 
 TEST_SUITE("RowSetFold") {
     TEST_CASE("the built-in sources index their lookup row sets") {
-        std::vector<std::string> names;
+        dstd::Vector<dstd::String> names;
         for (const auto& r : ix::indexed_rowsets(ix::get_schema("dftracer")))
             names.emplace_back(r.name);
         CHECK(names ==
-              std::vector<std::string>{"files", "hosts", "strings", "ranks"});
+              dstd::Vector<dstd::String>{"files", "hosts", "strings", "ranks"});
         names.clear();
         for (const auto& r : ix::indexed_rowsets(ix::get_schema("genesis")))
             names.emplace_back(r.name);
@@ -145,73 +145,73 @@ TEST_SUITE("RowSetFold") {
             "  counts = where x > 1 | group y { n = count() };\n"
             "  keyed = where y in (from big | select y)\n",
             "test");
-        std::vector<std::string> names;
+        dstd::Vector<dstd::String> names;
         for (const auto& r : ix::indexed_rowsets(s)) names.emplace_back(r.name);
-        CHECK(names == std::vector<std::string>{"big"});
+        CHECK(names == dstd::Vector<dstd::String>{"big"});
     }
 
     TEST_CASE("each stored row set equals the pipeline over every record") {
         TestEnvironment env(10);
-        const std::string gz = write_trace(env, trace_lines());
+        const dstd::String gz = write_trace(env, trace_lines());
         const auto ixr =
             ix::Indexer::open({dstd::String(dstd::StringView(gz))});
         const View v = View::from_file(
             dstd::String(gz),
-            dstd::String(std::string(determine_index_path(gz, ""))));
+            dstd::String(dstd::String(determine_index_path(gz, ""))));
         for (const char* name : {"files", "hosts", "strings", "ranks"}) {
             CAPTURE(name);
             const df::DataFrame stored = ixr.rowset(name);
             const df::DataFrame scanned =
-                run(v.duql(std::string("from ") + name + " | where true")
+                run(v.duql(dstd::String("from ") + name + " | where true")
                         .collect());
             CHECK(rows_of(stored) == rows_of(scanned));
         }
         CHECK(rows_of(ixr.rowset("files")) ==
-              std::vector<std::string>{"fhash=fh1;path=/data/a.bin;",
-                                       "fhash=fh2;path=/data/b.bin;"});
+              dstd::Vector<dstd::String>{"fhash=fh1;path=/data/a.bin;",
+                                         "fhash=fh2;path=/data/b.bin;"});
         CHECK(rows_of(ixr.rowset("ranks")) ==
-              std::vector<std::string>{"pid=7;rank=3;"});
+              dstd::Vector<dstd::String>{"pid=7;rank=3;"});
     }
 
     TEST_CASE("the stored genesis runs equal the pipeline over every record") {
         TestEnvironment env(10);
-        std::vector<std::string> lines = {
+        dstd::Vector<dstd::String> lines = {
             R"({"gtype":"run","run":"ab","app":"laghos","nodes":4})",
             R"({"gtype":"run","run":"cd","app":"lulesh","nodes":8})"};
         for (int i = 0; i < 30; ++i)
             lines.push_back(
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"depth":1,"count":2})");
-        const std::string gz = write_trace(env, lines);
+        const dstd::String gz = write_trace(env, lines);
         const auto ixr =
             ix::Indexer::open({dstd::String(dstd::StringView(gz))});
         const View v = View::from_file(
             dstd::String(gz),
-            dstd::String(std::string(determine_index_path(gz, ""))));
+            dstd::String(dstd::String(determine_index_path(gz, ""))));
         const df::DataFrame stored = ixr.rowset("runs");
         CHECK(rows_of(stored) ==
               rows_of(run(v.duql("from runs | where true").collect())));
         REQUIRE(stored.num_rows() == 2);
-        CHECK(row_text(stored, 1).find("app=lulesh;") != std::string::npos);
+        CHECK(row_text(stored, 1).find("app=lulesh;") != dstd::String::npos);
     }
 
     TEST_CASE("the first genesis aggregate leaves out the run records") {
         TestEnvironment env(10);
-        std::vector<std::string> lines = {
+        dstd::Vector<dstd::String> lines = {
             R"({"gtype":"run","run":"ab","app":"laghos","nodes":4})"};
         for (int i = 0; i < 30; ++i)
             lines.push_back(
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"depth":1,"count":2})");
-        const std::string gz = write_trace(env, lines, /*build=*/false);
+        const dstd::String gz = write_trace(env, lines, /*build=*/false);
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .group_by({GroupKey::field("gtype")})
                 .agg({{AggOp::Count, "", "n"}});
         for (int touch = 0; touch < 2; ++touch) {
             CAPTURE(touch);
             const df::DataFrame f = v.collect().get();
-            CHECK(rows_of(f) == std::vector<std::string>{"gtype=func;n=30;"});
+            CHECK(rows_of(f) == dstd::Vector<dstd::String>{"gtype=func;n=30;"});
         }
     }
 
@@ -225,8 +225,7 @@ TEST_SUITE("RowSetFold") {
         ScanUnit unit;
         unit.file_path = "x";
         for (int i = 0; i < 2; ++i) {
-            fold.step(FoldBatch{
-                dftracer::utils::dstd::Span<const FoldEvent>(events), unit});
+            fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
             fold.seal_unit(unit);
         }
         CHECK(fold.entry_count() == 5);
@@ -239,8 +238,7 @@ TEST_SUITE("RowSetFold") {
                         16);
         ScanUnit unit;
         unit.file_path = "x";
-        fold.step(FoldBatch{
-            dftracer::utils::dstd::Span<const FoldEvent>(events), unit});
+        fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
         fold.seal_unit(unit);
         CHECK(fold.abandoned());
         CHECK(fold.entry_count() == 0);
@@ -253,18 +251,16 @@ TEST_SUITE("RowSetFold") {
                         ix::indexed_rowsets(ix::get_schema("dftracer")));
         ScanUnit unit;
         unit.file_path = "x";
-        fold.step(FoldBatch{
-            dftracer::utils::dstd::Span<const FoldEvent>(events), unit});
+        fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
         fold.drop_unit(unit);
         CHECK(fold.entry_count() == 0);
-        fold.step(FoldBatch{
-            dftracer::utils::dstd::Span<const FoldEvent>(events), unit});
+        fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
         fold.seal_unit(unit);
         CHECK(fold.entry_count() == 5);
     }
 
     TEST_CASE("a never_index leaf is cataloged but its value is not interned") {
-        const std::string line =
+        const dstd::String line =
             R"({"gtype":"func","run":"ab","path":"main;f","ts":1,)"
             R"("dur":{"sketch":"UNIQUE_SKETCH_BLOB","count":2}})";
         const auto& genesis = ix::get_schema("genesis");
@@ -272,7 +268,7 @@ TEST_SUITE("RowSetFold") {
             CAPTURE(skip);
             StringIntern intern;
             simdjson::dom::parser parser;
-            std::string buf = padded(line);
+            dstd::String buf = padded(line);
             auto doc = parser.parse(buf.data(), line.size(), false);
             REQUIRE_FALSE(doc.error());
             FoldEvent ev;
@@ -294,17 +290,17 @@ TEST_SUITE("RowSetFold") {
 
     TEST_CASE("an index build skips never_index values and queries find them") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 30; ++i)
             lines.push_back(
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"dur":{"sketch":"SK)" +
-                std::to_string(i) + R"(","count":2}})");
-        const std::string gz = write_trace(env, lines);
+                dstd::to_string(i) + R"(","count":2}})");
+        const dstd::String gz = write_trace(env, lines);
         const auto ixr =
             ix::Indexer::open({dstd::String(dstd::StringView(gz))});
         const View v = View::from_file(
             dstd::String(gz),
-            dstd::String(std::string(determine_index_path(gz, ""))));
+            dstd::String(dstd::String(determine_index_path(gz, ""))));
         const df::DataFrame f =
             v.duql("where dur.sketch == \"SK7\" | select path, dur.count")
                 .collect()
@@ -316,6 +312,6 @@ TEST_SUITE("RowSetFold") {
                 .agg({{AggOp::Count, "", "n"}})
                 .collect()
                 .get();
-        CHECK(rows_of(all) == std::vector<std::string>{"gtype=func;n=2;"});
+        CHECK(rows_of(all) == dstd::Vector<dstd::String>{"gtype=func;n=2;"});
     }
 }

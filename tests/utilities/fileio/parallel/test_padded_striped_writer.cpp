@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;

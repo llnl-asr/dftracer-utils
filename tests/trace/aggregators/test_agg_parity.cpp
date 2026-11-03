@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
@@ -19,9 +20,9 @@
 #include <fstream>
 #include <iterator>
 #include <sstream>
-#include <string>
 #include <utility>
-#include <vector>
+
+using namespace dftracer::utils;
 
 // Parity references for dftracer_comparator, the View aggregate queries and
 // dftracer_gen_dlio_config. Set DFTRACER_UTILS_AGG_PARITY_RECORD=<dir> to write
@@ -35,10 +36,10 @@ using namespace test_view_common;
 namespace {
 
 namespace df = dftracer::utils::dataframe;
-using dftracer::utils::dstd::Map;
-using dftracer::utils::dstd::String;
-using dftracer::utils::dstd::StringView;
-using dftracer::utils::dstd::Vector;
+using dstd::Map;
+using dstd::String;
+using dstd::StringView;
+using dstd::Vector;
 
 constexpr const char* RECORD_ENV = "DFTRACER_UTILS_AGG_PARITY_RECORD";
 constexpr double TOL_EXACT = 0.0;
@@ -51,24 +52,21 @@ constexpr std::uint64_t SPAN_US = 12000000ULL;
 constexpr std::uint64_t ONE_SECOND_US = 1000000ULL;
 constexpr std::uint64_t FIVE_SECONDS_US = 5000000ULL;
 
-String read_text(const std::string& path) {
-    std::ifstream ifs(path.c_str(), std::ios::binary);
-    std::stringstream ss;
-    ss << ifs.rdbuf();
-    return String(ss.view());
+String read_text(const dstd::String& path) {
+    return dftu_utils_test::read_text(path);
 }
 
 // Writes the reference when recording and returns "", else returns the
 // reference text (a failure when the file is missing).
 String reference(const char* file, StringView produced) {
     if (const char* dir = std::getenv(RECORD_ENV)) {
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-        std::ofstream ofs(std::string(dir) + "/" + file, std::ios::binary);
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        dftu_utils_test::FileOut ofs(dstd::String(dir) + "/" + file);
         ofs << produced;
         return String();
     }
-    const std::string path =
-        std::string(DFTRACER_UTILS_AGG_PARITY_DATA_DIR) + "/" + file;
+    const dstd::String path =
+        dstd::String(DFTRACER_UTILS_AGG_PARITY_DATA_DIR) + "/" + file;
     String text = read_text(path);
     INFO("missing reference " << path);
     REQUIRE(!text.empty());
@@ -80,8 +78,8 @@ struct Rng {
     explicit Rng(std::uint64_t seed) : state(seed) {}
     std::uint64_t next() {
         const std::uint64_t z = state;
-        state += dftracer::utils::dstd::hash::GOLDEN_RATIO;
-        return dftracer::utils::dstd::hash::splitmix64(z);
+        state += dstd::hash::GOLDEN_RATIO;
+        return dstd::hash::splitmix64(z);
     }
     std::uint64_t below(std::uint64_t n) { return next() % n; }
 };
@@ -90,11 +88,11 @@ enum class Kind { Read, Write, Open, Close, Fwrite, Step, Fetch };
 
 // The variant changes durations, sizes and one event name so the comparator
 // report has differences in every direction.
-std::string write_trace(const std::string& dir, int file, std::uint64_t seed,
-                        bool variant) {
-    const std::string pfw = dir + "/rank_" + std::to_string(file) + ".pfw";
+dstd::String write_trace(const dstd::String& dir, int file, std::uint64_t seed,
+                         bool variant) {
+    const dstd::String pfw = dir + "/rank_" + dstd::to_string(file) + ".pfw";
     {
-        std::ofstream ofs(pfw.c_str());
+        dftu_utils_test::FileOut ofs(pfw);
         Rng rng(seed * 1000 + static_cast<std::uint64_t>(file));
         const std::uint64_t pid = 1000 + static_cast<std::uint64_t>(file);
         const std::uint64_t step = SPAN_US / EVENTS_PER_FILE;
@@ -183,19 +181,20 @@ std::string write_trace(const std::string& dir, int file, std::uint64_t seed,
         }
         ofs << "]\n";
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
 // A seeded jitter keeps the fitted distributions from being degenerate.
-void write_dlio_traces(const std::string& dir) {
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+void write_dlio_traces(const dstd::String& dir) {
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
     for (int file = 0; file < 2; ++file) {
-        const std::string pfw = dir + "/dlio_" + std::to_string(file) + ".pfw";
+        const dstd::String pfw =
+            dir + "/dlio_" + dstd::to_string(file) + ".pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             Rng rng(77 + static_cast<std::uint64_t>(file));
             ofs << "[\n";
             std::uint64_t id = 1;
@@ -231,25 +230,23 @@ void write_dlio_traces(const std::string& dir) {
             ofs << "]\n";
         }
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, pfw + ".gz"));
-        (void)dftracer::utils::dstd::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
     }
 }
 
 struct Fixtures {
     dftu_utils_test::ScopedTestDir root{"agg_parity"};
-    std::string baseline_dir;
-    std::string variant_dir;
-    std::string dlio_dir;
-    std::vector<std::string> baseline_files;
+    dstd::String baseline_dir;
+    dstd::String variant_dir;
+    dstd::String dlio_dir;
+    dstd::Vector<dstd::String> baseline_files;
 
     Fixtures() {
         baseline_dir = root.str() + "/baseline";
         variant_dir = root.str() + "/variant";
         dlio_dir = root.str() + "/dlio";
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(baseline_dir)
-                    .has_value());
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(variant_dir)
-                    .has_value());
+        REQUIRE(dstd::fs::create_directories(baseline_dir).has_value());
+        REQUIRE(dstd::fs::create_directories(variant_dir).has_value());
         for (int f = 0; f < FILES_PER_SET; ++f) {
             baseline_files.push_back(write_trace(baseline_dir, f, 11, false));
             write_trace(variant_dir, f, 29, true);
@@ -320,7 +317,7 @@ String table_text(const df::DataFrame& t, const Vector<String>& keys) {
         is_key[c] = std::find(keys.begin(), keys.end(),
                               StringView(t.names[c])) != keys.end();
     }
-    Vector<dftracer::utils::dstd::Pair<String, String>> rows;
+    Vector<dstd::Pair<String, String>> rows;
     for (std::int64_t r = 0; r < t.num_rows(); ++r) {
         String line, key;
         for (std::size_t c = 0; c < ncols; ++c) {
@@ -462,8 +459,8 @@ struct ViewQuery {
     BuildView build;
 };
 
-const dftracer::utils::dstd::Vector<AggSpec>& moment_aggs() {
-    static const dftracer::utils::dstd::Vector<AggSpec> aggs{
+const dstd::Vector<AggSpec>& moment_aggs() {
+    static const dstd::Vector<AggSpec> aggs{
         {AggOp::Count, "", "n"},
         {AggOp::Sum, "dur", "sum_dur"},
         {AggOp::Min, "dur", "min_dur"},
@@ -479,8 +476,8 @@ const dftracer::utils::dstd::Vector<AggSpec>& moment_aggs() {
     return aggs;
 }
 
-const dftracer::utils::dstd::Vector<AggSpec>& occupancy_aggs() {
-    static const dftracer::utils::dstd::Vector<AggSpec> aggs{
+const dstd::Vector<AggSpec>& occupancy_aggs() {
+    static const dstd::Vector<AggSpec> aggs{
         {AggOp::Count, "", "n"},
         {AggOp::Busy, "", "busy"},
         {AggOp::Active, "", "active"},
@@ -579,12 +576,10 @@ Vector<ViewQuery> view_queries() {
     return queries;
 }
 
-dftracer::utils::dstd::Vector<ViewFile> view_files(
-    const std::vector<std::string>& gz) {
-    dftracer::utils::dstd::Vector<ViewFile> files;
+dstd::Vector<ViewFile> view_files(const dstd::Vector<dstd::String>& gz) {
+    dstd::Vector<ViewFile> files;
     for (const auto& f : gz)
-        files.push_back(
-            {dftracer::utils::dstd::String(f), determine_index_path(f, "")});
+        files.push_back({dstd::String(f), determine_index_path(f, "")});
     return files;
 }
 
@@ -616,16 +611,16 @@ String normalize_report(String text) {
     return text;
 }
 
-String run_comparator(const std::vector<std::string>& extra) {
-    const std::string binary = dftu_utils_test::find_binary_by_name(
+String run_comparator(const dstd::Vector<dstd::String>& extra) {
+    const dstd::String binary = dftu_utils_test::find_binary_by_name(
         "DFTRACER_UTILS_COMPARATOR_PATH", "dftracer_comparator");
     REQUIRE(!binary.empty());
-    std::vector<std::string> args{"--baseline", fixtures().baseline_dir,
-                                  "--variant",  fixtures().variant_dir,
-                                  "--format",   "json"};
+    dstd::Vector<dstd::String> args{"--baseline", fixtures().baseline_dir,
+                                    "--variant",  fixtures().variant_dir,
+                                    "--format",   "json"};
     args.insert(args.end(), extra.begin(), extra.end());
     int rc = -1;
-    const std::string out =
+    const dstd::String out =
         dftu_utils_test::run_process_capture(binary, args, false, &rc);
     REQUIRE(rc == 0);
     return normalize_report(String(out));
@@ -890,7 +885,7 @@ TEST_SUITE("AggParity") {
     TEST_CASE("comparator report") {
         struct Run {
             const char* file;
-            std::vector<std::string> args;
+            dstd::Vector<dstd::String> args;
         };
         const Run runs[] = {
             {"comparator_5s.json", {}},
@@ -908,10 +903,10 @@ TEST_SUITE("AggParity") {
     }
 
     TEST_CASE("dlio config") {
-        const std::string binary = dftu_utils_test::find_binary_by_name(
+        const dstd::String binary = dftu_utils_test::find_binary_by_name(
             "DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH", "dftracer_gen_dlio_config");
         REQUIRE(!binary.empty());
-        const std::string out = fixtures().root.str() + "/dlio_config.yaml";
+        const dstd::String out = fixtures().root.str() + "/dlio_config.yaml";
         REQUIRE(dftu_utils_test::run_process(
                     binary, {fixtures().dlio_dir, "-o", out,
                              "--simulation-iterations", "2"}) == 0);

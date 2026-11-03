@@ -4,14 +4,14 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/arrow.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 
-#include <optional>
-#include <string>
-#include <vector>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::utilities::arrow;
 
@@ -31,19 +31,19 @@ struct Reader {
     double f64(int c, std::int64_t r) const {
         return ArrowArrayViewGetDoubleUnsafe(av.children[c], r);
     }
-    std::string str(int c, std::int64_t r) const {
+    dstd::String str(int c, std::int64_t r) const {
         ArrowStringView s = ArrowArrayViewGetStringUnsafe(av.children[c], r);
-        return std::string(s.data, static_cast<std::size_t>(s.size_bytes));
+        return dstd::String(s.data, static_cast<std::size_t>(s.size_bytes));
     }
 };
 
-using OptB = dftracer::utils::dstd::Optional<bool>;
-using OptS = dftracer::utils::dstd::Optional<std::string>;
-using OptI = dftracer::utils::dstd::Optional<std::int64_t>;
+using OptB = dstd::Optional<bool>;
+using OptS = dstd::Optional<dstd::String>;
+using OptI = dstd::Optional<std::int64_t>;
 
-ArrowExportResult make_batch(const std::vector<OptB>& sel,
-                             const std::vector<OptS>& file,
-                             const std::vector<OptI>& rk) {
+ArrowExportResult make_batch(const dstd::Vector<OptB>& sel,
+                             const dstd::Vector<OptS>& file,
+                             const dstd::Vector<OptI>& rk) {
     RecordBatchBuilder b;
     b.declare_schema({{"sel", ColumnType::Bool},
                       {"file", ColumnType::String},
@@ -66,13 +66,13 @@ ArrowExportResult make_batch(const std::vector<OptB>& sel,
     return b.finish();
 }
 
-ArrowExportResult attr(ArrowExportResult& in, std::vector<std::uint32_t> dims,
+ArrowExportResult attr(ArrowExportResult& in, dstd::Vector<std::uint32_t> dims,
                        std::uint32_t top_k) {
     return attribute(in.get_schema(), in.get_array(), 0, dims.data(),
                      static_cast<std::uint32_t>(dims.size()), top_k);
 }
 
-std::string name_of(ArrowExportResult& r, int c) {
+dstd::String name_of(ArrowExportResult& r, int c) {
     return r.get_schema()->children[c]->name;
 }
 
@@ -81,23 +81,23 @@ std::string name_of(ArrowExportResult& r, int c) {
 TEST_CASE("attribute - over/under-represented ranking") {
     // 10 selected, 10 baseline. hot: 9 sel/1 base (+0.8); cold: 1 sel/8 base
     // (-0.7); mid: 0 sel/1 base (-0.1).
-    std::vector<OptB> sel;
-    std::vector<OptS> file;
-    std::vector<OptI> rk(20, OptI(0));
+    dstd::Vector<OptB> sel;
+    dstd::Vector<OptS> file;
+    dstd::Vector<OptI> rk(20, OptI(0));
     for (int i = 0; i < 9; ++i) {
         sel.push_back(true);
-        file.push_back(std::string("hot.dat"));
+        file.push_back(dstd::String("hot.dat"));
     }
     sel.push_back(true);
-    file.push_back(std::string("cold.dat"));
+    file.push_back(dstd::String("cold.dat"));
     sel.push_back(false);
-    file.push_back(std::string("hot.dat"));
+    file.push_back(dstd::String("hot.dat"));
     for (int i = 0; i < 8; ++i) {
         sel.push_back(false);
-        file.push_back(std::string("cold.dat"));
+        file.push_back(dstd::String("cold.dat"));
     }
     sel.push_back(false);
-    file.push_back(std::string("mid.dat"));
+    file.push_back(dstd::String("mid.dat"));
 
     auto in = make_batch(sel, file, rk);
     auto out = attr(in, {1}, 0);
@@ -127,10 +127,10 @@ TEST_CASE("attribute - over/under-represented ranking") {
 }
 
 TEST_CASE("attribute - multi-dim string and int rendered to string") {
-    std::vector<OptB> sel = {true, true, false, false};
-    std::vector<OptS> file = {std::string("a"), std::string("a"),
-                              std::string("b"), std::string("b")};
-    std::vector<OptI> rk = {7, 7, 7, 9};
+    dstd::Vector<OptB> sel = {true, true, false, false};
+    dstd::Vector<OptS> file = {dstd::String("a"), dstd::String("a"),
+                               dstd::String("b"), dstd::String("b")};
+    dstd::Vector<OptI> rk = {7, 7, 7, 9};
 
     auto in = make_batch(sel, file, rk);
     auto out = attr(in, {1, 2}, 0);
@@ -153,10 +153,10 @@ TEST_CASE("attribute - multi-dim string and int rendered to string") {
 }
 
 TEST_CASE("attribute - top_k cap") {
-    std::vector<OptB> sel = {true, true, false, false};
-    std::vector<OptS> file = {std::string("a"), std::string("b"),
-                              std::string("c"), std::string("d")};
-    std::vector<OptI> rk(4, OptI(0));
+    dstd::Vector<OptB> sel = {true, true, false, false};
+    dstd::Vector<OptS> file = {dstd::String("a"), dstd::String("b"),
+                               dstd::String("c"), dstd::String("d")};
+    dstd::Vector<OptI> rk(4, OptI(0));
     auto in = make_batch(sel, file, rk);
     auto full = attr(in, {1}, 0);
     {
@@ -169,14 +169,14 @@ TEST_CASE("attribute - top_k cap") {
 }
 
 TEST_CASE("attribute - determinism across input order") {
-    std::vector<OptB> s1 = {true, true, false, false};
-    std::vector<OptS> f1 = {std::string("a"), std::string("b"),
-                            std::string("a"), std::string("c")};
-    std::vector<OptI> r1(4, OptI(0));
-    std::vector<OptB> s2 = {false, true, false, true};
-    std::vector<OptS> f2 = {std::string("c"), std::string("b"),
-                            std::string("a"), std::string("a")};
-    std::vector<OptI> r2(4, OptI(0));
+    dstd::Vector<OptB> s1 = {true, true, false, false};
+    dstd::Vector<OptS> f1 = {dstd::String("a"), dstd::String("b"),
+                             dstd::String("a"), dstd::String("c")};
+    dstd::Vector<OptI> r1(4, OptI(0));
+    dstd::Vector<OptB> s2 = {false, true, false, true};
+    dstd::Vector<OptS> f2 = {dstd::String("c"), dstd::String("b"),
+                             dstd::String("a"), dstd::String("a")};
+    dstd::Vector<OptI> r2(4, OptI(0));
 
     auto o1 = [&] {
         auto in = make_batch(s1, f1, r1);
@@ -197,10 +197,10 @@ TEST_CASE("attribute - determinism across input order") {
 }
 
 TEST_CASE("attribute - empty populations, no div-by-zero") {
-    std::vector<OptI> rk(2, OptI(0));
+    dstd::Vector<OptI> rk(2, OptI(0));
     SUBCASE("all baseline (empty selected)") {
-        std::vector<OptB> sel = {false, false};
-        std::vector<OptS> file = {std::string("a"), std::string("b")};
+        dstd::Vector<OptB> sel = {false, false};
+        dstd::Vector<OptS> file = {dstd::String("a"), dstd::String("b")};
         auto in = make_batch(sel, file, rk);
         auto out = attr(in, {1}, 0);
         Reader rd(out);
@@ -213,8 +213,8 @@ TEST_CASE("attribute - empty populations, no div-by-zero") {
         }
     }
     SUBCASE("all selected (empty baseline)") {
-        std::vector<OptB> sel = {true, true};
-        std::vector<OptS> file = {std::string("a"), std::string("b")};
+        dstd::Vector<OptB> sel = {true, true};
+        dstd::Vector<OptS> file = {dstd::String("a"), dstd::String("b")};
         auto in = make_batch(sel, file, rk);
         auto out = attr(in, {1}, 0);
         Reader rd(out);
@@ -231,10 +231,10 @@ TEST_CASE("attribute - empty populations, no div-by-zero") {
 TEST_CASE("attribute - null dim value and null select skipped") {
     // row2 has a null file (skipped in file counts); row3 has a null select
     // (excluded from both populations).
-    std::vector<OptB> sel = {true, false, true, dftracer::utils::dstd::nullopt};
-    std::vector<OptS> file = {std::string("a"), std::string("a"),
-                              dftracer::utils::dstd::nullopt, std::string("a")};
-    std::vector<OptI> rk(4, OptI(0));
+    dstd::Vector<OptB> sel = {true, false, true, dstd::nullopt};
+    dstd::Vector<OptS> file = {dstd::String("a"), dstd::String("a"),
+                               dstd::nullopt, dstd::String("a")};
+    dstd::Vector<OptI> rk(4, OptI(0));
     auto in = make_batch(sel, file, rk);
     auto out = attr(in, {1}, 0);
     Reader rd(out);

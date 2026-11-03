@@ -23,22 +23,21 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <string>
 #include <utility>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
-dftu_scalar scalar_str(dftracer::utils::dstd::StringView v) { return str(v); }
+dftu_scalar scalar_str(dstd::StringView v) { return str(v); }
 
 constexpr std::int64_t N = 40;
 const std::int64_t CUTS[] = {0, 13, 14, 29, N};
 
-using Row = dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>;
-using Rows = dftracer::utils::dstd::Vector<Row>;
+using Row = dstd::Optional<dstd::String>;
+using Rows = dstd::Vector<Row>;
 
 const char* const POOL[] = {"read", "write", "a name of exactly 16", "",
                             "a considerably longer name than the others"};
@@ -53,9 +52,9 @@ Rows rows_for(std::int64_t from, std::int64_t to, bool nulls) {
 }
 
 Series strings_of(const Rows& rows) {
-    dftracer::utils::dstd::Vector<std::int32_t> off{0};
-    dftracer::utils::dstd::String data;
-    dftracer::utils::dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
+    dstd::Vector<std::int32_t> off{0};
+    dstd::String data;
+    dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
         if (rows[i]) {
@@ -94,7 +93,7 @@ enum class Kind {
 Series piece_of(Kind kind, std::int64_t from, std::int64_t to, bool nulls,
                 int piece) {
     const std::int64_t n = to - from;
-    dftracer::utils::dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
     for (std::int64_t i = 0; i < n; ++i)
         if (!null_at(from + i, nulls))
             valid[static_cast<std::size_t>(i >> 3)] |=
@@ -102,18 +101,18 @@ Series piece_of(Kind kind, std::int64_t from, std::int64_t to, bool nulls,
     const std::uint8_t* v = nulls ? valid.data() : nullptr;
     switch (kind) {
         case Kind::Int64: {
-            dftracer::utils::dstd::Vector<std::int64_t> d;
+            dstd::Vector<std::int64_t> d;
             for (std::int64_t i = from; i < to; ++i) d.push_back(i * 37 - 100);
             return Series::flat_i64(d.data(), n, v);
         }
         case Kind::Float64: {
-            dftracer::utils::dstd::Vector<double> d;
+            dstd::Vector<double> d;
             for (std::int64_t i = from; i < to; ++i)
                 d.push_back(static_cast<double>(i) * 1.5);
             return Series::flat_f64(d.data(), n, v);
         }
         case Kind::Bool: {
-            dftracer::utils::dstd::Vector<std::uint8_t> bits((n + 7) / 8, 0);
+            dstd::Vector<std::uint8_t> bits((n + 7) / 8, 0);
             for (std::int64_t i = 0; i < n; ++i)
                 if ((from + i) % 3 != 1)
                     bits[static_cast<std::size_t>(i >> 3)] |= 1u << (i & 7);
@@ -138,37 +137,34 @@ struct Pair {
 };
 
 Pair build(Kind kind, bool nulls) {
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedPtr<dftu_series>>
-        chunks;
+    dstd::Vector<dstd::SharedPtr<dftu_series>> chunks;
     for (int k = 0; k < 4; ++k) {
         Series p = piece_of(kind, CUTS[k], CUTS[k + 1], nulls, k);
-        chunks.push_back(
-            dftracer::utils::dstd::make_shared<dftu_series>(*p.handle()));
+        chunks.push_back(dstd::make_shared<dftu_series>(*p.handle()));
     }
     Pair out{Series{make_chunked(std::move(chunks))},
              piece_of(kind, 0, N, nulls, 0)};
     return out;
 }
 
-dftracer::utils::dstd::String repr(const Series& in, std::int64_t i) {
+dstd::String repr(const Series& in, std::int64_t i) {
     if (in.is_null(i)) return "<null>";
     switch (in.type()) {
         case TypeId::Int64:
-            return dftracer::utils::dstd::to_string(in.data<std::int64_t>()[i]);
+            return dstd::to_string(in.data<std::int64_t>()[i]);
         case TypeId::Float64:
-            return dftracer::utils::dstd::to_string(in.data<double>()[i]);
+            return dstd::to_string(in.data<double>()[i]);
         case TypeId::Bool:
             return ((in.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1) ? "T"
                                                                       : "F";
         default:
-            return dftracer::utils::dstd::String(in.string_at(i));
+            return dstd::String(in.string_at(i));
     }
 }
 
-dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> flat_reprs(
-    const Series& in) {
+dstd::Vector<dstd::String> flat_reprs(const Series& in) {
     Series flat = in.is_flat() ? in.share() : in.materialize();
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
+    dstd::Vector<dstd::String> out;
     for (std::int64_t i = 0; i < flat.length(); ++i)
         out.push_back(repr(flat, i));
     return out;
@@ -184,14 +180,12 @@ DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
 
 class PartsCursor : public Cursor {
    public:
-    explicit PartsCursor(dftracer::utils::dstd::SharedPtr<
-                         const dftracer::utils::dstd::Vector<DataFrame>>
-                             parts)
+    explicit PartsCursor(dstd::SharedPtr<const dstd::Vector<DataFrame>> parts)
         : parts_(std::move(parts)) {}
 
-    dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Optional<Morsel>>
-    next(std::int64_t) override {
-        if (next_ >= parts_->size()) co_return dftracer::utils::dstd::nullopt;
+    dftracer::utils::coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t) override {
+        if (next_ >= parts_->size()) co_return dstd::nullopt;
         const DataFrame& df = (*parts_)[next_++];
         Morsel m;
         m.rows = df.num_rows();
@@ -205,35 +199,29 @@ class PartsCursor : public Cursor {
     }
 
    private:
-    dftracer::utils::dstd::SharedPtr<
-        const dftracer::utils::dstd::Vector<DataFrame>>
-        parts_;
-    dftracer::utils::dstd::SharedPtr<dftracer::utils::dstd::StringIntern>
-        intern_ = dftracer::utils::dstd::make_shared<
-            dftracer::utils::dstd::StringIntern>();
+    dstd::SharedPtr<const dstd::Vector<DataFrame>> parts_;
+    dstd::SharedPtr<dstd::StringIntern> intern_ =
+        dstd::make_shared<dstd::StringIntern>();
     std::size_t next_ = 0;
 };
 
 class PartsSource : public Source {
    public:
-    explicit PartsSource(dftracer::utils::dstd::Vector<DataFrame> parts)
-        : parts_(dftracer::utils::dstd::make_shared<
-                 const dftracer::utils::dstd::Vector<DataFrame>>(
+    explicit PartsSource(dstd::Vector<DataFrame> parts)
+        : parts_(dstd::make_shared<const dstd::Vector<DataFrame>>(
               std::move(parts))) {}
 
     Schema schema() const override { return Schema{}; }
 
     ScanResult scan(const ScanRequest& req) const override {
         ScanResult r;
-        r.cursor = dftracer::utils::dstd::make_unique<PartsCursor>(parts_);
+        r.cursor = dstd::make_unique<PartsCursor>(parts_);
         r.filters.assign(req.filters.size(), Pushed::No);
         return r;
     }
 
    private:
-    dftracer::utils::dstd::SharedPtr<
-        const dftracer::utils::dstd::Vector<DataFrame>>
-        parts_;
+    dstd::SharedPtr<const dstd::Vector<DataFrame>> parts_;
 };
 
 }  // namespace
@@ -267,18 +255,15 @@ TEST_SUITE("chunked columns") {
                 CAPTURE(static_cast<int>(kind));
                 CAPTURE(nulls);
                 Pair p = build(kind, nulls);
-                const dftracer::utils::dstd::Vector<
-                    dftracer::utils::dstd::String>
-                    all = flat_reprs(p.joined);
+                const dstd::Vector<dstd::String> all = flat_reprs(p.joined);
                 for (std::int64_t off = 0; off <= N; ++off)
                     for (std::int64_t len = 0; off + len <= N; ++len) {
                         Series s{
                             dftu_series_slice(p.chunked.handle(), off, len)};
                         REQUIRE(s.valid());
                         REQUIRE(s.length() == len);
-                        const dftracer::utils::dstd::Vector<
-                            dftracer::utils::dstd::String>
-                            want(all.begin() + off, all.begin() + off + len);
+                        const dstd::Vector<dstd::String> want(
+                            all.begin() + off, all.begin() + off + len);
                         REQUIRE(flat_reprs(s) == want);
                     }
             }
@@ -286,9 +271,7 @@ TEST_SUITE("chunked columns") {
 
     TEST_CASE("buffer_bytes counts a shared buffer once") {
         Series base = view_of(rows_for(0, N, false));
-        dftracer::utils::dstd::Vector<
-            dftracer::utils::dstd::SharedPtr<dftu_series>>
-            chunks;
+        dstd::Vector<dstd::SharedPtr<dftu_series>> chunks;
         for (int k = 0; k < 4; ++k)
             chunks.push_back(adopt_series(dftu_series_slice(
                 base.handle(), CUTS[k], CUTS[k + 1] - CUTS[k])));
@@ -312,8 +295,7 @@ TEST_SUITE("chunked columns") {
         DataFrame df;
         for (Kind kind :
              {Kind::Int64, Kind::Float64, Kind::Bool, Kind::StringFlat}) {
-            df.names.push_back(
-                "c" + dftracer::utils::dstd::to_string(static_cast<int>(kind)));
+            df.names.push_back("c" + dstd::to_string(static_cast<int>(kind)));
             df.columns.push_back(piece_of(kind, 0, N, true, 0));
         }
         DataFrame got = run(df.lazy().collect(6));
@@ -336,12 +318,11 @@ TEST_SUITE("chunked columns") {
         b.columns.push_back(piece_of(Kind::StringView, 10, 20, false, 0));
         c.columns.push_back(piece_of(Kind::StringDict, 20, 30, true, 0));
         const DataFrame eager = concat({&a, &b, &c}, ConcatHow::Diagonal);
-        dftracer::utils::dstd::Vector<DataFrame> parts;
+        dstd::Vector<DataFrame> parts;
         parts.push_back(std::move(a));
         parts.push_back(std::move(b));
         parts.push_back(std::move(c));
-        auto source =
-            dftracer::utils::dstd::make_shared<PartsSource>(std::move(parts));
+        auto source = dstd::make_shared<PartsSource>(std::move(parts));
         const DataFrame got = run(LazyFrame::scan(source).collect());
         REQUIRE(got.names == eager.names);
         for (std::size_t k = 0; k < eager.columns.size(); ++k) {
@@ -386,13 +367,13 @@ TEST_SUITE("chunked columns") {
 
                 for (std::int64_t a = 0; a < N; ++a) {
                     if (c.is_null(a)) {
-                        dftracer::utils::dstd::String key_c, key_j;
+                        dstd::String key_c, key_j;
                         append_cell(key_c, c, a);
                         append_cell(key_j, j, a);
                         CHECK(key_c == key_j);
                         continue;
                     }
-                    dftracer::utils::dstd::String key_c, key_j;
+                    dstd::String key_c, key_j;
                     append_cell(key_c, c, a);
                     append_cell(key_j, j, a);
                     CHECK(key_c == key_j);
@@ -418,7 +399,7 @@ TEST_SUITE("chunked columns") {
                     CHECK(fc.min == fj.min);
                     CHECK(fc.max == fj.max);
 
-                    dftracer::utils::dstd::Vector<std::int64_t> g;
+                    dstd::Vector<std::int64_t> g;
                     for (std::int64_t i = 0; i < N; ++i) g.push_back(i % 3);
                     const Series keys = Series::flat_i64(g.data(), N);
                     auto grouped = [&](const Series& values) {
@@ -428,9 +409,7 @@ TEST_SUITE("chunked columns") {
                             keys.handle(), values.handle(),
                             DFTU_REDUCE_SUM | DFTU_REDUCE_MIN | DFTU_REDUCE_MAX,
                             &k, vals, 5);
-                        dftracer::utils::dstd::Vector<
-                            dftracer::utils::dstd::String>
-                            out;
+                        dstd::Vector<dstd::String> out;
                         Series ks{k};
                         if (k)
                             for (std::int64_t i = 0; i < ks.length(); ++i)
@@ -440,7 +419,7 @@ TEST_SUITE("chunked columns") {
                             for (std::int64_t i = 0; i < vs.length(); ++i)
                                 out.push_back(repr(vs, i));
                         }
-                        out.push_back(dftracer::utils::dstd::to_string(n));
+                        out.push_back(dstd::to_string(n));
                         return out;
                     };
                     const auto want = grouped(j);
@@ -460,21 +439,19 @@ TEST_SUITE("chunked columns") {
     }
 
     TEST_CASE("take gathers per chunk and matches the joined column") {
-        const dftracer::utils::dstd::Vector<
-            dftracer::utils::dstd::Vector<std::int64_t>>
-            index_sets = {
-                {},
-                {0, 5, 12},
-                {0, 1, 5, 13, 14, 20, 29, 35, 39},
-                {3, 3, 13, 13, 14, 14, 39, 39},
-                {-1, 0, 13, -1, 14, 29, -1},
-                {-1, -1, 20, 30},
-                {39, 0, 20, 13, -1, 14},
-                {35, -1, 2},
-                {-1, -1},
-                {39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26,
-                 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12,
-                 11, 10, 9,  8,  7,  6,  5,  4,  3,  2,  1,  0}};
+        const dstd::Vector<dstd::Vector<std::int64_t>> index_sets = {
+            {},
+            {0, 5, 12},
+            {0, 1, 5, 13, 14, 20, 29, 35, 39},
+            {3, 3, 13, 13, 14, 14, 39, 39},
+            {-1, 0, 13, -1, 14, 29, -1},
+            {-1, -1, 20, 30},
+            {39, 0, 20, 13, -1, 14},
+            {35, -1, 2},
+            {-1, -1},
+            {39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26,
+             25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12,
+             11, 10, 9,  8,  7,  6,  5,  4,  3,  2,  1,  0}};
         for (Kind kind : KINDS)
             for (bool nulls : {false, true}) {
                 Pair p = build(kind, nulls);
@@ -500,7 +477,7 @@ TEST_SUITE("chunked columns") {
     TEST_CASE("row-wise kernels on a chunked column match the joined column") {
         const Series values =
             strings_of({Row("read"), Row("a name of exactly 16")});
-        dftracer::utils::dstd::Vector<std::int64_t> ints{-100, -63, 1000};
+        dstd::Vector<std::int64_t> ints{-100, -63, 1000};
         const Series int_values = Series::flat_i64(ints.data(), 3);
         for (Kind kind : KINDS)
             for (bool nulls : {false, true}) {
@@ -590,7 +567,7 @@ TEST_SUITE("chunked columns") {
                      joined.sort_by_multi({"key", "i"}, {false, true}));
 
                 if (kind == Kind::Bool) continue;
-                dftracer::utils::dstd::Vector<GroupAgg> aggs;
+                dstd::Vector<GroupAgg> aggs;
                 for (Agg op :
                      {Agg::Sum, Agg::Min, Agg::Max, Agg::Count, Agg::CountValid,
                       Agg::Mean, Agg::Var, Agg::Std, Agg::First, Agg::Last})
@@ -598,21 +575,16 @@ TEST_SUITE("chunked columns") {
                         GroupAgg a;
                         a.op = op;
                         a.column = col;
-                        a.out = dftracer::utils::dstd::String(col) + "_" +
-                                to_string(op);
+                        a.out = dstd::String(col) + "_" + to_string(op);
                         aggs.push_back(std::move(a));
                     }
                 const DataFrame want = joined.group_by("key", aggs);
                 REQUIRE(want.num_rows() > 0);
                 same(chunked.group_by("key", aggs), want);
-                same(chunked.group_by(
-                         dftracer::utils::dstd::Vector<
-                             dftracer::utils::dstd::String>{"key", "s"},
-                         aggs),
-                     joined.group_by(
-                         dftracer::utils::dstd::Vector<
-                             dftracer::utils::dstd::String>{"key", "s"},
-                         aggs));
+                same(chunked.group_by(dstd::Vector<dstd::String>{"key", "s"},
+                                      aggs),
+                     joined.group_by(dstd::Vector<dstd::String>{"key", "s"},
+                                     aggs));
             }
     }
 }

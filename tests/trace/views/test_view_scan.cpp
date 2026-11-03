@@ -3,21 +3,23 @@
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <atomic>
 #include <limits>
-#include <map>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -152,8 +154,8 @@ TEST_SUITE("View") {
         // A chunk is handed over one 4 MB read at a time, so it takes a chunk
         // bigger than that for a cancel to land inside one rather than
         // between two. 60k events is about 5 MB uncompressed.
-        std::string gz = create_mixed_trace(env, 60000, 0);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 60000, 0);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         SUBCASE("cancelled before the first batch") {
             StringSink sink;
@@ -195,8 +197,8 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         const int n = 60;  // ~10 members at 512 bytes
-        std::string gz = create_multimember_trace(env, n, 512);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_multimember_trace(env, n, 512);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         dftracer::utils::index::Indexer::open(
             {dstd::String(dstd::StringView(gz))})
             .build();
@@ -216,10 +218,10 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         const int n = 60;  // multi-member source; small members below
-        std::string gz = create_multimember_trace(env, n, 512);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_multimember_trace(env, n, 512);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        std::string out = env.get_dir() + "/merged.pfw.gz";
+        dstd::String out = env.get_dir() + "/merged.pfw.gz";
         TraceWriteOptions opts;
         opts.output_path = out;
         opts.member_size = 4096;  // small members -> many boundaries
@@ -230,7 +232,7 @@ TEST_SUITE("View") {
                          .get();
         CHECK(stats.events_matched == static_cast<std::uint64_t>(n));
 
-        std::string oidx = std::string(determine_index_path(out, ""));
+        dstd::String oidx = dstd::String(determine_index_path(out, ""));
         StringSink sink;
         auto rstats = View::from_file(dstd::String(out), dstd::String(oidx))
                           .sink_json(sink)
@@ -244,8 +246,8 @@ TEST_SUITE("View") {
     TEST_CASE("View - an indexed sink_trace to an unwritable path fails") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_multimember_trace(env, 300, 512);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_multimember_trace(env, 300, 512);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         TraceWriteOptions opts;
         opts.output_path = env.get_dir() + "/no_such_dir/out.pfw.gz";
         opts.member_size = 4096;
@@ -264,13 +266,13 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // Mixed cats so a cat filter can prune whole members.
-        std::string gz = create_mixed_trace(env, 20, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 20, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // A: write the output with the index fused into the write.
-        std::string dirA = env.get_dir() + "/a";
+        dstd::String dirA = env.get_dir() + "/a";
         REQUIRE(dstd::fs::create_directories(dirA).has_value());
-        const std::string outAgz = dirA + "/out.pfw.gz";
+        const dstd::String outAgz = dirA + "/out.pfw.gz";
         TraceWriteOptions opts;
         opts.output_path = outAgz;
         opts.member_size = 512;  // small members -> several to key per-member
@@ -281,21 +283,23 @@ TEST_SUITE("View") {
                       .sink_trace(opts)
                       .get();
         REQUIRE(dstd::fs::exists(outAgz).value());
-        const std::string idxA = std::string(determine_index_path(outAgz, ""));
+        const dstd::String idxA =
+            dstd::String(determine_index_path(outAgz, ""));
         // The write built the index, not a separate pass.
         REQUIRE(dstd::fs::exists(idxA).value());
 
         // B: identical output bytes in a fresh dir; View auto-indexes it lazily
         // via the standard indexer (the ground truth).
-        std::string dirB = env.get_dir() + "/b";
+        dstd::String dirB = env.get_dir() + "/b";
         REQUIRE(dstd::fs::create_directories(dirB).has_value());
-        const std::string outBgz = dirB + "/out.pfw.gz";
+        const dstd::String outBgz = dirB + "/out.pfw.gz";
         REQUIRE(dstd::fs::copy_file(outAgz, outBgz,
                                     dstd::fs::CopyMode::FailIfExists)
                     .has_value());
-        const std::string idxB = std::string(determine_index_path(outBgz, ""));
+        const dstd::String idxB =
+            dstd::String(determine_index_path(outBgz, ""));
 
-        auto run = [](const std::string& f, const std::string& ix,
+        auto run = [](const dstd::String& f, const dstd::String& ix,
                       const char* q) {
             StringSink s;
             View v = View::from_file(dstd::String(f), dstd::String(ix));
@@ -326,11 +330,11 @@ TEST_SUITE("View") {
     TEST_CASE("View - fused multi-part index matches a lazily-built index") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 400, 400);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_mixed_trace(env, 400, 400);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        std::string dirA = env.get_dir() + "/a";
-        std::string dirB = env.get_dir() + "/b";
+        dstd::String dirA = env.get_dir() + "/a";
+        dstd::String dirB = env.get_dir() + "/b";
         REQUIRE(dstd::fs::create_directories(dirA).has_value());
         REQUIRE(dstd::fs::create_directories(dirB).has_value());
         TraceWriteOptions opts;
@@ -343,7 +347,7 @@ TEST_SUITE("View") {
             .sink_trace(opts)
             .get();
 
-        std::vector<std::string> partsA, partsB;
+        dstd::Vector<dstd::String> partsA, partsB;
         for (int i = 0; dstd::fs::exists(utilities::fileio::gzip_part_path(
                                              opts.output_path, i, true))
                             .value();
@@ -352,7 +356,7 @@ TEST_SUITE("View") {
                 utilities::fileio::gzip_part_path(opts.output_path, i, true));
             partsB.push_back(
                 dirB + "/" +
-                std::string(dstd::PathView(partsA.back()).filename()));
+                dstd::String(dstd::PathView(partsA.back()).filename()));
             REQUIRE(dstd::fs::copy_file(partsA.back(), partsB.back(),
                                         dstd::fs::CopyMode::FailIfExists)
                         .has_value());
@@ -360,16 +364,16 @@ TEST_SUITE("View") {
         REQUIRE(partsA.size() > 2);
 
         namespace st = dftracer::utils::index::store;
-        const std::string idxA =
-            std::string(determine_index_path(partsA[0], ""));
-        const std::string idxB =
-            std::string(determine_index_path(partsB[0], ""));
+        const dstd::String idxA =
+            dstd::String(determine_index_path(partsA[0], ""));
+        const dstd::String idxB =
+            dstd::String(determine_index_path(partsB[0], ""));
         std::uint64_t scannedA = 0, scannedB = 0, matchedA = 0, matchedB = 0;
-        std::vector<std::string> colsA, colsB;
+        dstd::Vector<dstd::String> colsA, colsB;
         for (std::size_t i = 0; i < partsA.size(); ++i) {
-            auto q = [&](const std::string& f, const std::string& ix,
+            auto q = [&](const dstd::String& f, const dstd::String& ix,
                          std::uint64_t& sc, std::uint64_t& mt,
-                         std::vector<std::string>& cols) {
+                         dstd::Vector<dstd::String>& cols) {
                 StringSink sink;
                 auto stt = View::from_file(dstd::String(f), dstd::String(ix))
                                .duql(R"(cat == "STDIO")")
@@ -467,9 +471,9 @@ TEST_SUITE("View") {
         // Each event's top-level "name" is "read"/"write"; its arg "name" is a
         // different string, so the row frame must carry both "name" (top-level)
         // and "args.name" (the arg) without a schema collision.
-        std::string pfw = env.get_dir() + "/collide.pfw";
+        dstd::String pfw = env.get_dir() + "/collide.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
                    R"("ts":1000,"dur":10,"args":{"name":"inner_read"}})"
                 << "\n";
@@ -477,10 +481,10 @@ TEST_SUITE("View") {
                    R"("ts":1100,"dur":10,"args":{"name":"inner_write"}})"
                 << "\n";
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // Empty select: every column, including both "name" and "args.name".
         dataframe::DataFrame all =
@@ -489,7 +493,7 @@ TEST_SUITE("View") {
                 .get();
         REQUIRE(bhas(all, "name"));
         REQUIRE(bhas(all, "args.name"));
-        std::map<std::string, std::string> top_by_arg;
+        dstd::Map<dstd::String, dstd::String> top_by_arg;
         for (std::int64_t i = 0; i < all.num_rows(); ++i)
             top_by_arg[bstr(all, i, "name")] = bstr(all, i, "args.name");
         CHECK(top_by_arg["read"] == "inner_read");
@@ -520,9 +524,9 @@ TEST_SUITE("View") {
         "View - nested args are columns and short names resolve to args") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string pfw = env.get_dir() + "/nested.pfw";
+        dstd::String pfw = env.get_dir() + "/nested.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"X","name":"hot","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":1000,"dur":42,"args":{"dur":{"p99":7000},)"
                    R"("counters":{"X":{"p50":3}},"label":{"v":"A"},)"
@@ -536,10 +540,10 @@ TEST_SUITE("View") {
                    R"("ts":2000,"dur":7,"args":{"run":1}})"
                 << "\n";
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         {
             StringSink index_build;
             View::from_file(dstd::String(gz), dstd::String(idx))
@@ -566,20 +570,20 @@ TEST_SUITE("View") {
                               "args.label.v", "args.cqe.raw_ns", "args.run"})
             CHECK(std::binary_search(collected.begin(), collected.end(),
                                      dstd::String(c)));
-        std::vector<std::string> index_cols;
+        dstd::Vector<dstd::String> index_cols;
         for (const auto& name : v.columns()) index_cols.emplace_back(name);
         for (const dstd::String& c : collected) {
             if (c.rfind("args.", 0) != 0) continue;
             CAPTURE(c);
             CHECK(std::find(index_cols.begin(), index_cols.end(),
-                            std::string(c.substr(5))) != index_cols.end());
+                            dstd::String(c.substr(5))) != index_cols.end());
         }
 
         dataframe::DataFrame sel =
             v.select({"name", "dur", "dur.p99"}).collect().get();
         REQUIRE(sel.names ==
                 dstd::Vector<dstd::String>{"name", "dur", "args.dur.p99"});
-        std::map<std::string, dstd::Pair<double, double>> by_name;
+        dstd::Map<dstd::String, dstd::Pair<double, double>> by_name;
         for (std::int64_t i = 0; i < sel.num_rows(); ++i)
             if (bstr(sel, i, "name") != "flat")
                 by_name[bstr(sel, i, "name")] = {bnum(sel, i, "dur"),
@@ -593,9 +597,9 @@ TEST_SUITE("View") {
                 .collect()
                 .get();
         REQUIRE(grouped.num_rows() == 2);
-        std::map<std::string, double> counts;
+        dstd::Map<dstd::String, double> counts;
         for (std::int64_t i = 0; i < grouped.num_rows(); ++i)
-            counts[std::string(dataframe::cell_to_string(
+            counts[dstd::String(dataframe::cell_to_string(
                 grouped.columns[0], i))] = bnum(grouped, i, "n");
         CHECK(counts["3"] == 2);
 
@@ -603,19 +607,19 @@ TEST_SUITE("View") {
             v.duql(R"(name != "flat")")
                 .call_tree({"pid", "tid"}, "ts", "dur", "label.v")
                 .collect());
-        std::vector<std::string> labels;
+        dstd::Vector<dstd::String> labels;
         for (std::int64_t i = 0; i < tree.num_rows(); ++i)
             labels.push_back(bstr(tree, i, "name"));
         std::sort(labels.begin(), labels.end());
-        CHECK(labels == std::vector<std::string>{"A", "B"});
+        CHECK(labels == dstd::Vector<dstd::String>{"A", "B"});
     }
 
     TEST_CASE(
         "View - agg_numeric_args aggregates every numeric arg as a mean") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_trace_with_counters(env);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_trace_with_counters(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // ph="C" cpu counters: (user_pct,idle_pct) = (40,60) and (80,20).
         auto table = View::from_file(dstd::String(gz), dstd::String(idx))
@@ -644,8 +648,8 @@ TEST_SUITE("View") {
         "View - agg_numeric_args applies a set of reductions per numeric arg") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_trace_with_counters(env);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_trace_with_counters(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // ph="C" cpu counters: user_pct=(40,80), idle_pct=(60,20).
         auto table =
@@ -677,9 +681,9 @@ TEST_SUITE("View") {
         // two-step .group_by(k).agg("count:cycles"/"sum:cycles") lowers to
         // group_agg_expr, which used to feed an invalid (non-numeric) evaluated
         // column into the aggregator and segfault.
-        std::string pfw = env.get_dir() + "/cyc.pfw";
+        dstd::String pfw = env.get_dir() + "/cyc.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 4; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i * 100) << R"(,"dur":10,"args":{}})" << "\n";
@@ -693,10 +697,10 @@ TEST_SUITE("View") {
                     << "\n";
             }
         }
-        std::string gz = pfw + ".gz";
+        dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // Non-deterministic corruption: repeat so an uninitialized/garbage read
         // has several chances to surface.
@@ -714,11 +718,11 @@ TEST_SUITE("View") {
                         .type() == dataframe::TypeId::String);
 
             // Tally (name, cycles) pairs; a null cycles reads as empty.
-            std::map<std::string, int> name_counts, cyc_counts;
+            dstd::Map<dstd::String, int> name_counts, cyc_counts;
             int nnull = 0;
             for (std::int64_t i = 0; i < rows.num_rows(); ++i) {
                 name_counts[bstr(rows, i, "name")]++;
-                const std::string c = bstr(rows, i, "args.cycles");
+                const dstd::String c = bstr(rows, i, "args.cycles");
                 if (c.empty())
                     nnull++;
                 else
@@ -757,7 +761,7 @@ TEST_SUITE("View") {
             REQUIRE(bhas(g, "present_cycles"));
             REQUIRE(g.num_rows() == 3);  // read, cpu, gpu
             for (std::int64_t i = 0; i < g.num_rows(); ++i) {
-                const std::string nm = bstr(g, i, "name");
+                const dstd::String nm = bstr(g, i, "name");
                 CHECK(bnum(g, i, "count_cycles") ==
                       doctest::Approx(nm == "read" ? 4 : 3));
                 CHECK(bnum(g, i, "present_cycles") ==
@@ -773,8 +777,8 @@ TEST_SUITE("View") {
     TEST_CASE("View - sink_counters emits a ph=C event per group") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_trace_with_counters(env);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String gz = create_trace_with_counters(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         StringSink sink;
         View::from_file(dstd::String(gz), dstd::String(idx))
@@ -786,23 +790,23 @@ TEST_SUITE("View") {
 
         auto lines = sink.lines();
         REQUIRE(lines.size() == 1);
-        CHECK(lines[0].find(R"("name":"cpu")") != std::string::npos);
-        CHECK(lines[0].find(R"("ph":2)") != std::string::npos);
-        CHECK(lines[0].find(R"("user_pct":60)") != std::string::npos);
-        CHECK(lines[0].find(R"("idle_pct":40)") != std::string::npos);
+        CHECK(lines[0].find(R"("name":"cpu")") != dstd::String::npos);
+        CHECK(lines[0].find(R"("ph":2)") != dstd::String::npos);
+        CHECK(lines[0].find(R"("user_pct":60)") != dstd::String::npos);
+        CHECK(lines[0].find(R"("idle_pct":40)") != dstd::String::npos);
     }
 
     TEST_CASE("View - from_directory scans a tree of traces") {
         TestEnvironment env{200};
-        std::string dir = env.get_dir() + "/tree";
+        dstd::String dir = env.get_dir() + "/tree";
         REQUIRE(dstd::fs::create_directories(dir + "/sub").has_value());
 
         // Distinct cat + pid per file so the grouped counts unambiguously
         // report which files (and how many events) the scan actually read.
-        auto write_trace = [](const std::string& gz, const std::string& cat,
+        auto write_trace = [](const dstd::String& gz, const dstd::String& cat,
                               int pid, int n) {
-            std::string pfw = gz.substr(0, gz.size() - 3);  // drop ".gz"
-            std::ofstream ofs(pfw.c_str());
+            dstd::String pfw = gz.substr(0, gz.size() - 3);  // drop ".gz"
+            dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < n; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":")" << cat
                     << R"(","pid":)" << pid << R"(,"tid":1,"ts":)" << (1000 + i)
@@ -822,7 +826,7 @@ TEST_SUITE("View") {
                          .collect()
                          .get();
 
-        std::map<std::string, double> counts;
+        dstd::Map<dstd::String, double> counts;
         for (std::int64_t i = 0; i < table.num_rows(); ++i)
             counts[bstr(table, i, "cat")] = bnum(table, i, "count");
         CHECK(counts["aaa"] == doctest::Approx(10.0));  // cat is lowercased
@@ -840,9 +844,9 @@ constexpr int DICT_ROWS = 1000;
 // Row i: cat c<i%3>, name n<i%2>, args.path p<i%900>, and args.metric
 // m<i%3> on even i only.
 View dict_trace(TestEnvironment& env) {
-    const std::string pfw = env.get_dir() + "/dict.pfw";
+    const dstd::String pfw = env.get_dir() + "/dict.pfw";
     {
-        std::ofstream o(pfw.c_str());
+        dftu_utils_test::FileOut o(pfw);
         for (int i = 0; i < DICT_ROWS; ++i) {
             o << R"({"ph":"X","name":"n)" << i % 2 << R"(","cat":"c)" << i % 3
               << R"(","pid":1,"tid":1,"ts":)" << 1000 + i * 10
@@ -851,18 +855,18 @@ View dict_trace(TestEnvironment& env) {
             o << "}}\n";
         }
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
     dstd::fs::remove(pfw).has_value();
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     return View::from_file(
         dstd::String(gz),
-        dstd::String(std::string(determine_index_path(gz, ""))));
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-std::string cell(const df::Series& s, std::int64_t r) {
-    return s.is_null(r) ? "<null>" : std::string(s.string_at(r));
+dstd::String cell(const df::Series& s, std::int64_t r) {
+    return s.is_null(r) ? "<null>" : dstd::String(s.string_at(r));
 }
 
 }  // namespace
@@ -871,17 +875,17 @@ TEST_SUITE("View scan string columns") {
     TEST_CASE(
         "a scan batch is a dictionary or a view column over intern chunks") {
         namespace detail = dftracer::utils::trace::views::detail;
-        std::vector<std::uint32_t> cat_ids, path_ids;
+        dstd::Vector<std::uint32_t> cat_ids, path_ids;
         df::Series cat, path;
         {
-            dftracer::utils::dstd::StringIntern intern;
+            dstd::StringIntern intern;
             for (int i = 0; i < 1000; ++i) {
                 cat_ids.push_back(
-                    intern.get_or_insert("category-" + std::to_string(i % 3)));
+                    intern.get_or_insert("category-" + dstd::to_string(i % 3)));
                 path_ids.push_back(intern.get_or_insert(
-                    "/data/dir/file-" + std::to_string(i % 900)));
+                    "/data/dir/file-" + dstd::to_string(i % 900)));
             }
-            cat_ids[7] = dftracer::utils::dstd::StringIntern::NO_ID;
+            cat_ids[7] = dstd::StringIntern::NO_ID;
             cat = detail::interned_column(cat_ids, intern);
             path = detail::interned_column(path_ids, intern);
         }
@@ -894,8 +898,9 @@ TEST_SUITE("View scan string columns") {
         CHECK(cat.null_count() == 1);
         for (std::int64_t r = 0; r < 1000; ++r) {
             CHECK(cell(cat, r) ==
-                  (r == 7 ? "<null>" : "category-" + std::to_string(r % 3)));
-            CHECK(cell(path, r) == "/data/dir/file-" + std::to_string(r % 900));
+                  (r == 7 ? "<null>" : "category-" + dstd::to_string(r % 3)));
+            CHECK(cell(path, r) ==
+                  "/data/dir/file-" + dstd::to_string(r % 900));
         }
     }
 
@@ -915,10 +920,10 @@ TEST_SUITE("View scan string columns") {
         for (std::int64_t r = 0; r < f.num_rows(); ++r) {
             const auto i = (ts.data<std::uint64_t>()[r] - 1000) / 10;
             CAPTURE(i);
-            CHECK(cell(cat, r) == "c" + std::to_string(i % 3));
-            CHECK(cell(path, r) == "p" + std::to_string(i % 900));
+            CHECK(cell(cat, r) == "c" + dstd::to_string(i % 3));
+            CHECK(cell(path, r) == "p" + dstd::to_string(i % 900));
             CHECK(cell(metric, r) ==
-                  (i % 2 == 0 ? "m" + std::to_string(i % 3) : "<null>"));
+                  (i % 2 == 0 ? "m" + dstd::to_string(i % 3) : "<null>"));
         }
     }
 

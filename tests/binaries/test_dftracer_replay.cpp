@@ -2,6 +2,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -13,7 +16,8 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 extern char** environ;
 
@@ -22,7 +26,7 @@ namespace {
 /// same `<<` and close(), but the bytes land compressed.
 class GzTraceWriter {
    public:
-    explicit GzTraceWriter(const std::string& path) : path_(path) {}
+    explicit GzTraceWriter(const dstd::String& path) : path_(path) {}
     ~GzTraceWriter() { close(); }
 
     template <typename T>
@@ -40,8 +44,8 @@ class GzTraceWriter {
     }
 
    private:
-    std::string path_;
-    std::ostringstream buffer_;
+    dstd::String path_;
+    dftu_utils_test::TextOut buffer_;
     bool closed_ = false;
 };
 }  // namespace
@@ -60,7 +64,7 @@ bool under_valgrind() {
 #endif
 }
 
-std::string find_replay_binary() {
+dstd::String find_replay_binary() {
     return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_REPLAY_PATH",
                                                 "dftracer_replay");
 }
@@ -69,29 +73,29 @@ std::string find_replay_binary() {
 // unsafe (the child may run only async-signal-safe code before exec). Use
 // posix_spawn, which is built to launch a process safely from a multithreaded
 // parent, for every replay invocation.
-std::vector<char*> make_argv(const std::string& binary,
-                             const std::vector<std::string>& args) {
-    std::vector<char*> argv;
+dstd::Vector<char*> make_argv(const dstd::String& binary,
+                              const dstd::Vector<dstd::String>& args) {
+    dstd::Vector<char*> argv;
     argv.push_back(const_cast<char*>(binary.c_str()));
     for (const auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
     argv.push_back(nullptr);
     return argv;
 }
 
-std::string run_replay_capture(const std::string& binary,
-                               const std::vector<std::string>& args,
-                               int* exit_code);
+dstd::String run_replay_capture(const dstd::String& binary,
+                                const dstd::Vector<dstd::String>& args,
+                                int* exit_code);
 
-int run_replay(const std::string& binary,
-               const std::vector<std::string>& args) {
+int run_replay(const dstd::String& binary,
+               const dstd::Vector<dstd::String>& args) {
     int rc = -1;
     run_replay_capture(binary, args, &rc);
     return rc;
 }
 
-std::string run_replay_capture(const std::string& binary,
-                               const std::vector<std::string>& args,
-                               int* exit_code) {
+dstd::String run_replay_capture(const dstd::String& binary,
+                                const dstd::Vector<dstd::String>& args,
+                                int* exit_code) {
     int pipefd[2];
     if (::pipe(pipefd) < 0) return "";
 
@@ -114,7 +118,7 @@ std::string run_replay_capture(const std::string& binary,
         if (exit_code) *exit_code = -1;
         return "";
     }
-    std::string output;
+    dstd::String output;
     char buf[4096];
     ssize_t n;
     while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0)
@@ -128,7 +132,7 @@ std::string run_replay_capture(const std::string& binary,
 
 // Create a plain .pfw trace file with sample events.
 // The replay binary handles uncompressed .pfw without needing an index.
-void create_sample_trace(const std::string& path, int num_events = 10) {
+void create_sample_trace(const dstd::String& path, int num_events = 10) {
     GzTraceWriter file(path);
     file << "[\n";
     for (int i = 0; i < num_events; i++) {
@@ -146,7 +150,7 @@ void create_sample_trace(const std::string& path, int num_events = 10) {
     file.close();
 }
 
-void create_multi_category_trace(const std::string& path) {
+void create_multi_category_trace(const dstd::String& path) {
     GzTraceWriter file(path);
     file << "[\n";
     file
@@ -196,9 +200,9 @@ TEST_SUITE("DFTracerReplay") {
         int rc = 0;
         auto output = run_replay_capture(binary, {"--help"}, &rc);
         CHECK(rc == 0);
-        CHECK(output.find("DFTracer replay utility") != std::string::npos);
-        CHECK(output.find("--dftracer-mode") != std::string::npos);
-        CHECK(output.find("--dry-run") != std::string::npos);
+        CHECK(output.find("DFTracer replay utility") != dstd::String::npos);
+        CHECK(output.find("--dftracer-mode") != dstd::String::npos);
+        CHECK(output.find("--dry-run") != dstd::String::npos);
     }
 
     TEST_CASE("version flag") {
@@ -221,22 +225,21 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_dry");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "test_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "test_trace.pfw.gz").str());
         create_sample_trace(trace_file, 5);
 
         int rc = 0;
         auto output =
             run_replay_capture(binary, {"--dry-run", trace_file}, &rc);
         CHECK(rc == 0);
-        CHECK(output.find("Replay Summary") != std::string::npos);
-        CHECK(output.find("Executed:") != std::string::npos);
+        CHECK(output.find("Replay Summary") != dstd::String::npos);
+        CHECK(output.find("Executed:") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("dftracer mode with no-sleep") {
@@ -246,21 +249,20 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_nosleep");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "test_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "test_trace.pfw.gz").str());
         create_sample_trace(trace_file, 5);
 
         int rc = 0;
         auto output = run_replay_capture(
             binary, {"--dftracer-mode", "--no-sleep", trace_file}, &rc);
         CHECK(rc == 0);
-        CHECK(output.find("Replay Summary") != std::string::npos);
+        CHECK(output.find("Replay Summary") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("dftracer mode with no-timing") {
@@ -270,21 +272,20 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_notiming");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "test_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "test_trace.pfw.gz").str());
         create_sample_trace(trace_file, 5);
 
         int rc = 0;
         auto output = run_replay_capture(
             binary, {"--dftracer-mode", "--no-timing", trace_file}, &rc);
         CHECK(rc == 0);
-        CHECK(output.find("Executed:") != std::string::npos);
+        CHECK(output.find("Executed:") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("a bad pid or tid token is an error") {
@@ -294,12 +295,11 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_bad_id");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "test_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "test_trace.pfw.gz").str());
         create_sample_trace(trace_file, 10);
 
         for (const char* flag : {"--filter-pid", "--exclude-pid",
@@ -308,10 +308,10 @@ TEST_SUITE("DFTracerReplay") {
             auto output = run_replay_capture(
                 binary, {"--dry-run", flag, "12,abc", trace_file}, &rc);
             CHECK(rc == 1);
-            CHECK(output.find("abc") != std::string::npos);
+            CHECK(output.find("abc") != dstd::String::npos);
         }
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("filter by category") {
@@ -321,12 +321,11 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_filter_cat");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "multi_category.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "multi_category.pfw.gz").str());
         create_multi_category_trace(trace_file);
 
         int rc = 0;
@@ -334,10 +333,10 @@ TEST_SUITE("DFTracerReplay") {
             binary, {"--dry-run", "--filter-category", "POSIX", trace_file},
             &rc);
         CHECK(rc == 0);
-        CHECK(output.find("Executed:") != std::string::npos);
-        CHECK(output.find("Filtered:") != std::string::npos);
+        CHECK(output.find("Executed:") != dstd::String::npos);
+        CHECK(output.find("Filtered:") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("filter by multiple categories") {
@@ -347,19 +346,18 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_filter_multi");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "multi_category.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "multi_category.pfw.gz").str());
         create_multi_category_trace(trace_file);
 
         // Exit code may vary but should run.
         run_replay(binary, {"--dry-run", "--filter-category", "POSIX,STDIO",
                             trace_file});
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("filter by function name") {
@@ -369,21 +367,20 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_filter_func");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "multi_category.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "multi_category.pfw.gz").str());
         create_multi_category_trace(trace_file);
 
         int rc = 0;
         auto output = run_replay_capture(
             binary,
             {"--dry-run", "--filter-function", "read,write", trace_file}, &rc);
-        CHECK(output.find("Replay Summary") != std::string::npos);
+        CHECK(output.find("Replay Summary") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("max events limit") {
@@ -393,21 +390,20 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_max_events");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "test_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "test_trace.pfw.gz").str());
         create_sample_trace(trace_file, 20);
 
         int rc = 0;
         auto output = run_replay_capture(
             binary, {"--dry-run", "--max-events", "10", trace_file}, &rc);
         CHECK(rc == 0);
-        CHECK(output.find("Executed:") != std::string::npos);
+        CHECK(output.find("Executed:") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("50% deterministic sampling") {
@@ -417,12 +413,11 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_sample50");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "large_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "large_trace.pfw.gz").str());
         create_sample_trace(trace_file, 100);
 
         int rc = 0;
@@ -431,9 +426,9 @@ TEST_SUITE("DFTracerReplay") {
                                           "--sample-seed", "42", trace_file},
                                          &rc);
         CHECK(rc == 0);
-        CHECK(output.find("Replay Summary") != std::string::npos);
+        CHECK(output.find("Replay Summary") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("25% sampling") {
@@ -443,12 +438,11 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_sample25");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "large_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "large_trace.pfw.gz").str());
         create_sample_trace(trace_file, 100);
 
         int rc = 0;
@@ -458,7 +452,7 @@ TEST_SUITE("DFTracerReplay") {
                            &rc);
         CHECK(rc == 0);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("invalid sampling rate") {
@@ -468,18 +462,17 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_sample_bad");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "test_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "test_trace.pfw.gz").str());
         create_sample_trace(trace_file, 10);
 
         CHECK(run_replay(binary, {"--dry-run", "--sample-rate", "1.5",
                                   trace_file}) == 1);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("timing scale factor") {
@@ -489,19 +482,18 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_timing");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "perf_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "perf_trace.pfw.gz").str());
         create_sample_trace(trace_file, 10);
 
         int rc =
             run_replay(binary, {"--dftracer-mode", "--no-sleep", trace_file});
         CHECK(rc == 0);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("benchmark mode") {
@@ -511,12 +503,11 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_bench");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "perf_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "perf_trace.pfw.gz").str());
         create_sample_trace(trace_file, 50);
 
         auto start = std::chrono::steady_clock::now();
@@ -530,7 +521,7 @@ TEST_SUITE("DFTracerReplay") {
             std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         if (!under_valgrind()) CHECK(duration.count() < 5000);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("summary reports totals") {
@@ -540,21 +531,20 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_verbose");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "stats_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "stats_trace.pfw.gz").str());
         create_sample_trace(trace_file, 5);
 
         int rc = 0;
         auto output =
             run_replay_capture(binary, {"--dry-run", trace_file}, &rc);
         CHECK(rc == 0);
-        CHECK(output.find("Total events:") != std::string::npos);
+        CHECK(output.find("Total events:") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("statistics output") {
@@ -564,21 +554,20 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_stats");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "stats_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "stats_trace.pfw.gz").str());
         create_multi_category_trace(trace_file);
 
         int rc = 0;
         auto output =
             run_replay_capture(binary, {"--dry-run", trace_file}, &rc);
-        CHECK(output.find("Replay Summary") != std::string::npos);
-        CHECK(output.find("Executed:") != std::string::npos);
+        CHECK(output.find("Replay Summary") != dstd::String::npos);
+        CHECK(output.find("Executed:") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("per-function statistics") {
@@ -588,12 +577,11 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_perfunc");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace_file =
-            std::string((temp_dir / "stats_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace_file =
+            dstd::String((temp_dir / "stats_trace.pfw.gz").str());
         create_multi_category_trace(trace_file);
 
         int rc = 0;
@@ -601,7 +589,7 @@ TEST_SUITE("DFTracerReplay") {
             run_replay_capture(binary, {"--dry-run", trace_file}, &rc);
         CHECK(!output.empty());
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("nonexistent trace file") {
@@ -623,20 +611,19 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_bad_fmt");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string bad_trace =
-            std::string((temp_dir / "bad_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String bad_trace =
+            dstd::String((temp_dir / "bad_trace.pfw.gz").str());
 
-        std::ofstream file(bad_trace.c_str());
+        dftu_utils_test::FileOut file(bad_trace);
         file << "this is not valid JSON";
         file.close();
 
         CHECK(run_replay(binary, {"--dry-run", bad_trace}) == 1);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("empty trace file") {
@@ -646,12 +633,11 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_empty");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string empty_trace =
-            std::string((temp_dir / "empty_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String empty_trace =
+            dstd::String((temp_dir / "empty_trace.pfw.gz").str());
 
         // Must be a valid (empty) gzip, not plain text in a .gz name.
         GzTraceWriter file(empty_trace);
@@ -661,9 +647,9 @@ TEST_SUITE("DFTracerReplay") {
         int rc = 0;
         auto output =
             run_replay_capture(binary, {"--dry-run", empty_trace}, &rc);
-        CHECK(output.find("Replay Summary") != std::string::npos);
+        CHECK(output.find("Replay Summary") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("multiple trace files") {
@@ -673,12 +659,11 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_multi");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string trace1 = std::string((temp_dir / "trace1.pfw").str());
-        std::string trace2 = std::string((temp_dir / "trace2.pfw").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String trace1 = dstd::String((temp_dir / "trace1.pfw").str());
+        dstd::String trace2 = dstd::String((temp_dir / "trace2.pfw").str());
 
         create_sample_trace(trace1, 5);
         create_sample_trace(trace2, 5);
@@ -687,33 +672,34 @@ TEST_SUITE("DFTracerReplay") {
         auto output =
             run_replay_capture(binary, {"--dry-run", trace1, trace2}, &rc);
         CHECK(rc == 0);
-        CHECK(output.find("Replay Summary") != std::string::npos);
+        CHECK(output.find("Replay Summary") != dstd::String::npos);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("the thread count does not change the result") {
         auto binary = find_replay_binary();
         REQUIRE_FALSE(binary.empty());
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_threads");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::vector<std::string> args = {"--dry-run", "--no-timing"};
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::Vector<dstd::String> args = {"--dry-run", "--no-timing"};
         std::size_t expected = 0;
         for (int i = 0; i < 6; ++i) {
-            const std::string path = std::string(
-                (temp_dir / ("trace" + std::to_string(i) + ".pfw")).str());
+            const dstd::String path = dstd::String(
+                (temp_dir / ("trace" + dstd::to_string(i) + ".pfw")).str());
             create_sample_trace(path, 3 + i);
             args.push_back(path);
             expected += static_cast<std::size_t>(3 + i);
         }
 
-        auto count_after = [](const std::string& out, const std::string& key) {
+        auto count_after = [](const dstd::String& out,
+                              const dstd::String& key) {
             const auto at = out.find(key);
-            REQUIRE(at != std::string::npos);
-            return std::stoull(out.substr(at + key.size()));
+            REQUIRE(at != dstd::String::npos);
+            return dftu_utils_test::to_number<unsigned long long>(
+                out.substr(at + key.size()));
         };
         for (const char* threads : {"1", "4"}) {
             auto run_args = args;
@@ -726,7 +712,7 @@ TEST_SUITE("DFTracerReplay") {
             CHECK(count_after(output, "Executed: ") == expected);
         }
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("directory with trace files") {
@@ -736,23 +722,21 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_dir");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        dftracer::utils::dstd::Path trace_dir = temp_dir / "traces";
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(trace_dir)
-                    .has_value());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::Path trace_dir = temp_dir / "traces";
+        REQUIRE(dstd::fs::create_directories(trace_dir).has_value());
 
-        create_sample_trace(std::string((trace_dir / "trace1.pfw").str()), 3);
-        create_sample_trace(std::string((trace_dir / "trace2.pfw").str()), 3);
-        create_sample_trace(std::string((trace_dir / "trace3.pfw").str()), 3);
+        create_sample_trace(dstd::String((trace_dir / "trace1.pfw").str()), 3);
+        create_sample_trace(dstd::String((trace_dir / "trace2.pfw").str()), 3);
+        create_sample_trace(dstd::String((trace_dir / "trace3.pfw").str()), 3);
 
         int rc =
-            run_replay(binary, {"--dry-run", std::string(trace_dir.str())});
+            run_replay(binary, {"--dry-run", dstd::String(trace_dir.str())});
         CHECK(rc == 0);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("call tree mode with real traces") {
@@ -762,8 +746,8 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        std::string trace_dir = "trace_short/cosmoflow_h100/nodes-1";
-        if (!dftracer::utils::dstd::fs::is_directory(trace_dir).value()) {
+        dstd::String trace_dir = "trace_short/cosmoflow_h100/nodes-1";
+        if (!dstd::fs::is_directory(trace_dir).value()) {
             MESSAGE("Skipping call tree test - directory not found: ",
                     trace_dir);
             return;
@@ -781,8 +765,8 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        std::string trace_dir = "trace_short/cosmoflow_h100/nodes-1";
-        if (!dftracer::utils::dstd::fs::is_directory(trace_dir).value()) {
+        dstd::String trace_dir = "trace_short/cosmoflow_h100/nodes-1";
+        if (!dstd::fs::is_directory(trace_dir).value()) {
             MESSAGE("Skipping hierarchical replay test - directory not found: ",
                     trace_dir);
             return;
@@ -801,8 +785,8 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        std::string trace_file = "trace_short/bert_v100-1.pfw";
-        if (!dftracer::utils::dstd::fs::exists(trace_file).value()) {
+        dstd::String trace_file = "trace_short/bert_v100-1.pfw";
+        if (!dstd::fs::exists(trace_file).value()) {
             MESSAGE("Skipping BERT trace test - file not found: ", trace_file);
             return;
         }
@@ -813,7 +797,7 @@ TEST_SUITE("DFTracerReplay") {
                                           "--max-events", "100", trace_file},
                                          &rc);
         CHECK(rc == 0);
-        CHECK(output.find("Total events:") != std::string::npos);
+        CHECK(output.find("Total events:") != dstd::String::npos);
     }
 
     TEST_CASE("CosmoFlow A100 trace replay") {
@@ -823,8 +807,8 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        std::string trace_dir = "trace_short/cosmoflow_a100";
-        if (!dftracer::utils::dstd::fs::is_directory(trace_dir).value()) {
+        dstd::String trace_dir = "trace_short/cosmoflow_a100";
+        if (!dstd::fs::is_directory(trace_dir).value()) {
             MESSAGE("Skipping CosmoFlow A100 test - directory not found: ",
                     trace_dir);
             return;
@@ -842,8 +826,8 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        std::string trace_dir = "trace_short/cosmoflow_h100";
-        if (!dftracer::utils::dstd::fs::is_directory(trace_dir).value()) {
+        dstd::String trace_dir = "trace_short/cosmoflow_h100";
+        if (!dstd::fs::is_directory(trace_dir).value()) {
             MESSAGE("Skipping CosmoFlow H100 test - directory not found: ",
                     trace_dir);
             return;
@@ -862,12 +846,11 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_stress");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string large_trace =
-            std::string((temp_dir / "large_trace.pfw.gz").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String large_trace =
+            dstd::String((temp_dir / "large_trace.pfw.gz").str());
         create_sample_trace(large_trace, 1000);
 
         auto start = std::chrono::steady_clock::now();
@@ -880,7 +863,7 @@ TEST_SUITE("DFTracerReplay") {
             std::chrono::duration_cast<std::chrono::seconds>(end - start);
         if (!under_valgrind()) CHECK(duration.count() < 10);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 
     TEST_CASE("high sampling rate with large file") {
@@ -890,12 +873,11 @@ TEST_SUITE("DFTracerReplay") {
             return;
         }
 
-        dftracer::utils::dstd::Path temp_dir =
+        dstd::Path temp_dir =
             dftu_utils_test::make_unique_test_path("replay_stress2");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(temp_dir)
-                    .has_value());
-        std::string large_trace =
-            std::string((temp_dir / "large_trace2.pfw").str());
+        REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+        dstd::String large_trace =
+            dstd::String((temp_dir / "large_trace2.pfw").str());
         create_sample_trace(large_trace, 500);
 
         int rc = run_replay(
@@ -903,6 +885,6 @@ TEST_SUITE("DFTracerReplay") {
                      "--sample-seed", "42", large_trace});
         CHECK(rc == 0);
 
-        (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
+        (void)dstd::fs::remove_all(temp_dir);
     }
 }

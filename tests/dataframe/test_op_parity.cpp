@@ -8,13 +8,15 @@
 #endif
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dlfcn.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <initializer_list>
-#include <set>
-#include <string>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::dataframe::op_at;
 using dftracer::utils::dataframe::op_count;
@@ -22,23 +24,23 @@ using dftracer::utils::dataframe::OpKind;
 
 namespace {
 
-std::set<std::string> series_def_names() {
-    std::set<std::string> names;
+dstd::Set<dstd::String> series_def_names() {
+    dstd::Set<dstd::String> names;
 #define DFTU_SERIES_OP(name, fn, ret, o0, o1, o2) names.insert(#name);
 #include <dftracer/utils/dataframe/exported_series_ops.def>
     return names;
 }
 
-std::set<std::string> frame_def_names() {
-    std::set<std::string> names;
+dstd::Set<dstd::String> frame_def_names() {
+    dstd::Set<dstd::String> names;
 #define DFTU_FRAME_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6) \
     names.insert("dftu.frame." #name);
 #include <dftracer/utils/dataframe/exported_frame_ops.def>
     return names;
 }
 
-std::set<std::string> lazy_def_names() {
-    std::set<std::string> names;
+dstd::Set<dstd::String> lazy_def_names() {
+    dstd::Set<dstd::String> names;
 #define DFTU_LAZY_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6) \
     names.insert("dftu.lazy." #name);
 #include <dftracer/utils/dataframe/exported_lazy_ops.def>
@@ -49,8 +51,8 @@ std::set<std::string> lazy_def_names() {
 // columnar engine itself has no business depending on, per
 // exported_series_ops.def's own header comment). Shrinks only if one of
 // these moves into the .def; grows only with a matching host_ops.cpp change.
-const std::set<std::string>& runtime_registered_series_ops() {
-    static const std::set<std::string> names = {
+const dstd::Set<dstd::String>& runtime_registered_series_ops() {
+    static const dstd::Set<dstd::String> names = {
         "dftu.fs.scan_dir",      "dftu.fs.scan_dir_pattern",
         "dftu.file.compress",    "dftu.file.decompress",
         "dftu.text.line_filter",
@@ -61,8 +63,8 @@ const std::set<std::string>& runtime_registered_series_ops() {
 // Registered by utilities/arrow/frame_ops.cpp: the Arrow-layer
 // relational kernels, which live above the dataframe library and so cannot be
 // .def rows. Grows only with a matching frame_ops.cpp change.
-const std::set<std::string>& runtime_registered_frame_ops() {
-    static const std::set<std::string> names = {
+const dstd::Set<dstd::String>& runtime_registered_frame_ops() {
+    static const dstd::Set<dstd::String> names = {
         "dftu.frame.window",
         "dftu.frame.gap_fill",
         "dftu.frame.asof",
@@ -76,8 +78,8 @@ const std::set<std::string>& runtime_registered_frame_ops() {
 // registry holds a raw pointer, so nothing else notices; but a plugin or any
 // other consumer calling the C ABI directly cannot link it. Stringify the fn
 // token and look it up in this process to catch that.
-std::set<std::string> def_fn_symbols() {
-    std::set<std::string> fns;
+dstd::Set<dstd::String> def_fn_symbols() {
+    dstd::Set<dstd::String> fns;
 #define DFTU_SERIES_OP(name, fn, ret, o0, o1, o2) fns.insert(#fn);
 #include <dftracer/utils/dataframe/exported_series_ops.def>
 #define DFTU_FRAME_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6) \
@@ -88,8 +90,8 @@ std::set<std::string> def_fn_symbols() {
     return fns;
 }
 
-std::string joined(const std::set<std::string>& names) {
-    std::string out;
+dstd::String joined(const dstd::Set<dstd::String>& names) {
+    dstd::String out;
     for (const auto& n : names) {
         if (!out.empty()) out += ", ";
         out += n;
@@ -109,27 +111,27 @@ bool kind_in(OpKind k, std::initializer_list<OpKind> kinds) {
 // exported_frame_ops.def, so its kind is Series, not Frame) - it is excluded
 // here so it is checked exactly once, against the file it is actually
 // declared in.
-void check_bijection(const std::set<std::string>& def_names,
-                     const std::set<std::string>& known_extra,
+void check_bijection(const dstd::Set<dstd::String>& def_names,
+                     const dstd::Set<dstd::String>& known_extra,
                      std::initializer_list<OpKind> kinds,
-                     const std::set<std::string>& claimed_elsewhere = {}) {
-    std::set<std::string> registered;
+                     const dstd::Set<dstd::String>& claimed_elsewhere = {}) {
+    dstd::Set<dstd::String> registered;
     std::uint32_t n = op_count();
     for (std::uint32_t i = 0; i < n; ++i) {
         auto op = op_at(i);
         REQUIRE(static_cast<bool>(op));
-        std::string name(op.name());
+        dstd::String name(op.name());
         bool relevant =
             kind_in(op.sig().kind(), kinds) || def_names.count(name);
         if (relevant && claimed_elsewhere.count(name) == 0)
             registered.insert(name);
     }
 
-    std::set<std::string> missing_from_registry;
+    dstd::Set<dstd::String> missing_from_registry;
     for (const auto& name : def_names) {
         if (registered.count(name) == 0) missing_from_registry.insert(name);
     }
-    std::set<std::string> unexpected_in_registry;
+    dstd::Set<dstd::String> unexpected_in_registry;
     for (const auto& name : registered) {
         if (def_names.count(name) != 0) continue;
         if (known_extra.count(name) != 0) continue;
@@ -170,7 +172,7 @@ TEST_SUITE("op_parity") {
     }
 
     TEST_CASE("every .def row's function is an exported C ABI symbol") {
-        std::set<std::string> hidden;
+        dstd::Set<dstd::String> hidden;
         for (const auto& fn : def_fn_symbols()) {
             if (dlsym(RTLD_DEFAULT, fn.c_str()) == nullptr) hidden.insert(fn);
         }

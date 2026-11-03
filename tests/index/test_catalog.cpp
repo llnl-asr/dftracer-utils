@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/indexer.h>
@@ -16,13 +21,7 @@
 #include <testing_utilities.h>
 
 #include <algorithm>
-#include <fstream>
-#include <map>
 #include <random>
-#include <set>
-#include <sstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace istore = dftracer::utils::index::store;
@@ -33,46 +32,49 @@ using istore::PathType;
 
 namespace {
 
-std::string event(int i, const std::string& name, const std::string& args) {
-    std::ostringstream o;
-    o << R"({"id":)" << i << R"(,"name":")" << name
-      << R"(","cat":"POSIX","pid":1,"tid":2,"ph":"X","ts":)" << 1000 + i
-      << R"(,"dur":5,"type":"x","args":)" << args << "}\n";
-    return o.str();
+dstd::String event(int i, const dstd::String& name, const dstd::String& args) {
+    dstd::String o;
+    o += common::str_cat(R"({"id":)", i, R"(,"name":")", name,
+                         R"(","cat":"POSIX","pid":1,"tid":2,"ph":"X","ts":)",
+                         1000 + i, R"(,"dur":5,"type":"x","args":)", args,
+                         "}\n");
+    return o;
 }
 
 // 200 events: nested, array, bool, big uint, double and null args; `mix` is a
 // number on the first 100 events and a string after; only the last carries
 // `retry`. A metadata record carries args the catalog must not list.
-std::string write_fixture(const std::string& dir) {
-    std::string body = "[\n";
+dstd::String write_fixture(const dstd::String& dir) {
+    dstd::String body = "[\n";
     body +=
         R"({"name":"FH","ph":"M","pid":1,"tid":1,"args":{"name":"/a","value":"abc"}})"
         "\n";
     for (int i = 0; i < 200; ++i) {
-        std::ostringstream a;
-        a << R"({"size":)" << i * 10 << R"(,"ratio":)" << i << ".5"
-          << R"(,"flag":)" << (i % 2 ? "true" : "false")
-          << R"(,"big":18446744073709551000,"io":{"off":)" << i
-          << R"(,"mode":"r"},"hosts":["h1","h2"],"nul":null,"mix":)";
+        dstd::String a;
+        a += common::str_cat(
+            R"({"size":)", i * 10, R"(,"ratio":)", i, ".5", R"(,"flag":)",
+            (i % 2 ? "true" : "false"),
+            R"(,"big":18446744073709551000,"io":{"off":)", i,
+            R"(,"mode":"r"},"hosts":["h1","h2"],"nul":null,"mix":)");
         if (i < 100)
-            a << i;
+            a += common::str_cat(i);
         else
-            a << R"("s")";
-        if (i == 199) a << R"(,"retry":1)";
-        a << "}";
-        body += event(i, i % 3 ? "read" : "write", a.str());
+            a += R"("s")";
+        if (i == 199) a += R"(,"retry":1)";
+        a += "}";
+        body += event(i, i % 3 ? "read" : "write", a);
     }
     body += "]\n";
     return dftu_utils_test::write_gz_trace(dir + "/fixture.pfw.gz", body);
 }
 
 // `body` as `<name>.pfw.gz` over gzip members of about `member` bytes.
-std::string write_members(const std::string& dir, const std::string& name,
-                          const std::string& body, std::size_t member = 1024) {
+dstd::String write_members(const dstd::String& dir, const dstd::String& name,
+                           const dstd::String& body,
+                           std::size_t member = 1024) {
     const auto plain = dir + "/" + name + ".pfw";
     {
-        std::ofstream(plain.c_str()) << body;
+        (void)dstd::fs::write_file(dstd::PathView(plain), body);
     }
     const auto gz = plain + ".gz";
     REQUIRE(
@@ -82,18 +84,18 @@ std::string write_members(const std::string& dir, const std::string& name,
 }
 
 // 110 events over several members: `a` on 100 of them, `b` on 10.
-std::string write_budget_trace(const std::string& dir) {
-    std::string body = "[\n";
+dstd::String write_budget_trace(const dstd::String& dir) {
+    dstd::String body = "[\n";
     for (int i = 0; i < 110; ++i)
         body += event(i, "read",
-                      i < 100 ? R"({"a":)" + std::to_string(i) + "}"
-                              : R"({"b":)" + std::to_string(i) + "}");
+                      i < 100 ? R"({"a":)" + dstd::to_string(i) + "}"
+                              : R"({"b":)" + dstd::to_string(i) + "}");
     body += "]\n";
     return write_members(dir, "budget", body);
 }
 
-std::size_t count_rows(const std::string& trace, const std::string& index_dir,
-                       const std::string& query, bool skip_pruning) {
+std::size_t count_rows(const dstd::String& trace, const dstd::String& index_dir,
+                       const dstd::String& query, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
         utilities::reader::TraceReader reader(
             {.file_path = dstd::String(trace),
@@ -109,7 +111,7 @@ std::size_t count_rows(const std::string& trace, const std::string& index_dir,
     return run().get();
 }
 
-index::IndexerOptions options(const std::string& index_dir,
+index::IndexerOptions options(const dstd::String& index_dir,
                               std::size_t budget = 0) {
     index::IndexerOptions o;
     o.index_dir = index_dir;
@@ -118,30 +120,30 @@ index::IndexerOptions options(const std::string& index_dir,
 }
 
 struct Indexed {
-    std::string trace;
+    dstd::String trace;
     dstd::String index_path;
 };
 
-std::vector<std::string> zonemap_paths(const Indexed& t) {
+dstd::Vector<dstd::String> zonemap_paths(const Indexed& t) {
     const auto snapshot = dftu_utils_test::index_snapshot(t.index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, t.trace);
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     for (const auto& path : dftu_utils_test::index_take(
              index::paths(snapshot, file, IndexExtension::Zonemap)))
         out.emplace_back(path.data(), path.size());
     return out;
 }
 
-bool has(const std::vector<std::string>& v, const std::string& x) {
+bool has(const dstd::Vector<dstd::String>& v, const dstd::String& x) {
     return std::find(v.begin(), v.end(), x) != v.end();
 }
 
 // The zones of `path`, by chunk.
-std::map<std::uint64_t, index::extensions::kinds::Zone> zones_of(
-    const Indexed& t, const std::string& path) {
+dstd::Map<std::uint64_t, index::extensions::kinds::Zone> zones_of(
+    const Indexed& t, const dstd::String& path) {
     const auto snapshot = dftu_utils_test::index_snapshot(t.index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, t.trace);
-    std::map<std::uint64_t, index::extensions::kinds::Zone> out;
+    dstd::Map<std::uint64_t, index::extensions::kinds::Zone> out;
     for (auto& [chunk, bytes] : dftu_utils_test::index_take(
              index::granules(snapshot, file, IndexExtension::Zonemap, path))) {
         auto zone = index::extensions::kinds::decode_zone(
@@ -152,8 +154,8 @@ std::map<std::uint64_t, index::extensions::kinds::Zone> zones_of(
     return out;
 }
 
-std::set<std::uint64_t> read_chunks(const index::Indexer& ix,
-                                    const std::string& query) {
+dstd::Set<std::uint64_t> read_chunks(const index::Indexer& ix,
+                                     const dstd::String& query) {
     const auto e = ix.explain(query);
     REQUIRE(e.size() == 1);
     return {e[0].read.begin(), e[0].read.end()};
@@ -163,8 +165,8 @@ std::uint64_t chunk_count(const index::Indexer& ix) {
     return ix.explain(R"(name == "read")")[0].chunks;
 }
 
-void check_full_scan(const Indexed& t, const std::string& index_dir,
-                     const std::vector<std::string>& queries) {
+void check_full_scan(const Indexed& t, const dstd::String& index_dir,
+                     const dstd::Vector<dstd::String>& queries) {
     for (const auto& q : queries) {
         CAPTURE(q);
         CHECK(count_rows(t.trace, index_dir, q, false) ==
@@ -172,7 +174,7 @@ void check_full_scan(const Indexed& t, const std::string& index_dir,
     }
 }
 
-dstd::Map<dstd::String, PathStat> catalog_of(const std::string& trace,
+dstd::Map<dstd::String, PathStat> catalog_of(const dstd::String& trace,
                                              dstd::StringView index_path) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
@@ -184,7 +186,7 @@ dstd::Map<dstd::String, PathStat> catalog_of(const std::string& trace,
 }
 
 // The column types of the file's catalog, without the "args." prefix.
-dstd::Map<dstd::String, ColumnType> column_types(const std::string& trace,
+dstd::Map<dstd::String, ColumnType> column_types(const dstd::String& trace,
                                                  dstd::StringView index_path) {
     constexpr dstd::StringView ARGS = "args.";
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
@@ -242,7 +244,7 @@ TEST_SUITE("PathCatalog") {
         const auto st = ix.build();
         const auto cat = catalog_of(trace, st.index_path);
 
-        auto type_of = [&](const std::string& p) {
+        auto type_of = [&](const dstd::String& p) {
             const dstd::String key(p.data(), p.size());
             REQUIRE_MESSAGE(cat.count(key), p);
             return cat.at(key).type;
@@ -274,9 +276,9 @@ TEST_SUITE("PathCatalog") {
 
     TEST_CASE("an empty array or object is listed and is not a column") {
         dftu_utils_test::TestEnvironment env(10);
-        const std::string body = "[\n" +
-                                 event(0, "read", R"({"tags":[],"opts":{}})") +
-                                 event(1, "read", R"({"n":1})") + "]\n";
+        const dstd::String body = "[\n" +
+                                  event(0, "read", R"({"tags":[],"opts":{}})") +
+                                  event(1, "read", R"({"n":1})") + "]\n";
         const auto trace = dftu_utils_test::write_gz_trace(
             env.get_dir() + "/empty.pfw.gz", body);
         const auto idx = env.get_dir() + "/idx";
@@ -391,8 +393,8 @@ TEST_SUITE("PathCatalog") {
                 FAIL("expected an error");
             } catch (const common::DFTUtilsException& e) {
                 CHECK(e.error().is_code(common::ErrorCode::InvalidArgument));
-                CHECK(std::string(e.what()).find("stats_share") !=
-                      std::string::npos);
+                CHECK(dstd::String(e.what()).find("stats_share") !=
+                      dstd::String::npos);
             }
         }
     }
@@ -401,13 +403,13 @@ TEST_SUITE("PathCatalog") {
         dftu_utils_test::TestEnvironment env(10);
         // 400 paths; path p<j> is on the records of run j % 20 only, so
         // every path is absent from most chunks.
-        std::string body = "[\n";
+        dstd::String body = "[\n";
         for (int i = 0; i < 400; ++i) {
-            std::string args = "{";
+            dstd::String args = "{";
             for (int j = i / 20 % 20; j < 400; j += 20) {
                 if (args.size() > 1) args += ",";
-                args += "\"p" + std::to_string(1000 + j) +
-                        "\":" + std::to_string(i);
+                args += "\"p" + dstd::to_string(1000 + j) +
+                        "\":" + dstd::to_string(i);
             }
             body += event(i, "read", args + "}");
         }
@@ -419,8 +421,8 @@ TEST_SUITE("PathCatalog") {
         const Indexed t{trace, ix.build().index_path};
         const auto zones = zonemap_paths(t);
         for (int j = 0; j < 400; ++j)
-            CHECK_MESSAGE(has(zones, "p" + std::to_string(1000 + j)), j);
-        const std::string q = "p1399 == 399";
+            CHECK_MESSAGE(has(zones, "p" + dstd::to_string(1000 + j)), j);
+        const dstd::String q = "p1399 == 399";
         CHECK(read_chunks(ix, q).size() < chunk_count(ix));
         check_full_scan(t, idx, {q, "p1399 > 10", "exists(p1399)"});
     }
@@ -430,18 +432,18 @@ TEST_SUITE("PathCatalog") {
         // `c` is 7 and `u` "same" on every record, `u` over the distinct
         // limit in every chunk; `k` is 7 on the first half only; `a` varies
         // on 100 records.
-        std::string body = "[\n";
+        dstd::String body = "[\n";
         for (int i = 0; i < 110; ++i) {
-            std::string args = R"({"c":7,"u":"same")";
+            dstd::String args = R"({"c":7,"u":"same")";
             if (i < 55) args += R"(,"k":7)";
-            if (i < 100) args += R"(,"a":)" + std::to_string(i);
+            if (i < 100) args += R"(,"a":)" + dstd::to_string(i);
             body += event(i, "read", args + "}");
         }
         body += "]\n";
         const auto trace = write_members(env.get_dir(), "useless", body);
         for (std::size_t budget : {std::size_t{0}, std::size_t{1}}) {
             CAPTURE(budget);
-            const auto idx = env.get_dir() + "/idx" + std::to_string(budget);
+            const auto idx = env.get_dir() + "/idx" + dstd::to_string(budget);
             auto o = options(idx, budget);
             o.bloom->auto_max_distinct = 0;
             auto ix = index::Indexer::open(
@@ -476,20 +478,20 @@ TEST_SUITE("PathCatalog") {
         // 1400 paths in groups of 200: group g is on every (g + 1)th record,
         // so ranking is by group, then by name; values differ by record.
         constexpr int PATHS = 1400;
-        std::string body = "[\n";
+        dstd::String body = "[\n";
         for (int i = 0; i < 200; ++i) {
-            std::string args = "{";
+            dstd::String args = "{";
             for (int j = 0; j < PATHS; ++j) {
                 if (i % (1 + j / 200) != 0) continue;
                 if (args.size() > 1) args += ",";
-                args += "\"q" + std::to_string(10000 + j) +
-                        "\":" + std::to_string(i * 10000 + j);
+                args += "\"q" + dstd::to_string(10000 + j) +
+                        "\":" + dstd::to_string(i * 10000 + j);
             }
             body += event(i, "read", args + "}");
         }
         body += "]\n";
         const auto trace = write_members(env.get_dir(), "capped", body, 4096);
-        auto build = [&](const std::string& idx) {
+        auto build = [&](const dstd::String& idx) {
             auto ix = index::Indexer::open(
                 {dstd::String(dstd::StringView(trace))}, options(idx));
             return Indexed{trace, ix.build().index_path};
@@ -497,20 +499,21 @@ TEST_SUITE("PathCatalog") {
         const auto t = build(env.get_dir() + "/idx");
         const auto zones = zonemap_paths(t);
         const auto cat = catalog_of(trace, t.index_path);
-        std::vector<std::string> kept;
-        std::vector<std::string> dropped;
+        dstd::Vector<dstd::String> kept;
+        dstd::Vector<dstd::String> dropped;
         for (int j = 0; j < PATHS; ++j) {
-            const std::string p = "q" + std::to_string(10000 + j);
+            const dstd::String p = "q" + dstd::to_string(10000 + j);
             (has(zones, p) ? kept : dropped).push_back(p);
         }
         REQUIRE_FALSE(kept.empty());
         REQUIRE_FALSE(dropped.empty());
-        auto rank = [&](const std::string& p) {
-            return std::make_pair(-static_cast<std::int64_t>(
-                                      cat.at(dstd::String("args." + p)).count),
-                                  p);
+        auto rank = [&](const dstd::String& p) {
+            return dstd::Pair<std::int64_t, dstd::String>{
+                -static_cast<std::int64_t>(
+                    cat.at(dstd::String("args." + p)).count),
+                p};
         };
-        dstd::Pair<std::int64_t, std::string> worst_kept = rank(kept.front());
+        dstd::Pair<std::int64_t, dstd::String> worst_kept = rank(kept.front());
         for (const auto& p : kept) worst_kept = std::max(worst_kept, rank(p));
         for (const auto& p : dropped) CHECK(rank(p) > worst_kept);
 
@@ -521,7 +524,7 @@ TEST_SUITE("PathCatalog") {
         check_full_scan(
             t, env.get_dir() + "/idx",
             {kept.back() + " == 0", dropped.front() + " > 5",
-             dropped.back() + " == " + std::to_string(10000 + PATHS - 1)});
+             dropped.back() + " == " + dstd::to_string(10000 + PATHS - 1)});
     }
 }
 
@@ -529,12 +532,12 @@ TEST_SUITE("Absence") {
     TEST_CASE("a chunk without the path is skipped for a test on its value") {
         dftu_utils_test::TestEnvironment env(10);
         // `x` on the first 50 records only.
-        std::string body = "[\n";
+        dstd::String body = "[\n";
         for (int i = 0; i < 100; ++i) {
-            std::string args = R"({"y":)" + std::to_string(i) + R"(,"m":"m)" +
-                               std::to_string(i / 10 % 10) + "_" +
-                               std::to_string(i % 3) + "\"";
-            if (i < 50) args += R"(,"x":)" + std::to_string(i);
+            dstd::String args = R"({"y":)" + dstd::to_string(i) + R"(,"m":"m)" +
+                                dstd::to_string(i / 10 % 10) + "_" +
+                                dstd::to_string(i % 3) + "\"";
+            if (i < 50) args += R"(,"x":)" + dstd::to_string(i);
             body += event(i, "read", args + "}");
         }
         body += "]\n";
@@ -544,7 +547,7 @@ TEST_SUITE("Absence") {
                                        options(idx));
         const Indexed t{trace, ix.build().index_path};
         const auto all = chunk_count(ix);
-        std::set<std::uint64_t> with_x;
+        dstd::Set<std::uint64_t> with_x;
         for (const auto& [chunk, zone] : zones_of(t, "x")) {
             REQUIRE(zone.present);
             if (*zone.present > 0) with_x.insert(chunk);
@@ -572,10 +575,10 @@ TEST_SUITE("Absence") {
 
     TEST_CASE("a chunk bloom is sized for the chunk's values") {
         dftu_utils_test::TestEnvironment env(10);
-        std::string body = "[\n";
+        dstd::String body = "[\n";
         for (int i = 0; i < 100; ++i)
             body +=
-                event(i, "read", R"({"m":"v)" + std::to_string(i % 3) + "\"}");
+                event(i, "read", R"({"m":"v)" + dstd::to_string(i % 3) + "\"}");
         body += "]\n";
         const auto trace = write_members(env.get_dir(), "small", body);
         const auto idx = env.get_dir() + "/idx";
@@ -613,20 +616,20 @@ TEST_SUITE("Absence") {
         // number or null), `o` (a number or an object) and `e` (a number or
         // an empty object), each on some runs only.
         std::mt19937 rng(42);
-        std::string body = "[\n";
+        dstd::String body = "[\n";
         for (int i = 0; i < 300; ++i) {
             const int run = i / 25;
-            std::string args = R"({"i":)" + std::to_string(i);
-            if (run % 2 == 0) args += R"(,"x":)" + std::to_string(rng() % 20);
+            dstd::String args = R"({"i":)" + dstd::to_string(i);
+            if (run % 2 == 0) args += R"(,"x":)" + dstd::to_string(rng() % 20);
             if (run % 3 == 0)
-                args += R"(,"s":"s)" + std::to_string(rng() % 6) + "\"";
+                args += R"(,"s":"s)" + dstd::to_string(rng() % 6) + "\"";
             if (run % 4 == 1)
                 args += i % 7 == 0 ? R"(,"n":null)"
-                                   : R"(,"n":)" + std::to_string(rng() % 9);
+                                   : R"(,"n":)" + dstd::to_string(rng() % 9);
             if (run == 5) args += R"(,"o":{"k":1})";
-            if (run == 7) args += R"(,"o":)" + std::to_string(rng() % 4);
+            if (run == 7) args += R"(,"o":)" + dstd::to_string(rng() % 4);
             if (run == 9) args += R"(,"e":{})";
-            if (run == 10) args += R"(,"e":)" + std::to_string(rng() % 4);
+            if (run == 10) args += R"(,"e":)" + dstd::to_string(rng() % 4);
             body += event(i, "read", args + "}");
         }
         body += "]\n";
@@ -637,22 +640,23 @@ TEST_SUITE("Absence") {
                                         options(idx))
                        .build()
                        .index_path};
-        std::vector<std::string> queries;
+        dstd::Vector<dstd::String> queries;
         for (const char* p : {"x", "s", "n", "o", "e", "missing"}) {
-            const std::string f(p);
+            const dstd::String f(p);
             queries.push_back("exists(" + f + ")");
             queries.push_back("not exists(" + f + ")");
             queries.push_back(f + " is null");
             queries.push_back(f + " is not null");
         }
         for (int k = 0; k < 60; ++k) {
-            const char* p = std::vector<const char*>{"x", "n", "o", "e"}[k % 4];
-            const auto v = std::to_string(rng() % 20);
+            const char* p =
+                dstd::Vector<const char*>{"x", "n", "o", "e"}[k % 4];
+            const auto v = dstd::to_string(rng() % 20);
             const char* ops[] = {" == ", " != ", " > ", " <= "};
-            queries.push_back(std::string(p) + ops[rng() % 4] + v);
-            queries.push_back("not (" + std::string(p) + " == " + v + ")");
-            queries.push_back(std::string(p) + " in [" + v + ", 3]");
-            queries.push_back(R"(s == "s)" + std::to_string(rng() % 7) +
+            queries.push_back(dstd::String(p) + ops[rng() % 4] + v);
+            queries.push_back("not (" + dstd::String(p) + " == " + v + ")");
+            queries.push_back(dstd::String(p) + " in [" + v + ", 3]");
+            queries.push_back(R"(s == "s)" + dstd::to_string(rng() % 7) +
                               "\" or " + p + " < " + v);
         }
         check_full_scan(t, idx, queries);
@@ -665,16 +669,16 @@ TEST_SUITE("TopLevelShadow") {
     // evidence built from the args key must not prune it.
     TEST_CASE("an args key named like a top-level field does not prune it") {
         dftu_utils_test::TestEnvironment env(10);
-        std::string body = "[\n";
+        dstd::String body = "[\n";
         for (int i = 0; i < 200; ++i) {
-            std::ostringstream o;
-            o << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX")"
-              << R"(,"pid":1,"tid":2,"ph":"X","ts":)" << 1000 + i
-              << R"(,"dur":5,"type":"x","foo":"top)" << i
-              << R"(","args":{"id":)" << 100000 + i << R"(,"cat":"ARG)" << i
-              << R"(","type":"arg)" << i << R"(","foo":"arg)" << i << R"("}})"
-              << "\n";
-            body += o.str();
+            dstd::String o;
+            o += common::str_cat(
+                R"({"id":)", i, R"(,"name":"read","cat":"POSIX")",
+                R"(,"pid":1,"tid":2,"ph":"X","ts":)", 1000 + i,
+                R"(,"dur":5,"type":"x","foo":"top)", i, R"(","args":{"id":)",
+                100000 + i, R"(,"cat":"ARG)", i, R"(","type":"arg)", i,
+                R"(","foo":"arg)", i, R"("}})", "\n");
+            body += o;
         }
         body += "]\n";
         const auto trace = write_members(env.get_dir(), "shadow", body);
@@ -688,7 +692,7 @@ TEST_SUITE("TopLevelShadow") {
              R"(type == "x")", R"(foo == "top7")", R"(foo in ["top1", "top2"])",
              "exists(foo)", "args.id == 100005", R"(args.foo == "arg7")"});
         for (const char* q : {"args.id == 100005", R"(args.foo == "arg7")"}) {
-            const std::string query(q);
+            const dstd::String query(q);
             CAPTURE(query);
             CHECK(read_chunks(ix, query).size() < chunk_count(ix));
         }

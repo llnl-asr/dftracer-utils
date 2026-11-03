@@ -17,6 +17,8 @@
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -32,7 +34,6 @@
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace std::chrono_literals;
@@ -58,9 +59,9 @@ void fail_hung(const char* what) {
 }
 
 void shutdown_or_fail(Runtime& rt) {
-    std::promise<void> done;
+    dstd::Promise<void> done;
     dstd::Future<void> finished = done.get_future();
-    std::thread t([&] {
+    dstd::Thread t([&] {
         rt.shutdown();
         done.set_value();
     });
@@ -97,7 +98,7 @@ void expect_cancelled_at_shutdown(Runtime& rt, const Probe& probe) {
 
 struct Gate {
     std::mutex mutex;
-    std::vector<std::coroutine_handle<>> parked;
+    dstd::Vector<std::coroutine_handle<>> parked;
 };
 
 // Parks its awaiter for ever, on no registry: only the test resumes it.
@@ -182,7 +183,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         rt.submit(frame(), "BlockedOnLatch");
         expect_cancelled_at_shutdown(rt, probe);
         // The children never saw the shutdown. Finish them so nothing leaks.
-        std::vector<std::coroutine_handle<>> parked;
+        dstd::Vector<std::coroutine_handle<>> parked;
         {
             std::lock_guard<std::mutex> lock(gate.mutex);
             parked.swap(gate.parked);
@@ -233,7 +234,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
     }
 
     SUBCASE("channel receive") {
-        auto channel = std::make_shared<coro::Channel<int>>(1);
+        auto channel = dstd::make_shared<coro::Channel<int>>(1);
         auto frame = [&]() -> coro::CoroTask<void> {
             probe.entered.store(true);
             try {
@@ -249,7 +250,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
     }
 
     SUBCASE("channel send") {
-        auto channel = std::make_shared<coro::Channel<int>>(1);
+        auto channel = dstd::make_shared<coro::Channel<int>>(1);
         REQUIRE(channel->try_send(1));
         auto frame = [&]() -> coro::CoroTask<void> {
             probe.entered.store(true);
@@ -266,7 +267,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
     }
 
     SUBCASE("async once") {
-        auto channel = std::make_shared<coro::Channel<int>>(1);
+        auto channel = dstd::make_shared<coro::Channel<int>>(1);
         coro::AsyncOnce<int> once;
         Probe leader;
         auto lead = [&]() -> coro::CoroTask<void> {
@@ -300,7 +301,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
     }
 
     SUBCASE("spawn future") {
-        auto state = std::make_shared<coro::SharedState<int>>();
+        auto state = dstd::make_shared<coro::SharedState<int>>();
         state->executor = rt.executor();
         auto frame = [&]() -> coro::CoroTask<void> {
             probe.entered.store(true);
@@ -474,7 +475,7 @@ TEST_CASE("a runtime can end as soon as a foreign thread resumes its frame") {
     int ended = 0;
     for (int round = 0; round < ROUNDS; ++round) {
         auto rt =
-            std::make_unique<Runtime>(ExecutorConfig{.num_threads = 2}, false);
+            dstd::make_unique<Runtime>(ExecutorConfig{.num_threads = 2}, false);
         ForeignHandoff handoff;
         std::atomic<bool> finished{false};
         std::atomic<bool> released{false};
@@ -484,7 +485,7 @@ TEST_CASE("a runtime can end as soon as a foreign thread resumes its frame") {
             finished.store(true, std::memory_order_release);
         };
         rt->submit(frame(), "ResumedByForeignThread");
-        std::thread foreign([&] {
+        dstd::Thread foreign([&] {
             void* handle = nullptr;
             while ((handle = handoff.handle.load(std::memory_order_acquire)) ==
                    nullptr)
@@ -516,7 +517,7 @@ TEST_CASE("a foreign thread can exit while the runtime it resumed ends") {
     int ended = 0;
     for (int round = 0; round < ROUNDS; ++round) {
         auto rt =
-            std::make_unique<Runtime>(ExecutorConfig{.num_threads = 2}, false);
+            dstd::make_unique<Runtime>(ExecutorConfig{.num_threads = 2}, false);
         ForeignHandoff handoff;
         std::atomic<bool> finished{false};
         auto frame = [&]() -> coro::CoroTask<void> {
@@ -525,7 +526,7 @@ TEST_CASE("a foreign thread can exit while the runtime it resumed ends") {
             finished.store(true, std::memory_order_release);
         };
         rt->submit(frame(), "ResumedByExitingThread");
-        std::thread foreign([&] {
+        dstd::Thread foreign([&] {
             void* handle = nullptr;
             while ((handle = handoff.handle.load(std::memory_order_acquire)) ==
                    nullptr)

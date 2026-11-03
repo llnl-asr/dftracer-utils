@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/open_count.h>
@@ -17,10 +18,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <memory>
 #include <sstream>
 #include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;
@@ -42,8 +41,8 @@ constexpr std::size_t RUNNING_WORKERS = WORKERS;
 #endif
 constexpr int EVENTS = 1000;
 
-std::string write_trace(const std::string& dir, int n) {
-    std::ostringstream out;
+dstd::String write_trace(const dstd::String& dir, int n) {
+    dftu_utils_test::TextOut out;
     out << "[\n";
     for (int i = 0; i < EVENTS; ++i) {
         out << R"({"id":)" << i << R"(,"name":"op)" << (i + n) % 7
@@ -59,21 +58,21 @@ std::string write_trace(const std::string& dir, int n) {
 class LineSink : public ExportSink {
    public:
     void write(dstd::StringView data) override { text.append(data); }
-    std::string text;
+    dstd::String text;
 
     // A first touch dumps the raw file, array brackets included.
-    std::vector<std::string> lines() const {
-        std::vector<std::string> out;
-        std::istringstream in(text);
-        for (std::string line; std::getline(in, line);)
+    dstd::Vector<dstd::String> lines() const {
+        dstd::Vector<dstd::String> out;
+        dftu_utils_test::LineStream in(text);
+        for (dstd::String line; in.next(line);)
             if (!line.empty() && line.front() == '{') out.push_back(line);
         std::sort(out.begin(), out.end());
         return out;
     }
 };
 
-std::vector<std::string> export_lines(const std::vector<std::string>& files,
-                                      const std::string& index_dir) {
+dstd::Vector<dstd::String> export_lines(const dstd::Vector<dstd::String>& files,
+                                        const dstd::String& index_dir) {
     const auto view = View::from_files(view_files_of(files, index_dir));
     LineSink sink;
     default_runtime().block_on(
@@ -89,7 +88,7 @@ std::vector<std::string> export_lines(const std::vector<std::string>& files,
 TEST_SUITE("BootstrapParallelism") {
     TEST_CASE("a cold bootstrap keeps a file in flight per worker") {
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i)
             files.push_back(write_trace(env.get_dir(), i));
         const auto index_dir = env.get_dir() + "/idx";
@@ -118,7 +117,7 @@ TEST_SUITE("BootstrapParallelism") {
     TEST_CASE(
         "an export bootstrap opens the store once and equals a warm one") {
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i)
             files.push_back(write_trace(env.get_dir(), i));
         const auto index_dir = env.get_dir() + "/idx";

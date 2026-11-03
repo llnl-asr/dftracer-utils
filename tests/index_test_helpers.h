@@ -17,9 +17,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
 
 // Helpers for tests that write synthetic index data by hand or read the index
 // back through a snapshot.
@@ -28,7 +26,7 @@ namespace dftu_utils_test {
 using dftracer::utils::index::store::IndexExtension;
 
 inline dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> dstd_paths(
-    const std::vector<std::string>& paths) {
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& paths) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
     out.reserve(paths.size());
     for (const auto& path : paths) out.emplace_back(path);

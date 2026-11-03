@@ -24,8 +24,6 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <memory>
-#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -550,8 +548,8 @@ TEST_SUITE("lazy frame ops") {
             dstd::Vector<I> out;
             for (int i = 0; i < N; ++i) {
                 const bool null = i % 11 == 0;
-                const auto key = std::make_pair(null ? -1 : k[i],
-                                                use_j ? j[i] : std::int64_t{0});
+                const dstd::Pair<std::int64_t, std::int64_t> key{
+                    null ? -1 : k[i], use_j ? j[i] : std::int64_t{0}};
                 if (seen[key]++ < keep) out.push_back(v[i]);
             }
             return out;

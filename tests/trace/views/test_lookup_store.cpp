@@ -3,16 +3,18 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/cache/lookup_store.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
-#include <string>
 #include <thread>
 
 using namespace dftracer::utils;
@@ -26,46 +28,45 @@ namespace {
 namespace cache = dftracer::utils::index::cache;
 namespace scan = dftracer::utils::trace::views::detail::scan;
 
-std::string indexed_trace(TestEnvironment& env, int posix_n) {
-    const std::string gz = create_mixed_trace(env, posix_n, 20);
+dstd::String indexed_trace(TestEnvironment& env, int posix_n) {
+    const dstd::String gz = create_mixed_trace(env, posix_n, 20);
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     return gz;
 }
 
-auto plan_of(const std::string& gz) {
+auto plan_of(const dstd::String& gz) {
     auto p = scan::from_file(
         dstd::String(gz),
-        dstd::String(std::string(determine_index_path(gz, ""))));
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
     dftracer::utils::trace::views::detail::plan_record_schema(*p);
     return p;
 }
 
-dftracer::utils::dstd::SharedPtr<cache::CacheStore> store_in(
-    TestEnvironment& env) {
+dstd::SharedPtr<cache::CacheStore> store_in(TestEnvironment& env) {
     return cache::open_lookup_db(env.get_dir() + "/lookups",
                                  cache::CacheStore::Mode::ReadWrite);
 }
 
-std::string lookup_trace(TestEnvironment& env) {
-    const std::string plain = env.get_dir() + "/side.ndjson";
+dstd::String lookup_trace(TestEnvironment& env) {
+    const dstd::String plain = env.get_dir() + "/side.ndjson";
     {
-        std::ofstream o(plain.c_str());
+        dftu_utils_test::FileOut o(plain);
         o << R"({"type":"run","run":1,"app":"laghos"})" << "\n";
         o << R"({"type":"run","run":2,"app":"amg"})" << "\n";
         for (int i = 0; i < 4; ++i)
             o << R"({"type":"ev","i":)" << i << R"(,"run":)" << i % 2 + 1
               << "}\n";
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
-    (void)dftracer::utils::dstd::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     return gz;
 }
 
-std::string lookup_query() {
+dstd::String lookup_query() {
     return "let runs = where type == \"run\" | select run, app; where type "
            "== \"ev\" | lookup runs on run | select i, app";
 }
@@ -87,7 +88,7 @@ TEST_SUITE("LookupStore") {
         const auto plan = plan_of(gz);
         const auto path = cache::lookup_cache_path(*plan);
         CHECK(path == dftracer::utils::index::lookups_dir(
-                          std::string(determine_index_path(gz, ""))));
+                          dstd::String(determine_index_path(gz, ""))));
         const auto sig =
             cache::lookup_signature(*plan, "where type == \"run\"");
         REQUIRE(sig);
@@ -98,26 +99,24 @@ TEST_SUITE("LookupStore") {
         REQUIRE(db);
         CHECK_FALSE(cache::lookup_exists(*db, *sig));
         CHECK_FALSE(cache::read_lookup(*db, *sig));
-        cache::persist_lookup(*db, *sig, std::string("ipc\0bytes", 9));
+        cache::persist_lookup(*db, *sig, dstd::String("ipc\0bytes", 9));
         CHECK(cache::lookup_exists(*db, *sig));
-        CHECK(cache::read_lookup(*db, *sig) ==
-              dftracer::utils::dstd::String("ipc\0bytes", 9));
+        CHECK(cache::read_lookup(*db, *sig) == dstd::String("ipc\0bytes", 9));
     }
 
     TEST_CASE("the store evicts the least recently used side") {
         TestEnvironment env(200);
         auto db = store_in(env);
         REQUIRE(db);
-        const std::string value(1000, 'v');
+        const dstd::String value(1000, 'v');
         ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES",
-                 std::to_string(2 * entry_bytes(value.size())).c_str(), 1);
+                 dstd::to_string(2 * entry_bytes(value.size())).c_str(), 1);
         cache::persist_lookup(*db, 1, value);
         tick();
         cache::persist_lookup(*db, 2, value);
         tick();
         CHECK(cache::read_lookup(*db, 1) ==
-              dftracer::utils::dstd::String(
-                  dftracer::utils::dstd::StringView(value)));
+              dstd::String(dstd::StringView(value)));
         tick();
         cache::persist_lookup(*db, 3, value);
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
@@ -130,9 +129,9 @@ TEST_SUITE("LookupStore") {
         TestEnvironment env(200);
         auto db = store_in(env);
         REQUIRE(db);
-        const std::string value(1000, 'v');
+        const dstd::String value(1000, 'v');
         ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES",
-                 std::to_string(2 * entry_bytes(value.size())).c_str(), 1);
+                 dstd::to_string(2 * entry_bytes(value.size())).c_str(), 1);
         cache::persist_lookup(*db, 1, value);
         tick();
         cache::persist_lookup(*db, 2, value);
@@ -150,7 +149,7 @@ TEST_SUITE("LookupStore") {
         auto db = store_in(env);
         REQUIRE(db);
         ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES", "100", 1);
-        cache::persist_lookup(*db, 1, std::string(1000, 'v'));
+        cache::persist_lookup(*db, 1, dstd::String(1000, 'v'));
         CHECK_FALSE(cache::lookup_exists(*db, 1));
         cache::persist_lookup(*db, 2, "small");
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
@@ -183,7 +182,7 @@ TEST_SUITE("LookupStore") {
             REQUIRE(db);
             cache::persist_lookup(*db, *sig, "rows");
         }
-        (void)dftracer::utils::dstd::fs::remove_all(path);
+        (void)dstd::fs::remove_all(path);
 
         CHECK_FALSE(
             cache::open_lookup_db(path, cache::CacheStore::Mode::ReadOnly));
@@ -197,19 +196,19 @@ TEST_SUITE("LookupStore") {
 
     TEST_CASE("repeated queries that hit a stored side add one data file") {
         TestEnvironment env(200);
-        const std::string gz = lookup_trace(env);
-        const std::string q = lookup_query();
+        const dstd::String gz = lookup_trace(env);
+        const dstd::String q = lookup_query();
         for (int query = 0; query < 20; ++query) {
             const View v = View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))));
+                dstd::String(dstd::String(determine_index_path(gz, ""))));
             const auto g = run(v.duql(q).lazy().collect());
             CHECK(g.num_rows() == 4);
         }
         const auto store = dftracer::utils::index::store_dir(
             dftracer::utils::index::lookups_dir(
-                std::string(determine_index_path(gz, ""))));
-        REQUIRE(dftracer::utils::dstd::fs::exists(store).value());
+                dstd::String(determine_index_path(gz, ""))));
+        REQUIRE(dstd::fs::exists(store).value());
         std::size_t files = 0;
         for (const auto& entry : dftu_utils_test::list_dir(store))
             if (entry.path.view().extension() == ".dfs") ++files;
@@ -218,7 +217,7 @@ TEST_SUITE("LookupStore") {
 
     TEST_CASE("a store written after reads is seen by the next read") {
         TestEnvironment env(200);
-        const std::string path = env.get_dir() + "/lookups";
+        const dstd::String path = env.get_dir() + "/lookups";
         {
             auto db =
                 cache::open_lookup_db(path, cache::CacheStore::Mode::ReadWrite);
@@ -246,8 +245,8 @@ TEST_SUITE("LookupStore") {
 
     TEST_CASE("a store that cannot be opened is null") {
         TestEnvironment env(200);
-        const std::string blocker = env.get_dir() + "/blocker";
-        std::ofstream(blocker.c_str()) << "x";
+        const dstd::String blocker = env.get_dir() + "/blocker";
+        dftu_utils_test::FileOut(blocker) << "x";
         CHECK_FALSE(cache::open_lookup_db(blocker + "/lookups",
                                           cache::CacheStore::Mode::ReadWrite));
     }

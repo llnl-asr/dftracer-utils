@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/index_encoding.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -11,8 +13,6 @@
 
 #include <cstdint>
 #include <initializer_list>
-#include <optional>
-#include <string_view>
 
 namespace dstd = dftracer::utils::dstd;
 namespace encoding = dftracer::utils::index::store::internal::encoding;

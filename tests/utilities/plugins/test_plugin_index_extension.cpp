@@ -4,8 +4,10 @@
 // min and max of "v" per chunk as "index_minmax.range".
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/plugins/plugins.h>
@@ -16,9 +18,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <fstream>
-#include <optional>
-#include <string>
 
 #ifndef INDEX_MINMAX_PLUGIN_PATH
 #error "INDEX_MINMAX_PLUGIN_PATH must be defined by CMake"
@@ -35,22 +34,23 @@ using dftracer::utils::trace::views::ExportSink;
 using dftracer::utils::trace::views::View;
 
 constexpr int RECORDS = 3000;
-constexpr dftracer::utils::dstd::StringView EXT = "index_minmax.range";
+constexpr dstd::StringView EXT = "index_minmax.range";
 
 // Records {"op":"read","v":i} in gzip members of about 8 KB, so the chunks
 // hold rising ranges of v.
-std::string write_records(dftu_utils_test::TestEnvironment& env,
-                          const std::string& name) {
-    const std::string plain = env.get_dir() + "/" + name + ".ndjson";
+dstd::String write_records(dftu_utils_test::TestEnvironment& env,
+                           const dstd::String& name) {
+    const dstd::String plain = env.get_dir() + "/" + name + ".ndjson";
     {
-        std::ofstream out(plain.c_str());
+        dstd::String out;
         for (int i = 0; i < RECORDS; ++i)
-            out << R"({"op":"read","v":)" << i << "}\n";
+            out += common::str_cat(R"({"op":"read","v":)", i, "}\n");
+        (void)dstd::fs::write_file(dstd::PathView(plain), out);
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                8 * 1024));
-    (void)dftracer::utils::dstd::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     return gz;
 }
 
@@ -65,18 +65,18 @@ Plugins load(const dstd::String& config = "") {
     return std::move(*set);
 }
 
-Indexer open(const std::string& gz) {
+Indexer open(const dstd::String& gz) {
     IndexerOptions o;
     o.extensions = {};
     return Indexer::open({dstd::String(dstd::StringView(gz))}, o);
 }
 
-dftracer::utils::dstd::Optional<dftracer::utils::index::ExtensionEntry> entry(
+dstd::Optional<dftracer::utils::index::ExtensionEntry> entry(
     const Indexer& ix) {
     const auto manifest = ix.manifest();
     for (const auto& e : manifest.at(0).extensions)
         if (e.name == EXT) return e;
-    return dftracer::utils::dstd::nullopt;
+    return dstd::nullopt;
 }
 
 const dftracer::utils::index::ExtensionPrune* pruned(const FileExplain& f) {
@@ -86,13 +86,13 @@ const dftracer::utils::index::ExtensionPrune* pruned(const FileExplain& f) {
 }
 
 struct NullSink : ExportSink {
-    void write(dftracer::utils::dstd::StringView) override {}
+    void write(dstd::StringView) override {}
 };
 
-View view_of(const std::string& gz) {
+View view_of(const dstd::String& gz) {
     return View::from_file(
         dstd::String(gz),
-        dstd::String(std::string(
+        dstd::String(dstd::String(
             dftracer::utils::trace::internal::determine_index_path(gz, ""))));
 }
 
@@ -101,7 +101,7 @@ View view_of(const std::string& gz) {
 TEST_CASE("a plugin extension builds, prunes and survives being absent") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "a");
-    const std::string q = "v > 2990";
+    const dstd::String q = "v > 2990";
     std::uint64_t chunks = 0;
     {
         Plugins set = load();
@@ -169,9 +169,9 @@ TEST_CASE("drop and rebuild a plugin extension by name") {
     Plugins set = load();
     auto ix = open(gz);
     ix.build();
-    ix.drop_extension(std::string(EXT));
+    ix.drop_extension(dstd::String(EXT));
     CHECK_FALSE(entry(ix));
-    ix.rebuild_extension(std::string(EXT));
+    ix.rebuild_extension(dstd::String(EXT));
     REQUIRE(entry(ix));
     CHECK(entry(ix)->current);
     CHECK_THROWS(ix.rebuild_extension("index_minmax.absent"));

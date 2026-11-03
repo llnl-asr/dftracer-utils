@@ -5,25 +5,25 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/arrow/arrow.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <cstdio>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
 using namespace dftracer::utils::utilities::arrow;
 
-static std::string tmp_path(const char* name) {
+static dstd::String tmp_path(const char* name) {
     return dftu_utils_test::make_unique_test_path(name).str();
 }
 
 TEST_CASE("IpcWriter - basic write and close") {
-    std::string path = tmp_path("test_ipc_basic.arrows");
+    dstd::String path = tmp_path("test_ipc_basic.arrows");
     std::remove(path.c_str());
 
     Runtime runtime(2);
@@ -34,7 +34,7 @@ TEST_CASE("IpcWriter - basic write and close") {
                                 {"value", ColumnType::Double}});
         builder.reserve(2);
 
-        std::string s0 = "hello", s1 = "world";
+        dstd::String s0 = "hello", s1 = "world";
         builder.append_int64(0, 1);
         builder.append_string(1, s0);
         builder.append_double(2, 3.14);
@@ -63,7 +63,7 @@ TEST_CASE("IpcWriter - basic write and close") {
 }
 
 TEST_CASE("IpcWriter - multiple batches") {
-    std::string path = tmp_path("test_ipc_multi.arrows");
+    dstd::String path = tmp_path("test_ipc_multi.arrows");
     std::remove(path.c_str());
 
     Runtime runtime(2);
@@ -97,7 +97,7 @@ TEST_CASE("IpcWriter - multiple batches") {
 }
 
 TEST_CASE("IpcWriter - close without writing batches") {
-    std::string path = tmp_path("test_ipc_empty.arrows");
+    dstd::String path = tmp_path("test_ipc_empty.arrows");
     std::remove(path.c_str());
 
     Runtime runtime(2);
@@ -117,7 +117,7 @@ TEST_CASE("IpcWriter - close without writing batches") {
 // With no pooled slot every batch takes the overflow slot, which the writer
 // must own and free; the file is the same as with the pool.
 TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
-    auto write_file = [&](const std::string& path, IpcCompression compression,
+    auto write_file = [&](const dstd::String& path, IpcCompression compression,
                           std::size_t pool_slots) {
         std::remove(path.c_str());
         Runtime runtime(2);
@@ -144,11 +144,11 @@ TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
         };
         return runtime.submit(task(), "test").get();
     };
-    std::vector<IpcCompression> modes{IpcCompression::None};
+    dstd::Vector<IpcCompression> modes{IpcCompression::None};
     modes.push_back(IpcCompression::Zstd);
     for (const IpcCompression mode : modes) {
-        const std::string pooled = tmp_path("test_ipc_pooled.arrows");
-        const std::string bare = tmp_path("test_ipc_bare.arrows");
+        const dstd::String pooled = tmp_path("test_ipc_pooled.arrows");
+        const dstd::String bare = tmp_path("test_ipc_bare.arrows");
         REQUIRE(write_file(pooled, mode, 4) == 0);
         REQUIRE(write_file(bare, mode, 0) == 0);
         CHECK(dstd::fs::file_size(bare).value() ==
@@ -159,7 +159,7 @@ TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
 }
 
 TEST_CASE("IpcWriter - explicit ZSTD compression") {
-    std::string path = tmp_path("test_ipc_zstd_compression.arrows");
+    dstd::String path = tmp_path("test_ipc_zstd_compression.arrows");
     std::remove(path.c_str());
 
     Runtime runtime(2);
@@ -190,7 +190,7 @@ TEST_CASE("IpcWriter - explicit ZSTD compression") {
 }
 
 TEST_CASE("PartitionWriter - basic single file") {
-    std::string dir = tmp_path("test_partition_basic");
+    dstd::String dir = tmp_path("test_partition_basic");
     (void)dstd::fs::remove_all(dir);
 
     Runtime runtime(2);
@@ -228,7 +228,7 @@ TEST_CASE("PartitionWriter - basic single file") {
 }
 
 TEST_CASE("PartitionRouter - NONE mode pass-through") {
-    std::string dir = tmp_path("test_router_none");
+    dstd::String dir = tmp_path("test_router_none");
     (void)dstd::fs::remove_all(dir);
 
     PartitionConfig config;
@@ -267,7 +267,7 @@ TEST_CASE("PartitionRouter - NONE mode pass-through") {
 }
 
 TEST_CASE("PartitionRouter - COLUMN mode single column") {
-    std::string dir = tmp_path("test_router_column");
+    dstd::String dir = tmp_path("test_router_column");
     (void)dstd::fs::remove_all(dir);
 
     PartitionConfig config;

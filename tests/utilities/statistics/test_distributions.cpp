@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/distributions.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
-#include <functional>
 #include <random>
 
 using namespace dftracer::utils;
@@ -15,9 +15,9 @@ using Rng = std::mt19937_64;
 
 namespace {
 
-dstd::Vector<double> generate_samples(std::size_t n,
-                                      std::function<double(std::mt19937_64&)> f,
-                                      std::uint64_t seed = 12345) {
+dstd::Vector<double> generate_samples(
+    std::size_t n, dstd::Function<double(std::mt19937_64&)> f,
+    std::uint64_t seed = 12345) {
     std::mt19937_64 rng(seed);
     dstd::Vector<double> data;
     data.reserve(n);

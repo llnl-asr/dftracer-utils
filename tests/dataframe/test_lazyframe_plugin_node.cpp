@@ -13,6 +13,7 @@
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -22,9 +23,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <optional>
 #include <stdexcept>
 
 using namespace dftracer::utils;
@@ -484,7 +482,7 @@ DataFrame right_keys(dstd::Vector<std::int64_t> keys) {
 // suspends via coro::yield).
 class CursorSource : public Source {
    public:
-    explicit CursorSource(std::function<dstd::UniquePtr<Cursor>()> factory)
+    explicit CursorSource(dstd::Function<dstd::UniquePtr<Cursor>()> factory)
         : factory_(std::move(factory)) {}
     Schema schema() const override {
         return {{dftracer::utils::dataframe::Field{
@@ -500,7 +498,7 @@ class CursorSource : public Source {
     }
 
    private:
-    std::function<dstd::UniquePtr<Cursor>()> factory_;
+    dstd::Function<dstd::UniquePtr<Cursor>()> factory_;
 };
 
 // Answers synchronously via try_next: one row, then end of stream (or, when

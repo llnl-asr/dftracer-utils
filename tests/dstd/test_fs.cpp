@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -15,29 +17,25 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
-#include <map>
-#include <set>
-#include <string>
-#include <string_view>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftu_utils_test::ScopedTestDir;
 using dstd::Path;
 using dstd::PathView;
 
-namespace dfs = dftracer::utils::dstd::fs;
+namespace dfs = dstd::fs;
 
 namespace {
 
-Path in(const ScopedTestDir& dir, const std::string& name) {
+Path in(const ScopedTestDir& dir, const dstd::String& name) {
     return Path(dir.file(name));
 }
 
-std::string read_text(const Path& path) {
+dstd::String read_text(const Path& path) {
+    // keep std: independent of dstd::fs::read_file
     std::ifstream stream(path.c_str(), std::ios::binary);
-    return std::string(std::istreambuf_iterator<char>(stream),
-                       std::istreambuf_iterator<char>());
+    return dstd::String(std::istreambuf_iterator<char>(stream),
+                        std::istreambuf_iterator<char>());
 }
 
 bool running_as_root() { return ::geteuid() == 0; }
@@ -68,7 +66,7 @@ TEST_CASE("stat reports size, kind and mtime") {
     REQUIRE(sub.has_value());
     CHECK(sub->kind == dfs::FileKind::Directory);
 
-    const std::string link = dir.file("link");
+    const dstd::String link = dir.file("link");
     REQUIRE(::symlink("a.txt", link.c_str()) == 0);
     const auto via_lstat = dfs::lstat(Path(link).view());
     REQUIRE(via_lstat.has_value());
@@ -88,12 +86,12 @@ TEST_CASE("a failure carries the errno text and its condition") {
     CHECK(contains(missing.error().message(), "nope"));
     CHECK(contains(missing.error().message(), "No such file"));
 
-    const auto too_long = dfs::stat(in(dir, std::string(300, 'a')).view());
+    const auto too_long = dfs::stat(in(dir, dstd::String(300, 'a')).view());
     REQUIRE_FALSE(too_long.has_value());
     CHECK(too_long.error().is(dstd::Condition::InvalidArgument));
 
     const auto over_path_max =
-        dfs::stat(in(dir, std::string(5000, 'b')).view());
+        dfs::stat(in(dir, dstd::String(5000, 'b')).view());
     REQUIRE_FALSE(over_path_max.has_value());
     CHECK(over_path_max.error().is(dstd::Condition::InvalidArgument));
 
@@ -177,7 +175,7 @@ TEST_CASE("remove_all counts what it removed and never follows a link") {
     dir.create_file("root/b.txt", "x");
     dir.create_file("root/sub/nested/c.txt", "x");
     dir.create_file("keep/d.txt", "x");
-    const std::string link = dir.file("root/link");
+    const dstd::String link = dir.file("root/link");
     REQUIRE(::symlink(dir.file("keep").c_str(), link.c_str()) == 0);
 
     const auto removed = dfs::remove_all(in(dir, "root").view());
@@ -254,9 +252,9 @@ TEST_CASE("Dir lists names and kinds without a stat") {
 
     auto entries = handle->entries();
     REQUIRE(entries.has_value());
-    std::map<std::string, dfs::FileKind> seen;
+    dstd::Map<dstd::String, dfs::FileKind> seen;
     for (const dfs::DirEntry& entry : *entries) {
-        seen.emplace(std::string(entry.name), entry.kind);
+        seen.emplace(dstd::String(entry.name), entry.kind);
     }
     CHECK(entries->error() == 0);
     REQUIRE(seen.size() == 4);
@@ -290,7 +288,7 @@ TEST_CASE("Dir lists names and kinds without a stat") {
     REQUIRE(opened.has_value());
     char buffer[8] = {};
     CHECK(::read(opened->get(), buffer, sizeof buffer) == 5);
-    CHECK(std::string(buffer, 5) == "hello");
+    CHECK(dstd::String(buffer, 5) == "hello");
 
     const auto on_file = dfs::Dir::open(in(dir, "root/a.txt").view());
     REQUIRE_FALSE(on_file.has_value());
@@ -303,12 +301,12 @@ TEST_CASE("walk is depth first and visits a parent before its children") {
     dir.create_file("root/sub/b.txt", "x");
     dir.create_file("root/sub/nested/c.txt", "x");
 
-    std::vector<std::string> visited;
-    std::map<std::string, dfs::FileKind> kinds;
+    dstd::Vector<dstd::String> visited;
+    dstd::Map<dstd::String, dfs::FileKind> kinds;
     const auto walked = dfs::walk(in(dir, "root").view(),
                                   [&](PathView path, dfs::FileKind kind) {
                                       visited.emplace_back(path.str());
-                                      kinds[std::string(path.str())] = kind;
+                                      kinds[dstd::String(path.str())] = kind;
                                       return dfs::WalkAction::Continue;
                                   });
     REQUIRE(walked.has_value());
@@ -316,16 +314,16 @@ TEST_CASE("walk is depth first and visits a parent before its children") {
     CHECK(visited.size() == 6);
     REQUIRE_FALSE(visited.empty());
     CHECK(visited.front() == dir.file("root"));
-    CHECK(std::set<std::string>(visited.begin(), visited.end()).size() == 6);
+    CHECK(dstd::Set<dstd::String>(visited.begin(), visited.end()).size() == 6);
     CHECK(kinds[dir.file("root/sub/nested/c.txt")] == dfs::FileKind::File);
     CHECK(kinds[dir.file("root/sub")] == dfs::FileKind::Directory);
 
-    std::map<std::string, std::size_t> position;
+    dstd::Map<dstd::String, std::size_t> position;
     for (std::size_t at = 0; at < visited.size(); ++at) {
         position[visited[at]] = at;
     }
-    for (const std::string& path : visited) {
-        const std::string parent(PathView(path).parent().str());
+    for (const dstd::String& path : visited) {
+        const dstd::String parent(PathView(path).parent().str());
         if (position.count(parent) != 0) {
             CHECK(position[parent] < position[path]);
         }
@@ -337,7 +335,7 @@ TEST_CASE("walk honours SkipDir and Stop") {
     dir.create_file("root/a.txt", "x");
     dir.create_file("root/sub/b.txt", "x");
 
-    std::vector<std::string> visited;
+    dstd::Vector<dstd::String> visited;
     const auto skipped = dfs::walk(
         in(dir, "root").view(), [&](PathView path, dfs::FileKind kind) {
             visited.emplace_back(path.str());
@@ -368,7 +366,7 @@ TEST_CASE("walk reports a file and refuses a missing root") {
     ScopedTestDir dir("dstd_fs_walk_root");
     dir.create_file("a.txt", "x");
 
-    std::vector<dfs::FileKind> kinds;
+    dstd::Vector<dfs::FileKind> kinds;
     const auto walked =
         dfs::walk(in(dir, "a.txt").view(), [&](PathView, dfs::FileKind kind) {
             kinds.push_back(kind);
@@ -392,7 +390,7 @@ TEST_CASE("walk does not follow a symlinked directory") {
     REQUIRE(::symlink(dir.file("root/sub").c_str(),
                       dir.file("root/link").c_str()) == 0);
 
-    std::vector<std::string> visited;
+    dstd::Vector<dstd::String> visited;
     const auto walked =
         dfs::walk(in(dir, "root").view(), [&](PathView path, dfs::FileKind) {
             visited.emplace_back(path.str());
@@ -412,8 +410,8 @@ TEST_CASE("absolute and canonical") {
     dir.create_file("target.txt", "x");
     REQUIRE(::symlink("target.txt", dir.file("link.txt").c_str()) == 0);
 
-    const std::string expected =
-        std::string(dstd::fs::current_path().value().str()) + "/child";
+    const dstd::String expected =
+        dstd::String(dstd::fs::current_path().value().str()) + "/child";
     const auto relative_to_cwd = dfs::absolute(PathView("child"));
     REQUIRE(relative_to_cwd.has_value());
     CHECK(relative_to_cwd->str() == expected);
@@ -463,7 +461,7 @@ TEST_CASE("a trailing separator never follows a symlinked directory") {
             0);
     const Path link(dir.file("lnk") + "/");
 
-    std::vector<std::string> visited;
+    dstd::Vector<dstd::String> visited;
     const auto walked =
         dfs::walk(link.view(), [&](PathView path, dfs::FileKind kind) {
             visited.emplace_back(path.str());
@@ -575,7 +573,7 @@ TEST_CASE("a failed copy leaves no target this call created") {
 
 TEST_CASE("walk and remove_all hold one descriptor per level") {
     ScopedTestDir dir("dstd_fs_deep");
-    std::string relative = "root";
+    dstd::String relative = "root";
     for (int level = 0; level < 200; ++level) relative += "/d";
     REQUIRE(dfs::create_directories(in(dir, relative).view()).has_value());
 
@@ -632,8 +630,8 @@ TEST_CASE(
     ScopedTestDir dir("dstd_fs_weak");
     dir.create_dir("real");
     REQUIRE(::symlink("real", dir.file("link").c_str()) == 0);
-    const std::string base =
-        std::string(dstd::fs::canonical(dir.str()).value().str());
+    const dstd::String base =
+        dstd::String(dstd::fs::canonical(dir.str()).value().str());
 
     const auto existing = dfs::weakly_canonical(in(dir, "link").view());
     REQUIRE(existing.has_value());
@@ -654,7 +652,7 @@ TEST_CASE(
     const auto relative = dfs::weakly_canonical(PathView("no_such_dir/x"));
     REQUIRE(relative.has_value());
     CHECK(relative->str() ==
-          std::string(dstd::fs::canonical(".").value().str()) +
+          dstd::String(dstd::fs::canonical(".").value().str()) +
               "/no_such_dir/x");
 
     const auto empty = dfs::weakly_canonical(PathView());
@@ -681,7 +679,7 @@ TEST_CASE("copy_tree copies files, directories and symlinks") {
     char target[64] = {};
     const auto got = ::readlink(dir.file("dst/ln").c_str(), target, 63);
     REQUIRE(got > 0);
-    CHECK(std::string(target, static_cast<std::size_t>(got)) == "a.txt");
+    CHECK(dstd::String(target, static_cast<std::size_t>(got)) == "a.txt");
 
     const auto again =
         dfs::copy_tree(in(dir, "src").view(), in(dir, "dst").view(),
@@ -712,7 +710,7 @@ TEST_CASE("read_file returns the whole file") {
     ScopedTestDir dir("dstd_fs_read_file");
     dir.create_file("a.txt", "hello\nworld\n");
     dir.create_file("empty.txt", "");
-    std::string big(200000, 'x');
+    dstd::String big(200000, 'x');
     dir.create_file("big.txt", big);
 
     const auto text = dfs::read_file(in(dir, "a.txt").view());
@@ -738,7 +736,7 @@ TEST_CASE("read_file returns the whole file") {
 TEST_CASE("absolute only joins the current directory") {
     char cwd[4096];
     REQUIRE(::getcwd(cwd, sizeof cwd) != nullptr);
-    const std::string base(cwd);
+    const dstd::String base(cwd);
 
     const auto dotted = dfs::absolute(PathView("a/../b"));
     REQUIRE(dotted.has_value());
@@ -825,7 +823,7 @@ TEST_CASE("resize_file truncates and extends a file") {
 
     REQUIRE(dfs::resize_file(file.view(), 6).has_value());
     CHECK(dfs::file_size(file.view()).value() == 6);
-    CHECK(read_text(file) == std::string("he\0\0\0\0", 6));
+    CHECK(read_text(file) == dstd::String("he\0\0\0\0", 6));
 
     REQUIRE(dfs::resize_file(file.view(), 0).has_value());
     CHECK(read_text(file).empty());
@@ -897,7 +895,7 @@ TEST_CASE("create_symlink makes a link to a target that need not exist") {
     char text[64] = {};
     const auto got = ::readlink(link.c_str(), text, 63);
     REQUIRE(got > 0);
-    CHECK(std::string(text, static_cast<std::size_t>(got)) == "a.txt");
+    CHECK(dstd::String(text, static_cast<std::size_t>(got)) == "a.txt");
 
     REQUIRE(dfs::create_symlink(PathView("nope"), in(dir, "dangling").view())
                 .has_value());

@@ -38,8 +38,6 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <memory>
-#include <optional>
 
 using namespace dftracer::utils;
 namespace {
@@ -178,9 +176,8 @@ class SdkRange {
        public:
         explicit Cursor(dftracer::utils::plugins::OwnedFrame f)
             : f_(std::move(f)) {}
-        dftracer::utils::dstd::Optional<dftracer::utils::plugins::OwnedFrame>
-        next(int64_t) {
-            if (!f_) return dftracer::utils::dstd::nullopt;
+        dstd::Optional<dftracer::utils::plugins::OwnedFrame> next(int64_t) {
+            if (!f_) return dstd::nullopt;
             return std::move(f_);
         }
 
@@ -201,12 +198,12 @@ class SdkRange {
                 {}};
     }
 
-    dftracer::utils::dstd::Optional<dftracer::utils::plugins::Applied<SdkRange>>
-    apply_filter(dftracer::utils::plugins::ExprView pred) const {
+    dstd::Optional<dftracer::utils::plugins::Applied<SdkRange>> apply_filter(
+        dftracer::utils::plugins::ExprView pred) const {
         auto cmp = pred.as_compare();
         if (!cmp || cmp->column != 0 || cmp->op != DFTU_CMP_GT ||
             cmp->rhs.kind != DFTU_SCALAR_TAG_I64 || cmp->rhs.value.i + 1 <= lo_)
-            return dftracer::utils::dstd::nullopt;
+            return dstd::nullopt;
         ++g_sdk_filters;
         return dftracer::utils::plugins::Applied<SdkRange>{
             dstd::make_unique<SdkRange>(cmp->rhs.value.i + 1, hi_)};
@@ -229,10 +226,10 @@ class DoubleVal {
        public:
         explicit Cursor(dftracer::utils::plugins::InputCursor in)
             : in_(std::move(in)) {}
-        dftracer::utils::dstd::Optional<dftracer::utils::plugins::OwnedFrame>
-        next(int64_t max_rows) {
+        dstd::Optional<dftracer::utils::plugins::OwnedFrame> next(
+            int64_t max_rows) {
             auto f = in_.next(max_rows);
-            if (!f) return dftracer::utils::dstd::nullopt;
+            if (!f) return dstd::nullopt;
             ::dftu_series* id = ::dftu_dataframe_column(f->get(), "id");
             ::dftu_series* val = ::dftu_dataframe_column(f->get(), "val");
             const int64_t n = ::dftu_series_length(val);

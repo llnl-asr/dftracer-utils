@@ -41,8 +41,8 @@ TEST_SUITE("CompareView") {
         TestEnvironment var_env(200);
         REQUIRE(base_env.is_valid());
         REQUIRE(var_env.is_valid());
-        std::string base_gz = create_mixed_trace(base_env, 30, 20);
-        std::string var_gz = create_mixed_trace(var_env, 40, 20);
+        dstd::String base_gz = create_mixed_trace(base_env, 30, 20);
+        dstd::String var_gz = create_mixed_trace(var_env, 40, 20);
         dstd::String base_idx = dstd::String(determine_index_path(base_gz, ""));
         dstd::String var_idx = dstd::String(determine_index_path(var_gz, ""));
 

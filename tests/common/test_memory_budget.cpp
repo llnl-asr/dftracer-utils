@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/budget.h>
 #include <doctest/doctest.h>
+
+using namespace dftracer::utils;
 
 TEST_SUITE("memory_budget_advice") {
     TEST_CASE("fits when peak is within available memory") {
@@ -23,10 +26,10 @@ TEST_SUITE("memory_budget_advice") {
         CHECK(a.peak_bytes == (12ULL << 30));
         // ceil(12 / 6) = 2 nodes.
         CHECK(a.suggested_nodes == 2);
-        const dftracer::utils::dstd::String msg =
+        const dstd::String msg =
             dftracer::utils::common::format_memory_budget_warning(a);
-        CHECK(msg.find("12.0 GB") != dftracer::utils::dstd::String::npos);
-        CHECK(msg.find(">=2 nodes") != dftracer::utils::dstd::String::npos);
+        CHECK(msg.find("12.0 GB") != dstd::String::npos);
+        CHECK(msg.find(">=2 nodes") != dstd::String::npos);
     }
 
     TEST_CASE("suggested_nodes rounds up") {

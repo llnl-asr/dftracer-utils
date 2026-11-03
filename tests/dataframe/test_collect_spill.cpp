@@ -22,10 +22,9 @@
 #include <unistd.h>
 
 #include <cstdint>
-#include <fstream>
-#include <memory>
-#include <string>
 #include <utility>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
@@ -40,17 +39,17 @@ DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
 }
 
 struct SpillDirVar {
-    dftracer::utils::dstd::Path dir;
-    explicit SpillDirVar(const dftracer::utils::dstd::String& name) {
-        dir = dftracer::utils::dstd::fs::temp_directory() /
-              (name + "_" + dftracer::utils::dstd::to_string(::getpid()));
-        REQUIRE(dftracer::utils::dstd::fs::remove_all(dir).has_value());
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+    dstd::Path dir;
+    explicit SpillDirVar(const dstd::String& name) {
+        dir = dstd::fs::temp_directory() /
+              (name + "_" + dstd::to_string(::getpid()));
+        REQUIRE(dstd::fs::remove_all(dir).has_value());
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         ::setenv(DIR_VAR, dir.c_str(), 1);
     }
     ~SpillDirVar() {
         ::unsetenv(DIR_VAR);
-        (void)dftracer::utils::dstd::fs::remove_all(dir);
+        (void)dstd::fs::remove_all(dir);
     }
     std::size_t entries() const {
         std::size_t n = 0;
@@ -63,14 +62,14 @@ struct SpillDirVar {
 };
 
 DataFrame make_frame() {
-    dftracer::utils::dstd::Vector<std::int64_t> i64;
-    dftracer::utils::dstd::Vector<double> f64;
-    dftracer::utils::dstd::Vector<std::uint8_t> bits((N + 7) / 8, 0);
-    dftracer::utils::dstd::Vector<std::uint8_t> valid((N + 7) / 8, 0);
-    dftracer::utils::dstd::Vector<std::uint8_t> sv((N + 7) / 8, 0);
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> text, json;
-    dftracer::utils::dstd::Vector<std::int32_t> offs{0};
-    dftracer::utils::dstd::Vector<std::int64_t> inner;
+    dstd::Vector<std::int64_t> i64;
+    dstd::Vector<double> f64;
+    dstd::Vector<std::uint8_t> bits((N + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> valid((N + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> sv((N + 7) / 8, 0);
+    dstd::Vector<dstd::String> text, json;
+    dstd::Vector<std::int32_t> offs{0};
+    dstd::Vector<std::int64_t> inner;
     for (std::int64_t i = 0; i < N; ++i) {
         i64.push_back(i * 37 - 100);
         f64.push_back(static_cast<double>(i) * 1.5);
@@ -79,15 +78,12 @@ DataFrame make_frame() {
         if (i % 5 != 2)
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         if (i % 7 != 3) sv[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        text.push_back(
-            i % 7 == 3 ? ""
-                       : "name-" + dftracer::utils::dstd::to_string(i % 11));
-        json.push_back("{\"k\":" + dftracer::utils::dstd::to_string(i) + "}");
+        text.push_back(i % 7 == 3 ? "" : "name-" + dstd::to_string(i % 11));
+        json.push_back("{\"k\":" + dstd::to_string(i) + "}");
         inner.push_back(i);
         offs.push_back(static_cast<std::int32_t>(inner.size()));
     }
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> tv(
-        text.begin(), text.end());
+    dstd::Vector<dstd::StringView> tv(text.begin(), text.end());
     DataFrame df;
     df.names = {"i", "f", "b", "s", "j", "l"};
     df.columns.push_back(Series::flat_i64(i64.data(), N, valid.data()));
@@ -104,23 +100,22 @@ LazyFrame lazy_of(const DataFrame& df, std::uint64_t budget) {
     DataFrame copy;
     copy.names = df.names;
     for (const Series& c : df.columns) copy.columns.push_back(c.share());
-    return LazyFrame::scan(dftracer::utils::dstd::make_shared<InMemorySource>(
-                               std::move(copy)))
+    return LazyFrame::scan(dstd::make_shared<InMemorySource>(std::move(copy)))
         .memory_budget(budget);
 }
 
-dftracer::utils::dstd::String cell(const Series& s, std::int64_t i) {
+dstd::String cell(const Series& s, std::int64_t i) {
     if (s.is_null(i)) return "<null>";
     switch (s.type()) {
         case TypeId::Int64:
-            return dftracer::utils::dstd::to_string(s.data<std::int64_t>()[i]);
+            return dstd::to_string(s.data<std::int64_t>()[i]);
         case TypeId::Float64:
-            return dftracer::utils::dstd::to_string(s.data<double>()[i]);
+            return dstd::to_string(s.data<double>()[i]);
         case TypeId::Bool:
             return ((s.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1) ? "T"
                                                                      : "F";
         default:
-            return dftracer::utils::dstd::String(s.string_at(i));
+            return dstd::String(s.string_at(i));
     }
 }
 
@@ -195,19 +190,19 @@ TEST_SUITE("collect spill") {
             run(lazy_of(df, dftracer::utils::memory::NO_SPILL_BUDGET)
                     .collect(MORSEL));
         CHECK(got.num_rows() == N);
-        CHECK(!dftracer::utils::dstd::fs::exists(var.dir / "missing").value());
+        CHECK(!dstd::fs::exists(var.dir / "missing").value());
     }
 
     TEST_CASE("a spill file goes to the directory the variable names") {
         SpillDirVar var("dftu_cs_dir");
-        const dftracer::utils::dstd::Path run_path = [] {
+        const dstd::Path run_path = [] {
             dftracer::utils::dataframe::spill::Dir d;
-            return dftracer::utils::dstd::Path(d.run_path(0));
+            return dstd::Path(d.run_path(0));
         }();
         CHECK(run_path.str().rfind(var.dir.str(), 0) == 0);
         {
             dftracer::utils::dataframe::spill::Dir d;
-            std::ofstream((d.run_path(0)).c_str()) << "x";
+            (void)dstd::fs::write_file(dstd::PathView(d.run_path(0)), "x");
             CHECK(var.entries() == 1);
         }
         CHECK(var.entries() == 0);
@@ -215,27 +210,26 @@ TEST_SUITE("collect spill") {
 
     TEST_CASE("an unusable directory fails naming it and the variable") {
         SpillDirVar var("dftu_cs_bad");
-        const dftracer::utils::dstd::Path blocker = var.dir / "file";
-        std::ofstream(blocker.c_str()) << "x";
-        const dftracer::utils::dstd::Path bad = blocker / "sub";
+        const dstd::Path blocker = var.dir / "file";
+        (void)dstd::fs::write_file(dstd::PathView(blocker), "x");
+        const dstd::Path bad = blocker / "sub";
         ::setenv(DIR_VAR, bad.c_str(), 1);
         const DataFrame df = make_frame();
         const auto msg_of = [](auto&& fn) {
             try {
                 fn();
             } catch (const std::exception& e) {
-                return dftracer::utils::dstd::String(e.what());
+                return dstd::String(e.what());
             }
-            return dftracer::utils::dstd::String();
+            return dstd::String();
         };
-        const dftracer::utils::dstd::String collect_msg =
+        const dstd::String collect_msg =
             msg_of([&] { run(lazy_of(df, 1).collect(MORSEL)); });
-        CHECK(collect_msg.find(bad.str()) !=
-              dftracer::utils::dstd::String::npos);
-        CHECK(collect_msg.find(DIR_VAR) != dftracer::utils::dstd::String::npos);
-        const dftracer::utils::dstd::String dir_msg =
+        CHECK(collect_msg.find(bad.str()) != dstd::String::npos);
+        CHECK(collect_msg.find(DIR_VAR) != dstd::String::npos);
+        const dstd::String dir_msg =
             msg_of([] { dftracer::utils::dataframe::spill::Dir d; });
-        CHECK(dir_msg.find(bad.str()) != dftracer::utils::dstd::String::npos);
-        CHECK(dir_msg.find(DIR_VAR) != dftracer::utils::dstd::String::npos);
+        CHECK(dir_msg.find(bad.str()) != dstd::String::npos);
+        CHECK(dir_msg.find(DIR_VAR) != dstd::String::npos);
     }
 }

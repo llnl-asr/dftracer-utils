@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -14,7 +16,6 @@
 #include <testing_utilities.h>
 
 #include <cstdint>
-#include <fstream>
 #include <random>
 
 using namespace dftracer::utils;
@@ -188,7 +189,7 @@ struct ViewCounts {
     std::uint64_t plain = 0;
 };
 
-ViewCounts view_counts(const std::string& gz, const Query& q) {
+ViewCounts view_counts(const dstd::String& gz, const Query& q) {
     views::detail::ViewPlan vp;
     vp.files.push_back(
         {dstd::String(gz),
@@ -254,15 +255,16 @@ TEST_CASE("the pre-filter never drops a match") {
     dftu_utils_test::TestEnvironment env(10);
     std::mt19937 rng(20260925);
     const auto lines = make_lines(rng, EVENT_LINES);
-    const std::string plain = env.get_dir() + "/fuzz.pfw";
+    const dstd::String plain = env.get_dir() + "/fuzz.pfw";
     {
-        std::ofstream out(plain.c_str());
-        for (const auto& l : lines) out << l << "\n";
+        dstd::String out;
+        for (const auto& l : lines) out += common::str_cat(l, "\n");
+        (void)dstd::fs::write_file(dstd::PathView(plain), out);
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                MEMBER_BYTES));
-    (void)dftracer::utils::dstd::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     REQUIRE(dftu_utils_test::build_index(gz));
 
     simdjson::dom::parser parser;
@@ -306,15 +308,16 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
             c + "[" + dstd::to_string(rng() % 50) + sep +
             dstd::to_string(pick(PIDS)) + "]}");
     }
-    const std::string plain = env.get_dir() + "/fuzz.ndjson";
+    const dstd::String plain = env.get_dir() + "/fuzz.ndjson";
     {
-        std::ofstream out(plain.c_str());
-        for (const auto& l : lines) out << l << "\n";
+        dstd::String out;
+        for (const auto& l : lines) out += common::str_cat(l, "\n");
+        (void)dstd::fs::write_file(dstd::PathView(plain), out);
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                MEMBER_BYTES));
-    (void)dftracer::utils::dstd::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     REQUIRE(dftu_utils_test::build_index(gz));
 
     auto leaf = [&]() -> dstd::String {

@@ -26,8 +26,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <memory>
-#include <optional>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -50,7 +48,7 @@ using dftracer::utils::dataframe::OpArgs;
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::Source;
 using dftracer::utils::dataframe::TypeId;
-using dftracer::utils::dstd::StringIntern;
+using dstd::StringIntern;
 
 namespace {
 
@@ -160,7 +158,8 @@ coro::CoroTask<dstd::Pair<dstd::Vector<std::int64_t>, DataFrame>> probe_stream(
     for (const DataFrame& c : chunks) ptrs.push_back(&c);
     DataFrame merged = dftracer::utils::dataframe::concat(
         ptrs, dftracer::utils::dataframe::ConcatHow::Vertical);
-    co_return std::make_pair(std::move(chunk_rows), std::move(merged));
+    co_return dstd::Pair<dstd::Vector<std::int64_t>, DataFrame>{
+        std::move(chunk_rows), std::move(merged)};
 }
 
 dstd::Pair<dstd::Vector<std::int64_t>, DataFrame> run_stream_probe(

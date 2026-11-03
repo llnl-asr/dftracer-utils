@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/statistics/detailed_statistics.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
 
 #include <cmath>
-#include <string>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace::statistics;
 
@@ -191,10 +193,10 @@ TEST_SUITE("DetailedStatistics") {
         stats.chunks_scanned = 1;
         stats.chunks_skipped = 3;
 
-        std::string json = std::string(stats.to_json());
+        dstd::String json = dstd::String(stats.to_json());
 
         simdjson::dom::parser parser;
-        auto result = parser.parse(json);
+        auto result = parser.parse(simdjson::padded_string(json));
         REQUIRE(!result.error());
 
         auto root = result.value_unsafe();
@@ -229,10 +231,10 @@ TEST_SUITE("DetailedStatistics") {
         DetailedStatistics stats;
         stats.duration.update(100);
 
-        std::string json = std::string(stats.to_json());
+        dstd::String json = dstd::String(stats.to_json());
 
         simdjson::dom::parser parser;
-        auto result = parser.parse(json);
+        auto result = parser.parse(simdjson::padded_string(json));
         REQUIRE(!result.error());
 
         auto root = result.value_unsafe();
@@ -243,10 +245,10 @@ TEST_SUITE("DetailedStatistics") {
     TEST_CASE("to_json - global duration always present") {
         DetailedStatistics stats;
         // Even with no events, duration section should be present
-        std::string json = std::string(stats.to_json());
+        dstd::String json = dstd::String(stats.to_json());
 
         simdjson::dom::parser parser;
-        auto result = parser.parse(json);
+        auto result = parser.parse(simdjson::padded_string(json));
         REQUIRE(!result.error());
 
         auto root = result.value_unsafe();

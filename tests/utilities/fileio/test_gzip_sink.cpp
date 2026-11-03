@@ -1,32 +1,33 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/gzip_sink.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <zlib.h>
 
-#include <fstream>
 #include <iterator>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::python::GzipSink;
 
 namespace {
 
 // Inflates a multi-member gzip; returns the bytes and each member's last byte.
-std::string decode(const std::string& path, std::string& last_bytes) {
-    std::ifstream in(path.c_str(), std::ios::binary);
-    std::string gz((std::istreambuf_iterator<char>(in)),
-                   std::istreambuf_iterator<char>());
+dstd::String decode(const dstd::String& path, dstd::String& last_bytes) {
+    dstd::String gz =
+        dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
     z_stream zs{};
     REQUIRE(inflateInit2(&zs, 15 + 16) == Z_OK);
     zs.next_in = reinterpret_cast<Bytef*>(gz.data());
     zs.avail_in = static_cast<uInt>(gz.size());
-    std::string out;
-    std::vector<char> buf(1 << 16);
+    dstd::String out;
+    dstd::Vector<char> buf(1 << 16);
     int rc = Z_OK;
     std::size_t member_start = 0;
     while (zs.avail_in > 0) {
@@ -50,26 +51,25 @@ std::string decode(const std::string& path, std::string& last_bytes) {
 
 TEST_CASE("GzipSink - pieces split mid-line") {
     auto dir = dftu_utils_test::make_unique_test_path("dftracer_test_sink");
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-    const std::string path = std::string((dir / "out.pfw.gz").str());
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    const dstd::String path = dstd::String((dir / "out.pfw.gz").str());
 
-    std::string expected;
+    dstd::String expected;
     for (int i = 0; i < 9000; ++i) {
-        expected += "{\"id\":" + std::to_string(i) + ",\"p\":\"" +
-                    std::string(1000, 'x') + "\"}\n";
+        expected += "{\"id\":" + dstd::to_string(i) + ",\"p\":\"" +
+                    dstd::String(1000, 'x') + "\"}\n";
     }
     expected += "{\"unterminated\":1}";
     {
         GzipSink sink(path, 6);
         for (std::size_t off = 0; off < expected.size(); off += 7777) {
-            sink.write(
-                dftracer::utils::dstd::StringView(expected).substr(off, 7777));
+            sink.write(dstd::StringView(expected).substr(off, 7777));
         }
     }
 
-    std::string last;
+    dstd::String last;
     CHECK(decode(path, last) == expected);
     REQUIRE(last.size() >= 2);
     for (std::size_t i = 0; i + 1 < last.size(); ++i) CHECK(last[i] == '\n');
-    (void)dftracer::utils::dstd::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }

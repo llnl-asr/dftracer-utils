@@ -14,17 +14,17 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <optional>
-#include <string>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
-using Row = dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>;
+using Row = dstd::Optional<dstd::String>;
 enum class Layout { Flat, Dictionary, View };
 
-const dftracer::utils::dstd::Vector<Row> POOL = {
+const dstd::Vector<Row> POOL = {
     Row("read"),
     Row("write"),
     Row("a name of exactly 16"),
@@ -35,9 +35,9 @@ const dftracer::utils::dstd::Vector<Row> POOL = {
     Row("a considerably longer name than the others")};
 
 struct Morsel {
-    dftracer::utils::dstd::Vector<Row> keys;
-    dftracer::utils::dstd::Vector<std::int64_t> other;
-    dftracer::utils::dstd::Vector<std::int64_t> vals;
+    dstd::Vector<Row> keys;
+    dstd::Vector<std::int64_t> other;
+    dstd::Vector<std::int64_t> vals;
 };
 
 Morsel make_morsel(std::size_t n, std::size_t rot, std::size_t pool) {
@@ -50,13 +50,13 @@ Morsel make_morsel(std::size_t n, std::size_t rot, std::size_t pool) {
     return m;
 }
 
-Series flat_keys(const dftracer::utils::dstd::Vector<Row>& keys) {
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> v;
-    dftracer::utils::dstd::Vector<std::uint8_t> valid((keys.size() + 7) / 8, 0);
+Series flat_keys(const dstd::Vector<Row>& keys) {
+    dstd::Vector<dstd::StringView> v;
+    dstd::Vector<std::uint8_t> valid((keys.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < keys.size(); ++i) {
-        v.emplace_back(keys[i] ? dftracer::utils::dstd::StringView(*keys[i])
-                               : dftracer::utils::dstd::StringView());
+        v.emplace_back(keys[i] ? dstd::StringView(*keys[i])
+                               : dstd::StringView());
         if (keys[i])
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         else
@@ -65,7 +65,7 @@ Series flat_keys(const dftracer::utils::dstd::Vector<Row>& keys) {
     return Series::strings(v, any_null ? valid.data() : nullptr);
 }
 
-Series keys_as(const dftracer::utils::dstd::Vector<Row>& keys, Layout layout) {
+Series keys_as(const dstd::Vector<Row>& keys, Layout layout) {
     Series flat = flat_keys(keys);
     switch (layout) {
         case Layout::Flat:
@@ -81,30 +81,27 @@ Series keys_as(const dftracer::utils::dstd::Vector<Row>& keys, Layout layout) {
     return flat;
 }
 
-using Cells = dftracer::utils::dstd::Vector<
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>>;
+using Cells = dstd::Vector<dstd::Vector<dstd::String>>;
 
 Cells cells_of(const DataFrame& df) {
     Cells out;
     for (const Series& c : df.columns) {
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> col;
+        dstd::Vector<dstd::String> col;
         for (std::int64_t i = 0; i < c.length(); ++i) {
             if (c.is_null(i))
                 col.push_back("<null>");
             else if (c.type() == TypeId::String)
-                col.push_back(dftracer::utils::dstd::String(c.string_at(i)));
+                col.push_back(dstd::String(c.string_at(i)));
             else
-                col.push_back(dftracer::utils::dstd::to_string(
-                    c.data<std::int64_t>()[i]));
+                col.push_back(dstd::to_string(c.data<std::int64_t>()[i]));
         }
         out.push_back(std::move(col));
     }
     return out;
 }
 
-Cells fold(const dftracer::utils::dstd::Vector<Morsel>& morsels,
-           const dftracer::utils::dstd::Vector<Layout>& layouts,
-           bool two_keys) {
+Cells fold(const dstd::Vector<Morsel>& morsels,
+           const dstd::Vector<Layout>& layouts, bool two_keys) {
     AggStatePtr st = agg_new(
         {AggSpec{AggOp::Count, -1, "n"}, AggSpec{AggOp::Sum, 0, "sum"}});
     for (std::size_t j = 0; j < morsels.size(); ++j) {
@@ -113,18 +110,16 @@ Cells fold(const dftracer::utils::dstd::Vector<Morsel>& morsels,
         Series k = keys_as(m.keys, layouts[j]);
         Series o = Series::flat_i64(m.other.data(), len);
         Series v = Series::flat_i64(m.vals.data(), len);
-        dftracer::utils::dstd::Vector<const Series*> keys = {&k};
+        dstd::Vector<const Series*> keys = {&k};
         if (two_keys) keys.push_back(&o);
         agg_accumulate(*st, keys, {&v}, 0, len);
     }
-    DataFrame out = agg_finalize(
-        *st,
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"k", "o"}
-            .at(0));
+    DataFrame out =
+        agg_finalize(*st, dstd::Vector<dstd::String>{"k", "o"}.at(0));
     return cells_of(out);
 }
 
-dftracer::utils::dstd::Vector<Morsel> morsels() {
+dstd::Vector<Morsel> morsels() {
     return {make_morsel(300, 0, 5), make_morsel(300, 2, 8),
             make_morsel(300, 1, 8), make_morsel(300, 5, 6)};
 }
@@ -147,23 +142,20 @@ TEST_SUITE("group by string encodings") {
         const Cells want =
             fold(ms, {Layout::Flat, Layout::Flat, Layout::Flat, Layout::Flat},
                  false);
-        const dftracer::utils::dstd::Vector<
-            dftracer::utils::dstd::Vector<Layout>>
-            mixes = {
-                {Layout::Dictionary, Layout::Flat, Layout::View,
-                 Layout::Dictionary},
-                {Layout::Flat, Layout::Dictionary, Layout::Flat, Layout::View},
-                {Layout::View, Layout::View, Layout::Dictionary, Layout::Flat}};
+        const dstd::Vector<dstd::Vector<Layout>> mixes = {
+            {Layout::Dictionary, Layout::Flat, Layout::View,
+             Layout::Dictionary},
+            {Layout::Flat, Layout::Dictionary, Layout::Flat, Layout::View},
+            {Layout::View, Layout::View, Layout::Dictionary, Layout::Flat}};
         for (const auto& mix : mixes) CHECK(fold(ms, mix, false) == want);
     }
 
     TEST_CASE("a dictionary column with another key column") {
         const auto ms = morsels();
-        const dftracer::utils::dstd::Vector<Layout> flat(4, Layout::Flat);
+        const dstd::Vector<Layout> flat(4, Layout::Flat);
         const Cells want = fold(ms, flat, true);
-        CHECK(fold(ms,
-                   dftracer::utils::dstd::Vector<Layout>(4, Layout::Dictionary),
-                   true) == want);
+        CHECK(fold(ms, dstd::Vector<Layout>(4, Layout::Dictionary), true) ==
+              want);
         CHECK(fold(ms,
                    {Layout::Dictionary, Layout::Flat, Layout::View,
                     Layout::Dictionary},

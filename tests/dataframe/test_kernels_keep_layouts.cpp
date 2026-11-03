@@ -27,18 +27,17 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
-using Row = dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>;
-using Rows = dftracer::utils::dstd::Vector<Row>;
-using Idx = dftracer::utils::dstd::Vector<std::int64_t>;
+using Row = dstd::Optional<dstd::String>;
+using Rows = dstd::Vector<Row>;
+using Idx = dstd::Vector<std::int64_t>;
 
 const Rows POOL = {Row("read"),
                    Row("write"),
@@ -55,12 +54,12 @@ Rows pool_rows(std::size_t n) {
 }
 
 Series flat_of(const Rows& rows) {
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> v;
-    dftracer::utils::dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
+    dstd::Vector<dstd::StringView> v;
+    dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
-        v.emplace_back(rows[i] ? dftracer::utils::dstd::StringView(*rows[i])
-                               : dftracer::utils::dstd::StringView());
+        v.emplace_back(rows[i] ? dstd::StringView(*rows[i])
+                               : dstd::StringView());
         if (rows[i])
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         else
@@ -84,17 +83,14 @@ Series selection_over(const Series& base, const Idx& idx) {
     o->data = new_buffer(idx.size() * sizeof(std::int64_t));
     std::memcpy(writable(o->data), idx.data(),
                 idx.size() * sizeof(std::int64_t));
-    o->set_child(
-        dftracer::utils::dstd::make_shared<dftu_series>(*base.handle()));
+    o->set_child(dstd::make_shared<dftu_series>(*base.handle()));
     return Series{o};
 }
 
 Rows rows_of(const Series& s) {
     Rows r;
     for (std::int64_t i = 0; i < s.length(); ++i)
-        r.push_back(s.is_null(i)
-                        ? Row()
-                        : Row(dftracer::utils::dstd::String(s.string_at(i))));
+        r.push_back(s.is_null(i) ? Row() : Row(dstd::String(s.string_at(i))));
     return r;
 }
 
@@ -105,8 +101,8 @@ Rows pick(const Rows& rows, const Idx& idx) {
     return r;
 }
 
-Series mask_of(const dftracer::utils::dstd::Vector<bool>& v) {
-    dftracer::utils::dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
+Series mask_of(const dstd::Vector<bool>& v) {
+    dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (v[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     return Series::flat(TypeId::Bool, bits.data(),
@@ -128,10 +124,10 @@ const void* child_data_of(const Series& s) {
     return s.handle()->child()->data.data();
 }
 
-dftracer::utils::dstd::Vector<Case> cases() {
+dstd::Vector<Case> cases() {
     const Rows base = pool_rows(120);
     const Idx sel = {5, 5, -1, 17, 0, 119, 64, 3, 3, 99, 40, 41, 42, 7};
-    dftracer::utils::dstd::Vector<Case> out;
+    dstd::Vector<Case> out;
     out.push_back({"flat", Kind::Flat, flat_of(base), base, nullptr});
     Series v = view_of(base);
     out.push_back({"view", Kind::View, view_of(base), base, nullptr});
@@ -186,8 +182,8 @@ void check_layout(const Case& c, const Series& got) {
 
 Idx gather_idx() { return {7, 7, -1, 0, 13, 11, -1, 6, 2, 2, 10}; }
 
-dftracer::utils::dstd::String truth_of(const Series& m) {
-    dftracer::utils::dstd::String out;
+dstd::String truth_of(const Series& m) {
+    dstd::String out;
     for (std::int64_t i = 0; i < m.length(); ++i) {
         if (m.is_null(i))
             out += 'N';
@@ -198,12 +194,11 @@ dftracer::utils::dstd::String truth_of(const Series& m) {
     return out;
 }
 
-dftracer::utils::dstd::String ints_of(const Series& m) {
-    dftracer::utils::dstd::String out;
+dstd::String ints_of(const Series& m) {
+    dstd::String out;
     for (std::int64_t i = 0; i < m.length(); ++i)
-        out += (m.is_null(i) ? dftracer::utils::dstd::String("N")
-                             : dftracer::utils::dstd::to_string(
-                                   m.data<std::int64_t>()[i])) +
+        out += (m.is_null(i) ? dstd::String("N")
+                             : dstd::to_string(m.data<std::int64_t>()[i])) +
                ",";
     return out;
 }
@@ -241,8 +236,7 @@ Series run(StrFn fn, const Series& col, const char* arg) {
         fn(col.handle(), arg, static_cast<std::int32_t>(std::strlen(arg)))};
 }
 
-Series cmp_str(const Series& col, dftu_cmp_op op,
-               const dftracer::utils::dstd::String& lit) {
+Series cmp_str(const Series& col, dftu_cmp_op op, const dstd::String& lit) {
     dftu_scalar rhs{};
     rhs.kind = DFTU_SCALAR_TAG_STR;
     rhs.len = static_cast<std::uint32_t>(lit.size());
@@ -250,8 +244,7 @@ Series cmp_str(const Series& col, dftu_cmp_op op,
     return Series{dftu_series_compare(col.handle(), op, rhs)};
 }
 
-dftracer::utils::dstd::String in_truth(
-    const Series& col, const dftracer::utils::dstd::String& query) {
+dstd::String in_truth(const Series& col, const dstd::String& query) {
     DataFrame f;
     f.names = {"name"};
     f.columns.push_back(col.share());
@@ -264,11 +257,11 @@ dftracer::utils::dstd::String in_truth(
 
 TEST_SUITE("kernels keep layouts") {
     TEST_CASE("filter of a 3-value dictionary keeps the dictionary") {
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cats;
+        dstd::Vector<dstd::String> cats;
         for (int i = 0; i < 1000; ++i)
             cats.push_back(i % 3 == 0 ? "read" : i % 3 == 1 ? "write" : "open");
-        dftracer::utils::dstd::Vector<std::int64_t> ids;
-        dftracer::utils::dstd::Vector<bool> keep;
+        dstd::Vector<std::int64_t> ids;
+        dstd::Vector<bool> keep;
         for (int i = 0; i < 1000; ++i) {
             ids.push_back(i);
             keep.push_back(i % 10 == 3);
@@ -314,7 +307,7 @@ TEST_SUITE("kernels keep layouts") {
             check_layout(c, ts);
             CHECK(rows_of(ts) == pick(c.rows, tl));
 
-            dftracer::utils::dstd::Vector<bool> keep;
+            dstd::Vector<bool> keep;
             Idx kept;
             for (std::int64_t i = 0; i < n; ++i) {
                 keep.push_back(i % 4 == 1);
@@ -331,13 +324,12 @@ TEST_SUITE("kernels keep layouts") {
         for (const Case& c : cases()) {
             CAPTURE(c.name);
             const Idx idx = gather_idx();
-            dftracer::utils::dstd::Vector<std::int32_t> idx32(idx.begin(),
-                                                              idx.end());
+            dstd::Vector<std::int32_t> idx32(idx.begin(), idx.end());
             Series t = take32(c.col, idx32);
             check_layout(c, t);
             CHECK(rows_of(t) == pick(c.rows, idx));
 
-            dftracer::utils::dstd::Vector<Series> cols;
+            dstd::Vector<Series> cols;
             cols.push_back(c.col.share());
             cols.push_back(c.col.share());
             auto out = take_all(cols, idx.data(),
@@ -383,7 +375,7 @@ TEST_SUITE("kernels keep layouts") {
 
     TEST_CASE("DataFrame gathers, sort and join payload keep layout") {
         const Rows base = pool_rows(120);
-        dftracer::utils::dstd::Vector<std::int64_t> id(120), key(120);
+        dstd::Vector<std::int64_t> id(120), key(120);
         for (int i = 0; i < 120; ++i) {
             id[static_cast<std::size_t>(i)] = (i * 37) % 120;
             key[static_cast<std::size_t>(i)] = i % 7;
@@ -396,7 +388,7 @@ TEST_SUITE("kernels keep layouts") {
             df.columns.push_back(Series::flat_i64(key.data(), 120));
             return df;
         };
-        dftracer::utils::dstd::Vector<bool> keep;
+        dstd::Vector<bool> keep;
         for (int i = 0; i < 120; ++i) keep.push_back(i % 5 == 0);
         for (const Case& c : cases()) {
             if (c.kind == Kind::Flat || c.kind == Kind::SelFlat) continue;
@@ -420,8 +412,7 @@ TEST_SUITE("kernels keep layouts") {
 
             DataFrame right;
             right.names = {"key", "w"};
-            dftracer::utils::dstd::Vector<std::int64_t> rk = {1, 2, 2, 9},
-                                                        rw = {10, 20, 21, 90};
+            dstd::Vector<std::int64_t> rk = {1, 2, 2, 9}, rw = {10, 20, 21, 90};
             right.columns.push_back(Series::flat_i64(rk.data(), 4));
             right.columns.push_back(Series::flat_i64(rw.data(), 4));
             for (JoinHow how : {JoinHow::Inner, JoinHow::Left}) {
@@ -435,14 +426,12 @@ TEST_SUITE("kernels keep layouts") {
     }
 
     TEST_CASE("a dictionary entry that is null makes its rows null") {
-        const dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView>
-            vals{"a", "", "c"};
+        const dstd::Vector<dstd::StringView> vals{"a", "", "c"};
         const std::uint8_t child_valid = 0b101;
-        const dftracer::utils::dstd::Vector<std::int32_t> codes{0, 1, 0, 2};
+        const dstd::Vector<std::int32_t> codes{0, 1, 0, 2};
         Series d = dictionary_from_codes(
             codes,
-            Series::strings(dftracer::utils::dstd::Span<
-                                const dftracer::utils::dstd::StringView>(vals),
+            Series::strings(dstd::Span<const dstd::StringView>(vals),
                             &child_valid),
             nullptr);
         REQUIRE(d.encoding() == Encoding::Dictionary);
@@ -485,11 +474,10 @@ TEST_SUITE("kernels keep layouts") {
     }
 
     TEST_CASE("starts_with over a 3-entry dictionary equals the flat mask") {
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cats;
+        dstd::Vector<dstd::String> cats;
         for (int i = 0; i < 1000; ++i)
             cats.push_back(i % 3 == 0 ? "POSIX" : i % 3 == 1 ? "STDIO" : "PO");
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> views(
-            cats.begin(), cats.end());
+        dstd::Vector<dstd::StringView> views(cats.begin(), cats.end());
         const Series flat = Series::strings(views);
         const Series dict = flat.dictionary_encode();
         REQUIRE(dict.encoding() == Encoding::Dictionary);
@@ -500,14 +488,12 @@ TEST_SUITE("kernels keep layouts") {
     }
 
     TEST_CASE("a null dictionary entry gives null predicate rows") {
-        const dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView>
-            vals{"apple", "", "pear"};
+        const dstd::Vector<dstd::StringView> vals{"apple", "", "pear"};
         const std::uint8_t child_valid = 0b101;
-        const dftracer::utils::dstd::Vector<std::int32_t> codes{0, 1, 2, 0, 1};
+        const dstd::Vector<std::int32_t> codes{0, 1, 2, 0, 1};
         const Series d = dictionary_from_codes(
             codes,
-            Series::strings(dftracer::utils::dstd::Span<
-                                const dftracer::utils::dstd::StringView>(vals),
+            Series::strings(dstd::Span<const dstd::StringView>(vals),
                             &child_valid),
             nullptr);
         CHECK(truth_of(run(dftu_series_str_starts_with, d, "a")) == "TNFTN");
@@ -543,25 +529,22 @@ TEST_SUITE("kernels keep layouts") {
     }
 
     TEST_CASE("in over every layout equals the flat path") {
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> lits;
-        for (int i = 0; i < 18; ++i)
-            lits.push_back("lit" + dftracer::utils::dstd::to_string(i));
+        dstd::Vector<dstd::String> lits;
+        for (int i = 0; i < 18; ++i) lits.push_back("lit" + dstd::to_string(i));
         lits.push_back("read");
         lits.push_back("a name of exactly 16");
         for (const std::size_t n :
              {std::size_t{1}, std::size_t{2}, lits.size()}) {
-            dftracer::utils::dstd::String list =
-                "\"" + lits[lits.size() - 1] + "\"";
+            dstd::String list = "\"" + lits[lits.size() - 1] + "\"";
             if (n == 1) list = "\"read\"";
             if (n == 2) list = "\"read\", \"write\"";
             if (n == lits.size()) {
                 list.clear();
-                for (const dftracer::utils::dstd::String& l : lits)
+                for (const dstd::String& l : lits)
                     list += (list.empty() ? "" : ", ") + ("\"" + l + "\"");
             }
             for (const char* head : {"name in [", "name not in ["}) {
-                const dftracer::utils::dstd::String q =
-                    dftracer::utils::dstd::String(head) + list + "]";
+                const dstd::String q = dstd::String(head) + list + "]";
                 CAPTURE(q);
                 for (const Case& c : cases()) {
                     CAPTURE(c.name);
@@ -588,8 +571,8 @@ struct Backend {
 } backend;
 
 struct Frame {
-    dftracer::utils::dstd::Vector<Row> keys;
-    dftracer::utils::dstd::Vector<std::int64_t> a, b, c;
+    dstd::Vector<Row> keys;
+    dstd::Vector<std::int64_t> a, b, c;
 };
 
 Frame scale_frame(bool long_keys) {
@@ -601,7 +584,7 @@ Frame scale_frame(bool long_keys) {
         else
             f.keys.emplace_back(
                 (long_keys ? "a group key longer than sixteen bytes " : "k") +
-                dftracer::utils::dstd::to_string(g));
+                dstd::to_string(g));
         f.a.push_back(i % 1000);
         f.b.push_back((i * 31) % 977);
         f.c.push_back(i % 13);
@@ -609,9 +592,8 @@ Frame scale_frame(bool long_keys) {
     return f;
 }
 
-dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> int_cells(
-    const DataFrame& df) {
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
+dstd::Vector<dstd::String> int_cells(const DataFrame& df) {
+    dstd::Vector<dstd::String> out;
     for (const Series& col : df.columns)
         for (std::int64_t i = 0; i < col.length(); ++i) {
             if (col.is_null(i))
@@ -619,13 +601,12 @@ dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> int_cells(
             else if (col.type() == TypeId::String)
                 out.emplace_back(col.string_at(i));
             else if (col.type() == TypeId::Int64)
-                out.push_back(dftracer::utils::dstd::to_string(
-                    col.data<std::int64_t>()[i]));
+                out.push_back(dstd::to_string(col.data<std::int64_t>()[i]));
         }
     return out;
 }
 
-dftracer::utils::dstd::Vector<AggSpec> scale_specs() {
+dstd::Vector<AggSpec> scale_specs() {
     auto s = [](AggOp op, std::int32_t col, const char* out) {
         AggSpec sp;
         sp.op = op;
@@ -645,9 +626,8 @@ void scale_case(bool long_keys) {
     const Series a = Series::flat_i64(f.a.data(), SCALE_ROWS);
     const Series b = Series::flat_i64(f.b.data(), SCALE_ROWS);
     const Series c = Series::flat_i64(f.c.data(), SCALE_ROWS);
-    const dftracer::utils::dstd::Vector<const Series*> values{&a, &b, &c};
-    const auto names =
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"k"};
+    const dstd::Vector<const Series*> values{&a, &b, &c};
+    const auto names = dstd::Vector<dstd::String>{"k"};
     const DataFrame want = group_agg({&flat}, values, scale_specs(), names);
     REQUIRE(want.num_rows() > 2048);
     ViewBuilder vb;
@@ -684,15 +664,13 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
 
     TEST_CASE("offsets from lengths refuse a total past the offset width") {
         constexpr std::int32_t MAX = std::numeric_limits<std::int32_t>::max();
-        dftracer::utils::dstd::Vector<std::int32_t> fits = {0, MAX / 2, MAX / 2,
-                                                            1};
+        dstd::Vector<std::int32_t> fits = {0, MAX / 2, MAX / 2, 1};
         REQUIRE(offsets_from_lengths(fits.data(), 3));
         CHECK(fits[3] == MAX);
         CHECK(fits[1] == MAX / 2);
-        dftracer::utils::dstd::Vector<std::int32_t> over = {0, MAX / 2, MAX / 2,
-                                                            2};
+        dstd::Vector<std::int32_t> over = {0, MAX / 2, MAX / 2, 2};
         CHECK_FALSE(offsets_from_lengths(over.data(), 3));
-        dftracer::utils::dstd::Vector<std::int64_t> wide = {0, MAX, MAX, MAX};
+        dstd::Vector<std::int64_t> wide = {0, MAX, MAX, MAX};
         REQUIRE(offsets_from_lengths(wide.data(), 3));
         CHECK(wide[3] == std::int64_t{MAX} * 3);
     }
@@ -700,29 +678,25 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         constexpr std::size_t N = 100000;
         constexpr std::size_t DISTINCT = 37;
         auto text = [](std::size_t j) {
-            dftracer::utils::dstd::String t =
-                "name_" + dftracer::utils::dstd::to_string((j * 7919) % 1000);
+            dstd::String t = "name_" + dstd::to_string((j * 7919) % 1000);
             if (j % 5 == 0) t += " with a tail longer than twelve bytes";
             return t;
         };
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> child;
+        dstd::Vector<dstd::String> child;
         for (std::size_t j = 0; j < DISTINCT; ++j) child.push_back(text(j));
         child.push_back(child[3]);
         child.push_back(child[11]);
         child.push_back("");
         const std::size_t null_entry = child.size();
         child.push_back("never read");
-        dftracer::utils::dstd::Vector<std::uint8_t> child_valid(
-            (child.size() + 7) / 8, 0xFF);
+        dstd::Vector<std::uint8_t> child_valid((child.size() + 7) / 8, 0xFF);
         child_valid[null_entry >> 3] &=
             static_cast<std::uint8_t>(~(1u << (null_entry & 7)));
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> views(
-            child.begin(), child.end());
+        dstd::Vector<dstd::StringView> views(child.begin(), child.end());
 
-        dftracer::utils::dstd::Vector<std::int32_t> codes(N);
-        dftracer::utils::dstd::Vector<std::uint8_t> row_valid((N + 7) / 8,
-                                                              0xFF);
-        dftracer::utils::dstd::Vector<std::int64_t> ids(N), other(N);
+        dstd::Vector<std::int32_t> codes(N);
+        dstd::Vector<std::uint8_t> row_valid((N + 7) / 8, 0xFF);
+        dstd::Vector<std::int64_t> ids(N), other(N);
         Rows rows(N);
         for (std::size_t i = 0; i < N; ++i) {
             codes[i] = static_cast<std::int32_t>((i * 2654435761u >> 7) %
@@ -739,8 +713,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         }
         Series dict = dictionary_from_codes(
             codes,
-            Series::strings(dftracer::utils::dstd::Span<
-                                const dftracer::utils::dstd::StringView>(views),
+            Series::strings(dstd::Span<const dstd::StringView>(views),
                             child_valid.data()),
             row_valid.data());
         REQUIRE(dict.encoding() == Encoding::Dictionary);
@@ -755,7 +728,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
             Series col;
             Rows rows;
         };
-        dftracer::utils::dstd::Vector<Key> keys;
+        dstd::Vector<Key> keys;
         keys.push_back({"dictionary", dict.share(), rows});
         keys.push_back({"flat", flat_of(rows), rows});
         keys.push_back({"view", view_of(rows), rows});
@@ -764,8 +737,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
             unique[i] = i % 13 == 0 ? Row()
                         : i % 50 == 0
                             ? Row("duplicated")
-                            : Row("u" + dftracer::utils::dstd::to_string(
-                                            (i * 7919) % N));
+                            : Row("u" + dstd::to_string((i * 7919) % N));
         keys.push_back({"view mostly unique", view_of(unique), unique});
         keys.push_back({"selection over flat",
                         selection_over(flat_of(rows), sel), pick(rows, sel)});
@@ -776,7 +748,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
             Idx idx(N);
             for (std::size_t i = 0; i < N; ++i)
                 idx[i] = static_cast<std::int64_t>(i);
-            dftracer::utils::dstd::stable_sort(
+            dstd::stable_sort(
                 idx.begin(), idx.end(), [&](std::int64_t a, std::int64_t b) {
                     const Row& x = r[static_cast<std::size_t>(a)];
                     const Row& y = r[static_cast<std::size_t>(b)];
@@ -815,13 +787,10 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
     }
 
     TEST_CASE("materialize and argsort read nested selection and dictionary") {
-        const dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView>
-            vals{"a", "b", "c"};
-        const dftracer::utils::dstd::Vector<std::int32_t> codes{0, 1, 0, 2};
+        const dstd::Vector<dstd::StringView> vals{"a", "b", "c"};
+        const dstd::Vector<std::int32_t> codes{0, 1, 0, 2};
         const Series dict = dictionary_from_codes(
-            codes,
-            Series::strings(dftracer::utils::dstd::Span<
-                            const dftracer::utils::dstd::StringView>(vals)),
+            codes, Series::strings(dstd::Span<const dstd::StringView>(vals)),
             nullptr);
 
         auto* sel = new dftu_series();

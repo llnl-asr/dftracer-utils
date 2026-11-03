@@ -12,7 +12,8 @@
 #include <testing_utilities.h>
 
 #include <cstdint>
-#include <utility>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::cache;
@@ -21,30 +22,27 @@ namespace df = dftracer::utils::dataframe;
 namespace {
 
 // A single-key AggState (group "grp") with Count + Sum(v) over `values`.
-df::AggStatePtr make_state(
-    const dftracer::utils::dstd::Vector<double>& values) {
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys(
-        values.size(), "grp");
-    dftracer::utils::dstd::Vector<double> vd = values;
+df::AggStatePtr make_state(const dstd::Vector<double>& values) {
+    dstd::Vector<dstd::String> keys(values.size(), "grp");
+    dstd::Vector<double> vd = values;
     df::Series key = df::Series::strings(keys);
     df::Series val =
         df::Series::flat_f64(vd.data(), static_cast<std::int64_t>(vd.size()));
-    dftracer::utils::dstd::Vector<const df::Series*> vals{&val};
+    dstd::Vector<const df::Series*> vals{&val};
     return df::group_agg_state({&key}, vals,
                                {df::AggSpec{df::AggOp::Count, -1, "n"},
                                 df::AggSpec{df::AggOp::Sum, 0, "total"}});
 }
 
 // A multi-group AggState: row i belongs to group gkeys[i] with value values[i].
-df::AggStatePtr make_state_kv(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& gkeys,
-    const dftracer::utils::dstd::Vector<double>& values) {
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys = gkeys;
-    dftracer::utils::dstd::Vector<double> vd = values;
+df::AggStatePtr make_state_kv(const dstd::Vector<dstd::String>& gkeys,
+                              const dstd::Vector<double>& values) {
+    dstd::Vector<dstd::String> keys = gkeys;
+    dstd::Vector<double> vd = values;
     df::Series key = df::Series::strings(keys);
     df::Series val =
         df::Series::flat_f64(vd.data(), static_cast<std::int64_t>(vd.size()));
-    dftracer::utils::dstd::Vector<const df::Series*> vals{&val};
+    dstd::Vector<const df::Series*> vals{&val};
     return df::group_agg_state({&key}, vals,
                                {df::AggSpec{df::AggOp::Count, -1, "n"},
                                 df::AggSpec{df::AggOp::Sum, 0, "total"}});
@@ -57,10 +55,10 @@ TEST_SUITE("RollupStore") {
     // agg_merge, persisted as per-group blobs, and read back through a real
     // store into an equivalent state.
     TEST_CASE("agg_merge of rank partials persists and reads back") {
-        const dftracer::utils::dstd::String dir = dftracer::utils::dstd::String(
+        const dstd::String dir = dstd::String(
             dftu_utils_test::make_unique_test_path("dftu_rollup_store_test")
                 .str());
-        (void)dftracer::utils::dstd::fs::remove_all(dir);
+        (void)dstd::fs::remove_all(dir);
 
         auto db = open_rollup_db(dir, CacheStore::Mode::ReadWrite);
         REQUIRE(db);
@@ -84,17 +82,17 @@ TEST_SUITE("RollupStore") {
         CHECK_FALSE(rollup_exists(*db, 0x99999999));
         CHECK(read_rollup(*db, 0x99999999) == nullptr);
 
-        (void)dftracer::utils::dstd::fs::remove_all(dir);
+        (void)dstd::fs::remove_all(dir);
     }
 
     // Two ranks' partials over three distinct groups round-trip: every group's
     // per-group blob persists and reads back into an equivalent merged state.
     TEST_CASE("multiple groups persist and read back") {
-        const dftracer::utils::dstd::String dir = dftracer::utils::dstd::String(
-            dftu_utils_test::make_unique_test_path(
-                "dftu_rollup_store_multi_test")
-                .str());
-        (void)dftracer::utils::dstd::fs::remove_all(dir);
+        const dstd::String dir =
+            dstd::String(dftu_utils_test::make_unique_test_path(
+                             "dftu_rollup_store_multi_test")
+                             .str());
+        (void)dstd::fs::remove_all(dir);
 
         auto db = open_rollup_db(dir, CacheStore::Mode::ReadWrite);
         REQUIRE(db);
@@ -112,14 +110,11 @@ TEST_SUITE("RollupStore") {
         df::DataFrame r = df::agg_finalize(*got, "grp");
         REQUIRE(r.num_rows() == 3);
 
-        dftracer::utils::dstd::Map<
-            dftracer::utils::dstd::String,
-            dftracer::utils::dstd::Pair<std::int64_t, double>>
-            by_group;
+        dstd::Map<dstd::String, dstd::Pair<std::int64_t, double>> by_group;
         for (std::int64_t i = 0; i < r.num_rows(); ++i)
-            by_group[dftracer::utils::dstd::String(r.column("grp").string_at(
-                i))] = {r.column("n").data<std::int64_t>()[i],
-                        r.column("total").data<double>()[i]};
+            by_group[dstd::String(r.column("grp").string_at(i))] = {
+                r.column("n").data<std::int64_t>()[i],
+                r.column("total").data<double>()[i]};
 
         REQUIRE(by_group.count("g1"));
         REQUIRE(by_group.count("g2"));
@@ -131,6 +126,6 @@ TEST_SUITE("RollupStore") {
         CHECK(by_group["g3"].first == 1);
         CHECK(by_group["g3"].second == doctest::Approx(7));
 
-        (void)dftracer::utils::dstd::fs::remove_all(dir);
+        (void)dstd::fs::remove_all(dir);
     }
 }

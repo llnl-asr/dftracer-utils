@@ -10,11 +10,14 @@
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
 
-#include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -22,21 +25,17 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <map>
-#include <span>
-#include <string>
 #include <variant>
-#include <vector>
 
 using namespace dftracer::utils;
 
 using dftracer::utils::Runtime;
-using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::Host;
 using dftracer::utils::plugins::NamedResultRegistry;
 using dftracer::utils::plugins::OwnedDataFrame;
 using dftracer::utils::plugins::PluginFold;
 using dftracer::utils::trace::RecordPhase;
+using dstd::StringIntern;
 namespace agg = dftracer::utils::plugins::agg;
 namespace views = dftracer::utils::trace::views;
 using views::detail::FoldBatch;
@@ -106,8 +105,8 @@ dftu_plugin make_plugin(::dftu_task* (*on_columns)(void*, const dftu_dataframe*,
     return p;
 }
 
-FoldEvent evt(StringIntern& intern, const std::string& cat,
-              const std::string& name, std::uint64_t dur) {
+FoldEvent evt(StringIntern& intern, const dstd::String& cat,
+              const dstd::String& name, std::uint64_t dur) {
     FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);
     fe.name_id = intern.get_or_insert(name);
@@ -122,12 +121,12 @@ FoldEvent evt(StringIntern& intern, const std::string& cat,
 
 // GROUPS distinct keys, each seen twice (in two different slices) so every
 // group's aggregate depends on the cross-slice merge as well as on the spill.
-std::vector<dstd::Vector<FoldEvent>> wide_slices(StringIntern& intern) {
+dstd::Vector<dstd::Vector<FoldEvent>> wide_slices(StringIntern& intern) {
     dstd::Vector<FoldEvent> a, b;
     a.reserve(GROUPS);
     b.reserve(GROUPS);
     for (int i = 0; i < GROUPS; ++i) {
-        const std::string name = "op_" + std::to_string(i);
+        const dstd::String name = "op_" + dstd::to_string(i);
         a.push_back(
             evt(intern, "POSIX", name, static_cast<std::uint64_t>(i + 1)));
         b.push_back(evt(intern, "STDIO", name,
@@ -167,18 +166,18 @@ double num_at(const dftu_series* col, std::int64_t r) {
     return out;
 }
 
-std::string str_at(const dftu_series* col, std::int64_t r) {
+dstd::String str_at(const dftu_series* col, std::int64_t r) {
     dftu_series* flat = dftu_series_materialize(col);
     const std::int32_t* off = dftu_series_offsets(flat);
     const char* data = static_cast<const char*>(dftu_series_data(flat));
-    std::string out(data + off[r],
-                    static_cast<std::size_t>(off[r + 1] - off[r]));
+    dstd::String out(data + off[r],
+                     static_cast<std::size_t>(off[r + 1] - off[r]));
     dftu_series_free(flat);
     return out;
 }
 
-std::vector<std::string> list_at(const dftu_series* col, std::int64_t r) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> list_at(const dftu_series* col, std::int64_t r) {
+    dstd::Vector<dstd::String> out;
     const std::int32_t* lo = dftu_series_offsets(col);
     dftu_series* vals = dftu_series_child(col, 0);
     if (!lo || !vals) {
@@ -199,8 +198,8 @@ struct Row {
     double sum = 0;
     double mean = 0;
     double p50 = 0;
-    std::string cat_at_max;
-    std::vector<std::string> top_cat;
+    dstd::String cat_at_max;
+    dstd::Vector<dstd::String> top_cat;
 };
 
 dftu_dataframe* result_frame(NamedResultRegistry& named) {
@@ -213,8 +212,9 @@ dftu_dataframe* result_frame(NamedResultRegistry& named) {
 // Run the plugin over `wide_slices` with `budget`, returning the finalized
 // rows by key and, through `runs`, the number of spill runs the master's
 // accumulator wrote.
-std::map<std::string, Row> run_with_budget(dftu_plugin& p, std::uint64_t budget,
-                                           std::size_t* runs, bool nested) {
+dstd::Map<dstd::String, Row> run_with_budget(dftu_plugin& p,
+                                             std::uint64_t budget,
+                                             std::size_t* runs, bool nested) {
     StringIntern intern;
     NamedResultRegistry named;
     PluginFold master(&p, intern, nullptr, &named, "spill_test", budget);
@@ -232,7 +232,7 @@ std::map<std::string, Row> run_with_budget(dftu_plugin& p, std::uint64_t budget,
     *runs = master.agg_spill_runs(ACC_NAME);
     finalize_now(master);
 
-    std::map<std::string, Row> out;
+    dstd::Map<dstd::String, Row> out;
     dftu_dataframe* frame = result_frame(named);
     REQUIRE(frame != nullptr);
     dftu_series* key = dftu_dataframe_column(frame, "name");
@@ -277,13 +277,13 @@ TEST_CASE("plugin accumulator spills past the memory budget, same result") {
     dftu_plugin p = make_plugin(spill_columns);
 
     std::size_t unbounded_runs = 0;
-    const std::map<std::string, Row> want = run_with_budget(
+    const dstd::Map<dstd::String, Row> want = run_with_budget(
         p, dftracer::utils::memory::NO_SPILL_BUDGET, &unbounded_runs, false);
     CHECK(unbounded_runs == 0);
     REQUIRE(want.size() == static_cast<std::size_t>(GROUPS));
 
     std::size_t spill_runs = 0;
-    const std::map<std::string, Row> got =
+    const dstd::Map<dstd::String, Row> got =
         run_with_budget(p, TINY_BUDGET, &spill_runs, false);
 
     // The mechanism, not just the answer: a budget that is silently ignored
@@ -306,12 +306,12 @@ TEST_CASE("plugin accumulator spill keeps a nested (list) output column") {
     dftu_plugin p = make_plugin(spill_nested_columns);
 
     std::size_t unbounded_runs = 0;
-    const std::map<std::string, Row> want = run_with_budget(
+    const dstd::Map<dstd::String, Row> want = run_with_budget(
         p, dftracer::utils::memory::NO_SPILL_BUDGET, &unbounded_runs, true);
     CHECK(unbounded_runs == 0);
 
     std::size_t spill_runs = 0;
-    const std::map<std::string, Row> got =
+    const dstd::Map<dstd::String, Row> got =
         run_with_budget(p, TINY_BUDGET, &spill_runs, true);
     CHECK(spill_runs > 0);
 

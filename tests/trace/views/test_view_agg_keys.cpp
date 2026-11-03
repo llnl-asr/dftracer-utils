@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/result_join.h>
+#include <testing_utilities.h>
 #include <trace/views/agg_parity_common.h>
 
 #include <optional>
@@ -19,8 +24,8 @@ TEST_SUITE("View") {
     TEST_CASE(
         "Trace scan - agg engine composite keys match the GroupMap path") {
         REQUIRE(parity_env().is_valid());
-        const std::string gz = write_agg_engine_trace(parity_sub("base"));
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String gz = write_agg_engine_trace(parity_sub("base"));
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         SUBCASE("group_by (name, pid)") {
             run_both_multi({{dstd::String(gz), dstd::String(idx)}},
@@ -44,12 +49,12 @@ TEST_SUITE("View") {
         }
 
         // Two files, so fhash genuinely varies across groups (not just pid).
-        const std::string gz2 = parity_sub("two") + "/agg_engine2.pfw.gz";
-        const std::string idx2 = std::string(determine_index_path(gz2, ""));
-        const std::string gz2a = write_agg_engine_trace(parity_sub("two"));
+        const dstd::String gz2 = parity_sub("two") + "/agg_engine2.pfw.gz";
+        const dstd::String idx2 = dstd::String(determine_index_path(gz2, ""));
+        const dstd::String gz2a = write_agg_engine_trace(parity_sub("two"));
         if (!dstd::fs::exists(gz2).value()) {
-            std::string pfw2 = parity_sub("two") + "/agg_engine2.pfw";
-            std::ofstream ofs(pfw2.c_str());
+            dstd::String pfw2 = parity_sub("two") + "/agg_engine2.pfw";
+            dftu_utils_test::FileOut ofs(pfw2);
             const char* names[] = {"read", "write", "open"};
             const int pids[] = {1, 2, 3};
             int ts = 1000;
@@ -80,11 +85,11 @@ TEST_SUITE("View") {
         // Mixed-case cat values: the GroupMap path lowercases the group key
         // (str_format.h lower_ascii), so "POSIX"/"posix"/"Stdio"/"STDIO" must
         // merge into two groups ("posix", "stdio") in both paths.
-        const std::string gz3 = parity_sub("cat") + "/agg_engine_cat.pfw.gz";
-        const std::string idx3 = std::string(determine_index_path(gz3, ""));
+        const dstd::String gz3 = parity_sub("cat") + "/agg_engine_cat.pfw.gz";
+        const dstd::String idx3 = dstd::String(determine_index_path(gz3, ""));
         if (!dstd::fs::exists(gz3).value()) {
-            std::string pfw3 = parity_sub("cat") + "/agg_engine_cat.pfw";
-            std::ofstream ofs(pfw3.c_str());
+            dstd::String pfw3 = parity_sub("cat") + "/agg_engine_cat.pfw";
+            dftu_utils_test::FileOut ofs(pfw3);
             const char* names[] = {"read", "write", "open"};
             const char* cats[] = {"POSIX", "posix", "Stdio", "STDIO"};
             const int pids[] = {1, 2};
@@ -121,14 +126,14 @@ TEST_SUITE("View") {
         // its own fhash/hhash via FH/HH metadata and every event references it,
         // so the two files genuinely resolve to different names (distinct
         // basenames, so FileName has no cross-file collision to merge).
-        const std::string rdir = parity_sub("resolved");
-        const std::string gz4 = rdir + "/agg_engine_resolved_a.pfw.gz";
-        const std::string idx4 = std::string(determine_index_path(gz4, ""));
-        const std::string gz5 = rdir + "/agg_engine_resolved_b.pfw.gz";
-        const std::string idx5 = std::string(determine_index_path(gz5, ""));
+        const dstd::String rdir = parity_sub("resolved");
+        const dstd::String gz4 = rdir + "/agg_engine_resolved_a.pfw.gz";
+        const dstd::String idx4 = dstd::String(determine_index_path(gz4, ""));
+        const dstd::String gz5 = rdir + "/agg_engine_resolved_b.pfw.gz";
+        const dstd::String idx5 = dstd::String(determine_index_path(gz5, ""));
         if (!dstd::fs::exists(gz4).value() || !dstd::fs::exists(gz5).value()) {
-            std::string pfw4 = rdir + "/agg_engine_resolved_a.pfw";
-            std::ofstream ofs(pfw4.c_str());
+            dstd::String pfw4 = rdir + "/agg_engine_resolved_a.pfw";
+            dftu_utils_test::FileOut ofs(pfw4);
             ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/dirA/a.h5","value":"FA1"}})"
                 << "\n"
                 << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"nodeA","value":"HA1"}})"
@@ -148,8 +153,8 @@ TEST_SUITE("View") {
             dftu_utils_test::compress_file_to_gzip(pfw4, gz4);
             (void)dstd::fs::remove(pfw4);
 
-            std::string pfw5 = rdir + "/agg_engine_resolved_b.pfw";
-            std::ofstream ofs5(pfw5.c_str());
+            dstd::String pfw5 = rdir + "/agg_engine_resolved_b.pfw";
+            dftu_utils_test::FileOut ofs5(pfw5);
             ofs5
                 << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/dirB/b.h5","value":"FB1"}})"
                 << "\n"
@@ -204,11 +209,11 @@ TEST_SUITE("View") {
         // Rank is a resolved-like key harvested from PR metadata: each pid is
         // declared once (pid -> rank), events group on pid, and both paths must
         // relabel the pid groups to the same rank strings.
-        const std::string gz6 = parity_sub("rank") + "/agg_engine_rank.pfw.gz";
-        const std::string idx6 = std::string(determine_index_path(gz6, ""));
+        const dstd::String gz6 = parity_sub("rank") + "/agg_engine_rank.pfw.gz";
+        const dstd::String idx6 = dstd::String(determine_index_path(gz6, ""));
         if (!dstd::fs::exists(gz6).value()) {
-            std::string pfw6 = parity_sub("rank") + "/agg_engine_rank.pfw";
-            std::ofstream ofs(pfw6.c_str());
+            dstd::String pfw6 = parity_sub("rank") + "/agg_engine_rank.pfw";
+            dftu_utils_test::FileOut ofs(pfw6);
             ofs << R"({"ph":"M","name":"PR","cat":"dftracer","pid":100,"tid":0,"args":{"name":"rank","value":"0"}})"
                 << "\n"
                 << R"({"ph":"M","name":"PR","cat":"dftracer","pid":200,"tid":0,"args":{"name":"rank","value":"1"}})"
@@ -241,11 +246,11 @@ TEST_SUITE("View") {
         // same key text, including a null key for the events missing the arg.
         // The read events carry arg x, the write events carry arg y, so
         // grouping by x exercises the present-and-missing split.
-        const std::string gz7 = parity_sub("arg") + "/agg_engine_arg.pfw.gz";
-        const std::string idx7 = std::string(determine_index_path(gz7, ""));
+        const dstd::String gz7 = parity_sub("arg") + "/agg_engine_arg.pfw.gz";
+        const dstd::String idx7 = dstd::String(determine_index_path(gz7, ""));
         if (!dstd::fs::exists(gz7).value()) {
-            std::string pfw7 = parity_sub("arg") + "/agg_engine_arg.pfw";
-            std::ofstream ofs(pfw7.c_str());
+            dstd::String pfw7 = parity_sub("arg") + "/agg_engine_arg.pfw";
+            dftu_utils_test::FileOut ofs(pfw7);
             int ts = 1000;
             for (int i = 0; i < 30; ++i) {
                 ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
@@ -294,7 +299,7 @@ TEST_SUITE("View") {
         // columns (x/y), with 0.0 where an arg never appears in a group.
         // Grouped by name so read has x-present/y-absent and write the reverse.
         auto run_both_dyn =
-            [&](const std::function<scan::ScanPlan(scan::ScanPlan)>& agg_of,
+            [&](const dstd::Function<scan::ScanPlan(scan::ScanPlan)>& agg_of,
                 std::uint64_t mem_budget) {
                 auto build = [&] {
                     scan::ScanPlan v =
@@ -412,9 +417,9 @@ TEST_SUITE("View") {
         // time_bucket(_min); group_by (if any) runs first, matching the
         // group_by-then-time_bucket order used elsewhere in this file.
         auto run_both_bucket =
-            [&](const std::function<scan::ScanPlan(scan::ScanPlan)>& bucket_of,
+            [&](const dstd::Function<scan::ScanPlan(scan::ScanPlan)>& bucket_of,
                 const dstd::Vector<GroupKey>& extra_gks,
-                const std::vector<std::string>& extra_key_cols,
+                const dstd::Vector<dstd::String>& extra_key_cols,
                 std::uint64_t mem_budget) {
                 auto build = [&] {
                     scan::ScanPlan v =
@@ -439,7 +444,7 @@ TEST_SUITE("View") {
                 dataframe::DataFrame legacy = collect_groupmap_plan(build());
                 dataframe::DataFrame engine = collect_engine_plan(build());
                 dstd::Vector<dstd::String> keys = {"time_bucket"};
-                for (const std::string& k : extra_key_cols)
+                for (const dstd::String& k : extra_key_cols)
                     keys.emplace_back(k);
                 check_match_multi(legacy, engine, keys);
             };
@@ -545,7 +550,7 @@ TEST_SUITE("View") {
             dataframe::DataFrame engine = collect_engine_plan(build());
             REQUIRE(legacy.num_rows() == engine.num_rows());
             for (std::int64_t lr = 0; lr < legacy.num_rows(); ++lr) {
-                const std::string cat = bstr(legacy, lr, "cat");
+                const dstd::String cat = bstr(legacy, lr, "cat");
                 std::int64_t er = -1;
                 for (std::int64_t r = 0; r < engine.num_rows(); ++r)
                     if (bstr(engine, r, "cat") == cat) {
@@ -632,12 +637,12 @@ TEST_SUITE("View") {
         // A dirname transform coarsens: two distinct file hashes in the same
         // directory fold to one key, so both paths must MERGE their events into
         // a single group (a relabel-after-aggregate would leave two rows).
-        const std::string ddir = parity_sub("samedir");
-        const std::string gz8 = ddir + "/agg_engine_dir.pfw.gz";
-        const std::string idx8 = std::string(determine_index_path(gz8, ""));
+        const dstd::String ddir = parity_sub("samedir");
+        const dstd::String gz8 = ddir + "/agg_engine_dir.pfw.gz";
+        const dstd::String idx8 = dstd::String(determine_index_path(gz8, ""));
         if (!dstd::fs::exists(gz8).value()) {
-            std::string pfw8 = ddir + "/agg_engine_dir.pfw";
-            std::ofstream ofs(pfw8.c_str());
+            dstd::String pfw8 = ddir + "/agg_engine_dir.pfw";
+            dftu_utils_test::FileOut ofs(pfw8);
             ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/shared/f1.h5","value":"FS1"}})"
                 << "\n"
                 << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/shared/f2.h5","value":"FS2"}})"
@@ -731,12 +736,12 @@ TEST_SUITE("View") {
         // Aggregates over an arbitrary arg value field. `v` is present in every
         // group so Sum keeps its exact integer domain in both paths; Mean is
         // Float64 and ArgMax reprs the arg's raw value.
-        const std::string gz9 =
+        const dstd::String gz9 =
             parity_sub("argval") + "/agg_engine_argval.pfw.gz";
-        const std::string idx9 = std::string(determine_index_path(gz9, ""));
+        const dstd::String idx9 = dstd::String(determine_index_path(gz9, ""));
         if (!dstd::fs::exists(gz9).value()) {
-            std::string pfw9 = parity_sub("argval") + "/agg_engine_argval.pfw";
-            std::ofstream ofs(pfw9.c_str());
+            dstd::String pfw9 = parity_sub("argval") + "/agg_engine_argval.pfw";
+            dftu_utils_test::FileOut ofs(pfw9);
             const char* names[] = {"read", "write"};
             int ts = 1000;
             for (int i = 0; i < 60; ++i) {
@@ -782,12 +787,13 @@ TEST_SUITE("View") {
         // fold. The engine projects each as a typed U64 column, so Sum/Min/Max
         // match GroupMap column-for-column. ret>0 on every event, so size is
         // present in both groups (no all-absent group to widen).
-        const std::string gz_sz =
+        const dstd::String gz_sz =
             parity_sub("size") + "/agg_engine_size.pfw.gz";
-        const std::string idx_sz = std::string(determine_index_path(gz_sz, ""));
+        const dstd::String idx_sz =
+            dstd::String(determine_index_path(gz_sz, ""));
         if (!dstd::fs::exists(gz_sz).value()) {
-            std::string pfw_sz = parity_sub("size") + "/agg_engine_size.pfw";
-            std::ofstream ofs(pfw_sz.c_str());
+            dstd::String pfw_sz = parity_sub("size") + "/agg_engine_size.pfw";
+            dftu_utils_test::FileOut ofs(pfw_sz);
             const char* names[] = {"read", "write"};
             int ts = 1000;
             for (int i = 0; i < 60; ++i) {
@@ -837,13 +843,14 @@ TEST_SUITE("View") {
         // number_typed; the engine projects it as a value column, resolving the
         // full-name-captured arg exactly like PodSource::find_arg. Present in
         // every event, so both paths keep the exact integer domain.
-        const std::string gz_nv =
+        const dstd::String gz_nv =
             parity_sub("nested") + "/agg_engine_nested.pfw.gz";
-        const std::string idx_nv = std::string(determine_index_path(gz_nv, ""));
+        const dstd::String idx_nv =
+            dstd::String(determine_index_path(gz_nv, ""));
         if (!dstd::fs::exists(gz_nv).value()) {
-            std::string pfw_nv =
+            dstd::String pfw_nv =
                 parity_sub("nested") + "/agg_engine_nested.pfw";
-            std::ofstream ofs(pfw_nv.c_str());
+            dftu_utils_test::FileOut ofs(pfw_nv);
             const char* names[] = {"read", "write"};
             int ts = 1000;
             for (int i = 0; i < 60; ++i) {
@@ -924,12 +931,12 @@ TEST_SUITE("View") {
     // cell, never merged with a real "" (string) or 0 (int) value.
     TEST_CASE("View - a missing or null arg key groups as null, not \"\"") {
         REQUIRE(parity_env().is_valid());
-        const std::string dir = parity_sub("nullkey");
-        const std::string gz = dir + "/agg_null_key.pfw.gz";
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String dir = parity_sub("nullkey");
+        const dstd::String gz = dir + "/agg_null_key.pfw.gz";
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         if (!dstd::fs::exists(gz).value()) {
-            const std::string pfw = dir + "/agg_null_key.pfw";
-            std::ofstream ofs(pfw.c_str());
+            const dstd::String pfw = dir + "/agg_null_key.pfw";
+            dftu_utils_test::FileOut ofs(pfw);
             const char* names[] = {"read", "read", "write", "write"};
             const char* args[] = {R"({"k":5,"s":"x","e":[]})",
                                   R"({"k":0,"s":"","e":{}})", R"({})",
@@ -944,11 +951,11 @@ TEST_SUITE("View") {
             dstd::fs::remove(pfw).has_value();
         }
 
-        using Key = std::vector<dstd::Optional<std::string>>;
-        using Groups = std::map<Key, std::int64_t>;
+        using Key = dstd::Vector<dstd::Optional<dstd::String>>;
+        using Groups = dstd::Map<Key, std::int64_t>;
         const dstd::NullOpt null = dstd::nullopt;
         auto groups = [](const dataframe::DataFrame& f,
-                         const std::vector<std::string>& keys) {
+                         const dstd::Vector<dstd::String>& keys) {
             Groups g;
             for (std::int64_t r = 0; r < f.num_rows(); ++r) {
                 Key k;
@@ -959,7 +966,7 @@ TEST_SUITE("View") {
                     if (c.is_null(r))
                         k.emplace_back();
                     else
-                        k.emplace_back(std::string(c.string_at(r)));
+                        k.emplace_back(dstd::String(c.string_at(r)));
                 }
                 CHECK(g.emplace(k, static_cast<std::int64_t>(bnum(f, r, "n")))
                           .second);
@@ -981,10 +988,10 @@ TEST_SUITE("View") {
 
         struct Probe {
             dstd::Vector<GroupKey> gb;
-            std::vector<std::string> cols;
+            dstd::Vector<dstd::String> cols;
             Groups want;
         };
-        const std::vector<Probe> probes{
+        const dstd::Vector<Probe> probes{
             {{GroupKey::field("args.s")},
              {"args.s"},
              {{{"x"}, 1}, {{""}, 1}, {{null}, 2}}},
@@ -1062,8 +1069,8 @@ TEST_SUITE("View") {
             Groups got;
             for (std::int64_t i = 0; i < j.num_rows(); ++i) {
                 const auto& c = j.columns[0];
-                got.emplace(Key{c.is_null(i) ? dstd::Optional<std::string>()
-                                             : std::string(c.string_at(i))},
+                got.emplace(Key{c.is_null(i) ? dstd::Optional<dstd::String>()
+                                             : dstd::String(c.string_at(i))},
                             static_cast<std::int64_t>(bnum(j, i, "l_n")));
             }
             CHECK(got == probes[0].want);

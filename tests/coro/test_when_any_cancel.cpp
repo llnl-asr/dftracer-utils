@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scope_exit.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -20,7 +21,6 @@
 #include <memory>
 #include <stdexcept>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -46,7 +46,7 @@ struct Race {
         for (std::size_t i = 0; i < channels.size(); ++i) {
             stopped_at[i].store(NOT_STOPPED);
             saw_token[i].store(false);
-            channels[i] = std::make_shared<coro::Channel<int>>(1);
+            channels[i] = dstd::make_shared<coro::Channel<int>>(1);
         }
     }
 };
@@ -73,7 +73,7 @@ class Racer {
         : race_(std::move(race)),
           slot_(slot),
           throw_on_cancel_(throw_on_cancel),
-          token_(std::make_shared<std::atomic<bool>>(false)),
+          token_(dstd::make_shared<std::atomic<bool>>(false)),
           task_(receive_and_record(race_, token_, slot_)) {}
 
     bool await_ready() { return task_.await_ready(); }
@@ -122,9 +122,9 @@ class Plain {
     coro::CoroTask<T> task_;
 };
 
-std::thread feed_winner_later(const dstd::SharedPtr<Race>& race,
-                              std::size_t slot) {
-    return std::thread([race, slot] {
+dstd::Thread feed_winner_later(const dstd::SharedPtr<Race>& race,
+                               std::size_t slot) {
+    return dstd::Thread([race, slot] {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         race->channels[slot]->try_send(WINNER_VALUE);
     });
@@ -136,7 +136,7 @@ TEST_CASE("when_any - no loser runs after when_any returns") {
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
-    auto race = std::make_shared<Race>();
+    auto race = dstd::make_shared<Race>();
     std::atomic<int> winner_index{-1};
     std::atomic<int> winner_value{NO_VALUE};
     std::atomic<int> returned_at{NOT_STOPPED};
@@ -176,7 +176,7 @@ TEST_CASE("when_any - no loser runs after when_any returns (heterogeneous)") {
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
-    auto race = std::make_shared<Race>();
+    auto race = dstd::make_shared<Race>();
     std::atomic<int> winner_index{-1};
     std::atomic<int> returned_at{NOT_STOPPED};
 
@@ -273,7 +273,7 @@ TEST_CASE("when_any - a winner that throws after it won delivers its error") {
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
-    auto race = std::make_shared<Race>();
+    auto race = dstd::make_shared<Race>();
     std::atomic<bool> threw{false};
     std::atomic<bool> returned{false};
     std::atomic<int> returned_at{NOT_STOPPED};
@@ -424,7 +424,7 @@ TEST_CASE("when_any - a cancelled CoroTask loser stops without throwing") {
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
-    auto seen = std::make_shared<Seen>();
+    auto seen = dstd::make_shared<Seen>();
     int frames = 1;
     std::atomic<long long> elapsed_ms{-1};
     std::atomic<std::size_t> winner_index{99};

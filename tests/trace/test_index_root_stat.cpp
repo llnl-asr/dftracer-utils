@@ -3,11 +3,11 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
-#include <string>
 #include <system_error>
 
 using namespace dftracer::utils;
@@ -16,7 +16,7 @@ TEST_SUITE("IndexRootStat") {
     TEST_CASE("a root found to exist is kept until it is forgotten") {
         const dstd::Path dir =
             dftu_utils_test::make_unique_test_path("test_index_root_stat");
-        const std::string root = std::string((dir / ".dftindex").str());
+        const dstd::String root = dstd::String((dir / ".dftindex").str());
         REQUIRE(dstd::fs::create_directories(dir).has_value());
 
         common::InputStatScope scope;
@@ -50,20 +50,20 @@ TEST_SUITE("IndexRootStat") {
         REQUIRE(dstd::fs::create_directories(other).has_value());
 
         const auto a = trace::internal::index_root(
-            dstd::String(std::string((dir / ".dftindex").str())));
+            dstd::String(dstd::String((dir / ".dftindex").str())));
         const auto b = trace::internal::index_root(
-            dstd::String(std::string((dir / "." / ".dftindex").str())));
+            dstd::String(dstd::String((dir / "." / ".dftindex").str())));
         CHECK(a == b);
         CHECK(a == trace::internal::index_root(
-                       dstd::String(std::string((dir / ".dftindex").str()))));
-        CHECK(a != trace::internal::index_root(
-                       dstd::String(std::string((other / ".dftindex").str()))));
+                       dstd::String(dstd::String((dir / ".dftindex").str()))));
+        CHECK(a != trace::internal::index_root(dstd::String(
+                       dstd::String((other / ".dftindex").str()))));
 
         const dstd::Path link =
-            dir.view().parent() / (std::string(dir.view().filename()) + "_ln");
+            dir.view().parent() / (dstd::String(dir.view().filename()) + "_ln");
         if (dstd::fs::create_symlink(dir, link).has_value()) {
             CHECK(a == trace::internal::index_root(dstd::String(
-                           std::string((link / ".dftindex").str()))));
+                           dstd::String((link / ".dftindex").str()))));
             (void)dstd::fs::remove(link);
         }
 

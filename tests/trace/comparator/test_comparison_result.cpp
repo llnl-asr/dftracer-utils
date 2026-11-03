@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/comparator/comparison_aggregation.h>
 #include <dftracer/utils/trace/comparator/comparison_collapse.h>
@@ -10,7 +11,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <string>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace::comparator;
 using dftracer::utils::dataframe::FieldStat;
@@ -38,18 +40,16 @@ static FieldStat make_stats(double mean, double central_m2, uint64_t total,
     return s;
 }
 
-static dftracer::utils::dstd::StringIntern& test_intern() {
-    static dftracer::utils::dstd::StringIntern table;
+static dstd::StringIntern& test_intern() {
+    static dstd::StringIntern table;
     return table;
 }
 
 // A row of a query grouped by pid and window, with `count` events of equal
 // duration and, when `size_total` is set, equal size.
-static void add_row(AggQueryResult& result,
-                    dftracer::utils::dstd::StringView cat,
-                    dftracer::utils::dstd::StringView name, uint64_t pid,
-                    uint64_t window, uint64_t count, uint64_t dur_total,
-                    uint64_t size_total) {
+static void add_row(AggQueryResult& result, dstd::StringView cat,
+                    dstd::StringView name, uint64_t pid, uint64_t window,
+                    uint64_t count, uint64_t dur_total, uint64_t size_total) {
     AggKey key;
     key.cat = result.strings().get_or_insert(cat);
     key.name = result.strings().get_or_insert(name);
@@ -225,7 +225,7 @@ TEST_SUITE("CollapseByGroup") {
 }
 
 TEST_SUITE("ComparisonFilter") {
-    static ComparisonFilter filter_of(const std::string& text) {
+    static ComparisonFilter filter_of(const dstd::String& text) {
         auto q = dftracer::utils::duql::Query::from_string(text);
         REQUIRE(q.has_value());
         auto f = filter_from_query(*q);
@@ -264,7 +264,7 @@ TEST_SUITE("ComparisonFilter") {
     TEST_CASE("pid and ts bounds") {
         auto f = filter_of("pid in [3, 1] AND ts >= 10 AND ts < 20");
         REQUIRE(f.has_pids);
-        CHECK(f.pids == dftracer::utils::dstd::Vector<uint64_t>{1, 3});
+        CHECK(f.pids == dstd::Vector<uint64_t>{1, 3});
         CHECK(f.ts_begin == 10);
         CHECK(f.ts_end == 20);
         CHECK(f.same_cut(f));
@@ -289,10 +289,10 @@ TEST_SUITE("ComparisonFilter") {
     TEST_CASE("an expression compares the category lower-cased") {
         auto f = filter_of(R"(cat != "POSIX" and name like "%x%")");
         REQUIRE(f.expr.has_value());
-        CHECK(f.expr->source().find("lower(cat)") != std::string::npos);
+        CHECK(f.expr->source().find("lower(cat)") != dstd::String::npos);
         auto g = filter_of(R"(cat ~ "^PO" or name == "a")");
         REQUIRE(g.expr.has_value());
-        CHECK(g.expr->source().find("~*") != std::string::npos);
+        CHECK(g.expr->source().find("~*") != dstd::String::npos);
     }
 
     TEST_CASE("collapse keeps only the rows of the filter") {
@@ -330,8 +330,8 @@ TEST_SUITE("ComparisonFilter") {
 
     TEST_CASE("metadata counts processes, threads and file pairs") {
         AggQueryResult merged;
-        auto row = [&](dftracer::utils::dstd::StringView name, uint64_t ts,
-                       uint64_t te, uint64_t dur_total, auto&& observe) {
+        auto row = [&](dstd::StringView name, uint64_t ts, uint64_t te,
+                       uint64_t dur_total, auto&& observe) {
             AggKey key;
             key.cat = merged.strings().get_or_insert("posix");
             key.name = merged.strings().get_or_insert(name);

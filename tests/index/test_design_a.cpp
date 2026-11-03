@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
@@ -20,11 +27,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <sstream>
-#include <string>
 #include <thread>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
@@ -37,21 +41,21 @@ constexpr std::size_t SLACK = std::size_t{24} << 20;
 constexpr int SMALL_FILES = 96;
 constexpr int SMALL_EVENTS = 3000;
 
-std::string small_trace(const std::string& dir, int n) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String small_trace(const dstd::String& dir, int n) {
+    dstd::String out;
+    out += "[\n";
     for (int i = 0; i < SMALL_EVENTS; ++i) {
-        out << R"({"id":)" << i << R"(,"name":"op)" << (i + n) % 40
-            << R"(","cat":"POSIX","pid":)" << 1 + n % 7 << R"(,"tid":)"
-            << 10 + i % 5 << R"(,"ph":"X","ts":)" << 1000 + i * 10 + n * 7
-            << R"(,"dur":)" << 3 + i % 50 << R"(,"args":{"fname":"/data/d)"
-            << n % 9 << "/f" << (i * 31 + n) % 700 << R"(","size":)"
-            << (i * 17) % 4096 << R"(,"hhash":"h)" << n << R"("}})"
-            << "\n";
+        out += common::str_cat(
+            R"({"id":)", i, R"(,"name":"op)", (i + n) % 40,
+            R"(","cat":"POSIX","pid":)", 1 + n % 7, R"(,"tid":)", 10 + i % 5,
+            R"(,"ph":"X","ts":)", 1000 + i * 10 + n * 7, R"(,"dur":)",
+            3 + i % 50, R"(,"args":{"fname":"/data/d)", n % 9, "/f",
+            (i * 31 + n) % 700, R"(","size":)", (i * 17) % 4096,
+            R"(,"hhash":"h)", n, R"("}})", "\n");
     }
-    out << "]\n";
+    out += "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/s" + std::to_string(n) + ".pfw.gz", out.str());
+        dir + "/s" + dstd::to_string(n) + ".pfw.gz", out);
 }
 
 // Each segment walks the same names in another order, so the first appearance
@@ -59,37 +63,35 @@ std::string small_trace(const std::string& dir, int n) {
 constexpr int SEGMENT_LINES = 4096;
 constexpr int NAMES = 61;
 
-std::string big_trace(const std::string& dir, const std::string& stem,
-                      int lines, int variant) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String big_trace(const dstd::String& dir, const dstd::String& stem,
+                       int lines, int variant) {
+    dstd::String out;
+    out += "[\n";
     for (int i = 0; i < lines; ++i) {
         const int seg = i / SEGMENT_LINES;
         const int step = 2 * ((seg * 7 + variant) % 29) + 1;
         const int pick = (i * step + seg * 13) % NAMES;
-        out << R"({"id":)" << i << R"(,"name":"op)" << pick << R"(","cat":"c)"
-            << (pick * 3 + seg) % 11 << R"(","pid":)" << 1 + (i + seg) % 7
-            << R"(,"tid":)" << 10 + i % 5 << R"(,"ph":"X","ts":)"
-            << 1000 + i * 10 << R"(,"dur":)" << 3 + i % 50
-            << R"(,"args":{"fname":"/data/s)" << seg << "/f" << (i * step) % 97
-            << R"(","size":)" << (i * 17) % 4096 << R"(,"hhash":"h)"
-            << (pick + variant) % 17 << R"(","path":"/p)" << seg % 5 << "/q"
-            << (pick * 5 + i) % 53 << R"(/r)" << i % 31
-            << R"(","note":"abcdefghijklmnopqrstuvwxyz0123456789"}})"
-            << "\n";
+        out += common::str_cat(
+            R"({"id":)", i, R"(,"name":"op)", pick, R"(","cat":"c)",
+            (pick * 3 + seg) % 11, R"(","pid":)", 1 + (i + seg) % 7,
+            R"(,"tid":)", 10 + i % 5, R"(,"ph":"X","ts":)", 1000 + i * 10,
+            R"(,"dur":)", 3 + i % 50, R"(,"args":{"fname":"/data/s)", seg, "/f",
+            (i * step) % 97, R"(","size":)", (i * 17) % 4096, R"(,"hhash":"h)",
+            (pick + variant) % 17, R"(","path":"/p)", seg % 5, "/q",
+            (pick * 5 + i) % 53, R"(/r)", i % 31,
+            R"(","note":"abcdefghijklmnopqrstuvwxyz0123456789"}})", "\n");
     }
-    out << "]\n";
-    return dftu_utils_test::write_gz_trace(dir + "/" + stem + ".pfw.gz",
-                                           out.str());
+    out += "]\n";
+    return dftu_utils_test::write_gz_trace(dir + "/" + stem + ".pfw.gz", out);
 }
 
-build::IndexBuildBatchResult build_with(const std::vector<std::string>& files,
-                                        const std::string& index_dir,
+build::IndexBuildBatchResult build_with(const dstd::Vector<dstd::String>& files,
+                                        const dstd::String& index_dir,
                                         std::size_t workers,
                                         std::uint64_t budget) {
     build::IndexBuildBatchResult result;
-    const std::string staging = index_dir + ".staging";
-    auto counter = std::make_shared<std::atomic<std::size_t>>(0);
+    const dstd::String staging = index_dir + ".staging";
+    auto counter = dstd::make_shared<std::atomic<std::size_t>>(0);
     Runtime rt(workers);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
         auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
@@ -109,12 +111,12 @@ struct Peak {
     std::size_t in_flight = 0;
 };
 
-Peak peak_of_build(const std::vector<std::string>& files,
-                   const std::string& index_dir, std::size_t workers,
+Peak peak_of_build(const dstd::Vector<dstd::String>& files,
+                   const dstd::String& index_dir, std::size_t workers,
                    std::uint64_t budget) {
     std::atomic<bool> done{false};
     std::atomic<std::size_t> peak{0};
-    std::thread sampler([&] {
+    dstd::Thread sampler([&] {
         while (!done.load(std::memory_order_relaxed)) {
             const auto live = memory::Manager::get().stats().live;
             auto seen = peak.load(std::memory_order_relaxed);
@@ -136,8 +138,8 @@ Peak peak_of_build(const std::vector<std::string>& files,
 using Family = dstd::Vector<dstd::Pair<dstd::String, dstd::String>>;
 using Dump = dstd::Map<dstd::String, Family>;
 
-Dump dump_index(const std::string& first_file, const std::string& index_dir) {
-    const auto path = std::string(
+Dump dump_index(const dstd::String& first_file, const dstd::String& index_dir) {
+    const auto path = dstd::String(
         trace::internal::determine_index_path(first_file, index_dir));
     Dump out;
     for (auto& record : dftu_utils_test::dump_index(path))
@@ -167,7 +169,7 @@ void check_same(const Dump& a, const Dump& b, const char* what) {
 TEST_SUITE("DesignA") {
     TEST_CASE("the peak stays under the budget at 2 and at 16 workers") {
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < SMALL_FILES; ++i)
             files.push_back(small_trace(env.get_dir(), i));
 
@@ -223,7 +225,7 @@ TEST_SUITE("DesignA") {
     TEST_CASE("the parse probes cost nothing and count only when enabled") {
         constexpr int BIG_LINES = SEGMENT_LINES * 8;
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         files.push_back(big_trace(env.get_dir(), "big", BIG_LINES, 0));
 
         build::g_probe_parse.store(false);
@@ -244,7 +246,7 @@ TEST_SUITE("DesignA") {
         constexpr std::size_t WORKERS = 8;
         constexpr int LINES = SEGMENT_LINES * 12;
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         files.push_back(big_trace(env.get_dir(), "a", LINES, 1));
         files.push_back(small_trace(env.get_dir(), 0));
 
@@ -255,7 +257,7 @@ TEST_SUITE("DesignA") {
         const auto order = build::g_intern_order_digest.load();
         const auto expect = dump_index(files[0], env.get_dir() + "/idx1");
         for (int run = 0; run < 3; ++run) {
-            const auto dir = env.get_dir() + "/idx_par" + std::to_string(run);
+            const auto dir = env.get_dir() + "/idx_par" + dstd::to_string(run);
             build::g_intern_order_digest.store(0);
             const auto many = build_with(files, dir, WORKERS, 0);
             REQUIRE(many.indexed == files.size());

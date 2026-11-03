@@ -10,8 +10,6 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
 
 using namespace dftracer::utils;
 

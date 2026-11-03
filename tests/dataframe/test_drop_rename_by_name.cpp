@@ -13,8 +13,6 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
 #include <stdexcept>
 
 using namespace dftracer::utils;
@@ -67,8 +65,8 @@ class DynCursor : public Cursor {
 
    private:
     dstd::Vector<dstd::String> dyn_;
-    dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
-        dstd::make_shared<dftracer::utils::dstd::StringIntern>();
+    dstd::SharedPtr<dstd::StringIntern> intern_ =
+        dstd::make_shared<dstd::StringIntern>();
     int next_ = 0;
 };
 

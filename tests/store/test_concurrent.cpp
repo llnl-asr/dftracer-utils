@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/data_file.h>
@@ -24,18 +28,18 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
-#include <map>
 #include <string>
 #include <thread>
 #include <utility>
 #include <variant>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
     static void reopen_read_only(DataFileWriter& writer,
-                                 const std::string& path) {
+                                 const dstd::String& path) {
         if (writer.fd_ >= 0) ::close(writer.fd_);
         writer.fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     }
@@ -45,12 +49,11 @@ struct DataFileWriterTestHook {
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
 using dftracer::utils::Runtime;
-using dftracer::utils::dstd::ByteView;
-using dftracer::utils::dstd::Condition;
+using dstd::ByteView;
+using dstd::Condition;
 using store::Batch;
 using store::FoldKind;
 using store::NamespaceSpec;
@@ -85,68 +88,59 @@ constexpr bool SANITIZED = false;
 constexpr bool SANITIZED = false;
 #endif
 
-ByteView view_of(const std::string& bytes) {
+ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::String dstring(const std::string& value) {
-    return dstd::String(value.data(), value.size());
+dstd::String to_std(ByteView bytes) {
+    return dstd::String(reinterpret_cast<const char*>(bytes.data()),
+                        bytes.size());
 }
 
-std::string to_std(ByteView bytes) {
-    return std::string(reinterpret_cast<const char*>(bytes.data()),
-                       bytes.size());
-}
-
-std::string to_std(const dstd::String& value) {
-    return std::string(value.data(), value.size());
-}
-
-std::string i64_bytes(std::int64_t value) {
-    std::string bytes(8, '\0');
-    dftracer::utils::dstd::write_u64_le(
-        reinterpret_cast<std::uint8_t*>(bytes.data()),
-        static_cast<std::uint64_t>(value));
+dstd::String i64_bytes(std::int64_t value) {
+    dstd::String bytes(8, '\0');
+    dstd::write_u64_le(reinterpret_cast<std::uint8_t*>(bytes.data()),
+                       static_cast<std::uint64_t>(value));
     return bytes;
 }
 
 std::int64_t read_i64(ByteView bytes) {
     REQUIRE(bytes.size() == 8);
-    return std::bit_cast<std::int64_t>(dftracer::utils::dstd::read_u64_le(
-        reinterpret_cast<const std::uint8_t*>(bytes.data())));
+    return std::bit_cast<std::int64_t>(
+        dstd::read_u64_le(reinterpret_cast<const std::uint8_t*>(bytes.data())));
 }
 
-NamespaceSpec put_spec(const std::string& name, std::uint32_t version = 0) {
+NamespaceSpec put_spec(const dstd::String& name, std::uint32_t version = 0) {
     NamespaceSpec spec;
-    spec.name = dstring(name);
+    spec.name = dstd::String(name);
     spec.format_version = version;
     spec.fold = FoldKind::None;
     return spec;
 }
 
-NamespaceSpec fold_spec(const std::string& name, FoldKind kind) {
+NamespaceSpec fold_spec(const dstd::String& name, FoldKind kind) {
     NamespaceSpec spec;
-    spec.name = dstring(name);
+    spec.name = dstd::String(name);
     spec.format_version = 0;
     spec.fold = kind;
     return spec;
 }
 
-NamespaceSpec durable_spec(const std::string& name, bool durable) {
+NamespaceSpec durable_spec(const dstd::String& name, bool durable) {
     NamespaceSpec spec;
-    spec.name = dstring(name);
+    spec.name = dstd::String(name);
     spec.format_version = 0;
     spec.fold = FoldKind::None;
     spec.durable = durable;
     return spec;
 }
 
-ScopeKey file_scope(const std::string& path) {
-    return ScopeKey::file(dstring(path));
+ScopeKey file_scope(const dstd::String& path) {
+    return ScopeKey::file(dstd::String(path));
 }
 
-std::string scope_path(int index) {
-    return "/data/file-" + std::to_string(index) + ".dft";
+dstd::String scope_path(int index) {
+    return "/data/file-" + dstd::to_string(index) + ".dft";
 }
 
 WriterOptions store_options(std::uint32_t extent_size,
@@ -156,8 +150,8 @@ WriterOptions store_options(std::uint32_t extent_size,
     options.extent_size = extent_size;
     options.commit_bytes = commit_bytes;
     options.commit_interval = commit_interval;
-    options.host = dstring("host");
-    options.label = dstring("label");
+    options.host = dstd::String("host");
+    options.label = dstd::String("label");
     return options;
 }
 
@@ -202,35 +196,34 @@ dstd::Expected<void, dstd::Error> commit_waiting(Writer& writer,
     }
 }
 
-std::vector<std::uint8_t> read_file(const std::string& path) {
-    std::ifstream input(path.c_str(), std::ios::binary);
-    return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(input),
-                                     std::istreambuf_iterator<char>());
+dstd::Vector<std::uint8_t> read_file(const dstd::String& path) {
+    const dstd::String text = dftu_utils_test::read_text(path);
+    return dstd::Vector<std::uint8_t>(text.begin(), text.end());
 }
 
-std::string copy_out(const std::string& source,
-                     const dftu_utils_test::ScopedTestDir& target,
-                     const std::string& name) {
-    const std::vector<std::uint8_t> bytes = read_file(source);
-    std::ofstream output((target.file(name)).c_str(), std::ios::binary);
+dstd::String copy_out(const dstd::String& source,
+                      const dftu_utils_test::ScopedTestDir& target,
+                      const dstd::String& name) {
+    const dstd::Vector<std::uint8_t> bytes = read_file(source);
+    dftu_utils_test::FileOut output(target.file(name));
     output.write(reinterpret_cast<const char*>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));
     output.close();
     return target.str();
 }
 
-std::size_t record_count(const std::string& path) {
-    auto reader = DataFileReader::open(dstring(path));
+std::size_t record_count(const dstd::String& path) {
+    auto reader = DataFileReader::open(dstd::String(path));
     if (!reader) return 0;
     return reader->records_read();
 }
 
 /// Every extent ref a file holds names a copy the same file announces, so a
 /// byte copy of it never holds an extent whose items are still to come.
-void check_extent_refs_announced(const std::string& path) {
-    auto reader = DataFileReader::open(dstring(path));
+void check_extent_refs_announced(const dstd::String& path) {
+    auto reader = DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
-    std::vector<std::uint32_t> copies;
+    dstd::Vector<std::uint32_t> copies;
     for (const store::engine::CopyItem& copy : reader->index().copies) {
         copies.push_back(copy.local_id);
     }
@@ -244,20 +237,20 @@ void check_extent_refs_announced(const std::string& path) {
     }
 }
 
-std::vector<std::uint64_t> copy_generations(const std::string& path) {
-    auto reader = DataFileReader::open(dstring(path));
+dstd::Vector<std::uint64_t> copy_generations(const dstd::String& path) {
+    auto reader = DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
-    std::vector<std::uint64_t> out;
+    dstd::Vector<std::uint64_t> out;
     for (const store::engine::CopyItem& copy : reader->index().copies) {
         out.push_back(copy.generation);
     }
     return out;
 }
 
-std::vector<std::uint64_t> drop_generations(const std::string& path) {
-    auto reader = DataFileReader::open(dstring(path));
+dstd::Vector<std::uint64_t> drop_generations(const dstd::String& path) {
+    auto reader = DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
-    std::vector<std::uint64_t> out;
+    dstd::Vector<std::uint64_t> out;
     for (const store::engine::DropItem& drop : reader->index().drops) {
         out.push_back(drop.generation);
     }
@@ -265,35 +258,36 @@ std::vector<std::uint64_t> drop_generations(const std::string& path) {
 }
 
 struct Row {
-    std::string scope;
-    std::string key;
-    std::string value;
+    dstd::String scope;
+    dstd::String key;
+    dstd::String value;
 };
 
-std::vector<Row> collect(store::engine::ScanCursor& cursor) {
-    std::vector<Row> rows;
+dstd::Vector<Row> collect(store::engine::ScanCursor& cursor) {
+    dstd::Vector<Row> rows;
     while (!cursor.at_end()) {
         auto value = cursor.value();
         REQUIRE(value.has_value());
         REQUIRE_FALSE(cursor.scope().paths.empty());
-        rows.push_back({to_std(cursor.scope().paths[0]), to_std(cursor.key()),
-                        to_std(*value)});
+        rows.push_back({dstd::String(cursor.scope().paths[0]),
+                        to_std(cursor.key()), to_std(*value)});
         cursor.next();
     }
     return rows;
 }
 
-using RowsByScope = std::map<dstd::Pair<std::string, std::string>, std::string>;
+using RowsByScope =
+    dstd::Map<dstd::Pair<dstd::String, dstd::String>, dstd::String>;
 
-RowsByScope index_rows(const std::vector<Row>& rows) {
+RowsByScope index_rows(const dstd::Vector<Row>& rows) {
     RowsByScope out;
     for (const Row& row : rows) out[{row.scope, row.key}] = row.value;
     return out;
 }
 
-std::string batch_key(int index) {
-    const std::string digits = std::to_string(index);
-    return "b" + std::string(3 - digits.size(), '0') + digits + "-k";
+dstd::String batch_key(int index) {
+    const dstd::String digits = dstd::to_string(index);
+    return "b" + dstd::String(3 - digits.size(), '0') + digits + "-k";
 }
 
 }  // namespace
@@ -323,22 +317,22 @@ TEST_CASE("many threads commit and one close keeps every key and every sum") {
         return scope_path((thread * 31 + batch * 7) % SCOPES);
     };
     const auto key_of = [](int thread, int batch, int key) {
-        return "t" + std::to_string(thread) + "-b" + std::to_string(batch) +
-               "-k" + std::to_string(key);
+        return "t" + dstd::to_string(thread) + "-b" + dstd::to_string(batch) +
+               "-k" + dstd::to_string(key);
     };
-    const auto value_of = [](const std::string& tag, int thread, int batch,
+    const auto value_of = [](const dstd::String& tag, int thread, int batch,
                              int key) {
-        return tag + "-" + std::to_string(thread) + "-" +
-               std::to_string(batch) + "-" + std::to_string(key);
+        return tag + "-" + dstd::to_string(thread) + "-" +
+               dstd::to_string(batch) + "-" + dstd::to_string(key);
     };
-    const auto fold_key = [](int key) { return "m" + std::to_string(key); };
+    const auto fold_key = [](int key) { return "m" + dstd::to_string(key); };
 
     RowsByScope expected_a;
     RowsByScope expected_b;
-    std::map<std::string, std::int64_t> expected_sum;
+    dstd::Map<dstd::String, std::int64_t> expected_sum;
     for (int t = 0; t < THREADS; ++t) {
         for (int b = 0; b < BATCHES; ++b) {
-            const std::string scope = scope_of(t, b);
+            const dstd::String scope = scope_of(t, b);
             for (int k = 0; k < KEYS; ++k) {
                 expected_a[{scope, key_of(t, b, k)}] = value_of("a", t, b, k);
                 expected_b[{scope, key_of(t, b, k)}] = value_of("b", t, b, k);
@@ -350,7 +344,7 @@ TEST_CASE("many threads commit and one close keeps every key and every sum") {
     }
 
     std::atomic<bool> failed{false};
-    std::vector<std::thread> workers;
+    dstd::Vector<dstd::Thread> workers;
     workers.reserve(THREADS);
     for (int t = 0; t < THREADS; ++t) {
         workers.emplace_back([&, t] {
@@ -360,15 +354,15 @@ TEST_CASE("many threads commit and one close keeps every key and every sum") {
                 Batch other = writer->batch(raw_b, scope, 0);
                 Batch sum = writer->batch(sums, scope, 0);
                 for (int k = 0; k < KEYS; ++k) {
-                    const std::string key = key_of(t, b, k);
-                    const std::string first = value_of("a", t, b, k);
-                    const std::string second = value_of("b", t, b, k);
+                    const dstd::String key = key_of(t, b, k);
+                    const dstd::String first = value_of("a", t, b, k);
+                    const dstd::String second = value_of("b", t, b, k);
                     a.put(view_of(key), view_of(first));
                     other.put(view_of(key), view_of(second));
                 }
                 for (int k = 0; k < FOLD_KEYS; ++k) {
-                    const std::string value = i64_bytes(t + 1);
-                    const std::string key = fold_key(k);
+                    const dstd::String value = i64_bytes(t + 1);
+                    const dstd::String key = fold_key(k);
                     sum.fold(view_of(key), view_of(value));
                 }
                 if (!commit_waiting(*writer, std::move(a)).has_value())
@@ -380,7 +374,7 @@ TEST_CASE("many threads commit and one close keeps every key and every sum") {
             }
         });
     }
-    for (std::thread& worker : workers) worker.join();
+    for (dstd::Thread& worker : workers) worker.join();
     REQUIRE_FALSE(failed.load());
 
     auto closed = close_writer(*writer);
@@ -401,8 +395,8 @@ TEST_CASE("many threads commit and one close keeps every key and every sum") {
 
     auto sums_cursor =
         snapshot->scan_all(fold_spec("sums", FoldKind::SumI64), {}, {});
-    std::map<std::string, std::int64_t> got_sum;
-    const std::vector<Row> sum_rows = collect(sums_cursor);
+    dstd::Map<dstd::String, std::int64_t> got_sum;
+    const dstd::Vector<Row> sum_rows = collect(sums_cursor);
     for (const Row& row : sum_rows) {
         got_sum[row.key] = read_i64(view_of(row.value));
     }
@@ -424,12 +418,12 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
     REQUIRE(created.has_value());
     const NamespaceId space = *created;
     const ScopeKey scope = file_scope("/data/atomic.dft");
-    const std::string file_name = to_std(writer->name());
+    const dstd::String file_name = dstd::String(writer->name());
 
     std::atomic<int> next_batch{0};
     std::atomic<int> running{THREADS};
     std::atomic<bool> failed{false};
-    std::vector<std::thread> workers;
+    dstd::Vector<dstd::Thread> workers;
     workers.reserve(THREADS);
     for (int t = 0; t < THREADS; ++t) {
         workers.emplace_back([&] {
@@ -438,10 +432,10 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
                 if (batch >= THREADS * BATCHES) break;
                 Batch entries = writer->batch(space, scope, 0);
                 for (int k = 0; k < KEYS; ++k) {
-                    const std::string key =
-                        batch_key(batch) + std::to_string(k);
-                    const std::string value =
-                        "v" + std::to_string(batch) + "-" + std::to_string(k);
+                    const dstd::String key =
+                        batch_key(batch) + dstd::to_string(k);
+                    const dstd::String value =
+                        "v" + dstd::to_string(batch) + "-" + dstd::to_string(k);
                     entries.put(view_of(key), view_of(value));
                 }
                 if (!commit_waiting(*writer, std::move(entries)).has_value()) {
@@ -455,8 +449,8 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
     std::size_t ready_samples = 0;
     std::size_t visible_samples = 0;
     const auto sample = [&] {
-        const std::string copy =
-            copy_out(to_std(writer->path()), copies, file_name);
+        const dstd::String copy =
+            copy_out(dstd::String(writer->path()), copies, file_name);
         check_extent_refs_announced(copies.file(file_name));
         auto snapshot = Snapshot::open(copy);
         if (!snapshot.has_value() ||
@@ -465,13 +459,13 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
         }
         ++ready_samples;
         auto cursor = snapshot->scan_all(spec, {}, {});
-        std::map<int, std::size_t> per_batch;
+        dstd::Map<int, std::size_t> per_batch;
         while (!cursor.at_end()) {
             auto value = cursor.value();
             REQUIRE(value.has_value());
-            const std::string key = to_std(cursor.key());
+            const dstd::String key = to_std(cursor.key());
             REQUIRE(key.size() > 4);
-            const int batch = std::stoi(key.substr(1, 3));
+            const int batch = dftu_utils_test::to_number<int>(key.substr(1, 3));
             ++per_batch[batch];
             cursor.next();
         }
@@ -483,7 +477,7 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
     while (running.load() > 0) sample();
     for (int i = 0; i < 3; ++i) sample();
 
-    for (std::thread& worker : workers) worker.join();
+    for (dstd::Thread& worker : workers) worker.join();
     REQUIRE_FALSE(failed.load());
     CHECK(ready_samples > 0);
     CHECK(visible_samples > 0);
@@ -495,11 +489,12 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
     REQUIRE(snapshot.has_value());
     REQUIRE(snapshot->state(spec, scope) == ScopeState::Ready);
     auto cursor = snapshot->scan_all(spec, {}, {});
-    std::map<int, std::size_t> per_batch;
+    dstd::Map<int, std::size_t> per_batch;
     while (!cursor.at_end()) {
         auto value = cursor.value();
         REQUIRE(value.has_value());
-        const int batch = std::stoi(to_std(cursor.key()).substr(1, 3));
+        const int batch =
+            dftu_utils_test::to_number<int>(to_std(cursor.key()).substr(1, 3));
         ++per_batch[batch];
         cursor.next();
     }
@@ -520,8 +515,8 @@ TEST_CASE("flush makes a committed batch visible in a byte copy") {
 
     Batch entries = writer->batch(*created, scope, 0);
     for (int k = 0; k < 5; ++k) {
-        const std::string key = "k" + std::to_string(k);
-        const std::string value = "v" + std::to_string(k);
+        const dstd::String key = "k" + dstd::to_string(k);
+        const dstd::String value = "v" + dstd::to_string(k);
         entries.put(view_of(key), view_of(value));
     }
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -529,14 +524,14 @@ TEST_CASE("flush makes a committed batch visible in a byte copy") {
     auto flushed = flush_writer(*writer);
     REQUIRE(flushed.has_value());
 
-    const std::string copy =
-        copy_out(to_std(writer->path()), copies, to_std(writer->name()));
+    const dstd::String copy = copy_out(dstd::String(writer->path()), copies,
+                                       dstd::String(writer->name()));
     auto snapshot = Snapshot::open(copy);
     REQUIRE(snapshot.has_value());
     REQUIRE(snapshot->state(spec, scope) == ScopeState::Ready);
     for (int k = 0; k < 5; ++k) {
-        const std::string key = "k" + std::to_string(k);
-        const std::string expected = "v" + std::to_string(k);
+        const dstd::String key = "k" + dstd::to_string(k);
+        const dstd::String expected = "v" + dstd::to_string(k);
         auto value = snapshot->get(spec, scope, view_of(key));
         REQUIRE(value.has_value());
         REQUIRE(value->has_value());
@@ -547,35 +542,33 @@ TEST_CASE("flush makes a committed batch visible in a byte copy") {
     REQUIRE(closed.has_value());
 }
 
-static std::vector<std::uint8_t> read_range(const std::string& path,
-                                            std::uint64_t offset,
-                                            std::size_t length) {
-    std::ifstream input(path.c_str(), std::ios::binary);
-    input.seekg(static_cast<std::streamoff>(offset));
-    std::vector<std::uint8_t> bytes(length);
-    input.read(reinterpret_cast<char*>(bytes.data()),
-               static_cast<std::streamsize>(length));
-    bytes.resize(static_cast<std::size_t>(input.gcount()));
-    return bytes;
+static dstd::Vector<std::uint8_t> read_range(const dstd::String& path,
+                                             std::uint64_t offset,
+                                             std::size_t length) {
+    const dstd::String text = dftu_utils_test::read_text(path);
+    if (offset >= text.size()) return {};
+    const std::size_t count =
+        std::min(length, text.size() - static_cast<std::size_t>(offset));
+    return dstd::Vector<std::uint8_t>(
+        text.begin() + static_cast<std::ptrdiff_t>(offset),
+        text.begin() + static_cast<std::ptrdiff_t>(offset + count));
 }
 
 /// True when the record the file's header names as its tail holds an extent ref
 /// with a segment whose key range is exactly `key`. Reading the tail record
 /// alone keeps the check off the rest of the file, which grows while it runs.
-static bool marker_recorded(const std::string& path, const std::string& key) {
-    const std::vector<std::uint8_t> header =
+static bool marker_recorded(const dstd::String& path, const dstd::String& key) {
+    const dstd::Vector<std::uint8_t> header =
         read_range(path, 0, store::engine::FILE_HEADER_BYTES);
     if (header.size() < store::engine::FILE_HEADER_BYTES) return false;
-    const std::size_t tail_at =
-        48 + dftracer::utils::dstd::read_u16_le(header.data() + 44) +
-        dftracer::utils::dstd::read_u16_le(header.data() + 46);
-    const std::uint64_t tail =
-        dftracer::utils::dstd::read_u64_le(header.data() + tail_at);
-    const std::vector<std::uint8_t> prefix = read_range(path, tail, 16);
+    const std::size_t tail_at = 48 + dstd::read_u16_le(header.data() + 44) +
+                                dstd::read_u16_le(header.data() + 46);
+    const std::uint64_t tail = dstd::read_u64_le(header.data() + tail_at);
+    const dstd::Vector<std::uint8_t> prefix = read_range(path, tail, 16);
     if (prefix.size() != 16) return false;
     const std::size_t record_bytes =
-        40 + dftracer::utils::dstd::read_u32_le(prefix.data() + 12) + 4;
-    const std::vector<std::uint8_t> bytes =
+        40 + dstd::read_u32_le(prefix.data() + 12) + 4;
+    const dstd::Vector<std::uint8_t> bytes =
         read_range(path, tail, record_bytes);
     if (bytes.size() != record_bytes) return false;
     auto record =
@@ -624,11 +617,11 @@ TEST_CASE("flush holds every batch committed before it under other threads") {
     const NamespaceId space = *created;
     const ScopeKey background_scope = file_scope("/data/background.dft");
     const ScopeKey marker_scope = file_scope("/data/marker.dft");
-    const std::string value = "value";
+    const dstd::String value = "value";
 
     std::atomic<bool> stop{false};
     std::atomic<bool> failed{false};
-    std::vector<std::thread> writers;
+    dstd::Vector<dstd::Thread> writers;
     writers.reserve(BACKGROUND);
     for (std::uint32_t t = 0; t < BACKGROUND; ++t) {
         writers.emplace_back([&, t] {
@@ -637,9 +630,9 @@ TEST_CASE("flush holds every batch committed before it under other threads") {
                    count < BACKGROUND_BATCHES) {
                 Batch entries = writer->batch(space, background_scope, 0);
                 for (int k = 0; k < KEYS; ++k) {
-                    const std::string key = "t" + std::to_string(t) + "-" +
-                                            std::to_string(count) + "-" +
-                                            std::to_string(k);
+                    const dstd::String key = "t" + dstd::to_string(t) + "-" +
+                                             dstd::to_string(count) + "-" +
+                                             dstd::to_string(k);
                     entries.put(view_of(key), view_of(value));
                 }
                 if (!commit_waiting(*writer, std::move(entries)).has_value()) {
@@ -650,11 +643,11 @@ TEST_CASE("flush holds every batch committed before it under other threads") {
         });
     }
 
-    const std::string path = to_std(writer->path());
+    const dstd::String path = dstd::String(writer->path());
     int missing = 0;
     int first_missing = -1;
     for (int round = 0; round < ROUNDS; ++round) {
-        const std::string key = "marker-" + std::to_string(round);
+        const dstd::String key = "marker-" + dstd::to_string(round);
         Batch marker = writer->batch(space, marker_scope, 0);
         marker.put(view_of(key), view_of(value));
         REQUIRE(commit_waiting(*writer, std::move(marker)).has_value());
@@ -667,7 +660,7 @@ TEST_CASE("flush holds every batch committed before it under other threads") {
     }
 
     stop.store(true, std::memory_order_release);
-    for (std::thread& worker : writers) worker.join();
+    for (dstd::Thread& worker : writers) worker.join();
     CHECK_FALSE(failed.load());
     INFO("first missing marker: " << first_missing);
     CHECK(missing == 0);
@@ -682,14 +675,14 @@ TEST_CASE("every extent ref carries the sequence of the record that holds it") {
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
     const ScopeKey scope = file_scope("/data/sequences.dft");
-    const std::string value(700, 'r');
+    const dstd::String value(700, 'r');
 
     constexpr int ROUNDS = 12;
     for (int round = 0; round < ROUNDS; ++round) {
         Batch entries = writer->batch(*created, scope, 0);
         for (int k = 0; k < 3; ++k) {
-            const std::string key =
-                "r" + std::to_string(round) + "-" + std::to_string(k);
+            const dstd::String key =
+                "r" + dstd::to_string(round) + "-" + dstd::to_string(k);
             entries.put(view_of(key), view_of(value));
         }
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -697,8 +690,8 @@ TEST_CASE("every extent ref carries the sequence of the record that holds it") {
     }
     REQUIRE(close_writer(*writer).has_value());
 
-    const std::string path = to_std(writer->path());
-    const std::vector<std::uint8_t> file = read_file(path);
+    const dstd::String path = dstd::String(writer->path());
+    const dstd::Vector<std::uint8_t> file = read_file(path);
     std::size_t refs = 0;
     for (std::size_t offset = store::engine::FILE_HEADER_BYTES;
          offset + 40U <= file.size();
@@ -718,7 +711,7 @@ TEST_CASE("every extent ref carries the sequence of the record that holds it") {
     }
     CHECK(refs >= ROUNDS);
 
-    auto reader = DataFileReader::open(dstring(path));
+    auto reader = DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
     CHECK(reader->index().last_sequence ==
           static_cast<std::uint64_t>(ROUNDS) + 1U);
@@ -742,12 +735,12 @@ TEST_CASE(
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
     const ScopeKey scope = file_scope("/data/sized.dft");
-    const std::string file_name = to_std(writer->name());
-    const std::string big_value(5000, 'x');
+    const dstd::String file_name = dstd::String(writer->name());
+    const dstd::String big_value(5000, 'x');
 
     int extent = 0;
     const auto commit_extent = [&] {
-        const std::string key = "p" + std::to_string(extent);
+        const dstd::String key = "p" + dstd::to_string(extent);
         Batch entries = writer->batch(*created, scope, 0);
         entries.put(view_of(key), view_of(big_value));
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -756,7 +749,7 @@ TEST_CASE(
     // The record is in the file as soon as its pwrite returns, so the reader
     // of the live file sees it. A byte copy adds an fd and a race to that.
     const auto records_now = [&] {
-        return record_count(to_std(writer->path()));
+        return record_count(dstd::String(writer->path()));
     };
 
     for (int i = 0; i < QUIET_BATCHES; ++i) commit_extent();
@@ -788,15 +781,15 @@ TEST_CASE("group commit by time writes a record without flush") {
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
     const ScopeKey scope = file_scope("/data/timed.dft");
-    const std::string file_name = to_std(writer->name());
+    const dstd::String file_name = dstd::String(writer->name());
 
     Batch entries = writer->batch(*created, scope, 0);
-    const std::string key = "only";
-    const std::string big_value(5000, 'y');
+    const dstd::String key = "only";
+    const dstd::String big_value(5000, 'y');
     entries.put(view_of(key), view_of(big_value));
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
 
-    const std::string source = to_std(writer->path());
+    const dstd::String source = dstd::String(writer->path());
     const auto started = std::chrono::steady_clock::now();
     bool appeared = false;
     while (std::chrono::steady_clock::now() - started <
@@ -827,9 +820,9 @@ TEST_CASE(
     const NamespaceId volatile_space = *created;
     const ScopeKey scope = file_scope("/data/durable.dft");
 
-    const auto commit = [&](NamespaceId space, const std::string& key) {
+    const auto commit = [&](NamespaceId space, const dstd::String& key) {
         Batch entries = writer->batch(space, scope, 0);
-        entries.put(view_of(key), view_of(std::string("value")));
+        entries.put(view_of(key), view_of(dstd::String("value")));
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
     };
 
@@ -863,11 +856,11 @@ TEST_CASE("one publish of several building copies writes one record") {
 
     for (const NamespaceId space : {*first, *second}) {
         Batch entries = writer->building_batch(space, scope);
-        entries.put(view_of(std::string("k")), view_of(std::string("v")));
+        entries.put(view_of(dstd::String("k")), view_of(dstd::String("v")));
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
     }
     Batch entries = writer->building_batch(*first, other);
-    entries.put(view_of(std::string("k")), view_of(std::string("v")));
+    entries.put(view_of(dstd::String("k")), view_of(dstd::String("v")));
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
     REQUIRE(flush_writer(*writer).has_value());
     const std::uint64_t before = CommitterTestHook::syncs();
@@ -906,11 +899,11 @@ TEST_CASE("one apply of a drop, a fail and a publish writes one record") {
 
     for (const NamespaceId space : {*dropped, *failed}) {
         Batch entries = writer->batch(space, scope, 1);
-        entries.put(view_of(std::string("k")), view_of(std::string("old")));
+        entries.put(view_of(dstd::String("k")), view_of(dstd::String("old")));
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
     }
     Batch entries = writer->building_batch(*built, scope);
-    entries.put(view_of(std::string("k")), view_of(std::string("new")));
+    entries.put(view_of(dstd::String("k")), view_of(dstd::String("new")));
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
     REQUIRE(flush_writer(*writer).has_value());
 
@@ -959,7 +952,7 @@ TEST_CASE("an apply with one bad change applies nothing") {
     const ScopeKey unbuilt = file_scope("/data/unbuilt.dft");
 
     Batch plain = writer->batch(*space, scope, 0);
-    plain.put(view_of(std::string("k")), view_of(std::string("v")));
+    plain.put(view_of(dstd::String("k")), view_of(dstd::String("v")));
     REQUIRE(commit_waiting(*writer, std::move(plain)).has_value());
     REQUIRE(flush_writer(*writer).has_value());
 
@@ -1003,10 +996,10 @@ TEST_CASE("a publish with one bad target publishes nothing") {
     const ScopeKey ready = file_scope("/data/ready.dft");
 
     Batch staged = writer->building_batch(*space, building);
-    staged.put(view_of(std::string("k")), view_of(std::string("v")));
+    staged.put(view_of(dstd::String("k")), view_of(dstd::String("v")));
     REQUIRE(commit_waiting(*writer, std::move(staged)).has_value());
     Batch plain = writer->batch(*space, ready, 0);
-    plain.put(view_of(std::string("k")), view_of(std::string("v")));
+    plain.put(view_of(dstd::String("k")), view_of(dstd::String("v")));
     REQUIRE(commit_waiting(*writer, std::move(plain)).has_value());
     REQUIRE(flush_writer(*writer).has_value());
 
@@ -1041,12 +1034,12 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
 
     const auto scope_of = [](int thread) { return scope_path(thread + 10); };
     const auto key_of = [](int thread, int round, int key) {
-        return "t" + std::to_string(thread) + "-r" + std::to_string(round) +
-               "-k" + std::to_string(key);
+        return "t" + dstd::to_string(thread) + "-r" + dstd::to_string(round) +
+               "-k" + dstd::to_string(key);
     };
 
     std::atomic<bool> failed{false};
-    std::vector<std::thread> workers;
+    dstd::Vector<dstd::Thread> workers;
     workers.reserve(THREADS);
     for (int t = 0; t < THREADS; ++t) {
         workers.emplace_back([&, t] {
@@ -1054,7 +1047,7 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
             const auto commit_round = [&](int round) {
                 Batch entries = writer->batch(space, scope, 0);
                 for (int k = 0; k < KEYS; ++k) {
-                    const std::string key = key_of(t, round, k);
+                    const dstd::String key = key_of(t, round, k);
                     entries.put(view_of(key), view_of(key));
                 }
                 if (!commit_waiting(*writer, std::move(entries)).has_value()) {
@@ -1069,14 +1062,14 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
             }
         });
     }
-    for (std::thread& worker : workers) worker.join();
+    for (dstd::Thread& worker : workers) worker.join();
     REQUIRE_FALSE(failed.load());
 
     REQUIRE(close_writer(*writer).has_value());
 
-    const std::string path = to_std(writer->path());
-    std::vector<std::uint64_t> generations = copy_generations(path);
-    const std::vector<std::uint64_t> drops = drop_generations(path);
+    const dstd::String path = dstd::String(writer->path());
+    dstd::Vector<std::uint64_t> generations = copy_generations(path);
+    const dstd::Vector<std::uint64_t> drops = drop_generations(path);
     generations.insert(generations.end(), drops.begin(), drops.end());
     std::sort(generations.begin(), generations.end());
 
@@ -1084,7 +1077,7 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
     // after a failure the next again, so one round adds three: the first commit
     // of the next round finds its copy still live and reuses it.
     const std::uint64_t last_generation = 3 * ROUNDS + 1;
-    std::vector<std::uint64_t> expected;
+    dstd::Vector<std::uint64_t> expected;
     for (int t = 0; t < THREADS; ++t) {
         for (std::uint64_t generation = 1; generation <= last_generation;
              ++generation) {
@@ -1096,7 +1089,7 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
     // twice. Every generation of every scope appears and no other one does.
     generations.erase(std::unique(generations.begin(), generations.end()),
                       generations.end());
-    std::vector<std::uint64_t> distinct_expected;
+    dstd::Vector<std::uint64_t> distinct_expected;
     for (std::uint64_t generation = 1; generation <= last_generation;
          ++generation) {
         distinct_expected.push_back(generation);
@@ -1109,12 +1102,12 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
         const ScopeKey scope = file_scope(scope_of(t));
         REQUIRE(snapshot->state(spec, scope) == ScopeState::Ready);
         auto cursor = snapshot->scan(spec, scope, {}, {});
-        const std::vector<Row> rows = collect(cursor);
+        const dstd::Vector<Row> rows = collect(cursor);
         REQUIRE(rows.size() == static_cast<std::size_t>(KEYS));
-        std::vector<std::string> keys;
+        dstd::Vector<dstd::String> keys;
         for (const Row& row : rows) keys.push_back(row.key);
         std::sort(keys.begin(), keys.end());
-        std::vector<std::string> expected_keys;
+        dstd::Vector<dstd::String> expected_keys;
         for (int k = 0; k < KEYS; ++k) {
             expected_keys.push_back(key_of(t, ROUNDS - 1, k));
         }
@@ -1135,15 +1128,15 @@ TEST_CASE("a writer destroyed without close drains its extent writes") {
         // A value longer than an extent makes every batch a run of its own, so
         // writes are in flight while the writer is destroyed, and the last one
         // stays in an open extent no record names.
-        const std::string big_value(5000, 't');
+        const dstd::String big_value(5000, 't');
         for (int i = 0; i < 64; ++i) {
             Batch entries = writer->batch(*created, scope, 0);
-            entries.put(view_of("k" + std::to_string(i)), view_of(big_value));
+            entries.put(view_of("k" + dstd::to_string(i)), view_of(big_value));
             REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
         }
         Batch open_extent = writer->batch(*created, scope, 0);
-        open_extent.put(view_of(std::string("open")),
-                        view_of(std::string("value")));
+        open_extent.put(view_of(dstd::String("open")),
+                        view_of(dstd::String("value")));
         REQUIRE(commit_waiting(*writer, std::move(open_extent)).has_value());
         CHECK(CommitterTestHook::live_batches() > before);
 
@@ -1165,12 +1158,13 @@ TEST_CASE("a failed extent write deletes the batches of its extent") {
     const ScopeKey scope = file_scope("/data/failed_extent.dft");
 
     Batch entries = writer->batch(*created, scope, 0);
-    entries.put(view_of(std::string("key")), view_of(std::string("value")));
+    entries.put(view_of(dstd::String("key")), view_of(dstd::String("value")));
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
     CHECK(CommitterTestHook::live_batches() == before + 1);
 
     store::engine::DataFileWriterTestHook::reopen_read_only(
-        store::engine::WriterTestHook::file(*writer), to_std(writer->path()));
+        store::engine::WriterTestHook::file(*writer),
+        dstd::String(writer->path()));
     auto flushed = flush_writer(*writer);
     REQUIRE_FALSE(flushed.has_value());
     CHECK(flushed.error().is(Condition::Io));
@@ -1187,9 +1181,9 @@ TEST_CASE("a failed record write latches for commit, flush and close") {
     const NamespaceId space = *created;
     const ScopeKey scope = file_scope("/data/latched.dft");
 
-    const auto commit_one = [&](const std::string& key) {
+    const auto commit_one = [&](const dstd::String& key) {
         Batch entries = writer->batch(space, scope, 0);
-        entries.put(view_of(key), view_of(std::string("value")));
+        entries.put(view_of(key), view_of(dstd::String("value")));
         return commit_waiting(*writer, std::move(entries));
     };
 

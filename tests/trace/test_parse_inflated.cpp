@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/parse_inflated.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
 
 #include <algorithm>
 #include <memory>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::trace::EventRecord;
 using dftracer::utils::trace::PARSE_BATCH_BYTES;
@@ -18,43 +21,41 @@ using dftracer::utils::trace::strip_array_delimiters;
 namespace {
 
 // parse_buffer needs the buffer to carry simdjson's trailing padding.
-dftracer::utils::dstd::SharedPtr<dftracer::utils::dstd::String> padded(
-    const std::string& s) {
-    auto b = dftracer::utils::dstd::make_shared<dftracer::utils::dstd::String>(
-        s.data(), s.size());
+dstd::SharedPtr<dstd::String> padded(const dstd::String& s) {
+    auto b = dstd::make_shared<dstd::String>(s.data(), s.size());
     b->resize(s.size() + simdjson::SIMDJSON_PADDING, '\0');
     return b;
 }
 
 // Parse one buffer and return the event names, plus the trailing byte count the
 // caller would carry into the next chunk.
-std::vector<std::string> parse_names(const std::string& data,
-                                     std::size_t& carry) {
+dstd::Vector<dstd::String> parse_names(const dstd::String& data,
+                                       std::size_t& carry) {
     simdjson::dom::parser parser;
     auto buf = padded(data);
     std::size_t line_no = 0;
-    std::vector<std::string> names;
+    dstd::Vector<dstd::String> names;
     carry = parse_buffer(
         parser, buf, data.size(), 0, line_no,
         [&](const EventRecord& r) { names.emplace_back(r.ev.name); });
     return names;
 }
 
-std::string event(const std::string& name) {
+dstd::String event(const dstd::String& name) {
     return R"({"ph":"X","name":")" + name +
            R"(","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1})";
 }
 
-std::string long_event(const std::string& name, std::size_t line_bytes) {
-    const std::string head = R"({"ph":"X","name":")" + name +
-                             R"(","cat":"POSIX","pid":1,"tid":1,"ts":1,)" +
-                             R"("dur":1,"args":{"blob":")";
-    const std::string tail = R"("}})";
-    return head + std::string(line_bytes - head.size() - tail.size(), 'x') +
+dstd::String long_event(const dstd::String& name, std::size_t line_bytes) {
+    const dstd::String head = R"({"ph":"X","name":")" + name +
+                              R"(","cat":"POSIX","pid":1,"tid":1,"ts":1,)" +
+                              R"("dur":1,"args":{"blob":")";
+    const dstd::String tail = R"("}})";
+    return head + dstd::String(line_bytes - head.size() - tail.size(), 'x') +
            tail;
 }
 
-bool has(const std::vector<std::string>& v, const std::string& s) {
+bool has(const dstd::Vector<dstd::String>& v, const dstd::String& s) {
     return std::find(v.begin(), v.end(), s) != v.end();
 }
 
@@ -62,9 +63,9 @@ bool has(const std::vector<std::string>& v, const std::string& s) {
 
 TEST_SUITE("parse_buffer") {
     TEST_CASE("parses every record in a clean buffer") {
-        std::string data;
+        dstd::String data;
         for (int i = 0; i < 5; ++i)
-            data += event("e" + std::to_string(i)) + "\n";
+            data += event("e" + dstd::to_string(i)) + "\n";
         std::size_t carry = 0;
         auto names = parse_names(data, carry);
         CHECK(names.size() == 5);
@@ -75,7 +76,7 @@ TEST_SUITE("parse_buffer") {
     // record capturing a shell command is the real-world case) desyncs
     // parse_many over the whole batch. The neighbours must still be recovered.
     TEST_CASE("a malformed record drops only itself") {
-        std::string data =
+        dstd::String data =
             event("before") + "\n" +
             R"({"ph":4,"name":"SH","args":{"name":"bash -c "echo )" + "\n" +
             R"(hi"","value":"h1"}})" + "\n" + event("after") + "\n";
@@ -88,16 +89,16 @@ TEST_SUITE("parse_buffer") {
     // A buffer cut mid-record (no closing newline) is carried whole into the
     // next chunk, where the completed record parses.
     TEST_CASE("a record split across chunks is carried and recovered") {
-        std::string full = event("straddle") + "\n";
+        dstd::String full = event("straddle") + "\n";
         std::size_t cut = full.size() - 15;  // mid-record, before any newline
-        std::string first = full.substr(0, cut);
+        dstd::String first = full.substr(0, cut);
 
         std::size_t carry = 0;
         auto n1 = parse_names(first, carry);
         CHECK(n1.empty());
         CHECK(carry == first.size());  // no complete line: carry it all
 
-        std::string second = first + full.substr(cut);
+        dstd::String second = first + full.substr(cut);
         auto n2 = parse_names(second, carry);
         CHECK(has(n2, "straddle"));
     }
@@ -106,8 +107,9 @@ TEST_SUITE("parse_buffer") {
     // only the complete records are parsed and the remainder is reported to
     // carry.
     TEST_CASE("a trailing partial line is not parsed but is carried") {
-        std::string data = event("complete") + "\n" +
-                           R"({"ph":"X","name":"partial","cat":"POS)";  // no \n
+        dstd::String data =
+            event("complete") + "\n" +
+            R"({"ph":"X","name":"partial","cat":"POS)";  // no \n
         std::size_t carry = 0;
         auto names = parse_names(data, carry);
         CHECK(has(names, "complete"));
@@ -118,10 +120,10 @@ TEST_SUITE("parse_buffer") {
     // A buffer of many batches is read batch by batch, so the parser holds
     // one batch whatever the buffer size.
     TEST_CASE("a large buffer grows the parser by one batch, not the buffer") {
-        std::string data;
+        dstd::String data;
         std::size_t count = 0;
         while (data.size() < 8 * PARSE_BATCH_BYTES)
-            data += event("e" + std::to_string(count++)) + "\n";
+            data += event("e" + dstd::to_string(count++)) + "\n";
         simdjson::dom::parser parser;
         auto buf = padded(data);
         std::size_t line_no = 0;
@@ -129,7 +131,7 @@ TEST_SUITE("parse_buffer") {
         bool in_order = true;
         parse_buffer(parser, buf, data.size(), 0, line_no,
                      [&](const EventRecord& r) {
-                         in_order &= r.ev.name == "e" + std::to_string(seen);
+                         in_order &= r.ev.name == "e" + dstd::to_string(seen);
                          ++seen;
                      });
         CHECK(seen == count);
@@ -140,17 +142,17 @@ TEST_SUITE("parse_buffer") {
     // A record longer than a batch is parsed alone; the records on both
     // sides of it still come through in order.
     TEST_CASE("records longer than a batch do not drop their neighbours") {
-        const std::string blob(2 * PARSE_BATCH_BYTES, 'x');
-        std::string data;
-        std::vector<std::string> want;
+        const dstd::String blob(2 * PARSE_BATCH_BYTES, 'x');
+        dstd::String data;
+        dstd::Vector<dstd::String> want;
         for (int round = 0; round < 3; ++round) {
             for (int i = 0; i < 2000; ++i) {
-                want.push_back("r" + std::to_string(round) + "_" +
-                               std::to_string(i));
+                want.push_back("r" + dstd::to_string(round) + "_" +
+                               dstd::to_string(i));
                 data += event(want.back()) + "\n";
             }
-            want.push_back("long" + std::to_string(round));
-            data += R"({"ph":"X","name":"long)" + std::to_string(round) +
+            want.push_back("long" + dstd::to_string(round));
+            data += R"({"ph":"X","name":"long)" + dstd::to_string(round) +
                     R"(","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,)" +
                     R"("args":{"blob":")" + blob + R"("}})" + "\n";
         }
@@ -163,16 +165,16 @@ TEST_SUITE("parse_buffer") {
     }
 
     TEST_CASE("a bad record in the third batch drops only itself") {
-        std::string data;
-        std::vector<std::string> want;
+        dstd::String data;
+        dstd::Vector<dstd::String> want;
         std::size_t count = 0;
         const auto add = [&] {
-            want.push_back("e" + std::to_string(count++));
+            want.push_back("e" + dstd::to_string(count++));
             data += event(want.back()) + "\n";
         };
         while (data.size() < 2 * PARSE_BATCH_BYTES + PARSE_BATCH_BYTES / 2)
             add();
-        data += std::string(
+        data += dstd::String(
                     R"({"ph":4,"name":"SH","args":{"name":"bash -c "echo )") +
                 "\n" + R"(hi"","value":"h1"}})" + "\n";
         while (data.size() < 5 * PARSE_BATCH_BYTES) add();
@@ -183,14 +185,14 @@ TEST_SUITE("parse_buffer") {
     }
 
     TEST_CASE("CRLF line ends parse and the carry counts the bytes after \\n") {
-        std::string data = "[\r\n";
-        std::vector<std::string> want;
+        dstd::String data = "[\r\n";
+        dstd::Vector<dstd::String> want;
         for (int i = 0; i < 50; ++i) {
-            want.push_back("e" + std::to_string(i));
+            want.push_back("e" + dstd::to_string(i));
             data += event(want.back()) + "\r\n";
         }
         data += "]\r\n";
-        const std::string partial = R"({"ph":"X","name":"cut","ca)";
+        const dstd::String partial = R"({"ph":"X","name":"cut","ca)";
         data += partial;
         strip_array_delimiters(data.data(), data.size());
         std::size_t carry = 0;
@@ -205,16 +207,16 @@ TEST_SUITE("parse_buffer") {
               PARSE_BATCH_BYTES - 1, PARSE_BATCH_BYTES,
               PARSE_BATCH_BYTES + 1}) {
             INFO("line bytes: ", bytes);
-            std::string data;
-            std::vector<std::string> want;
+            dstd::String data;
+            dstd::Vector<dstd::String> want;
             for (int i = 0; i < 1500; ++i) {
-                want.push_back("a" + std::to_string(i));
+                want.push_back("a" + dstd::to_string(i));
                 data += event(want.back()) + "\n";
             }
             want.push_back("exact");
             data += long_event("exact", bytes) + "\n";
             for (int i = 0; i < 1500; ++i) {
-                want.push_back("b" + std::to_string(i));
+                want.push_back("b" + dstd::to_string(i));
                 data += event(want.back()) + "\n";
             }
             std::size_t carry = 0;
@@ -225,17 +227,17 @@ TEST_SUITE("parse_buffer") {
     }
 
     TEST_CASE("a long line that is itself bad drops only itself") {
-        std::string bad = long_event("bad", 2 * PARSE_BATCH_BYTES);
+        dstd::String bad = long_event("bad", 2 * PARSE_BATCH_BYTES);
         bad.erase(bad.size() - 3);
-        std::string data;
-        std::vector<std::string> want;
+        dstd::String data;
+        dstd::Vector<dstd::String> want;
         for (int i = 0; i < 2500; ++i) {
-            want.push_back("a" + std::to_string(i));
+            want.push_back("a" + dstd::to_string(i));
             data += event(want.back()) + "\n";
         }
         data += bad + "\n";
         for (int i = 0; i < 2500; ++i) {
-            want.push_back("b" + std::to_string(i));
+            want.push_back("b" + dstd::to_string(i));
             data += event(want.back()) + "\n";
         }
         std::size_t carry = 0;

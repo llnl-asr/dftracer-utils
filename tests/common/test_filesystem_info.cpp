@@ -4,11 +4,12 @@
 #include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <cstdlib>
 #include <fstream>
-#include <string>
 
 using namespace dftracer::utils;
 
@@ -49,7 +50,8 @@ TEST_CASE("list_mounts reports the root mount") {
 }
 
 TEST_CASE("find_mountpoint returns a mounted ancestor") {
-    const std::string mp(common::find_mountpoint("/tmp/a/b/c/deep/path").str());
+    const dstd::String mp(
+        common::find_mountpoint("/tmp/a/b/c/deep/path").str());
     REQUIRE_FALSE(mp.empty());
     // The result must be a prefix of the queried path and a real directory.
     CHECK(dstd::fs::exists(mp).value());
@@ -58,11 +60,11 @@ TEST_CASE("find_mountpoint returns a mounted ancestor") {
 }
 
 TEST_CASE("ScratchSession creates and cleans up its directory") {
-    std::string dir;
+    dstd::String dir;
     {
         common::ScratchSession s;
         REQUIRE(s.valid());  // /tmp forced above
-        dir = std::string(s.dir().str());
+        dir = dstd::String(s.dir().str());
         CHECK(dstd::fs::exists(dir).value());
         CHECK(dstd::fs::is_directory(dir).value());
     }
@@ -70,11 +72,11 @@ TEST_CASE("ScratchSession creates and cleans up its directory") {
 }
 
 TEST_CASE("ScratchSession release keeps the directory") {
-    std::string dir;
+    dstd::String dir;
     {
         common::ScratchSession s;
         REQUIRE(s.valid());
-        dir = std::string(s.dir().str());
+        dir = dstd::String(s.dir().str());
         s.release();
     }
     CHECK(dstd::fs::exists(dir).value());
@@ -84,15 +86,14 @@ TEST_CASE("ScratchSession release keeps the directory") {
 TEST_CASE("publish_path moves a built directory to its destination") {
     common::ScratchSession s;
     REQUIRE(s.valid());
-    const std::string src = std::string(s.dir().str()) + "/build";
+    const dstd::String src = dstd::String(s.dir().str()) + "/build";
     REQUIRE(dstd::fs::create_directories(src).has_value());
     {
-        std::ofstream((src + "/marker.txt").c_str()) << "hello";
+        dftu_utils_test::FileOut(src + "/marker.txt") << "hello";
     }
 
-    const std::string dst = std::string(s.dir().str()) + "/published";
-    common::publish_path(dftracer::utils::dstd::PathView(src),
-                         dftracer::utils::dstd::PathView(dst));
+    const dstd::String dst = dstd::String(s.dir().str()) + "/published";
+    common::publish_path(dstd::PathView(src), dstd::PathView(dst));
 
     CHECK_FALSE(dstd::fs::exists(src).value());
     CHECK(dstd::fs::exists(dst + "/marker.txt").value());

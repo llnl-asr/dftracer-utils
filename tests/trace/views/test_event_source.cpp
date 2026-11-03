@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
 
-#include <map>
 #include <optional>
-#include <string>
-#include <vector>
 
-using dftracer::utils::dstd::StringIntern;
+using namespace dftracer::utils;
+
+using dstd::StringIntern;
 
 // DomSource must reproduce a raw top-then-args simdjson extraction
 // byte-for-byte (the same contract the old view_aggregate helpers gave), so the
@@ -22,23 +24,22 @@ using namespace dftracer::utils::trace::views::detail;
 
 namespace {
 
-FoldEvent extract_fold_event(
-    simdjson::dom::element root, StringIntern& intern, bool needs_args,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>* extra =
-        nullptr,
-    bool capture_schema = false) {
+FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
+                             bool needs_args,
+                             const dstd::Vector<dstd::String>* extra = nullptr,
+                             bool capture_schema = false) {
     FoldEvent ev;
     extract_fold_event_into(ev, root, intern, needs_args, extra,
                             capture_schema);
     return ev;
 }
 
-std::string padded(std::string s) {
+dstd::String padded(dstd::String s) {
     s.resize(s.size() + simdjson::SIMDJSON_PADDING, '\0');
     return s;
 }
 
-simdjson::dom::element parse(simdjson::dom::parser& p, std::string& buf,
+simdjson::dom::element parse(simdjson::dom::parser& p, dstd::String& buf,
                              const char* json) {
     buf = padded(json);
     return p.parse(buf.data(), buf.size() - simdjson::SIMDJSON_PADDING, false)
@@ -47,22 +48,21 @@ simdjson::dom::element parse(simdjson::dom::parser& p, std::string& buf,
 
 // Independent references: a top-then-args string / number extraction straight
 // over the simdjson element, mirroring the contract EventSource must satisfy.
-std::string to_str_ref(simdjson::dom::element e) {
-    dftracer::utils::dstd::StringView s;
-    if (e.get_string().get(s) == simdjson::SUCCESS) return std::string(s);
+dstd::String to_str_ref(simdjson::dom::element e) {
+    dstd::StringView s;
+    if (e.get_string().get(s) == simdjson::SUCCESS) return dstd::String(s);
     std::int64_t i;
-    if (e.get_int64().get(i) == simdjson::SUCCESS) return std::to_string(i);
+    if (e.get_int64().get(i) == simdjson::SUCCESS) return dstd::to_string(i);
     std::uint64_t u;
-    if (e.get_uint64().get(u) == simdjson::SUCCESS) return std::to_string(u);
+    if (e.get_uint64().get(u) == simdjson::SUCCESS) return dstd::to_string(u);
     double d;
-    if (e.get_double().get(d) == simdjson::SUCCESS) return std::to_string(d);
+    if (e.get_double().get(d) == simdjson::SUCCESS) return dstd::to_string(d);
     bool b;
     if (e.get_bool().get(b) == simdjson::SUCCESS) return b ? "true" : "false";
     return {};
 }
 
-dftracer::utils::dstd::Optional<double> to_number_ref(
-    simdjson::dom::element e) {
+dstd::Optional<double> to_number_ref(simdjson::dom::element e) {
     double d;
     if (e.get_double().get(d) == simdjson::SUCCESS) return d;
     std::int64_t i;
@@ -71,11 +71,11 @@ dftracer::utils::dstd::Optional<double> to_number_ref(
     std::uint64_t u;
     if (e.get_uint64().get(u) == simdjson::SUCCESS)
         return static_cast<double>(u);
-    return dftracer::utils::dstd::nullopt;
+    return dstd::nullopt;
 }
 
-std::string top_or_args_str(simdjson::dom::element root,
-                            const std::string& key) {
+dstd::String top_or_args_str(simdjson::dom::element root,
+                             const dstd::String& key) {
     auto r = root[key];
     if (!r.error()) return to_str_ref(r.value_unsafe());
     auto args = root["args"];
@@ -86,8 +86,8 @@ std::string top_or_args_str(simdjson::dom::element root,
     return {};
 }
 
-dftracer::utils::dstd::Optional<double> agg_field(simdjson::dom::element root,
-                                                  const std::string& field) {
+dstd::Optional<double> agg_field(simdjson::dom::element root,
+                                 const dstd::String& field) {
     auto r = root[field];
     if (!r.error()) return to_number_ref(r.value_unsafe());
     auto args = root["args"];
@@ -95,7 +95,7 @@ dftracer::utils::dstd::Optional<double> agg_field(simdjson::dom::element root,
         auto rr = args[field];
         if (!rr.error()) return to_number_ref(rr.value_unsafe());
     }
-    return dftracer::utils::dstd::nullopt;
+    return dstd::nullopt;
 }
 
 }  // namespace
@@ -103,7 +103,7 @@ dftracer::utils::dstd::Optional<double> agg_field(simdjson::dom::element root,
 TEST_SUITE("EventSource") {
     TEST_CASE("DomSource.value matches top_or_args_str across field shapes") {
         simdjson::dom::parser p;
-        std::string buf;
+        dstd::String buf;
         auto root = parse(
             p, buf,
             R"({"ph":"X","name":"read","cat":"POSIX","pid":42,"tid":7,"ts":100,"dur":9,"args":{"fhash":"fh1","ret":4096,"level":"warn"}})");
@@ -113,14 +113,14 @@ TEST_SUITE("EventSource") {
         for (const char* field : {"name", "cat", "pid", "tid", "ts", "dur",
                                   "fhash", "ret", "level", "absent"}) {
             CAPTURE(field);
-            CHECK(std::string(src.value(field)) ==
+            CHECK(dstd::String(src.value(field)) ==
                   top_or_args_str(root, field));
         }
     }
 
     TEST_CASE("DomSource.number matches a raw top-then-args agg_field") {
         simdjson::dom::parser p;
-        std::string buf;
+        dstd::String buf;
         auto root = parse(
             p, buf,
             R"({"ph":"X","name":"read","pid":1,"ts":10,"dur":3,"args":{"ret":8192,"offset":512}})");
@@ -139,13 +139,13 @@ TEST_SUITE("EventSource") {
 
     TEST_CASE("append_value writes the same bytes value returns") {
         simdjson::dom::parser p;
-        std::string buf;
+        dstd::String buf;
         auto root =
             parse(p, buf,
                   R"({"ph":"X","name":"n","pid":123,"args":{"k":"v","m":9}})");
         DomSource src(root);
         for (const char* field : {"name", "pid", "k", "m", "absent"}) {
-            dftracer::utils::dstd::String out = "pre|";
+            dstd::String out = "pre|";
             src.append_value(out, field);
             CHECK(out == "pre|" + src.value(field));
         }
@@ -156,7 +156,7 @@ TEST_SUITE("EventSource") {
     // POD equals scan_fold over the element.
     TEST_CASE("PodSource reproduces DomSource on the same event") {
         simdjson::dom::parser p;
-        std::string buf;
+        dstd::String buf;
         auto root = parse(
             p, buf,
             R"({"ph":"X","name":"read","cat":"POSIX","pid":42,"tid":7,"ts":100,"dur":9,"args":{"fhash":"fh1","hhash":"hh2","ret":4096,"rate":1.5,"path":"/x"}})");
@@ -180,21 +180,19 @@ TEST_SUITE("EventSource") {
         // Group dims read args-only (fhash/hhash/arg), which must also match.
         for (const char* key : {"fhash", "hhash", "ret", "path", "absent"}) {
             CAPTURE(key);
-            dftracer::utils::dstd::String pd, dd;
+            dstd::String pd, dd;
             pod.append_arg(pd, key);
             dom.append_arg(dd, key);
             CHECK(pd == dd);
         }
 
-        std::map<std::string, double> dom_args, pod_args;
-        dom.for_each_numeric_arg(
-            [&](dftracer::utils::dstd::StringView k, double v) {
-                dom_args[std::string(k)] = v;
-            });
-        pod.for_each_numeric_arg(
-            [&](dftracer::utils::dstd::StringView k, double v) {
-                pod_args[std::string(k)] = v;
-            });
+        dstd::Map<dstd::String, double> dom_args, pod_args;
+        dom.for_each_numeric_arg([&](dstd::StringView k, double v) {
+            dom_args[dstd::String(k)] = v;
+        });
+        pod.for_each_numeric_arg([&](dstd::StringView k, double v) {
+            pod_args[dstd::String(k)] = v;
+        });
         CHECK(dom_args == pod_args);
         CHECK(pod.phase() == dom.phase());
     }
@@ -204,7 +202,7 @@ TEST_SUITE("EventSource") {
     // with the explicit "args." prefix, identically through both sources.
     TEST_CASE("flat dotted arg key resolves bare and args.-prefixed") {
         simdjson::dom::parser p;
-        std::string buf;
+        dstd::String buf;
         auto root = parse(
             p, buf,
             R"({"ph":"X","name":"rdma_send","pid":9,"args":{"cqe.raw_ns":2850744041253792,"ibv.qp":4712,"mlx5.op":"SEND"}})");
@@ -231,15 +229,15 @@ TEST_SUITE("EventSource") {
 
     TEST_CASE("for_each_numeric_arg visits every numeric arg once") {
         simdjson::dom::parser p;
-        std::string buf;
+        dstd::String buf;
         auto root = parse(
             p, buf,
             R"({"ph":"X","name":"n","args":{"ret":4096,"offset":512,"path":"/x","dur_d":1.5}})");
         DomSource src(root);
 
-        std::map<std::string, double> seen;
-        src.for_each_numeric_arg([&](dftracer::utils::dstd::StringView k,
-                                     double v) { seen[std::string(k)] = v; });
+        dstd::Map<dstd::String, double> seen;
+        src.for_each_numeric_arg(
+            [&](dstd::StringView k, double v) { seen[dstd::String(k)] = v; });
 
         CHECK(seen.size() == 3);  // ret, offset, dur_d -- not the string path
         CHECK(seen["ret"] == doctest::Approx(4096));

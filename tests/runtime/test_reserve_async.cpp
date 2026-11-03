@@ -3,6 +3,8 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/reserve_async.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -15,7 +17,6 @@
 #include <exception>
 #include <random>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -60,7 +61,7 @@ struct Outcome {
     memory::Status status = memory::Status::Pending;
     std::size_t bytes = 0;
     coro::Executor* resumed_on = nullptr;
-    std::thread::id thread;
+    dstd::Thread::Id thread;
     Clock::duration waited{};
     void* block = nullptr;
 };
@@ -75,7 +76,7 @@ CoroTask<void> wait_for(memory::Pool* pool, std::size_t bytes,
     ReserveAsync::Result r = co_await reserve_async(*pool, bytes, deadline);
     out->waited = Clock::now() - start;
     out->resumed_on = coro::Executor::current();
-    out->thread = std::this_thread::get_id();
+    out->thread = dstd::Thread::current_id();
     if (r) {
         out->status = memory::Status::Ok;
         out->bytes = r->bytes();
@@ -204,9 +205,9 @@ TEST_CASE("a release from a plain thread does not resume the waiter inline") {
     std::atomic<bool> about_to_wait{false};
     TaskHandle w = rt.submit(wait_for(pool.get(), 16 * MIB, Clock::now() + 30s,
                                       &out, &about_to_wait));
-    std::thread::id releaser;
-    std::thread t([&] {
-        releaser = std::this_thread::get_id();
+    dstd::Thread::Id releaser;
+    dstd::Thread t([&] {
+        releaser = dstd::Thread::current_id();
         while (!about_to_wait.load(std::memory_order_acquire)) {
             std::this_thread::yield();
         }
@@ -304,7 +305,7 @@ TEST_CASE("many waiters on several workers end exact") {
     constexpr std::size_t SIZES[] = {8 * MIB, 16 * MIB, 32 * MIB, 48 * MIB};
     Runtime rt(4);
     Budget budget(64 * MIB);
-    std::vector<memory::PoolHandle> pools;
+    dstd::Vector<memory::PoolHandle> pools;
     for (int i = 0; i < TASKS; ++i) pools.push_back(open_pool("t"));
 
     std::atomic<int> granted{0};
@@ -337,7 +338,7 @@ TEST_CASE("many waiters on several workers end exact") {
             }
         }
     };
-    std::vector<TaskHandle> handles;
+    dstd::Vector<TaskHandle> handles;
     for (int i = 0; i < TASKS; ++i) {
         handles.push_back(
             rt.submit(worker(pools[static_cast<std::size_t>(i)].get(),

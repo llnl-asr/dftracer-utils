@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -13,10 +14,11 @@
 
 #include <cstdint>
 #include <span>
-#include <vector>
 
-using dftracer::utils::dstd::StringIntern;
+using namespace dftracer::utils;
+
 using dftracer::utils::trace::RecordPhase;
+using dstd::StringIntern;
 namespace df = dftracer::utils::dataframe;
 namespace detail = dftracer::utils::trace::views::detail;
 using detail::FoldBatch;
@@ -77,11 +79,10 @@ TEST_SUITE("VectorizedFold") {
     TEST_CASE("a batch is folded as columns, not per event") {
         StringIntern in;
         auto fold = make_fold(in);
-        dftracer::utils::dstd::Vector<FoldEvent> evs = {
-            ev(in, 1, 100, 5), ev(in, 1, 110, 5), ev(in, 2, 120, 5)};
+        dstd::Vector<FoldEvent> evs = {ev(in, 1, 100, 5), ev(in, 1, 110, 5),
+                                       ev(in, 2, 120, 5)};
         ScanUnit unit{};
-        fold.step(FoldBatch{
-            dftracer::utils::dstd::Span<const FoldEvent>(evs), unit, {}});
+        fold.step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
         CHECK(fold.result().rows == 3);
         CHECK(fold.result().dur_sum == 15);  // SIMD reduce of the dur column
     }
@@ -91,14 +92,11 @@ TEST_SUITE("VectorizedFold") {
         auto proto = make_fold(in);
         auto a = proto.slice();  // fresh state, like a worker slot
         auto b = proto.slice();
-        dftracer::utils::dstd::Vector<FoldEvent> ea = {ev(in, 1, 1, 10),
-                                                       ev(in, 1, 2, 10)};
-        dftracer::utils::dstd::Vector<FoldEvent> eb = {ev(in, 2, 3, 7)};
+        dstd::Vector<FoldEvent> ea = {ev(in, 1, 1, 10), ev(in, 1, 2, 10)};
+        dstd::Vector<FoldEvent> eb = {ev(in, 2, 3, 7)};
         ScanUnit unit{};
-        a->step(FoldBatch{
-            dftracer::utils::dstd::Span<const FoldEvent>(ea), unit, {}});
-        b->step(FoldBatch{
-            dftracer::utils::dstd::Span<const FoldEvent>(eb), unit, {}});
+        a->step(FoldBatch{dstd::Span<const FoldEvent>(ea), unit, {}});
+        b->step(FoldBatch{dstd::Span<const FoldEvent>(eb), unit, {}});
         a->merge(*b);
 
         const auto* av = static_cast<VectorizedFold<Acc>*>(a.get());
@@ -111,10 +109,9 @@ TEST_SUITE("VectorizedFold") {
         auto fold = make_fold(in);
         FoldEvent m = ev(in, 1, 1, 0);
         m.phase = RecordPhase::Metadata;
-        dftracer::utils::dstd::Vector<FoldEvent> evs = {m};
+        dstd::Vector<FoldEvent> evs = {m};
         ScanUnit unit{};
-        fold.step(FoldBatch{
-            dftracer::utils::dstd::Span<const FoldEvent>(evs), unit, {}});
+        fold.step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
         CHECK(fold.result().rows == 0);
         CHECK(fold.result().dur_sum == 0);
     }

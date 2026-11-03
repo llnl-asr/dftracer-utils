@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 #include <dftracer/utils/trace/comparator/tree_table_formatter.h>
 #include <doctest/doctest.h>
 
 #include <cstdio>
 #include <cstring>
-#include <string>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace::comparator;
 
@@ -14,7 +17,7 @@ using namespace dftracer::utils::trace::comparator;
 // Helpers
 // ---------------------------------------------------------------------------
 
-static MetricComparison make_mc(std::string name, double base, double var) {
+static MetricComparison make_mc(dstd::String name, double base, double var) {
     MetricComparison mc;
     mc.metric_name = std::move(name);
     mc.baseline_value = base;
@@ -24,10 +27,9 @@ static MetricComparison make_mc(std::string name, double base, double var) {
     return mc;
 }
 
-static NodeResult make_node(
-    std::string name,
-    dftracer::utils::dstd::Vector<MetricComparison> summary = {},
-    dftracer::utils::dstd::Vector<NodeResult> children = {}) {
+static NodeResult make_node(dstd::String name,
+                            dstd::Vector<MetricComparison> summary = {},
+                            dstd::Vector<NodeResult> children = {}) {
     NodeResult n;
     n.name = std::move(name);
     n.summary.metrics = std::move(summary);
@@ -37,7 +39,7 @@ static NodeResult make_node(
 
 // Render output with colors and unicode disabled for predictable string
 // matching.
-static std::string render_to_string(const ComparisonOutput& output) {
+static dstd::String render_to_string(const ComparisonOutput& output) {
     FormatterOptions opts;
     opts.use_color = false;
     opts.use_unicode = false;
@@ -48,7 +50,7 @@ static std::string render_to_string(const ComparisonOutput& output) {
     fmt.render(f, output);
     rewind(f);
 
-    std::string result;
+    dstd::String result;
     char buf[4096];
     std::size_t n;
     while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
@@ -58,11 +60,11 @@ static std::string render_to_string(const ComparisonOutput& output) {
     return result;
 }
 
-static std::size_t count_occurrences(const std::string& haystack,
-                                     const std::string& needle) {
+static std::size_t count_occurrences(const dstd::String& haystack,
+                                     const dstd::String& needle) {
     std::size_t count = 0;
     std::size_t pos = 0;
-    while ((pos = haystack.find(needle, pos)) != std::string::npos) {
+    while ((pos = haystack.find(needle, pos)) != dstd::String::npos) {
         ++count;
         pos += needle.size();
     }
@@ -79,8 +81,8 @@ TEST_SUITE("TreeTableFormatter_EmptyNode") {
         out.nodes.push_back(make_node("Lifecycle"));
 
         auto s = render_to_string(out);
-        CHECK(s.find("(no data)") != std::string::npos);
-        CHECK(s.find("SUMMARY") == std::string::npos);
+        CHECK(s.find("(no data)") != dstd::String::npos);
+        CHECK(s.find("SUMMARY") == dstd::String::npos);
     }
 
     TEST_CASE("multiple empty top-level nodes each get (no data)") {
@@ -90,7 +92,7 @@ TEST_SUITE("TreeTableFormatter_EmptyNode") {
 
         auto s = render_to_string(out);
         CHECK(count_occurrences(s, "(no data)") == 2);
-        CHECK(s.find("SUMMARY") == std::string::npos);
+        CHECK(s.find("SUMMARY") == dstd::String::npos);
     }
 
     TEST_CASE(
@@ -102,9 +104,9 @@ TEST_SUITE("TreeTableFormatter_EmptyNode") {
         out.nodes.push_back(parent);
 
         auto s = render_to_string(out);
-        CHECK(s.find("SUMMARY") != std::string::npos);
-        CHECK(s.find("(no data)") != std::string::npos);
-        CHECK(s.find("Read") != std::string::npos);
+        CHECK(s.find("SUMMARY") != dstd::String::npos);
+        CHECK(s.find("(no data)") != dstd::String::npos);
+        CHECK(s.find("Read") != dstd::String::npos);
     }
 
     TEST_CASE(
@@ -118,7 +120,7 @@ TEST_SUITE("TreeTableFormatter_EmptyNode") {
         // Parent has no summary data so its SUMMARY header should be absent.
         // Child has data so SUMMARY appears exactly once (for the child).
         CHECK(count_occurrences(s, "SUMMARY") == 1);
-        CHECK(s.find("(no data)") == std::string::npos);
+        CHECK(s.find("(no data)") == dstd::String::npos);
     }
 
     TEST_CASE(
@@ -132,10 +134,10 @@ TEST_SUITE("TreeTableFormatter_EmptyNode") {
         out.nodes.push_back(parent);
 
         auto s = render_to_string(out);
-        CHECK(s.find("SUMMARY") != std::string::npos);
+        CHECK(s.find("SUMMARY") != dstd::String::npos);
         CHECK(count_occurrences(s, "(no data)") == 2);
-        CHECK(s.find("Save") != std::string::npos);
-        CHECK(s.find("Load") != std::string::npos);
+        CHECK(s.find("Save") != dstd::String::npos);
+        CHECK(s.find("Load") != dstd::String::npos);
     }
 }
 
@@ -150,8 +152,8 @@ TEST_SUITE("TreeTableFormatter_NonEmptyNode") {
             make_node("Read", {make_mc("count", 100.0, 150.0)}));
 
         auto s = render_to_string(out);
-        CHECK(s.find("SUMMARY") != std::string::npos);
-        CHECK(s.find("(no data)") == std::string::npos);
+        CHECK(s.find("SUMMARY") != dstd::String::npos);
+        CHECK(s.find("(no data)") == dstd::String::npos);
     }
 
     TEST_CASE("non-empty node metric name appears in output") {
@@ -160,7 +162,7 @@ TEST_SUITE("TreeTableFormatter_NonEmptyNode") {
             make_node("Read", {make_mc("count", 100.0, 150.0)}));
 
         auto s = render_to_string(out);
-        CHECK(s.find("count") != std::string::npos);
+        CHECK(s.find("count") != dstd::String::npos);
     }
 
     TEST_CASE("non-empty nested node renders all levels") {
@@ -172,11 +174,11 @@ TEST_SUITE("TreeTableFormatter_NonEmptyNode") {
 
         auto s = render_to_string(out);
         // Both POSIX and Read appear
-        CHECK(s.find("POSIX") != std::string::npos);
-        CHECK(s.find("Read") != std::string::npos);
+        CHECK(s.find("POSIX") != dstd::String::npos);
+        CHECK(s.find("Read") != dstd::String::npos);
         // Two SUMMARY blocks (parent + child)
         CHECK(count_occurrences(s, "SUMMARY") == 2);
-        CHECK(s.find("(no data)") == std::string::npos);
+        CHECK(s.find("(no data)") == dstd::String::npos);
     }
 }
 
@@ -195,8 +197,8 @@ TEST_SUITE("TreeTableFormatter_Json") {
         TreeTableFormatter fmt(opts);
         auto json = fmt.render_json(out);
 
-        CHECK(json.find("\"Lifecycle\"") != std::string::npos);
-        CHECK(json.find("\"metrics\":[]") != std::string::npos);
+        CHECK(json.find("\"Lifecycle\"") != dstd::String::npos);
+        CHECK(json.find("\"metrics\":[]") != dstd::String::npos);
     }
 
     TEST_CASE("non-empty node metrics appear in JSON") {
@@ -209,8 +211,8 @@ TEST_SUITE("TreeTableFormatter_Json") {
         TreeTableFormatter fmt(opts);
         auto json = fmt.render_json(out);
 
-        CHECK(json.find("\"count\"") != std::string::npos);
-        CHECK(json.find("\"baseline\":100") != std::string::npos);
-        CHECK(json.find("\"variant\":150") != std::string::npos);
+        CHECK(json.find("\"count\"") != dstd::String::npos);
+        CHECK(json.find("\"baseline\":100") != dstd::String::npos);
+        CHECK(json.find("\"variant\":150") != dstd::String::npos);
     }
 }

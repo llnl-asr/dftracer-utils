@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -12,7 +13,6 @@
 
 #include <atomic>
 #include <stdexcept>
-#include <string>
 #include <tuple>
 #include <variant>
 
@@ -31,21 +31,20 @@ TEST_CASE("when_all - Two heterogeneous types (int, string)") {
 
     auto task = make_task(
         [int_ptr, str_ptr](CoroScope&) -> CoroTask<void> {
-            co_await coro::with_scope(
-                [int_ptr, str_ptr](coro::Scope& scope) -> CoroTask<void> {
-                    auto f1 = scope.spawn_future(
-                        []() -> CoroTask<int> { co_return 42; });
-                    auto f2 = scope.spawn_future([]() -> CoroTask<std::string> {
-                        co_return std::string("hello");
-                    });
-
-                    auto [a, b] =
-                        co_await when_all(std::move(f1), std::move(f2));
-
-                    int_ptr->store(a, std::memory_order_relaxed);
-                    str_ptr->store(b == "hello", std::memory_order_relaxed);
-                    co_return;
+            co_await coro::with_scope([int_ptr, str_ptr](coro::Scope& scope)
+                                          -> CoroTask<void> {
+                auto f1 =
+                    scope.spawn_future([]() -> CoroTask<int> { co_return 42; });
+                auto f2 = scope.spawn_future([]() -> CoroTask<dstd::String> {
+                    co_return dstd::String("hello");
                 });
+
+                auto [a, b] = co_await when_all(std::move(f1), std::move(f2));
+
+                int_ptr->store(a, std::memory_order_relaxed);
+                str_ptr->store(b == "hello", std::memory_order_relaxed);
+                co_return;
+            });
             co_return;
         },
         "WhenAllTwoHetero");
@@ -79,9 +78,10 @@ TEST_CASE("when_all - Three heterogeneous types (int, float, string)") {
                         []() -> CoroTask<int> { co_return 1; });
                     auto f2 = scope.spawn_future(
                         []() -> CoroTask<float> { co_return 2.5f; });
-                    auto f3 = scope.spawn_future([]() -> CoroTask<std::string> {
-                        co_return std::string("three");
-                    });
+                    auto f3 =
+                        scope.spawn_future([]() -> CoroTask<dstd::String> {
+                            co_return dstd::String("three");
+                        });
 
                     auto [a, b, c] = co_await when_all(
                         std::move(f1), std::move(f2), std::move(f3));
@@ -203,7 +203,7 @@ TEST_CASE("when_all - Exception propagation from one task") {
                     try {
                         co_await when_all(std::move(f1), std::move(f2));
                     } catch (const std::runtime_error& e) {
-                        caught_ptr->store(std::string(e.what()) == "boom",
+                        caught_ptr->store(dstd::String(e.what()) == "boom",
                                           std::memory_order_relaxed);
                     }
                     co_return;

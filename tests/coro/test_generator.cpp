@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/generator.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
-#include <string>
-#include <vector>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::coro;
 
@@ -27,14 +28,14 @@ static Generator<int> fibonacci(int n) {
 }
 
 // Generator that yields strings
-static Generator<std::string> words() {
+static Generator<dstd::String> words() {
     co_yield "hello";
     co_yield "world";
     co_yield "coroutines";
 }
 
 TEST_CASE("Generator - Basic range generation") {
-    std::vector<int> result;
+    dstd::Vector<int> result;
     for (int value : range(0, 5)) {
         result.push_back(value);
     }
@@ -48,7 +49,7 @@ TEST_CASE("Generator - Basic range generation") {
 }
 
 TEST_CASE("Generator - Fibonacci sequence") {
-    std::vector<int> result;
+    dstd::Vector<int> result;
     for (int value : fibonacci(7)) {
         result.push_back(value);
     }
@@ -64,7 +65,7 @@ TEST_CASE("Generator - Fibonacci sequence") {
 }
 
 TEST_CASE("Generator - String generation") {
-    std::vector<std::string> result;
+    dstd::Vector<dstd::String> result;
     for (const auto& word : words()) {
         result.push_back(word);
     }
@@ -105,7 +106,7 @@ TEST_CASE("Generator - Manual iteration") {
 TEST_CASE("Generator - Empty generator") {
     auto gen = range(5, 5);  // Empty range
 
-    std::vector<int> result;
+    dstd::Vector<int> result;
     for (int value : gen) {
         result.push_back(value);
     }
@@ -117,7 +118,7 @@ TEST_CASE("Generator - Move semantics") {
     auto gen1 = range(0, 3);
     auto gen2 = std::move(gen1);  // Move construct
 
-    std::vector<int> result;
+    dstd::Vector<int> result;
     for (int value : gen2) {
         result.push_back(value);
     }
@@ -139,7 +140,7 @@ static Generator<int> throwing_generator() {
 TEST_CASE("Generator - Exception propagation") {
     auto gen = throwing_generator();
 
-    std::vector<int> result;
+    dstd::Vector<int> result;
     CHECK_THROWS_AS(
         {
             for (int value : gen) {
@@ -186,7 +187,7 @@ static Generator<Point> points() {
 }
 
 TEST_CASE("Generator - Complex types") {
-    std::vector<Point> result;
+    dstd::Vector<Point> result;
     for (const auto& p : points()) {
         result.push_back(p);
     }

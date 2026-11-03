@@ -30,7 +30,11 @@
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #endif
 
 #include <testing_utilities.h>
@@ -38,15 +42,12 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::Runtime;
-using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
+using dstd::StringIntern;
 
 namespace {
 
@@ -63,8 +64,8 @@ struct HostFixture {
     StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    std::unique_ptr<PluginFold> fold =
-        std::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<PluginFold> fold =
+        dstd::make_unique<PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     dftu_str intern_str(const char* s) {
         return host().intern(host().h, s,
@@ -76,7 +77,7 @@ struct HostFixture {
     }
 };
 
-std::uint64_t file_size(const std::string& path) {
+std::uint64_t file_size(const dstd::String& path) {
     struct stat st{};
     return ::stat(path.c_str(), &st) == 0
                ? static_cast<std::uint64_t>(st.st_size)
@@ -107,7 +108,7 @@ TEST_CASE("plugin host: arrow_write_ipc writes a non-empty IPC file") {
         host.get_service(host.h, DFTU_SVC_ARROW));
     REQUIRE(arrow != nullptr);
 
-    std::string ipc = env.get_dir() + "/x.arrow";
+    dstd::String ipc = env.get_dir() + "/x.arrow";
     int wr = arrow->arrow_write_ipc(host.h, owned.array(), owned.schema(),
                                     ipc.c_str());
     CHECK(wr == 0);
@@ -182,19 +183,20 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
         host.get_service(host.h, DFTU_SVC_TRACE));
     REQUIRE(tr != nullptr);
 
-    std::string trace = env.get_dir() + "/out.pfw.gz";
+    dstd::String trace = env.get_dir() + "/out.pfw.gz";
     dftu_trace_writer* w = tr->trace_open_write(host.h, trace.c_str());
     REQUIRE(w != nullptr);
 
     const std::uint32_t N = 50;
-    std::vector<std::string> cats(N, "POSIX"), names(N, "write");
-    std::vector<std::uint64_t> pid(N, 7), tid(N, 9), ts(N), dur(N, 3);
-    std::vector<std::int64_t> ph(N, DFTU_PH_COMPLETE);
+    dstd::Vector<dstd::String> cats(N, "POSIX"), names(N, "write");
+    dstd::Vector<std::uint64_t> pid(N, 7), tid(N, 9), ts(N), dur(N, 3);
+    dstd::Vector<std::int64_t> ph(N, DFTU_PH_COMPLETE);
     for (std::uint32_t i = 0; i < N; ++i) ts[i] = 1000000 + i * 100;
 
-    auto string_col = [](const std::vector<std::string>& vals) -> dftu_series* {
-        std::vector<std::int32_t> offsets(vals.size() + 1, 0);
-        std::string data;
+    auto string_col =
+        [](const dstd::Vector<dstd::String>& vals) -> dftu_series* {
+        dstd::Vector<std::int32_t> offsets(vals.size() + 1, 0);
+        dstd::String data;
         for (std::size_t i = 0; i < vals.size(); ++i) {
             data += vals[i];
             offsets[i + 1] = static_cast<std::int32_t>(data.size());
@@ -243,10 +245,9 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
                 static_cast<const std::uint64_t*>(dftu_series_data(ts_col));
             std::int64_t len = 0;
             const char* p = dftu_series_string_at(name_col, 0, &len);
-            const dftracer::utils::dstd::StringView nm =
-                p ? dftracer::utils::dstd::StringView(
-                        p, static_cast<std::size_t>(len))
-                  : dftracer::utils::dstd::StringView();
+            const dstd::StringView nm =
+                p ? dstd::StringView(p, static_cast<std::size_t>(len))
+                  : dstd::StringView();
             s->first_ok = ts_data[0] == 1000000 && nm == "write";
         }
         s->count += static_cast<std::uint64_t>(n);
@@ -269,14 +270,14 @@ TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
         host.get_service(host.h, DFTU_SVC_TRACE));
     REQUIRE(tr != nullptr);
 
-    const std::string dir = env.get_dir() + "/tw";
+    const dstd::String dir = env.get_dir() + "/tw";
     ::mkdir(dir.c_str(), 0755);
-    const std::string trace = dir + "/big.pfw.gz";
+    const dstd::String trace = dir + "/big.pfw.gz";
     dftu_trace_writer* w = tr->trace_open_write(host.h, trace.c_str());
     REQUIRE(w != nullptr);
 
-    std::string expected;
-    const std::string line(999, 'x');
+    dstd::String expected;
+    const dstd::String line(999, 'x');
     while (expected.size() < 2 * dftracer::utils::common::constants::indexer::
                                          DEFAULT_CHECKPOINT_SIZE +
                                  1024) {
@@ -287,16 +288,15 @@ TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
         expected;
     REQUIRE(tr->trace_close(host.h, w) == 0);
 
-    std::string decoded, last;
+    dstd::String decoded, last;
     {
-        std::ifstream in(trace.c_str(), std::ios::binary);
-        std::string gz((std::istreambuf_iterator<char>(in)),
-                       std::istreambuf_iterator<char>());
+        dstd::String gz =
+            dstd::fs::read_file(dstd::PathView(trace)).value_or(dstd::String());
         z_stream zs{};
         REQUIRE(inflateInit2(&zs, 15 + 16) == Z_OK);
         zs.next_in = reinterpret_cast<Bytef*>(gz.data());
         zs.avail_in = static_cast<uInt>(gz.size());
-        std::vector<char> buf(1 << 16);
+        dstd::Vector<char> buf(1 << 16);
         while (zs.avail_in > 0) {
             zs.next_out = reinterpret_cast<Bytef*>(buf.data());
             zs.avail_out = static_cast<uInt>(buf.size());

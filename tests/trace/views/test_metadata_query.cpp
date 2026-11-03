@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -9,10 +10,10 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <fstream>
-#include <string>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -29,12 +30,12 @@ namespace {
 // plus a few normal complete events. `numeric_ph` writes the current integer
 // "ph" form (4 = metadata, 1 = complete); otherwise the legacy letter form
 // ("M"/"X"), so the same code path is exercised through read_phase either way.
-std::string create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
-    const std::string tag = numeric_ph ? "num" : "str";
-    const std::string dir = env.get_dir() + "/" + tag;
+dstd::String create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
+    const dstd::String tag = numeric_ph ? "num" : "str";
+    const dstd::String dir = env.get_dir() + "/" + tag;
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    const std::string pfw = dir + "/meta.pfw";
-    std::ofstream ofs(pfw.c_str());
+    const dstd::String pfw = dir + "/meta.pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     if (numeric_ph)
         ofs << R"({"name":"CM","ph":4,"pid":0,"tid":0,"ts":0,"args":{"name":"time_metric","value":"NS"}})"
             << "\n";
@@ -47,7 +48,7 @@ std::string create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
             << R"(,"pid":1,"tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
             << (10 + i) << R"(,"args":{}})" << "\n";
     ofs.close();
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dstd::fs::remove(pfw);
     return gz;
@@ -55,14 +56,14 @@ std::string create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
 
 // Build the index once (a metadata-phase query is not bootstrap-eligible, so an
 // index must already exist).
-void prime_index(const std::string& gz, const std::string& idx) {
+void prime_index(const dstd::String& gz, const dstd::String& idx) {
     StringSink sink;
     View::from_file(dstd::String(gz), dstd::String(idx)).sink_json(sink).get();
 }
 
 // Rows whose top-level name column equals `name`.
 std::int64_t rows_named(const dataframe::DataFrame& df,
-                        const std::string& name) {
+                        const dstd::String& name) {
     if (!bhas(df, "name")) return 0;
     std::int64_t n = 0;
     for (std::int64_t i = 0; i < df.num_rows(); ++i)
@@ -72,8 +73,8 @@ std::int64_t rows_named(const dataframe::DataFrame& df,
 
 void check_metadata_variant(bool numeric_ph) {
     TestEnvironment env(200);
-    const std::string gz = create_metadata_trace(env, numeric_ph);
-    const std::string idx = std::string(determine_index_path(gz, ""));
+    const dstd::String gz = create_metadata_trace(env, numeric_ph);
+    const dstd::String idx = dstd::String(determine_index_path(gz, ""));
     prime_index(gz, idx);
 
     // phase("metadata") returns the CM record as a row, args flattened.
@@ -146,10 +147,10 @@ namespace {
 // 40 threads, each named by a thread_name record just before its events, and
 // 4 FH records, over small gzip members so the records spread across chunks.
 // Only thread 0 writes "open" events.
-std::string create_threaded_trace(TestEnvironment& env) {
-    const std::string pfw = env.get_dir() + "/threads.pfw";
+dstd::String create_threaded_trace(TestEnvironment& env) {
+    const dstd::String pfw = env.get_dir() + "/threads.pfw";
     {
-        std::ofstream ofs(pfw.c_str());
+        dftu_utils_test::FileOut ofs(pfw);
         ofs << "[\n";
         for (int t = 0; t < 40; ++t) {
             ofs << R"({"name":"thread_name","ph":"M","pid":1,"tid":)" << t
@@ -166,7 +167,7 @@ std::string create_threaded_trace(TestEnvironment& env) {
         }
         ofs << "]\n";
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 4 * 1024));
     (void)dstd::fs::remove(pfw);
@@ -180,9 +181,9 @@ std::string create_threaded_trace(TestEnvironment& env) {
 TEST_SUITE("View - metadata under pruning") {
     TEST_CASE("the index counts metadata records per chunk") {
         TestEnvironment env(200);
-        const std::string gz = create_threaded_trace(env);
+        const dstd::String gz = create_threaded_trace(env);
         const auto snapshot = dftu_utils_test::index_snapshot(
-            std::string(determine_index_path(gz, "")));
+            dstd::String(determine_index_path(gz, "")));
         auto counts =
             dftu_utils_test::index_take(dftracer::utils::index::chunk_meta(
                 snapshot, dftu_utils_test::require_indexed_file(snapshot, gz)));
@@ -199,8 +200,8 @@ TEST_SUITE("View - metadata under pruning") {
 
     TEST_CASE("metadata records are rows only under all") {
         TestEnvironment env(200);
-        const std::string gz = create_threaded_trace(env);
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String gz = create_threaded_trace(env);
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         StringSink data;
         View::from_file(dstd::String(gz), dstd::String(idx))
             .sink_json(data)
@@ -224,8 +225,8 @@ TEST_SUITE("View - metadata under pruning") {
 
     TEST_CASE("a metadata query finds records in any chunk") {
         TestEnvironment env(200);
-        const std::string gz = create_threaded_trace(env);
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String gz = create_threaded_trace(env);
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         ScanPlan q = scan::filter(
             scan::phase(scan::from_file(dstd::String(gz), dstd::String(idx)),
                         Phase::Metadata),
@@ -240,15 +241,15 @@ TEST_SUITE("View - metadata under pruning") {
 
     TEST_CASE("a metadata query reads no chunk of a file without metadata") {
         TestEnvironment env(200);
-        const std::string pfw = env.get_dir() + "/plain.pfw";
+        const dstd::String pfw = env.get_dir() + "/plain.pfw";
         {
-            std::ofstream ofs(pfw.c_str());
+            dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 2000; ++i)
                 ofs << R"({"name":"read","cat":"POSIX","ph":"X","pid":1,)"
                     << R"("tid":1,"ts":)" << i << R"(,"dur":1,"args":{}})"
                     << "\n";
         }
-        const std::string gz = pfw + ".gz";
+        const dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                                    4 * 1024));
         dftracer::utils::index::Indexer::open(
@@ -258,7 +259,7 @@ TEST_SUITE("View - metadata under pruning") {
         const auto stats =
             run(View::from_file(
                     dstd::String(gz),
-                    dstd::String(std::string(determine_index_path(gz, ""))))
+                    dstd::String(dstd::String(determine_index_path(gz, ""))))
                     .phase(Phase::Metadata)
                     .sink_json(sink));
         CHECK(stats.chunks_scanned == 0);
@@ -267,8 +268,8 @@ TEST_SUITE("View - metadata under pruning") {
 
     TEST_CASE("an index without dft.metadata still returns every record") {
         TestEnvironment env(200);
-        const std::string gz = create_threaded_trace(env);
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String gz = create_threaded_trace(env);
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         dftracer::utils::index::Indexer::open(
             {dstd::String(dstd::StringView(gz))})
             .drop_extension("dft.metadata");
@@ -296,8 +297,8 @@ TEST_SUITE("View - metadata under pruning") {
 
     TEST_CASE("the trace reader keeps metadata lines its query matches") {
         TestEnvironment env(200);
-        const std::string gz = create_threaded_trace(env);
-        auto count_with = [&](const std::string& text, bool skip) {
+        const dstd::String gz = create_threaded_trace(env);
+        auto count_with = [&](const dstd::String& text, bool skip) {
             auto run = [&]() -> coro::CoroTask<std::size_t> {
                 dftracer::utils::utilities::reader::TraceReader reader(
                     {.file_path = dstd::String(gz)});
@@ -311,8 +312,10 @@ TEST_SUITE("View - metadata under pruning") {
             };
             return run().get();
         };
-        auto count = [&](const std::string& t) { return count_with(t, false); };
-        auto count_all = [&](const std::string& t) {
+        auto count = [&](const dstd::String& t) {
+            return count_with(t, false);
+        };
+        auto count_all = [&](const dstd::String& t) {
             return count_with(t, true);
         };
         CHECK(count("") == 2044);
@@ -325,14 +328,13 @@ TEST_SUITE("View - metadata under pruning") {
 
     TEST_CASE("metadata evidence prunes chunks no record can match") {
         TestEnvironment env(200);
-        const std::string gz = create_threaded_trace(env);
+        const dstd::String gz = create_threaded_trace(env);
         namespace ip = dftracer::utils::index::plan;
-        auto chunks = [&](const std::string& text, ip::MetadataUse use) {
+        auto chunks = [&](const dstd::String& text, ip::MetadataUse use) {
             const auto q = dftracer::utils::duql::parse_or_throw(text);
             auto out =
                 ip::prune_file({.index_path = determine_index_path(gz, ""),
-                                .file_path = dftracer::utils::dstd::String(
-                                    dftracer::utils::dstd::StringView(gz)),
+                                .file_path = dstd::String(dstd::StringView(gz)),
                                 .query = &q,
                                 .metadata = use})
                     .get();

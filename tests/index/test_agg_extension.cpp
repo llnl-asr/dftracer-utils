@@ -4,9 +4,13 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/corrupt_index.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
@@ -27,10 +31,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <fstream>
-#include <optional>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftracer::utils::index::Indexer;
@@ -49,23 +49,26 @@ namespace {
 constexpr dstd::StringView SENTINEL = "agg_extension.sentinel";
 
 // `n` POSIX reads of 100 us each, one per millisecond from `start_us`.
-std::string write_trace(const std::string& dir, const std::string& name, int n,
-                        std::uint64_t start_us, bool system = false) {
-    const std::string pfw = dir + "/" + name + ".pfw";
+dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
+                         int n, std::uint64_t start_us, bool system = false) {
+    const dstd::String pfw = dir + "/" + name + ".pfw";
     {
-        std::ofstream out(pfw.c_str());
+        dstd::String out;
         for (int i = 0; i < n; ++i)
-            out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
-                   R"("tid":1,"ts":)"
-                << start_us + static_cast<std::uint64_t>(i) * 1000
-                << R"(,"dur":100,"args":{}})" << "\n";
+            out += common::str_cat(
+                R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                R"("tid":1,"ts":)",
+                start_us + static_cast<std::uint64_t>(i) * 1000,
+                R"(,"dur":100,"args":{}})", "\n");
         for (int i = 0; system && i < n; ++i)
-            out << R"({"ph":"C","name":"cpu","cat":"sys","pid":1,"tid":1,)"
-                   R"("ts":)"
-                << start_us + static_cast<std::uint64_t>(i) * 1000
-                << R"(,"args":{"hhash":"h1","util":)" << i << "}}\n";
+            out += common::str_cat(
+                R"({"ph":"C","name":"cpu","cat":"sys","pid":1,"tid":1,)"
+                R"("ts":)",
+                start_us + static_cast<std::uint64_t>(i) * 1000,
+                R"(,"args":{"hhash":"h1","util":)", i, "}}\n");
+        (void)dstd::fs::write_file(dstd::PathView(pfw), out);
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
     (void)dstd::fs::remove(pfw);
     return gz;
@@ -79,15 +82,14 @@ IndexerOptions with_aggregation(std::uint64_t interval_us) {
     return o;
 }
 
-std::string index_of(const std::string& trace) {
-    return std::string(trace::internal::determine_index_path(trace, ""));
+dstd::String index_of(const dstd::String& trace) {
+    return dstd::String(trace::internal::determine_index_path(trace, ""));
 }
 
-dataframe::DataFrame counters_of(const std::vector<std::string>& traces) {
+dataframe::DataFrame counters_of(const dstd::Vector<dstd::String>& traces) {
     dstd::Vector<ViewFile> files;
     for (const auto& t : traces)
-        files.push_back({dftracer::utils::dstd::String(t),
-                         dftracer::utils::dstd::String(index_of(t))});
+        files.push_back({dstd::String(t), dstd::String(index_of(t))});
     return View::from_files(std::move(files)).collect_typed().get().counters;
 }
 
@@ -115,7 +117,7 @@ bool same_counters(const dataframe::DataFrame& a,
 
 // A bloom granule no build writes: it survives only while the file's bloom
 // data is not rewritten, so the rewrite keeps everything the file holds.
-void plant_sentinel(const std::string& trace) {
+void plant_sentinel(const dstd::String& trace) {
     const auto opened = dftu_utils_test::open_test_index(index_of(trace));
     const auto snapshot = dftu_utils_test::index_take(opened.snapshot());
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
@@ -140,7 +142,7 @@ void plant_sentinel(const std::string& trace) {
     dftu_utils_test::commit_test_build(build);
 }
 
-bool has_sentinel(const std::string& trace) {
+bool has_sentinel(const dstd::String& trace) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_of(trace));
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     return !dftu_utils_test::index_take(index::granules(snapshot, file,
@@ -150,7 +152,7 @@ bool has_sentinel(const std::string& trace) {
 }
 
 dstd::Optional<index::ExtensionEntry> agg_entry(const Indexer& ix,
-                                                const std::string& trace) {
+                                                const dstd::String& trace) {
     const auto manifest = ix.manifest();
     for (const auto& f : manifest)
         if (dstd::StringView(f.path) == dstd::StringView(trace))
@@ -159,11 +161,10 @@ dstd::Optional<index::ExtensionEntry> agg_entry(const Indexer& ix,
     return dstd::nullopt;
 }
 
-double count_reads(const std::vector<std::string>& traces) {
+double count_reads(const dstd::Vector<dstd::String>& traces) {
     dstd::Vector<ViewFile> files;
     for (const auto& t : traces)
-        files.push_back({dftracer::utils::dstd::String(t),
-                         dftracer::utils::dstd::String(index_of(t))});
+        files.push_back({dstd::String(t), dstd::String(index_of(t))});
     const auto df = View::from_files(std::move(files))
                         .phase(Phase::Events)
                         .group_by({GroupKey::name()})
@@ -224,9 +225,9 @@ TEST_SUITE("AggExtension") {
             auto ns = store->ns(spec);
             REQUIRE(ns.has_value());
             const kv::ScopeKey scope = kv::ScopeKey::root();
-            const std::string key =
-                std::string(1, static_cast<char>(
-                                   index::store::layout::agg_kind::META)) +
+            const dstd::String key =
+                dstd::String(1, static_cast<char>(
+                                    index::store::layout::agg_kind::META)) +
                 "config";
             kv::Batch batch = store->building_batch(*ns, scope);
             batch.put(dstd::ByteView(key), dstd::ByteView("garbage", 7));
@@ -259,18 +260,18 @@ TEST_SUITE("AggExtension") {
     TEST_CASE("the message for a corrupt index names the directories") {
         const auto once = index::build::corrupt_index_message(
             {"/data/a/.dftindex", "/data/b/.dftindex"}, "Corruption: x", false);
-        CHECK(once.find("/data/a/.dftindex") != std::string::npos);
-        CHECK(once.find("/data/b/.dftindex") != std::string::npos);
-        CHECK(once.find("Corruption: x") != std::string::npos);
-        CHECK(once.find("did not repair") == std::string::npos);
+        CHECK(once.find("/data/a/.dftindex") != dstd::String::npos);
+        CHECK(once.find("/data/b/.dftindex") != dstd::String::npos);
+        CHECK(once.find("Corruption: x") != dstd::String::npos);
+        CHECK(once.find("did not repair") == dstd::String::npos);
         CHECK(once.find("delete that directory and build the index again") !=
-              std::string::npos);
+              dstd::String::npos);
         const auto twice = index::build::corrupt_index_message(
             {"/data/a/.dftindex"}, "Corruption: y", true);
         CHECK(twice.find("clearing its aggregation tier did not repair it") !=
-              std::string::npos);
+              dstd::String::npos);
         CHECK(twice.find("delete that directory and build the index again") !=
-              std::string::npos);
+              dstd::String::npos);
     }
 
     TEST_CASE("an interval change rebuilds only the tier") {

@@ -36,7 +36,7 @@ TEST_CASE("a failed typed task frees its exception once the caller drops it") {
     Runtime rt;
     dstd::WeakPtr<int> watch;
     {
-        auto token = std::make_shared<int>(1);
+        auto token = dstd::make_shared<int>(1);
         watch = token;
         auto handle = rt.submit(fail_int(std::move(token)));
         CHECK_THROWS_AS(handle.get(), TokenError);
@@ -49,7 +49,7 @@ TEST_CASE("a failed untyped task frees its exception at shutdown") {
     Runtime rt;
     dstd::WeakPtr<int> watch;
     {
-        auto token = std::make_shared<int>(1);
+        auto token = dstd::make_shared<int>(1);
         watch = token;
         auto handle = rt.submit(fail_void(std::move(token)));
         CHECK_THROWS_AS(handle.get(), TokenError);

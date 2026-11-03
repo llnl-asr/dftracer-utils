@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <trace/views/agg_parity_common.h>
 
 using namespace dftracer::utils;
@@ -14,8 +16,8 @@ namespace scan = dftracer::utils::trace::views::detail::scan;
 TEST_SUITE("View") {
     TEST_CASE("View - agg engine path matches the GroupMap path") {
         REQUIRE(parity_env().is_valid());
-        const std::string gz = write_agg_engine_trace(parity_sub("base"));
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String gz = write_agg_engine_trace(parity_sub("base"));
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto run_both = [&](const GroupKey& gk, const dstd::String& key_col,
                             std::uint64_t mem_budget) {
             run_both_file(gz, idx, gk, key_col, mem_budget);
@@ -54,8 +56,9 @@ TEST_SUITE("View") {
         SUBCASE("engine path is served by a subsuming rollup, not a rescan") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = std::string(determine_index_path(rgz, ""));
+            const dstd::String rgz = write_agg_engine_trace(renv.get_dir());
+            const dstd::String ridx =
+                dstd::String(determine_index_path(rgz, ""));
             auto fine = [&] {
                 return scan::agg(
                     scan::group_by(
@@ -83,8 +86,9 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: same-grain full vocab matches a scan") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = std::string(determine_index_path(rgz, ""));
+            const dstd::String rgz = write_agg_engine_trace(renv.get_dir());
+            const dstd::String ridx =
+                dstd::String(determine_index_path(rgz, ""));
             auto q = [&] {
                 return scan::agg(
                     scan::group_by(
@@ -114,8 +118,9 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: coarsening Pct/SetUnion matches a scan") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = std::string(determine_index_path(rgz, ""));
+            const dstd::String rgz = write_agg_engine_trace(renv.get_dir());
+            const dstd::String ridx =
+                dstd::String(determine_index_path(rgz, ""));
             auto specs = [] {
                 return dstd::Vector<AggSpec>{
                     {AggOp::Count, "", "n"},
@@ -151,8 +156,9 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: occupancy exact same-grain and coarsening") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = std::string(determine_index_path(rgz, ""));
+            const dstd::String rgz = write_agg_engine_trace(renv.get_dir());
+            const dstd::String ridx =
+                dstd::String(determine_index_path(rgz, ""));
             auto occ = [&](dstd::Vector<GroupKey> gb) {
                 return scan::agg(
                     scan::group_by(
@@ -181,13 +187,14 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: Hist same-grain and coarsening") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = std::string(determine_index_path(rgz, ""));
+            const dstd::String rgz = write_agg_engine_trace(renv.get_dir());
+            const dstd::String ridx =
+                dstd::String(determine_index_path(rgz, ""));
             auto check_hist = [&](const dataframe::DataFrame& expect,
                                   const dataframe::DataFrame& got) {
                 REQUIRE(expect.num_rows() == got.num_rows());
                 for (std::int64_t lr = 0; lr < expect.num_rows(); ++lr) {
-                    const std::string cat = bstr(expect, lr, "cat");
+                    const dstd::String cat = bstr(expect, lr, "cat");
                     std::int64_t er = -1;
                     for (std::int64_t r = 0; r < got.num_rows(); ++r)
                         if (bstr(got, r, "cat") == cat) {

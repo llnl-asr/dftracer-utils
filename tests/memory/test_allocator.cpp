@@ -113,6 +113,7 @@ TEST_CASE("a vector with Allocator charges the scope pool and frees to zero") {
     REQUIRE(pool);
     {
         Scope s{*pool};
+        // keep std: memory tests link only memory
         std::vector<std::uint64_t, Allocator<std::uint64_t>> v;
         for (std::uint64_t i = 0; i < 10000; ++i) v.push_back(i);
         CHECK(pool->live() >= 10000 * sizeof(std::uint64_t));
@@ -128,6 +129,7 @@ TEST_CASE("a vector with Allocator charges the scope pool and frees to zero") {
 TEST_CASE("Allocator blocks follow the scope that allocated them") {
     PoolHandle first = root().child("first");
     PoolHandle second = root().child("second");
+    // keep std: memory tests link only memory
     std::vector<int, Allocator<int>> v;
     {
         Scope s{*first};
@@ -140,6 +142,7 @@ TEST_CASE("Allocator blocks follow the scope that allocated them") {
         CHECK(first->live() == 0);
         CHECK(second->live() >= 100000 * sizeof(int));
     }
+    // keep std: memory tests link only memory
     std::vector<int, Allocator<int>>().swap(v);
     CHECK(second->live() == 0);
 }
@@ -152,9 +155,11 @@ TEST_CASE(
     REQUIRE(scope);
     {
         Scope s{*scope};
+        // keep std: memory tests link only memory
         std::vector<std::uint32_t, PoolAllocator<std::uint32_t>> v{
             PoolAllocator<std::uint32_t>{*named}};
         for (std::uint32_t i = 0; i < 50000; ++i) v.push_back(i);
+        // keep std: memory tests link only memory
         std::list<int, PoolAllocator<int>> nodes{PoolAllocator<int>{*named}};
         for (int i = 0; i < 100; ++i) nodes.push_back(i);
         CHECK(named->live() >= 50000 * sizeof(std::uint32_t));
@@ -199,6 +204,7 @@ TEST_CASE("allocators compare equal by pool and propagate with the container") {
     CHECK(&rebound.pool() == a.get());
     CHECK(on_a != on_b);
 
+    // keep std: memory tests link only memory
     using Vec = std::vector<int, PoolAllocator<int>>;
     {
         Vec x(100, 1, on_a);
@@ -224,10 +230,14 @@ TEST_CASE("allocators compare equal by pool and propagate with the container") {
 
 TEST_CASE("over-aligned types keep their alignment") {
     PoolHandle pool = root().child("aligned");
+    // keep std: memory tests link only memory
     std::vector<Line, Allocator<Line>> lines(3);
+    // keep std: memory tests link only memory
     std::vector<Page, Allocator<Page>> pages(3);
+    // keep std: memory tests link only memory
     std::vector<Line, PoolAllocator<Line>> pool_lines(
         5, PoolAllocator<Line>{*pool});
+    // keep std: memory tests link only memory
     std::vector<Page, PoolAllocator<Page>> pool_pages(
         5, PoolAllocator<Page>{*pool});
     CHECK(aligned(lines.data(), alignof(Line)));
@@ -383,6 +393,7 @@ TEST_CASE("reallocate accepts a block another thread allocated") {
         CAPTURE(pair[0]);
         CAPTURE(pair[1]);
         void* p = nullptr;
+        // keep std: memory tests link only memory
         std::thread([&] {
             Scope s{*pool};
             p = allocate(pair[0], 16);

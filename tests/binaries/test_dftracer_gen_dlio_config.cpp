@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -12,33 +15,33 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace {
 
 // (cat, name) labels for the three emitted components. Defaults are the DLIO
 // benchmark event names; override to exercise the loader's event selectors.
 struct EventLabels {
-    std::string fetch_block_cat = "dataloader";
-    std::string fetch_block_name = "fetch.block";
-    std::string fetch_iter_cat = "dataloader";
-    std::string fetch_iter_name = "fetch.iter";
-    std::string preprocess_cat = "data";
-    std::string preprocess_name = "preprocess";
+    dstd::String fetch_block_cat = "dataloader";
+    dstd::String fetch_block_name = "fetch.block";
+    dstd::String fetch_iter_cat = "dataloader";
+    dstd::String fetch_iter_name = "fetch.iter";
+    dstd::String preprocess_cat = "data";
+    dstd::String preprocess_name = "preprocess";
 };
 
 // Produce a .pfw.gz file containing realistic DLIO trace events: a mix of
 // fetch.block / fetch.iter and preprocess duration events spread across
 // `num_ranks` pids. Each rank gets `events_per_rank` of each kind. Event
 // categories and names come from `labels`.
-std::string create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
-                               int num_ranks, int events_per_rank,
-                               const EventLabels& labels = {}) {
-    const std::string plain_path =
-        env.get_dir() + "/dlio_trace_" + std::to_string(id) + ".pfw";
+dstd::String create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
+                                int num_ranks, int events_per_rank,
+                                const EventLabels& labels = {}) {
+    const dstd::String plain_path =
+        env.get_dir() + "/dlio_trace_" + dstd::to_string(id) + ".pfw";
     {
-        std::ofstream ofs(plain_path.c_str());
+        dftu_utils_test::FileOut ofs(plain_path);
         if (!ofs.is_open()) return "";
         ofs << "[\n";
         std::uint64_t event_id = 1;
@@ -87,36 +90,30 @@ std::string create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
     }
 
     // Compress to .pfw.gz.
-    std::string gz_path = plain_path + ".gz";
+    dstd::String gz_path = plain_path + ".gz";
     {
         gzFile gz = gzopen(gz_path.c_str(), "wb");
         if (!gz) return "";
-        std::ifstream ifs(plain_path.c_str(), std::ios::binary);
-        std::stringstream ss;
-        ss << ifs.rdbuf();
-        const std::string body = ss.str();
+        const dstd::String body = dftu_utils_test::read_text(plain_path);
         gzwrite(gz, body.data(), static_cast<unsigned>(body.size()));
         gzclose(gz);
     }
-    (void)dftracer::utils::dstd::fs::remove(plain_path);
+    (void)dstd::fs::remove(plain_path);
     return gz_path;
 }
 
-std::string find_binary() {
+dstd::String find_binary() {
     return dftu_utils_test::find_binary_by_name(
         "DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH", "dftracer_gen_dlio_config");
 }
 
-int run_binary(const std::string& binary,
-               const std::vector<std::string>& args) {
+int run_binary(const dstd::String& binary,
+               const dstd::Vector<dstd::String>& args) {
     return dftu_utils_test::run_process(binary, args);
 }
 
-std::string read_file(const std::string& path) {
-    std::ifstream ifs(path.c_str());
-    std::stringstream ss;
-    ss << ifs.rdbuf();
-    return ss.str();
+dstd::String read_file(const dstd::String& path) {
+    return dftu_utils_test::read_text(path);
 }
 
 }  // namespace
@@ -158,11 +155,11 @@ TEST_SUITE("DFTracerGenDlioConfig") {
         auto trace_gz = env.create_dft_test_gzip_file(50);
         REQUIRE(!trace_gz.empty());
 
-        const std::string out = env.get_dir() + "/dlio_config.yaml";
+        const dstd::String out = env.get_dir() + "/dlio_config.yaml";
         const int rc = run_binary(binary, {env.get_dir(), "-o", out});
         // Non-zero exit and no YAML produced.
         CHECK(rc != 0);
-        CHECK_FALSE(dftracer::utils::dstd::fs::exists(out).value());
+        CHECK_FALSE(dstd::fs::exists(out).value());
     }
 
     TEST_CASE(
@@ -178,21 +175,21 @@ TEST_SUITE("DFTracerGenDlioConfig") {
             REQUIRE(!f.empty());
         }
 
-        const std::string out = env.get_dir() + "/dlio_config.yaml";
+        const dstd::String out = env.get_dir() + "/dlio_config.yaml";
         const int rc = run_binary(
             binary, {env.get_dir(), "-o", out, "--simulation-iterations", "2"});
         CHECK(rc == 0);
-        REQUIRE(dftracer::utils::dstd::fs::exists(out).value());
+        REQUIRE(dstd::fs::exists(out).value());
 
-        const std::string contents = read_file(out);
+        const dstd::String contents = read_file(out);
         // Spot-check the YAML schema. Don't pin specific distribution choice
         // (fitter may pick any of single/GMM-2/GMM-3 depending on data).
-        CHECK(contents.find("train:") != std::string::npos);
-        CHECK(contents.find("computation_time:") != std::string::npos);
-        CHECK(contents.find("reader:") != std::string::npos);
-        CHECK(contents.find("preprocess_time:") != std::string::npos);
-        CHECK(contents.find("type:") != std::string::npos);
-        CHECK(contents.find("max_bound:") != std::string::npos);
+        CHECK(contents.find("train:") != dstd::String::npos);
+        CHECK(contents.find("computation_time:") != dstd::String::npos);
+        CHECK(contents.find("reader:") != dstd::String::npos);
+        CHECK(contents.find("preprocess_time:") != dstd::String::npos);
+        CHECK(contents.find("type:") != dstd::String::npos);
+        CHECK(contents.find("max_bound:") != dstd::String::npos);
     }
 
     TEST_CASE("custom event cat/name overrides map onto DLIO components") {
@@ -215,17 +212,17 @@ TEST_SUITE("DFTracerGenDlioConfig") {
 
         // Without overrides the loader looks for DLIO defaults and finds
         // nothing.
-        const std::string out_default = env.get_dir() + "/dlio_default.yaml";
+        const dstd::String out_default = env.get_dir() + "/dlio_default.yaml";
         const int rc_default = run_binary(
             binary,
             {env.get_dir(), "-o", out_default, "--simulation-iterations", "2"});
         CHECK(rc_default != 0);
-        CHECK_FALSE(dftracer::utils::dstd::fs::exists(out_default).value());
+        CHECK_FALSE(dstd::fs::exists(out_default).value());
 
         // A YAML event map remaps the components onto the custom events.
-        const std::string map_path = env.get_dir() + "/event_map.yaml";
+        const dstd::String map_path = env.get_dir() + "/event_map.yaml";
         {
-            std::ofstream ofs(map_path.c_str());
+            dftu_utils_test::FileOut ofs(map_path);
             REQUIRE(ofs.is_open());
             ofs << "fetch_block:\n"
                 << "  cat: " << labels.fetch_block_cat << "\n"
@@ -238,16 +235,16 @@ TEST_SUITE("DFTracerGenDlioConfig") {
                 << "  name: " << labels.preprocess_name << "\n";
         }
 
-        const std::string out = env.get_dir() + "/dlio_config.yaml";
+        const dstd::String out = env.get_dir() + "/dlio_config.yaml";
         const int rc = run_binary(
             binary, {env.get_dir(), "-o", out, "--simulation-iterations", "2",
                      "--event-map", map_path});
         CHECK(rc == 0);
-        REQUIRE(dftracer::utils::dstd::fs::exists(out).value());
+        REQUIRE(dstd::fs::exists(out).value());
 
-        const std::string contents = read_file(out);
-        CHECK(contents.find("computation_time:") != std::string::npos);
-        CHECK(contents.find("preprocess_time:") != std::string::npos);
+        const dstd::String contents = read_file(out);
+        CHECK(contents.find("computation_time:") != dstd::String::npos);
+        CHECK(contents.find("preprocess_time:") != dstd::String::npos);
     }
 
     TEST_CASE("JSON event map is accepted") {
@@ -269,9 +266,9 @@ TEST_SUITE("DFTracerGenDlioConfig") {
         REQUIRE(!f.empty());
 
         // JSON is a YAML subset, so the same loader accepts a .json map.
-        const std::string map_path = env.get_dir() + "/event_map.json";
+        const dstd::String map_path = env.get_dir() + "/event_map.json";
         {
-            std::ofstream ofs(map_path.c_str());
+            dftu_utils_test::FileOut ofs(map_path);
             REQUIRE(ofs.is_open());
             ofs << R"({"fetch_block":{"cat":")" << labels.fetch_block_cat
                 << R"(","name":")" << labels.fetch_block_name << R"("},)"
@@ -279,12 +276,12 @@ TEST_SUITE("DFTracerGenDlioConfig") {
                 << R"(","name":")" << labels.preprocess_name << R"("}})";
         }
 
-        const std::string out = env.get_dir() + "/dlio_config.yaml";
+        const dstd::String out = env.get_dir() + "/dlio_config.yaml";
         const int rc = run_binary(
             binary, {env.get_dir(), "-o", out, "--simulation-iterations", "2",
                      "--event-map", map_path});
         CHECK(rc == 0);
-        CHECK(dftracer::utils::dstd::fs::exists(out).value());
+        CHECK(dstd::fs::exists(out).value());
     }
 
     TEST_CASE("malformed event map is rejected") {
@@ -297,19 +294,19 @@ TEST_SUITE("DFTracerGenDlioConfig") {
                                     /*events_per_rank=*/150);
         REQUIRE(!f.empty());
 
-        const std::string map_path = env.get_dir() + "/bad_map.yaml";
+        const dstd::String map_path = env.get_dir() + "/bad_map.yaml";
         {
-            std::ofstream ofs(map_path.c_str());
+            dftu_utils_test::FileOut ofs(map_path);
             REQUIRE(ofs.is_open());
             ofs << "fetch_block: {cat: dataloader, name: fetch.block\n";
         }
 
-        const std::string out = env.get_dir() + "/dlio_config.yaml";
+        const dstd::String out = env.get_dir() + "/dlio_config.yaml";
         const int rc = run_binary(
             binary, {env.get_dir(), "-o", out, "--simulation-iterations", "2",
                      "--event-map", map_path});
         CHECK(rc != 0);
-        CHECK_FALSE(dftracer::utils::dstd::fs::exists(out).value());
+        CHECK_FALSE(dstd::fs::exists(out).value());
     }
 
     TEST_CASE("respects --num-workers and --prefetch-factor") {
@@ -322,11 +319,11 @@ TEST_SUITE("DFTracerGenDlioConfig") {
                                     /*events_per_rank=*/150);
         REQUIRE(!f.empty());
 
-        const std::string out = env.get_dir() + "/dlio_config.yaml";
+        const dstd::String out = env.get_dir() + "/dlio_config.yaml";
         const int rc = run_binary(
             binary, {env.get_dir(), "-o", out, "--num-workers", "4",
                      "--prefetch-factor", "1", "--simulation-iterations", "2"});
         CHECK(rc == 0);
-        CHECK(dftracer::utils::dstd::fs::exists(out).value());
+        CHECK(dstd::fs::exists(out).value());
     }
 }

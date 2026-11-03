@@ -14,6 +14,10 @@
 #include <dftracer/utils/runtime/runtime.h>
 // compose.h pulls plugin.h/arrow_abi.h; keep it after fold_adapter.h so
 // nanoarrow's full definitions win over arrow_abi.h's fallback structs.
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/compose.h>
 #include <doctest/doctest.h>
@@ -26,16 +30,12 @@
 
 #include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <memory>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 
 using dftracer::utils::Runtime;
-using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
+using dstd::StringIntern;
 
 namespace {
 
@@ -50,8 +50,8 @@ struct HostFixture {
     StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    std::unique_ptr<PluginFold> fold =
-        std::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<PluginFold> fold =
+        dstd::make_unique<PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     ~HostFixture() {
         fold.reset();
@@ -59,17 +59,15 @@ struct HostFixture {
     }
 };
 
-std::uint64_t file_size(const std::string& path) {
+std::uint64_t file_size(const dstd::String& path) {
     struct stat st{};
     return ::stat(path.c_str(), &st) == 0
                ? static_cast<std::uint64_t>(st.st_size)
                : 0;
 }
 
-std::string read_all(const std::string& path) {
-    std::ifstream f(path.c_str(), std::ios::binary);
-    return std::string((std::istreambuf_iterator<char>(f)),
-                       std::istreambuf_iterator<char>());
+dstd::String read_all(const dstd::String& path) {
+    return dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
 }
 
 // Drive a plugin Task to completion on a fresh Runtime, exactly as the fuse
@@ -91,7 +89,7 @@ void drive_task(dftu_plugin_host& host, int workers, MakeTask make) {
 // Vectored write then vectored positional read back, with an lseek in between.
 dftracer::utils::plugins::Task vectored_roundtrip(
     dftracer::utils::plugins::Host h, const char* path, std::int64_t* wrote,
-    std::int64_t* off, std::string* got) {
+    std::int64_t* off, dstd::String* got) {
     dftracer::utils::plugins::Io io = h.io();
     int fd = -1;
     co_await io.open(path, O_RDWR | O_CREAT | O_TRUNC, 0644, &fd);
@@ -142,7 +140,7 @@ dftracer::utils::plugins::Task sendfile_to_fd(dftracer::utils::plugins::Host h,
 
 // pwrite a payload, then pwritev-append after it, and pread the whole back.
 dftracer::utils::plugins::Task positional_vectored(
-    dftracer::utils::plugins::Host h, const char* path, std::string* got) {
+    dftracer::utils::plugins::Host h, const char* path, dstd::String* got) {
     dftracer::utils::plugins::Io io = h.io();
     int fd = -1;
     co_await io.open(path, O_RDWR | O_CREAT | O_TRUNC, 0644, &fd);
@@ -231,11 +229,11 @@ dftracer::utils::plugins::Task write_via_writer(
 
 TEST_CASE("plugin cxx: vectored io writev/preadv and lseek round-trip") {
     dftu_utils_test::TestEnvironment env(0);
-    std::string path = env.get_dir() + "/vec.bin";
+    dstd::String path = env.get_dir() + "/vec.bin";
 
     HostFixture fx;
     std::int64_t wrote = 0, off = 0;
-    std::string got;
+    dstd::String got;
     drive_task(fx.host(), 1, [&] {
         return vectored_roundtrip(dftracer::utils::plugins::Host{&fx.host()},
                                   path.c_str(), &wrote, &off, &got);
@@ -248,9 +246,9 @@ TEST_CASE("plugin cxx: vectored io writev/preadv and lseek round-trip") {
 
 TEST_CASE("plugin cxx: positional vectored pwritev/pwrite round-trip") {
     dftu_utils_test::TestEnvironment env(0);
-    std::string path = env.get_dir() + "/posvec.bin";
+    dstd::String path = env.get_dir() + "/posvec.bin";
     HostFixture fx;
-    std::string got;
+    dstd::String got;
     drive_task(fx.host(), 1, [&] {
         return positional_vectored(dftracer::utils::plugins::Host{&fx.host()},
                                    path.c_str(), &got);
@@ -260,11 +258,10 @@ TEST_CASE("plugin cxx: positional vectored pwritev/pwrite round-trip") {
 
 TEST_CASE("plugin cxx: sendfile transfers a file into a socket") {
     dftu_utils_test::TestEnvironment env(0);
-    std::string src = env.get_dir() + "/src.bin";
-    const std::string body = "zero-copy transfer payload\n";
+    dstd::String src = env.get_dir() + "/src.bin";
+    const dstd::String body = "zero-copy transfer payload\n";
     {
-        std::ofstream f(src.c_str(), std::ios::binary);
-        f << body;
+        (void)dstd::fs::write_file(dstd::PathView(src), body);
     }
 
     int sv[2] = {-1, -1};
@@ -281,7 +278,7 @@ TEST_CASE("plugin cxx: sendfile transfers a file into a socket") {
     char buf[64] = {};
     ssize_t n = ::read(sv[0], buf, sizeof(buf));
     CHECK(n == static_cast<ssize_t>(body.size()));
-    CHECK(std::string(buf, body.size()) == body);
+    CHECK(dstd::String(buf, body.size()) == body);
     ::close(sv[0]);
     ::close(sv[1]);
 }
@@ -297,7 +294,7 @@ TEST_CASE("plugin cxx: spawn joined with all() and then() sequences work") {
 
 TEST_CASE("plugin cxx: Writer open/chunk/close writes a non-empty file") {
     dftu_utils_test::TestEnvironment env(0);
-    std::string path = env.get_dir() + "/writer_out.dat";
+    dstd::String path = env.get_dir() + "/writer_out.dat";
 
     HostFixture fx;
     drive_task(fx.host(), 1, [&] {
@@ -306,7 +303,7 @@ TEST_CASE("plugin cxx: Writer open/chunk/close writes a non-empty file") {
     });
 
     // The sharded writer emits per-worker shard files ("<path>.shard_<N>").
-    std::string shard = path + ".shard_0";
+    dstd::String shard = path + ".shard_0";
     CHECK(file_size(shard) > 0);
     CHECK(read_all(shard) == "writer-chunk-payload\n");
 }
@@ -333,14 +330,16 @@ TEST_CASE("plugin cxx: typed compose pipe/when_all/when_any run") {
 
 TEST_CASE("plugin cxx: merge_shards concatenates shard files into a target") {
     dftu_utils_test::TestEnvironment env(0);
-    std::string a = env.get_dir() + "/a.shard";
-    std::string b = env.get_dir() + "/b.shard";
-    std::string target = env.get_dir() + "/merged.out";
+    dstd::String a = env.get_dir() + "/a.shard";
+    dstd::String b = env.get_dir() + "/b.shard";
+    dstd::String target = env.get_dir() + "/merged.out";
     {
-        std::ofstream fa(a.c_str(), std::ios::binary);
-        fa << "AAAA";
-        std::ofstream fb(b.c_str(), std::ios::binary);
-        fb << "BBBB";
+        dstd::String fa;
+        fa += "AAAA";
+        dstd::String fb;
+        fb += "BBBB";
+        (void)dstd::fs::write_file(dstd::PathView(a), fa);
+        (void)dstd::fs::write_file(dstd::PathView(b), fb);
     }
 
     HostFixture fx;

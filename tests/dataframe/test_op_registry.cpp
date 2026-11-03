@@ -10,6 +10,8 @@
 
 #include <cstdint>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::Agg;
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::find_op;
@@ -478,9 +480,8 @@ TEST_SUITE("op_registry") {
         cppDf.names = {"k", "v"};
         cppDf.columns.emplace_back(kCol);
         cppDf.columns.emplace_back(vCol);
-        DataFrame viaCpp = cppDf.group_by(
-            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"k"},
-            {GroupAgg{Agg::Sum, "v", "total"}});
+        DataFrame viaCpp = cppDf.group_by(dstd::Vector<dstd::String>{"k"},
+                                          {GroupAgg{Agg::Sum, "v", "total"}});
         REQUIRE(static_cast<std::int64_t>(viaCpp.num_rows()) ==
                 dftu_dataframe_num_rows(viaRegistry));
 

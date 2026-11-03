@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The cases count walks, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/map.h>
@@ -24,7 +25,6 @@
 #include <cstdint>
 #include <ctime>
 #include <iterator>
-#include <sstream>
 #include <type_traits>
 #include <typeinfo>
 #include <utility>
@@ -52,78 +52,80 @@ bool has_args_object(int shape) {
     return shape == 0 || shape == 2 || shape == 3 || shape == 5 || shape == 6;
 }
 
-std::string write_trace(const std::string& dir) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String write_trace(const dstd::String& dir) {
+    dstd::String out;
+    out += "[\n";
     for (int i = 0; i < RECORDS; ++i) {
         const int pid = 1 + i % 4;
         const int ts = 1000 + i * 10;
-        out << R"({"id":)" << i;
+        out += common::str_cat(R"({"id":)", i);
         switch (shape_of(i)) {
             case 0:
-                out << R"(,"name":"read","cat":"POSIX","pid":)" << pid
-                    << R"(,"tid":1,"ph":"X","ts":)" << ts
-                    << R"(,"dur":3,"args":{"fname":"/data/f)" << i % 37
-                    << R"(","size":)" << i % 4096
-                    << R"(,"fhash":"f00d","hhash":"a1b2c3d4e5f60718","level":)"
-                    << i % 3 << "}}\n";
+                out += common::str_cat(
+                    R"(,"name":"read","cat":"POSIX","pid":)", pid,
+                    R"(,"tid":1,"ph":"X","ts":)", ts,
+                    R"(,"dur":3,"args":{"fname":"/data/f)", i % 37,
+                    R"(","size":)", i % 4096,
+                    R"(,"fhash":"f00d","hhash":"a1b2c3d4e5f60718","level":)",
+                    i % 3, "}}\n");
                 break;
             case 1:
-                out << R"(,"name":"compute","cat":"APP","pid":)" << pid
-                    << R"(,"tid":2,"ph":"X","ts":)" << ts << R"(,"dur":7})"
-                    << "\n";
+                out += common::str_cat(
+                    R"(,"name":"compute","cat":"APP","pid":)", pid,
+                    R"(,"tid":2,"ph":"X","ts":)", ts, R"(,"dur":7})", "\n");
                 break;
             case 2:
-                out << R"(,"name":"write","cat":"POSIX","pid":)" << pid
-                    << R"(,"tid":1,"ph":"X","ts":)" << ts
-                    << R"(,"dur":5,"args":{"io":{"off":)" << i
-                    << R"(,"len":512},"hosts":["n1","n2"],"note":null,)"
-                    << R"("ratio":0.5}})"
-                    << "\n";
+                out += common::str_cat(
+                    R"(,"name":"write","cat":"POSIX","pid":)", pid,
+                    R"(,"tid":1,"ph":"X","ts":)", ts,
+                    R"(,"dur":5,"args":{"io":{"off":)", i,
+                    R"(,"len":512},"hosts":["n1","n2"],"note":null,)",
+                    R"("ratio":0.5}})", "\n");
                 break;
             case 3:
-                out << R"(,"name":"open","cat":"POSIX","pid":)" << pid
-                    << R"(,"tid":1,"ph":"X","ts":)" << ts
-                    << R"(,"dur":1,"args":{}})"
-                    << "\n";
+                out += common::str_cat(R"(,"name":"open","cat":"POSIX","pid":)",
+                                       pid, R"(,"tid":1,"ph":"X","ts":)", ts,
+                                       R"(,"dur":1,"args":{}})", "\n");
                 break;
             case 4:
-                out << R"(,"name":"close","cat":"POSIX","pid":)" << pid
-                    << R"(,"tid":1,"ph":"X","ts":)" << ts
-                    << R"(,"dur":1,"args":7})"
-                    << "\n";
+                out +=
+                    common::str_cat(R"(,"name":"close","cat":"POSIX","pid":)",
+                                    pid, R"(,"tid":1,"ph":"X","ts":)", ts,
+                                    R"(,"dur":1,"args":7})", "\n");
                 break;
             case 5:
-                out << R"(,"name":"stat","cat":"POSIX","pid":)" << pid
-                    << R"(,"tid":3,"ph":"X","ts":)" << ts
-                    << R"(,"dur":2,"extra":"tag)" << i % 5
-                    << R"(","meta":{"k":[1,2],"z":null},"args":{"fname":"/d/s)"
-                    << i % 11 << R"(","ret":-)" << i << "}}\n";
+                out += common::str_cat(
+                    R"(,"name":"stat","cat":"POSIX","pid":)", pid,
+                    R"(,"tid":3,"ph":"X","ts":)", ts,
+                    R"(,"dur":2,"extra":"tag)", i % 5,
+                    R"(","meta":{"k":[1,2],"z":null},"args":{"fname":"/d/s)",
+                    i % 11, R"(","ret":-)", i, "}}\n");
                 break;
             case 6:
-                out << R"(,"name":"seek","cat":"STDIO","pid":"7","tid":1,)"
-                    << R"("ph":"X","ts":)" << ts
-                    << R"(,"dur":2.5,"args":{"neg":-3,"big":)"
-                    << "18446744073709551615"
-                    << R"(,"flag":true,"off":false,"ratio":1.25,)"
-                    << R"("tag":"x"}})"
-                    << "\n";
+                out += common::str_cat(
+                    R"(,"name":"seek","cat":"STDIO","pid":"7","tid":1,)",
+                    R"("ph":"X","ts":)", ts,
+                    R"(,"dur":2.5,"args":{"neg":-3,"big":)",
+                    "18446744073709551615",
+                    R"(,"flag":true,"off":false,"ratio":1.25,)",
+                    R"("tag":"x"}})", "\n");
                 break;
             default:
-                out << R"(,"name":"nophase","cat":"POSIX","pid":)" << pid
-                    << R"(,"ts":)" << ts << "}\n";
+                out +=
+                    common::str_cat(R"(,"name":"nophase","cat":"POSIX","pid":)",
+                                    pid, R"(,"ts":)", ts, "}\n");
         }
     }
-    out << "]\n";
-    const std::string path = dftu_utils_test::write_stored_gz_trace(
-        dir + "/trace.pfw.gz", out.str());
+    out += "]\n";
+    const dstd::String path =
+        dftu_utils_test::write_stored_gz_trace(dir + "/trace.pfw.gz", out);
     const timespec fixed[2] = {{FIXED_MTIME, 0}, {FIXED_MTIME, 0}};
     REQUIRE(::utimensat(AT_FDCWD, path.c_str(), fixed, 0) == 0);
     return path;
 }
 
-build::IndexBuildBatchResult build_one(const std::string& file,
-                                       const std::string& index_dir) {
+build::IndexBuildBatchResult build_one(const dstd::String& file,
+                                       const dstd::String& index_dir) {
     Runtime rt(4);
     build::IndexBuildBatchResult result;
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -182,12 +184,11 @@ dstd::Map<dstd::String, std::uint64_t> namespace_digests(
         ns.spec.format_version = decl.format_version;
         auto [it, fresh] =
             out.emplace(dstd::String(decl.name.data(), decl.name.size()),
-                        dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY);
+                        dstd::hash::FNV1A_OFFSET_BASIS_LEGACY);
         std::uint64_t& h = it->second;
         const auto mix = [&h](dstd::StringView bytes) {
-            for (unsigned char c : bytes)
-                h = (h ^ c) * dftracer::utils::dstd::hash::FNV1A_PRIME;
-            h = (h ^ 0xFF) * dftracer::utils::dstd::hash::FNV1A_PRIME;
+            for (unsigned char c : bytes) h = (h ^ c) * dstd::hash::FNV1A_PRIME;
+            h = (h ^ 0xFF) * dstd::hash::FNV1A_PRIME;
         };
         auto cursor = snapshot->scan_all(ns, {}, {});
         for (; !cursor.at_end(); cursor.next()) {
@@ -210,47 +211,47 @@ dstd::Map<dstd::String, std::uint64_t> namespace_digests(
 }
 
 namespace views = dftracer::utils::trace::views::detail;
-using dftracer::utils::dstd::StringIntern;
+using dstd::StringIntern;
 
 // Resolves interned ids, so events from different interns compare.
-std::string describe(const views::FoldEvent& ev, const StringIntern& in) {
+dstd::String describe(const views::FoldEvent& ev, const StringIntern& in) {
     const auto text = [&](std::uint32_t id) {
         return id == StringIntern::NO_ID ? dstd::String("<none>")
                                          : dstd::String(in.resolve(id));
     };
-    std::ostringstream o;
-    o << "cat=" << text(ev.cat_id) << " name=" << text(ev.name_id)
-      << " fhash=" << text(ev.fhash_id) << " hhash=" << text(ev.hhash_id)
-      << " pid=" << ev.pid << " tid=" << ev.tid << " ts=" << ev.ts
-      << " dur=" << ev.dur << " phase=" << static_cast<int>(ev.phase)
-      << " has_dur=" << ev.has_dur << " by_path=" << ev.by_path
-      << " unconverted=" << ev.unconverted << "\n";
+    dstd::String o;
+    o += common::str_cat(
+        "cat=", text(ev.cat_id), " name=", text(ev.name_id),
+        " fhash=", text(ev.fhash_id), " hhash=", text(ev.hhash_id),
+        " pid=", ev.pid, " tid=", ev.tid, " ts=", ev.ts, " dur=", ev.dur,
+        " phase=", static_cast<int>(ev.phase), " has_dur=", ev.has_dur,
+        " by_path=", ev.by_path, " unconverted=", ev.unconverted, "\n");
     const auto list = [&](const char* label, const auto& pairs) {
-        o << label << ":";
+        o += common::str_cat(label, ":");
         for (const auto& [k, v] : pairs) {
-            o << " " << text(k) << "=";
+            o += common::str_cat(" ", text(k), "=");
             std::visit(
                 [&](const auto& x) {
                     using T = std::decay_t<decltype(x)>;
                     if constexpr (std::is_same_v<T, std::uint32_t>)
-                        o << "s:" << text(x);
+                        o += common::str_cat("s:", text(x));
                     else
-                        o << typeid(T).name() << ":" << x;
+                        o += common::str_cat(typeid(T).name(), ":", x);
                 },
                 v);
         }
-        o << "\n";
+        o += "\n";
     };
     list("args", ev.args);
     list("top", ev.top_fields);
-    o << "specials:";
+    o += "specials:";
     for (const auto& sp : ev.specials)
-        o << " " << text(sp.key) << "/" << static_cast<int>(sp.kind) << "/"
-          << sp.top;
-    o << "\nleaves:";
+        o += common::str_cat(" ", text(sp.key), "/", static_cast<int>(sp.kind),
+                             "/", sp.top);
+    o += "\nleaves:";
     for (const auto& [id, tag] : ev.schema_leaves)
-        o << " " << text(id) << "#" << static_cast<int>(tag);
-    return o.str();
+        o += common::str_cat(" ", text(id), "#", static_cast<int>(tag));
+    return o;
 }
 
 }  // namespace
@@ -258,7 +259,7 @@ std::string describe(const views::FoldEvent& ev, const StringIntern& in) {
 TEST_SUITE("IndexParseWalks") {
     TEST_CASE("each record and each args object is walked once") {
         dftu_utils_test::TestEnvironment env(10);
-        const std::string file = write_trace(env.get_dir());
+        const dstd::String file = write_trace(env.get_dir());
         std::uint64_t with_args = 0;
         for (int i = 0; i < RECORDS; ++i)
             if (has_args_object(shape_of(i))) ++with_args;
@@ -279,7 +280,7 @@ TEST_SUITE("IndexParseWalks") {
 
     TEST_CASE("the index of a fixed trace is unchanged") {
         dftu_utils_test::TestEnvironment env(10);
-        const std::string file = write_trace(env.get_dir());
+        const dstd::String file = write_trace(env.get_dir());
         build_one(file, env.get_dir() + "/idx");
         const dstd::String path =
             trace::internal::determine_index_path(file, env.get_dir() + "/idx");
@@ -305,21 +306,21 @@ TEST_SUITE("IndexParseWalks") {
             "{\"id\":3,\"name\":\"ctl\tchar\",\"cat\":\"c\",\"pid\":1,"
             "\"tid\":1,\"ph\":\"X\",\"ts\":7}",
         };
-        std::ostringstream out;
-        out << "[\n";
+        dstd::String out;
+        out += "[\n";
         for (int i = 0; i < GOOD; ++i) {
-            out << R"({"id":)" << i
-                << R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)"
-                << R"("ts":)" << 1000 + i << R"(,"dur":2,"args":{"size":)" << i
-                << R"(,"huge":123456789012345678901234567890,"neg":-5}})"
-                << "\n";
+            out += common::str_cat(
+                R"({"id":)", i,
+                R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)",
+                R"("ts":)", 1000 + i, R"(,"dur":2,"args":{"size":)", i,
+                R"(,"huge":123456789012345678901234567890,"neg":-5}})", "\n");
             if (i % 600 == 0)
-                for (const auto& line : bad) out << line << "\n";
+                for (const auto& line : bad) out += common::str_cat(line, "\n");
         }
-        out << "]\n";
+        out += "]\n";
         dftu_utils_test::TestEnvironment env(10);
-        const std::string file = dftu_utils_test::write_gz_trace(
-            env.get_dir() + "/bad.pfw.gz", out.str());
+        const dstd::String file =
+            dftu_utils_test::write_gz_trace(env.get_dir() + "/bad.pfw.gz", out);
         const auto result = build_one(file, env.get_dir() + "/idx");
         REQUIRE(result.results.size() == 1);
         CHECK(result.results[0].events_processed == std::size_t{GOOD});
@@ -328,20 +329,22 @@ TEST_SUITE("IndexParseWalks") {
     TEST_CASE("a record longer than a parse batch is indexed") {
         constexpr int LINES = 40;
         constexpr std::size_t LONG_BYTES = 3 * trace::PARSE_BATCH_BYTES;
-        std::ostringstream out;
-        out << "[\n";
+        dstd::String out;
+        out += "[\n";
         for (int i = 0; i < LINES; ++i) {
-            out << R"({"id":)" << i
-                << R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)"
-                << R"("ts":)" << 1000 + i << R"(,"dur":2,"args":{"size":)" << i;
+            out += common::str_cat(
+                R"({"id":)", i,
+                R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)",
+                R"("ts":)", 1000 + i, R"(,"dur":2,"args":{"size":)", i);
             if (i == 20)
-                out << R"(,"note":")" << dstd::String(LONG_BYTES, 'x') << '"';
-            out << "}}\n";
+                out += common::str_cat(R"(,"note":")",
+                                       dstd::String(LONG_BYTES, 'x'), '"');
+            out += "}}\n";
         }
-        out << "]\n";
+        out += "]\n";
         dftu_utils_test::TestEnvironment env(10);
-        const std::string file = dftu_utils_test::write_gz_trace(
-            env.get_dir() + "/long.pfw.gz", out.str());
+        const dstd::String file = dftu_utils_test::write_gz_trace(
+            env.get_dir() + "/long.pfw.gz", out);
         walks::g_record_walks = 0;
         walks::g_count = true;
         const auto result = build_one(file, env.get_dir() + "/idx");

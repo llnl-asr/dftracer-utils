@@ -13,10 +13,7 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -70,8 +67,8 @@ class PartsCursor : public Cursor {
 
    private:
     dstd::SharedPtr<const dstd::Vector<DataFrame>> parts_;
-    dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
-        dstd::make_shared<dftracer::utils::dstd::StringIntern>();
+    dstd::SharedPtr<dstd::StringIntern> intern_ =
+        dstd::make_shared<dstd::StringIntern>();
     std::size_t next_ = 0;
 };
 

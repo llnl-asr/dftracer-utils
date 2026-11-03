@@ -30,8 +30,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <memory>
-#include <string>
 #include <tuple>
 #include <variant>
 
@@ -39,13 +37,13 @@ using namespace dftracer::utils;
 
 namespace views = dftracer::utils::trace::views;
 using dftracer::utils::Runtime;
-using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::Host;
 using dftracer::utils::plugins::NamedResultRegistry;
 using dftracer::utils::plugins::OwnedDataFrame;
 using dftracer::utils::plugins::PluginFold;
 using dftracer::utils::plugins::SharedResultRegistry;
 using dftracer::utils::trace::RecordPhase;
+using dstd::StringIntern;
 using views::detail::CoverageSet;
 using views::detail::FoldBatch;
 using views::detail::FoldEvent;

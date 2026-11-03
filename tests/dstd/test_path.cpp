@@ -1,26 +1,26 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <filesystem>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
-using dftracer::utils::dstd::HOST_PATH_STYLE;
-using dftracer::utils::dstd::Path;
-using dftracer::utils::dstd::PathStyle;
-using dftracer::utils::dstd::PathView;
+using dstd::HOST_PATH_STYLE;
+using dstd::Path;
+using dstd::PathStyle;
+using dstd::PathView;
 
-namespace pd = dftracer::utils::dstd::path_detail;
+namespace pd = dstd::path_detail;
 
 namespace {
 
 /// Inputs whose filename, parent, stem and extension are the same here as in
 /// std::filesystem. A trailing separator and a leading "//" are not, and the
 /// cases below CHECK them on their own.
-const std::vector<std::string> SAME_AS_STD = {
+const dstd::Vector<dstd::String> SAME_AS_STD = {
     "",         "/",        "/a",      "a",      "a/b", "/a/b",
     "a.tar.gz", ".bashrc",  "foo.txt", ".",      "..",  "a/.",
     "a/..",     "/..",      "../a",    "a..b",   "..a", "...",
@@ -33,7 +33,7 @@ static_assert(pd::parent("/a/b.txt", PathStyle::Posix) == "/a");
 static_assert(pd::extension("/a/b.txt", PathStyle::Posix) == ".txt");
 
 TEST_CASE("PathView queries match std::filesystem without a trailing slash") {
-    for (const std::string& input : SAME_AS_STD) {
+    for (const dstd::String& input : SAME_AS_STD) {
         CAPTURE(input);
         const PathView path(input);
         const dstd::Path reference(input);
@@ -157,24 +157,21 @@ TEST_CASE("replace_extension") {
 }
 
 TEST_CASE("normalize resolves dots and keeps what has nothing to cancel") {
-    CHECK(dftracer::utils::dstd::normalize(PathView("a/./b/../c")).str() ==
-          "a/c");
-    CHECK(dftracer::utils::dstd::normalize(PathView("../a")).str() == "../a");
-    CHECK(dftracer::utils::dstd::normalize(PathView("/..")).str() == "/");
-    CHECK(dftracer::utils::dstd::normalize(PathView("/a/../..")).str() == "/");
-    CHECK(dftracer::utils::dstd::normalize(PathView("a/../../b")).str() ==
-          "../b");
-    CHECK(dftracer::utils::dstd::normalize(PathView(".")).str() == ".");
-    CHECK(dftracer::utils::dstd::normalize(PathView("a/..")).str() == ".");
-    CHECK(dftracer::utils::dstd::normalize(PathView("/")).str() == "/");
-    CHECK(dftracer::utils::dstd::normalize(PathView("//a")).str() == "/a");
-    CHECK(dftracer::utils::dstd::normalize(PathView("")).str() == "");
-    CHECK(dftracer::utils::dstd::normalize(PathView("a//b//c")).str() ==
-          "a/b/c");
+    CHECK(dstd::normalize(PathView("a/./b/../c")).str() == "a/c");
+    CHECK(dstd::normalize(PathView("../a")).str() == "../a");
+    CHECK(dstd::normalize(PathView("/..")).str() == "/");
+    CHECK(dstd::normalize(PathView("/a/../..")).str() == "/");
+    CHECK(dstd::normalize(PathView("a/../../b")).str() == "../b");
+    CHECK(dstd::normalize(PathView(".")).str() == ".");
+    CHECK(dstd::normalize(PathView("a/..")).str() == ".");
+    CHECK(dstd::normalize(PathView("/")).str() == "/");
+    CHECK(dstd::normalize(PathView("//a")).str() == "/a");
+    CHECK(dstd::normalize(PathView("")).str() == "");
+    CHECK(dstd::normalize(PathView("a//b//c")).str() == "a/b/c");
 }
 
 TEST_CASE("relative is lexical") {
-    using dftracer::utils::dstd::relative;
+    using dstd::relative;
     CHECK(relative(PathView("/a/b/c"), PathView("/a")).str() == "b/c");
     CHECK(relative(PathView("/a/b"), PathView("/a/b")).str() == ".");
     CHECK(relative(PathView("/a"), PathView("/a/b")).str() == "..");
@@ -213,15 +210,14 @@ TEST_CASE("the Windows style rules run on any platform") {
     CHECK(PathView("\\\\srv\\share\\x").root(PathStyle::Windows) ==
           "\\\\srv\\share");
 
-    CHECK(dftracer::utils::dstd::normalize(PathView("C:\\a\\..\\b"),
-                                           PathStyle::Windows)
-              .str() == "C:\\b");
-    CHECK(dftracer::utils::dstd::relative(PathView("C:\\a\\b"),
-                                          PathView("C:\\a"), PathStyle::Windows)
+    CHECK(dstd::normalize(PathView("C:\\a\\..\\b"), PathStyle::Windows).str() ==
+          "C:\\b");
+    CHECK(dstd::relative(PathView("C:\\a\\b"), PathView("C:\\a"),
+                         PathStyle::Windows)
               .str() == "b");
-    CHECK(dftracer::utils::dstd::relative(PathView("C:\\a"), PathView("D:\\a"),
-                                          PathStyle::Windows)
-              .str() == "");
+    CHECK(
+        dstd::relative(PathView("C:\\a"), PathView("D:\\a"), PathStyle::Windows)
+            .str() == "");
 }
 
 TEST_CASE("the host style is the one the platform uses") {

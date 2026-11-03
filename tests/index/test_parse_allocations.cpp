@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -11,8 +12,6 @@
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
-#include <sstream>
-
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
 
@@ -23,18 +22,19 @@ constexpr int EVENTS = 4000;
 constexpr double MAX_PER_EVENT = 8.0;
 constexpr double MAX_PER_FILE = 3900.0;
 
-std::string write_trace(const std::string& dir, int n, int events = EVENTS) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String write_trace(const dstd::String& dir, int n, int events = EVENTS) {
+    dstd::String out;
+    out += "[\n";
     for (int i = 0; i < events; ++i)
-        out << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":)"
-            << 1 + i % 4 << R"(,"tid":1,"ph":"X","ts":)" << 1000 + i * 10
-            << R"(,"dur":3,"args":{"fname":"/data/file_number_)" << n << "_"
-            << i % 37 << R"(","size":)" << i % 4096
-            << R"(,"hhash":"a1b2c3d4e5f60718","level":)" << i % 3 << "}}\n";
-    out << "]\n";
+        out += common::str_cat(
+            R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":)", 1 + i % 4,
+            R"(,"tid":1,"ph":"X","ts":)", 1000 + i * 10,
+            R"(,"dur":3,"args":{"fname":"/data/file_number_)", n, "_", i % 37,
+            R"(","size":)", i % 4096, R"(,"hhash":"a1b2c3d4e5f60718","level":)",
+            i % 3, "}}\n");
+    out += "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/t" + std::string(dstd::to_string(n)) + ".pfw.gz", out.str());
+        dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz", out);
 }
 
 }  // namespace

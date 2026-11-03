@@ -53,6 +53,7 @@ TEST_CASE("many threads copy and drop references to one owned block") {
     for (std::size_t i = 0; i < SIZE; ++i) bytes[i] = pattern(i);
 
     std::atomic<int> bad{0};
+    // keep std: memory tests link only memory
     std::vector<std::thread> threads;
     for (int t = 0; t < THREADS; ++t) {
         threads.emplace_back([&bad, view = BufferView(block), t] {
@@ -69,6 +70,7 @@ TEST_CASE("many threads copy and drop references to one owned block") {
     }
     // Drop the main reference while the workers run, so one of them frees.
     block.reset();
+    // keep std: memory tests link only memory
     for (std::thread& th : threads) th.join();
     CHECK(bad.load() == 0);
     CHECK(pool->live() == 0);
@@ -82,6 +84,7 @@ TEST_CASE(
         std::uint8_t foreign[64] = {};
         BlockRef block =
             Block::borrow(foreign, sizeof(foreign), sum_slots, &shared);
+        // keep std: memory tests link only memory
         std::vector<std::thread> threads;
         for (int t = 0; t < THREADS; ++t) {
             threads.emplace_back([&shared, ref = block, t]() mutable {
@@ -94,6 +97,7 @@ TEST_CASE(
             });
         }
         block.reset();
+        // keep std: memory tests link only memory
         for (std::thread& th : threads) th.join();
         CHECK(shared.releases.load() == 1);
         CHECK(shared.sum == THREADS * (THREADS + 1) / 2);

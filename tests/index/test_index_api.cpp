@@ -5,11 +5,14 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/file_group.h>
@@ -29,8 +32,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <fstream>
-#include <thread>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -100,7 +101,7 @@ dstd::String build_into(const dstd::String& dir,
     const auto index_path = dir + "/.dftindex";
     for (const auto& trace : traces)
         REQUIRE(dftu_utils_test::build_index(
-            std::string(trace), std::string(index_path), CHECKPOINT));
+            dstd::String(trace), dstd::String(index_path), CHECKPOINT));
     return index_path;
 }
 
@@ -119,16 +120,14 @@ void put_plugin_extension(const dstd::String& index_path,
     }
 }
 
-dstd::Vector<dstd::String> create_traces(
-    dftu_utils_test::TestEnvironment& env,
-    const dftracer::utils::dstd::Path& dir) {
+dstd::Vector<dstd::String> create_traces(dftu_utils_test::TestEnvironment& env,
+                                         const dstd::Path& dir) {
     dstd::Vector<dstd::String> traces;
     for (const char* name : {"c.pfw.gz", "a.pfw.gz", "b.pfw.gz"}) {
-        const std::string created = env.create_dft_test_gzip_file(120);
+        const dstd::String created = env.create_dft_test_gzip_file(120);
         REQUIRE_FALSE(created.empty());
         const dstd::String renamed((dir / name).str());
-        REQUIRE(
-            dftracer::utils::dstd::fs::rename(created, renamed).has_value());
+        REQUIRE(dstd::fs::rename(created, renamed).has_value());
         traces.push_back(renamed);
     }
     return traces;
@@ -368,8 +367,8 @@ void put_catalog(index::FileBuild& build) {
 TEST_CASE("the index api reads a built index and a plugin extension") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const dftracer::utils::dstd::Path root(env.get_dir());
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(root).has_value());
+    const dstd::Path root(env.get_dir());
+    REQUIRE(dstd::fs::create_directories(root).has_value());
     const auto traces = create_traces(env, root);
     const auto index_path = build_into(dstd::String(root.str()), traces);
     put_plugin_extension(index_path, traces);
@@ -411,8 +410,8 @@ TEST_CASE("the index api reads a built index and a plugin extension") {
 TEST_CASE("the typed agg readers read what the aggregation store reads") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const dftracer::utils::dstd::Path root(env.get_dir());
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(root).has_value());
+    const dstd::Path root(env.get_dir());
+    REQUIRE(dstd::fs::create_directories(root).has_value());
     const auto traces = create_traces(env, root);
 
     index::IndexerOptions options;
@@ -476,7 +475,7 @@ TEST_CASE("the typed agg readers read what the aggregation store reads") {
 TEST_CASE("a copy at another format version is not current") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const std::string root = env.get_dir() + "/.dftindex";
+    const dstd::String root = env.get_dir() + "/.dftindex";
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
     const dstd::String path = "/traces/versioned.pfw.gz";
@@ -518,7 +517,7 @@ TEST_CASE("a copy at another format version is not current") {
 TEST_CASE("a committed FileBuild is visible whole and only after the commit") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const std::string root = env.get_dir() + "/.dftindex";
+    const dstd::String root = env.get_dir() + "/.dftindex";
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
     const dstd::String path = "/traces/one.pfw.gz";
@@ -754,7 +753,7 @@ TEST_CASE("a FileGroup publishes a repeated path in order and counts files") {
 TEST_CASE("a FileBuild writes the data the typed readers read") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const std::string root = env.get_dir() + "/.dftindex";
+    const dstd::String root = env.get_dir() + "/.dftindex";
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
     const dstd::String path = "/traces/written.pfw.gz";
@@ -1027,7 +1026,7 @@ TEST_CASE("staging commits the batches so far and publishes nothing") {
 TEST_CASE("agg meta is replaced and deleted in one record at a time") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const std::string root = env.get_dir() + "/.dftindex";
+    const dstd::String root = env.get_dir() + "/.dftindex";
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
 
@@ -1064,7 +1063,7 @@ TEST_CASE("agg meta is replaced and deleted in one record at a time") {
 TEST_CASE("remove_extension drops one extension of many files in one record") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const std::string root = env.get_dir() + "/.dftindex";
+    const dstd::String root = env.get_dir() + "/.dftindex";
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
     const SourceStat stat = stat_of(1000, 4000, 9);
@@ -1145,7 +1144,7 @@ TEST_CASE("a second build of an extension replaces the first copy") {
 TEST_CASE("commits land across many openings of one root") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const std::string root = env.get_dir() + "/.dftindex";
+    const dstd::String root = env.get_dir() + "/.dftindex";
     constexpr int ROUNDS = 12;
     for (int round = 0; round < ROUNDS; ++round) {
         auto opened = Index::open(root);
@@ -1169,7 +1168,7 @@ TEST_CASE("commits land across many openings of one root") {
 TEST_CASE("FileBuild commits from concurrent tasks and an open reader") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const std::string root = env.get_dir() + "/.dftindex";
+    const dstd::String root = env.get_dir() + "/.dftindex";
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
     const auto reader = take(opened->snapshot());
@@ -1207,7 +1206,7 @@ TEST_CASE("FileBuild commits from concurrent tasks and an open reader") {
 TEST_CASE("a rebuilt extension replaces only its own copy") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const std::string root = env.get_dir() + "/.dftindex";
+    const dstd::String root = env.get_dir() + "/.dftindex";
     const dstd::String path = "/traces/reopen.pfw.gz";
     const SourceStat stat = stat_of(1000, 4000, 9);
     {
@@ -1381,7 +1380,7 @@ TEST_CASE("commits from many threads all land") {
     REQUIRE(opened.has_value());
     constexpr int THREADS = 4;
     constexpr int ROUNDS = 10;
-    dstd::Vector<std::thread> threads;
+    dstd::Vector<dstd::Thread> threads;
     std::atomic<int> failed{0};
     for (int t = 0; t < THREADS; ++t) {
         threads.emplace_back([&opened, &failed, t] {
@@ -1401,7 +1400,7 @@ TEST_CASE("commits from many threads all land") {
             }
         });
     }
-    for (std::thread& thread : threads) thread.join();
+    for (dstd::Thread& thread : threads) thread.join();
     CHECK(failed.load() == 0);
 
     const auto snapshot = take(opened->snapshot());
@@ -1465,11 +1464,8 @@ TEST_CASE("a commit lands from a worker, a process worker and a plain thread") {
 
 namespace {
 
-dstd::String write_bytes(const dftracer::utils::dstd::Path& path,
-                         dstd::StringView contents) {
-    std::ofstream out(path.c_str(), std::ios::binary | std::ios::trunc);
-    out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-    out.close();
+dstd::String write_bytes(const dstd::Path& path, dstd::StringView contents) {
+    (void)dstd::fs::write_file(dstd::PathView(path), contents);
     return dstd::String(path.str());
 }
 
@@ -1493,8 +1489,8 @@ void register_traces(const Index& index,
 TEST_CASE("freshness follows the size and the mtime of the trace file") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const dftracer::utils::dstd::Path dir(env.get_dir());
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+    const dstd::Path dir(env.get_dir());
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
     auto opened = Index::open((dir / ".dftindex").str());
     REQUIRE(opened.has_value());
 
@@ -1504,8 +1500,7 @@ TEST_CASE("freshness follows the size and the mtime of the trace file") {
         const auto snapshot = take(opened->snapshot());
         const auto file = snapshot.file(a);
         REQUIRE(file.has_value());
-        CHECK(file->stat().size ==
-              dftracer::utils::dstd::fs::file_size(a).value());
+        CHECK(file->stat().size == dstd::fs::file_size(a).value());
         CHECK(file->stat().mtime != 0);
     }
 
@@ -1529,9 +1524,8 @@ TEST_CASE("freshness follows the size and the mtime of the trace file") {
     SUBCASE("an mtime change with the same size is stale") {
         const auto a = write_bytes(dir / "a.pfw", "same-size-content");
         register_traces(*opened, {a});
-        REQUIRE(dftracer::utils::dstd::fs::set_mtime_ns(
-                    a, dftracer::utils::dstd::fs::mtime_ns(a).value() +
-                           48ULL * 3600 * 1'000'000'000ULL)
+        REQUIRE(dstd::fs::set_mtime_ns(a, dstd::fs::mtime_ns(a).value() +
+                                              48ULL * 3600 * 1'000'000'000ULL)
                     .has_value());
         const auto snapshot = take(opened->snapshot());
         CHECK(snapshot.freshness(a, stat_of_file(a)) == Freshness::Stale);
@@ -1566,9 +1560,9 @@ TEST_CASE("freshness follows the size and the mtime of the trace file") {
 TEST_CASE("a snapshot sees a commit made after the first one") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const std::string trace = env.create_dft_test_gzip_file(50);
+    const dstd::String trace = env.create_dft_test_gzip_file(50);
     REQUIRE_FALSE(trace.empty());
-    const std::string index_path = env.get_dir() + "/.dftindex";
+    const dstd::String index_path = env.get_dir() + "/.dftindex";
     const dstd::String key = index_store::internal::get_logical_path(trace);
 
     auto opened = Index::open(index_path);
@@ -1576,8 +1570,8 @@ TEST_CASE("a snapshot sees a commit made after the first one") {
     const auto before = take(opened->snapshot());
     CHECK_FALSE(before.file(key).has_value());
 
-    REQUIRE(dftu_utils_test::build_index(std::string(trace),
-                                         std::string(index_path), CHECKPOINT));
+    REQUIRE(dftu_utils_test::build_index(dstd::String(trace),
+                                         dstd::String(index_path), CHECKPOINT));
 
     const auto after = take(opened->snapshot());
     const auto file = after.file(key);
@@ -1591,8 +1585,8 @@ TEST_CASE("a snapshot sees a commit made after the first one") {
 TEST_CASE("an index root without a store reads nothing and stays absent") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const auto root = dftracer::utils::dstd::Path(env.get_dir()) / "empty";
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(root).has_value());
+    const auto root = dstd::Path(env.get_dir()) / "empty";
+    REQUIRE(dstd::fs::create_directories(root).has_value());
     const dstd::String trace = dstd::String((root / "a.pfw.gz").str());
 
     auto opened = Index::open((root / ".dftindex").str());
@@ -1601,7 +1595,7 @@ TEST_CASE("an index root without a store reads nothing and stays absent") {
     CHECK(take(snapshot.files()).empty());
     CHECK_FALSE(snapshot.file(trace).has_value());
     CHECK(snapshot.freshness(trace, stat_of(1, 2)) == Freshness::Missing);
-    CHECK_FALSE(dftracer::utils::dstd::fs::exists(root / ".dftindex").value());
+    CHECK_FALSE(dstd::fs::exists(root / ".dftindex").value());
 }
 
 TEST_CASE("pid and tid counts round trip with large pids") {
@@ -1726,7 +1720,7 @@ TEST_CASE("a view or shard root normalizes to itself") {
 TEST_CASE("opening a view root keeps its store inside the view root") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
-    const std::string root = env.get_dir() + "/.dftindex";
+    const dstd::String root = env.get_dir() + "/.dftindex";
     const dstd::String view = index::view_root(root, "v1");
     auto opened = Index::open(view);
     REQUIRE(opened.has_value());
@@ -1735,7 +1729,7 @@ TEST_CASE("opening a view root keeps its store inside the view root") {
     put_members(build, 1);
     REQUIRE(run(build.commit()).has_value());
 
-    CHECK(dftracer::utils::dstd::fs::exists(root + "/views/v1/store").value());
-    CHECK_FALSE(dftracer::utils::dstd::fs::exists(root + "/store").value());
+    CHECK(dstd::fs::exists(root + "/views/v1/store").value());
+    CHECK_FALSE(dstd::fs::exists(root + "/store").value());
     index::release_root(view);
 }

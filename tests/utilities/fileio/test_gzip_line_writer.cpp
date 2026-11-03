@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -25,6 +26,7 @@
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::fileio;
@@ -79,7 +81,7 @@ Written write_all(const dstd::String& path, GzipWriterOptions o,
 }
 
 dstd::Vector<index::gzip::GzipMemberRecord> index_of(const dstd::String& path) {
-    const std::string path_std(path);
+    const dstd::String path_std(path);
     dstd::Optional<index::gzip::GzipBuildArtifacts> arts;
     run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         index::gzip::CheckpointIndexer::VisitorList none;
@@ -284,9 +286,8 @@ TEST_CASE("GzipLineWriter - compress false") {
     o.compress = false;
     o.workers = 3;
     auto w = write_all(dstd::String(path.str()), std::move(o), pieces);
-    std::ifstream f(path.c_str(), std::ios::binary);
-    dstd::String got((std::istreambuf_iterator<char>(f)),
-                     std::istreambuf_iterator<char>());
+    dstd::String got =
+        dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
     CHECK(got == all);
     REQUIRE(w.members.size() > 3);
     for (auto& m : w.members) {

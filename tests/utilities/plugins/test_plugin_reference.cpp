@@ -5,7 +5,10 @@
 // service checks race-free writes into the plugin's own status table.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
@@ -18,8 +21,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <string>
 
 using namespace dftracer::utils;
 
@@ -40,18 +41,18 @@ namespace {
 constexpr int EVENTS = 16;
 
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
-    const std::string dir = env.get_dir() + "/reference_trace";
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-    const std::string pfw = dir + "/trace.pfw";
-    std::ofstream ofs(pfw.c_str());
+    const dstd::String dir = env.get_dir() + "/reference_trace";
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    const dstd::String pfw = dir + "/trace.pfw";
+    dstd::String ofs;
     for (int i = 0; i < EVENTS; ++i)
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
-            << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
-            << "\n";
-    ofs.close();
-    const std::string gz = pfw + ".gz";
+        ofs += common::str_cat(
+            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
+            (1000 + i * 100), R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
+    (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
+    const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return index_trace(gz);
 }
 
@@ -115,18 +116,18 @@ TEST_CASE("reference_plugin: every service reports OK") {
                         ConfigTree::from_json_string(R"({"workdir": ")" +
                                                      env.get_dir() + R"("})"))
                    .build();
-    INFO(
-        (set.has_value() ? std::string{} : std::string(set.error().message())));
+    INFO((set.has_value() ? dstd::String{}
+                          : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
 
     View view = View::from_files({make_trace(env)});
     PluginRun run = run_single(*set, view);
 
-    const std::string report = result_text(run, "reference_report");
+    const dstd::String report = result_text(run, "reference_report");
     INFO(report);
     CHECK(reference_ok(run) == 1);
-    CHECK(report.find("FAIL") == std::string::npos);
-    CHECK(report.find("MISSING") == std::string::npos);
+    CHECK(report.find("FAIL") == dstd::String::npos);
+    CHECK(report.find("MISSING") == dstd::String::npos);
     CHECK(reference_dur_sum(run) == expected_dur_sum());
 }
 
@@ -140,18 +141,18 @@ TEST_CASE("reference_plugin: a forced-missing service fails loudly") {
                             R"({"workdir": ")" + env.get_dir() +
                             R"(", "force_missing": "dftu.svc.agg@1"})"))
                    .build();
-    INFO(
-        (set.has_value() ? std::string{} : std::string(set.error().message())));
+    INFO((set.has_value() ? dstd::String{}
+                          : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
 
     View view = View::from_files({make_trace(env)});
     PluginRun run = run_single(*set, view);
 
-    const std::string report = result_text(run, "reference_report");
+    const dstd::String report = result_text(run, "reference_report");
     INFO(report);
     CHECK(reference_ok(run) == 0);
-    CHECK(report.find("agg: MISSING") != std::string::npos);
-    CHECK(report.find("agg_state: MISSING") != std::string::npos);
+    CHECK(report.find("agg: MISSING") != dstd::String::npos);
+    CHECK(report.find("agg_state: MISSING") != dstd::String::npos);
 }
 
 #else

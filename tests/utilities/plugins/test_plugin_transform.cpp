@@ -7,8 +7,10 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -27,9 +29,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <fstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -196,20 +195,20 @@ dftu_plugin make_after_query() {
     return p;
 }
 
-std::string make_trace(dftu_utils_test::TestEnvironment& env) {
-    std::string dir = env.get_dir() + "/t";
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-    std::string pfw = dir + "/trace.pfw";
-    std::ofstream ofs(pfw.c_str());
+dstd::String make_trace(dftu_utils_test::TestEnvironment& env) {
+    dstd::String dir = env.get_dir() + "/t";
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    dstd::String pfw = dir + "/trace.pfw";
+    dstd::String ofs;
     for (int i = 0; i < EVENTS; ++i)
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":)" << (i % 2 + 1)
-            << R"(,"tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
-            << (10 + i) << R"(,"args":{}})"
-            << "\n";
-    ofs.close();
-    std::string gz = pfw + ".gz";
+        ofs +=
+            common::str_cat(R"({"ph":"X","name":"read","cat":"POSIX","pid":)",
+                            (i % 2 + 1), R"(,"tid":1,"ts":)", (1000 + i * 100),
+                            R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
+    (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
+    dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 

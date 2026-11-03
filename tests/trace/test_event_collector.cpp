@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/event_collector_utility.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
-#include <fstream>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace;
 using namespace dftu_utils_test;
@@ -17,18 +19,18 @@ TEST_SUITE("EventCollector") {
         TestEnvironment env(100);
 
         // Create a DFTracer test file
-        std::string test_file = env.create_dft_test_gzip_file(10);
+        dstd::String test_file = env.create_dft_test_gzip_file(10);
 
         // First collect metadata
-        auto meta_input = MetadataCollectorUtilityInput::from_file(
-                              dftracer::utils::dstd::String(test_file))
-                              .with_compute_hash(true);
+        auto meta_input =
+            MetadataCollectorUtilityInput::from_file(dstd::String(test_file))
+                .with_compute_hash(true);
         MetadataCollectorUtility meta_collector;
         auto meta_output = meta_collector(meta_input).get();
 
         // Now collect events from metadata
-        dftracer::utils::dstd::Vector<MetadataCollectorUtilityOutput>
-            metadata_vec = {meta_output};
+        dstd::Vector<MetadataCollectorUtilityOutput> metadata_vec = {
+            meta_output};
         auto input =
             EventCollectorFromMetadataCollectorUtilityInput::from_metadata(
                 metadata_vec);

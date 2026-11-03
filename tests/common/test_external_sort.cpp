@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/external_sort.h>
 #include <dftracer/utils/common/spill_file.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
@@ -10,7 +11,8 @@
 #include <cstdint>
 #include <random>
 #include <thread>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace {
 
@@ -25,21 +27,20 @@ struct Less {
     }
 };
 
-dftracer::utils::dstd::Vector<Rec> shuffled(std::size_t n) {
+dstd::Vector<Rec> shuffled(std::size_t n) {
     std::mt19937_64 rng(7);
-    dftracer::utils::dstd::Vector<Rec> v;
+    dstd::Vector<Rec> v;
     for (std::size_t i = 0; i < n; ++i)
         v.push_back({static_cast<std::int64_t>(rng() % 50),
                      static_cast<std::int64_t>(i)});
     return v;
 }
 
-dftracer::utils::dstd::Vector<Rec> sorted_through(
-    const dftracer::utils::dstd::Vector<Rec>& in, std::uint64_t budget,
-    std::size_t* runs) {
+dstd::Vector<Rec> sorted_through(const dstd::Vector<Rec>& in,
+                                 std::uint64_t budget, std::size_t* runs) {
     dftracer::utils::common::ExternalSorter<Rec, Less> s(Less{}, budget);
     for (const Rec& r : in) REQUIRE(s.add(r).has_value());
-    dftracer::utils::dstd::Vector<Rec> out;
+    dstd::Vector<Rec> out;
     REQUIRE(s.drain([&](const Rec& r) { out.push_back(r); }).has_value());
     if (runs) *runs = s.runs();
     return out;
@@ -87,9 +88,9 @@ TEST_CASE("a spill file returns what was appended at the returned offsets") {
     const auto ob = *f.append(b, 3);
     char buf[7] = {};
     REQUIRE(f.read(ob, buf, 3).has_value());
-    CHECK(dftracer::utils::dstd::StringView(buf, 3) == "XYZ");
+    CHECK(dstd::StringView(buf, 3) == "XYZ");
     REQUIRE(f.read(oa, buf, 6).has_value());
-    CHECK(dftracer::utils::dstd::StringView(buf, 6) == "abcdef");
+    CHECK(dstd::StringView(buf, 6) == "abcdef");
     CHECK_FALSE(f.read(ob, buf, 7).has_value());
 }
 
@@ -97,10 +98,10 @@ TEST_CASE("runs added from several threads merge to the sorted order") {
     const auto in = shuffled(20000);
     dftracer::utils::common::ExternalSorter<Rec, Less> s(Less{}, 1 << 20);
     // keep std: the test joins its threads itself
-    std::vector<std::thread> threads;
+    dstd::Vector<dstd::Thread> threads;
     for (std::size_t t = 0; t < 4; ++t) {
         threads.emplace_back([&, t] {
-            dftracer::utils::dstd::Vector<Rec> run;
+            dstd::Vector<Rec> run;
             for (std::size_t i = t; i < in.size(); i += 4) {
                 run.push_back(in[i]);
                 if (run.size() == 1000) REQUIRE(s.add_run(run).has_value());
@@ -110,7 +111,7 @@ TEST_CASE("runs added from several threads merge to the sorted order") {
     }
     for (auto& th : threads) th.join();
     CHECK(s.runs() == 20);
-    dftracer::utils::dstd::Vector<Rec> out;
+    dstd::Vector<Rec> out;
     REQUIRE(s.drain([&](const Rec& r) { out.push_back(r); }).has_value());
     auto want = in;
     std::sort(want.begin(), want.end(), Less{});

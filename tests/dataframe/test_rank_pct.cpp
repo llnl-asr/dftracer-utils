@@ -2,19 +2,21 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 #include <cstdint>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::dataframe::RankMethod;
 using dftracer::utils::dataframe::Series;
 
 namespace {
 
-Series ints(const std::vector<std::int64_t>& v,
-            const std::vector<std::uint8_t>& valid = {}) {
+Series ints(const dstd::Vector<std::int64_t>& v,
+            const dstd::Vector<std::uint8_t>& valid = {}) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
                             valid.empty() ? nullptr : valid.data());
 }

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -8,8 +11,8 @@
 #include <zlib.h>
 
 #include <cstdlib>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 // ============================================================================
 // Helpers
@@ -17,13 +20,13 @@
 
 namespace {
 
-std::string find_gen_fake_trace_binary() {
+dstd::String find_gen_fake_trace_binary() {
     return dftu_utils_test::find_binary_by_name(
         "DFTRACER_UTILS_GEN_FAKE_TRACE_PATH", "dftracer_gen_fake_trace");
 }
 
-int run_gen_fake_trace(const std::string& binary,
-                       const std::vector<std::string>& args) {
+int run_gen_fake_trace(const dstd::String& binary,
+                       const dstd::Vector<dstd::String>& args) {
     return dftu_utils_test::run_process(binary, args);
 }
 
@@ -56,16 +59,16 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        std::string out_dir = env.get_dir() + "/output";
+        dstd::String out_dir = env.get_dir() + "/output";
         int rc = run_gen_fake_trace(
             binary, {"-o", out_dir, "--num-processes", "1", "--num-epochs", "1",
                      "--steps-per-epoch", "1", "--num-train-files", "1",
                      "--num-val-files", "1"});
         CHECK(rc == 0);
 
-        std::string rank0 = out_dir + "/rank_0.pfw.gz";
-        REQUIRE(dftracer::utils::dstd::fs::exists(rank0).value());
-        CHECK(dftracer::utils::dstd::fs::file_size(rank0).value() > 0);
+        dstd::String rank0 = out_dir + "/rank_0.pfw.gz";
+        REQUIRE(dstd::fs::exists(rank0).value());
+        CHECK(dstd::fs::file_size(rank0).value() > 0);
     }
 
     TEST_CASE("generate multiple ranks") {
@@ -78,7 +81,7 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        std::string out_dir = env.get_dir() + "/output";
+        dstd::String out_dir = env.get_dir() + "/output";
         int rc = run_gen_fake_trace(
             binary, {"-o", out_dir, "--num-processes", "3", "--num-epochs", "1",
                      "--steps-per-epoch", "1", "--num-train-files", "1",
@@ -86,10 +89,10 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         CHECK(rc == 0);
 
         for (int rank = 0; rank < 3; ++rank) {
-            std::string path =
-                out_dir + "/rank_" + std::to_string(rank) + ".pfw.gz";
-            CHECK(dftracer::utils::dstd::fs::exists(path).value());
-            CHECK(dftracer::utils::dstd::fs::file_size(path).value() > 0);
+            dstd::String path =
+                out_dir + "/rank_" + dstd::to_string(rank) + ".pfw.gz";
+            CHECK(dstd::fs::exists(path).value());
+            CHECK(dstd::fs::file_size(path).value() > 0);
         }
     }
 
@@ -103,15 +106,15 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        std::string out_dir = env.get_dir() + "/output";
+        dstd::String out_dir = env.get_dir() + "/output";
         int rc = run_gen_fake_trace(
             binary, {"-o", out_dir, "--num-processes", "1", "--num-epochs", "1",
                      "--steps-per-epoch", "1", "--num-train-files", "1",
                      "--num-val-files", "1"});
         CHECK(rc == 0);
 
-        std::string rank0 = out_dir + "/rank_0.pfw.gz";
-        REQUIRE(dftracer::utils::dstd::fs::exists(rank0).value());
+        dstd::String rank0 = out_dir + "/rank_0.pfw.gz";
+        REQUIRE(dstd::fs::exists(rank0).value());
 
         // First line is the opening JSON array bracket.
         auto first = dftu_utils_test::gz_first_line(rank0);
@@ -129,21 +132,21 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        std::string out1 = env.get_dir() + "/run1";
-        std::string out2 = env.get_dir() + "/run2";
+        dstd::String out1 = env.get_dir() + "/run1";
+        dstd::String out2 = env.get_dir() + "/run2";
 
-        std::vector<std::string> common_args = {"--num-processes",
-                                                "1",
-                                                "--num-epochs",
-                                                "1",
-                                                "--steps-per-epoch",
-                                                "2",
-                                                "--num-train-files",
-                                                "1",
-                                                "--num-val-files",
-                                                "1",
-                                                "--seed",
-                                                "42"};
+        dstd::Vector<dstd::String> common_args = {"--num-processes",
+                                                  "1",
+                                                  "--num-epochs",
+                                                  "1",
+                                                  "--steps-per-epoch",
+                                                  "2",
+                                                  "--num-train-files",
+                                                  "1",
+                                                  "--num-val-files",
+                                                  "1",
+                                                  "--seed",
+                                                  "42"};
 
         auto args1 = common_args;
         args1.insert(args1.begin(), {"-o", out1});
@@ -155,14 +158,14 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         int rc2 = run_gen_fake_trace(binary, args2);
         CHECK(rc2 == 0);
 
-        std::string f1 = out1 + "/rank_0.pfw.gz";
-        std::string f2 = out2 + "/rank_0.pfw.gz";
-        REQUIRE(dftracer::utils::dstd::fs::exists(f1).value());
-        REQUIRE(dftracer::utils::dstd::fs::exists(f2).value());
+        dstd::String f1 = out1 + "/rank_0.pfw.gz";
+        dstd::String f2 = out2 + "/rank_0.pfw.gz";
+        REQUIRE(dstd::fs::exists(f1).value());
+        REQUIRE(dstd::fs::exists(f2).value());
 
         // Same seed + same parameters must produce identical file sizes.
-        CHECK(dftracer::utils::dstd::fs::file_size(f1).value() ==
-              dftracer::utils::dstd::fs::file_size(f2).value());
+        CHECK(dstd::fs::file_size(f1).value() ==
+              dstd::fs::file_size(f2).value());
     }
 
     TEST_CASE("verify mode succeeds") {
@@ -175,7 +178,7 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        std::string out_dir = env.get_dir() + "/output";
+        dstd::String out_dir = env.get_dir() + "/output";
         // Use minimal parameters to keep the test fast.
         int rc = run_gen_fake_trace(
             binary, {"-o", out_dir, "--num-processes", "1", "--num-epochs", "1",

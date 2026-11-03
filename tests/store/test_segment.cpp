@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/segment.h>
 #include <doctest/doctest.h>
 
@@ -7,17 +11,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <map>
 #include <random>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
-
-using dftracer::utils::dstd::ByteView;
-using dftracer::utils::dstd::Condition;
+using dstd::ByteView;
+using dstd::Condition;
 namespace store = dftracer::utils::store;
 using dftracer::utils::store::engine::BIG_VALUE_BYTES;
 using dftracer::utils::store::engine::BigRef;
@@ -32,7 +33,7 @@ using dftracer::utils::store::engine::SegmentView;
 constexpr std::uint64_t RANDOM_SEED = 0x5EC7105EED1234C0ULL;
 constexpr std::size_t PAIR_COUNT = 10000;
 
-int compare_strings(const std::string& a, const std::string& b) {
+int compare_strings(const dstd::String& a, const dstd::String& b) {
     const std::size_t common = a.size() < b.size() ? a.size() : b.size();
     if (common != 0) {
         const int cmp = std::memcmp(a.data(), b.data(), common);
@@ -44,29 +45,25 @@ int compare_strings(const std::string& a, const std::string& b) {
 }
 
 struct BytewiseLess {
-    bool operator()(const std::string& a, const std::string& b) const {
+    bool operator()(const dstd::String& a, const dstd::String& b) const {
         return compare_strings(a, b) < 0;
     }
 };
 
-using SortedMap = std::map<std::string, std::string, BytewiseLess>;
+using SortedMap = dstd::Map<dstd::String, dstd::String, BytewiseLess>;
 
-ByteView view_of(const std::string& bytes) {
+ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
-}
-
-ByteView view_of(const std::vector<std::uint8_t>& bytes) {
-    return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
 ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
-std::string as_string(ByteView bytes) {
+dstd::String as_string(ByteView bytes) {
     if (bytes.empty()) return {};
-    return std::string(reinterpret_cast<const char*>(bytes.data()),
-                       bytes.size());
+    return dstd::String(reinterpret_cast<const char*>(bytes.data()),
+                        bytes.size());
 }
 
 bool same_bytes(ByteView a, ByteView b) {
@@ -82,17 +79,17 @@ std::uint32_t read_u32_le_at(ByteView bytes, std::size_t offset) {
            (static_cast<std::uint32_t>(data[offset + 3U]) << 24U);
 }
 
-std::string random_bytes(std::mt19937_64& rng, std::size_t max_length) {
+dstd::String random_bytes(std::mt19937_64& rng, std::size_t max_length) {
     std::uniform_int_distribution<std::size_t> length_dist(0, max_length);
     std::uniform_int_distribution<unsigned> byte_dist(0, 255);
-    std::string out(length_dist(rng), '\0');
+    dstd::String out(length_dist(rng), '\0');
     for (char& c : out) c = static_cast<char>(byte_dist(rng));
     return out;
 }
 
-std::string random_key(std::mt19937_64& rng) { return random_bytes(rng, 32); }
+dstd::String random_key(std::mt19937_64& rng) { return random_bytes(rng, 32); }
 
-std::string random_value(std::mt19937_64& rng) {
+dstd::String random_value(std::mt19937_64& rng) {
     return random_bytes(rng, 512);
 }
 
@@ -135,8 +132,8 @@ TEST_SUITE("index store segment") {
         SegmentBuilder builder;
         SortedMap expected;
         for (std::size_t i = 0; i < PAIR_COUNT; ++i) {
-            const std::string key = random_key(rng);
-            const std::string value = random_value(rng);
+            const dstd::String key = random_key(rng);
+            const dstd::String value = random_value(rng);
             builder.add(view_of(key), view_of(value));
             expected[key] = value;
         }
@@ -162,7 +159,7 @@ TEST_SUITE("index store segment") {
         }
 
         for (std::size_t i = 0; i < 1000; ++i) {
-            std::string key = random_key(rng);
+            dstd::String key = random_key(rng);
             while (expected.find(key) != expected.end()) {
                 key = random_key(rng);
             }
@@ -170,7 +167,7 @@ TEST_SUITE("index store segment") {
         }
 
         for (std::size_t i = 0; i < 1000; ++i) {
-            const std::string start = random_key(rng);
+            const dstd::String start = random_key(rng);
             auto cursor = view.lower_bound(view_of(start));
             auto expected_it = expected.lower_bound(start);
             while (!cursor.at_end()) {
@@ -188,10 +185,12 @@ TEST_SUITE("index store segment") {
 
     TEST_CASE("equal keys keep the last added value") {
         SegmentBuilder builder;
-        builder.add(view_of(std::string("key")), view_of(std::string("first")));
-        builder.add(view_of(std::string("key")),
-                    view_of(std::string("second")));
-        builder.add(view_of(std::string("key")), view_of(std::string("third")));
+        builder.add(view_of(dstd::String("key")),
+                    view_of(dstd::String("first")));
+        builder.add(view_of(dstd::String("key")),
+                    view_of(dstd::String("second")));
+        builder.add(view_of(dstd::String("key")),
+                    view_of(dstd::String("third")));
 
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
         REQUIRE(sealed.has_value());
@@ -199,36 +198,36 @@ TEST_SUITE("index store segment") {
         REQUIRE(opened.has_value());
         CHECK(opened->entry_count() == 1);
 
-        const auto entry = opened->find(view_of(std::string("key")));
+        const auto entry = opened->find(view_of(dstd::String("key")));
         REQUIRE(entry.has_value());
         CHECK(as_string(entry->value()) == "third");
     }
 
     TEST_CASE("a fold combines equal keys in add order") {
         SegmentBuilder builder;
-        builder.add(view_of(std::string("key")), view_of(std::string("A")));
-        builder.add(view_of(std::string("key")), view_of(std::string("B")));
-        builder.add(view_of(std::string("key")), view_of(std::string("C")));
-        builder.add(view_of(std::string("key")), view_of(std::string("D")));
+        builder.add(view_of(dstd::String("key")), view_of(dstd::String("A")));
+        builder.add(view_of(dstd::String("key")), view_of(dstd::String("B")));
+        builder.add(view_of(dstd::String("key")), view_of(dstd::String("C")));
+        builder.add(view_of(dstd::String("key")), view_of(dstd::String("D")));
 
         const auto sealed = builder.seal(append_fold, nullptr, nullptr);
         REQUIRE(sealed.has_value());
         const auto opened = SegmentView::open(view_of(*sealed));
         REQUIRE(opened.has_value());
 
-        const auto entry = opened->find(view_of(std::string("key")));
+        const auto entry = opened->find(view_of(dstd::String("key")));
         REQUIRE(entry.has_value());
         CHECK(as_string(entry->value()) == "ABCD");
     }
 
     TEST_CASE("values above the threshold come back as big refs") {
         SegmentBuilder builder;
-        const std::string inline_value(BIG_VALUE_BYTES, 'i');
-        const std::string big_value(BIG_VALUE_BYTES + 1, 'b');
-        const std::string other_big_value(BIG_VALUE_BYTES + 123, 'c');
-        builder.add(view_of(std::string("inline")), view_of(inline_value));
-        builder.add(view_of(std::string("big")), view_of(big_value));
-        builder.add(view_of(std::string("other")), view_of(other_big_value));
+        const dstd::String inline_value(BIG_VALUE_BYTES, 'i');
+        const dstd::String big_value(BIG_VALUE_BYTES + 1, 'b');
+        const dstd::String other_big_value(BIG_VALUE_BYTES + 123, 'c');
+        builder.add(view_of(dstd::String("inline")), view_of(inline_value));
+        builder.add(view_of(dstd::String("big")), view_of(big_value));
+        builder.add(view_of(dstd::String("other")), view_of(other_big_value));
 
         const PlacerFn placer = make_big_ref;
         PlacerContext context{0, 0x1020304050607080ULL, 0};
@@ -237,12 +236,12 @@ TEST_SUITE("index store segment") {
         const auto opened = SegmentView::open(view_of(*sealed));
         REQUIRE(opened.has_value());
 
-        const auto inline_entry = opened->find(view_of(std::string("inline")));
+        const auto inline_entry = opened->find(view_of(dstd::String("inline")));
         REQUIRE(inline_entry.has_value());
         CHECK_FALSE(inline_entry->is_big());
         CHECK(inline_entry->value().size() == BIG_VALUE_BYTES);
 
-        const auto big_entry = opened->find(view_of(std::string("big")));
+        const auto big_entry = opened->find(view_of(dstd::String("big")));
         REQUIRE(big_entry.has_value());
         CHECK(big_entry->is_big());
         CHECK(big_entry->big_ref().offset ==
@@ -252,7 +251,7 @@ TEST_SUITE("index store segment") {
         CHECK(big_entry->big_ref().crc ==
               make_big_ref(&context, view_of(big_value)).crc);
 
-        const auto other_entry = opened->find(view_of(std::string("other")));
+        const auto other_entry = opened->find(view_of(dstd::String("other")));
         REQUIRE(other_entry.has_value());
         CHECK(other_entry->is_big());
         CHECK(other_entry->big_ref().offset ==
@@ -265,10 +264,10 @@ TEST_SUITE("index store segment") {
 
     TEST_CASE("a tiny segment matches its exact bytes") {
         SegmentBuilder builder;
-        builder.add(view_of(std::string("a")), view_of(std::string("1")));
-        builder.add(view_of(std::string("b")),
-                    view_of(std::string(BIG_VALUE_BYTES + 1, 'b')));
-        builder.add(view_of(std::string("c")), view_of(std::string("xy")));
+        builder.add(view_of(dstd::String("a")), view_of(dstd::String("1")));
+        builder.add(view_of(dstd::String("b")),
+                    view_of(dstd::String(BIG_VALUE_BYTES + 1, 'b')));
+        builder.add(view_of(dstd::String("c")), view_of(dstd::String("xy")));
 
         PlacerContext context{0x0102030405060708ULL, 0x1112131415161718ULL,
                               0x21222324U};
@@ -289,9 +288,9 @@ TEST_SUITE("index store segment") {
 
     TEST_CASE("two entries over the granule byte limit make two granules") {
         SegmentBuilder builder;
-        const std::string first_value(GRANULE_BYTES - 5U, 'v');
-        builder.add(view_of(std::string("a")), view_of(first_value));
-        builder.add(view_of(std::string("b")), view_of(std::string("w")));
+        const dstd::String first_value(GRANULE_BYTES - 5U, 'v');
+        builder.add(view_of(dstd::String("a")), view_of(first_value));
+        builder.add(view_of(dstd::String("b")), view_of(dstd::String("w")));
 
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
         REQUIRE(sealed.has_value());
@@ -305,10 +304,10 @@ TEST_SUITE("index store segment") {
 
     TEST_CASE("lower_bound and find are deterministic around granules") {
         SegmentBuilder builder;
-        const std::string large_value(GRANULE_BYTES - 5U, 'v');
-        builder.add(view_of(std::string("b")), view_of(large_value));
-        builder.add(view_of(std::string("f")), view_of(large_value));
-        builder.add(view_of(std::string("h")), view_of(large_value));
+        const dstd::String large_value(GRANULE_BYTES - 5U, 'v');
+        builder.add(view_of(dstd::String("b")), view_of(large_value));
+        builder.add(view_of(dstd::String("f")), view_of(large_value));
+        builder.add(view_of(dstd::String("h")), view_of(large_value));
 
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
         REQUIRE(sealed.has_value());
@@ -316,28 +315,28 @@ TEST_SUITE("index store segment") {
         REQUIRE(opened.has_value());
         const SegmentView& view = *opened;
 
-        const auto check_lower = [&](const std::string& key,
+        const auto check_lower = [&](const dstd::String& key,
                                      const char* expected) {
             auto cursor = view.lower_bound(view_of(key));
             REQUIRE_FALSE(cursor.at_end());
-            CHECK(as_string(cursor.entry().key()) == std::string(expected));
+            CHECK(as_string(cursor.entry().key()) == dstd::String(expected));
         };
 
         check_lower("a", "b");
         check_lower("b", "b");
         check_lower("e", "f");
         check_lower("c", "f");
-        CHECK(view.lower_bound(view_of(std::string("z"))).at_end());
+        CHECK(view.lower_bound(view_of(dstd::String("z"))).at_end());
 
-        CHECK_FALSE(view.find(view_of(std::string("a"))).has_value());
-        const auto first = view.find(view_of(std::string("b")));
+        CHECK_FALSE(view.find(view_of(dstd::String("a"))).has_value());
+        const auto first = view.find(view_of(dstd::String("b")));
         REQUIRE(first.has_value());
         CHECK(as_string(first->key()) == "b");
-        CHECK_FALSE(view.find(view_of(std::string("c"))).has_value());
-        const auto second = view.find(view_of(std::string("f")));
+        CHECK_FALSE(view.find(view_of(dstd::String("c"))).has_value());
+        const auto second = view.find(view_of(dstd::String("f")));
         REQUIRE(second.has_value());
         CHECK(as_string(second->key()) == "f");
-        CHECK_FALSE(view.find(view_of(std::string("z"))).has_value());
+        CHECK_FALSE(view.find(view_of(dstd::String("z"))).has_value());
     }
 
     TEST_CASE("an empty builder seals an empty segment") {
@@ -349,8 +348,8 @@ TEST_SUITE("index store segment") {
         const auto opened = SegmentView::open(view_of(*sealed));
         REQUIRE(opened.has_value());
         CHECK(opened->entry_count() == 0);
-        CHECK_FALSE(opened->find(view_of(std::string("absent"))).has_value());
-        CHECK(opened->lower_bound(view_of(std::string("absent"))).at_end());
+        CHECK_FALSE(opened->find(view_of(dstd::String("absent"))).has_value());
+        CHECK(opened->lower_bound(view_of(dstd::String("absent"))).at_end());
         CHECK(builder.entry_count() == 0);
         CHECK(builder.first_key().size() == 0);
         CHECK(builder.last_key().size() == 0);
@@ -359,17 +358,17 @@ TEST_SUITE("index store segment") {
     TEST_CASE("targeted field corruption returns Parse") {
         const auto make_base = [] {
             SegmentBuilder builder;
-            builder.add(view_of(std::string("a")), view_of(std::string("1")));
-            builder.add(view_of(std::string("b")), view_of(std::string("2")));
+            builder.add(view_of(dstd::String("a")), view_of(dstd::String("1")));
+            builder.add(view_of(dstd::String("b")), view_of(dstd::String("2")));
             const auto sealed = builder.seal(nullptr, nullptr, nullptr);
             REQUIRE(sealed.has_value());
-            return std::vector<std::uint8_t>(sealed->begin(), sealed->end());
+            return dstd::Vector<std::uint8_t>(sealed->begin(), sealed->end());
         };
-        const std::vector<std::uint8_t> base = make_base();
+        const dstd::Vector<std::uint8_t> base = make_base();
         REQUIRE(base.size() == 40U);
 
         const auto check_parse = [&](std::size_t offset, std::uint8_t value) {
-            std::vector<std::uint8_t> mutated = base;
+            dstd::Vector<std::uint8_t> mutated = base;
             REQUIRE(offset < mutated.size());
             mutated[offset] = value;
             const auto opened = SegmentView::open(view_of(mutated));
@@ -388,8 +387,8 @@ TEST_SUITE("index store segment") {
 
     TEST_CASE("a big value with a null placer is an error") {
         SegmentBuilder builder;
-        builder.add(view_of(std::string("key")),
-                    view_of(std::string(BIG_VALUE_BYTES + 1, 'b')));
+        builder.add(view_of(dstd::String("key")),
+                    view_of(dstd::String(BIG_VALUE_BYTES + 1, 'b')));
 
         const auto failed = builder.seal(nullptr, nullptr, nullptr);
         REQUIRE_FALSE(failed.has_value());
@@ -408,9 +407,9 @@ TEST_SUITE("index store segment") {
 
     TEST_CASE("the spans of a sealed segment cut its pages at its granules") {
         SegmentBuilder builder;
-        const std::string value(GRANULE_BYTES / 2 - 32, 'v');
+        const dstd::String value(GRANULE_BYTES / 2 - 32, 'v');
         for (std::size_t i = 0; i < 12; ++i) {
-            const std::string key = "key-" + std::to_string(i);
+            const dstd::String key = "key-" + dstd::to_string(i);
             builder.add(view_of(key), view_of(value));
         }
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
@@ -444,8 +443,8 @@ TEST_SUITE("index store segment") {
 
     TEST_CASE("a segment of at most one page is one span") {
         SegmentBuilder builder;
-        builder.add(view_of(std::string("a")), view_of(std::string("1")));
-        builder.add(view_of(std::string("b")), view_of(std::string("2")));
+        builder.add(view_of(dstd::String("a")), view_of(dstd::String("1")));
+        builder.add(view_of(dstd::String("b")), view_of(dstd::String("2")));
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
         REQUIRE(sealed.has_value());
         REQUIRE(sealed->size() <= PAGE_BYTES);
@@ -458,7 +457,7 @@ TEST_SUITE("index store segment") {
         CHECK(spans[0].length == sealed->size());
 
         dstd::Vector<SegmentSpan> garbage_spans;
-        const std::string garbage(4096, 'x');
+        const dstd::String garbage(4096, 'x');
         CHECK_FALSE(store::engine::append_segment_spans(view_of(garbage), 0,
                                                         garbage_spans));
         CHECK(garbage_spans.empty());
@@ -466,12 +465,12 @@ TEST_SUITE("index store segment") {
 
     TEST_CASE("the head and the granule walk agree with find") {
         SegmentBuilder builder;
-        std::vector<std::string> keys;
-        const std::string value(1000, 'v');
+        dstd::Vector<dstd::String> keys;
+        const dstd::String value(1000, 'v');
         for (std::size_t i = 0; i < 300; ++i) {
-            const std::string digits = std::to_string(i);
-            const std::string key =
-                "key-" + std::string(4 - digits.size(), '0') + digits;
+            const dstd::String digits = dstd::to_string(i);
+            const dstd::String key =
+                "key-" + dstd::String(4 - digits.size(), '0') + digits;
             keys.push_back(key);
             builder.add(view_of(key), view_of(value));
         }
@@ -488,7 +487,7 @@ TEST_SUITE("index store segment") {
         REQUIRE(head_bytes < sealed->size());
         const ByteView head{sealed->data(), head_bytes};
 
-        const auto check = [&](const std::string& key) {
+        const auto check = [&](const dstd::String& key) {
             const auto expected = view.find(view_of(key));
             const auto granule =
                 SegmentView::find_granule(head, length, view_of(key));
@@ -511,7 +510,7 @@ TEST_SUITE("index store segment") {
             }
         };
 
-        for (const std::string& key : keys) check(key);
+        for (const dstd::String& key : keys) check(key);
         check(keys.front() + "x");
         for (std::size_t i = 0; i + 1 < keys.size(); ++i) {
             check(keys[i] + "x");
@@ -519,24 +518,24 @@ TEST_SUITE("index store segment") {
         check("aaa");
         check("zzz");
 
-        CHECK_FALSE(
-            SegmentView::find_granule(head, length, view_of(std::string("aaa")))
-                ->has_value());
+        CHECK_FALSE(SegmentView::find_granule(head, length,
+                                              view_of(dstd::String("aaa")))
+                        ->has_value());
         CHECK_FALSE(
             SegmentView::find_in_granule(
                 ByteView{sealed->data() + head_bytes, length - head_bytes},
-                view_of(std::string("zzz")))
+                view_of(dstd::String("zzz")))
                 ->has_value());
     }
 
     TEST_CASE("a window of the granules of a range holds every key of it") {
         SegmentBuilder builder;
-        std::vector<std::string> keys;
-        const std::string value(1000, 'v');
+        dstd::Vector<dstd::String> keys;
+        const dstd::String value(1000, 'v');
         for (std::size_t i = 0; i < 300; ++i) {
-            const std::string digits = std::to_string(i);
-            const std::string key =
-                "key-" + std::string(4 - digits.size(), '0') + digits;
+            const dstd::String digits = dstd::to_string(i);
+            const dstd::String key =
+                "key-" + dstd::String(4 - digits.size(), '0') + digits;
             keys.push_back(key);
             builder.add(view_of(key), view_of(value));
         }
@@ -549,9 +548,9 @@ TEST_SUITE("index store segment") {
         const ByteView head{sealed->data(), head_bytes};
 
         // The first key of each granule, so bounds also fall on granule edges.
-        std::vector<std::string> bounds = {"aaa", "zzz", keys.back() + "x"};
+        dstd::Vector<dstd::String> bounds = {"aaa", "zzz", keys.back() + "x"};
         std::uint32_t last_offset = 0;
-        for (const std::string& key : keys) {
+        for (const dstd::String& key : keys) {
             const auto granule =
                 SegmentView::find_granule(head, length, view_of(key));
             REQUIRE(granule.has_value());
@@ -564,18 +563,18 @@ TEST_SUITE("index store segment") {
             bounds.push_back(keys[i] + "x");
         }
 
-        const auto range_of = [&](const std::string& begin,
-                                  const std::string& end) {
-            std::vector<std::string> out;
-            for (const std::string& key : keys) {
+        const auto range_of = [&](const dstd::String& begin,
+                                  const dstd::String& end) {
+            dstd::Vector<dstd::String> out;
+            for (const dstd::String& key : keys) {
                 if (key >= begin && (end.empty() || key < end)) {
                     out.push_back(key);
                 }
             }
             return out;
         };
-        const auto windowed = [&](const std::string& begin,
-                                  const std::string& end) {
+        const auto windowed = [&](const dstd::String& begin,
+                                  const dstd::String& end) {
             auto opened = SegmentView::open_head(head, length);
             REQUIRE(opened.has_value());
             const SegmentView::GranuleSpan span =
@@ -586,12 +585,12 @@ TEST_SUITE("index store segment") {
                 ByteView{sealed->data() + span.offset, span.length},
                 span.offset);
             REQUIRE(view.has_value());
-            std::vector<std::string> out;
+            dstd::Vector<dstd::String> out;
             for (auto cursor = view->lower_bound(view_of(begin));
                  !cursor.at_end(); cursor.next()) {
                 const ByteView key = cursor.entry().key();
-                std::string text(reinterpret_cast<const char*>(key.data()),
-                                 key.size());
+                dstd::String text(reinterpret_cast<const char*>(key.data()),
+                                  key.size());
                 if (!end.empty() && text >= end) break;
                 CHECK(same_bytes(cursor.entry().value(), view_of(value)));
                 out.push_back(std::move(text));
@@ -599,9 +598,9 @@ TEST_SUITE("index store segment") {
             return out;
         };
 
-        for (const std::string& begin : bounds) {
-            CHECK(windowed(begin, std::string()) == range_of(begin, ""));
-            for (const std::string& end : bounds) {
+        for (const dstd::String& begin : bounds) {
+            CHECK(windowed(begin, dstd::String()) == range_of(begin, ""));
+            for (const dstd::String& end : bounds) {
                 if (end <= begin) continue;
                 CHECK(windowed(begin, end) == range_of(begin, end));
             }
@@ -610,9 +609,9 @@ TEST_SUITE("index store segment") {
 
     TEST_CASE("a damaged header or index leaves the head unusable") {
         SegmentBuilder builder;
-        const std::string value(GRANULE_BYTES / 2 - 32, 'v');
+        const dstd::String value(GRANULE_BYTES / 2 - 32, 'v');
         for (std::size_t i = 0; i < 6; ++i) {
-            const std::string key = "key-" + std::to_string(i);
+            const dstd::String key = "key-" + dstd::to_string(i);
             builder.add(view_of(key), view_of(value));
         }
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
@@ -621,9 +620,9 @@ TEST_SUITE("index store segment") {
         const std::uint32_t head_bytes =
             SegmentView::head_length(view_of(*sealed));
         REQUIRE(head_bytes > 0);
-        const std::string key = "key-3";
+        const dstd::String key = "key-3";
 
-        const auto refuses = [&](const std::vector<std::uint8_t>& bytes,
+        const auto refuses = [&](const dstd::Vector<std::uint8_t>& bytes,
                                  std::uint32_t head) {
             const ByteView head_view{bytes.data(), head};
             const auto granule =
@@ -633,21 +632,21 @@ TEST_SUITE("index store segment") {
         };
 
         SUBCASE("a magic that is not a segment magic") {
-            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            dstd::Vector<std::uint8_t> bad(sealed->begin(), sealed->end());
             bad[0] = 'X';
             CHECK(SegmentView::head_length(ByteView{bad.data(), head_bytes}) ==
                   0);
             refuses(bad, head_bytes);
         }
         SUBCASE("a reserved byte of the header set") {
-            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            dstd::Vector<std::uint8_t> bad(sealed->begin(), sealed->end());
             bad[17] = 1;
             CHECK(SegmentView::head_length(ByteView{bad.data(), head_bytes}) ==
                   0);
             refuses(bad, head_bytes);
         }
         SUBCASE("a header of another segment length") {
-            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            dstd::Vector<std::uint8_t> bad(sealed->begin(), sealed->end());
             const auto other = static_cast<std::uint32_t>(bad.size() * 2);
             bad[4] = static_cast<std::uint8_t>(other & 0xFFU);
             bad[5] = static_cast<std::uint8_t>((other >> 8U) & 0xFFU);
@@ -656,16 +655,16 @@ TEST_SUITE("index store segment") {
             refuses(bad, head_bytes);
         }
         SUBCASE("an index entry that runs past the head") {
-            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            dstd::Vector<std::uint8_t> bad(sealed->begin(), sealed->end());
             bad.resize(head_bytes - 1);
             CHECK(SegmentView::head_length(ByteView{bad.data(), bad.size()}) ==
                   0);
             refuses(bad, static_cast<std::uint32_t>(bad.size()));
         }
         SUBCASE("an index offset that does not follow the one before it") {
-            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            dstd::Vector<std::uint8_t> bad(sealed->begin(), sealed->end());
             const std::size_t second =
-                20U + 8U + 1U + std::string("key-0").size();
+                20U + 8U + 1U + dstd::String("key-0").size();
             bad[second] = 0;
             bad[second + 1U] = 0;
             bad[second + 2U] = 0;
@@ -673,7 +672,7 @@ TEST_SUITE("index store segment") {
             refuses(bad, head_bytes);
         }
         SUBCASE("a granule length of zero") {
-            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            dstd::Vector<std::uint8_t> bad(sealed->begin(), sealed->end());
             bad[24] = 0;
             bad[25] = 0;
             bad[26] = 0;
@@ -684,22 +683,22 @@ TEST_SUITE("index store segment") {
 
     TEST_CASE("corrupt segments return Parse or stay in bounds") {
         SegmentBuilder builder;
-        std::vector<std::string> keys;
+        dstd::Vector<dstd::String> keys;
         for (std::size_t i = 0; i < 200; ++i) {
-            const std::string key = "key-" + std::to_string(i);
-            const std::string value(64, static_cast<char>('a' + (i % 26)));
+            const dstd::String key = "key-" + dstd::to_string(i);
+            const dstd::String value(64, static_cast<char>('a' + (i % 26)));
             keys.push_back(key);
             builder.add(view_of(key), view_of(value));
         }
 
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
         REQUIRE(sealed.has_value());
-        std::vector<std::uint8_t> original;
+        dstd::Vector<std::uint8_t> original;
         original.insert(original.end(), sealed->begin(), sealed->end());
 
         std::mt19937_64 rng(RANDOM_SEED + 1);
         for (std::size_t run = 0; run < 2000; ++run) {
-            std::vector<std::uint8_t> mutated = original;
+            dstd::Vector<std::uint8_t> mutated = original;
             if ((rng() & 1U) == 0) {
                 mutated.resize(rng() % original.size());
             } else {
@@ -717,7 +716,7 @@ TEST_SUITE("index store segment") {
                 continue;
             }
 
-            for (const std::string& key : keys) {
+            for (const dstd::String& key : keys) {
                 (void)opened->find(view_of(key));
             }
             auto cursor = opened->lower_bound(ByteView{});

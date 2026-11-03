@@ -18,6 +18,9 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
@@ -29,12 +32,9 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
-#include <fstream>
 #include <mutex>
 #include <sstream>
-#include <string>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::replay;
@@ -45,10 +45,10 @@ namespace {
 // apart. The events name "read" / cat "POSIX" pass the default filters but
 // dry_run=true skips actual I/O so the consumer's per-event work is
 // dominated by apply_timing sleep.
-void write_evenly_spaced_trace(const std::string& path, std::size_t n,
+void write_evenly_spaced_trace(const dstd::String& path, std::size_t n,
                                std::uint64_t step_us, std::uint32_t pid = 12345,
                                std::uint64_t base_ts = 1'000'000) {
-    std::ostringstream f;
+    dftu_utils_test::TextOut f;
     f << "[\n";
     for (std::size_t i = 0; i < n; ++i) {
         f << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":)" << pid
@@ -71,7 +71,7 @@ struct DispatchSample {
 // future executor changes may dispatch from multiple workers.
 struct DispatchRecorder {
     std::mutex m;
-    std::vector<DispatchSample> samples;
+    dstd::Vector<DispatchSample> samples;
 
     void record(const Trace& t, std::chrono::steady_clock::time_point now) {
         std::lock_guard lock(m);
@@ -86,13 +86,13 @@ struct FidelityStats {
     std::int64_t expected_trace_span_us = 0;
 };
 
-FidelityStats analyze(const std::vector<DispatchSample>& samples) {
+FidelityStats analyze(const dstd::Vector<DispatchSample>& samples) {
     REQUIRE(samples.size() >= 2);
 
     const auto& first = samples.front();
     const auto& last = samples.back();
 
-    std::vector<std::int64_t> lateness;
+    dstd::Vector<std::int64_t> lateness;
     lateness.reserve(samples.size());
     for (std::size_t i = 0; i < samples.size(); ++i) {
         auto expected_offset =
@@ -200,7 +200,7 @@ TEST_CASE("Replay fidelity - sync path") {
     dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_fid_sync");
     REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
-    std::string trace_file = std::string((temp_dir / "fid.pfw.gz").str());
+    dstd::String trace_file = dstd::String((temp_dir / "fid.pfw.gz").str());
 
     constexpr std::size_t N = 40;
     constexpr std::uint64_t STEP_US = 5'000;
@@ -231,7 +231,7 @@ TEST_CASE("Replay fidelity - pipelined path") {
     dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_fid_pipelined");
     REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
-    std::string trace_file = std::string((temp_dir / "fid.pfw.gz").str());
+    dstd::String trace_file = dstd::String((temp_dir / "fid.pfw.gz").str());
 
     constexpr std::size_t N = 40;
     constexpr std::uint64_t STEP_US = 5'000;
@@ -274,7 +274,7 @@ TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
     dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_fid_anchor");
     REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
-    std::string trace_file = std::string((temp_dir / "fid.pfw.gz").str());
+    dstd::String trace_file = dstd::String((temp_dir / "fid.pfw.gz").str());
 
     constexpr std::size_t N = 20;
     constexpr std::uint64_t STEP_US = 5'000;  // 95ms span
@@ -312,8 +312,8 @@ TEST_CASE("Replay pipelined - files replay at the same time") {
     dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_concurrent");
     REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
-    const std::string file_a = std::string((temp_dir / "a.pfw.gz").str());
-    const std::string file_b = std::string((temp_dir / "b.pfw.gz").str());
+    const dstd::String file_a = dstd::String((temp_dir / "a.pfw.gz").str());
+    const dstd::String file_b = dstd::String((temp_dir / "b.pfw.gz").str());
     constexpr std::size_t N = 8;
     constexpr std::uint32_t PID_A = 100;
     constexpr std::uint32_t PID_B = 200;
@@ -362,8 +362,8 @@ TEST_CASE("Replay pipelined - each file keeps its own timeline") {
     dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_lanes");
     REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
-    const std::string file_a = std::string((temp_dir / "a.pfw.gz").str());
-    const std::string file_b = std::string((temp_dir / "b.pfw.gz").str());
+    const dstd::String file_a = dstd::String((temp_dir / "a.pfw.gz").str());
+    const dstd::String file_b = dstd::String((temp_dir / "b.pfw.gz").str());
     constexpr std::size_t N = 20;
     constexpr std::uint64_t STEP_US = 5'000;
     constexpr std::uint32_t PID_A = 100;
@@ -409,8 +409,8 @@ TEST_CASE("Replay pipelined - max_events caps the whole run") {
     dstd::Vector<dstd::String> files;
     for (std::size_t i = 0; i < FILES; ++i) {
         files.push_back(dstd::String(
-            (temp_dir / ("f" + std::to_string(i) + ".pfw.gz")).str()));
-        write_evenly_spaced_trace(std::string(files.back()), N, 1,
+            (temp_dir / ("f" + dstd::to_string(i) + ".pfw.gz")).str()));
+        write_evenly_spaced_trace(dstd::String(files.back()), N, 1,
                                   static_cast<std::uint32_t>(100 + i));
     }
 

@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
@@ -34,8 +37,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <fstream>
-#include <sstream>
 #include <thread>
 #include <utility>
 
@@ -57,11 +58,11 @@ using Key = dstd::Pair<dstd::String, dstd::String>;
 
 const char* const NAMES[] = {"read", "write", "open", "close"};
 
-std::string write_trace(const std::string& dir, int n,
-                        dstd::Map<Key, dstd::Vector<double>>& durations,
-                        int salt = 0) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String write_trace(const dstd::String& dir, int n,
+                         dstd::Map<Key, dstd::Vector<double>>& durations,
+                         int salt = 0) {
+    dstd::String out;
+    out += "[\n";
     for (int i = 0; i < EVENTS + salt; ++i) {
         const bool own = i % 5 == 0;
         const dstd::String cat = own ? "file" + dstd::to_string(n)
@@ -70,26 +71,25 @@ std::string write_trace(const std::string& dir, int n,
         const int dur = 1 + (i * 7 + n + salt) % 500;
         char fhash[24];
         std::snprintf(fhash, sizeof fhash, "%016x", 0x1000 + i % 7);
-        out << R"({"id":)" << i << R"(,"name":")" << name << R"(","cat":")"
-            << cat << R"(","pid":)" << 1 + i % 3 << R"(,"tid":)" << 1 + i % 2
-            << R"(,"ph":"X","ts":)" << 1000 + i * 997 << R"(,"dur":)" << dur
-            << R"(,"args":{"ret":)" << (i * 13) % 4096 << R"(,"offset":)"
-            << i * 512 << R"(,"level":)" << i % 3
-            << R"(,"hhash":"a1b2c3d4e5f60718","fhash":")" << fhash << R"("}})"
-            << "\n";
+        out += common::str_cat(
+            R"({"id":)", i, R"(,"name":")", name, R"(","cat":")", cat,
+            R"(","pid":)", 1 + i % 3, R"(,"tid":)", 1 + i % 2,
+            R"(,"ph":"X","ts":)", 1000 + i * 997, R"(,"dur":)", dur,
+            R"(,"args":{"ret":)", (i * 13) % 4096, R"(,"offset":)", i * 512,
+            R"(,"level":)", i % 3, R"(,"hhash":"a1b2c3d4e5f60718","fhash":")",
+            fhash, R"("}})", "\n");
         dstd::String lower = cat;
         std::transform(lower.begin(), lower.end(), lower.begin(),
                        [](unsigned char c) { return std::tolower(c); });
         durations[{lower, name}].push_back(dur);
     }
-    out << "]\n";
-    const std::string pfw =
-        dir + "/t" + std::string(dstd::to_string(n)) + ".pfw";
+    out += "]\n";
+    const dstd::String pfw =
+        dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw";
     {
-        std::ofstream file(pfw.c_str());
-        file << out.str();
+        (void)dstd::fs::write_file(dstd::PathView(pfw), out);
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
     (void)dstd::fs::remove(pfw);
@@ -123,7 +123,7 @@ struct Stored {
     dstd::Set<std::uint32_t> chunks;
 };
 
-index::Snapshot open_index(const std::string& index_path) {
+index::Snapshot open_index(const dstd::String& index_path) {
     return common::unwrap(index::plan::open_snapshot(index_path));
 }
 
@@ -179,7 +179,7 @@ void check_quantiles(const agg::AggPartial& p, const agg::QuantileStore& q,
     }
 }
 
-std::string index_dir_of(const dftu_utils_test::TestEnvironment& env) {
+dstd::String index_dir_of(const dftu_utils_test::TestEnvironment& env) {
     return env.get_dir() + "/idx";
 }
 
@@ -187,7 +187,7 @@ std::string index_dir_of(const dftu_utils_test::TestEnvironment& env) {
 // so two indexes compare whatever ids they gave.
 dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
                                                dstd::StringView index_dir) {
-    const auto index_path = std::string(trace::internal::determine_index_path(
+    const auto index_path = dstd::String(trace::internal::determine_index_path(
         dstd::String(file), dstd::String(index_dir)));
     const auto snapshot = open_index(index_path);
     const auto stored_file = file_of(snapshot, file);
@@ -211,18 +211,19 @@ dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
     common::unwrap(index::for_each_agg_chunk_columns(
         snapshot, stored_file,
         [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
-            std::ostringstream value;
-            value << block.rows;
+            dstd::String value;
+            value += common::str_cat(block.rows);
             for (const auto* locals :
                  {&block.cat, &block.name, &block.host, &block.file})
                 for (const std::uint32_t local : *locals)
-                    value << ' '
-                          << dstd::StringView(block.texts[local].data(),
-                                              block.texts[local].size());
+                    value += common::str_cat(
+                        ' ', dstd::StringView(block.texts[local].data(),
+                                              block.texts[local].size()));
             for (const auto* numbers :
                  {&block.ts, &block.dur, &block.pid, &block.tid})
-                for (const std::uint64_t v : *numbers) value << ' ' << v;
-            rows.emplace("c " + dstd::to_string(chunk), value.str());
+                for (const std::uint64_t v : *numbers)
+                    value += common::str_cat(' ', v);
+            rows.emplace("c " + dstd::to_string(chunk), value);
             return true;
         }));
     return rows;
@@ -275,7 +276,7 @@ TEST_SUITE("AggPartialsStore") {
         const double seconds = build_seconds(files, index_dir);
         MESSAGE("index build of " << FILES << " files: " << seconds << " s");
 
-        const auto index_path = std::string(
+        const auto index_path = dstd::String(
             trace::internal::determine_index_path(files[0], index_dir));
         const auto snapshot = open_index(index_path);
         auto dictionary = agg::make_intern_table();
@@ -328,7 +329,7 @@ TEST_SUITE("AggPartialsStore") {
         const auto index_dir = index_dir_of(env);
         build_seconds(files, index_dir);
 
-        const auto index_path = std::string(
+        const auto index_path = dstd::String(
             trace::internal::determine_index_path(files[0], index_dir));
         dstd::Vector<std::size_t> before;
         {
@@ -408,7 +409,7 @@ TEST_SUITE("AggPartialsStore") {
         const auto index_dir = index_dir_of(env);
         build_seconds(files, index_dir);
 
-        const auto index_path = std::string(
+        const auto index_path = dstd::String(
             trace::internal::determine_index_path(files[0], index_dir));
         dstd::Vector<std::size_t> before;
         {
@@ -486,8 +487,8 @@ TEST_SUITE("AggPartialsStore") {
         dstd::Map<Key, dstd::Vector<double>> durations;
         for (int i = 0; i < 3; ++i)
             files.emplace_back(write_trace(env.get_dir(), i, durations));
-        const std::string held = env.get_dir() + "/held";
-        const std::string through = env.get_dir() + "/through";
+        const dstd::String held = env.get_dir() + "/held";
+        const dstd::String through = env.get_dir() + "/through";
 
         const auto run_bytes = agg::g_agg_run_bytes.exchange(UINT64_MAX);
         build_seconds(files, held);
@@ -509,7 +510,7 @@ TEST_SUITE("AggPartialsStore") {
         build_seconds(files, through);
         CHECK(agg::g_agg_runs_staged.load() > rebuilt);
         agg::g_agg_run_bytes.store(UINT64_MAX);
-        const std::string fresh = env.get_dir() + "/fresh";
+        const dstd::String fresh = env.get_dir() + "/fresh";
         build_seconds(files, fresh);
         agg::g_agg_run_bytes.store(run_bytes);
         CHECK(agg_rows(files[0], through) != agg_rows(files[0], held));
@@ -537,7 +538,7 @@ TEST_SUITE("AggPartialsStore") {
         ::unsetenv(CRASH_DIR_ENV);
         REQUIRE(child.ok());
 
-        const std::string fresh = env.get_dir() + "/fresh";
+        const dstd::String fresh = env.get_dir() + "/fresh";
         build_seconds(files, fresh);
         std::size_t kept = 0;
         for (int i = 0; i < CRASH_FILES; ++i) {
@@ -564,7 +565,7 @@ TEST_SUITE("AggPartialsStore") {
         const auto files = crash_files(dir);
         agg::g_agg_run_bytes.store(1);
         std::atomic<bool> done{false};
-        std::thread build([&] {
+        dstd::Thread build([&] {
             build_seconds(files, dir + "/idx");
             done.store(true);
         });

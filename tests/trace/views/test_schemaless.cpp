@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
@@ -15,15 +19,11 @@
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <cstdio>
 #include <fstream>
-#include <functional>
-#include <map>
-#include <set>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -38,27 +38,27 @@ namespace {
 
 // `lines` as a gzip of members of about `member_bytes`, indexed with small
 // checkpoints so each member is its own chunk.
-std::string write_gz(TestEnvironment& env, const std::string& name,
-                     const std::vector<std::string>& lines,
-                     std::size_t member_bytes = 256) {
-    const std::string plain = env.get_dir() + "/" + name + ".ndjson";
+dstd::String write_gz(TestEnvironment& env, const dstd::String& name,
+                      const dstd::Vector<dstd::String>& lines,
+                      std::size_t member_bytes = 256) {
+    const dstd::String plain = env.get_dir() + "/" + name + ".ndjson";
     {
-        std::ofstream o(plain.c_str());
+        dftu_utils_test::FileOut o(plain);
         for (const auto& l : lines) o << l << "\n";
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                member_bytes));
     (void)dstd::fs::remove(plain);
     return gz;
 }
 
-std::string write_indexed(TestEnvironment& env, const std::string& name,
-                          const std::vector<std::string>& lines,
-                          std::size_t member_bytes = 256,
-                          dftracer::utils::dstd::StringView schema = "",
-                          std::uint64_t tier_interval_us = 0) {
-    const std::string gz = write_gz(env, name, lines, member_bytes);
+dstd::String write_indexed(TestEnvironment& env, const dstd::String& name,
+                           const dstd::Vector<dstd::String>& lines,
+                           std::size_t member_bytes = 256,
+                           dstd::StringView schema = "",
+                           std::uint64_t tier_interval_us = 0) {
+    const dstd::String gz = write_gz(env, name, lines, member_bytes);
     ix::IndexerOptions o;
     o.checkpoint_size = member_bytes;
     o.schema = schema;
@@ -79,12 +79,12 @@ fields:
 )";
 
 // A dftracer event line, as the records of the dft_roles schema too.
-std::string dft_line(int pid, int tid, const char* name, std::int64_t ts,
-                     std::int64_t dur) {
-    return R"({"id":1,"name":")" + std::string(name) +
-           R"(","cat":"POSIX","pid":)" + std::to_string(pid) + R"(,"tid":)" +
-           std::to_string(tid) + R"(,"ts":)" + std::to_string(ts) +
-           R"(,"dur":)" + std::to_string(dur) +
+dstd::String dft_line(int pid, int tid, const char* name, std::int64_t ts,
+                      std::int64_t dur) {
+    return R"({"id":1,"name":")" + dstd::String(name) +
+           R"(","cat":"POSIX","pid":)" + dstd::to_string(pid) + R"(,"tid":)" +
+           dstd::to_string(tid) + R"(,"ts":)" + dstd::to_string(ts) +
+           R"(,"dur":)" + dstd::to_string(dur) +
            R"(,"ph":"X","args":{"size":7}})";
 }
 
@@ -143,26 +143,25 @@ bool typed_serve(const scan::ScanPlan& p, df::DataFrame& regular,
 }
 
 // Each row of `f` as its cells' text, keyed by the `keys` columns' text.
-std::map<std::string, std::vector<std::string>> rows_by_key(
-    const df::DataFrame& f, const std::vector<std::string>& keys) {
-    std::map<std::string, std::vector<std::string>> out;
+dstd::Map<dstd::String, dstd::Vector<dstd::String>> rows_by_key(
+    const df::DataFrame& f, const dstd::Vector<dstd::String>& keys) {
+    dstd::Map<dstd::String, dstd::Vector<dstd::String>> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
-        std::string k;
+        dstd::String k;
         for (const auto& c : keys) k += bstr(f, r, c) + '\x1f';
         auto& cells = out[k];
         for (std::size_t c = 0; c < f.names.size(); ++c)
             cells.push_back(
                 f.columns[c].type() == df::TypeId::String
                     ? bstr(f, r, f.names[c])
-                    : std::string(dftracer::utils::dstd::double_text(
-                          bnum(f, r, f.names[c]))));
+                    : dstd::String(dstd::double_text(bnum(f, r, f.names[c]))));
     }
     return out;
 }
 
 // `a` and `b` hold the same columns and rows; with `types`, of the same types.
 void same_frame(const df::DataFrame& a, const df::DataFrame& b,
-                const std::vector<std::string>& keys, bool types = true) {
+                const dstd::Vector<dstd::String>& keys, bool types = true) {
     REQUIRE(a.names == b.names);
     if (types)
         for (std::size_t c = 0; c < a.names.size(); ++c)
@@ -171,7 +170,7 @@ void same_frame(const df::DataFrame& a, const df::DataFrame& b,
     CHECK(rows_by_key(a, keys) == rows_by_key(b, keys));
 }
 
-std::int64_t count_of(const View& v, const std::string& query) {
+std::int64_t count_of(const View& v, const dstd::String& query) {
     const df::DataFrame f =
         run(v.duql(query + " | agg { n = count() }").lazy().collect());
     REQUIRE(f.num_rows() == 1);
@@ -194,44 +193,45 @@ fields:
                                "test");
 }
 
-std::vector<std::string> path_role_lines() {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> path_role_lines() {
+    dstd::Vector<dstd::String> out;
     for (int i = 0; i < 400; ++i)
-        out.push_back(R"({"start":)" + std::to_string(1000 + i * 10) +
-                      R"(,"took":5,"host":"h)" + std::to_string(i % 2) +
-                      R"(","thread":"t)" + std::to_string(i % 4) +
+        out.push_back(R"({"start":)" + dstd::to_string(1000 + i * 10) +
+                      R"(,"took":5,"host":"h)" + dstd::to_string(i % 2) +
+                      R"(","thread":"t)" + dstd::to_string(i % 4) +
                       R"(","op":")" + (i % 3 ? "read" : "write") +
-                      R"(","size":)" + std::to_string(i) + "}");
+                      R"(","size":)" + dstd::to_string(i) + "}");
     return out;
 }
 
-std::map<std::string, double> counts_by_op(const View& v) {
+dstd::Map<dstd::String, double> counts_by_op(const View& v) {
     const df::DataFrame f = v.group_by({GroupKey::name()})
                                 .agg({{AggOp::Count, "", "n"}})
                                 .collect()
                                 .get();
-    std::map<std::string, double> out;
+    dstd::Map<dstd::String, double> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out[bstr(f, r, "op")] = bnum(f, r, "n");
     return out;
 }
 
 // The file's recorded schema and whether its pruning tier is built.
-dstd::Pair<std::string, bool> index_state(const std::string& gz,
-                                          const std::string& idx) {
+dstd::Pair<dstd::String, bool> index_state(const dstd::String& gz,
+                                           const dstd::String& idx) {
     const auto snapshot = dftu_utils_test::index_snapshot(idx);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
     const auto schema = dftu_utils_test::index_take(ix::schema(snapshot, file));
-    return {schema ? std::string(schema->data(), schema->size()) : "",
+    return {schema ? dstd::String(schema->data(), schema->size()) : "",
             dftu_utils_test::pruning_tier_current(snapshot, file)};
 }
 
 // Nested calls on two processes of two threads each: step holds read (which
 // holds sys) and write. `line` writes one call.
-std::vector<std::string> nested_calls(
-    const std::function<std::string(int pid, int tid, const char* name,
-                                    std::int64_t ts, std::int64_t dur)>& line) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> nested_calls(
+    const dstd::Function<dstd::String(int pid, int tid, const char* name,
+                                      std::int64_t ts, std::int64_t dur)>&
+        line) {
+    dstd::Vector<dstd::String> out;
     for (int pid : {1, 2})
         for (int tid : {10, 11})
             for (int k = 0; k < 5; ++k) {
@@ -245,10 +245,10 @@ std::vector<std::string> nested_calls(
 }
 
 // Each flamegraph node's name path ("all/step/read") -> (total, count).
-std::map<std::string, dstd::Pair<double, std::int64_t>> flame_paths(
+dstd::Map<dstd::String, dstd::Pair<double, std::int64_t>> flame_paths(
     const df::DataFrame& f) {
-    std::vector<std::string> path(static_cast<std::size_t>(f.num_rows()));
-    std::map<std::string, dstd::Pair<double, std::int64_t>> out;
+    dstd::Vector<dstd::String> path(static_cast<std::size_t>(f.num_rows()));
+    dstd::Map<dstd::String, dstd::Pair<double, std::int64_t>> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
         const auto parent = static_cast<std::int64_t>(bnum(f, r, "parent"));
         path[static_cast<std::size_t>(r)] =
@@ -278,32 +278,32 @@ fields:
                             "test");
         TestEnvironment env(10);
         const auto dft = nested_calls(dft_line);
-        const std::string a = write_indexed(env, "dft", dft, 1024);
-        const std::string b =
+        const dstd::String a = write_indexed(env, "dft", dft, 1024);
+        const dstd::String b =
             write_indexed(env, "roles", dft, 1024, "dft_roles");
         const auto secs = nested_calls([](int pid, int tid, const char* name,
                                           std::int64_t ts, std::int64_t dur) {
-            return R"({"host":"h)" + std::to_string(pid) + R"(","thread":"t)" +
-                   std::to_string(tid) + R"(","op":")" + name +
+            return R"({"host":"h)" + dstd::to_string(pid) + R"(","thread":"t)" +
+                   dstd::to_string(tid) + R"(","op":")" + name +
                    R"(","start":)" +
-                   std::string(dftracer::utils::dstd::double_text(
-                       static_cast<double>(ts) / 1e6)) +
+                   dstd::String(
+                       dstd::double_text(static_cast<double>(ts) / 1e6)) +
                    R"(,"took":)" +
-                   std::string(dftracer::utils::dstd::double_text(
-                       static_cast<double>(dur) / 1e3)) +
+                   dstd::String(
+                       dstd::double_text(static_cast<double>(dur) / 1e3)) +
                    "}";
         });
-        const std::string c =
+        const dstd::String c =
             write_indexed(env, "secs", secs, 1024, "secs_roles");
         const View va = View::from_file(
             dstd::String(a),
-            dstd::String(std::string(determine_index_path(a, ""))));
+            dstd::String(dstd::String(determine_index_path(a, ""))));
         const View vb = View::from_file(
             dstd::String(b),
-            dstd::String(std::string(determine_index_path(b, ""))));
+            dstd::String(dstd::String(determine_index_path(b, ""))));
         const View vc = View::from_file(
             dstd::String(c),
-            dstd::String(std::string(determine_index_path(c, ""))));
+            dstd::String(dstd::String(determine_index_path(c, ""))));
 
         const df::DataFrame ta = run(va.call_tree().collect());
         const df::DataFrame tb = run(vb.call_tree().collect());
@@ -348,7 +348,7 @@ fields:
         const df::DataFrame tc = run(vc.call_tree().collect());
         REQUIRE(tc.num_rows() == ta.num_rows());
         CHECK(tc.columns[tc.column_index("ts")].type() == df::TypeId::Float64);
-        std::multiset<dstd::Pair<std::string, std::int64_t>> la, lc;
+        dstd::MultiSet<dstd::Pair<dstd::String, std::int64_t>> la, lc;
         for (std::int64_t r = 0; r < ta.num_rows(); ++r) {
             la.emplace(bstr(ta, r, "name"),
                        static_cast<std::int64_t>(bnum(ta, r, "level")));
@@ -369,7 +369,7 @@ fields:
 
     TEST_CASE("integers past int64 stay exact and wider ones keep the line") {
         TestEnvironment env(10);
-        const std::string gz = write_indexed(
+        const dstd::String gz = write_indexed(
             env, "big",
             {R"({"id":18446744073709551615,"k":1})",
              R"({"id":18446744073709551614,"k":2})",
@@ -378,7 +378,7 @@ fields:
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
         CHECK(count_of(v, "where k > 0") == 4);
         const df::DataFrame ids =
@@ -396,13 +396,13 @@ fields:
 
     TEST_CASE("an export with select writes nested and dotted paths") {
         TestEnvironment env(10);
-        const std::string gz = write_indexed(
+        const dstd::String gz = write_indexed(
             env, "nested",
             {R"({"id":"a","actor":{"login":"u1"},"x.y":7,"tags":["p","q"],"args":{"z":1}})"});
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
         StringSink sink;
         v.select({"actor.login", "x.y", "tags.1", "z"}).sink_json(sink).get();
@@ -422,13 +422,13 @@ source: |
 )",
                             "test");
         TestEnvironment env(10);
-        const std::string plain = env.get_dir() + "/t.ndjson";
+        const dstd::String plain = env.get_dir() + "/t.ndjson";
         {
-            std::ofstream o(plain.c_str());
+            dftu_utils_test::FileOut o(plain);
             o << R"({"n":2.0,"meta":{"b":1,"a":[1,2]}})" << "\n"
               << R"({"n":3,"meta":"x"})" << "\n";
         }
-        const std::string gz = plain + ".gz";
+        const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
         ix::IndexerOptions o;
         o.schema = "typed_rows";
@@ -452,7 +452,7 @@ fields:
 )",
                             "test");
         TestEnvironment env(10);
-        const std::string gz = write_indexed(
+        const dstd::String gz = write_indexed(
             env, "coerce",
             {R"({"at":"2024-01-01T00:00:00Z","n":"42","label":7})",
              R"({"at":"2024-01-01T00:30:00.5+00:00","n":2.0,"label":"x"})",
@@ -460,7 +460,7 @@ fields:
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("coerce");
         const df::DataFrame f = run(v.duql("select n, label").lazy().collect());
         REQUIRE(f.num_rows() == 3);
@@ -492,14 +492,14 @@ fields:
 )",
                             "test");
         TestEnvironment env(10);
-        const std::string gz = write_indexed(
+        const dstd::String gz = write_indexed(
             env, "digits",
             {R"({"at":"2024-01-01T00:00:00Z","x":"1e3","label":"007"})",
              R"({"at":"2024-01-01T00:30:00Z","x":"-1.5","label":"1.50"})"});
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("digits");
         const df::DataFrame f = run(v.duql("select x, label").lazy().collect());
         REQUIRE(f.num_rows() == 2);
@@ -513,11 +513,11 @@ fields:
     TEST_CASE("bad lines and unconverted values are counted, not lost") {
         ix::register_schema("id: counted\nfields:\n  n: {type: int}\n", "test");
         TestEnvironment env(10);
-        std::string deep;
+        dstd::String deep;
         for (int i = 0; i < 1100; ++i) deep += R"({"a":)";
         deep += "1";
         for (int i = 0; i < 1100; ++i) deep += "}";
-        const std::string gz =
+        const dstd::String gz =
             write_indexed(env, "bad",
                           {"[", R"({"n":1},)", R"({"n":"n/a"},)", "{not json",
                            deep, R"({"n":3})", "]"},
@@ -525,7 +525,7 @@ fields:
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("counted");
         const df::DataFrame f = run(v.duql("select n").lazy().collect());
         CHECK(f.num_rows() == 3);
@@ -551,15 +551,15 @@ fields:
 )",
                             "test");
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 300; ++i)
-            lines.push_back(R"({"t":)" + std::to_string(1000 + i) +
+            lines.push_back(R"({"t":)" + dstd::to_string(1000 + i) +
                             R"(.25,"d":0.5,"k":"a"})");
-        const std::string gz = write_indexed(env, "secs", lines, 4096);
+        const dstd::String gz = write_indexed(env, "secs", lines, 4096);
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("seconds_log");
         const df::DataFrame trace =
             run(v.duql("bucket 60s | agg { n = count() } | sort bucket")
@@ -596,35 +596,35 @@ fields:
 
     TEST_CASE("a column a select dropped is an error, not nulls") {
         TestEnvironment env(10);
-        const std::string gz =
+        const dstd::String gz =
             write_indexed(env, "sel", {R"({"a":1,"b":2})", R"({"a":3,"b":4})"});
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
-        std::string what;
+        dstd::String what;
         try {
             (void)run(
                 v.duql("select a | group b { n = count() }").lazy().collect());
         } catch (const std::exception& e) {
             what = e.what();
         }
-        CHECK(what.find("has no column 'b'") != std::string::npos);
+        CHECK(what.find("has no column 'b'") != dstd::String::npos);
         CHECK(count_of(v, "select a | where a > 1") == 1);
     }
 
     TEST_CASE("zone pruning compares non-integral literals exactly") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 40; ++i)
             lines.push_back(R"({"k":"a","x":)" +
-                            std::to_string(i < 20 ? 1 : 5) + "}");
-        const std::string gz = write_indexed(env, "zones", lines);
+                            dstd::to_string(i < 20 ? 1 : 5) + "}");
+        const dstd::String gz = write_indexed(env, "zones", lines);
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
         CHECK(count_of(v, "where x < 1.5") == 20);
         CHECK(count_of(v, "where x > 4.5") == 20);
@@ -635,19 +635,19 @@ fields:
     TEST_CASE(
         "an index of huge arrays keeps a bounded catalog and prunes right") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int r = 0; r < 20; ++r) {
-            std::string big;
+            dstd::String big;
             for (int i = 0; i < 1000; ++i)
-                big += (i ? "," : "") + std::to_string(i + r);
-            lines.push_back(R"({"k":)" + std::to_string(r) + R"(,"big":[)" +
+                big += (i ? "," : "") + dstd::to_string(i + r);
+            lines.push_back(R"({"k":)" + dstd::to_string(r) + R"(,"big":[)" +
                             big + "]}");
         }
-        const std::string gz = write_indexed(env, "huge", lines, 4096);
+        const dstd::String gz = write_indexed(env, "huge", lines, 4096);
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
         CHECK(v.schema_tree().size() < 300);
         CHECK(count_of(v, "where big[500] == 505") == 1);
@@ -659,30 +659,28 @@ fields:
 
     TEST_CASE("a path field named like a dftracer field prunes by its zones") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (char c : {'a', 'b', 'c'})
             for (int i = 0; i < 1000; ++i) {
                 char n[8];
                 std::snprintf(n, sizeof(n), "%c%04d", c, i);
-                lines.push_back(R"({"name":")" + std::string(n) +
-                                R"(","pid":)" + std::to_string(i) + "}");
+                lines.push_back(R"({"name":")" + dstd::String(n) +
+                                R"(","pid":)" + dstd::to_string(i) + "}");
             }
         // Chunks of more than 256 names carry no bloom, so zones prune.
-        const std::string gz = write_indexed(env, "named", lines, 16384);
+        const dstd::String gz = write_indexed(env, "named", lines, 16384);
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
         CHECK(count_of(v, "where name == \"b0150\"") == 1);
         CHECK(count_of(v, "where name in [\"a0001\", \"c0999\"]") == 2);
         const auto snapshot =
-            ix::plan::open_snapshot(std::string(determine_index_path(gz, "")));
+            ix::plan::open_snapshot(dstd::String(determine_index_path(gz, "")));
         REQUIRE(snapshot.has_value());
         const auto plan = ix::plan::explain_file_chunks(
-            *snapshot,
-            dftracer::utils::dstd::String(
-                dftracer::utils::dstd::StringView(gz)),
+            *snapshot, dstd::String(dstd::StringView(gz)),
             duql::parse_or_throw("name == \"b0150\""));
         REQUIRE(plan.total_chunks > 3);
         CHECK(plan.read.size() < plan.total_chunks / 2);
@@ -705,17 +703,17 @@ fields:
         // gets its own directory.
         TestEnvironment ea(10), eb(10), ec(10);
         const auto lines = nested_calls(dft_line);
-        const std::string a = write_indexed(ea, "dft", lines, 1024, "", 1000);
-        const std::string b =
+        const dstd::String a = write_indexed(ea, "dft", lines, 1024, "", 1000);
+        const dstd::String b =
             write_indexed(eb, "roles", lines, 1024, "dft_roles", 1000);
-        const std::string c =
+        const dstd::String c =
             write_indexed(ec, "loose", lines, 1024, "loose_roles", 1000);
-        auto plan = [](const std::string& gz, dstd::Vector<GroupKey> keys,
+        auto plan = [](const dstd::String& gz, dstd::Vector<GroupKey> keys,
                        dstd::Vector<AggSpec> aggs,
-                       const std::string& where = "") {
+                       const dstd::String& where = "") {
             auto p = scan::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))));
+                dstd::String(dstd::String(determine_index_path(gz, ""))));
             if (!where.empty())
                 p = scan::filter(p, duql::parse_or_throw(where));
             return scan::agg(scan::group_by(p, std::move(keys)),
@@ -728,7 +726,7 @@ fields:
             {AggOp::Mean, "dur", "avg"}, {AggOp::Min, "dur", "lo"},
             {AggOp::Max, "dur", "hi"},   {AggOp::Std, "dur", "sd"},
             {AggOp::Min, "ts", "first"}};
-        const std::vector<std::string> cols{"name", "pid", "tid"};
+        const dstd::Vector<dstd::String> cols{"name", "pid", "tid"};
 
         const df::DataFrame dft_tier = tier_only(plan(a, keys, aggs));
         same_frame(dft_tier, scan_only(plan(a, keys, aggs)), cols);
@@ -738,7 +736,7 @@ fields:
         // dftracer reads its integers unsigned, a path record signed.
         same_frame(path_tier, dft_tier, cols, false);
 
-        const std::string reads = R"(name == "read" and pid == 2)";
+        const dstd::String reads = R"(name == "read" and pid == 2)";
         const df::DataFrame filtered = tier_only(plan(b, keys, aggs, reads));
         CHECK(filtered.num_rows() == 2);
         same_frame(filtered, scan_only(plan(b, keys, aggs, reads)), cols);
@@ -770,9 +768,9 @@ fields:
             R"({"id":1,"name":"read","cat":"POSIX","tid":10,"ts":7,"dur":3})";
         auto neg_tid = lines;
         neg_tid[7] = dft_line(1, -3, "read", 9, 4);
-        const std::string d =
+        const dstd::String d =
             write_indexed(ed, "nopid", no_pid, 1024, "dft_roles", 1000);
-        const std::string e =
+        const dstd::String e =
             write_indexed(ee, "negtid", neg_tid, 1024, "dft_roles", 1000);
         CHECK(declines(plan(d, keys, aggs)));
         CHECK(declines(plan(e, keys, aggs)));
@@ -810,7 +808,7 @@ fields:
 )",
                             "test");
         TestEnvironment env(10);
-        std::vector<std::string> lines{
+        dstd::Vector<dstd::String> lines{
             R"({"kind":"file","fhash":"f1","path":"/data/a.bin"})",
             R"({"kind":"file","fhash":"f2","path":"/data/b.bin"})",
             R"({"kind":"rank","pid":100,"rank":0})",
@@ -818,10 +816,10 @@ fields:
         // Rank 0 reads a.bin three times; rank 1 a.bin once and b.bin twice.
         for (int i = 0; i < 6; ++i)
             lines.push_back(R"({"kind":"event","op":"read","ts":)" +
-                            std::to_string(1000 + i) + R"(,"dur":10,"pid":)" +
+                            dstd::to_string(1000 + i) + R"(,"dur":10,"pid":)" +
                             (i < 3 ? "100" : "200") + R"(,"fhash":")" +
                             (i < 4 ? "f1" : "f2") + R"("})");
-        using Counts = std::map<std::string, std::int64_t>;
+        using Counts = dstd::Map<dstd::String, std::int64_t>;
         auto counts = [](const View& v, GroupKey key, const char* col) {
             const df::DataFrame f = v.group_by({key})
                                         .agg({{AggOp::Count, "", "n"}})
@@ -833,11 +831,11 @@ fields:
                     static_cast<std::int64_t>(bnum(f, r, "n"));
             return out;
         };
-        const std::string gz =
+        const dstd::String gz =
             write_indexed(env, "ranked", lines, 256, "ranked_io");
         const View v = View::from_file(
             dstd::String(gz),
-            dstd::String(std::string(determine_index_path(gz, ""))));
+            dstd::String(dstd::String(determine_index_path(gz, ""))));
         CHECK(counts(v, GroupKey::file_path(), "file_path") ==
               Counts{{"/data/a.bin", 4}, {"/data/b.bin", 2}});
         CHECK(counts(v, GroupKey::file_name(), "file_name") ==
@@ -847,11 +845,11 @@ fields:
         CHECK(counts(v, GroupKey::fhash(), "fhash") ==
               Counts{{"f1", 4}, {"f2", 2}});
 
-        const std::string plain =
+        const dstd::String plain =
             write_indexed(env, "unranked", lines, 256, "unranked_io");
         const View u = View::from_file(
             dstd::String(plain),
-            dstd::String(std::string(determine_index_path(plain, ""))));
+            dstd::String(dstd::String(determine_index_path(plain, ""))));
         CHECK_THROWS_WITH_AS(
             (void)counts(u, GroupKey::rank(), "rank"),
             doctest::Contains(
@@ -870,21 +868,22 @@ fields:
     TEST_CASE("an indexed export of path records reads back as their schema") {
         const ix::RecordSchema& schema = path_roles();
         TestEnvironment env(10);
-        const std::string src =
+        const dstd::String src =
             write_indexed(env, "src", path_role_lines(), 1024, schema.id);
         const View vs = View::from_file(
             dstd::String(src),
-            dstd::String(std::string(determine_index_path(src, ""))));
+            dstd::String(dstd::String(determine_index_path(src, ""))));
         TraceWriteOptions opts;
         opts.output_path = env.get_dir() + "/out.pfw.gz";
         opts.build_index = true;
         opts.member_size = 1024;
         (void)vs.sink_trace(opts).get();
 
-        const std::string idx =
-            std::string(determine_index_path(opts.output_path, ""));
-        const auto [id, tier] = index_state(std::string(opts.output_path), idx);
-        CHECK(id == std::string(schema.id));
+        const dstd::String idx =
+            dstd::String(determine_index_path(opts.output_path, ""));
+        const auto [id, tier] =
+            index_state(dstd::String(opts.output_path), idx);
+        CHECK(id == dstd::String(schema.id));
         CHECK(tier);
 
         const View vo = View::from_file(opts.output_path, dstd::String(idx));
@@ -900,26 +899,26 @@ fields:
         const ix::RecordSchema& schema = path_roles();
         TestEnvironment env(10);
         const auto lines = path_role_lines();
-        const std::string ref =
+        const dstd::String ref =
             write_indexed(env, "ref", lines, 1024, schema.id);
         const View vr = View::from_file(
             dstd::String(ref),
-            dstd::String(std::string(determine_index_path(ref, ""))));
+            dstd::String(dstd::String(determine_index_path(ref, ""))));
 
-        const std::string agg = write_gz(env, "agg", lines, 1024);
-        const std::string agg_idx = std::string(
+        const dstd::String agg = write_gz(env, "agg", lines, 1024);
+        const dstd::String agg_idx = dstd::String(
             determine_index_path(agg, env.get_dir() + "/agg_index"));
         REQUIRE_FALSE(dstd::fs::exists(agg_idx).value());
         const View va =
             View::from_file(dstd::String(agg), dstd::String(agg_idx));
         CHECK(counts_by_op(va) == counts_by_op(vr));
         const auto [agg_id, agg_tier] = index_state(agg, agg_idx);
-        CHECK(agg_id == std::string(schema.id));
+        CHECK(agg_id == dstd::String(schema.id));
         CHECK(agg_tier);
         CHECK(count_of(va, "where size < 50") == 50);
 
-        const std::string dump = write_gz(env, "dump", lines, 1024);
-        const std::string dump_idx = std::string(
+        const dstd::String dump = write_gz(env, "dump", lines, 1024);
+        const dstd::String dump_idx = dstd::String(
             determine_index_path(dump, env.get_dir() + "/dump_index"));
         REQUIRE_FALSE(dstd::fs::exists(dump_idx).value());
         StringSink sink;
@@ -928,7 +927,7 @@ fields:
             .get();
         CHECK(sink.lines().size() == lines.size());
         const auto [dump_id, dump_tier] = index_state(dump, dump_idx);
-        CHECK(dump_id == std::string(schema.id));
+        CHECK(dump_id == dstd::String(schema.id));
         CHECK(dump_tier);
         const View vd =
             View::from_file(dstd::String(dump), dstd::String(dump_idx));
@@ -940,8 +939,8 @@ fields:
 
         // A time window takes no bootstrap; the next whole read builds the
         // tier along the way.
-        const std::string late = write_gz(env, "late", lines, 1024);
-        const std::string late_idx = std::string(
+        const dstd::String late = write_gz(env, "late", lines, 1024);
+        const dstd::String late_idx = dstd::String(
             determine_index_path(late, env.get_dir() + "/late_index"));
         const View vl =
             View::from_file(dstd::String(late), dstd::String(late_idx));
@@ -957,12 +956,12 @@ fields:
     TEST_CASE("counters of path records take the lane from its role") {
         const ix::RecordSchema& schema = path_roles();
         TestEnvironment env(10);
-        const std::string gz =
+        const dstd::String gz =
             write_indexed(env, "ctr", path_role_lines(), 1024, schema.id);
         StringSink sink;
         (void)View::from_file(
             dstd::String(gz),
-            dstd::String(std::string(determine_index_path(gz, ""))))
+            dstd::String(dstd::String(determine_index_path(gz, ""))))
             .group_by({GroupKey::pid(), GroupKey::tid()})
             .agg({{AggOp::Count, "", "n"}})
             .sink_counters(sink)
@@ -970,10 +969,10 @@ fields:
         const auto lines = sink.lines();
         REQUIRE(lines.size() == 4);
         for (int t = 0; t < 4; ++t) {
-            const std::string pid =
-                std::to_string(ix::entity_id("h" + std::to_string(t % 2)));
-            const std::string tid =
-                std::to_string(ix::entity_id("t" + std::to_string(t)));
+            const dstd::String pid =
+                dstd::to_string(ix::entity_id("h" + dstd::to_string(t % 2)));
+            const dstd::String tid =
+                dstd::to_string(ix::entity_id("t" + dstd::to_string(t)));
             CHECK(count_containing(
                       lines, "\"pid\":" + pid + ",\"tid\":" + tid + ",") == 1);
         }
@@ -981,17 +980,17 @@ fields:
 
     TEST_CASE("an aggregate of an expression keeps its keys and lists") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 40; ++i)
-            lines.push_back(R"({"k":")" + std::string(i % 2 ? "a" : "b") +
-                            R"(","v":)" + std::to_string(i) + R"(,"tags":[)" +
-                            std::string(i % 4 ? "1,2" : "3") +
+            lines.push_back(R"({"k":")" + dstd::String(i % 2 ? "a" : "b") +
+                            R"(","v":)" + dstd::to_string(i) + R"(,"tags":[)" +
+                            dstd::String(i % 4 ? "1,2" : "3") +
                             R"(],"objs":[{"x":1},{"x":2}]})");
-        const std::string gz = write_indexed(env, "exprs", lines, 1024);
+        const dstd::String gz = write_indexed(env, "exprs", lines, 1024);
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
         const df::DataFrame f = run(
             v.duql("group k { s = sum(v + 1), n = sum(len(tags)) } | sort k")
@@ -1011,22 +1010,22 @@ fields:
 
     TEST_CASE("a field of mixed JSON types is a JSON column") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         const char* retry[] = {"0", "1", "2.5", R"("3")", "3"};
         for (int i = 0; i < 50; ++i)
-            lines.push_back(R"({"k":)" + std::to_string(i) + R"(,"retry":)" +
+            lines.push_back(R"({"k":)" + dstd::to_string(i) + R"(,"retry":)" +
                             retry[i % 5] + "}");
-        const std::string gz = write_indexed(env, "mixed", lines, 256);
+        const dstd::String gz = write_indexed(env, "mixed", lines, 256);
         const View v =
             View::from_file(
                 dstd::String(gz),
-                dstd::String(std::string(determine_index_path(gz, ""))))
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
         const df::DataFrame rows =
             run(v.duql("sort k | take 5 | select retry").lazy().collect());
         const df::Series& col = rows.columns[rows.column_index("retry")];
         REQUIRE(col.is_json());
-        const std::vector<std::string> want{"0", "1", "2.5", R"("3")", "3"};
+        const dstd::Vector<dstd::String> want{"0", "1", "2.5", R"("3")", "3"};
         for (std::int64_t r = 0; r < 5; ++r)
             CHECK(col.string_at(r) == want[static_cast<std::size_t>(r)]);
 
@@ -1036,13 +1035,13 @@ fields:
                     .collect());
         const df::Series& key = keys.columns[keys.column_index("retry")];
         CHECK(key.is_json());
-        std::map<std::string, std::int64_t> by_key;
+        dstd::Map<dstd::String, std::int64_t> by_key;
         for (std::int64_t r = 0; r < keys.num_rows(); ++r)
-            by_key[std::string(key.string_at(r))] =
+            by_key[dstd::String(key.string_at(r))] =
                 static_cast<std::int64_t>(bnum(keys, r, "n"));
         CHECK(
             by_key ==
-            std::map<std::string, std::int64_t>{
+            dstd::Map<dstd::String, std::int64_t>{
                 {"0", 10}, {"1", 10}, {"2.5", 10}, {R"("3")", 10}, {"3", 10}});
         // A field of one type keeps it.
         CHECK_FALSE(
@@ -1060,8 +1059,8 @@ fields:
 )",
                             "test");
         TestEnvironment env(10);
-        std::vector<std::string> dft;
-        std::vector<std::string> secs;
+        dstd::Vector<dstd::String> dft;
+        dstd::Vector<dstd::String> secs;
         std::uint64_t x = 2463534242ULL;
         for (int i = 0; i < 600; ++i) {
             x ^= x << 13;
@@ -1072,26 +1071,25 @@ fields:
             const std::int64_t ts = static_cast<std::int64_t>(x % 3000) * 1000;
             const std::int64_t dur = static_cast<std::int64_t>(x % 50) * 10;
             dft.push_back(dft_line(pid, tid, "read", ts, dur));
-            secs.push_back(R"({"host":"h)" + std::to_string(pid) +
-                           R"(","thread":"t)" + std::to_string(tid) +
-                           R"(","start":)" +
-                           std::string(dftracer::utils::dstd::double_text(
-                               static_cast<double>(ts) / 1e6)) +
-                           R"(,"took":)" +
-                           std::string(dftracer::utils::dstd::double_text(
-                               static_cast<double>(dur) / 1e3)) +
-                           "}");
+            secs.push_back(
+                R"({"host":"h)" + dstd::to_string(pid) + R"(","thread":"t)" +
+                dstd::to_string(tid) + R"(","start":)" +
+                dstd::String(dstd::double_text(static_cast<double>(ts) / 1e6)) +
+                R"(,"took":)" +
+                dstd::String(
+                    dstd::double_text(static_cast<double>(dur) / 1e3)) +
+                "}");
         }
         secs.push_back(R"({"host":"h1","thread":"t1","took":1})");
-        const std::string a = write_indexed(env, "sdft", dft, 4096);
-        const std::string b =
+        const dstd::String a = write_indexed(env, "sdft", dft, 4096);
+        const dstd::String b =
             write_indexed(env, "ssecs", secs, 4096, "secs_sessions");
         const View va = View::from_file(
             dstd::String(a),
-            dstd::String(std::string(determine_index_path(a, ""))));
+            dstd::String(dstd::String(determine_index_path(a, ""))));
         const View vb = View::from_file(
             dstd::String(b),
-            dstd::String(std::string(determine_index_path(b, ""))));
+            dstd::String(dstd::String(determine_index_path(b, ""))));
         const df::DataFrame fa = run(
             va.duql("session pid, tid gap 105us max 300ms | group pid, tid, "
                     "session { n = count() } | sort pid, tid, session")
@@ -1112,7 +1110,7 @@ fields:
                 continue;
             }
             CHECK(bstr(fb, i, "host") ==
-                  "h" + std::to_string(static_cast<int>(bnum(fa, r, "pid"))));
+                  "h" + dstd::to_string(static_cast<int>(bnum(fa, r, "pid"))));
             CHECK(bnum(fb, i, "session") == bnum(fa, r, "session"));
             CHECK(bnum(fb, i, "n") == bnum(fa, r, "n"));
             ++r;

@@ -5,8 +5,10 @@
 // provider, cycle) fail at build instead of after a wasted scan.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -21,9 +23,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <fstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -132,20 +131,20 @@ dftu_plugin make_consumer() {
     return p;
 }
 
-std::string make_trace(dftu_utils_test::TestEnvironment& env,
-                       const std::string& tag, int n) {
-    std::string dir = env.get_dir() + "/" + tag;
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-    std::string pfw = dir + "/trace.pfw";
-    std::ofstream ofs(pfw.c_str());
+dstd::String make_trace(dftu_utils_test::TestEnvironment& env,
+                        const dstd::String& tag, int n) {
+    dstd::String dir = env.get_dir() + "/" + tag;
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    dstd::String pfw = dir + "/trace.pfw";
+    dstd::String ofs;
     for (int i = 0; i < n; ++i)
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
-            << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
-            << "\n";
-    ofs.close();
-    std::string gz = pfw + ".gz";
+        ofs += common::str_cat(
+            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
+            (1000 + i * 100), R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
+    (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
+    dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -216,9 +215,9 @@ TEST_SUITE("PluginFoldOrder") {
         auto set = build_injected_plugins({&p});
         REQUIRE_FALSE(set.has_value());
         CHECK(set.error().message().find("com.example.absent") !=
-              std::string::npos);
+              dstd::String::npos);
         CHECK(set.error().message().find("no loaded plugin provides") !=
-              std::string::npos);
+              dstd::String::npos);
     }
 
     TEST_CASE("two plugins providing the same name fail the build") {
@@ -230,8 +229,8 @@ TEST_SUITE("PluginFoldOrder") {
         auto set = build_injected_plugins({&pa, &pb});
         REQUIRE_FALSE(set.has_value());
         CHECK(set.error().message().find("com.example.dup") !=
-              std::string::npos);
-        CHECK(set.error().message().find("both provide") != std::string::npos);
+              dstd::String::npos);
+        CHECK(set.error().message().find("both provide") != dstd::String::npos);
     }
 
     TEST_CASE("a provides/consumes cycle fails the build") {
@@ -244,7 +243,7 @@ TEST_SUITE("PluginFoldOrder") {
         dftu_plugin pb = make_graph_plugin(&b);
         auto set = build_injected_plugins({&pa, &pb});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message().find("cycle") != std::string::npos);
+        CHECK(set.error().message().find("cycle") != dstd::String::npos);
     }
 
     TEST_CASE("a dftu.-prefixed provided name fails the build") {
@@ -254,9 +253,9 @@ TEST_SUITE("PluginFoldOrder") {
         auto set = build_injected_plugins({&pa});
         REQUIRE_FALSE(set.has_value());
         CHECK(set.error().message().find("dftu.hash.fnv1a") !=
-              std::string::npos);
+              dstd::String::npos);
         CHECK(set.error().message().find("belongs to the host") !=
-              std::string::npos);
+              dstd::String::npos);
     }
 
     TEST_CASE("a dftu.-prefixed consumed name fails the build") {
@@ -265,9 +264,9 @@ TEST_SUITE("PluginFoldOrder") {
         dftu_plugin pa = make_graph_plugin(&a);
         auto set = build_injected_plugins({&pa});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message().find("dftu.svc.agg") != std::string::npos);
+        CHECK(set.error().message().find("dftu.svc.agg") != dstd::String::npos);
         CHECK(set.error().message().find("belongs to the host") !=
-              std::string::npos);
+              dstd::String::npos);
     }
 
     TEST_CASE("a plugin consuming its own name is not a cycle") {

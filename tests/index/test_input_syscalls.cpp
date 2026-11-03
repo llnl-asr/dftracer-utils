@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <cstdlib>
-#include <fstream>
-#include <map>
-#include <sstream>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 // Every CLI tool stats each input at most once per run and opens it at most
 // once per pass over its bytes (2 on a cold run, 1 for dftracer_index and on a
@@ -37,52 +39,55 @@ struct Counts {
     std::size_t open = 0;
 };
 
-std::string make_trace(int pid, int events) {
-    std::ostringstream os;
-    os << "[\n";
+dstd::String make_trace(int pid, int events) {
+    dstd::String os;
+    os += "[\n";
     for (int i = 0; i < events; ++i) {
-        os << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":)"
-           << pid << R"(,"tid":)" << pid << R"(,"ts":)" << (1000 + i * 10)
-           << R"(,"dur":5,"ph":"X","args":{"hhash":"abc","ret":1024}})"
-           << "\n";
+        os += common::str_cat(
+            R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":)", pid,
+            R"(,"tid":)", pid, R"(,"ts":)", (1000 + i * 10),
+            R"(,"dur":5,"ph":"X","args":{"hhash":"abc","ret":1024}})", "\n");
     }
-    return os.str();
+    return os;
 }
 
 struct Tool {
-    std::string name;
+    dstd::String name;
     // in, idx and out are the input, index and output directories of the run.
-    std::vector<std::string> (*args)(const std::string& in,
-                                     const std::string& idx,
-                                     const std::string& out);
+    dstd::Vector<dstd::String> (*args)(const dstd::String& in,
+                                       const dstd::String& idx,
+                                       const dstd::String& out);
 };
 
-std::vector<std::string> index_args(const std::string& in,
-                                    const std::string& idx,
-                                    const std::string&) {
+dstd::Vector<dstd::String> index_args(const dstd::String& in,
+                                      const dstd::String& idx,
+                                      const dstd::String&) {
     return {"--executor-threads", "2", in, "--index-dir", idx};
 }
 
-std::vector<std::string> view_args(const std::string& in,
-                                   const std::string& idx, const std::string&) {
+dstd::Vector<dstd::String> view_args(const dstd::String& in,
+                                     const dstd::String& idx,
+                                     const dstd::String&) {
     return {"--executor-threads", "2",   in, "--index-dir", idx,
             "--group-by",         "name"};
 }
 
-std::vector<std::string> split_args(const std::string& in, const std::string&,
-                                    const std::string& out) {
+dstd::Vector<dstd::String> split_args(const dstd::String& in,
+                                      const dstd::String&,
+                                      const dstd::String& out) {
     return {"--executor-threads", "2",   in, "-o", out, "--app-name", "bench",
             "--chunk-size",       "64MB"};
 }
 
-std::vector<std::string> validate_args(const std::string& in,
-                                       const std::string&, const std::string&) {
+dstd::Vector<dstd::String> validate_args(const dstd::String& in,
+                                         const dstd::String&,
+                                         const dstd::String&) {
     return {"--executor-threads", "2", in};
 }
 
-std::vector<std::string> comparator_args(const std::string& in,
-                                         const std::string& idx,
-                                         const std::string&) {
+dstd::Vector<dstd::String> comparator_args(const dstd::String& in,
+                                           const dstd::String& idx,
+                                           const dstd::String&) {
     return {"--executor-threads",
             "2",
             "--baseline",
@@ -95,34 +100,35 @@ std::vector<std::string> comparator_args(const std::string& in,
             idx + "/variant"};
 }
 
-std::vector<std::string> replay_args(const std::string& in, const std::string&,
-                                     const std::string&) {
+dstd::Vector<dstd::String> replay_args(const dstd::String& in,
+                                       const dstd::String&,
+                                       const dstd::String&) {
     return {"--executor-threads", "2",          "--dry-run",
             "--dftracer-mode",    "--no-sleep", in};
 }
 
-std::string canonical_or_empty(const std::string& path) {
-    auto p = dftracer::utils::dstd::fs::weakly_canonical(path);
-    return p.has_value() ? std::string(p->str()) : std::string();
+dstd::String canonical_or_empty(const dstd::String& path) {
+    auto p = dstd::fs::weakly_canonical(path);
+    return p.has_value() ? dstd::String(p->str()) : dstd::String();
 }
 
 struct RunCounts {
     bool log_found = false;
-    std::vector<Counts> per_input;
+    dstd::Vector<Counts> per_input;
     Counts root;
     std::size_t schema_lookups = 0;
     int exit_code = -1;
-    std::string output;
+    dstd::String output;
 };
 
-RunCounts run_once(const std::string& binary,
-                   const std::vector<std::string>& args,
-                   const std::string& log_path,
-                   const std::vector<std::string>& roots,
-                   const std::vector<std::string>& inputs) {
+RunCounts run_once(const dstd::String& binary,
+                   const dstd::Vector<dstd::String>& args,
+                   const dstd::String& log_path,
+                   const dstd::Vector<dstd::String>& roots,
+                   const dstd::Vector<dstd::String>& inputs) {
     RunCounts rc;
     rc.per_input.resize(inputs.size());
-    (void)dftracer::utils::dstd::fs::remove(log_path);
+    (void)dstd::fs::remove(log_path);
 
     dftu_utils_test::set_test_library_path(binary);
     ::setenv(PRELOAD_VAR, DFTRACER_UTILS_TEST_INTERPOSE_PATH, 1);
@@ -132,32 +138,38 @@ RunCounts run_once(const std::string& binary,
     ::unsetenv(PRELOAD_VAR);
     ::unsetenv("DFTRACER_UTILS_TEST_SYSCALL_LOG");
 
-    std::ifstream in(log_path.c_str());
-    if (!in) return rc;
+    const auto log = dstd::fs::read_file(dstd::PathView(log_path));
+    if (!log) return rc;
     rc.log_found = true;
 
-    std::vector<std::string> canon_inputs;
+    dstd::Vector<dstd::String> canon_inputs;
     for (const auto& i : inputs) canon_inputs.push_back(canonical_or_empty(i));
-    std::vector<std::string> canon_roots;
+    dstd::Vector<dstd::String> canon_roots;
     for (const auto& r : roots) canon_roots.push_back(canonical_or_empty(r));
 
-    std::map<std::string, std::string> canon_cache;
-    std::string line;
-    while (std::getline(in, line)) {
+    dstd::Map<dstd::String, dstd::String> canon_cache;
+    dstd::StringView rest = *log;
+    while (!rest.empty()) {
+        const std::size_t eol = rest.find('\n');
+        const dstd::String line(rest.substr(0, eol));
+        rest = eol == dstd::StringView::npos ? dstd::StringView{}
+                                             : rest.substr(eol + 1);
         auto t1 = line.find('\t');
         auto t2 = line.find('\t', t1 + 1);
-        if (t1 == std::string::npos || t2 == std::string::npos) continue;
-        const std::string cls = line.substr(0, t1);
-        const std::size_t n = std::stoul(line.substr(t1 + 1, t2 - t1 - 1));
-        const std::string path = line.substr(t2 + 1);
+        if (t1 == dstd::String::npos || t2 == dstd::String::npos) continue;
+        const dstd::String cls = line.substr(0, t1);
+        const auto parsed =
+            dstd::from_chars<std::size_t>(line.substr(t1 + 1, t2 - t1 - 1));
+        REQUIRE(parsed.has_value());
+        const std::size_t n = *parsed;
+        const dstd::String path = line.substr(t2 + 1);
         if (path.empty() || path[0] != '/') continue;
-        if (cls == "stat" &&
-            dftracer::utils::dstd::Path(path).view().filename() == "schemas")
+        if (cls == "stat" && dstd::Path(path).view().filename() == "schemas")
             rc.schema_lookups += n;
         auto it = canon_cache.find(path);
         if (it == canon_cache.end())
             it = canon_cache.emplace(path, canonical_or_empty(path)).first;
-        const std::string& c = it->second;
+        const dstd::String& c = it->second;
         Counts* hit = nullptr;
         if (std::find(canon_roots.begin(), canon_roots.end(), c) !=
             canon_roots.end()) {
@@ -172,8 +184,8 @@ RunCounts run_once(const std::string& binary,
     return rc;
 }
 
-void check_run(const std::string& label, const std::string& tool,
-               const RunCounts& rc, const std::vector<std::string>& inputs,
+void check_run(const dstd::String& label, const dstd::String& tool,
+               const RunCounts& rc, const dstd::Vector<dstd::String>& inputs,
                std::size_t max_open, std::size_t roots) {
     INFO(tool << " " << label << " exit code " << rc.exit_code);
     if (!rc.log_found) MESSAGE(tool << " output: " << rc.output);
@@ -209,23 +221,22 @@ void check_run(const std::string& label, const std::string& tool,
 }
 
 void run_tool(const Tool& tool) {
-    const std::string binary = std::string(DFTRACER_UTILS_TEST_BIN_DIR) + "/" +
-                               "dftracer_" + tool.name;
+    const dstd::String binary = dstd::String(DFTRACER_UTILS_TEST_BIN_DIR) +
+                                "/" + "dftracer_" + tool.name;
     REQUIRE_MESSAGE(::access(binary.c_str(), X_OK) == 0,
                     binary << " is not built");
 
     dftu_utils_test::ScopedTestDir dir("input_syscalls_" + tool.name);
-    const std::string in = dir.file("in");
+    const dstd::String in = dir.file("in");
     // The comparator reads one directory per side. Each side gets its own copy
     // of the files, so every input file is read for one side only.
-    std::vector<std::string> roots{in};
+    dstd::Vector<dstd::String> roots{in};
     if (tool.name == "comparator") roots.push_back(in + "_variant");
-    std::vector<std::string> inputs;
+    dstd::Vector<dstd::String> inputs;
     for (const auto& root : roots) {
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(root + "/sub")
-                    .has_value());
+        REQUIRE(dstd::fs::create_directories(root + "/sub").has_value());
         for (int i = 0; i < 4; ++i)
-            inputs.push_back(root + "/trace_" + std::to_string(i) + ".pfw.gz");
+            inputs.push_back(root + "/trace_" + dstd::to_string(i) + ".pfw.gz");
         inputs.push_back(root + "/sub/trace_4.pfw.gz");
     }
     for (std::size_t i = 0; i < inputs.size(); ++i)
@@ -233,10 +244,10 @@ void run_tool(const Tool& tool) {
                      inputs[i], make_trace(static_cast<int>(i % 5) + 1, 300))
                      .empty());
 
-    const std::string idx = dir.file("idx");
-    const std::string out = dir.file("out");
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(idx).has_value());
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(out).has_value());
+    const dstd::String idx = dir.file("idx");
+    const dstd::String out = dir.file("out");
+    REQUIRE(dstd::fs::create_directories(idx).has_value());
+    REQUIRE(dstd::fs::create_directories(out).has_value());
     const auto args = tool.args(in, idx, out);
 
     const auto cold =
@@ -251,19 +262,19 @@ void run_tool(const Tool& tool) {
 }  // namespace
 
 TEST_CASE("a cold index build looks for the schemas folder once per root") {
-    const std::string binary =
-        std::string(DFTRACER_UTILS_TEST_BIN_DIR) + "/dftracer_index";
+    const dstd::String binary =
+        dstd::String(DFTRACER_UTILS_TEST_BIN_DIR) + "/dftracer_index";
     REQUIRE_MESSAGE(::access(binary.c_str(), X_OK) == 0,
                     binary << " is not built");
     dftu_utils_test::ScopedTestDir dir("input_syscalls_schemas");
-    const std::string in = dir.file("in");
-    const std::string idx = dir.file("idx");
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(in).has_value());
-    REQUIRE(dftracer::utils::dstd::fs::create_directories(idx).has_value());
+    const dstd::String in = dir.file("in");
+    const dstd::String idx = dir.file("idx");
+    REQUIRE(dstd::fs::create_directories(in).has_value());
+    REQUIRE(dstd::fs::create_directories(idx).has_value());
     constexpr int FILES = 24;
-    std::vector<std::string> inputs;
+    dstd::Vector<dstd::String> inputs;
     for (int i = 0; i < FILES; ++i) {
-        inputs.push_back(in + "/trace_" + std::to_string(i) + ".pfw.gz");
+        inputs.push_back(in + "/trace_" + dstd::to_string(i) + ".pfw.gz");
         REQUIRE(!dftu_utils_test::write_gz_trace(inputs.back(),
                                                  make_trace(i + 1, 50))
                      .empty());

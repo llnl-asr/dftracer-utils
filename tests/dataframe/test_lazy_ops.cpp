@@ -8,11 +8,13 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::dataframe::OpArgs;
 
@@ -34,8 +36,8 @@ dftu_scalar i64_scalar(std::int64_t v) {
 }
 
 // A two-column frame: "k" keys, "v" values.
-dftu_dataframe* make_frame(const std::vector<std::int64_t>& k,
-                           const std::vector<std::int64_t>& v) {
+dftu_dataframe* make_frame(const dstd::Vector<std::int64_t>& k,
+                           const dstd::Vector<std::int64_t>& v) {
     dftu_series* cols[2] = {
         i64_col(k.data(), static_cast<std::int64_t>(k.size())),
         i64_col(v.data(), static_cast<std::int64_t>(v.size()))};
@@ -470,7 +472,7 @@ TEST_SUITE("lazy_ops") {
             dftu_dataframe* via_direct = dftu_lazyframe_collect(direct, 0);
             check_same(via_registry, via_direct);
             CHECK(dftu_dataframe_column_name(via_registry, 0) ==
-                  std::string("key"));
+                  dstd::String("key"));
             dftu_dataframe_free(via_registry);
             dftu_dataframe_free(via_direct);
             dftu_lazyframe_free(direct);
@@ -497,7 +499,7 @@ TEST_SUITE("lazy_ops") {
             a.strlist(2, value_vars, 1);
             dftu_dataframe* via_registry = run_registry(name, lf1, a);
             dftu_lazyframe* direct =
-                std::string(name) == "dftu.lazy.unpivot"
+                dstd::String(name) == "dftu.lazy.unpivot"
                     ? dftu_lazyframe_unpivot(lf2, id_vars, 1, value_vars, 1)
                     : dftu_lazyframe_melt(lf2, id_vars, 1, value_vars, 1);
             REQUIRE(direct != nullptr);

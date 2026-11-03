@@ -2,17 +2,19 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <chrono>
 #include <cstdio>
 #include <fstream>
-#include <set>
-#include <string>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -31,11 +33,11 @@ constexpr int NEW_EVENTS = 1500;
 constexpr std::size_t MEMBER_BYTES = 64 * 1024;
 constexpr int MEMBER_EVENTS = 6000;
 
-void write_events(const std::string& gz, const char* cat, int n,
+void write_events(const dstd::String& gz, const char* cat, int n,
                   std::size_t member_bytes, const char* odd_cat = nullptr) {
-    const std::string plain = gz + ".plain";
+    const dstd::String plain = gz + ".plain";
     {
-        std::ofstream ofs(plain.c_str());
+        dftu_utils_test::FileOut ofs(plain);
         ofs << "[\n";
         for (int i = 0; i < n; ++i) {
             const char* c = (odd_cat && i >= n - 3) ? odd_cat : cat;
@@ -52,17 +54,16 @@ void write_events(const std::string& gz, const char* cat, int n,
     (void)dstd::fs::remove(plain);
 }
 
-void rewrite_events(const std::string& gz, const char* cat, int n,
+void rewrite_events(const dstd::String& gz, const char* cat, int n,
                     std::size_t member_bytes = 0) {
     const auto before = dstd::fs::mtime_ns(gz).value();
     write_events(gz, cat, n, member_bytes);
     REQUIRE(dstd::fs::set_mtime_ns(gz, before + 10'000'000'000ULL).has_value());
 }
 
-coro::CoroTask<void> build_tier(std::string gz, std::string index_dir = "") {
+coro::CoroTask<void> build_tier(dstd::String gz, dstd::String index_dir = "") {
     dftracer::utils::index::build::ResolveAndBuildInput in;
-    in.files.push_back(
-        dftracer::utils::dstd::String(dftracer::utils::dstd::StringView(gz)));
+    in.files.push_back(dstd::String(dstd::StringView(gz)));
     in.index_dir = std::move(index_dir);
     in.require_checkpoints = true;
     co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -71,7 +72,7 @@ coro::CoroTask<void> build_tier(std::string gz, std::string index_dir = "") {
     });
 }
 
-coro::CoroTask<void> build_files(std::vector<std::string> files) {
+coro::CoroTask<void> build_files(dstd::Vector<dstd::String> files) {
     dftracer::utils::index::build::ResolveAndBuildInput in;
     for (const auto& file : files) in.files.emplace_back(file);
     in.require_checkpoints = true;
@@ -82,7 +83,7 @@ coro::CoroTask<void> build_files(std::vector<std::string> files) {
 }
 
 coro::CoroTask<dftracer::utils::index::build::ResolverResult> resolve_files(
-    std::vector<std::string> files) {
+    dstd::Vector<dstd::String> files) {
     dftracer::utils::index::build::ResolverInput in;
     for (const auto& file : files) in.files.emplace_back(file);
     in.require_checkpoints = true;
@@ -93,15 +94,15 @@ coro::CoroTask<dftracer::utils::index::build::ResolverResult> resolve_files(
     co_return result;
 }
 
-std::size_t rows(const View& v, const std::string& q) {
+std::size_t rows(const View& v, const dstd::String& q) {
     return v.duql(q).collect().get().num_rows();
 }
 
-View dir_view(const std::string& dir, const std::string& root = "") {
+View dir_view(const dstd::String& dir, const dstd::String& root = "") {
     return run(View::from_directory(dstd::String(dir), dstd::String(root)));
 }
 
-std::int64_t count_by(const dataframe::DataFrame& df, const std::string& cat) {
+std::int64_t count_by(const dataframe::DataFrame& df, const dstd::String& cat) {
     for (std::int64_t i = 0; i < df.num_rows(); ++i)
         if (bstr(df, i, "cat") == cat)
             return static_cast<std::int64_t>(bnum(df, i, "n"));
@@ -125,7 +126,7 @@ TEST_SUITE("ViewIndexFreshness") {
     TEST_CASE("a rewritten trace gives the rows of its new content") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
-        const std::string gz = env.get_dir() + "/t.pfw.gz";
+        const dstd::String gz = env.get_dir() + "/t.pfw.gz";
         write_events(gz, "A", OLD_EVENTS, 0);
         (void)run(
             dir_view(env.get_dir()).agg({{AggOp::Count, "", "n"}}).collect());
@@ -142,7 +143,7 @@ TEST_SUITE("ViewIndexFreshness") {
     TEST_CASE("an aggregation after a rewrite counts the new content") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
-        const std::string gz = env.get_dir() + "/t.pfw.gz";
+        const dstd::String gz = env.get_dir() + "/t.pfw.gz";
         write_events(gz, "A", OLD_EVENTS, 0);
         run(build_tier(gz));
         const auto first = by_cat(dir_view(env.get_dir()));
@@ -158,7 +159,7 @@ TEST_SUITE("ViewIndexFreshness") {
         "an identical rewrite is rebuilt and then served from the index") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
-        const std::string gz = env.get_dir() + "/t.pfw.gz";
+        const dstd::String gz = env.get_dir() + "/t.pfw.gz";
         write_events(gz, "A", MEMBER_EVENTS, MEMBER_BYTES);
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == MEMBER_EVENTS);
 
@@ -170,7 +171,7 @@ TEST_SUITE("ViewIndexFreshness") {
 
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == MEMBER_EVENTS);
         const auto snapshot = dftu_utils_test::index_snapshot(
-            std::string(determine_index_path(gz, "")));
+            dstd::String(determine_index_path(gz, "")));
         const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
         CHECK(file.stat().mtime == want);
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "B")") == 0);
@@ -179,13 +180,13 @@ TEST_SUITE("ViewIndexFreshness") {
     TEST_CASE("a rebuild leaves the other directories of a shared root alone") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
-        const std::string d1 = env.get_dir() + "/d1";
-        const std::string d2 = env.get_dir() + "/d2";
-        const std::string root = env.get_dir() + "/shared";
+        const dstd::String d1 = env.get_dir() + "/d1";
+        const dstd::String d2 = env.get_dir() + "/d2";
+        const dstd::String root = env.get_dir() + "/shared";
         REQUIRE(dstd::fs::create_directories(d1).has_value());
         REQUIRE(dstd::fs::create_directories(d2).has_value());
-        const std::string f1 = d1 + "/a.pfw.gz";
-        const std::string f2 = d2 + "/b.pfw.gz";
+        const dstd::String f1 = d1 + "/a.pfw.gz";
+        const dstd::String f2 = d2 + "/b.pfw.gz";
         write_events(f1, "A", OLD_EVENTS, 0);
         write_events(f2, "C", MEMBER_EVENTS, MEMBER_BYTES);
         run(build_tier(f1, root));
@@ -193,7 +194,7 @@ TEST_SUITE("ViewIndexFreshness") {
         CHECK(rows(dir_view(d1, root), R"(cat == "A")") == OLD_EVENTS);
         CHECK(rows(dir_view(d2, root), R"(cat == "C")") == MEMBER_EVENTS);
 
-        const auto idx = std::string(determine_index_path(f1, root));
+        const auto idx = dstd::String(determine_index_path(f1, root));
 
         rewrite_events(f1, "B", NEW_EVENTS);
         CHECK(rows(dir_view(d1, root), R"(cat == "B")") == NEW_EVENTS);
@@ -211,37 +212,37 @@ TEST_SUITE("ViewIndexFreshness") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
         constexpr int FILES = 40;
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i) {
-            const std::string gz =
-                env.get_dir() + "/t" + std::to_string(100 + i) + ".pfw.gz";
+            const dstd::String gz =
+                env.get_dir() + "/t" + dstd::to_string(100 + i) + ".pfw.gz";
             write_events(gz, "A", 50, 0);
             files.push_back(gz);
         }
         run(build_files(files));
-        const std::set<int> rewritten = {3, 17, 38};
+        const dstd::Set<int> rewritten = {3, 17, 38};
         for (const int i : rewritten) rewrite_events(files[i], "B", 60);
         for (int i = FILES; i < FILES + 2; ++i) {
-            const std::string gz =
-                env.get_dir() + "/t" + std::to_string(100 + i) + ".pfw.gz";
+            const dstd::String gz =
+                env.get_dir() + "/t" + dstd::to_string(100 + i) + ".pfw.gz";
             write_events(gz, "A", 50, 0);
             files.push_back(gz);
         }
 
         const auto result = run(resolve_files(files));
         CHECK(result.stale_detected);
-        std::set<std::size_t> flagged;
+        dstd::Set<std::size_t> flagged;
         for (const auto& item : result.needs_checkpoint)
             flagged.insert(item.file_index);
-        const std::set<std::size_t> expected = {3, 17, 38, FILES, FILES + 1};
+        const dstd::Set<std::size_t> expected = {3, 17, 38, FILES, FILES + 1};
         CHECK(flagged == expected);
         REQUIRE(result.cached.size() == FILES - rewritten.size());
         std::size_t last = 0;
         for (std::size_t i = 0; i < result.cached.size(); ++i) {
             const auto& cached = result.cached[i];
             CHECK(expected.count(cached.file_index) == 0);
-            CHECK(dftracer::utils::dstd::StringView(cached.file_path) ==
-                  dftracer::utils::dstd::StringView(files[cached.file_index]));
+            CHECK(dstd::StringView(cached.file_path) ==
+                  dstd::StringView(files[cached.file_index]));
             if (i > 0) CHECK(cached.file_index > last);
             last = cached.file_index;
         }
@@ -250,7 +251,7 @@ TEST_SUITE("ViewIndexFreshness") {
     TEST_CASE("from_file without an index path prunes with the default index") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
-        const std::string gz = env.get_dir() + "/t.pfw.gz";
+        const dstd::String gz = env.get_dir() + "/t.pfw.gz";
         write_events(gz, "A", MEMBER_EVENTS, MEMBER_BYTES, "RARE");
         REQUIRE(dftu_utils_test::build_index(gz));
 

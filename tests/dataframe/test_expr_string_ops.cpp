@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <stdexcept>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::DataType;
 using dftracer::utils::dataframe::eval;
 using dftracer::utils::dataframe::Expr;
@@ -43,36 +45,35 @@ Series names() {
     return Series::strings({"read", "pread64", "Write", "fsync", "readv"});
 }
 
-dftracer::utils::dstd::Vector<bool> bools(const Series& mask) {
+dstd::Vector<bool> bools(const Series& mask) {
     REQUIRE(mask.valid());
     REQUIRE(mask.type() == TypeId::Bool);
-    dftracer::utils::dstd::Vector<bool> out;
+    dstd::Vector<bool> out;
     const std::uint8_t* b = mask.data<std::uint8_t>();
     for (std::int64_t i = 0; i < mask.length(); ++i)
         out.push_back(((b[i >> 3] >> (i & 7)) & 1) != 0);
     return out;
 }
 
-dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> strs(
-    const Series& s) {
+dstd::Vector<dstd::String> strs(const Series& s) {
     REQUIRE(s.valid());
     REQUIRE(s.type() == TypeId::String);
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
+    dstd::Vector<dstd::String> out;
     for (std::int64_t i = 0; i < s.length(); ++i)
         out.emplace_back(s.string_at(i));
     return out;
 }
 
-dftracer::utils::dstd::Vector<std::int64_t> i64s(const Series& s) {
+dstd::Vector<std::int64_t> i64s(const Series& s) {
     REQUIRE(s.valid());
     REQUIRE(s.type() == TypeId::Int64);
-    return dftracer::utils::dstd::Vector<std::int64_t>(
-        s.data<std::int64_t>(), s.data<std::int64_t>() + s.length());
+    return dstd::Vector<std::int64_t>(s.data<std::int64_t>(),
+                                      s.data<std::int64_t>() + s.length());
 }
 
 // Every string node must type the same way it evaluates.
 void check_inferred(const Expr& e, const Series& in) {
-    dftracer::utils::dstd::Vector<const Series*> ins{&in};
+    dstd::Vector<const Series*> ins{&in};
     Series out = eval(e, ins);
     REQUIRE(out.valid());
     DataType dt = infer_type(e, {in.data_type()});
@@ -84,8 +85,8 @@ void check_inferred(const Expr& e, const Series& in) {
 TEST_SUITE("expr string ops") {
     TEST_CASE("predicates against a literal") {
         Series s = names();
-        dftracer::utils::dstd::Vector<const Series*> in{&s};
-        using B = dftracer::utils::dstd::Vector<bool>;
+        dstd::Vector<const Series*> in{&s};
+        using B = dstd::Vector<bool>;
         CHECK(
             bools(eval(expr_str_pred(StrPredOp::Contains, expr_col(0), "read"),
                        in)) == B{true, true, false, false, true});
@@ -124,9 +125,9 @@ TEST_SUITE("expr string ops") {
 
     TEST_CASE("maps, length, find, replace, slice") {
         Series s = Series::strings({"  Read ", "pread64", "x"});
-        dftracer::utils::dstd::Vector<const Series*> in{&s};
-        using S = dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>;
-        using I = dftracer::utils::dstd::Vector<std::int64_t>;
+        dstd::Vector<const Series*> in{&s};
+        using S = dstd::Vector<dstd::String>;
+        using I = dstd::Vector<std::int64_t>;
         CHECK(strs(eval(expr_str_map(StrMapOp::Upper, expr_col(0)), in)) ==
               S{"  READ ", "PREAD64", "X"});
         CHECK(strs(eval(expr_str_map(StrMapOp::Lower, expr_col(0)), in)) ==
@@ -142,7 +143,7 @@ TEST_SUITE("expr string ops") {
         CHECK(strs(eval(expr_str_replace(expr_col(0), "ea", "EA", false),
                         in)) == S{"  REAd ", "prEAd64", "x"});
         Series rr = Series::strings({"aXaXa"});
-        dftracer::utils::dstd::Vector<const Series*> rin{&rr};
+        dstd::Vector<const Series*> rin{&rr};
         CHECK(strs(eval(expr_str_replace(expr_col(0), "a", "b", false), rin)) ==
               S{"bXaXa"});
         CHECK(strs(eval(expr_str_replace(expr_col(0), "a", "b", true), rin)) ==
@@ -150,7 +151,7 @@ TEST_SUITE("expr string ops") {
         CHECK(strs(eval(expr_str_slice(expr_col(0), 2, 3), in)) ==
               S{"Rea", "ead", ""});
         Series utf = Series::strings({"héllo"});
-        dftracer::utils::dstd::Vector<const Series*> uin{&utf};
+        dstd::Vector<const Series*> uin{&utf};
         CHECK(i64s(eval(expr_str_len(expr_col(0), false), uin)) == I{6});
         CHECK(i64s(eval(expr_str_len(expr_col(0), true), uin)) == I{5});
 
@@ -163,45 +164,43 @@ TEST_SUITE("expr string ops") {
 
     TEST_CASE("is_in over strings and ints, and its negation") {
         Series s = names();
-        dftracer::utils::dstd::Vector<const Series*> in{&s};
+        dstd::Vector<const Series*> in{&s};
         Expr e = expr_is_in(expr_col(0), Series::strings({"read", "fsync"}));
-        CHECK(bools(eval(e, in)) == dftracer::utils::dstd::Vector<bool>{
-                                        true, false, false, true, false});
+        CHECK(bools(eval(e, in)) ==
+              dstd::Vector<bool>{true, false, false, true, false});
         CHECK(bools(eval(expr_not(e), in)) ==
-              dftracer::utils::dstd::Vector<bool>{false, true, true, false,
-                                                  true});
+              dstd::Vector<bool>{false, true, true, false, true});
         check_inferred(e, s);
 
-        dftracer::utils::dstd::Vector<std::int64_t> v{1, 2, 3, 4};
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4};
         Series ints = Series::flat_i64(v.data(), 4);
-        dftracer::utils::dstd::Vector<std::int64_t> set{2, 4};
-        dftracer::utils::dstd::Vector<const Series*> iin{&ints};
+        dstd::Vector<std::int64_t> set{2, 4};
+        dstd::Vector<const Series*> iin{&ints};
         CHECK(
             bools(eval(expr_is_in(expr_col(0), Series::flat_i64(set.data(), 2)),
-                       iin)) ==
-            dftracer::utils::dstd::Vector<bool>{false, true, false, true});
+                       iin)) == dstd::Vector<bool>{false, true, false, true});
     }
 
     TEST_CASE("string ops CSE by text, not by pointer") {
         Series s = names();
-        dftracer::utils::dstd::Vector<const Series*> in{&s};
-        dftracer::utils::dstd::String a = "read";
-        dftracer::utils::dstd::String b = "read";
-        dftracer::utils::dstd::String c = "rea";
+        dstd::Vector<const Series*> in{&s};
+        dstd::String a = "read";
+        dstd::String b = "read";
+        dstd::String c = "rea";
         Expr same = expr_str_pred(StrPredOp::Contains, expr_col(0), a) &
                     expr_str_pred(StrPredOp::Contains, expr_col(0), b);
         Expr diff = expr_str_pred(StrPredOp::Contains, expr_col(0), a) &
                     expr_str_pred(StrPredOp::StartsWith, expr_col(0), c);
-        CHECK(bools(eval(same, in)) == dftracer::utils::dstd::Vector<bool>{
-                                           true, true, false, false, true});
-        CHECK(bools(eval(diff, in)) == dftracer::utils::dstd::Vector<bool>{
-                                           true, false, false, false, true});
+        CHECK(bools(eval(same, in)) ==
+              dstd::Vector<bool>{true, true, false, false, true});
+        CHECK(bools(eval(diff, in)) ==
+              dstd::Vector<bool>{true, false, false, false, true});
     }
 
     TEST_CASE("refusals name the type") {
-        dftracer::utils::dstd::Vector<std::int64_t> v{1, 2};
+        dstd::Vector<std::int64_t> v{1, 2};
         Series ints = Series::flat_i64(v.data(), 2);
-        dftracer::utils::dstd::Vector<const Series*> in{&ints};
+        dstd::Vector<const Series*> in{&ints};
         CHECK_THROWS_AS(
             eval(expr_str_pred(StrPredOp::Contains, expr_col(0), "x"), in),
             std::invalid_argument);
@@ -211,8 +210,8 @@ TEST_SUITE("expr string ops") {
             eval(expr_is_in(expr_col(0), Series::strings({"a"})), in),
             std::invalid_argument);
         Series s = names();
-        dftracer::utils::dstd::Vector<const Series*> sin{&s};
-        dftracer::utils::dstd::Vector<std::int64_t> set{1};
+        dstd::Vector<const Series*> sin{&s};
+        dstd::Vector<std::int64_t> set{1};
         CHECK_THROWS_AS(
             eval(expr_is_in(expr_col(0), Series::flat_i64(set.data(), 1)), sin),
             std::invalid_argument);
@@ -225,7 +224,7 @@ TEST_SUITE("expr string ops") {
         Expr p = expr_str_pred(StrPredOp::Like, expr_col(3), "a%");
         std::int32_t col = -1;
         StrPredOp op{};
-        dftracer::utils::dstd::StringView pattern;
+        dstd::StringView pattern;
         REQUIRE(expr_as_col_str_pred(p, &col, &op, &pattern));
         CHECK(col == 3);
         CHECK(op == StrPredOp::Like);
@@ -249,10 +248,10 @@ TEST_SUITE("expr string ops") {
         using dftracer::utils::dataframe::expr_cmp;
         using dftracer::utils::dataframe::expr_lit;
         using dftracer::utils::dataframe::expr_select;
-        dftracer::utils::dstd::Vector<std::int64_t> xv{1, 5, 3, 9};
-        dftracer::utils::dstd::Vector<std::uint8_t> valid{0x0D};  // row 1 null
+        dstd::Vector<std::int64_t> xv{1, 5, 3, 9};
+        dstd::Vector<std::uint8_t> valid{0x0D};  // row 1 null
         Series x = Series::flat_i64(xv.data(), 4, valid.data());
-        dftracer::utils::dstd::Vector<const Series*> in{&x};
+        dstd::Vector<const Series*> in{&x};
         Expr big =
             expr_cmp(CmpOp::Gt, expr_col(0),
                      dftracer::utils::dataframe::to_scalar(std::int64_t{2}));
@@ -264,8 +263,7 @@ TEST_SUITE("expr string ops") {
         CHECK(r.type() == TypeId::Int64);
         // Row 1 is null in x, so the condition is null there and the else arm
         // is picked: a present 0, not a null.
-        CHECK(i64s(r) ==
-              dftracer::utils::dstd::Vector<std::int64_t>{0, 0, 3, 9});
+        CHECK(i64s(r) == dstd::Vector<std::int64_t>{0, 0, 3, 9});
         CHECK_FALSE(r.is_null(1));
 
         // literal : literal, float promotes
@@ -279,10 +277,10 @@ TEST_SUITE("expr string ops") {
         // column : column of a different int type meets at Int64. A null
         // condition (row 1: null > 2) takes the else arm, as SQL CASE does,
         // and a picked null arm (row 0 of y) stays null.
-        dftracer::utils::dstd::Vector<std::int32_t> yv{-1, -2, -3, -4};
-        dftracer::utils::dstd::Vector<std::uint8_t> yvalid{0x0E};  // row 0 null
+        dstd::Vector<std::int32_t> yv{-1, -2, -3, -4};
+        dstd::Vector<std::uint8_t> yvalid{0x0E};  // row 0 null
         Series y = Series::flat(TypeId::Int32, yv.data(), 4, yvalid.data());
-        dftracer::utils::dstd::Vector<const Series*> in2{&x, &y};
+        dstd::Vector<const Series*> in2{&x, &y};
         Series m = eval(expr_select(big, expr_col(0), expr_col(1)), in2);
         CHECK(m.type() == TypeId::Int64);
         CHECK(i64s(m)[1] == -2);
@@ -300,16 +298,15 @@ TEST_SUITE("expr string ops") {
 
         // strings
         Series s = names();
-        dftracer::utils::dstd::Vector<const Series*> sin{&s};
+        dstd::Vector<const Series*> sin{&s};
         Series alt = Series::strings({"a", "b", "c", "d", "e"});
-        dftracer::utils::dstd::Vector<const Series*> sin2{&s, &alt};
+        dstd::Vector<const Series*> sin2{&s, &alt};
         Series ws = eval(
             expr_select(expr_str_pred(StrPredOp::StartsWith, expr_col(0), "re"),
                         expr_col(0), expr_col(1)),
             sin2);
         CHECK(strs(ws) ==
-              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                  "read", "b", "c", "d", "readv"});
+              dstd::Vector<dstd::String>{"read", "b", "c", "d", "readv"});
         CHECK_THROWS_AS(eval(expr_select(expr_col(0), expr_col(0),
                                          expr_lit(std::int64_t{0})),
                              in),
@@ -324,8 +321,7 @@ TEST_SUITE("expr string ops") {
         REQUIRE(sel);
         const dftu_series* raw[1] = {x.handle()};
         Series via_c{dftu_expr_eval(sel, raw, 1)};
-        CHECK(i64s(via_c) ==
-              dftracer::utils::dstd::Vector<std::int64_t>{0, 0, 3, 9});
+        CHECK(i64s(via_c) == dstd::Vector<std::int64_t>{0, 0, 3, 9});
         CHECK(dftu_expr_select(nullptr, c, zero) == nullptr);
         for (dftu_expr* e : {sel, zero, cond, c}) dftu_expr_free(e);
     }
@@ -333,9 +329,9 @@ TEST_SUITE("expr string ops") {
     TEST_CASE("column argument builders, C++ and C ABI") {
         Series s = Series::strings({"read", "pread64", "Write"});
         Series n = Series::strings({"re", "64", "x"});
-        dftracer::utils::dstd::Vector<std::int64_t> iv{1, 2, 3};
+        dstd::Vector<std::int64_t> iv{1, 2, 3};
         Series ints = Series::flat(TypeId::Int64, iv.data(), 3);
-        dftracer::utils::dstd::Vector<double> dv{1.25, 2.5, 3.75};
+        dstd::Vector<double> dv{1.25, 2.5, 3.75};
         Series dbl = Series::flat(TypeId::Float64, dv.data(), 3);
         auto col = [](int i) { return expr_col(i); };
         const Expr len = col(1);
@@ -345,9 +341,8 @@ TEST_SUITE("expr string ops") {
         const DataType ni = n.data_type();
         const DataType ii = ints.data_type();
         const DataType di = dbl.data_type();
-        auto inferred = [](const Expr& e,
-                           dftracer::utils::dstd::Vector<const Series*> in,
-                           dftracer::utils::dstd::Vector<DataType> types) {
+        auto inferred = [](const Expr& e, dstd::Vector<const Series*> in,
+                           dstd::Vector<DataType> types) {
             Series out = eval(e, in);
             REQUIRE(out.valid());
             CHECK(infer_type(e, types).id == out.type());
@@ -374,15 +369,14 @@ TEST_SUITE("expr string ops") {
             dftu_expr_str_pred_col(DFTU_STR_PRED_CONTAINS, c0, c1);
         REQUIRE(pred);
         CHECK(bools(Series{dftu_expr_eval(pred, in2, 2)}) ==
-              dftracer::utils::dstd::Vector<bool>{true, true, false});
+              dstd::Vector<bool>{true, true, false});
         CHECK(dftu_expr_str_pred_col(DFTU_STR_PRED_LIKE, c0, c1) == nullptr);
         CHECK(dftu_expr_str_pred_col(DFTU_STR_PRED_CONTAINS, c0, nullptr) ==
               nullptr);
         dftu_expr* rep = dftu_expr_str_replace_col(c0, c1, c1);
         REQUIRE(rep);
         CHECK(strs(Series{dftu_expr_eval(rep, in2, 2)}) ==
-              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                  "read", "pread64", "Write"});
+              dstd::Vector<dstd::String>{"read", "pread64", "Write"});
         CHECK(dftu_expr_str_replace_col(c0, c1, nullptr) == nullptr);
 
         const dftu_series* in3[2] = {s.handle(), ints.handle()};
@@ -391,11 +385,9 @@ TEST_SUITE("expr string ops") {
         REQUIRE(sub);
         REQUIRE(sub2);
         CHECK(strs(Series{dftu_expr_eval(sub, in3, 2)}) ==
-              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                  "ead", "ead64", "te"});
+              dstd::Vector<dstd::String>{"ead", "ead64", "te"});
         CHECK(strs(Series{dftu_expr_eval(sub2, in3, 2)}) ==
-              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                  "e", "ea", "te"});
+              dstd::Vector<dstd::String>{"e", "ea", "te"});
         CHECK(dftu_expr_str_substr_col(nullptr, c1, nullptr) == nullptr);
         CHECK(dftu_expr_str_substr_col(c0, nullptr, nullptr) == nullptr);
 
@@ -439,19 +431,16 @@ TEST_SUITE("expr string ops") {
         Series r_rep{dftu_expr_eval(rep, in, 1)};
         Series r_sl{dftu_expr_eval(sl, in, 1)};
         Series r_isin{dftu_expr_eval(isin, in, 1)};
-        CHECK(bools(r_pred) == dftracer::utils::dstd::Vector<bool>{
-                                   false, true, false, false, false});
+        CHECK(bools(r_pred) ==
+              dstd::Vector<bool>{false, true, false, false, false});
         CHECK(strs(r_up)[0] == "READ");
-        CHECK(i64s(r_len) ==
-              dftracer::utils::dstd::Vector<std::int64_t>{4, 7, 5, 5, 5});
-        CHECK(i64s(r_find) ==
-              dftracer::utils::dstd::Vector<std::int64_t>{3, 4, -1, -1, 3});
+        CHECK(i64s(r_len) == dstd::Vector<std::int64_t>{4, 7, 5, 5, 5});
+        CHECK(i64s(r_find) == dstd::Vector<std::int64_t>{3, 4, -1, -1, 3});
         CHECK(strs(r_rep)[0] == "Read");
         CHECK(strs(r_sl) ==
-              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                  "re", "pr", "Wr", "fs", "re"});
-        CHECK(bools(r_isin) == dftracer::utils::dstd::Vector<bool>{
-                                   false, false, false, false, true});
+              dstd::Vector<dstd::String>{"re", "pr", "Wr", "fs", "re"});
+        CHECK(bools(r_isin) ==
+              dstd::Vector<bool>{false, false, false, false, true});
         CHECK(dftu_expr_str_pred(DFTU_STR_PRED_LIKE, nullptr, "a", 1) ==
               nullptr);
         CHECK(dftu_expr_is_in(c, nullptr) == nullptr);
@@ -463,18 +452,17 @@ TEST_SUITE("expr string ops") {
         Series s =
             Series::strings({"a-b", "no", "c-d"}).str_extract("(\\w)-(\\w)", 1);
         REQUIRE(s.null_count() == 1);
-        dftracer::utils::dstd::Vector<const Series*> in{&s};
+        dstd::Vector<const Series*> in{&s};
         CHECK(bools(eval(expr_is_null(expr_col(0), true), in)) ==
-              dftracer::utils::dstd::Vector<bool>{false, true, false});
+              dstd::Vector<bool>{false, true, false});
         CHECK(bools(eval(expr_is_null(expr_col(0), false), in)) ==
-              dftracer::utils::dstd::Vector<bool>{true, false, true});
+              dstd::Vector<bool>{true, false, true});
         check_inferred(expr_is_null(expr_col(0), true), s);
 
         Series full = names();
-        dftracer::utils::dstd::Vector<const Series*> fin{&full};
+        dstd::Vector<const Series*> fin{&full};
         CHECK(bools(eval(expr_is_null(expr_col(0), true), fin)) ==
-              dftracer::utils::dstd::Vector<bool>{false, false, false, false,
-                                                  false});
+              dstd::Vector<bool>{false, false, false, false, false});
 
         dftu_expr* c = dftu_expr_col(0);
         dftu_expr* isnull = dftu_expr_is_null(c, 1);
@@ -483,9 +471,9 @@ TEST_SUITE("expr string ops") {
         REQUIRE(notnull);
         const dftu_series* cin[1] = {s.handle()};
         CHECK(bools(Series{dftu_expr_eval(isnull, cin, 1)}) ==
-              dftracer::utils::dstd::Vector<bool>{false, true, false});
+              dstd::Vector<bool>{false, true, false});
         CHECK(bools(Series{dftu_expr_eval(notnull, cin, 1)}) ==
-              dftracer::utils::dstd::Vector<bool>{true, false, true});
+              dstd::Vector<bool>{true, false, true});
         CHECK(dftu_expr_is_null(nullptr, 1) == nullptr);
         for (dftu_expr* e : {isnull, notnull, c}) dftu_expr_free(e);
     }

@@ -4,6 +4,10 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
@@ -12,7 +16,6 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
-#include <string>
 #include <thread>
 #include <vector>
 
@@ -168,7 +171,7 @@ TEST_CASE("Channel - Single producer, single consumer") {
     std::atomic<int> sum_consumed{0};
 
     // Producer thread
-    std::thread producer([&, p = channel.producer()]() mutable {
+    dstd::Thread producer([&, p = channel.producer()]() mutable {
         auto guard = p.guard();
         for (int i = 0; i < NUM_ITEMS; ++i) {
             if (blocking_send(channel, i)) sum_produced.fetch_add(i);
@@ -176,7 +179,7 @@ TEST_CASE("Channel - Single producer, single consumer") {
     });
 
     // Consumer thread
-    std::thread consumer([&]() {
+    dstd::Thread consumer([&]() {
         int value;
         while (blocking_receive(channel, value)) {
             sum_consumed.fetch_add(value);
@@ -197,7 +200,7 @@ TEST_CASE("Channel - receive waits before first producer registration") {
     std::atomic<bool> receive_success{false};
     std::atomic<int> received_value{-1};
 
-    std::thread consumer([&]() {
+    dstd::Thread consumer([&]() {
         int value = 0;
         consumer_entered.store(true, std::memory_order_release);
         bool success = blocking_receive(channel, value);
@@ -213,7 +216,7 @@ TEST_CASE("Channel - receive waits before first producer registration") {
 
     CHECK(consumer_done.load(std::memory_order_acquire) == false);
 
-    std::thread producer([&, p = channel.producer()]() mutable {
+    dstd::Thread producer([&, p = channel.producer()]() mutable {
         auto guard = p.guard();
         CHECK(channel.num_producers() >= 1);
         CHECK(blocking_send(channel, 123));
@@ -249,7 +252,7 @@ TEST_CASE("Channel - Multiple producers, single consumer" *
     std::atomic<int> total_consumed{0};
 
     // Producer threads
-    std::vector<std::thread> producers;
+    dstd::Vector<dstd::Thread> producers;
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
         producers.emplace_back([&, p, prod = channel.producer()]() mutable {
             auto guard = prod.guard();
@@ -262,7 +265,7 @@ TEST_CASE("Channel - Multiple producers, single consumer" *
     }
 
     // Consumer thread
-    std::thread consumer([&]() {
+    dstd::Thread consumer([&]() {
         int value;
         while (blocking_receive(channel, value)) {
             total_consumed.fetch_add(value);
@@ -287,7 +290,7 @@ TEST_CASE("Channel - Single producer, multiple consumers" *
     std::atomic<int> sum_consumed{0};
 
     // Producer thread
-    std::thread producer([&, p = channel.producer()]() mutable {
+    dstd::Thread producer([&, p = channel.producer()]() mutable {
         auto guard = p.guard();
         for (int i = 0; i < NUM_ITEMS; ++i) {
             CHECK(blocking_send(channel, i));
@@ -296,7 +299,7 @@ TEST_CASE("Channel - Single producer, multiple consumers" *
     });
 
     // Consumer threads
-    std::vector<std::thread> consumers;
+    dstd::Vector<dstd::Thread> consumers;
     for (int c = 0; c < NUM_CONSUMERS; ++c) {
         consumers.emplace_back([&]() {
             int value;
@@ -319,14 +322,14 @@ TEST_CASE("Channel - Single producer, multiple consumers" *
 // ============================================================================
 
 TEST_CASE("Channel - String messages") {
-    Channel<std::string> channel(10);
+    Channel<dstd::String> channel(10);
 
     CHECK(channel.try_send("Hello"));
     CHECK(channel.try_send("World"));
     CHECK(channel.try_send("from"));
     CHECK(channel.try_send("Channel"));
 
-    std::string msg;
+    dstd::String msg;
     CHECK(blocking_receive(channel, msg) == true);
     CHECK(msg == "Hello");
 
@@ -343,11 +346,11 @@ TEST_CASE("Channel - String messages") {
 TEST_CASE("Channel - Complex data type") {
     struct Event {
         int id;
-        std::string name;
+        dstd::String name;
         double value;
 
         Event() : id(0), value(0.0) {}
-        Event(int i, std::string n, double v)
+        Event(int i, dstd::String n, double v)
             : id(i), name(std::move(n)), value(v) {}
     };
 
@@ -430,9 +433,9 @@ TEST_CASE("Channel - Pipeline with transform") {
     Channel<int> input_channel(50);
     Channel<int> output_channel(50);
 
-    std::vector<int> produced_values;
-    std::vector<int> transformed_values;
-    std::vector<int> consumed_values;
+    dstd::Vector<int> produced_values;
+    dstd::Vector<int> transformed_values;
+    dstd::Vector<int> consumed_values;
 
     // Producer task
     auto producer = make_task(
@@ -584,7 +587,7 @@ TEST_CASE("Channel - High throughput stress test") {
     std::atomic<int> items_sent{0};
     std::atomic<int> items_received{0};
 
-    std::thread producer([&, p = channel.producer()]() mutable {
+    dstd::Thread producer([&, p = channel.producer()]() mutable {
         auto guard = p.guard();
         for (int i = 0; i < NUM_ITEMS; ++i) {
             CHECK(blocking_send(channel, i));
@@ -592,7 +595,7 @@ TEST_CASE("Channel - High throughput stress test") {
         }
     });
 
-    std::thread consumer([&]() {
+    dstd::Thread consumer([&]() {
         int value;
         while (blocking_receive(channel, value)) {
             items_received.fetch_add(1);
@@ -634,7 +637,7 @@ TEST_CASE("Channel - close wakes blocked receive" * doctest::test_suite("vg")) {
     std::atomic<bool> receive_done{false};
     bool receive_result = true;
 
-    std::thread receiver([&]() {
+    dstd::Thread receiver([&]() {
         int value = 0;
         receiver_entered.store(true, std::memory_order_release);
         receive_result = blocking_receive(channel, value);
@@ -662,12 +665,12 @@ TEST_CASE("Channel - last producer release wakes blocked receive") {
     Channel<int> channel(10);
 
     auto cp = channel.producer();
-    auto guard = std::make_unique<Channel<int>::ProducerGuard>(cp.guard());
+    auto guard = dstd::make_unique<Channel<int>::ProducerGuard>(cp.guard());
 
     std::atomic<bool> receiver_entered{false};
     bool receive_result = true;
 
-    std::thread receiver([&]() {
+    dstd::Thread receiver([&]() {
         int value = 0;
         receiver_entered.store(true, std::memory_order_release);
         receive_result = blocking_receive(channel, value);
@@ -948,9 +951,9 @@ TEST_CASE("Channel - receive_async() with transform pipeline") {
     Channel<int> input_channel(50);
     Channel<int> output_channel(50);
 
-    std::vector<int> produced_values;
-    std::vector<int> transformed_values;
-    std::vector<int> consumed_values;
+    dstd::Vector<int> produced_values;
+    dstd::Vector<int> transformed_values;
+    dstd::Vector<int> consumed_values;
 
     // Producer task
     auto producer = make_task(
@@ -1129,8 +1132,8 @@ TEST_CASE("Channel - Multiple producers, multiple consumers (blocking)") {
     std::atomic<int> total_produced{0};
     std::atomic<int> total_consumed{0};
 
-    std::vector<dstd::SharedPtr<Task>> producers;
-    std::vector<dstd::SharedPtr<Task>> consumers;
+    dstd::Vector<dstd::SharedPtr<Task>> producers;
+    dstd::Vector<dstd::SharedPtr<Task>> consumers;
 
     // Create multiple producers
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
@@ -1147,7 +1150,7 @@ TEST_CASE("Channel - Multiple producers, multiple consumers (blocking)") {
 
                 co_return ITEMS_PER_PRODUCER;
             },
-            "Producer" + std::to_string(p));
+            "Producer" + dstd::to_string(p));
         producers.push_back(producer);
     }
 
@@ -1165,7 +1168,7 @@ TEST_CASE("Channel - Multiple producers, multiple consumers (blocking)") {
 
                 co_return items;
             },
-            "Consumer" + std::to_string(c));
+            "Consumer" + dstd::to_string(c));
         consumers.push_back(consumer);
     }
 
@@ -1177,6 +1180,7 @@ TEST_CASE("Channel - Multiple producers, multiple consumers (blocking)") {
     Pipeline pipeline(config);
 
     // Combine all producers and consumers as source tasks
+    // keep std: Pipeline::set_source takes a std::vector
     std::vector<dstd::SharedPtr<Task>> all_tasks;
     all_tasks.insert(all_tasks.end(), producers.begin(), producers.end());
     all_tasks.insert(all_tasks.end(), consumers.begin(), consumers.end());
@@ -1207,8 +1211,8 @@ TEST_CASE(
     std::atomic<int> total_produced{0};
     std::atomic<int> total_consumed{0};
 
-    std::vector<dstd::SharedPtr<Task>> producers;
-    std::vector<dstd::SharedPtr<Task>> consumers;
+    dstd::Vector<dstd::SharedPtr<Task>> producers;
+    dstd::Vector<dstd::SharedPtr<Task>> consumers;
 
     // Create multiple producers
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
@@ -1225,7 +1229,7 @@ TEST_CASE(
 
                 co_return ITEMS_PER_PRODUCER;
             },
-            "Producer" + std::to_string(p));
+            "Producer" + dstd::to_string(p));
         producers.push_back(producer);
     }
 
@@ -1242,7 +1246,7 @@ TEST_CASE(
 
                 co_return items;
             },
-            "Consumer" + std::to_string(c));
+            "Consumer" + dstd::to_string(c));
         consumers.push_back(consumer);
     }
 
@@ -1254,6 +1258,7 @@ TEST_CASE(
     Pipeline pipeline(config);
 
     // Combine all producers and consumers as source tasks
+    // keep std: Pipeline::set_source takes a std::vector
     std::vector<dstd::SharedPtr<Task>> all_tasks;
     all_tasks.insert(all_tasks.end(), producers.begin(), producers.end());
     all_tasks.insert(all_tasks.end(), consumers.begin(), consumers.end());
@@ -1363,7 +1368,7 @@ TEST_CASE("Channel - producer() with threads") {
     std::atomic<int> total_consumed{0};
 
     // Producer threads use producer()
-    std::vector<std::thread> producers;
+    dstd::Vector<dstd::Thread> producers;
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
         producers.emplace_back([&, p, prod = channel.producer()]() mutable {
             auto guard = prod.guard();  // RAII release
@@ -1376,7 +1381,7 @@ TEST_CASE("Channel - producer() with threads") {
     }
 
     // Consumer thread
-    std::thread consumer([&]() {
+    dstd::Thread consumer([&]() {
         int value;
         while (blocking_receive(channel, value)) {
             total_consumed.fetch_add(value);
@@ -1663,90 +1668,92 @@ TEST_CASE("Channel - spawn_transforms() basic") {
 
 TEST_CASE("Channel - spawn_transforms() two-stage pipeline") {
     auto stage1 = coro::make_channel<int>(50);
-    auto stage2 = coro::make_channel<std::string>(50);
-    auto stage3 = coro::make_channel<std::string>(50);
+    auto stage2 = coro::make_channel<dstd::String>(50);
+    auto stage3 = coro::make_channel<dstd::String>(50);
 
     std::atomic<int> total_consumed{0};
 
     auto streaming_task = make_task(
         [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope([&](coro::Scope& scope)
-                                          -> coro::CoroTask<void> {
-                // Producer: emit integers
-                auto generate = []() -> coro::Generator<int> {
-                    for (int i = 0; i < 50; ++i) co_yield i;
-                };
-                scope.spawn([&]() -> coro::CoroTask<void> {
-                    auto ch = stage1->producer();
-                    auto guard = ch.guard();
-                    coro::Generator<int> gen = generate();
-                    for (auto item : gen) {
-                        const auto send_ok = co_await ch.send(std::move(item));
-                        if (!send_ok) {
+            co_await coro::with_scope(
+                [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                    // Producer: emit integers
+                    auto generate = []() -> coro::Generator<int> {
+                        for (int i = 0; i < 50; ++i) co_yield i;
+                    };
+                    scope.spawn([&]() -> coro::CoroTask<void> {
+                        auto ch = stage1->producer();
+                        auto guard = ch.guard();
+                        coro::Generator<int> gen = generate();
+                        for (auto item : gen) {
+                            const auto send_ok =
+                                co_await ch.send(std::move(item));
+                            if (!send_ok) {
+                                co_return;
+                            }
+                        }
+                        co_return;
+                    });
+
+                    // Transform 1: int -> string
+                    auto to_string_op =
+                        [](int val) -> coro::CoroTask<dstd::String> {
+                        co_return dstd::to_string(val);
+                    };
+                    for (int w = 0; w < 2; ++w) {
+                        scope.spawn([&]() -> coro::CoroTask<void> {
+                            auto op = stage2->producer();
+                            auto guard = op.guard();
+                            for (;;) {
+                                auto item = co_await stage1->receive();
+                                if (!item) break;
+                                auto result =
+                                    co_await to_string_op(std::move(*item));
+                                const auto send_ok =
+                                    co_await op.send(std::move(result));
+                                if (!send_ok) {
+                                    co_return;
+                                }
+                            }
                             co_return;
-                        }
+                        });
                     }
-                    co_return;
-                });
 
-                // Transform 1: int -> string
-                auto to_string_op = [](int val) -> coro::CoroTask<std::string> {
-                    co_return std::to_string(val);
-                };
-                for (int w = 0; w < 2; ++w) {
-                    scope.spawn([&]() -> coro::CoroTask<void> {
-                        auto op = stage2->producer();
-                        auto guard = op.guard();
-                        for (;;) {
-                            auto item = co_await stage1->receive();
-                            if (!item) break;
-                            auto result =
-                                co_await to_string_op(std::move(*item));
-                            const auto send_ok =
-                                co_await op.send(std::move(result));
-                            if (!send_ok) {
-                                co_return;
+                    // Transform 2: string -> string (prefix)
+                    auto prefix =
+                        [](dstd::String val) -> coro::CoroTask<dstd::String> {
+                        co_return "item_" + val;
+                    };
+                    for (int w = 0; w < 2; ++w) {
+                        scope.spawn([&]() -> coro::CoroTask<void> {
+                            auto op = stage3->producer();
+                            auto guard = op.guard();
+                            for (;;) {
+                                auto item = co_await stage2->receive();
+                                if (!item) break;
+                                auto result = co_await prefix(std::move(*item));
+                                const auto send_ok =
+                                    co_await op.send(std::move(result));
+                                if (!send_ok) {
+                                    co_return;
+                                }
                             }
+                            co_return;
+                        });
+                    }
+
+                    // Consumer
+                    scope.spawn([&]() -> coro::CoroTask<void> {
+                        for (;;) {
+                            auto item = co_await stage3->receive();
+                            if (!item) break;
+                            total_consumed.fetch_add(1);
                         }
                         co_return;
                     });
-                }
 
-                // Transform 2: string -> string (prefix)
-                auto prefix =
-                    [](std::string val) -> coro::CoroTask<std::string> {
-                    co_return "item_" + val;
-                };
-                for (int w = 0; w < 2; ++w) {
-                    scope.spawn([&]() -> coro::CoroTask<void> {
-                        auto op = stage3->producer();
-                        auto guard = op.guard();
-                        for (;;) {
-                            auto item = co_await stage2->receive();
-                            if (!item) break;
-                            auto result = co_await prefix(std::move(*item));
-                            const auto send_ok =
-                                co_await op.send(std::move(result));
-                            if (!send_ok) {
-                                co_return;
-                            }
-                        }
-                        co_return;
-                    });
-                }
-
-                // Consumer
-                scope.spawn([&]() -> coro::CoroTask<void> {
-                    for (;;) {
-                        auto item = co_await stage3->receive();
-                        if (!item) break;
-                        total_consumed.fetch_add(1);
-                    }
                     co_return;
                 });
-
-                co_return;
-            });
             co_return;
         },
         "TwoStageTransform");

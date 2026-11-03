@@ -7,12 +7,12 @@
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::dataframe::Agg;
 using dftracer::utils::dataframe::DataFrame;
@@ -22,15 +22,16 @@ using dftracer::utils::dataframe::TypeId;
 
 namespace {
 
-Series i64(std::vector<std::int64_t> v) {
+Series i64(dstd::Vector<std::int64_t> v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
 // A Bool column; `valid` (when non-empty) marks the non-null slots.
-Series bools(const std::vector<bool>& v, const std::vector<bool>& valid = {}) {
+Series bools(const dstd::Vector<bool>& v,
+             const dstd::Vector<bool>& valid = {}) {
     const std::size_t nbytes = (v.size() + 7) / 8;
-    std::vector<std::uint8_t> bits(nbytes, 0);
-    std::vector<std::uint8_t> vbits(nbytes, 0);
+    dstd::Vector<std::uint8_t> bits(nbytes, 0);
+    dstd::Vector<std::uint8_t> vbits(nbytes, 0);
     for (std::size_t i = 0; i < v.size(); ++i) {
         if (v[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         if (valid.empty() || valid[i])
@@ -41,32 +42,31 @@ Series bools(const std::vector<bool>& v, const std::vector<bool>& valid = {}) {
                         valid.empty() ? nullptr : vbits.data());
 }
 
-Series strs(const std::vector<dftracer::utils::dstd::StringView>& v,
-            const std::vector<bool>& valid = {}) {
-    std::vector<std::uint8_t> vbits((v.size() + 7) / 8, 0);
+Series strs(const dstd::Vector<dstd::StringView>& v,
+            const dstd::Vector<bool>& valid = {}) {
+    dstd::Vector<std::uint8_t> vbits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (valid.empty() || valid[i])
             vbits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-    return Series::strings(
-        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(v),
-        valid.empty() ? nullptr : vbits.data());
+    return Series::strings(dstd::Span<const dstd::StringView>(v),
+                           valid.empty() ? nullptr : vbits.data());
 }
 
-Series timestamps(const std::vector<std::int64_t>& v) {
+Series timestamps(const dstd::Vector<std::int64_t>& v) {
     return Series::flat(TypeId::Timestamp, v.data(),
                         static_cast<std::int64_t>(v.size()));
 }
 
-std::string error_text(dftu_scalar s) {
+dstd::String error_text(dftu_scalar s) {
     REQUIRE(s.kind == DFTU_SCALAR_TAG_ERR);
     REQUIRE(s.value.err != nullptr);
     REQUIRE(s.value.err->message != nullptr);
     return s.value.err->message;
 }
 
-bool names(const std::string& text, const char* a, const char* b) {
-    return text.find(a) != std::string::npos &&
-           text.find(b) != std::string::npos;
+bool names(const dstd::String& text, const char* a, const char* b) {
+    return text.find(a) != dstd::String::npos &&
+           text.find(b) != dstd::String::npos;
 }
 
 }  // namespace

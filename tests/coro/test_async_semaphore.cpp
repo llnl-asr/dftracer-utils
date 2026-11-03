@@ -5,10 +5,12 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
+#include <testing_utilities.h>
 
 #include <atomic>
 #include <chrono>
@@ -97,7 +99,7 @@ TEST_SUITE("CoroSemaphore") {
     }
 
     // A waiter parked on acquire() must resume when release() is called from a
-    // thread with no Executor::current() (a plain std::thread). Bounded
+    // thread with no Executor::current() (a plain dstd::Thread). Bounded
     // wait: a regression manifests as a hang, so time out and fail rather than
     // block.
     TEST_CASE("release() from an off-executor thread wakes a parked waiter") {
@@ -105,10 +107,10 @@ TEST_SUITE("CoroSemaphore") {
         std::atomic<bool> waiter_done{false};
         std::atomic<bool> finished{false};
 
-        std::thread worker([&] {
+        dstd::Thread worker([&] {
             run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
                 co_await sem.acquire(10);  // take all capacity
-                std::thread releaser([&sem] {
+                dstd::Thread releaser([&sem] {
                     // No Executor::current() here.
                     std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     sem.release(10);

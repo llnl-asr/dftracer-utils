@@ -4,8 +4,10 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -27,7 +29,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <fstream>
 #include <iterator>
 #include <tuple>
 
@@ -52,45 +53,47 @@ constexpr std::size_t CHECKPOINT_SIZE = 2048;
 // an integer, and every third event is a pre-aggregated counter, which the
 // counters skip. App counters and plain events share the trace and are not
 // counters at all.
-std::string write_trace(const std::string& dir) {
-    const std::string pfw = dir + "/counters.pfw";
+dstd::String write_trace(const dstd::String& dir) {
+    const dstd::String pfw = dir + "/counters.pfw";
     {
-        std::ofstream out(pfw.c_str());
+        dstd::String out;
         for (int i = 0; i < 24; ++i) {
             const dstd::String host = (i % 2 == 0) ? "h1" : "h2";
             const std::uint64_t ts =
                 BASE_TS + static_cast<std::uint64_t>(i) * 130'000;
-            out << R"({"ph":"C","name":"cpu","cat":"sys","pid":1,"tid":1,)"
-                << R"("ts":)" << ts << R"(,"args":{"hhash":")" << host
-                << R"(","util":)" << (i + 0.5) << R"(,"num":)" << (10 + i)
-                << "}}\n";
+            out += common::str_cat(
+                R"({"ph":"C","name":"cpu","cat":"sys","pid":1,"tid":1,)",
+                R"("ts":)", ts, R"(,"args":{"hhash":")", host, R"(","util":)",
+                (i + 0.5), R"(,"num":)", (10 + i), "}}\n");
             if (i % 6 == 0)
-                out << R"({"ph":"C","name":"mem","cat":"sys","pid":1,)"
-                    << R"("tid":1,"ts":)" << ts + 7'000
-                    << R"(,"args":{"hhash":")" << host << R"(","used":)"
-                    << (1000 + i) << "}}\n";
+                out += common::str_cat(
+                    R"({"ph":"C","name":"mem","cat":"sys","pid":1,)",
+                    R"("tid":1,"ts":)", ts + 7'000, R"(,"args":{"hhash":")",
+                    host, R"(","used":)", (1000 + i), "}}\n");
             if (i % 3 == 0)
-                out << R"({"ph":"C","name":"cpu","cat":"sys","pid":1,)"
-                    << R"("tid":1,"ts":)" << ts + 11'000
-                    << R"(,"args":{"hhash":")" << host
-                    << R"(","count":5,"util":99.0}})"
-                       "\n";
-            out << R"({"ph":"C","name":"faults","cat":"app","pid":1,)"
-                << R"("tid":1,"ts":)" << ts + 3'000 << R"(,"args":{"count":2}})"
-                << "\n";
-            out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
-                << R"("tid":1,"ts":)" << ts + 5'000
-                << R"(,"dur":10,"args":{"size":4096}})" << "\n";
+                out += common::str_cat(
+                    R"({"ph":"C","name":"cpu","cat":"sys","pid":1,)",
+                    R"("tid":1,"ts":)", ts + 11'000, R"(,"args":{"hhash":")",
+                    host, R"(","count":5,"util":99.0}})", "\n");
+            out += common::str_cat(
+                R"({"ph":"C","name":"faults","cat":"app","pid":1,)",
+                R"("tid":1,"ts":)", ts + 3'000, R"(,"args":{"count":2}})",
+                "\n");
+            out += common::str_cat(
+                R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)",
+                R"("tid":1,"ts":)", ts + 5'000,
+                R"(,"dur":10,"args":{"size":4096}})", "\n");
         }
+        (void)dstd::fs::write_file(dstd::PathView(pfw), out);
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
     (void)dstd::fs::remove(pfw);
     return gz;
 }
 
-IndexerOptions with_aggregation(const std::string& index_dir) {
+IndexerOptions with_aggregation(const dstd::String& index_dir) {
     IndexerOptions o;
     o.index_dir = index_dir;
     o.checkpoint_size = CHECKPOINT_SIZE;
@@ -225,10 +228,10 @@ struct Blocks {
     std::size_t counters = 0;
 };
 
-Blocks blocks_of(const std::string& gz, const std::string& idx) {
+Blocks blocks_of(const dstd::String& gz, const dstd::String& idx) {
     Blocks out;
     const auto index_path =
-        std::string(trace::internal::determine_index_path(gz, idx));
+        dstd::String(trace::internal::determine_index_path(gz, idx));
     const auto snapshot =
         common::unwrap(index::plan::open_snapshot(index_path));
     const auto file =
@@ -255,13 +258,12 @@ TEST_SUITE("CountersColumns") {
     TEST_CASE("the counters of the index are the per-second means") {
         TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir());
-        const std::string idx = env.get_dir() + "/idx";
+        const dstd::String idx = env.get_dir() + "/idx";
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(idx))
             .build();
         const auto typed =
-            View::from_files({{dftracer::utils::dstd::String(gz),
-                               dftracer::utils::dstd::String(idx)}})
+            View::from_files({{dstd::String(gz), dstd::String(idx)}})
                 .collect_typed()
                 .get();
         check_against(typed.counters, expected_groups());
@@ -276,13 +278,12 @@ TEST_SUITE("CountersColumns") {
     TEST_CASE("a shard split splits the counters without a repeat") {
         TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir());
-        const std::string idx = env.get_dir() + "/idx";
+        const dstd::String idx = env.get_dir() + "/idx";
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(idx))
             .build();
         const auto whole =
-            View::from_files({{dftracer::utils::dstd::String(gz),
-                               dftracer::utils::dstd::String(idx)}})
+            View::from_files({{dstd::String(gz), dstd::String(idx)}})
                 .collect_typed()
                 .get();
         check_against(whole.counters, expected_groups());
@@ -302,13 +303,11 @@ TEST_SUITE("CountersColumns") {
         CHECK_FALSE(hi.empty());
 
         const auto first =
-            View::from_files({{dftracer::utils::dstd::String(gz),
-                               dftracer::utils::dstd::String(idx)}})
+            View::from_files({{dstd::String(gz), dstd::String(idx)}})
                 .collect_typed(0, boundary)
                 .get();
         const auto second =
-            View::from_files({{dftracer::utils::dstd::String(gz),
-                               dftracer::utils::dstd::String(idx)}})
+            View::from_files({{dstd::String(gz), dstd::String(idx)}})
                 .collect_typed(boundary, 4096)
                 .get();
         check_against(first.counters, lo);

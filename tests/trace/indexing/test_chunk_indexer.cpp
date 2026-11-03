@@ -18,7 +18,7 @@ static dstd::Pair<dstd::String, std::size_t> create_test_trace_gz(
     const dstd::String& dir, int num_events) {
     dstd::String plain_path = dir + "/test_index.trace";
     {
-        std::ofstream ofs(plain_path.c_str());
+        dftu_utils_test::FileOut ofs(plain_path);
 
         // Metadata events
         ofs << R"({"name":"HH","ph":"M","args":{"hhash":"abc123","name":"testhost","value":"abc123"}})"
@@ -50,8 +50,8 @@ static dstd::Pair<dstd::String, std::size_t> create_test_trace_gz(
 
     std::size_t uncompressed_size = dstd::fs::file_size(plain_path).value();
     dstd::String gz_path = plain_path + ".gz";
-    dftu_utils_test::compress_file_to_gzip(std::string(plain_path),
-                                           std::string(gz_path));
+    dftu_utils_test::compress_file_to_gzip(dstd::String(plain_path),
+                                           dstd::String(gz_path));
     (void)dstd::fs::remove(plain_path);
 
     return {gz_path, uncompressed_size};
@@ -170,7 +170,7 @@ TEST_SUITE("ChunkIndexer") {
 
         dstd::String plain_path = test_dir + "/test_sparse.trace";
         {
-            std::ofstream ofs(plain_path.c_str());
+            dftu_utils_test::FileOut ofs(plain_path);
             // Event without fhash (not all events are I/O)
             ofs << R"({"name":"compute","cat":"APP","pid":1,"tid":1,"ts":1000,"dur":500,"ph":"X","args":{"hhash":"abc123"}})"
                 << "\n";
@@ -182,8 +182,8 @@ TEST_SUITE("ChunkIndexer") {
 
         std::size_t uncompressed_size = dstd::fs::file_size(plain_path).value();
         dstd::String gz_path = plain_path + ".gz";
-        dftu_utils_test::compress_file_to_gzip(std::string(plain_path),
-                                               std::string(gz_path));
+        dftu_utils_test::compress_file_to_gzip(dstd::String(plain_path),
+                                               dstd::String(gz_path));
         (void)dstd::fs::remove(plain_path);
 
         ChunkIndexerConfig config;

@@ -6,7 +6,10 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -15,6 +18,7 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <algorithm>
@@ -23,9 +27,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <map>
 #include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -67,49 +69,49 @@ const char* const OWN_HASHES[FILES] = {"1111111111111101", "1111111111111102",
 std::uint64_t read_dur(int file, int j) { return 10 + (j * 7 + file * 3) % 40; }
 std::uint64_t write_dur(int j) { return 20 + j % 9; }
 
-std::string with_dur(std::uint64_t dur) {
-    return std::string(R"(,"dur":)") + std::to_string(dur);
+dstd::String with_dur(std::uint64_t dur) {
+    return dstd::String(R"(,"dur":)") + dstd::to_string(dur);
 }
 
-void write_trace(std::ostream& o, int i) {
-    const std::string pid = std::to_string(100 + i);
-    const std::string host = std::string(R"("hhash":")") + HOSTS[i] + R"(")";
-    const std::string own =
-        std::string(R"("fhash":")") + OWN_HASHES[i] + R"(")";
-    const std::string data = std::string(R"("fhash":")") + DATA_HASH + R"(")";
-    auto rec = [&](const char* ph, const std::string& name,
-                   const std::string& cat, const std::string& tid,
-                   std::uint64_t ts, const std::string& dur,
-                   const std::string& args) {
+void write_trace(dftu_utils_test::FileOut& o, int i) {
+    const dstd::String pid = dstd::to_string(100 + i);
+    const dstd::String host = dstd::String(R"("hhash":")") + HOSTS[i] + R"(")";
+    const dstd::String own =
+        dstd::String(R"("fhash":")") + OWN_HASHES[i] + R"(")";
+    const dstd::String data = dstd::String(R"("fhash":")") + DATA_HASH + R"(")";
+    auto rec = [&](const char* ph, const dstd::String& name,
+                   const dstd::String& cat, const dstd::String& tid,
+                   std::uint64_t ts, const dstd::String& dur,
+                   const dstd::String& args) {
         o << R"({"ph":")" << ph << R"(","name":")" << name << R"(","cat":")"
           << cat << R"(","pid":)" << pid << R"(,"tid":)" << tid << R"(,"ts":)"
           << ts << dur << R"(,"args":{)" << args << "}}\n";
     };
 
-    rec("M", "FH", "dftracer", "0", BASE_TS, std::string(),
-        std::string(R"("value":")") + OWN_HASHES[i] + R"(","name":"/data/t)" +
-            std::to_string(i) + R"(.pfw")");
-    rec("M", "HH", "dftracer", "0", BASE_TS, std::string(),
-        std::string(R"("value":")") + HOSTS[i] + R"(","name":")" +
+    rec("M", "FH", "dftracer", "0", BASE_TS, dstd::String(),
+        dstd::String(R"("value":")") + OWN_HASHES[i] + R"(","name":"/data/t)" +
+            dstd::to_string(i) + R"(.pfw")");
+    rec("M", "HH", "dftracer", "0", BASE_TS, dstd::String(),
+        dstd::String(R"("value":")") + HOSTS[i] + R"(","name":")" +
             HOST_NAMES[i] + R"(")");
-    rec("M", "SH", "dftracer", "0", BASE_TS, std::string(),
+    rec("M", "SH", "dftracer", "0", BASE_TS, dstd::String(),
         R"("value":"ab12cd34ef56ab78","name":"read")");
-    rec("M", "PR", "dftracer", "0", BASE_TS, std::string(),
-        std::string(R"("name":"rank","value":)") + std::to_string(i));
-    rec("M", "thread_name", "dftracer", "0", BASE_TS, std::string(),
+    rec("M", "PR", "dftracer", "0", BASE_TS, dstd::String(),
+        dstd::String(R"("name":"rank","value":)") + dstd::to_string(i));
+    rec("M", "thread_name", "dftracer", "0", BASE_TS, dstd::String(),
         R"("name":"1","value":"main")");
 
     for (int s = 0; s < SECONDS; ++s) {
         const std::uint64_t base =
             BASE_TS + static_cast<std::uint64_t>(s) * MICROS_PER_S;
         for (int j = 0; j < READS; ++j) {
-            const std::string dur =
-                j % 4 == 3 ? std::string() : with_dur(read_dur(i, j));
+            const dstd::String dur =
+                j % 4 == 3 ? dstd::String() : with_dur(read_dur(i, j));
             rec("X", "read", "POSIX", "1",
                 base + static_cast<std::uint64_t>(j) * 100, dur,
                 host + "," + own + R"(,"ret":)" +
-                    std::to_string(512 * (1 + j % 4)) + R"(,"offset":)" +
-                    std::to_string(j * 512));
+                    dstd::to_string(512 * (1 + j % 4)) + R"(,"offset":)" +
+                    dstd::to_string(j * 512));
         }
         if (s != 0) continue;
         for (int j = 0; j < WRITES; ++j)
@@ -117,22 +119,22 @@ void write_trace(std::ostream& o, int i) {
                 base + 40000 + static_cast<std::uint64_t>(j) * 100,
                 with_dur(write_dur(j)),
                 host + "," + data + R"(,"ret":)" +
-                    std::to_string(128 * (1 + j % 3)));
+                    dstd::to_string(128 * (1 + j % 3)));
         for (int e = 0; e < INSTANTS; ++e)
             rec("i", "task_begin", "app", "1",
                 base + 5000 + static_cast<std::uint64_t>(e) * 700,
-                std::string(), host);
+                dstd::String(), host);
         for (int e = 0; e < CPU_COUNTERS; ++e)
             rec("C", "cpu", "sys", "0",
                 base + 20000 + static_cast<std::uint64_t>(e) * 100,
-                std::string(),
-                host + R"(,"user_pct":)" + std::to_string(30 + e * 5) +
-                    R"(,"idle_pct":)" + std::to_string(70 - e * 5));
+                dstd::String(),
+                host + R"(,"user_pct":)" + dstd::to_string(30 + e * 5) +
+                    R"(,"idle_pct":)" + dstd::to_string(70 - e * 5));
         // A counter of counts and sums, as a folded run writes it.
         for (int e = 0; e < PREAGG_COUNTERS; ++e)
             rec("C", "pwrite", "STDIO", "2",
                 base + 60000 + static_cast<std::uint64_t>(e) * 100,
-                std::string(),
+                dstd::String(),
                 host + "," + data +
                     R"(,"count":4,"dur_sum":40,"dur_min":5,"dur_max":20)" +
                     R"(,"ret_sum":4096,"offset_sum":8192)");
@@ -140,33 +142,33 @@ void write_trace(std::ostream& o, int i) {
         for (int e = 0; e < AGGREGATED; ++e)
             rec("A", "read", "POSIX", "1",
                 base + 70000 + static_cast<std::uint64_t>(e) * 100,
-                std::string(),
+                dstd::String(),
                 host + "," + own +
                     R"(,"count":3,"dur_sum":30,"dur_min":8,"dur_max":12)");
         // A sampling profiler's counter: a profile record, not a system one.
         for (int e = 0; e < SAMPLES; ++e)
             rec("C", "sample", "app", "0",
                 base + 80000 + static_cast<std::uint64_t>(e) * 100,
-                std::string(), host + R"(,"dur":7,"count":1)");
+                dstd::String(), host + R"(,"dur":7,"count":1)");
     }
 }
 
 struct Fixture {
     TestEnvironment env{200};
-    std::vector<std::string> gz;
-    std::string index_path;
+    dstd::Vector<dstd::String> gz;
+    dstd::String index_path;
 
     Fixture() {
         REQUIRE(env.is_valid());
         for (int i = 0; i < FILES; ++i) {
-            const std::string dir = env.get_dir() + "/f" + std::to_string(i);
+            const dstd::String dir = env.get_dir() + "/f" + dstd::to_string(i);
             REQUIRE(dstd::fs::create_directories(dir).has_value());
-            const std::string plain = dir + "/t.pfw";
+            const dstd::String plain = dir + "/t.pfw";
             {
-                std::ofstream o(plain.c_str());
+                dftu_utils_test::FileOut o(plain);
                 write_trace(o, i);
             }
-            const std::string out = plain + ".gz";
+            const dstd::String out = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
             (void)dstd::fs::remove(plain);
@@ -176,7 +178,8 @@ struct Fixture {
         o.index_dir = env.get_dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
         ix::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
-        index_path = std::string(determine_index_path(gz.front(), o.index_dir));
+        index_path =
+            dstd::String(determine_index_path(gz.front(), o.index_dir));
     }
 
     dstd::Vector<ViewFile> files() const {
@@ -207,13 +210,13 @@ df::DataFrame scan_only(const scan::ScanPlan& p) {
 }
 
 struct Shape {
-    std::string label;
+    dstd::String label;
     dstd::Vector<GroupKey> keys;
-    std::vector<std::string> columns;
+    dstd::Vector<dstd::String> columns;
     std::uint64_t window_us = 0;
 };
 
-std::vector<Shape> shapes() {
+dstd::Vector<Shape> shapes() {
     using K = GroupKey;
     return {
         {"no group", {}, {}},
@@ -230,11 +233,11 @@ std::vector<Shape> shapes() {
 }
 
 struct AggCase {
-    std::string label;
+    dstd::String label;
     AggSpec spec;
 };
 
-std::vector<AggCase> agg_cases() {
+dstd::Vector<AggCase> agg_cases() {
     return {{"count", {AggOp::Count, "", "n"}},
             {"sum_dur", {AggOp::Sum, "dur", "sum_dur"}},
             {"min_dur", {AggOp::Min, "dur", "min_dur"}},
@@ -250,29 +253,29 @@ std::vector<AggCase> agg_cases() {
             {"distinct_tid", {AggOp::SetUnion, "tid", "tids"}}};
 }
 
-std::string format_double(double v) {
+dstd::String format_double(double v) {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.12g", v);
     return buf;
 }
 
-const df::Series* column_of(const df::DataFrame& f, const std::string& name) {
+const df::Series* column_of(const df::DataFrame& f, const dstd::String& name) {
     const std::int64_t c = bcol(f, name);
     return c < 0 ? nullptr : &f.columns[static_cast<std::size_t>(c)];
 }
 
-std::string printable(std::string s) {
+dstd::String printable(dstd::String s) {
     for (char& c : s)
         if (static_cast<unsigned char>(c) < 0x20) c = ',';
     return s;
 }
 
-std::string cell_text(const df::Series& column, std::int64_t row) {
+dstd::String cell_text(const df::Series& column, std::int64_t row) {
     if (column.is_null(row)) return "null";
     const df::Series c = column.materialize();
     using T = df::TypeId;
     if (c.type() == T::String || c.type() == T::LargeString)
-        return printable(std::string(c.string_at(row)));
+        return printable(dstd::String(c.string_at(row)));
     if (c.type() == T::Int64)
         return format_double(static_cast<double>(c.data<std::int64_t>()[row]));
     if (c.type() == T::Uint64)
@@ -286,21 +289,21 @@ std::string cell_text(const df::Series& column, std::int64_t row) {
     return format_double(c.data<double>()[row]);
 }
 
-using Cells = std::map<std::string, std::string>;
+using Cells = dstd::Map<dstd::String, dstd::String>;
 
-std::string key_of(const df::DataFrame& f, std::int64_t row,
-                   const std::vector<std::string>& keys) {
-    std::string k;
+dstd::String key_of(const df::DataFrame& f, std::int64_t row,
+                    const dstd::Vector<dstd::String>& keys) {
+    dstd::String k;
     for (const auto& name : keys) {
         const df::Series* c = column_of(f, name);
-        k += c == nullptr ? std::string("missing") : cell_text(*c, row);
+        k += c == nullptr ? dstd::String("missing") : cell_text(*c, row);
         k += '|';
     }
     return k;
 }
 
-Cells cells_of(const df::DataFrame& f, const std::vector<std::string>& keys,
-               const std::string& column) {
+Cells cells_of(const df::DataFrame& f, const dstd::Vector<dstd::String>& keys,
+               const dstd::String& column) {
     Cells out;
     const df::Series* c = column_of(f, column);
     if (c == nullptr) return out;
@@ -309,7 +312,7 @@ Cells cells_of(const df::DataFrame& f, const std::vector<std::string>& keys,
     return out;
 }
 
-bool parse_number(const std::string& s, double& out) {
+bool parse_number(const dstd::String& s, double& out) {
     char* end = nullptr;
     const double v = std::strtod(s.c_str(), &end);
     if (end == s.c_str() || *end != '\0') return false;
@@ -317,7 +320,7 @@ bool parse_number(const std::string& s, double& out) {
     return true;
 }
 
-bool same_cell(const std::string& index_text, const std::string& scan_text,
+bool same_cell(const dstd::String& index_text, const dstd::String& scan_text,
                double tolerance) {
     if (index_text == "null" || scan_text == "null")
         return index_text == scan_text;
@@ -332,28 +335,28 @@ bool same_cell(const std::string& index_text, const std::string& scan_text,
 }
 
 struct Line {
-    std::string shape;
-    std::string agg;
-    std::string status;
-    std::string note;
-    std::vector<std::string> cells;
+    dstd::String shape;
+    dstd::String agg;
+    dstd::String status;
+    dstd::String note;
+    dstd::Vector<dstd::String> cells;
 };
 
 // The cells the View declines and must keep declining: a SetUnion key on every
 // shape, and every aggregate of the name + 1 s window shape, whose time bucket
 // an untyped plan cannot answer from the partials.
-bool expected_declined(const std::string& shape, const std::string& agg) {
+bool expected_declined(const dstd::String& shape, const dstd::String& agg) {
     return agg == "distinct_pid" || agg == "distinct_tid" || shape == "name+1s";
 }
 
-std::string first_line(std::string s) {
-    if (const auto nl = s.find('\n'); nl != std::string::npos) s.resize(nl);
+dstd::String first_line(dstd::String s) {
+    if (const auto nl = s.find('\n'); nl != dstd::String::npos) s.resize(nl);
     if (s.size() > 96) s.resize(96);
     return s;
 }
 
-std::string join(const std::vector<std::string>& parts) {
-    std::string out;
+dstd::String join(const dstd::Vector<dstd::String>& parts) {
+    dstd::String out;
     for (const auto& p : parts) {
         if (!out.empty()) out += "; ";
         out += p;
@@ -363,11 +366,12 @@ std::string join(const std::vector<std::string>& parts) {
 
 Cells view_cells(const dstd::Vector<ViewFile>& files,
                  const dstd::Vector<GroupKey>& keys,
-                 const std::vector<std::string>& columns, const AggSpec& spec) {
+                 const dstd::Vector<dstd::String>& columns,
+                 const AggSpec& spec) {
     View v = View::from_files(files);
     if (!keys.empty()) v = v.group_by(keys);
     return cells_of(v.agg({spec}).collect().get(), columns,
-                    std::string(spec.out_name));
+                    dstd::String(spec.out_name));
 }
 
 void check_same_cells(const Cells& want, const Cells& got) {
@@ -391,11 +395,11 @@ void check_same_cells(const Cells& want, const Cells& got) {
 TEST_SUITE("ViewIndexParity") {
     TEST_CASE("the index answers every unfiltered shape like a scan") {
         Fixture fx;
-        const std::vector<Shape> shape_list = shapes();
-        const std::vector<AggCase> cases = agg_cases();
+        const dstd::Vector<Shape> shape_list = shapes();
+        const dstd::Vector<AggCase> cases = agg_cases();
 
-        std::map<std::string, std::map<std::string, Cells>> expected;
-        std::map<std::string, std::string> scan_error;
+        dstd::Map<dstd::String, dstd::Map<dstd::String, Cells>> expected;
+        dstd::Map<dstd::String, dstd::String> scan_error;
         for (const auto& sh : shape_list) {
             for (const auto& ac : cases) {
                 auto p = scan::from_files(fx.files());
@@ -405,7 +409,7 @@ TEST_SUITE("ViewIndexParity") {
                 try {
                     expected[sh.label][ac.label] =
                         cells_of(scan_only(p), sh.columns,
-                                 std::string(ac.spec.out_name));
+                                 dstd::String(ac.spec.out_name));
                 } catch (const std::exception& e) {
                     scan_error[sh.label + "/" + ac.label] = e.what();
                 }
@@ -414,7 +418,7 @@ TEST_SUITE("ViewIndexParity") {
 
         fx.delete_traces();
 
-        std::vector<Line> lines;
+        dstd::Vector<Line> lines;
         std::size_t equal = 0;
         std::size_t differs = 0;
         std::size_t declined = 0;
@@ -446,7 +450,7 @@ TEST_SUITE("ViewIndexParity") {
                     if (!sh.keys.empty()) v = v.group_by(sh.keys);
                     if (sh.window_us != 0) v = v.time_bucket(sh.window_us);
                     got = cells_of(v.agg({ac.spec}).collect().get(), sh.columns,
-                                   std::string(ac.spec.out_name));
+                                   dstd::String(ac.spec.out_name));
                 } catch (const std::exception& e) {
                     line.status = "declined";
                     line.note = first_line(e.what());
@@ -463,7 +467,7 @@ TEST_SUITE("ViewIndexParity") {
                 const double tolerance = (ac.spec.op == AggOp::Pct)
                                              ? QUANTILE_TOLERANCE
                                              : NUMERIC_TOLERANCE;
-                std::vector<std::string> diffs;
+                dstd::Vector<dstd::String> diffs;
                 for (const auto& [key, value] : want) {
                     const auto it = got.find(key);
                     if (it == got.end()) {
@@ -482,15 +486,15 @@ TEST_SUITE("ViewIndexParity") {
                     ++equal;
                 } else {
                     line.status = "differs";
-                    line.note = std::to_string(diffs.size()) + " of " +
-                                std::to_string(want.size()) + " groups";
+                    line.note = dstd::to_string(diffs.size()) + " of " +
+                                dstd::to_string(want.size()) + " groups";
                     for (std::size_t i = 0;
                          i < diffs.size() && i < MAX_REPORTED_CELLS; ++i)
                         line.cells.push_back(diffs[i]);
                     if (diffs.size() > MAX_REPORTED_CELLS)
                         line.cells.push_back(
                             "+" +
-                            std::to_string(diffs.size() - MAX_REPORTED_CELLS) +
+                            dstd::to_string(diffs.size() - MAX_REPORTED_CELLS) +
                             " more");
                     ++differs;
                 }
@@ -503,7 +507,7 @@ TEST_SUITE("ViewIndexParity") {
             "\n=== index versus scan, unfiltered traces: %zu shapes x %zu "
             "aggregates\n\n",
             shape_list.size(), cases.size());
-        std::string shape;
+        dstd::String shape;
         for (const auto& l : lines) {
             if (l.shape != shape) {
                 std::printf("%s\n", l.shape.c_str());
@@ -527,22 +531,22 @@ TEST_SUITE("ViewIndexParity") {
         "a trace counts the events of a counter, a frame counts its rows") {
         TestEnvironment env{201};
         REQUIRE(env.is_valid());
-        const std::string plain = env.get_dir() + "/preagg.pfw";
+        const dstd::String plain = env.get_dir() + "/preagg.pfw";
         {
-            std::ofstream o(plain.c_str());
+            dftu_utils_test::FileOut o(plain);
             o << R"({"ph":"C","name":"pwrite","cat":"STDIO","pid":7,"tid":2,)"
                  R"("ts":1000,"args":{"count":4,"dur_sum":40,"dur_min":5,)"
                  R"("dur_max":20,"ret_sum":4096,"offset_sum":8192}})"
               << "\n";
         }
-        const std::string gz = plain + ".gz";
+        const dstd::String gz = plain + ".gz";
         REQUIRE(compress_file_to_gzip(plain, gz));
         (void)dstd::fs::remove(plain);
         ix::IndexerOptions o;
         o.index_dir = env.get_dir() + "/idx";
         ix::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
-        const std::string index =
-            std::string(determine_index_path(gz, o.index_dir));
+        const dstd::String index =
+            dstd::String(determine_index_path(gz, o.index_dir));
 
         const dstd::Vector<AggSpec> count{{AggOp::Count, "", "n"}};
         const df::DataFrame trace = scan_only(scan::agg(
@@ -570,13 +574,13 @@ TEST_SUITE("ViewIndexParity") {
         constexpr std::uint64_t FILE_GAP = 1'000'000;
         TestEnvironment env{202};
         REQUIRE(env.is_valid());
-        std::vector<std::string> gz;
+        dstd::Vector<dstd::String> gz;
         for (int i = 0; i < 2; ++i) {
-            const std::string dir = env.get_dir() + "/f" + std::to_string(i);
+            const dstd::String dir = env.get_dir() + "/f" + dstd::to_string(i);
             REQUIRE(dstd::fs::create_directories(dir).has_value());
-            const std::string plain = dir + "/t.pfw";
+            const dstd::String plain = dir + "/t.pfw";
             {
-                std::ofstream o(plain.c_str());
+                dftu_utils_test::FileOut o(plain);
                 for (int k = 0; k < 4; ++k)
                     o << R"({"ph":"C","name":"ctr","cat":"sys","pid":7,)"
                       << R"("tid":1,"ts":)"
@@ -586,7 +590,7 @@ TEST_SUITE("ViewIndexParity") {
                       << R"(","count":4,"dur_sum":40,"dur_min":5,)"
                       << R"("dur_max":20}})" << "\n";
             }
-            const std::string out = plain + ".gz";
+            const dstd::String out = plain + ".gz";
             REQUIRE(compress_file_to_gzip(plain, out));
             (void)dstd::fs::remove(plain);
             gz.push_back(out);
@@ -596,8 +600,8 @@ TEST_SUITE("ViewIndexParity") {
         opts.aggregation.time_interval_us = INTERVAL_US;
         opts.aggregation.extra_group_keys = {"epoch"};
         ix::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
-        const std::string index =
-            std::string(determine_index_path(gz.front(), opts.index_dir));
+        const dstd::String index =
+            dstd::String(determine_index_path(gz.front(), opts.index_dir));
 
         const dstd::Vector<ViewFile> mixed{
             {dstd::String(gz[0]), ""},
@@ -606,18 +610,20 @@ TEST_SUITE("ViewIndexParity") {
             {dstd::String(gz[0]), dstd::String(index)},
             {dstd::String(gz[1]), dstd::String(index)}};
         const dstd::Vector<GroupKey> keys{GroupKey::of_arg("epoch")};
-        const std::vector<std::string> columns{"epoch"};
+        const dstd::Vector<dstd::String> columns{"epoch"};
         const AggSpec count{AggOp::Count, "", "n"};
         const AggSpec max_te{AggOp::Max, "te", "max_te"};
 
         const Cells counts = view_cells(mixed, keys, columns, count);
         const Cells ends = view_cells(mixed, keys, columns, max_te);
         REQUIRE(counts.size() == 2);
-        CHECK(std::stod(counts.at("a|")) == doctest::Approx(16));
-        CHECK(std::stod(counts.at("b|")) == doctest::Approx(16));
-        CHECK(std::stod(ends.at("a|")) ==
+        CHECK(dftu_utils_test::to_number<double>(counts.at("a|")) ==
+              doctest::Approx(16));
+        CHECK(dftu_utils_test::to_number<double>(counts.at("b|")) ==
+              doctest::Approx(16));
+        CHECK(dftu_utils_test::to_number<double>(ends.at("a|")) ==
               doctest::Approx(2 * FILE_GAP + 200 + INTERVAL_US));
-        CHECK(std::stod(ends.at("b|")) ==
+        CHECK(dftu_utils_test::to_number<double>(ends.at("b|")) ==
               doctest::Approx(2 * FILE_GAP + 300 + INTERVAL_US));
         for (const auto& g : gz) dstd::fs::remove(g).has_value();
         check_same_cells(view_cells(indexed, keys, columns, count), counts);
@@ -629,9 +635,9 @@ TEST_SUITE("ViewIndexParity") {
     TEST_CASE("the first aggregate of an unindexed trace equals the next") {
         TestEnvironment env{206};
         REQUIRE(env.is_valid());
-        const std::string plain = env.get_dir() + "/t.pfw";
+        const dstd::String plain = env.get_dir() + "/t.pfw";
         {
-            std::ofstream o(plain.c_str());
+            dftu_utils_test::FileOut o(plain);
             for (int k = 0; k < 2; ++k)
                 o << R"({"ph":"C","name":"pwrite","cat":"STDIO","pid":7,)"
                   << R"("tid":2,"ts":)" << (1000 + k * 100)
@@ -642,18 +648,18 @@ TEST_SUITE("ViewIndexParity") {
                   << R"("tid":1,"ts":)" << (1200 + k * 100) << R"(,"dur":)"
                   << (10 + k * 20) << R"(,"args":{}})" << "\n";
         }
-        const std::string gz = plain + ".gz";
+        const dstd::String gz = plain + ".gz";
         REQUIRE(compress_file_to_gzip(plain, gz));
         (void)dstd::fs::remove(plain);
-        const std::string index_dir = env.get_dir() + "/idx";
-        const std::string index =
-            std::string(determine_index_path(gz, index_dir));
+        const dstd::String index_dir = env.get_dir() + "/idx";
+        const dstd::String index =
+            dstd::String(determine_index_path(gz, index_dir));
         REQUIRE_FALSE(dstd::fs::exists(index).value());
 
         const dstd::Vector<ViewFile> files{
             {dstd::String(gz), dstd::String(index)}};
         const dstd::Vector<GroupKey> keys{GroupKey::name()};
-        const std::vector<std::string> columns{"name"};
+        const dstd::Vector<dstd::String> columns{"name"};
         const dstd::Vector<AggSpec> specs{{AggOp::Count, "", "n"},
                                           {AggOp::Sum, "dur", "sum_dur"},
                                           {AggOp::Min, "dur", "min_dur"},
@@ -665,7 +671,7 @@ TEST_SUITE("ViewIndexParity") {
                 .collect()
                 .get();
         };
-        const std::map<std::string, std::map<std::string, double>> want{
+        const dstd::Map<dstd::String, dstd::Map<dstd::String, double>> want{
             {"n", {{"pwrite|", 8}, {"read|", 2}}},
             {"sum_dur", {{"pwrite|", 80}, {"read|", 40}}},
             {"min_dur", {{"pwrite|", 5}, {"read|", 10}}},
@@ -679,7 +685,8 @@ TEST_SUITE("ViewIndexParity") {
             const Cells got = cells_of(first, columns, column);
             REQUIRE(got.size() == cells.size());
             for (const auto& [key, value] : cells)
-                CHECK(std::stod(got.at(key)) == doctest::Approx(value));
+                CHECK(dftu_utils_test::to_number<double>(got.at(key)) ==
+                      doctest::Approx(value));
             check_same_cells(cells_of(next, columns, column), got);
         }
     }
@@ -689,9 +696,9 @@ TEST_SUITE("ViewIndexParity") {
     TEST_CASE("a missing or unreadable index root reads the trace") {
         TestEnvironment env{204};
         REQUIRE(env.is_valid());
-        const std::string plain = env.get_dir() + "/t.pfw";
+        const dstd::String plain = env.get_dir() + "/t.pfw";
         {
-            std::ofstream o(plain.c_str());
+            dftu_utils_test::FileOut o(plain);
             for (int i = 0; i < 12; ++i)
                 o << R"({"ph":"X","name":")" << (i % 3 == 0 ? "read" : "write")
                   << R"(","cat":"POSIX",)"
@@ -699,12 +706,12 @@ TEST_SUITE("ViewIndexParity") {
                   << R"(,"dur":)" << (10 + i) << R"(,"args":{"ret":)"
                   << (i * 512) << "}}\n";
         }
-        const std::string junk = env.get_dir() + "/junk.idx";
+        const dstd::String junk = env.get_dir() + "/junk.idx";
         {
-            std::ofstream o(junk.c_str());
+            dftu_utils_test::FileOut o(junk);
             o << "not a database\n";
         }
-        const std::string gz = plain + ".gz";
+        const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             plain, gz, MEMBER_BYTES));
         (void)dstd::fs::remove(plain);
@@ -712,11 +719,11 @@ TEST_SUITE("ViewIndexParity") {
         opts.index_dir = env.get_dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
         ix::Indexer::open({dstd::String(dstd::StringView(gz))}, opts).build();
-        const std::string index =
-            std::string(determine_index_path(gz, opts.index_dir));
+        const dstd::String index =
+            dstd::String(determine_index_path(gz, opts.index_dir));
 
         const dstd::Vector<GroupKey> keys{GroupKey::cat(), GroupKey::name()};
-        const std::vector<std::string> columns{"cat", "name"};
+        const dstd::Vector<dstd::String> columns{"cat", "name"};
         const AggSpec sum_dur{AggOp::Sum, "dur", "sum_dur"};
 
         const dstd::Vector<ViewFile> missing{
@@ -738,16 +745,16 @@ TEST_SUITE("ViewIndexParity") {
     TEST_CASE("a fused scan folds a branch like the branch alone") {
         TestEnvironment env{205};
         REQUIRE(env.is_valid());
-        std::vector<std::string> gz;
+        dstd::Vector<dstd::String> gz;
         for (int i = 0; i < 2; ++i) {
-            const std::string dir = env.get_dir() + "/f" + std::to_string(i);
+            const dstd::String dir = env.get_dir() + "/f" + dstd::to_string(i);
             REQUIRE(dstd::fs::create_directories(dir).has_value());
-            const std::string plain = dir + "/t.pfw";
+            const dstd::String plain = dir + "/t.pfw";
             {
-                std::ofstream o(plain.c_str());
+                dftu_utils_test::FileOut o(plain);
                 write_trace(o, i);
             }
-            const std::string out = plain + ".gz";
+            const dstd::String out = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
             (void)dstd::fs::remove(plain);
@@ -758,14 +765,16 @@ TEST_SUITE("ViewIndexParity") {
         opts.checkpoint_size = MEMBER_BYTES;
         ix::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
         const dstd::Vector<ViewFile> files{
-            {dstd::String(gz[0]), dstd::String(std::string(determine_index_path(
-                                      gz[0], opts.index_dir)))},
-            {dstd::String(gz[1]), dstd::String(std::string(determine_index_path(
-                                      gz[1], opts.index_dir)))}};
+            {dstd::String(gz[0]),
+             dstd::String(
+                 dstd::String(determine_index_path(gz[0], opts.index_dir)))},
+            {dstd::String(gz[1]),
+             dstd::String(
+                 dstd::String(determine_index_path(gz[1], opts.index_dir)))}};
         const Query stdio = Query::from_string(R"(cat == "STDIO")").value();
         const Query posix = Query::from_string(R"(cat == "POSIX")").value();
         const dstd::Vector<GroupKey> by_name{GroupKey::name()};
-        const std::vector<std::string> columns{"name"};
+        const dstd::Vector<dstd::String> columns{"name"};
         const auto aggs = [] {
             return dstd::Vector<AggSpec>{{AggOp::Count, "", "n"},
                                          {AggOp::Sum, "dur", "sum_dur"}};
@@ -781,7 +790,7 @@ TEST_SUITE("ViewIndexParity") {
                     df::LazyFrame plan =
                         View::from_files(files).branch([&](ViewSession& s) {
                             auto c = s.collect(q, by_name, aggs());
-                            return std::function<void(const ExportStats&)>(
+                            return dstd::Function<void(const ExportStats&)>(
                                 [&, c](const ExportStats&) {
                                     out = std::move(c.get());
                                 });
@@ -800,7 +809,7 @@ TEST_SUITE("ViewIndexParity") {
                     View::from_files(files).branch([&](ViewSession& s) {
                         auto a = s.collect(stdio, by_name, aggs());
                         auto b = s.collect(posix, by_name, aggs());
-                        return std::function<void(const ExportStats&)>(
+                        return dstd::Function<void(const ExportStats&)>(
                             [&, a, b](const ExportStats& st) {
                                 stats = st;
                                 fused_stdio = std::move(a.get());

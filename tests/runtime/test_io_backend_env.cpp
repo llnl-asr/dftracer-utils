@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <doctest/doctest.h>
@@ -8,7 +9,6 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <string>
 
 using namespace dftracer::utils;
 
@@ -52,14 +52,14 @@ TEST_CASE("child: start with a bogus backend" * doctest::skip()) {
 TEST_CASE("the env var forces the thread pool") {
     auto result = run_with("threadpool", "child: report the backend");
     CHECK(result.ok());
-    CHECK(result.output.find("backend=threadpool\n") != std::string::npos);
+    CHECK(result.output.find("backend=threadpool\n") != dstd::String::npos);
 }
 
 TEST_CASE("an unknown backend fails to start") {
     auto result =
         run_with("bogus_backend", "child: start with a bogus backend");
     CHECK(result.ok());
-    CHECK(result.output.find("start failed: ") != std::string::npos);
-    CHECK(result.output.find("'bogus_backend'") != std::string::npos);
-    CHECK(result.output.find("started\n") == std::string::npos);
+    CHECK(result.output.find("start failed: ") != dstd::String::npos);
+    CHECK(result.output.find("'bogus_backend'") != dstd::String::npos);
+    CHECK(result.output.find("started\n") == dstd::String::npos);
 }

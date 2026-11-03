@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The cases count work, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -21,7 +22,6 @@
 #include <cstdint>
 #include <ctime>
 #include <iterator>
-#include <sstream>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -38,45 +38,45 @@ constexpr int SHAPES = 3;
 constexpr std::time_t FIXED_MTIME = 1700000000;
 constexpr std::uint64_t LEAF_PATHS = 24;
 constexpr std::uint64_t MIN_REDUCTION = 20;
-std::string write_trace(const std::string& dir) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String write_trace(const dstd::String& dir) {
+    dstd::String out;
+    out += "[\n";
     for (int i = 0; i < EVENTS; ++i) {
         const int pid = 1 + i % 4;
         const int ts = 1000 + i * 10;
-        out << R"({"id":)" << i;
+        out += common::str_cat(R"({"id":)", i);
         switch (i % SHAPES) {
             case 0:
-                out << R"(,"name":"read","cat":"POSIX","pid":)" << pid
-                    << R"(,"tid":1,"ph":"X","ts":)" << ts
-                    << R"(,"dur":3,"args":{"fname":"/data/f)" << i % 37
-                    << R"(","size":)" << i % 4096
-                    << R"(,"hhash":"a1b2c3d4e5f60718","level":)" << i % 3
-                    << "}}\n";
+                out += common::str_cat(
+                    R"(,"name":"read","cat":"POSIX","pid":)", pid,
+                    R"(,"tid":1,"ph":"X","ts":)", ts,
+                    R"(,"dur":3,"args":{"fname":"/data/f)", i % 37,
+                    R"(","size":)", i % 4096,
+                    R"(,"hhash":"a1b2c3d4e5f60718","level":)", i % 3, "}}\n");
                 break;
             case 1:
-                out << R"(,"name":"compute","cat":"APP","pid":)" << pid
-                    << R"(,"tid":2,"ph":"X","ts":)" << ts << R"(,"dur":7})"
-                    << "\n";
+                out += common::str_cat(
+                    R"(,"name":"compute","cat":"APP","pid":)", pid,
+                    R"(,"tid":2,"ph":"X","ts":)", ts, R"(,"dur":7})", "\n");
                 break;
             default:
-                out << R"(,"name":"write","cat":"POSIX","pid":)" << pid
-                    << R"(,"tid":1,"ph":"X","ts":)" << ts
-                    << R"(,"dur":5,"args":{"io":{"off":)" << i
-                    << R"(,"len":512},"hosts":["n1","n2"],"note":null,)"
-                    << R"("ratio":0.5}})"
-                    << "\n";
+                out += common::str_cat(
+                    R"(,"name":"write","cat":"POSIX","pid":)", pid,
+                    R"(,"tid":1,"ph":"X","ts":)", ts,
+                    R"(,"dur":5,"args":{"io":{"off":)", i,
+                    R"(,"len":512},"hosts":["n1","n2"],"note":null,)",
+                    R"("ratio":0.5}})", "\n");
         }
     }
-    out << "]\n";
-    const std::string path = dftu_utils_test::write_stored_gz_trace(
-        dir + "/trace.pfw.gz", out.str());
+    out += "]\n";
+    const dstd::String path =
+        dftu_utils_test::write_stored_gz_trace(dir + "/trace.pfw.gz", out);
     const timespec fixed[2] = {{FIXED_MTIME, 0}, {FIXED_MTIME, 0}};
     REQUIRE(::utimensat(AT_FDCWD, path.c_str(), fixed, 0) == 0);
     return path;
 }
 
-void build_one(const std::string& file, const std::string& index_dir) {
+void build_one(const dstd::String& file, const dstd::String& index_dir) {
     Runtime rt(4);
     build::IndexBuildBatchResult result;
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -97,7 +97,7 @@ TEST_SUITE("IndexEventCost") {
     TEST_CASE(
         "schema leaf paths are interned per record shape, not per event") {
         dftu_utils_test::TestEnvironment env(10);
-        const std::string file = write_trace(env.get_dir());
+        const dstd::String file = write_trace(env.get_dir());
         const auto before = cost::g_leaf_path_interns.load();
         build_one(file, env.get_dir() + "/idx");
         const auto interns = cost::g_leaf_path_interns.load() - before;
@@ -110,7 +110,7 @@ TEST_SUITE("IndexEventCost") {
 
     TEST_CASE("chunk statistics find known keys by interned id") {
         dftu_utils_test::TestEnvironment env(10);
-        const std::string file = write_trace(env.get_dir());
+        const dstd::String file = write_trace(env.get_dir());
         const auto before = cost::g_stats_string_lookups.load();
         build_one(file, env.get_dir() + "/idx");
         const auto lookups = cost::g_stats_string_lookups.load() - before;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/index/key.h>
 #include <doctest/doctest.h>
@@ -12,15 +13,15 @@
 #include <cstring>
 #include <limits>
 #include <random>
-#include <string>
-#include <string_view>
 #include <tuple>
+
+using namespace dftracer::utils;
 
 namespace {
 
-using dftracer::utils::dstd::ByteView;
 using dftracer::utils::index::KeyBuilder;
 using dftracer::utils::index::KeyReader;
+using dstd::ByteView;
 
 constexpr std::uint64_t RANDOM_SEED = 0x5EED1234C0DEC0DEULL;
 constexpr std::size_t PAIR_COUNT = 10000;
@@ -55,7 +56,7 @@ int compare_f64(double a, double b) {
     return 0;
 }
 
-int compare_string(const std::string& a, const std::string& b) {
+int compare_string(const dstd::String& a, const dstd::String& b) {
     if (a < b) return -1;
     if (b < a) return 1;
     return 0;
@@ -114,12 +115,11 @@ int compare_f32(float a, float b) {
     return compare_f64(static_cast<double>(a), static_cast<double>(b));
 }
 
-void encode_string(KeyBuilder& builder, const std::string& value) {
+void encode_string(KeyBuilder& builder, const dstd::String& value) {
     builder.str({value.data(), value.size()});
 }
 
-using Composite =
-    dftracer::utils::dstd::Tuple<std::uint32_t, std::string, std::int64_t>;
+using Composite = dstd::Tuple<std::uint32_t, dstd::String, std::int64_t>;
 
 void encode_composite(KeyBuilder& builder, const Composite& value) {
     builder.u32(std::get<0>(value));
@@ -133,16 +133,15 @@ bool same_f64(double a, double b) {
     return std::bit_cast<std::uint64_t>(a) == std::bit_cast<std::uint64_t>(b);
 }
 
-bool strings_equal(const dftracer::utils::dstd::String& a,
-                   const std::string& b) {
+bool strings_equal(const dstd::String& a, const dstd::String& b) {
     return a.size() == b.size() &&
            (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
 }
 
-std::string random_string(std::mt19937_64& rng) {
+dstd::String random_string(std::mt19937_64& rng) {
     std::uniform_int_distribution<unsigned> length_dist(0, 16);
     std::uniform_int_distribution<unsigned> byte_dist(0, 255);
-    std::string out(static_cast<std::size_t>(length_dist(rng)), '\0');
+    dstd::String out(static_cast<std::size_t>(length_dist(rng)), '\0');
     for (char& c : out) c = static_cast<char>(byte_dist(rng));
     return out;
 }
@@ -324,14 +323,14 @@ TEST_SUITE("index store key") {
 
     TEST_CASE("string keys preserve order with embedded zeros") {
         std::mt19937_64 rng(RANDOM_SEED);
-        check_random_pairs<std::string>(
+        check_random_pairs<dstd::String>(
             rng, [](std::mt19937_64& engine) { return random_string(engine); },
             encode_string, compare_string);
 
-        const std::array<std::string, 6> edges = {
-            std::string(""),        std::string("a"),
-            std::string("ab"),      std::string("a\0", 2),
-            std::string("a\0b", 3), std::string("a\xFF", 2)};
+        const std::array<dstd::String, 6> edges = {
+            dstd::String(""),        dstd::String("a"),
+            dstd::String("ab"),      dstd::String("a\0", 2),
+            dstd::String("a\0b", 3), dstd::String("a\xFF", 2)};
         for (std::size_t i = 1; i < edges.size(); ++i) {
             check_pair(edges[i - 1], edges[i], encode_string, compare_string);
         }
@@ -401,7 +400,7 @@ TEST_SUITE("index store key") {
             CHECK(reader.done());
         }
         {
-            const std::string original("a\0b", 3);
+            const dstd::String original("a\0b", 3);
             KeyBuilder builder;
             builder.str({original.data(), original.size()});
             KeyReader reader(builder.view());
@@ -457,7 +456,7 @@ TEST_SUITE("index store key") {
     }
 
     TEST_CASE("raw is the unconsumed remainder") {
-        const std::string tail = "tail";
+        const dstd::String tail = "tail";
         KeyBuilder builder;
         builder.u32(0x01020304U).raw({tail.data(), tail.size()});
         KeyReader reader(builder.view());
@@ -471,7 +470,7 @@ TEST_SUITE("index store key") {
     }
 
     TEST_CASE("truncated and malformed keys return Parse") {
-        using dftracer::utils::dstd::Condition;
+        using dstd::Condition;
 
         const auto check_parse = [](const auto& result) {
             REQUIRE_FALSE(result.has_value());

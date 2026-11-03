@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/page_cache.h>
 #include <doctest/doctest.h>
@@ -10,11 +11,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <thread>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
 constexpr std::size_t PAGE = 32 * 1024;
@@ -78,7 +79,7 @@ TEST_SUITE("index store page cache") {
     TEST_CASE("a page found again is kept over one never found") {
         // Two pages a shard. Three places of one shard: a cache of one page a
         // shard keeps only one of two places when they share a shard.
-        std::vector<std::uint64_t> same{0};
+        dstd::Vector<std::uint64_t> same{0};
         for (std::uint64_t i = 1; same.size() < 3; ++i) {
             store::engine::PageCache probe(16 * PAGE);
             probe.insert(1, 0, page_of(0));
@@ -98,7 +99,7 @@ TEST_SUITE("index store page cache") {
     TEST_CASE("threads that insert and find at once see whole pages") {
         store::engine::PageCache cache(16 * 8 * PAGE);
         std::atomic<std::size_t> wrong{0};
-        std::vector<std::thread> threads;
+        dstd::Vector<dstd::Thread> threads;
         for (int t = 0; t < 8; ++t) {
             threads.emplace_back([&cache, &wrong, t] {
                 for (std::uint64_t i = 0; i < 2000; ++i) {
@@ -114,7 +115,7 @@ TEST_SUITE("index store page cache") {
                 }
             });
         }
-        for (std::thread& thread : threads) thread.join();
+        for (dstd::Thread& thread : threads) thread.join();
         CHECK(wrong.load() == 0);
         CHECK(cache.bytes() <= 16 * 8 * PAGE);
     }

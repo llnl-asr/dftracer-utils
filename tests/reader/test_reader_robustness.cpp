@@ -2,9 +2,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -17,29 +22,27 @@
 #include <fstream>
 #include <future>
 #include <iomanip>
-#include <map>
 #include <memory>
 #include <random>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <tuple>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftu_utils_test;
 
-std::size_t count_json_lines(const std::string& content);
-bool validate_json_lines(const std::string& content);
-std::string get_last_json_line(const std::string& content);
-std::size_t extract_id_from_json(const std::string& line);
+std::size_t count_json_lines(const dstd::String& content);
+bool validate_json_lines(const dstd::String& content);
+dstd::String get_last_json_line(const dstd::String& content);
+std::size_t extract_id_from_json(const dstd::String& line);
 
 // Helper to create large JSON test data
 class LargeTestEnvironment {
    private:
-    std::string temp_dir_;
+    dstd::String temp_dir_;
     std::size_t num_lines_;
     std::size_t bytes_per_line_;
 
@@ -63,18 +66,18 @@ class LargeTestEnvironment {
         }
     }
 
-    std::string create_large_gzip_file(
-        const std::string& name = "large_test.gz") {
-        std::string txt_file = temp_dir_ + "/" + name + ".txt";
-        std::string gz_file = temp_dir_ + "/" + name;
+    dstd::String create_large_gzip_file(
+        const dstd::String& name = "large_test.gz") {
+        dstd::String txt_file = temp_dir_ + "/" + name + ".txt";
+        dstd::String gz_file = temp_dir_ + "/" + name;
 
-        std::ofstream f(txt_file.c_str(), std::ios::binary);
+        dftu_utils_test::FileOut f(txt_file);
         if (!f) return "";
 
         constexpr std::size_t closing_len = 3;  // "\"}\n"
 
         for (std::size_t i = 1; i <= num_lines_; ++i) {
-            std::ostringstream line;
+            dftu_utils_test::TextOut line;
             line << "{\"name\":\"name_" << i << "\",\"cat\":\"cat_" << i
                  << "\",\"dur\":" << (i * 123 % 10000) << ",\"data\":\"";
 
@@ -88,12 +91,12 @@ class LargeTestEnvironment {
             // Append padding safely
             if (needed_padding) {
                 // write in chunks to avoid allocating a giant temporary
-                static const std::string pad_chunk(4096, 'x');
+                static const dstd::String pad_chunk(4096, 'x');
                 while (needed_padding >= pad_chunk.size()) {
                     line << pad_chunk;
                     needed_padding -= pad_chunk.size();
                 }
-                if (needed_padding) line << std::string(needed_padding, 'x');
+                if (needed_padding) line << dstd::String(needed_padding, 'x');
             }
 
             line << "\"}\n";
@@ -109,21 +112,21 @@ class LargeTestEnvironment {
         return success ? gz_file : "";
     }
 
-    std::string get_index_path(const std::string& gz_file) {
+    dstd::String get_index_path(const dstd::String& gz_file) {
         return gz_file + ".idx";
     }
 
-    std::string get_dir() const { return temp_dir_; }
+    dstd::String get_dir() const { return temp_dir_; }
     std::size_t get_num_lines() const { return num_lines_; }
     std::size_t get_bytes_per_line() const { return bytes_per_line_; }
     bool is_valid() const { return dstd::fs::exists(temp_dir_).value(); }
 };
 
 // Helper function to count JSON lines in content
-std::size_t count_json_lines(const std::string& content) {
+std::size_t count_json_lines(const dstd::String& content) {
     std::size_t count = 0;
     std::size_t pos = 0;
-    while ((pos = content.find("}\n", pos)) != std::string::npos) {
+    while ((pos = content.find("}\n", pos)) != dstd::String::npos) {
         count++;
         pos += 2;
     }
@@ -131,12 +134,12 @@ std::size_t count_json_lines(const std::string& content) {
 }
 
 // Helper function to validate all lines are complete JSON
-bool validate_json_lines(const std::string& content) {
+bool validate_json_lines(const dstd::String& content) {
     if (content.empty()) return true;
 
-    std::istringstream ss(content);
-    std::string line;
-    while (std::getline(ss, line)) {
+    dftu_utils_test::LineStream ss(content);
+    dstd::String line;
+    while (ss.next(line)) {
         if (line.empty()) continue;
 
         // Each line should start with { and end with }
@@ -145,10 +148,10 @@ bool validate_json_lines(const std::string& content) {
         }
 
         // Should contain the expected JSON structure
-        if (line.find("\"name\":") == std::string::npos ||
-            line.find("\"cat\":") == std::string::npos ||
-            line.find("\"dur\":") == std::string::npos ||
-            line.find("\"data\":") == std::string::npos) {
+        if (line.find("\"name\":") == dstd::String::npos ||
+            line.find("\"cat\":") == dstd::String::npos ||
+            line.find("\"dur\":") == dstd::String::npos ||
+            line.find("\"data\":") == dstd::String::npos) {
             return false;
         }
     }
@@ -156,19 +159,19 @@ bool validate_json_lines(const std::string& content) {
 }
 
 // Helper function to get the last complete JSON line
-std::string get_last_json_line(const std::string& content) {
+dstd::String get_last_json_line(const dstd::String& content) {
     if (content.empty()) return "";
 
     // Find the last occurrence of "}\n"
     std::size_t last_pos = content.rfind("}\n");
-    if (last_pos == std::string::npos) return "";
+    if (last_pos == dstd::String::npos) return "";
 
     // Find the start of this line (look backwards for previous "\n" or start of
     // string)
     std::size_t line_start = 0;
     if (last_pos > 0) {
         std::size_t prev_newline = content.rfind('\n', last_pos - 1);
-        if (prev_newline != std::string::npos) {
+        if (prev_newline != dstd::String::npos) {
             line_start = prev_newline + 1;
         }
     }
@@ -178,19 +181,19 @@ std::string get_last_json_line(const std::string& content) {
 }
 
 // Helper function to extract ID from JSON line
-std::size_t extract_id_from_json(const std::string& line) {
+std::size_t extract_id_from_json(const dstd::String& line) {
     std::size_t name_pos = line.find("\"name\":\"name_");
-    if (name_pos == std::string::npos) return 0;
+    if (name_pos == dstd::String::npos) return 0;
 
     name_pos += 14;  // Length of "\"name\":\"name_"
     std::size_t end_pos = line.find("\"", name_pos);
-    if (end_pos == std::string::npos) return 0;
+    if (end_pos == dstd::String::npos) return 0;
 
-    std::string id_str = line.substr(name_pos, end_pos - name_pos);
+    dstd::String id_str = line.substr(name_pos, end_pos - name_pos);
     if (id_str.empty()) return 0;
 
     try {
-        return std::stoull(id_str);
+        return dftu_utils_test::to_number<unsigned long long>(id_str);
     } catch (const std::exception&) {
         return 0;
     }
@@ -201,8 +204,8 @@ std::size_t extract_id_from_json(const std::string& line) {
 // and building a file of this size is much of the cost of the test.
 struct Prepared {
     LargeTestEnvironment env;
-    std::string gz_file;
-    std::string idx_file;
+    dstd::String gz_file;
+    dstd::String idx_file;
     std::size_t total_lines = 0;
 
     Prepared(std::size_t size_mb, std::size_t bytes_per_line,
@@ -225,20 +228,20 @@ struct Prepared {
 
 static Prepared& prepared(std::size_t size_mb, std::size_t bytes_per_line,
                           double checkpoint_mb, bool with_lines = false) {
-    static std::map<dstd::Tuple<std::size_t, std::size_t, double, bool>,
-                    std::unique_ptr<Prepared>>
+    static dstd::Map<dstd::Tuple<std::size_t, std::size_t, double, bool>,
+                     dstd::UniquePtr<Prepared>>
         made;
     auto& slot = made[{size_mb, bytes_per_line, checkpoint_mb, with_lines}];
     if (!slot)
-        slot = std::make_unique<Prepared>(size_mb, bytes_per_line,
-                                          checkpoint_mb, with_lines);
+        slot = dstd::make_unique<Prepared>(size_mb, bytes_per_line,
+                                           checkpoint_mb, with_lines);
     return *slot;
 }
 
 TEST_CASE("Robustness - Large file continuous stride reading") {
     Prepared& fx = prepared(74, 1024, 32.0);
-    const std::string gz_file = fx.gz_file;
-    const std::string idx_file = fx.idx_file;
+    const dstd::String gz_file = fx.gz_file;
+    const dstd::String idx_file = fx.idx_file;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
@@ -252,11 +255,11 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
 
         std::size_t current_start = 0;
         std::size_t total_lines = 0;
-        std::vector<std::size_t> chunk_line_counts;
-        std::vector<dstd::Pair<std::size_t, std::size_t>>
+        dstd::Vector<std::size_t> chunk_line_counts;
+        dstd::Vector<dstd::Pair<std::size_t, std::size_t>>
             id_ranges;  // first and last ID in each chunk
 
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
 
         // Read chunks with stride (each starts where previous ended +1)
         while (current_start < max_bytes) {
@@ -264,7 +267,7 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
                 std::min(current_start + chunk_size, max_bytes);
 
             std::size_t bytes_written = 0;
-            std::string content;
+            dstd::String content;
 
             // Read this chunk
             std::size_t offset = current_start;
@@ -285,10 +288,10 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
                 total_lines += lines_in_chunk;
 
                 // Extract first and last IDs
-                std::istringstream ss(content);
-                std::string first_line, last_line, line;
-                if (std::getline(ss, first_line)) {
-                    while (std::getline(ss, line)) {
+                dftu_utils_test::LineStream ss(content);
+                dstd::String first_line, last_line, line;
+                if (ss.next(first_line)) {
+                    while (ss.next(line)) {
                         last_line = line;
                     }
                     if (last_line.empty()) last_line = first_line;
@@ -327,9 +330,9 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
         const std::size_t large_read_size = 30 * 1024 * 1024;
         const std::size_t buffer_size = 8 * 1024 * 1024;
 
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
         std::size_t bytes_written = 0;
-        std::string single_read_content;
+        dstd::String single_read_content;
 
         std::size_t offset = 0;
         while (offset < large_read_size &&
@@ -343,7 +346,7 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
         // Validate JSON completeness for single large read
         CHECK(validate_json_lines(single_read_content));
         std::size_t single_read_lines = count_json_lines(single_read_content);
-        std::string single_read_last_line =
+        dstd::String single_read_last_line =
             get_last_json_line(single_read_content);
 
         // Now read same range as three 10MB stride chunks with fresh reader
@@ -352,13 +355,13 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
         REQUIRE(stride_reader != nullptr);
         std::size_t stride_total_lines = 0;
         const std::size_t chunk_size = 10 * 1024 * 1024;
-        std::string stride_combined_content;
+        dstd::String stride_combined_content;
 
         for (std::size_t i = 0; i < 3; ++i) {
             std::size_t start = i * chunk_size;
             std::size_t end = (i + 1) * chunk_size;
 
-            std::string chunk_content;
+            dstd::String chunk_content;
             bytes_written = 0;
 
             std::size_t chunk_offset = start;
@@ -377,7 +380,7 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
         }
 
         // Get last line from stride reading
-        std::string stride_last_line =
+        dstd::String stride_last_line =
             get_last_json_line(stride_combined_content);
 
         // Both approaches should end with the same last line
@@ -394,8 +397,8 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
 
 TEST_CASE("Robustness - Different buffer sizes consistency") {
     Prepared& fx = prepared(36, 512, 16.0);
-    const std::string gz_file = fx.gz_file;
-    const std::string idx_file = fx.idx_file;
+    const dstd::String gz_file = fx.gz_file;
+    const dstd::String idx_file = fx.idx_file;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
@@ -405,7 +408,7 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
         const std::size_t end_pos = 5 * 1024 * 1024;  // 5MB
 
         // Test with different buffer sizes
-        std::vector<std::size_t> buffer_sizes = {
+        dstd::Vector<std::size_t> buffer_sizes = {
             1024,            // 1KB (smaller than INCOMPLETE_BUFFER_SIZE)
             4 * 1024,        // 4KB
             64 * 1024,       // 64KB
@@ -414,8 +417,8 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
         };
 
         dstd::Vector<dstd::String> results;
-        std::vector<std::size_t> line_counts;
-        std::vector<std::string> last_lines;
+        dstd::Vector<std::size_t> line_counts;
+        dstd::Vector<dstd::String> last_lines;
 
         for (std::size_t buf_size : buffer_sizes) {
             // Create a fresh reader instance for each buffer size to avoid
@@ -424,9 +427,9 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
                 ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
             REQUIRE(test_reader != nullptr);
 
-            std::vector<char> buffer(buf_size);
+            dstd::Vector<char> buffer(buf_size);
             std::size_t bytes_written = 0;
-            std::string content;
+            dstd::String content;
 
             std::size_t offset = start_pos;
             while (offset < end_pos &&
@@ -463,8 +466,8 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
 
 TEST_CASE("Robustness - Boundary edge cases") {
     Prepared& fx = prepared(8, 256, 1.0);
-    const std::string gz_file = fx.gz_file;
-    const std::string idx_file = fx.idx_file;
+    const dstd::String gz_file = fx.gz_file;
+    const dstd::String idx_file = fx.idx_file;
     LargeTestEnvironment& env = fx.env;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
@@ -473,7 +476,7 @@ TEST_CASE("Robustness - Boundary edge cases") {
 
     SUBCASE("Range less than bytes_per_line") {
         // Test very small ranges at various positions
-        std::vector<std::size_t> test_positions = {
+        dstd::Vector<std::size_t> test_positions = {
             0,                  // Start of file
             1024,               // Early position
             max_bytes / 4,      // Quarter point
@@ -483,12 +486,12 @@ TEST_CASE("Robustness - Boundary edge cases") {
         };
 
         const std::size_t buffer_size = 8 * 1024 * 1024;
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
 
         for (std::size_t pos : test_positions) {
             if (pos + 100 <= max_bytes) {
                 std::size_t bytes_written = 0;
-                std::string content;
+                dstd::String content;
 
                 // Read 100 bytes starting at position
                 std::size_t offset = pos;
@@ -516,7 +519,7 @@ TEST_CASE("Robustness - Boundary edge cases") {
 
     SUBCASE("Tiny ranges near boundaries") {
         // Test very small ranges at various positions
-        std::vector<std::size_t> test_positions = {
+        dstd::Vector<std::size_t> test_positions = {
             0,                  // Start of file
             1024,               // Early position
             max_bytes / 4,      // Quarter point
@@ -526,12 +529,12 @@ TEST_CASE("Robustness - Boundary edge cases") {
         };
 
         const std::size_t buffer_size = 8 * 1024 * 1024;
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
 
         for (std::size_t pos : test_positions) {
             if (pos + 100 <= max_bytes) {
                 std::size_t bytes_written = 0;
-                std::string content;
+                dstd::String content;
 
                 // Read 100 bytes starting at position
                 std::size_t end_pos = pos + env.get_bytes_per_line();
@@ -562,9 +565,9 @@ TEST_CASE("Robustness - Boundary edge cases") {
     SUBCASE("Adjacent ranges have proper continuation") {
         const std::size_t range_size = 1024 * 1024;  // 1MB ranges
         const std::size_t buffer_size = 8 * 1024 * 1024;
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
 
-        std::vector<dstd::Pair<std::size_t, std::size_t>> id_ranges;
+        dstd::Vector<dstd::Pair<std::size_t, std::size_t>> id_ranges;
 
         // Read several adjacent ranges
         for (std::size_t i = 0; i < 3 && (i * range_size < max_bytes); ++i) {
@@ -572,7 +575,7 @@ TEST_CASE("Robustness - Boundary edge cases") {
             std::size_t end = std::min((i + 1) * range_size, max_bytes);
 
             std::size_t bytes_written = 0;
-            std::string content;
+            dstd::String content;
 
             std::size_t offset = start;
             while (offset < end &&
@@ -584,10 +587,10 @@ TEST_CASE("Robustness - Boundary edge cases") {
 
             if (!content.empty()) {
                 // Get first and last line
-                std::istringstream ss(content);
-                std::string first_line, last_line, line;
-                if (std::getline(ss, first_line)) {
-                    while (std::getline(ss, line)) {
+                dftu_utils_test::LineStream ss(content);
+                dstd::String first_line, last_line, line;
+                if (ss.next(first_line)) {
+                    while (ss.next(line)) {
                         last_line = line;
                     }
                     if (last_line.empty()) last_line = first_line;
@@ -617,8 +620,8 @@ TEST_CASE("Robustness - Boundary edge cases") {
 
 TEST_CASE("Robustness - Complete file sequential read") {
     Prepared& fx = prepared(16, 128, 8.0);
-    const std::string gz_file = fx.gz_file;
-    const std::string idx_file = fx.idx_file;
+    const dstd::String gz_file = fx.gz_file;
+    const dstd::String idx_file = fx.idx_file;
     LargeTestEnvironment& env = fx.env;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
@@ -628,17 +631,17 @@ TEST_CASE("Robustness - Complete file sequential read") {
     SUBCASE("Complete file read in chunks matches expected line count") {
         const std::size_t chunk_size = 1024 * 1024;  // 1MB chunks
         const std::size_t buffer_size = 8 * 1024 * 1024;
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
 
         std::size_t total_lines = 0;
         std::size_t current_pos = 0;
-        std::vector<std::size_t> all_ids;
+        dstd::Vector<std::size_t> all_ids;
 
         while (current_pos < max_bytes) {
             std::size_t end_pos = std::min(current_pos + chunk_size, max_bytes);
 
             std::size_t bytes_written = 0;
-            std::string content;
+            dstd::String content;
 
             std::size_t offset = current_pos;
             while (offset < end_pos &&
@@ -653,10 +656,10 @@ TEST_CASE("Robustness - Complete file sequential read") {
                 total_lines += chunk_lines;
 
                 // Extract all IDs from this chunk
-                std::istringstream ss(content);
-                std::string line;
-                while (std::getline(ss, line)) {
-                    if (line.find("\"name\":\"name_") != std::string::npos) {
+                dftu_utils_test::LineStream ss(content);
+                dstd::String line;
+                while (ss.next(line)) {
+                    if (line.find("\"name\":\"name_") != dstd::String::npos) {
                         std::size_t id = extract_id_from_json(line);
                         if (id > 0) {
                             all_ids.push_back(id);
@@ -695,11 +698,11 @@ TEST_CASE("Robustness - Complete file sequential read") {
 
     SUBCASE("Single large read vs chunked read comparison") {
         const std::size_t buffer_size = 8 * 1024 * 1024;
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
 
         // Read entire file as single operation
         std::size_t bytes_written = 0;
-        std::string complete_content;
+        dstd::String complete_content;
 
         std::size_t offset = 0;
         while (offset < max_bytes &&
@@ -712,7 +715,7 @@ TEST_CASE("Robustness - Complete file sequential read") {
         // Validate JSON completeness for single read
         CHECK(validate_json_lines(complete_content));
         std::size_t complete_lines = count_json_lines(complete_content);
-        std::string complete_last_line = get_last_json_line(complete_content);
+        dstd::String complete_last_line = get_last_json_line(complete_content);
 
         // Read same file in 2MB chunks with fresh reader
         auto chunked_reader =
@@ -721,13 +724,13 @@ TEST_CASE("Robustness - Complete file sequential read") {
         const std::size_t chunk_size = 2 * 1024 * 1024;
         std::size_t chunked_total_lines = 0;
         std::size_t current_pos = 0;
-        std::string chunked_complete_content;
+        dstd::String chunked_complete_content;
 
         while (current_pos < max_bytes) {
             std::size_t end_pos = std::min(current_pos + chunk_size, max_bytes);
 
             bytes_written = 0;
-            std::string chunk_content;
+            dstd::String chunk_content;
 
             std::size_t chunk_offset = current_pos;
             while (chunk_offset < end_pos &&
@@ -747,7 +750,7 @@ TEST_CASE("Robustness - Complete file sequential read") {
         }
 
         // Get last line from chunked reading
-        std::string chunked_last_line =
+        dstd::String chunked_last_line =
             get_last_json_line(chunked_complete_content);
 
         // Both approaches should end with the same last line
@@ -764,8 +767,8 @@ TEST_CASE("Robustness - Complete file sequential read") {
 
 TEST_CASE("Robustness - JSON validation and consistency") {
     Prepared& fx = prepared(20, 512, 8.0);
-    const std::string gz_file = fx.gz_file;
-    const std::string idx_file = fx.idx_file;
+    const dstd::String gz_file = fx.gz_file;
+    const dstd::String idx_file = fx.idx_file;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
@@ -773,9 +776,9 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
     SUBCASE("All JSON lines are valid and complete") {
         // Test various read ranges with different buffer sizes
-        std::vector<std::size_t> buffer_sizes = {1024, 8192, 64 * 1024,
-                                                 1024 * 1024};
-        std::vector<dstd::Pair<std::size_t, std::size_t>> test_ranges = {
+        dstd::Vector<std::size_t> buffer_sizes = {1024, 8192, 64 * 1024,
+                                                  1024 * 1024};
+        dstd::Vector<dstd::Pair<std::size_t, std::size_t>> test_ranges = {
             {0, max_bytes / 4},
             {max_bytes / 4, max_bytes / 2},
             {max_bytes / 2, max_bytes * 3 / 4},
@@ -786,9 +789,9 @@ TEST_CASE("Robustness - JSON validation and consistency") {
                 auto test_reader =
                     ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
                 REQUIRE(test_reader != nullptr);
-                std::vector<char> buffer(buf_size);
+                dstd::Vector<char> buffer(buf_size);
                 std::size_t bytes_written = 0;
-                std::string content;
+                dstd::String content;
 
                 std::size_t offset = range.first;
                 while (offset < range.second &&
@@ -817,18 +820,18 @@ TEST_CASE("Robustness - JSON validation and consistency") {
         const std::size_t start_pos = max_bytes / 4;
         const std::size_t end_pos = max_bytes / 2;
 
-        std::vector<std::size_t> buffer_sizes = {512, 2048, 16384, 256 * 1024,
-                                                 2 * 1024 * 1024};
-        std::vector<std::string> last_lines;
-        std::vector<std::size_t> line_counts;
+        dstd::Vector<std::size_t> buffer_sizes = {512, 2048, 16384, 256 * 1024,
+                                                  2 * 1024 * 1024};
+        dstd::Vector<dstd::String> last_lines;
+        dstd::Vector<std::size_t> line_counts;
 
         for (std::size_t buf_size : buffer_sizes) {
             auto test_reader =
                 ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
             REQUIRE(test_reader != nullptr);
-            std::vector<char> buffer(buf_size);
+            dstd::Vector<char> buffer(buf_size);
             std::size_t bytes_written = 0;
-            std::string content;
+            dstd::String content;
 
             std::size_t offset = start_pos;
             while (offset < end_pos &&
@@ -840,7 +843,7 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
             REQUIRE(validate_json_lines(content));
 
-            std::string last_line = get_last_json_line(content);
+            dstd::String last_line = get_last_json_line(content);
             std::size_t line_count = count_json_lines(content);
 
             last_lines.push_back(last_line);
@@ -867,9 +870,9 @@ TEST_CASE("Robustness - JSON validation and consistency") {
         auto seq_reader =
             ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
         REQUIRE(seq_reader != nullptr);
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
         std::size_t bytes_written = 0;
-        std::string sequential_content;
+        dstd::String sequential_content;
 
         std::size_t offset = 0;
         while (offset < test_size &&
@@ -881,12 +884,12 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
         REQUIRE(validate_json_lines(sequential_content));
         std::size_t sequential_lines = count_json_lines(sequential_content);
-        std::string sequential_last_line =
+        dstd::String sequential_last_line =
             get_last_json_line(sequential_content);
 
         // Chunked reading with different chunk sizes
-        std::vector<std::size_t> chunk_sizes = {1024 * 1024, 2 * 1024 * 1024,
-                                                4 * 1024 * 1024};
+        dstd::Vector<std::size_t> chunk_sizes = {1024 * 1024, 2 * 1024 * 1024,
+                                                 4 * 1024 * 1024};
 
         for (std::size_t chunk_size : chunk_sizes) {
             auto chunked_reader =
@@ -894,14 +897,14 @@ TEST_CASE("Robustness - JSON validation and consistency") {
             REQUIRE(chunked_reader != nullptr);
             std::size_t chunked_total_lines = 0;
             std::size_t current_pos = 0;
-            std::string chunked_last_line;
+            dstd::String chunked_last_line;
 
             while (current_pos < test_size) {
                 std::size_t end_pos =
                     std::min(current_pos + chunk_size, test_size);
 
                 bytes_written = 0;
-                std::string chunk_content;
+                dstd::String chunk_content;
 
                 std::size_t chunk_offset = current_pos;
                 while (chunk_offset < end_pos &&
@@ -918,7 +921,7 @@ TEST_CASE("Robustness - JSON validation and consistency") {
                 chunked_total_lines += chunk_lines;
 
                 // Update last line from this chunk
-                std::string chunk_last = get_last_json_line(chunk_content);
+                dstd::String chunk_last = get_last_json_line(chunk_content);
                 if (!chunk_last.empty()) {
                     chunked_last_line = chunk_last;
                 }
@@ -963,8 +966,8 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
 TEST_CASE("Robustness - Complete file reading equivalence") {
     Prepared& fx = prepared(20, 512, 8.0);
-    const std::string gz_file = fx.gz_file;
-    const std::string idx_file = fx.idx_file;
+    const dstd::String gz_file = fx.gz_file;
+    const dstd::String idx_file = fx.idx_file;
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
@@ -973,9 +976,9 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
 
     SUBCASE("Single read (0, max_bytes) vs stride reading entire file") {
         // Read entire file as single operation
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
         std::size_t bytes_written = 0;
-        std::string complete_content;
+        dstd::String complete_content;
 
         std::size_t offset = 0;
         while (offset < max_bytes &&
@@ -988,27 +991,27 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
         // Validate single read
         REQUIRE(validate_json_lines(complete_content));
         std::size_t complete_lines = count_json_lines(complete_content);
-        std::string complete_last_line = get_last_json_line(complete_content);
+        dstd::String complete_last_line = get_last_json_line(complete_content);
 
         // Read same file using stride (chunked) approach covering entire file
         auto stride_reader =
             ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
         REQUIRE(stride_reader != nullptr);
-        std::vector<std::size_t> chunk_sizes = {
+        dstd::Vector<std::size_t> chunk_sizes = {
             512 * 1024, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024};
 
         for (std::size_t chunk_size : chunk_sizes) {
             std::size_t stride_total_lines = 0;
             std::size_t current_pos = 0;
-            std::string stride_last_line;
-            std::string stride_complete_content;
+            dstd::String stride_last_line;
+            dstd::String stride_complete_content;
 
             while (current_pos < max_bytes) {
                 std::size_t end_pos =
                     std::min(current_pos + chunk_size, max_bytes);
 
                 bytes_written = 0;
-                std::string chunk_content;
+                dstd::String chunk_content;
 
                 std::size_t chunk_offset = current_pos;
                 while (chunk_offset < end_pos &&
@@ -1026,7 +1029,7 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
                 stride_total_lines += count_json_lines(chunk_content);
 
                 // Update last line
-                std::string chunk_last = get_last_json_line(chunk_content);
+                dstd::String chunk_last = get_last_json_line(chunk_content);
                 if (!chunk_last.empty()) {
                     stride_last_line = chunk_last;
                 }
@@ -1062,10 +1065,10 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
     }
 
     SUBCASE("Different stride sizes produce identical final results") {
-        std::vector<std::size_t> stride_sizes = {256 * 1024, 1024 * 1024,
-                                                 3 * 1024 * 1024};
-        std::vector<std::string> final_lines;
-        std::vector<std::size_t> total_line_counts;
+        dstd::Vector<std::size_t> stride_sizes = {256 * 1024, 1024 * 1024,
+                                                  3 * 1024 * 1024};
+        dstd::Vector<dstd::String> final_lines;
+        dstd::Vector<std::size_t> total_line_counts;
 
         for (std::size_t stride_size : stride_sizes) {
             auto test_reader =
@@ -1073,15 +1076,15 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
             REQUIRE(test_reader != nullptr);
             std::size_t total_lines = 0;
             std::size_t current_pos = 0;
-            std::string last_line;
+            dstd::String last_line;
 
-            std::vector<char> buffer(buffer_size);
+            dstd::Vector<char> buffer(buffer_size);
             while (current_pos < max_bytes) {
                 std::size_t end_pos =
                     std::min(current_pos + stride_size, max_bytes);
 
                 std::size_t bytes_written = 0;
-                std::string content;
+                dstd::String content;
 
                 std::size_t offset = current_pos;
                 while (offset < end_pos &&
@@ -1095,7 +1098,7 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
                 REQUIRE(validate_json_lines(content));
                 total_lines += count_json_lines(content);
 
-                std::string chunk_last = get_last_json_line(content);
+                dstd::String chunk_last = get_last_json_line(content);
                 if (!chunk_last.empty()) {
                     last_line = chunk_last;
                 }
@@ -1125,11 +1128,12 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
 
 TEST_CASE("Robustness - Memory and performance stress") {
     Prepared& fx = prepared(4, 64, 1.0);
-    const std::string gz_file = fx.gz_file;
-    const std::string idx_file = fx.idx_file;
+    const dstd::String gz_file = fx.gz_file;
+    const dstd::String idx_file = fx.idx_file;
 
     SUBCASE("Many small reads with different buffer sizes") {
-        std::vector<std::size_t> buffer_sizes = {256, 1024, 4096, 16384, 65536};
+        dstd::Vector<std::size_t> buffer_sizes = {256, 1024, 4096, 16384,
+                                                  65536};
 
         for (std::size_t buf_size : buffer_sizes) {
             auto reader =
@@ -1137,7 +1141,7 @@ TEST_CASE("Robustness - Memory and performance stress") {
             REQUIRE(reader != nullptr);
             std::size_t max_bytes = reader->get_max_bytes();
 
-            std::vector<char> buffer(buf_size);
+            dstd::Vector<char> buffer(buf_size);
             std::size_t total_bytes_read = 0;
             std::size_t total_lines = 0;
 
@@ -1154,7 +1158,7 @@ TEST_CASE("Robustness - Memory and performance stress") {
                 std::size_t end = std::min(start + 500, max_bytes);
 
                 std::size_t bytes_written = 0;
-                std::string content;
+                dstd::String content;
 
                 std::size_t offset = start;
                 while (offset < end &&
@@ -1177,7 +1181,7 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
     SUBCASE("Concurrent reader instances") {
         // Create multiple readers for the same file
-        std::vector<dstd::SharedPtr<Reader>> readers;
+        dstd::Vector<dstd::SharedPtr<Reader>> readers;
 
         for (std::size_t i = 0; i < 5; ++i) {
             readers.push_back(
@@ -1187,11 +1191,11 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
         // All readers should be able to read simultaneously
         const std::size_t buffer_size = 4 * 1024 * 1024;
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
 
         for (auto& reader : readers) {
             std::size_t bytes_written = 0;
-            std::string content;
+            dstd::String content;
 
             std::size_t offset = 0;
             while (offset < 1024 * 1024 &&
@@ -1210,7 +1214,7 @@ TEST_CASE("Robustness - Memory and performance stress") {
     SUBCASE("Threading Concurrent reader instances") {
         // Create multiple threads reading the same file
         const std::size_t num_threads = 4;
-        std::vector<std::thread> threads;
+        dstd::Vector<dstd::Thread> threads;
         std::atomic<std::size_t> total_lines(0);
 
         for (std::size_t i = 0; i < num_threads; ++i) {
@@ -1221,10 +1225,10 @@ TEST_CASE("Robustness - Memory and performance stress") {
                 std::size_t max_bytes = thread_reader->get_max_bytes();
 
                 const std::size_t buffer_size = 4 * 1024 * 1024;
-                std::vector<char> buffer(buffer_size);
+                dstd::Vector<char> buffer(buffer_size);
 
                 std::size_t bytes_written = 0;
-                std::string content;
+                dstd::String content;
 
                 std::size_t offset = 0;
                 while (offset < max_bytes &&
@@ -1255,7 +1259,7 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
     SUBCASE("Future-Async Concurrent reader instances") {
         const std::size_t num_futures = 4;
-        std::vector<dstd::Future<std::size_t>> futures;
+        dstd::Vector<dstd::Future<std::size_t>> futures;
 
         for (std::size_t i = 0; i < num_futures; ++i) {
             futures.push_back(std::async(std::launch::async, [&gz_file,
@@ -1266,10 +1270,10 @@ TEST_CASE("Robustness - Memory and performance stress") {
                 std::size_t max_bytes = async_reader->get_max_bytes();
 
                 const std::size_t buffer_size = 4 * 1024 * 1024;
-                std::vector<char> buffer(buffer_size);
+                dstd::Vector<char> buffer(buffer_size);
 
                 std::size_t bytes_written = 0;
-                std::string content;
+                dstd::String content;
 
                 std::size_t offset = 0;
                 while (offset < max_bytes &&
@@ -1313,8 +1317,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
     // A larger file with bigger lines and small chunks, to force many
     // checkpoints with line counts.
     Prepared& fx = prepared(16, 1024, 0.5, true);
-    const std::string gz_file = fx.gz_file;
-    const std::string idx_file = fx.idx_file;
+    const dstd::String gz_file = fx.gz_file;
+    const dstd::String idx_file = fx.idx_file;
     LargeTestEnvironment& env = fx.env;
 
     printf("Expected lines: %zu, bytes per line: %zu, indexed lines: %zu\n",
@@ -1374,15 +1378,15 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
                 }
 
                 // Verify first line contains expected line number
-                std::string expected_name =
-                    "\"name\":\"name_" + std::to_string(start_line) + "\"";
-                CHECK(result.find(expected_name) != std::string::npos);
+                dstd::String expected_name =
+                    "\"name\":\"name_" + dstd::to_string(start_line) + "\"";
+                CHECK(result.find(expected_name) != dstd::String::npos);
 
                 // Verify last line contains expected line number
                 if (range_size > 1) {
-                    std::string last_expected =
-                        "\"name\":\"name_" + std::to_string(end_line) + "\"";
-                    CHECK(result.find(last_expected) != std::string::npos);
+                    dstd::String last_expected =
+                        "\"name\":\"name_" + dstd::to_string(end_line) + "\"";
+                    CHECK(result.find(last_expected) != dstd::String::npos);
                 }
 
                 results.push_back(result);
@@ -1419,7 +1423,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         }
 
         // Test various large ranges
-        std::vector<dstd::Pair<std::size_t, std::size_t>> large_ranges = {
+        dstd::Vector<dstd::Pair<std::size_t, std::size_t>> large_ranges = {
             {1, std::min(total_lines, std::size_t(1000))},
             {std::max(std::size_t(1), total_lines / 4),
              std::min(total_lines, total_lines / 4 + 2000)},
@@ -1449,15 +1453,16 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
                     CHECK(result.back() == '\n');
 
                     // Verify start and end content
-                    std::string start_expected =
-                        "\"name\":\"name_" + std::to_string(range.first) + "\"";
-                    std::string end_expected = "\"name\":\"name_" +
-                                               std::to_string(range.second) +
-                                               "\"";
+                    dstd::String start_expected = "\"name\":\"name_" +
+                                                  dstd::to_string(range.first) +
+                                                  "\"";
+                    dstd::String end_expected = "\"name\":\"name_" +
+                                                dstd::to_string(range.second) +
+                                                "\"";
 
-                    CHECK(result.find(start_expected) != std::string::npos);
+                    CHECK(result.find(start_expected) != dstd::String::npos);
                     if (range.first != range.second) {
-                        CHECK(result.find(end_expected) != std::string::npos);
+                        CHECK(result.find(end_expected) != dstd::String::npos);
                     }
 
                 } catch (const std::exception& e) {
@@ -1486,7 +1491,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         }
 
         // Test single lines at various positions
-        std::vector<std::size_t> test_lines = {
+        dstd::Vector<std::size_t> test_lines = {
             1,
             std::min(total_lines, std::size_t(100)),
             std::min(total_lines, std::size_t(1000)),
@@ -1509,13 +1514,13 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
                     CHECK(line_count == 1);
 
                     // Should contain expected line number
-                    std::string expected_name =
-                        "\"name\":\"name_" + std::to_string(line_num) + "\"";
-                    CHECK(result.find(expected_name) != std::string::npos);
+                    dstd::String expected_name =
+                        "\"name\":\"name_" + dstd::to_string(line_num) + "\"";
+                    CHECK(result.find(expected_name) != dstd::String::npos);
 
                     // Should be valid JSON line
                     CHECK(result.front() == '{');
-                    CHECK(result.find('}') != std::string::npos);
+                    CHECK(result.find('}') != dstd::String::npos);
                     CHECK(result.back() == '\n');
 
                 } catch (const std::exception& e) {
@@ -1546,15 +1551,15 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         try {
             // First line
             dstd::String first = reader->read_lines(1, 1);
-            CHECK(first.find("\"name\":\"name_1\"") != std::string::npos);
+            CHECK(first.find("\"name\":\"name_1\"") != dstd::String::npos);
 
             // Last line
             if (total_lines > 0) {
                 dstd::String last =
                     reader->read_lines(total_lines, total_lines);
-                std::string expected =
-                    "\"name\":\"name_" + std::to_string(total_lines) + "\"";
-                CHECK(last.find(expected) != std::string::npos);
+                dstd::String expected =
+                    "\"name\":\"name_" + dstd::to_string(total_lines) + "\"";
+                CHECK(last.find(expected) != dstd::String::npos);
             }
 
             // First few lines
@@ -1625,13 +1630,13 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
 TEST_CASE("Robustness - Line reading consistency across multiple readers") {
     Prepared& fx = prepared(16, 128, 4.0, true);
-    const std::string gz_file = fx.gz_file;
-    const std::string idx_file = fx.idx_file;
+    const dstd::String gz_file = fx.gz_file;
+    const dstd::String idx_file = fx.idx_file;
     const std::size_t total_lines = fx.total_lines;
 
     SUBCASE("Multiple reader instances return identical results") {
         // Create multiple readers
-        std::vector<dstd::SharedPtr<Reader>> readers;
+        dstd::Vector<dstd::SharedPtr<Reader>> readers;
         for (std::size_t i = 0; i < 5; ++i) {
             readers.push_back(
                 ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
@@ -1639,7 +1644,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
         }
 
         // Test same line ranges across all readers
-        std::vector<dstd::Pair<std::size_t, std::size_t>> test_ranges = {
+        dstd::Vector<dstd::Pair<std::size_t, std::size_t>> test_ranges = {
             {1, 10},
             {100, 110},
             {std::min(total_lines, std::size_t(1000)),
@@ -1679,7 +1684,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
 
     SUBCASE("Concurrent line reading threads") {
         const std::size_t num_threads = 4;
-        std::vector<std::thread> threads;
+        dstd::Vector<dstd::Thread> threads;
         std::atomic<std::size_t> successful_reads(0);
         std::atomic<std::size_t> failed_reads(0);
 
@@ -1773,7 +1778,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
 
         // Random access reading (same ranges as sequential)
         dstd::Vector<dstd::String> random_results;
-        std::vector<std::size_t> indices;
+        dstd::Vector<std::size_t> indices;
         for (std::size_t i = 0; i < sequential_results.size(); ++i) {
             indices.push_back(i);
         }

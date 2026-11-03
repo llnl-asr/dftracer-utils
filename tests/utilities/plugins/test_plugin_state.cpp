@@ -15,8 +15,10 @@
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/schema.h>
@@ -28,20 +30,17 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <map>
-#include <string>
 #include <variant>
-#include <vector>
 
 using namespace dftracer::utils;
 
 using dftracer::utils::Runtime;
-using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::NamedResultRegistry;
 using dftracer::utils::plugins::PluginFold;
 using dftracer::utils::plugins::RegisteredState;
 using dftracer::utils::plugins::StateRegistry;
 using dftracer::utils::trace::RecordPhase;
+using dstd::StringIntern;
 namespace views = dftracer::utils::trace::views;
 using views::detail::FoldBatch;
 using views::detail::FoldEvent;
@@ -59,17 +58,17 @@ constexpr std::uint64_t TINY_BUDGET = 4096;
 // matters.
 constexpr std::uint64_t BYTES_PER_ENTRY = 64;
 
-using Totals = std::map<std::string, std::uint64_t>;
+using Totals = dstd::Map<dstd::String, std::uint64_t>;
 
 // "name\0dur\0..." - a self-contained encoding used both for a spill run and
 // for the finalized result, so a spilled state and an in-memory one are read
 // back the same way.
-std::string encode(const Totals& t) {
-    std::string out;
+dstd::String encode(const Totals& t) {
+    dstd::String out;
     for (const auto& [name, dur] : t) {
         out.append(name);
         out.push_back('\0');
-        out.append(std::to_string(dur));
+        out.append(dstd::to_string(dur));
         out.push_back('\0');
     }
     return out;
@@ -79,10 +78,10 @@ Totals decode(const char* p, std::size_t n) {
     Totals out;
     std::size_t at = 0;
     while (at < n) {
-        const std::string name(p + at);
+        const dstd::String name(p + at);
         at += name.size() + 1;
         if (at > n) break;
-        const std::string dur(p + at);
+        const dstd::String dur(p + at);
         at += dur.size() + 1;
         out[name] += std::strtoull(dur.c_str(), nullptr, 10);
     }
@@ -115,7 +114,7 @@ int state_update(void* state, const dftu_dataframe* df, dftu_error* err) {
         static_cast<const std::uint64_t*>(dftu_series_data(flat_dur));
     auto& t = *static_cast<Totals*>(state);
     for (std::int64_t r = 0; r < dftu_series_length(flat_name); ++r)
-        t[std::string(str_at(flat_name, r))] += durs[r];
+        t[dstd::String(str_at(flat_name, r))] += durs[r];
     dftu_series_free(flat_name);
     dftu_series_free(flat_dur);
     dftu_series_free(name);
@@ -136,7 +135,7 @@ std::uint64_t state_bytes(const void* state) {
 void free_buffer(void* data, void*) { delete[] static_cast<char*>(data); }
 
 int state_serialize(const void* state, dftu_bytes* out, dftu_error*) {
-    const std::string enc = encode(*static_cast<const Totals*>(state));
+    const dstd::String enc = encode(*static_cast<const Totals*>(state));
     char* buf = new char[enc.size() ? enc.size() : 1];
     std::memcpy(buf, enc.data(), enc.size());
     out->data = buf;
@@ -154,7 +153,7 @@ void* state_deserialize(void*, dftu_bytes in, dftu_error*) {
 int state_finalize(void* state, dftu_result_value* out, dftu_error*) {
     // Held past the call: the host copies BYTES results, but not until it
     // returns from here.
-    static thread_local std::string enc;
+    static thread_local dstd::String enc;
     enc = encode(*static_cast<Totals*>(state));
     out->kind = DFTU_RESULT_KIND_BYTES;
     out->u.bytes.data = enc.data();
@@ -200,7 +199,7 @@ dftu_plugin state_only_plugin() {
     return p;
 }
 
-FoldEvent evt(StringIntern& intern, const std::string& name,
+FoldEvent evt(StringIntern& intern, const dstd::String& name,
               std::uint64_t dur) {
     FoldEvent fe;
     fe.cat_id = intern.get_or_insert("POSIX");
@@ -216,14 +215,14 @@ FoldEvent evt(StringIntern& intern, const std::string& name,
 
 // GROUPS distinct names, each seen once per slice, so every total depends on
 // the cross-slice merge as well as on any spill.
-std::vector<dstd::Vector<FoldEvent>> slices(StringIntern& intern,
-                                            int n_slices) {
-    std::vector<dstd::Vector<FoldEvent>> out(
+dstd::Vector<dstd::Vector<FoldEvent>> slices(StringIntern& intern,
+                                             int n_slices) {
+    dstd::Vector<dstd::Vector<FoldEvent>> out(
         static_cast<std::size_t>(n_slices));
     for (int s = 0; s < n_slices; ++s)
         for (int i = 0; i < GROUPS; ++i)
             out[static_cast<std::size_t>(s)].push_back(
-                evt(intern, "op_" + std::to_string(i),
+                evt(intern, "op_" + dstd::to_string(i),
                     static_cast<std::uint64_t>((s + 1) * (i + 1))));
     return out;
 }
@@ -283,7 +282,7 @@ RunResult run_state(bool spillable, std::uint64_t budget, int n_slices) {
 struct GrowingSlice {
     std::uint64_t held = 0;
     std::uint64_t events = 0;
-    std::vector<std::uint64_t> reclaims;
+    dstd::Vector<std::uint64_t> reclaims;
 };
 
 struct SliceRun {
@@ -370,7 +369,7 @@ Totals expected(int n_slices) {
     Totals want;
     for (int s = 0; s < n_slices; ++s)
         for (int i = 0; i < GROUPS; ++i)
-            want["op_" + std::to_string(i)] +=
+            want["op_" + dstd::to_string(i)] +=
                 static_cast<std::uint64_t>((s + 1) * (i + 1));
     return want;
 }

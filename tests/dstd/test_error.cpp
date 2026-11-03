@@ -6,7 +6,6 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string_view>
 #include <utility>
 
 using namespace dftracer::utils;

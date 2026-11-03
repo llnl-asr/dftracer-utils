@@ -14,7 +14,9 @@
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -44,7 +46,6 @@
 #include <cstdint>
 #include <limits>
 #include <span>
-#include <string>
 
 namespace gmoracle {
 
@@ -330,7 +331,7 @@ struct HarvestMaps {
     dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
                                dftracer::utils::dstd::String>
         host;   // hhash -> host name
-    std::unordered_map<std::uint64_t, dftracer::utils::dstd::String>
+    dftracer::utils::dstd::HashMap<std::uint64_t, dftracer::utils::dstd::String>
         rank;   // pid -> rank
     dftracer::utils::dstd::String resolve(
         GroupKey::Kind kind, const dftracer::utils::dstd::String& v) const {
@@ -779,7 +780,8 @@ inline bool plan_wants_names(const ViewPlan& plan) {
 inline void harvest_pr_rank(
     const detail::FoldEvent& ev,
     const dftracer::utils::dstd::StringIntern& intern,
-    std::unordered_map<std::uint64_t, dftracer::utils::dstd::String>& ranks) {
+    dftracer::utils::dstd::HashMap<std::uint64_t,
+                                   dftracer::utils::dstd::String>& ranks) {
     if (ev.name_id == dftracer::utils::dstd::StringIntern::NO_ID ||
         intern.resolve(ev.name_id) != "PR")
         return;
@@ -848,7 +850,9 @@ class OracleAggFold : public detail::Fold {
         co_return true;
     }
     GroupMap& map() { return map_; }
-    std::unordered_map<std::uint64_t, dftracer::utils::dstd::String>& ranks() {
+    dftracer::utils::dstd::HashMap<std::uint64_t,
+                                   dftracer::utils::dstd::String>&
+    ranks() {
         return ranks_;
     }
     HarvestMaps& maps() {
@@ -895,7 +899,8 @@ class OracleAggFold : public detail::Fold {
     bool want_names_ = false;
     GroupMap map_;
     dftracer::utils::dstd::String keybuf_;
-    std::unordered_map<std::uint64_t, dftracer::utils::dstd::String> ranks_;
+    dftracer::utils::dstd::HashMap<std::uint64_t, dftracer::utils::dstd::String>
+        ranks_;
     HarvestMaps maps_;
 };
 

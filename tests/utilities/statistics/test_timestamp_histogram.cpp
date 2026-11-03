@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/timestamp_histogram.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
 
 TEST_SUITE("TimestampHistogram") {
@@ -64,14 +66,10 @@ TEST_SUITE("TimestampHistogram") {
 
         CHECK(h.total_count() == 4);
         CHECK(h.num_bins() == 4);
-        CHECK(h.bins()[0] ==
-              std::make_pair(std::uint64_t{0}, std::uint64_t{1}));
-        CHECK(h.bins()[1] ==
-              std::make_pair(std::uint64_t{1}, std::uint64_t{1}));
-        CHECK(h.bins()[2] ==
-              std::make_pair(std::uint64_t{2}, std::uint64_t{1}));
-        CHECK(h.bins()[3] ==
-              std::make_pair(std::uint64_t{10}, std::uint64_t{1}));
+        CHECK(h.bins()[0] == dstd::Pair<std::uint64_t, std::uint64_t>{0, 1});
+        CHECK(h.bins()[1] == dstd::Pair<std::uint64_t, std::uint64_t>{1, 1});
+        CHECK(h.bins()[2] == dstd::Pair<std::uint64_t, std::uint64_t>{2, 1});
+        CHECK(h.bins()[3] == dstd::Pair<std::uint64_t, std::uint64_t>{10, 1});
     }
 
     TEST_CASE("count_in_range") {
@@ -113,12 +111,9 @@ TEST_SUITE("TimestampHistogram") {
 
         CHECK(a.total_count() == 4);
         CHECK(a.num_bins() == 3);
-        CHECK(a.bins()[0] ==
-              std::make_pair(std::uint64_t{0}, std::uint64_t{2}));
-        CHECK(a.bins()[1] ==
-              std::make_pair(std::uint64_t{1}, std::uint64_t{1}));
-        CHECK(a.bins()[2] ==
-              std::make_pair(std::uint64_t{2}, std::uint64_t{1}));
+        CHECK(a.bins()[0] == dstd::Pair<std::uint64_t, std::uint64_t>{0, 2});
+        CHECK(a.bins()[1] == dstd::Pair<std::uint64_t, std::uint64_t>{1, 1});
+        CHECK(a.bins()[2] == dstd::Pair<std::uint64_t, std::uint64_t>{2, 1});
     }
 
     TEST_CASE("merge with empty") {

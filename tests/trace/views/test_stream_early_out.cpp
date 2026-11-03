@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
 
 #include <chrono>
 #include <memory>
-#include <string>
 #include <thread>
 
 using namespace dftracer::utils;
@@ -22,7 +22,7 @@ namespace {
 // last strong reference dies with that coroutine's frame: the weak_ptr expiring
 // means the producer actually finished.
 struct ProducerSentinel {
-    dstd::SharedPtr<int> strong = std::make_shared<int>(0);
+    dstd::SharedPtr<int> strong = dstd::make_shared<int>(0);
     dstd::WeakPtr<int> weak = strong;
 };
 
@@ -39,9 +39,9 @@ TEST_SUITE("View - streaming early-out") {
         TestEnvironment env(200);
         // Enough members that a whole-trace scan needs many units, and a byte
         // budget small enough that the producer must wait on the consumer.
-        std::string gz =
+        dstd::String gz =
             test_view_common::create_multimember_trace(env, 4000, 512);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         ProducerSentinel sentinel;
         {
@@ -70,9 +70,9 @@ TEST_SUITE("View - streaming early-out") {
 
     TEST_CASE("a fully drained stream still returns every row") {
         TestEnvironment env(200);
-        std::string gz =
+        dstd::String gz =
             test_view_common::create_multimember_trace(env, 500, 512);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
         View v = View::from_file(dstd::String(gz), dstd::String(idx))
                      .memory_budget(4096);
 

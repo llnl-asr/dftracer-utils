@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <doctest/doctest.h>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace;
 
@@ -41,8 +44,8 @@ TEST_SUITE("TimeMetric") {
         ev.phase = RecordPhase::Metadata;
         ev.name = "CM";
         ev.args.set_valid(true);
-        ev.args.insert("name", dftracer::utils::dstd::String("time_metric"));
-        ev.args.insert("value", dftracer::utils::dstd::String("NS"));
+        ev.args.insert("name", dstd::String("time_metric"));
+        ev.args.insert("value", dstd::String("NS"));
         TimeMetric out = TimeMetric::Us;
         CHECK(extract_time_metric(ev, out));
         CHECK(out == TimeMetric::Ns);

@@ -105,7 +105,9 @@ TEST_CASE("live and reserved counters are exact in a fresh process") {
 
 TEST_CASE("counters scenario" * doctest::skip()) {
     fresh_process::announce();
+    // keep std: memory tests link only memory
     std::vector<PageStats> seen;
+    // keep std: memory tests link only memory
     std::thread worker([&seen] {
         auto snap = [&seen] { seen.push_back(page_stats()); };
         snap();
@@ -128,6 +130,7 @@ TEST_CASE("counters scenario" * doctest::skip()) {
         page_deallocate(a, 100);
         page_deallocate(b);
         snap();
+        // keep std: memory tests link only memory
         std::vector<void*> runs;
         for (int i = 0; i < 4; ++i) runs.push_back(page_allocate(MIB, 16));
         snap();
@@ -252,6 +255,7 @@ TEST_CASE("the tier boundaries pick small, medium, large and huge") {
 }
 
 TEST_CASE("every alignment from 1 to 2 MiB at every size") {
+    // keep std: memory tests link only memory
     const std::vector<std::size_t> sizes = {0,
                                             1,
                                             15,
@@ -289,6 +293,7 @@ TEST_CASE("every alignment from 1 to 2 MiB at every size") {
 }
 
 TEST_CASE("a small class is aligned to its size up to 64 bytes") {
+    // keep std: memory tests link only memory
     std::vector<void*> blocks;
     for (std::size_t align : {16, 32, 64}) {
         for (int i = 0; i < 200; ++i) {
@@ -320,6 +325,7 @@ TEST_CASE("live blocks never overlap and survive mixed frees") {
         std::size_t size;
         unsigned char tag;
     };
+    // keep std: memory tests link only memory
     std::vector<Block> blocks;
     for (int i = 0; i < 4000; ++i) {
         std::size_t size = 1 + rng() % (rng() % 8 == 0 ? 300 * KIB : 3000);
@@ -346,11 +352,14 @@ TEST_CASE("live blocks never overlap and survive mixed frees") {
 
 TEST_CASE("an emptied page serves another class") {
     std::size_t base = live();
+    // keep std: memory tests link only memory
     std::vector<void*> a;
     for (int i = 0; i < 1000; ++i) a.push_back(page_allocate(48, 16));
     for (void* p : a) page_deallocate(p, 48);
+    // keep std: memory tests link only memory
     std::vector<void*> b;
     for (int i = 0; i < 500; ++i) b.push_back(page_allocate(2000, 16));
+    // keep std: memory tests link only memory
     std::set<void*> distinct(b.begin(), b.end());
     CHECK(distinct.size() == b.size());
     for (void* p : b) page_deallocate(p, 2000);
@@ -386,6 +395,7 @@ TEST_CASE("a sized free with the wrong size aborts in a checked build") {
         std::size_t wrong;
     };
     static Case current;
+    // keep std: memory tests link only memory
     const std::vector<Case> cases = {{100, 5000},
                                      {5000, 100},
                                      {40 * KIB, 200 * KIB},
@@ -424,6 +434,7 @@ TEST_CASE("a block freed by another thread is accepted") {
     for (std::size_t size :
          {std::size_t{64}, std::size_t{200 * KIB}, std::size_t{2 * MIB}}) {
         void* p = page_allocate(size, 16);
+        // keep std: memory tests link only memory
         std::thread([p, size] { page_deallocate(p, size); }).join();
         CHECK(live() == base);
     }
@@ -611,6 +622,7 @@ std::size_t run_mapped(std::size_t size) {
 
 // Allocates and frees 5 MiB runs until more than @p bytes are cached.
 void make_warm_idle(std::size_t bytes) {
+    // keep std: memory tests link only memory
     std::vector<void*> runs;
     for (std::size_t got = 0; got <= bytes; got += run_mapped(5 * MIB))
         runs.push_back(page_allocate(5 * MIB, 16));
@@ -764,6 +776,7 @@ TEST_CASE("budget purge scenario" * doctest::skip()) {
     constexpr std::size_t RUN = LARGE_PURGE_SIZE / 2;
     constexpr std::size_t CACHED = 32 * MIB;
     constexpr std::size_t NEXT = 8 * MIB;
+    // keep std: memory tests link only memory
     std::vector<void*> runs;
     for (std::size_t got = 0; got < CACHED; got += RUN) {
         runs.push_back(page_allocate(RUN, 16));
@@ -821,7 +834,9 @@ TEST_CASE("trim_thread gives back the idle pages of the calling thread") {
     constexpr std::size_t count = 64;
     std::size_t backed_after_free = 0;
     std::size_t backed_after_trim = 0;
+    // keep std: memory tests link only memory
     std::thread worker([&] {
+        // keep std: memory tests link only memory
         std::vector<char*> blocks;
         for (std::size_t i = 0; i < count; ++i) {
             auto* m = static_cast<char*>(page_allocate(medium, 16));

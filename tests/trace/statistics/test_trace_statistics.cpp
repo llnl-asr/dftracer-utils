@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/statistics/trace_statistics.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
 
 #include <cmath>
 #include <limits>
-#include <string>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace::statistics;
 
@@ -60,17 +62,17 @@ TEST_SUITE("TraceStatistics") {
         ts.merged.update_from_event("read", "POSIX", 1, 1, 1000, 100);
         ts.merged.update_from_event("write", "storage", 2, 2, 2000, 200);
 
-        std::string json = std::string(ts.to_json());
+        dstd::String json = dstd::String(ts.to_json());
 
         // Parse and validate the JSON
         simdjson::dom::parser parser;
-        auto result = parser.parse(json);
+        auto result = parser.parse(simdjson::padded_string(json));
         REQUIRE(!result.error());
 
         auto root = result.value_unsafe();
         REQUIRE(root.is_object());
 
-        CHECK(std::string(root["file_path"].get_string().value()) ==
+        CHECK(dstd::String(root["file_path"].get_string().value()) ==
               "/test/file.pfw.gz");
         CHECK(root["success"].get_bool().value() == true);
         CHECK(root["total_events"].get_uint64().value() == 2);
@@ -102,15 +104,15 @@ TEST_SUITE("TraceStatistics") {
         ts.success = false;
         ts.error_message = "File not found";
 
-        std::string json = std::string(ts.to_json());
+        dstd::String json = dstd::String(ts.to_json());
 
         simdjson::dom::parser parser;
-        auto result = parser.parse(json);
+        auto result = parser.parse(simdjson::padded_string(json));
         REQUIRE(!result.error());
 
         auto root = result.value_unsafe();
         CHECK(root["success"].get_bool().value() == false);
-        CHECK(std::string(root["error"].get_string().value()) ==
+        CHECK(dstd::String(root["error"].get_string().value()) ==
               "File not found");
     }
 }

@@ -7,7 +7,7 @@
 #include <doctest/doctest.h>
 #include <simdjson.h>
 
-#include <string>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace;
 using dftracer::utils::json::JsonValue;
@@ -15,8 +15,8 @@ using dftracer::utils::json::JsonValue;
 namespace {
 
 // Parse one NDJSON line into a DFTracerEvent via the DOM path.
-DFTracerEvent parse_line(simdjson::dom::parser& p, const std::string& line) {
-    std::string pad = line;
+DFTracerEvent parse_line(simdjson::dom::parser& p, const dstd::String& line) {
+    dstd::String pad = line;
     pad.resize(line.size() + simdjson::SIMDJSON_PADDING);
     auto doc = p.parse(pad.data(), line.size(), false);
     DFTracerEvent ev;
@@ -123,8 +123,7 @@ TEST_SUITE("event-format") {
         CHECK(ev.args["num_events"].get<std::uint64_t>() == 9);
         CHECK(ev.args["used.MPI"].get<std::uint64_t>() == 1);
         CHECK(ev.args["used.LIBC_IO"].get<std::uint64_t>() == 1);
-        CHECK(ev.args["app.model"].get<dftracer::utils::dstd::StringView>() ==
-              "resnet50");
+        CHECK(ev.args["app.model"].get<dstd::StringView>() == "resnet50");
         CHECK(ev.args["app.batch"].get<std::uint64_t>() == 32);
         // Array index then object descent: unbounded depth.
         CHECK(ev.args["tags.0.model.size"].get<std::uint64_t>() == 42);
@@ -134,9 +133,9 @@ TEST_SUITE("event-format") {
 TEST_SUITE("json-path") {
     TEST_CASE("JsonValue::at resolves deep object and array-index paths") {
         simdjson::dom::parser p;
-        std::string s =
+        dstd::String s =
             R"({"args":{"used":{"MPI":1},"tags":[{"model":{"size":42}},{"model":{"size":7}}]}})";
-        std::string pad = s;
+        dstd::String pad = s;
         pad.resize(s.size() + simdjson::SIMDJSON_PADDING);
         auto doc = p.parse(pad.data(), s.size(), false);
         JsonValue jv(doc.value());

@@ -5,8 +5,6 @@
 
 #include <cstdint>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 // One table of {TypeId, per-op expectation} covering every Arrow logical type
 // the engine can build, so an op that neither computes nor refuses shows up as
@@ -17,7 +15,11 @@
 #include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <nanoarrow/nanoarrow.h>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;
@@ -217,7 +219,7 @@ bool mask_bit(const Series& mask, std::int64_t i) {
 }
 
 Series count_ones(std::int64_t n) {
-    static std::vector<std::int64_t> ones;
+    static dstd::Vector<std::int64_t> ones;
     ones.assign(static_cast<std::size_t>(n), 1);
     return Series::flat_i64(ones.data(), n);
 }
@@ -248,7 +250,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("sort, argsort and is_sorted") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             Series order = s.argsort(false);
@@ -276,7 +278,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("min, max, sum and mean") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             if (row.ops[OP_REDUCE] == Support::Refuses) {
@@ -313,7 +315,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("count is the non-null row count for every type") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             CHECK(s.count() == s.length());
@@ -325,7 +327,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("nunique, unique and is_unique") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             Series uniq = s.unique();
@@ -351,7 +353,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("is_in matches the exact repeated value") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             if (row.ops[OP_IS_IN] == Support::Refuses) {
@@ -372,7 +374,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("group_by through the ABI primitive") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             Series values = count_ones(s.length());
@@ -403,7 +405,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("group_by through DataFrame (AggState) refuses these key types") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             DataFrame df = keyed_frame(s);
@@ -421,10 +423,10 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("take, head and reverse keep the logical type") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
-            std::vector<std::int64_t> ix{2, 0};
+            dstd::Vector<std::int64_t> ix{2, 0};
             Series taken = s.take(ix);
             Series first = s.head(1);
             Series flipped = s.reverse();
@@ -446,7 +448,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("cast to Int64") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             Series casted = s.cast(TypeId::Int64);
@@ -474,10 +476,10 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
     }
 
     TEST_CASE("casting INTO these types") {
-        std::vector<double> vals = {1.5, 2.5};
+        dstd::Vector<double> vals = {1.5, 2.5};
         Series a = Series::flat_f64(vals.data(), 2);
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series casted = a.cast(row.id);
             if (row.ops[OP_CAST_FROM] == Support::Refuses) {
                 CHECK_FALSE(casted.valid());
@@ -491,7 +493,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("fnv1a and dictionary_encode") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             Series hashed = s.fnv1a();
@@ -514,7 +516,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("value_counts") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             dftu_series* h = s.handle();
@@ -531,7 +533,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("arithmetic promotes or refuses, never computes on raw bits") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             Series other = row.build();
             REQUIRE(s.valid());
@@ -553,7 +555,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("comparison against a scalar") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             dftu_series* mask =
@@ -570,7 +572,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("describe reports the fixed row set for every type") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             DataFrame df;
@@ -583,7 +585,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
 
     TEST_CASE("fill_null") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             // No kernel has a lane type for any of these, so fill_null

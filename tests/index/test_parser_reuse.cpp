@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -14,39 +15,41 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <sstream>
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
 
 namespace {
 
-std::string write_small_trace(const std::string& dir, int n) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String write_small_trace(const dstd::String& dir, int n) {
+    dstd::String out;
+    out += "[\n";
     for (int i = 0; i < 40; ++i) {
-        out << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":1,)"
-            << R"("tid":1,"ph":"X","ts":)" << 1000 + i * 10
-            << R"(,"dur":3,"args":{"fname":"/data/f)" << n << R"("}})"
-            << "\n";
+        out += common::str_cat(
+            R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":1,)",
+            R"("tid":1,"ph":"X","ts":)", 1000 + i * 10,
+            R"(,"dur":3,"args":{"fname":"/data/f)", n, R"("}})", "\n");
     }
-    out << "]\n";
+    out += "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/t" + std::string(dstd::to_string(n)) + ".pfw.gz", out.str());
+        dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz", out);
 }
 
-std::string write_long_line_trace(const std::string& dir, std::size_t bytes) {
-    std::ostringstream out;
-    out << "[\n";
+dstd::String write_long_line_trace(const dstd::String& dir, std::size_t bytes) {
+    dstd::String out;
+    out += "[\n";
     for (int i = 0; i < 40; ++i) {
-        out << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":1,)"
-            << R"("tid":1,"ph":"X","ts":)" << 1000 + i * 10
-            << R"(,"dur":3,"args":{"fname":"/data/long")";
-        if (i == 20) out << R"(,"note":")" << dstd::String(bytes, 'x') << '"';
-        out << "}}\n";
+        out += common::str_cat(R"({"id":)", i,
+                               R"(,"name":"read","cat":"POSIX","pid":1,)",
+                               R"("tid":1,"ph":"X","ts":)", 1000 + i * 10,
+                               R"(,"dur":3,"args":{"fname":"/data/long")");
+        if (i == 20)
+            out +=
+                common::str_cat(R"(,"note":")", dstd::String(bytes, 'x'), '"');
+        out += "}}\n";
     }
-    out << "]\n";
-    return dftu_utils_test::write_gz_trace(dir + "/long.pfw.gz", out.str());
+    out += "]\n";
+    return dftu_utils_test::write_gz_trace(dir + "/long.pfw.gz", out);
 }
 
 }  // namespace

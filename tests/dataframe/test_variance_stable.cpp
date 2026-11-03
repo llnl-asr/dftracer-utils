@@ -16,6 +16,8 @@
 #include <cstdint>
 #include <random>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::FieldStat;
 using dftracer::utils::dataframe::Series;
@@ -30,7 +32,7 @@ struct Ref {
 
 // Neumaier-compensated sum: the reference must not lose digits to the very
 // cancellation under test (on some targets `long double` is a plain double).
-double compensated_sum(const dftracer::utils::dstd::Vector<double>& v) {
+double compensated_sum(const dstd::Vector<double>& v) {
     double sum = 0.0, c = 0.0;
     for (double x : v) {
         const double t = sum + x;
@@ -42,7 +44,7 @@ double compensated_sum(const dftracer::utils::dstd::Vector<double>& v) {
 
 // The corrected two-pass value: deviations from the compensated mean, with the
 // (sum d)^2 / n term removing the rounding error of the mean itself.
-Ref two_pass(const dftracer::utils::dstd::Vector<double>& v) {
+Ref two_pass(const dstd::Vector<double>& v) {
     const double n = static_cast<double>(v.size());
     const double mu = compensated_sum(v) / n;
     double s1 = 0, s2 = 0, s3 = 0, s4 = 0;
@@ -68,7 +70,7 @@ Ref two_pass(const dftracer::utils::dstd::Vector<double>& v) {
 // 128-bit integers, so no rounding enters before the final division.
 __extension__ typedef __int128 Wide;
 
-double exact_std(const dftracer::utils::dstd::Vector<std::int64_t>& v) {
+double exact_std(const dstd::Vector<std::int64_t>& v) {
     Wide s = 0;
     for (auto x : v) s += x;
     const std::int64_t k =
@@ -86,12 +88,11 @@ double exact_std(const dftracer::utils::dstd::Vector<std::int64_t>& v) {
     return static_cast<double>(std::sqrt(m2 / (n - 1.0L)));
 }
 
-dftracer::utils::dstd::Vector<double> normal(double mean, double sd,
-                                             std::size_t n,
-                                             std::uint64_t seed) {
+dstd::Vector<double> normal(double mean, double sd, std::size_t n,
+                            std::uint64_t seed) {
     std::mt19937_64 rng(seed);
     std::normal_distribution<double> z(0.0, 1.0);
-    dftracer::utils::dstd::Vector<double> v(n);
+    dstd::Vector<double> v(n);
     for (auto& x : v) x = mean + sd * z(rng);
     return v;
 }
@@ -136,7 +137,7 @@ TEST_CASE("a tiny spread keeps the standard deviation") {
 TEST_CASE("an integer column with a large offset") {
     std::mt19937_64 rng(2);
     std::normal_distribution<double> z(0.0, 1000.0);
-    dftracer::utils::dstd::Vector<std::int64_t> iv(N);
+    dstd::Vector<std::int64_t> iv(N);
     for (std::size_t i = 0; i < N; ++i) {
         iv[i] = 1'700'000'000'000'000LL + static_cast<std::int64_t>(z(rng));
     }
@@ -167,10 +168,10 @@ TEST_CASE("skewness and kurtosis keep their digits with an offset") {
 }
 
 TEST_CASE("a constant column has a standard deviation of 0") {
-    dftracer::utils::dstd::Vector<double> big(N, 1e9);
+    dstd::Vector<double> big(N, 1e9);
     Series sb = Series::flat_f64(big.data(), static_cast<std::int64_t>(N));
     CHECK(sb.stddev() == 0.0);
-    dftracer::utils::dstd::Vector<double> small{3.0, 3.0, 3.0, 3.0};
+    dstd::Vector<double> small{3.0, 3.0, 3.0, 3.0};
     Series ss = Series::flat_f64(small.data(), 4);
     CHECK(ss.stddev() == 0.0);
     FieldStat f;
@@ -179,8 +180,8 @@ TEST_CASE("a constant column has a standard deviation of 0") {
 }
 
 TEST_CASE("nulls are skipped") {
-    dftracer::utils::dstd::Vector<double> xs{1.0, 0.0, 3.0};
-    dftracer::utils::dstd::Vector<std::uint8_t> valid{0x05};  // rows 0 and 2
+    dstd::Vector<double> xs{1.0, 0.0, 3.0};
+    dstd::Vector<std::uint8_t> valid{0x05};  // rows 0 and 2
     Series s = Series::flat_f64(xs.data(), 3, valid.data());
     CHECK(s.stddev() == doctest::Approx(std::sqrt(2.0)).epsilon(1e-12));
     CHECK(s.variance() == doctest::Approx(2.0).epsilon(1e-12));
@@ -209,11 +210,11 @@ TEST_CASE("partitions merge to the one-pass value for any split") {
     const Ref ref = two_pass(v);
     Series s = Series::flat_f64(v.data(), static_cast<std::int64_t>(N));
     // Eight uneven partitions, one of a single value, and an empty one.
-    const dftracer::utils::dstd::Vector<std::int64_t> cuts{
+    const dstd::Vector<std::int64_t> cuts{
         0,       1,       1,
         200'000, 333'333, 333'334,
         700'001, 900'000, static_cast<std::int64_t>(N)};
-    dftracer::utils::dstd::Vector<FieldStat> parts;
+    dstd::Vector<FieldStat> parts;
     for (std::size_t i = 0; i + 1 < cuts.size(); ++i)
         parts.push_back(cuts[i] == cuts[i + 1]
                             ? FieldStat{}
@@ -227,9 +228,9 @@ TEST_CASE("partitions merge to the one-pass value for any split") {
     CHECK_MESSAGE(close(left_to_right.kurtosis(), ref.kurt),
                   left_to_right.kurtosis() << " vs " << ref.kurt);
     // A different merge order: a pairwise tree, then right to left.
-    dftracer::utils::dstd::Vector<FieldStat> level = parts;
+    dstd::Vector<FieldStat> level = parts;
     while (level.size() > 1) {
-        dftracer::utils::dstd::Vector<FieldStat> next;
+        dstd::Vector<FieldStat> next;
         for (std::size_t i = 0; i < level.size(); i += 2) {
             FieldStat a = level[i];
             if (i + 1 < level.size()) a.merge(level[i + 1]);
@@ -248,11 +249,9 @@ TEST_CASE("every group keeps its own accuracy at different offsets") {
     constexpr std::size_t G = 1000, PER = 1000;
     std::mt19937_64 rng(5);
     std::normal_distribution<double> z(0.0, 1.0);
-    dftracer::utils::dstd::Vector<std::int64_t> keys(G * PER);
-    dftracer::utils::dstd::Vector<double> vals(G * PER);
-    dftracer::utils::dstd::Map<std::int64_t,
-                               dftracer::utils::dstd::Vector<double>>
-        by_group;
+    dstd::Vector<std::int64_t> keys(G * PER);
+    dstd::Vector<double> vals(G * PER);
+    dstd::Map<std::int64_t, dstd::Vector<double>> by_group;
     for (std::size_t g = 0; g < G; ++g) {
         const double mean = static_cast<double>(g) * 1e9;  // 0 to 1e12
         for (std::size_t j = 0; j < PER; ++j) {
@@ -266,7 +265,7 @@ TEST_CASE("every group keeps its own accuracy at different offsets") {
         Series::flat_i64(keys.data(), static_cast<std::int64_t>(keys.size()));
     Series x =
         Series::flat_f64(vals.data(), static_cast<std::int64_t>(vals.size()));
-    dftracer::utils::dstd::Vector<const Series*> inputs = {&k, &x};
+    dstd::Vector<const Series*> inputs = {&k, &x};
     DataFrame r = df::group_agg_expr(
         df::expr_col(0),
         {df::agg_std(df::expr_col(1), "s"), df::agg_var(df::expr_col(1), "v")},
@@ -292,10 +291,10 @@ TEST_CASE("every group keeps its own accuracy at different offsets") {
 TEST_CASE("a group-by over one group with a large offset") {
     const auto v = normal(1e9, 1.0, N, 0);
     const Ref ref = two_pass(v);
-    dftracer::utils::dstd::Vector<std::int64_t> keys(N, 7);
+    dstd::Vector<std::int64_t> keys(N, 7);
     Series k = Series::flat_i64(keys.data(), static_cast<std::int64_t>(N));
     Series x = Series::flat_f64(v.data(), static_cast<std::int64_t>(N));
-    dftracer::utils::dstd::Vector<const Series*> inputs = {&k, &x};
+    dstd::Vector<const Series*> inputs = {&k, &x};
     DataFrame r = df::group_agg_expr(
         df::expr_col(0), {df::agg_std(df::expr_col(1), "s")}, inputs, "g");
     REQUIRE(r.num_rows() == 1);
@@ -308,9 +307,8 @@ TEST_CASE("rolling standard deviation stays accurate with an offset") {
     Series r = s.rolling_std(5);
     const double* out = r.data<double>();
     for (std::size_t i = 4; i < v.size(); ++i) {
-        const dftracer::utils::dstd::Vector<double> w(
-            v.begin() + static_cast<long>(i - 4),
-            v.begin() + static_cast<long>(i + 1));
+        const dstd::Vector<double> w(v.begin() + static_cast<long>(i - 4),
+                                     v.begin() + static_cast<long>(i + 1));
         REQUIRE(rel(out[i], two_pass(w).sd) < 1e-9);
     }
 }
@@ -320,7 +318,7 @@ TEST_CASE("an exponentially weighted standard deviation is shift invariant") {
     // column is a true translation of the base column.
     std::mt19937_64 rng(7);
     std::normal_distribution<double> z(500.0, 100.0);
-    dftracer::utils::dstd::Vector<double> base(2000), shifted(2000);
+    dstd::Vector<double> base(2000), shifted(2000);
     for (std::size_t i = 0; i < base.size(); ++i) {
         base[i] = std::floor(z(rng));
         shifted[i] = base[i] + 1e9;

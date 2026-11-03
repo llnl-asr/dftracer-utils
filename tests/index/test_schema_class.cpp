@@ -16,39 +16,36 @@ namespace ix = dftracer::utils::index;
 namespace {
 
 struct ClassNginx {
-    static constexpr dftracer::utils::dstd::StringView id = "class_nginx";
+    static constexpr dstd::StringView id = "class_nginx";
     ix::Field<std::int64_t, "status"> status;
     ix::Field<double, "request_time", ix::DurationRole<ix::TimeUnit::S>>
         request_time;
-    ix::Field<dftracer::utils::dstd::Optional<dstd::String>, "meta.host"> host;
+    ix::Field<dstd::Optional<dstd::String>, "meta.host"> host;
     ix::Field<dstd::String, "upstream", ix::AlwaysIndex> upstream;
-    ix::Field<dftracer::utils::dstd::Optional<ix::Json>, "tags"> tags;
+    ix::Field<dstd::Optional<ix::Json>, "tags"> tags;
 };
 
 struct ClassStep {
-    static constexpr dftracer::utils::dstd::StringView id = "class_step";
+    static constexpr dstd::StringView id = "class_step";
     using extends = ix::schemas::DFTracer;
     ix::Field<std::int64_t, "args.step"> step;
 };
 
 struct ClassWeb {
-    static constexpr dftracer::utils::dstd::StringView id = "class_web";
-    static constexpr dftracer::utils::dstd::StringView SOURCE =
+    static constexpr dstd::StringView id = "class_web";
+    static constexpr dstd::StringView SOURCE =
         "errors = where status >= 500; def slow(t) = latency > t";
     ix::Field<std::int64_t, "status"> status;
     ix::Field<double, "latency"> latency;
 };
 
 struct ClassTimed {
-    static constexpr dftracer::utils::dstd::StringView id = "class_timed";
+    static constexpr dstd::StringView id = "class_timed";
     ix::Field<std::uint64_t, "ts_ms", ix::TimeRole<ix::TimeUnit::Ms>> ts_ms;
     ix::Field<dstd::String, "worker", ix::EntityRole> worker;
-    ix::Field<dftracer::utils::dstd::Optional<bool>, "ok"> ok;
-    ix::Field<dftracer::utils::dstd::Optional<std::int64_t>, "thread",
-              ix::LaneRole>
-        thread;
-    ix::Field<dftracer::utils::dstd::Optional<dstd::String>, "op", ix::NameRole>
-        op;
+    ix::Field<dstd::Optional<bool>, "ok"> ok;
+    ix::Field<dstd::Optional<std::int64_t>, "thread", ix::LaneRole> thread;
+    ix::Field<dstd::Optional<dstd::String>, "op", ix::NameRole> op;
 };
 
 }  // namespace

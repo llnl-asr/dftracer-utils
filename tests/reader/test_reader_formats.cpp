@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/store/error.h>
@@ -9,19 +11,16 @@
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
-#include <fstream>
-#include <memory>
 #include <random>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftu_utils_test;
-using namespace dftracer::utils;
 using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
 using dftracer::utils::index::store::IndexerError;
 
-std::string format_name(Format format);
+dstd::String format_name(Format format);
 
 // Parameterized test fixture for different formats
 class FormatTestFixture {
@@ -35,19 +34,19 @@ class FormatTestFixture {
     }
 
     Format get_format() const { return format_; }
-    const std::string& get_test_file() const { return test_file_; }
-    const std::string& get_index_file() const { return index_file_; }
+    const dstd::String& get_test_file() const { return test_file_; }
+    const dstd::String& get_index_file() const { return index_file_; }
     const TestEnvironment& get_env() const { return env_; }
 
    private:
     Format format_;
     TestEnvironment env_;
-    std::string test_file_;
-    std::string index_file_;
+    dstd::String test_file_;
+    dstd::String index_file_;
 };
 
 // Helper function to get format name for test output
-std::string format_name(Format format) {
+dstd::String format_name(Format format) {
     switch (format) {
         case Format::GZIP:
             return "gzip";
@@ -154,7 +153,7 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
 
     SUBCASE("Basic data reading") {
         const std::size_t buffer_size = 1024;
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
         std::size_t total_bytes = 0;
         std::size_t current_pos = 0;
         std::uint64_t max_bytes = indexer->get_max_bytes();
@@ -182,7 +181,7 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
         std::size_t end_offset = (max_bytes * 3) / 4;
 
         const std::size_t buffer_size = 1024;
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
         std::size_t bytes_read = reader->read(start_offset, end_offset,
                                               buffer.data(), buffer.size());
         CHECK(bytes_read > 0);
@@ -196,7 +195,7 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
 
     SUBCASE("Small buffer reading") {
         const std::size_t small_buffer_size = 16;
-        std::vector<char> buffer(small_buffer_size);
+        dstd::Vector<char> buffer(small_buffer_size);
         std::size_t total_bytes = 0;
         std::size_t read_count = 0;
         std::size_t current_pos_small = 0;
@@ -240,8 +239,8 @@ TEST_CASE_TEMPLATE("JSON boundary detection", FormatType, GZIPFormat) {
         REQUIRE(raw_reader != nullptr);
 
         const std::size_t buffer_size = 1024;
-        std::vector<char> raw_buffer(buffer_size);
-        std::vector<char> json_buffer(buffer_size);
+        dstd::Vector<char> raw_buffer(buffer_size);
+        dstd::Vector<char> json_buffer(buffer_size);
 
         std::uint64_t max_bytes = indexer->get_max_bytes();
 
@@ -273,10 +272,10 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
     TestEnvironment large_env(1000, fixture.get_format());
     REQUIRE(large_env.is_valid());
 
-    std::string large_test_file = large_env.create_test_file();
+    dstd::String large_test_file = large_env.create_test_file();
     REQUIRE(!large_test_file.empty());
 
-    std::string large_index_file = large_env.get_index_path(large_test_file);
+    dstd::String large_index_file = large_env.get_index_path(large_test_file);
 
     auto indexer = CheckpointIndexerFactory::create(
         large_test_file, large_index_file, 100 * 1024);
@@ -291,7 +290,7 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
 
     SUBCASE("Basic line reading") {
         const std::size_t buffer_size = 1024;
-        std::vector<char> buffer(buffer_size);
+        dstd::Vector<char> buffer(buffer_size);
         std::size_t line_count = 0;
 
         for (std::size_t line = 1;
@@ -315,22 +314,22 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
 
     SUBCASE("Specific line reading accuracy") {
         // Test reading specific lines
-        std::vector<std::size_t> test_lines = {0,  1,   10,
-                                               50, 100, total_lines - 1};
+        dstd::Vector<std::size_t> test_lines = {0,  1,   10,
+                                                50, 100, total_lines - 1};
 
         for (std::size_t line_num : test_lines) {
             if (line_num >= total_lines) continue;
 
             const std::size_t buffer_size = 1024;
-            std::vector<char> buffer(buffer_size);
+            dstd::Vector<char> buffer(buffer_size);
 
             try {
                 // Convert to 1-based indexing
                 dstd::String line_content =
                     reader->read_lines(line_num + 1, line_num + 1);
                 CHECK(!line_content.empty());
-                CHECK(line_content.find("\"id\":") != std::string::npos);
-                CHECK(line_content.find("\"message\":") != std::string::npos);
+                CHECK(line_content.find("\"id\":") != dstd::String::npos);
+                CHECK(line_content.find("\"message\":") != dstd::String::npos);
             } catch (...) {
                 // Skip lines that can't be read
             }

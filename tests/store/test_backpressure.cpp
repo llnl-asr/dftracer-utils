@@ -3,9 +3,12 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/data_file.h>
@@ -24,10 +27,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <map>
-#include <string>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -35,7 +35,7 @@ namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
     static void reopen_read_only(DataFileWriter& writer,
-                                 const std::string& path) {
+                                 const dstd::String& path) {
         if (writer.fd_ >= 0) ::close(writer.fd_);
         writer.fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     }
@@ -46,13 +46,12 @@ struct DataFileWriterTestHook {
 namespace {
 
 namespace memory = dftracer::utils::memory;
-namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
 using dftracer::utils::Runtime;
 using dftracer::utils::TaskHandle;
-using dftracer::utils::dstd::ByteView;
-using dftracer::utils::dstd::Condition;
+using dstd::ByteView;
+using dstd::Condition;
 using store::Batch;
 using store::FoldKind;
 using store::NamespaceSpec;
@@ -96,72 +95,63 @@ constexpr bool SANITIZED = false;
 constexpr bool SANITIZED = false;
 #endif
 
-ByteView view_of(const std::string& bytes) {
+ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::String dstring(const std::string& value) {
-    return dstd::String(value.data(), value.size());
+dstd::String to_std(ByteView bytes) {
+    return dstd::String(reinterpret_cast<const char*>(bytes.data()),
+                        bytes.size());
 }
 
-std::string to_std(ByteView bytes) {
-    return std::string(reinterpret_cast<const char*>(bytes.data()),
-                       bytes.size());
-}
-
-std::string to_std(const dstd::String& value) {
-    return std::string(value.data(), value.size());
-}
-
-std::string i64_bytes(std::int64_t value) {
-    std::string bytes(8, '\0');
-    dftracer::utils::dstd::write_u64_le(
-        reinterpret_cast<std::uint8_t*>(bytes.data()),
-        static_cast<std::uint64_t>(value));
+dstd::String i64_bytes(std::int64_t value) {
+    dstd::String bytes(8, '\0');
+    dstd::write_u64_le(reinterpret_cast<std::uint8_t*>(bytes.data()),
+                       static_cast<std::uint64_t>(value));
     return bytes;
 }
 
 std::int64_t read_i64(ByteView bytes) {
     REQUIRE(bytes.size() == 8);
-    return std::bit_cast<std::int64_t>(dftracer::utils::dstd::read_u64_le(
-        reinterpret_cast<const std::uint8_t*>(bytes.data())));
+    return std::bit_cast<std::int64_t>(
+        dstd::read_u64_le(reinterpret_cast<const std::uint8_t*>(bytes.data())));
 }
 
-memory::PoolHandle child_pool(const std::string& name, std::size_t limit) {
+memory::PoolHandle child_pool(const dstd::String& name, std::size_t limit) {
     return memory::current_pool().child(name, memory::PoolKind::Scratch,
                                         memory::Limits{limit});
 }
 
 /// `head` padded with 'x' to exactly `length` bytes, so every value of a raw
 /// batch makes its segment the size the quotas are counted in.
-std::string padded(const std::string& head, std::size_t length) {
-    std::string out = head;
+dstd::String padded(const dstd::String& head, std::size_t length) {
+    dstd::String out = head;
     out.resize(length, 'x');
     return out;
 }
 
-NamespaceSpec put_spec(const std::string& name, std::uint32_t version = 0) {
+NamespaceSpec put_spec(const dstd::String& name, std::uint32_t version = 0) {
     NamespaceSpec spec;
-    spec.name = dstring(name);
+    spec.name = dstd::String(name);
     spec.format_version = version;
     spec.fold = FoldKind::None;
     return spec;
 }
 
-NamespaceSpec fold_spec(const std::string& name, FoldKind kind) {
+NamespaceSpec fold_spec(const dstd::String& name, FoldKind kind) {
     NamespaceSpec spec;
-    spec.name = dstring(name);
+    spec.name = dstd::String(name);
     spec.format_version = 0;
     spec.fold = kind;
     return spec;
 }
 
-ScopeKey file_scope(const std::string& path) {
-    return ScopeKey::file(dstring(path));
+ScopeKey file_scope(const dstd::String& path) {
+    return ScopeKey::file(dstd::String(path));
 }
 
-std::string scope_path(int index) {
-    return "/data/backpressure-" + std::to_string(index) + ".dft";
+dstd::String scope_path(int index) {
+    return "/data/backpressure-" + dstd::to_string(index) + ".dft";
 }
 
 /// Options that commit only when asked: neither the size nor the interval ever
@@ -172,8 +162,8 @@ WriterOptions manual_options(std::uint64_t quota) {
     options.extent_quota_bytes = quota;
     options.commit_bytes = std::uint64_t{1} << 40;
     options.commit_interval = std::chrono::hours(1);
-    options.host = dstring("host");
-    options.label = dstring("label");
+    options.host = dstd::String("host");
+    options.label = dstd::String("label");
     return options;
 }
 
@@ -230,7 +220,7 @@ Batch raw_batch(Writer& writer, NamespaceId space, const ScopeKey& scope,
                 ValueFn value_of) {
     Batch batch = writer.batch(space, scope, 0);
     for (std::size_t k = 0; k < keys; ++k) {
-        const std::string value = padded(value_of(k), value_bytes);
+        const dstd::String value = padded(value_of(k), value_bytes);
         batch.put(view_of(key_of(k)), view_of(value));
     }
     return batch;
@@ -240,73 +230,74 @@ Batch fold_batch(Writer& writer, NamespaceId space, const ScopeKey& scope,
                  std::int64_t value, std::size_t keys) {
     Batch batch = writer.batch(space, scope, 0);
     for (std::size_t k = 0; k < keys; ++k) {
-        const std::string key = "m" +
-                                std::string(4 - std::to_string(k).size(), '0') +
-                                std::to_string(k);
-        const std::string bytes = i64_bytes(value);
+        const dstd::String key =
+            "m" + dstd::String(4 - dstd::to_string(k).size(), '0') +
+            dstd::to_string(k);
+        const dstd::String bytes = i64_bytes(value);
         batch.fold(view_of(key), view_of(bytes));
     }
     return batch;
 }
 
-std::string raw_key(int thread, int round, std::size_t k) {
-    return "t" + std::to_string(thread) + "-b" + std::to_string(round) + "-k" +
-           std::to_string(k);
+dstd::String raw_key(int thread, int round, std::size_t k) {
+    return "t" + dstd::to_string(thread) + "-b" + dstd::to_string(round) +
+           "-k" + dstd::to_string(k);
 }
 
-std::string raw_value(const std::string& tag, int thread, int round,
-                      std::size_t k) {
-    return tag + "-" + std::to_string(thread) + "-" + std::to_string(round) +
-           "-" + std::to_string(k);
+dstd::String raw_value(const dstd::String& tag, int thread, int round,
+                       std::size_t k) {
+    return tag + "-" + dstd::to_string(thread) + "-" + dstd::to_string(round) +
+           "-" + dstd::to_string(k);
 }
 
-std::string fold_key(std::size_t k) {
-    return "m" + std::string(4 - std::to_string(k).size(), '0') +
-           std::to_string(k);
+dstd::String fold_key(std::size_t k) {
+    return "m" + dstd::String(4 - dstd::to_string(k).size(), '0') +
+           dstd::to_string(k);
 }
 
 struct Row {
-    std::string scope;
-    std::string key;
-    std::string value;
+    dstd::String scope;
+    dstd::String key;
+    dstd::String value;
 };
 
-std::vector<Row> collect(store::engine::ScanCursor& cursor) {
-    std::vector<Row> rows;
+dstd::Vector<Row> collect(store::engine::ScanCursor& cursor) {
+    dstd::Vector<Row> rows;
     while (!cursor.at_end()) {
         auto value = cursor.value();
         REQUIRE(value.has_value());
         REQUIRE_FALSE(cursor.scope().paths.empty());
-        rows.push_back({to_std(cursor.scope().paths[0]), to_std(cursor.key()),
-                        to_std(*value)});
+        rows.push_back({dstd::String(cursor.scope().paths[0]),
+                        to_std(cursor.key()), to_std(*value)});
         cursor.next();
     }
     return rows;
 }
 
-using RowsByScope = std::map<dstd::Pair<std::string, std::string>, std::string>;
+using RowsByScope =
+    dstd::Map<dstd::Pair<dstd::String, dstd::String>, dstd::String>;
 
-RowsByScope index_rows(const std::vector<Row>& rows) {
+RowsByScope index_rows(const dstd::Vector<Row>& rows) {
     RowsByScope out;
     for (const Row& row : rows) out[{row.scope, row.key}] = row.value;
     return out;
 }
 
 struct CopyRow {
-    std::string scope;
+    dstd::String scope;
     std::uint32_t id = 0;
     std::uint64_t generation = 0;
 };
 
-std::vector<CopyRow> read_copies(const std::string& path) {
-    auto reader = DataFileReader::open(dstring(path));
+dstd::Vector<CopyRow> read_copies(const dstd::String& path) {
+    auto reader = DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
-    std::map<std::uint32_t, std::string> scope_paths;
+    dstd::Map<std::uint32_t, dstd::String> scope_paths;
     for (const store::engine::ScopeItem& scope : reader->index().scopes) {
         REQUIRE_FALSE(scope.paths.empty());
-        scope_paths[scope.local_id] = to_std(scope.paths[0]);
+        scope_paths[scope.local_id] = dstd::String(scope.paths[0]);
     }
-    std::vector<CopyRow> out;
+    dstd::Vector<CopyRow> out;
     for (const store::engine::CopyItem& copy : reader->index().copies) {
         out.push_back(
             {scope_paths[copy.scope_id], copy.local_id, copy.generation});
@@ -314,8 +305,8 @@ std::vector<CopyRow> read_copies(const std::string& path) {
     return out;
 }
 
-std::uint32_t copy_id_of(const std::vector<CopyRow>& copies,
-                         const std::string& scope) {
+std::uint32_t copy_id_of(const dstd::Vector<CopyRow>& copies,
+                         const dstd::String& scope) {
     for (const CopyRow& copy : copies) {
         if (copy.scope == scope) return copy.id;
     }
@@ -350,10 +341,10 @@ TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
     RowsByScope expected_b;
     // A scan of a fold namespace folds the scopes together, so the sums are
     // keyed by key alone.
-    std::map<std::string, std::int64_t> expected_sum;
+    dstd::Map<dstd::String, std::int64_t> expected_sum;
     for (int t = 0; t < COROS; ++t) {
         for (int r = 0; r < ROUNDS; ++r) {
-            const std::string scope = scope_of(t, r);
+            const dstd::String scope = scope_of(t, r);
             for (std::size_t k = 0; k < RAW_KEYS; ++k) {
                 expected_a[{scope, raw_key(t, r, k)}] =
                     padded(raw_value("a", t, r, k), RAW_VALUE_BYTES);
@@ -434,8 +425,8 @@ TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
 
     auto sums_cursor =
         snapshot->scan_all(fold_spec("sums", FoldKind::SumI64), {}, {});
-    std::map<std::string, std::int64_t> got_sum;
-    const std::vector<Row> sum_rows = collect(sums_cursor);
+    dstd::Map<dstd::String, std::int64_t> got_sum;
+    const dstd::Vector<Row> sum_rows = collect(sums_cursor);
     for (const Row& row : sum_rows)
         got_sum[row.key] = read_i64(view_of(row.value));
     CHECK(got_sum.size() == expected_sum.size());
@@ -454,16 +445,16 @@ TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
     const ScopeKey scope = file_scope(scope_path(0));
 
     const auto key_of = [](int batch, std::size_t k) {
-        return "q" + std::to_string(batch) + "-k" + std::to_string(k);
+        return "q" + dstd::to_string(batch) + "-k" + dstd::to_string(k);
     };
     const auto value_of = [](int batch, std::size_t k) {
-        return "v" + std::to_string(batch) + "-" + std::to_string(k);
+        return "v" + dstd::to_string(batch) + "-" + dstd::to_string(k);
     };
 
     RowsByScope expected;
     for (int b = 0; b < BATCHES; ++b) {
         for (std::size_t k = 0; k < RAW_KEYS; ++k) {
-            expected[{to_std(scope.paths[0]), key_of(b, k)}] =
+            expected[{dstd::String(scope.paths[0]), key_of(b, k)}] =
                 padded(value_of(b, k), RAW_VALUE_BYTES);
         }
     }
@@ -533,11 +524,11 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
     // open with room for the small third batch.
     constexpr std::size_t BUSY_KEYS = 6;
     constexpr std::size_t BUSY_VALUE_BYTES = 8000;
-    const auto one = [&](const ScopeKey& scope, const std::string& tag) {
+    const auto one = [&](const ScopeKey& scope, const dstd::String& tag) {
         return raw_batch(
             *writer, space, scope, BUSY_KEYS, BUSY_VALUE_BYTES,
-            [&tag](std::size_t k) { return tag + "-k" + std::to_string(k); },
-            [&tag](std::size_t k) { return tag + "-" + std::to_string(k); });
+            [&tag](std::size_t k) { return tag + "-k" + dstd::to_string(k); },
+            [&tag](std::size_t k) { return tag + "-" + dstd::to_string(k); });
     };
 
     REQUIRE(writer->commit(one(first_scope, "first")).has_value());
@@ -550,8 +541,8 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
     REQUIRE(writer
                 ->commit(raw_batch(
                     *writer, space, third_scope, 1, 64,
-                    [](std::size_t) { return std::string("third"); },
-                    [](std::size_t) { return std::string("third"); }))
+                    [](std::size_t) { return dstd::String("third"); },
+                    [](std::size_t) { return dstd::String("third"); }))
                 .has_value());
 
     await_space(*writer);
@@ -561,7 +552,8 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
 
     REQUIRE(close_writer(*writer).has_value());
 
-    const std::vector<CopyRow> copies = read_copies(to_std(writer->path()));
+    const dstd::Vector<CopyRow> copies =
+        read_copies(dstd::String(writer->path()));
     REQUIRE(copies.size() == 3);
     CHECK(copy_id_of(copies, scope_path(1)) == 1);
     CHECK(copy_id_of(copies, scope_path(2)) == 2);
@@ -573,11 +565,11 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
     REQUIRE(snapshot->state(put_spec("busy", 0), refused_scope) ==
             ScopeState::Ready);
     for (const ScopeKey& scope : {first_scope, refused_scope}) {
-        const std::string tag = scope == first_scope ? "first" : "refused";
+        const dstd::String tag = scope == first_scope ? "first" : "refused";
         for (std::size_t k = 0; k < BUSY_KEYS; ++k) {
-            const std::string key = tag + "-k" + std::to_string(k);
-            const std::string expected =
-                padded(tag + "-" + std::to_string(k), BUSY_VALUE_BYTES);
+            const dstd::String key = tag + "-k" + dstd::to_string(k);
+            const dstd::String expected =
+                padded(tag + "-" + dstd::to_string(k), BUSY_VALUE_BYTES);
             auto value =
                 snapshot->get(put_spec("busy", 0), scope, view_of(key));
             REQUIRE(value.has_value());
@@ -605,10 +597,10 @@ TEST_CASE("back pressure: a batch larger than the quota is taken over it") {
     const ScopeKey scope = file_scope(scope_path(0));
 
     const auto key_of = [](std::size_t k) {
-        return "big-k" + std::to_string(k);
+        return "big-k" + dstd::to_string(k);
     };
     const auto value_of = [](std::size_t k) {
-        return "big-" + std::to_string(k);
+        return "big-" + dstd::to_string(k);
     };
 
     // Nothing is held, so no write can free room: the batch is taken past the
@@ -632,8 +624,8 @@ TEST_CASE("back pressure: a batch larger than the quota is taken over it") {
                         *writer,
                         raw_batch(
                             *writer, space, scope, 1, 64,
-                            [](std::size_t) { return std::string("after"); },
-                            [](std::size_t) { return std::string("after"); }),
+                            [](std::size_t) { return dstd::String("after"); },
+                            [](std::size_t) { return dstd::String("after"); }),
                         BATCH_ATTEMPTS);
                     if (!small.has_value()) errors.fetch_add(1);
                 });
@@ -656,7 +648,7 @@ TEST_CASE("back pressure: a batch larger than the quota is taken over it") {
               padded(value_of(k), BIG_VALUE_BYTES));
     }
     auto after = snapshot->get(put_spec("over", 0), scope,
-                               view_of(std::string("after")));
+                               view_of(dstd::String("after")));
     REQUIRE(after.has_value());
     REQUIRE(after->has_value());
     CHECK(to_std((*after)->bytes()) == padded("after", 64));
@@ -687,12 +679,12 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
         return scope_path(thread % SCOPES);
     };
     const auto key_of = [](int thread, int batch, std::size_t k) {
-        return "t" + std::to_string(thread) + "-b" + std::to_string(batch) +
-               "-k" + std::to_string(k);
+        return "t" + dstd::to_string(thread) + "-b" + dstd::to_string(batch) +
+               "-k" + dstd::to_string(k);
     };
     const auto value_of = [](int thread, int batch, std::size_t k) {
-        return "v" + std::to_string(thread) + "-" + std::to_string(batch) +
-               "-" + std::to_string(k);
+        return "v" + dstd::to_string(thread) + "-" + dstd::to_string(batch) +
+               "-" + dstd::to_string(k);
     };
 
     RowsByScope expected;
@@ -790,16 +782,16 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
     const NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
     const auto key_of = [](int batch, std::size_t k) {
-        return "r" + std::to_string(batch) + "-k" + std::to_string(k);
+        return "r" + dstd::to_string(batch) + "-k" + dstd::to_string(k);
     };
     const auto value_of = [](int batch, std::size_t k) {
-        return "v" + std::to_string(batch) + "-" + std::to_string(k);
+        return "v" + dstd::to_string(batch) + "-" + dstd::to_string(k);
     };
 
     RowsByScope expected;
     for (int b = 0; b < BATCHES; ++b) {
         for (std::size_t k = 0; k < RAW_KEYS; ++k) {
-            expected[{to_std(scope.paths[0]), key_of(b, k)}] =
+            expected[{dstd::String(scope.paths[0]), key_of(b, k)}] =
                 padded(value_of(b, k), RAW_VALUE_BYTES);
         }
     }
@@ -851,11 +843,11 @@ TEST_CASE("back pressure: a latched extent error ends space() and commit") {
     const NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
 
-    const auto one = [&](const std::string& tag) {
+    const auto one = [&](const dstd::String& tag) {
         return raw_batch(
             *writer, space, scope, RAW_KEYS, RAW_VALUE_BYTES,
-            [&tag](std::size_t k) { return tag + "-k" + std::to_string(k); },
-            [&tag](std::size_t k) { return tag + "-" + std::to_string(k); });
+            [&tag](std::size_t k) { return tag + "-k" + dstd::to_string(k); },
+            [&tag](std::size_t k) { return tag + "-" + dstd::to_string(k); });
     };
 
     REQUIRE(writer->commit(one("held")).has_value());
@@ -863,7 +855,7 @@ TEST_CASE("back pressure: a latched extent error ends space() and commit") {
     CHECK(before.held > 0);
 
     store::engine::DataFileWriterTestHook::reopen_read_only(
-        WriterTestHook::file(*writer), to_std(writer->path()));
+        WriterTestHook::file(*writer), dstd::String(writer->path()));
 
     auto flushed = store_runtime().submit(writer->flush());
     await_handle(flushed, WAIT_LIMIT);
@@ -901,15 +893,15 @@ TEST_CASE(
     REQUIRE(writer
                 ->commit(raw_batch(
                     *writer, space, scope, RAW_KEYS, RAW_VALUE_BYTES,
-                    [](std::size_t k) { return "k" + std::to_string(k); },
-                    [](std::size_t k) { return "v" + std::to_string(k); }))
+                    [](std::size_t k) { return "k" + dstd::to_string(k); },
+                    [](std::size_t k) { return "v" + dstd::to_string(k); }))
                 .has_value());
     CHECK(WriterTestHook::extents(*writer).held > 0);
 
     // space() seals the open extent and parks before its write fails. Nothing
     // else touches the writer, so only the failed write can end the wait.
     store::engine::DataFileWriterTestHook::reopen_read_only(
-        WriterTestHook::file(*writer), to_std(writer->path()));
+        WriterTestHook::file(*writer), dstd::String(writer->path()));
     await_space(*writer);
 
     const WriterExtentsCounters after = WriterTestHook::extents(*writer);
@@ -942,17 +934,17 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
         writer = std::move(*created);
     }
 
-    std::vector<NamespaceId> spaces;
+    dstd::Vector<NamespaceId> spaces;
     for (int n = 0; n < NAMESPACES; ++n) {
         auto created =
-            writer->add_namespace(put_spec("limit-" + std::to_string(n), 0));
+            writer->add_namespace(put_spec("limit-" + dstd::to_string(n), 0));
         REQUIRE(created.has_value());
         spaces.push_back(*created);
     }
     const ScopeKey scope = file_scope(scope_path(0));
     const auto key_of = [](int n, int s, std::size_t k) {
-        return "n" + std::to_string(n) + "-s" + std::to_string(s) + "-k" +
-               std::to_string(k);
+        return "n" + dstd::to_string(n) + "-s" + dstd::to_string(s) + "-k" +
+               dstd::to_string(k);
     };
     const auto make = [&](int n, int s) {
         return raw_batch(
@@ -1012,7 +1004,7 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     REQUIRE(snapshot.has_value());
     for (int n = 0; n < NAMESPACES; ++n) {
         auto cursor = snapshot->scan_all(
-            put_spec("limit-" + std::to_string(n), 0), {}, {});
+            put_spec("limit-" + dstd::to_string(n), 0), {}, {});
         CHECK(collect(cursor).size() == SEGMENTS_PER_NAMESPACE * RAW_KEYS);
     }
 }
@@ -1029,23 +1021,22 @@ TEST_CASE("back pressure: a Busy commit writes none of its big values") {
     // A 40 KiB segment is past the half-extent quota and stays in its open
     // extent: it is taken past the quota and holds bytes nothing writes yet.
     Batch fill = writer->batch(space, scope, 0);
-    const std::string fill_value(40 * 1024, 'f');
-    fill.put(view_of(std::string("fill")), view_of(fill_value));
+    const dstd::String fill_value(40 * 1024, 'f');
+    fill.put(view_of(dstd::String("fill")), view_of(fill_value));
     REQUIRE(writer->commit(std::move(fill)).has_value());
     CHECK(WriterTestHook::extents(*writer).over_quota == 1);
 
-    const std::string path = to_std(writer->path());
-    const auto size_before = dftracer::utils::dstd::fs::file_size(path).value();
+    const dstd::String path = dstd::String(writer->path());
+    const auto size_before = dstd::fs::file_size(path).value();
     Batch big = writer->batch(space, scope, 0);
-    const std::string big_value(std::size_t{2} << 20, 'b');
-    big.put(view_of(std::string("big")), view_of(big_value));
+    const dstd::String big_value(std::size_t{2} << 20, 'b');
+    big.put(view_of(dstd::String("big")), view_of(big_value));
     auto busy = writer->commit(std::move(big));
     REQUIRE_FALSE(busy.has_value());
     CHECK(is_busy(busy.error()));
     // The big value goes to the file as the segment is sealed. A Busy commit
     // sealed nothing, so the file did not grow by it.
-    CHECK(dftracer::utils::dstd::fs::file_size(path).value() <
-          size_before + big_value.size());
+    CHECK(dstd::fs::file_size(path).value() < size_before + big_value.size());
 
     auto retried = store_runtime().submit(
         commit_retrying(*writer, std::move(big), RETRY_ATTEMPTS));
@@ -1056,7 +1047,7 @@ TEST_CASE("back pressure: a Busy commit writes none of its big values") {
     auto snapshot = Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     auto cursor = snapshot->scan_all(put_spec("big", 0), {}, {});
-    const std::vector<Row> rows = collect(cursor);
+    const dstd::Vector<Row> rows = collect(cursor);
     REQUIRE(rows.size() == 2);
     CHECK(rows[0].key == "big");
     CHECK(rows[0].value == big_value);
@@ -1087,8 +1078,8 @@ TEST_CASE(
     WriterTestHook::set_space_sealed([](Writer& w) {
         if (&w != hooked || appended) return;
         Batch batch = w.batch(hooked_space, *hooked_scope, 0);
-        const std::string value(RAW_VALUE_BYTES, 'a');
-        batch.put(view_of(std::string("late")), view_of(value));
+        const dstd::String value(RAW_VALUE_BYTES, 'a');
+        batch.put(view_of(dstd::String("late")), view_of(value));
         appended = w.commit(std::move(batch)).has_value();
     });
     await_space(*writer);
@@ -1155,7 +1146,7 @@ TEST_CASE("back pressure keeps extents full under steady load") {
     // Extents hold at least half an extent of raw segment bytes on average. The
     // stored extents are smaller, since they are compressed.
     auto reader = store::engine::DataFileReader::open(
-        std::string(writer->path().data(), writer->path().size()));
+        dstd::String(writer->path().data(), writer->path().size()));
     REQUIRE(reader.has_value());
     auto refs = reader->all_extent_refs();
     REQUIRE(refs.has_value());

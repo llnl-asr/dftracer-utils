@@ -12,7 +12,8 @@
 
 #include <cstdint>
 #include <limits>
-#include <optional>
+
+using namespace dftracer::utils;
 
 namespace df = dftracer::utils::dataframe;
 using namespace dftracer::utils::duql;
@@ -23,40 +24,31 @@ constexpr std::int64_t N = 8;
 constexpr std::int64_t I64_MAX = std::numeric_limits<std::int64_t>::max();
 constexpr std::uint64_t U64_MAX = std::numeric_limits<std::uint64_t>::max();
 
-using OptI = dftracer::utils::dstd::Optional<std::int64_t>;
-using OptU = dftracer::utils::dstd::Optional<std::uint64_t>;
-using OptD = dftracer::utils::dstd::Optional<double>;
-using OptS = dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>;
-using OptB = dftracer::utils::dstd::Optional<bool>;
+using OptI = dstd::Optional<std::int64_t>;
+using OptU = dstd::Optional<std::uint64_t>;
+using OptD = dstd::Optional<double>;
+using OptS = dstd::Optional<dstd::String>;
+using OptB = dstd::Optional<bool>;
 
-const dftracer::utils::dstd::Vector<OptI> I = {1, -7, 0, I64_MAX, {}, 9, -3, 6};
-const dftracer::utils::dstd::Vector<OptI> J = {2, 3, 0, 1, 5, {}, -2, 4};
-const dftracer::utils::dstd::Vector<OptD> F = {0.5, -2.5, 0.0, 1e300,
-                                               2.0, {},   3.0, 6.0};
-const dftracer::utils::dstd::Vector<OptU> U = {1, U64_MAX, 0, 5, 2, 3, {}, 7};
-const dftracer::utils::dstd::Vector<OptS> S = {"a",   "B",     "",   {},
-                                               "abc", " x y ", "Ab", "zz"};
-const dftracer::utils::dstd::Vector<OptS> T = {"a",  "B",  "",  "q",
-                                               "bc", " x", "b", {}};
-const dftracer::utils::dstd::Vector<OptB> B = {true,  false, {},    true,
-                                               false, true,  false, true};
+const dstd::Vector<OptI> I = {1, -7, 0, I64_MAX, {}, 9, -3, 6};
+const dstd::Vector<OptI> J = {2, 3, 0, 1, 5, {}, -2, 4};
+const dstd::Vector<OptD> F = {0.5, -2.5, 0.0, 1e300, 2.0, {}, 3.0, 6.0};
+const dstd::Vector<OptU> U = {1, U64_MAX, 0, 5, 2, 3, {}, 7};
+const dstd::Vector<OptS> S = {"a", "B", "", {}, "abc", " x y ", "Ab", "zz"};
+const dstd::Vector<OptS> T = {"a", "B", "", "q", "bc", " x", "b", {}};
+const dstd::Vector<OptB> B = {true, false, {}, true, false, true, false, true};
 
 template <class T>
-dftracer::utils::dstd::Vector<std::uint8_t> validity(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::Optional<T>>&
-        v) {
-    dftracer::utils::dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
+dstd::Vector<std::uint8_t> validity(const dstd::Vector<dstd::Optional<T>>& v) {
+    dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t r = 0; r < v.size(); ++r)
         if (v[r]) bits[r / 8] |= static_cast<std::uint8_t>(1U << (r % 8));
     return bits;
 }
 
 template <class T>
-df::Series numbers(
-    df::TypeId type,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::Optional<T>>&
-        v) {
-    dftracer::utils::dstd::Vector<T> data;
+df::Series numbers(df::TypeId type, const dstd::Vector<dstd::Optional<T>>& v) {
+    dstd::Vector<T> data;
     for (const auto& x : v) data.push_back(x.value_or(T{}));
     const auto bits = validity(v);
     return df::Series::flat(type, data.data(), N, bits.data());
@@ -69,29 +61,27 @@ df::DataFrame frame() {
     f.columns.push_back(numbers(df::TypeId::Int64, J));
     f.columns.push_back(numbers(df::TypeId::Float64, F));
     f.columns.push_back(numbers(df::TypeId::Uint64, U));
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> s;
-    for (const auto& x : S)
-        s.push_back(x ? dftracer::utils::dstd::StringView(*x) : "");
+    dstd::Vector<dstd::StringView> s;
+    for (const auto& x : S) s.push_back(x ? dstd::StringView(*x) : "");
     const auto sbits = validity(S);
     f.columns.push_back(df::Series::strings(s, sbits.data()));
-    dftracer::utils::dstd::Vector<std::uint8_t> b;
+    dstd::Vector<std::uint8_t> b;
     for (const auto& x : B) b.push_back(x.value_or(false) ? 1 : 0);
-    dftracer::utils::dstd::Vector<std::uint8_t> packed((N + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> packed((N + 7) / 8, 0);
     for (std::size_t r = 0; r < b.size(); ++r)
         if (b[r]) packed[r / 8] |= static_cast<std::uint8_t>(1U << (r % 8));
     const auto bbits = validity(B);
     f.columns.push_back(
         df::Series::flat(df::TypeId::Bool, packed.data(), N, bbits.data()));
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> t;
-    for (const auto& x : T)
-        t.push_back(x ? dftracer::utils::dstd::StringView(*x) : "");
+    dstd::Vector<dstd::StringView> t;
+    for (const auto& x : T) t.push_back(x ? dstd::StringView(*x) : "");
     const auto tbits = validity(T);
     f.columns.push_back(df::Series::strings(t, tbits.data()));
     return f;
 }
 
 template <class T>
-Cell cell(const dftracer::utils::dstd::Optional<T>& v) {
+Cell cell(const dstd::Optional<T>& v) {
     return v ? Cell(*v) : Cell::null();
 }
 
@@ -230,7 +220,7 @@ TEST_CASE("vectorized expressions agree with the row evaluator") {
     };
     const df::DataFrame f = frame();
     for (const char* text : FORMS) {
-        INFO("query: ", dftracer::utils::dstd::String(text));
+        INFO("query: ", dstd::String(text));
         auto q = parse(text);
         REQUIRE_MESSAGE(q.has_value(), (q ? "" : q.error().format()));
         const df::Series mask = df::evaluate_mask(**q, f);
@@ -239,23 +229,23 @@ TEST_CASE("vectorized expressions agree with the row evaluator") {
                 evaluate_truth(**q, row(static_cast<std::size_t>(r)));
             const Truth got = column_truth(mask, r);
             CHECK_MESSAGE(got == want, "row ", r, ": columns ",
-                          dftracer::utils::dstd::String(name(got)), ", rows ",
-                          dftracer::utils::dstd::String(name(want)));
+                          dstd::String(name(got)), ", rows ",
+                          dstd::String(name(want)));
         }
     }
 }
 
 TEST_CASE("calendar time agrees between the column and row evaluators") {
-    const dftracer::utils::dstd::Vector<OptI> TS = {1700000000123456,
-                                                    -1,
-                                                    0,
-                                                    {},
-                                                    -86400000000,
-                                                    951782400000000,
-                                                    -62135596800000000,
-                                                    253402300799999999};
-    const dftracer::utils::dstd::Vector<OptD> SECS = {
-        1700000000.9, -0.5, 0.0, 2.5, {}, -1e30, 1e300, 86399.0};
+    const dstd::Vector<OptI> TS = {1700000000123456,
+                                   -1,
+                                   0,
+                                   {},
+                                   -86400000000,
+                                   951782400000000,
+                                   -62135596800000000,
+                                   253402300799999999};
+    const dstd::Vector<OptD> SECS = {1700000000.9, -0.5,  0.0,   2.5,
+                                     {},           -1e30, 1e300, 86399.0};
     df::DataFrame f;
     f.names = {"ts", "secs", "s"};
     f.columns.push_back(numbers(df::TypeId::Int64, TS));
@@ -265,7 +255,7 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
     Roles roles;
     roles.fields.emplace("ts", 1000);
     roles.fields.emplace("secs", 1000000000);
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> forms;
+    dstd::Vector<dstd::String> forms;
     for (const char* col : {"ts", "secs"}) {
         for (const char* part :
              {"year", "month", "day", "hour", "minute", "second", "millisecond",
@@ -273,18 +263,18 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
               "quarter", "iso_week", "iso_year"})
             for (const char* k : {"-1", "0", "1", "3", "6", "12", "23", "59",
                                   "364", "999", "1969", "2022"})
-                forms.push_back(dftracer::utils::dstd::String("date_part(") +
-                                col + ", \"" + part + "\") > " + k);
+                forms.push_back(dstd::String("date_part(") + col + ", \"" +
+                                part + "\") > " + k);
         for (const char* fmt : {"%F %T.%f", "%Y-%m-%d %H:%M:%S %j",
                                 "%A %B %p %I %y", "%s %z %Z %%"})
             for (const char* k : {"\"0\"", "\"1969\"", "\"2000\"",
                                   "\"2023-11-14\"", "\"A\"", "\"Thu\""})
-                forms.push_back(dftracer::utils::dstd::String("format_time(") +
-                                col + ", \"" + fmt + "\") < " + k);
+                forms.push_back(dstd::String("format_time(") + col + ", \"" +
+                                fmt + "\") < " + k);
     }
     forms.push_back("date_part(as_time(s, \"us\"), \"hour\") > 0");
-    for (const dftracer::utils::dstd::String& form : forms) {
-        const dftracer::utils::dstd::String text = "where " + form;
+    for (const dstd::String& form : forms) {
+        const dstd::String text = "where " + form;
         INFO("query: ", text);
         auto p = compile_program(text, {}, &roles);
         REQUIRE_MESSAGE(p.has_value(), (p ? "" : p.error().format()));
@@ -294,29 +284,27 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
             ValueMap m;
             m["ts"] = cell(TS[static_cast<std::size_t>(r)]);
             m["secs"] = cell(SECS[static_cast<std::size_t>(r)]);
-            m["s"] = Cell(
-                dftracer::utils::dstd::String(1, static_cast<char>('a' + r)));
+            m["s"] = Cell(dstd::String(1, static_cast<char>('a' + r)));
             const Truth want = evaluate_truth(*p->main.filter, m);
             const Truth got = column_truth(mask, r);
             CHECK_MESSAGE(got == want, "row ", r, ": columns ",
-                          dftracer::utils::dstd::String(name(got)), ", rows ",
-                          dftracer::utils::dstd::String(name(want)));
+                          dstd::String(name(got)), ", rows ",
+                          dstd::String(name(want)));
         }
     }
 }
 
 TEST_CASE("quantifiers over a list column agree with the row evaluator") {
     // l: [1, 5], [], null, [2, null], [7]; s: a, b, c, d, e
-    const dftracer::utils::dstd::Vector<std::int32_t> offs = {0, 2, 2, 2, 4, 5};
-    const dftracer::utils::dstd::Vector<std::int64_t> vals = {1, 5, 2, 0, 7};
-    const dftracer::utils::dstd::Vector<std::uint8_t> valid = {
-        0x17};  // element 3 is null
+    const dstd::Vector<std::int32_t> offs = {0, 2, 2, 2, 4, 5};
+    const dstd::Vector<std::int64_t> vals = {1, 5, 2, 0, 7};
+    const dstd::Vector<std::uint8_t> valid = {0x17};  // element 3 is null
     df::DataFrame f;
     f.names = {"l", "s"};
     f.columns.push_back(
         df::Series::list(offs,
                          df::Series::flat_i64(vals.data(), 5, valid.data()))
-            .take(dftracer::utils::dstd::Vector<std::int64_t>{0, 1, -1, 3, 4}));
+            .take(dstd::Vector<std::int64_t>{0, 1, -1, 3, 4}));
     f.columns.push_back(df::Series::strings({"a", "b", "c", "d", "e"}));
     const char* const JSON[] = {"[1,5]", "[]", nullptr, "[2,null]", "[7]"};
     const char* const S5[] = {"a", "b", "c", "d", "e"};
@@ -330,19 +318,19 @@ TEST_CASE("quantifiers over a list column agree with the row evaluator") {
         "all(l) > 0",
     };
     for (const char* text : FORMS) {
-        INFO("query: ", dftracer::utils::dstd::String(text));
+        INFO("query: ", dstd::String(text));
         auto q = parse(text);
         REQUIRE_MESSAGE(q.has_value(), (q ? "" : q.error().format()));
         const df::Series mask = df::evaluate_mask(**q, f);
         for (std::int64_t r = 0; r < 5; ++r) {
             ValueMap m;
             if (JSON[r]) m["l"] = Cell::json(JSON[r], true);
-            m["s"] = Cell(dftracer::utils::dstd::String(S5[r]));
+            m["s"] = Cell(dstd::String(S5[r]));
             const Truth want = evaluate_truth(**q, m);
             const Truth got = column_truth(mask, r);
             CHECK_MESSAGE(got == want, "row ", r, ": columns ",
-                          dftracer::utils::dstd::String(name(got)), ", rows ",
-                          dftracer::utils::dstd::String(name(want)));
+                          dstd::String(name(got)), ", rows ",
+                          dstd::String(name(want)));
         }
     }
 }

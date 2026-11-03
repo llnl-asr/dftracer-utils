@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -24,8 +28,6 @@
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftracer::utils::index::IndexedFile;
@@ -73,9 +75,9 @@ TEST_SUITE("Indexer") {
         TestEnvironment env(10);
         const dstd::Path dir = dstd::Path(env.get_dir()) / "traces";
         REQUIRE(dstd::fs::create_directories(dir).has_value());
-        std::ofstream((dir / "a.pfw.gz").c_str()) << "x";
-        std::ofstream((dir / "b.pfw").c_str()) << "x";
-        std::ofstream((dir / "notes.txt").c_str()) << "x";
+        (void)dstd::fs::write_file(dstd::PathView(dir / "a.pfw.gz"), "x");
+        (void)dstd::fs::write_file(dstd::PathView(dir / "b.pfw"), "x");
+        (void)dstd::fs::write_file(dstd::PathView(dir / "notes.txt"), "x");
 
         auto ix = Indexer::open({dstd::String(dir.str())}, with_runtime(rt));
         dstd::Vector<dstd::String> names;
@@ -92,13 +94,13 @@ TEST_SUITE("Indexer") {
         } catch (const common::DFTUtilsException& e) {
             CHECK(e.error().is_code(common::ErrorCode::InvalidArgument));
         }
-        const std::string missing = "/no/such/dir/trace.pfw.gz";
+        const dstd::String missing = "/no/such/dir/trace.pfw.gz";
         try {
             Indexer::open({dstd::String(dstd::StringView(missing))});
             FAIL("expected an error");
         } catch (const common::DFTUtilsException& e) {
             CHECK(e.error().is_code(common::ErrorCode::NotFound));
-            CHECK(std::string(e.what()).find(missing) != std::string::npos);
+            CHECK(dstd::String(e.what()).find(missing) != dstd::String::npos);
         }
     }
 
@@ -130,7 +132,8 @@ TEST_SUITE("Indexer") {
         const dstd::Path root(index_of(trace));
         REQUIRE(dstd::fs::create_directories(root / "rollups" / "store")
                     .has_value());
-        std::ofstream((root / "rollups" / "marker").c_str()) << "r";
+        (void)dstd::fs::write_file(dstd::PathView(root / "rollups" / "marker"),
+                                   "r");
         (void)dstd::fs::remove_all(root / "store");
         REQUIRE(dstd::fs::exists(root).value());
         REQUIRE_FALSE(dstd::fs::exists(root / "store").value());
@@ -282,7 +285,7 @@ TEST_SUITE("Indexer") {
         const auto files_block = blocking.files();
 
         auto async = Indexer::open(
-            {dstd::String(dstd::StringView(std::string(b.str())))},
+            {dstd::String(dstd::StringView(dstd::String(b.str())))},
             with_runtime(rt));
         IndexStatus by_async;
         dstd::Vector<IndexedFile> files_async;
@@ -321,7 +324,7 @@ TEST_SUITE("Indexer") {
             ix.build();
         } catch (const common::DFTUtilsException& e) {
             threw = true;
-            CHECK(std::string(e.what()).find(locked) != std::string::npos);
+            CHECK(dstd::String(e.what()).find(locked) != dstd::String::npos);
         }
         REQUIRE(dstd::fs::set_permissions(locked, 0700).has_value());
         CHECK(threw);
@@ -356,17 +359,17 @@ struct ZlibPrefix {
     std::size_t lines = 0;
     std::size_t events = 0;  // complete lines that start with '{'
     std::size_t complete_members = 0;
-    std::vector<std::size_t> member_starts;
+    dstd::Vector<std::size_t> member_starts;
 };
 
-ZlibPrefix zlib_prefix(const std::string& path) {
-    std::ifstream in(path.c_str(), std::ios::binary);
-    std::vector<unsigned char> data((std::istreambuf_iterator<char>(in)),
-                                    std::istreambuf_iterator<char>());
+ZlibPrefix zlib_prefix(const dstd::String& path) {
+    const dstd::String data_raw =
+        dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
+    dstd::Vector<unsigned char> data(data_raw.begin(), data_raw.end());
     ZlibPrefix r;
     std::size_t off = 0;
-    std::string out;
-    std::vector<unsigned char> buf(1 << 16);
+    dstd::String out;
+    dstd::Vector<unsigned char> buf(1 << 16);
     while (off < data.size()) {
         r.member_starts.push_back(off);
         z_stream zs{};
@@ -390,19 +393,21 @@ ZlibPrefix zlib_prefix(const std::string& path) {
     r.lines =
         static_cast<std::size_t>(std::count(out.begin(), out.end(), '\n'));
     std::size_t pos = 0;
-    for (std::size_t nl; (nl = out.find('\n', pos)) != std::string::npos;
+    for (std::size_t nl; (nl = out.find('\n', pos)) != dstd::String::npos;
          pos = nl + 1)
         if (out[pos] == '{') ++r.events;
     return r;
 }
 
-std::string write_prefix(const std::string& src, const std::string& dst,
-                         double frac) {
-    std::ifstream in(src.c_str(), std::ios::binary);
-    std::string bytes((std::istreambuf_iterator<char>(in)),
-                      std::istreambuf_iterator<char>());
-    std::ofstream(dst.c_str(), std::ios::binary) << bytes.substr(
-        0, static_cast<std::size_t>(static_cast<double>(bytes.size()) * frac));
+dstd::String write_prefix(const dstd::String& src, const dstd::String& dst,
+                          double frac) {
+    dstd::String bytes =
+        dstd::fs::read_file(dstd::PathView(src)).value_or(dstd::String());
+    (void)dstd::fs::write_file(
+        dstd::PathView(dst),
+        common::str_cat(bytes.substr(
+            0, static_cast<std::size_t>(static_cast<double>(bytes.size()) *
+                                        frac))));
     return dst;
 }
 
@@ -413,7 +418,7 @@ struct Indexed {
     std::uint64_t members_end = 0;
 };
 
-Indexed indexed(const std::string& trace) {
+Indexed indexed(const dstd::String& trace) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_of(trace));
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     Indexed r;
@@ -430,10 +435,10 @@ Indexed indexed(const std::string& trace) {
     return r;
 }
 
-std::string multimember_trace(TestEnvironment& env, int events,
-                              const std::string& name) {
+dstd::String multimember_trace(TestEnvironment& env, int events,
+                               const dstd::String& name) {
     const auto plain = env.create_dft_test_file(events);
-    const std::string gz((dstd::Path(env.get_dir()) / name).str());
+    const dstd::String gz((dstd::Path(env.get_dir()) / name).str());
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     (void)dstd::fs::remove(plain);
@@ -451,9 +456,9 @@ TEST_SUITE("Truncated") {
             CAPTURE(frac);
             const auto cut = write_prefix(
                 full,
-                std::string(
+                dstd::String(
                     (dstd::Path(env.get_dir()) /
-                     ("cut" + std::to_string(static_cast<int>(frac * 100)) +
+                     ("cut" + dstd::to_string(static_cast<int>(frac * 100)) +
                       ".pfw.gz"))
                         .str()),
                 frac);
@@ -475,10 +480,11 @@ TEST_SUITE("Truncated") {
         TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
-            full, std::string((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
+            full,
+            dstd::String((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
             0.5);
         {
-            std::fstream f(cut,
+            std::fstream f(cut.c_str(),
                            std::ios::in | std::ios::out | std::ios::binary);
             f.seekp(-4, std::ios::end);
             f.write("\xfe\xff\xff\xff", 4);
@@ -504,7 +510,8 @@ TEST_SUITE("Truncated") {
         TestEnvironment env(10);
         const auto full = env.create_dft_test_gzip_file(3000);
         const auto cut = write_prefix(
-            full, std::string((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
+            full,
+            dstd::String((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
             0.5);
         Indexer::open({dstd::String(dstd::StringView(cut))}, with_runtime(rt))
             .build();
@@ -537,11 +544,11 @@ TEST_SUITE("Truncated") {
         REQUIRE(ref.member_starts.size() > 1);
         const std::size_t last = ref.member_starts.back();
         {
-            std::fstream f(full,
+            std::fstream f(full.c_str(),
                            std::ios::in | std::ios::out | std::ios::binary);
             f.seekp(static_cast<std::streamoff>(last + 10));
             const std::size_t n = dstd::fs::file_size(full).value() - last - 10;
-            std::string noise(n, static_cast<char>(0xFF));
+            dstd::String noise(n, static_cast<char>(0xFF));
             f.write(noise.data(), static_cast<std::streamsize>(n));
         }
         Indexer::open({dstd::String(dstd::StringView(full))}, with_runtime(rt))
@@ -557,7 +564,7 @@ TEST_SUITE("Truncated") {
         Runtime rt(4);
         TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
-        const std::string path(
+        const dstd::String path(
             (dstd::Path(env.get_dir()) / "live.pfw.gz").str());
         write_prefix(full, path, 0.6);
         auto ix = Indexer::open({dstd::String(dstd::StringView(path))},
@@ -580,12 +587,12 @@ TEST_SUITE("Truncated") {
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
             full,
-            std::string((dstd::Path(env.get_dir()) / "cut90.pfw.gz").str()),
+            dstd::String((dstd::Path(env.get_dir()) / "cut90.pfw.gz").str()),
             0.9);
         const auto ref = zlib_prefix(cut);
         REQUIRE(ref.events > 0);
 
-        const auto count_lines = [](const std::string& path)
+        const auto count_lines = [](const dstd::String& path)
             -> dftracer::utils::coro::CoroTask<std::size_t> {
             dftracer::utils::utilities::reader::TraceReader reader(
                 {.file_path = dstd::String(path)});
@@ -613,7 +620,8 @@ TEST_SUITE("Truncated") {
         TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
-            full, std::string((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
+            full,
+            dstd::String((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
             0.7);
         auto ix = Indexer::open({dstd::String(dstd::StringView(full)),
                                  dstd::String(dstd::StringView(cut))},

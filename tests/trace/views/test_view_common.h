@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -19,8 +20,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
-#include <string>
-#include <vector>
 
 namespace test_view_common {
 
@@ -30,10 +29,10 @@ T run(dftracer::utils::coro::CoroTask<T> task) {
 }
 
 // A trace mixing POSIX and STDIO events so filters have something to cut.
-inline std::string create_mixed_trace(dftu_utils_test::TestEnvironment& env,
-                                      int posix_n, int stdio_n) {
-    std::string pfw = env.get_dir() + "/mixed.pfw";
-    std::ofstream ofs(pfw.c_str());
+inline dftracer::utils::dstd::String create_mixed_trace(
+    dftu_utils_test::TestEnvironment& env, int posix_n, int stdio_n) {
+    dftracer::utils::dstd::String pfw = env.get_dir() + "/mixed.pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < posix_n; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
@@ -45,7 +44,7 @@ inline std::string create_mixed_trace(dftu_utils_test::TestEnvironment& env,
             << "\n";
     }
     ofs.close();
-    std::string gz = pfw + ".gz";
+    dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
@@ -55,27 +54,27 @@ inline std::string create_mixed_trace(dftu_utils_test::TestEnvironment& env,
 // `member_bytes` each, so the scan must cross member boundaries. Each member's
 // last event straddles into the next member (content here, terminating newline
 // there), which is exactly the case that must not drop events.
-inline std::string create_multimember_trace(
+inline dftracer::utils::dstd::String create_multimember_trace(
     dftu_utils_test::TestEnvironment& env, int n, std::size_t member_bytes) {
-    std::string pfw = env.get_dir() + "/mm.pfw";
-    std::ofstream ofs(pfw.c_str());
+    dftracer::utils::dstd::String pfw = env.get_dir() + "/mm.pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
             << "\n";
     }
     ofs.close();
-    std::string gz = pfw + ".gz";
+    dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, member_bytes);
     (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 
 // A trace with ph="X" events plus ph="C" counter events (aggregator style).
-inline std::string create_trace_with_counters(
+inline dftracer::utils::dstd::String create_trace_with_counters(
     dftu_utils_test::TestEnvironment& env) {
-    std::string pfw = env.get_dir() + "/ctr.pfw";
-    std::ofstream ofs(pfw.c_str());
+    dftracer::utils::dstd::String pfw = env.get_dir() + "/ctr.pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 10; ++i)
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":10,"args":{}})" << "\n";
@@ -85,7 +84,7 @@ inline std::string create_trace_with_counters(
     ofs << R"({"ph":"C","name":"cpu","cat":"sys","pid":0,"tid":0,"ts":2000,"args":{"user_pct":80,"idle_pct":20}})"
         << "\n";
     ofs.close();
-    std::string gz = pfw + ".gz";
+    dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
@@ -93,10 +92,10 @@ inline std::string create_trace_with_counters(
 
 // Many ph="C" counter events over two names (cpu, gpu), enough to span several
 // scan batches so a tiny memory budget forces multiple spills of each group.
-inline std::string create_bulk_counters(dftu_utils_test::TestEnvironment& env,
-                                        int n) {
-    std::string pfw = env.get_dir() + "/bulk.pfw";
-    std::ofstream ofs(pfw.c_str());
+inline dftracer::utils::dstd::String create_bulk_counters(
+    dftu_utils_test::TestEnvironment& env, int n) {
+    dftracer::utils::dstd::String pfw = env.get_dir() + "/bulk.pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i) {
         const char* nm = (i % 2 == 0) ? "cpu" : "gpu";
         ofs << R"({"ph":"C","name":")" << nm
@@ -104,7 +103,7 @@ inline std::string create_bulk_counters(dftu_utils_test::TestEnvironment& env,
             << R"(,"args":{"util":)" << (i % 100) << R"(}})" << "\n";
     }
     ofs.close();
-    std::string gz = pfw + ".gz";
+    dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
@@ -112,15 +111,16 @@ inline std::string create_bulk_counters(dftu_utils_test::TestEnvironment& env,
 
 // A file of cpu counter events with the given user_pct readings (one per
 // event).
-inline std::string create_counter_file(dftu_utils_test::TestEnvironment& env,
-                                       const std::string& tag,
-                                       const std::vector<int>& user_pcts) {
+inline dftracer::utils::dstd::String create_counter_file(
+    dftu_utils_test::TestEnvironment& env,
+    const dftracer::utils::dstd::String& tag,
+    const dftracer::utils::dstd::Vector<int>& user_pcts) {
     // Each shard gets its own dir so its index (keyed off the parent dir) does
     // not collide with the other shard's.
-    std::string dir = env.get_dir() + "/" + tag;
+    dftracer::utils::dstd::String dir = env.get_dir() + "/" + tag;
     REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-    std::string pfw = dir + "/ctr.pfw";
-    std::ofstream ofs(pfw.c_str());
+    dftracer::utils::dstd::String pfw = dir + "/ctr.pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     int ts = 1000;
     for (int v : user_pcts) {
         ofs << R"({"ph":"C","name":"cpu","cat":"sys","pid":0,"tid":0,"ts":)"
@@ -128,7 +128,7 @@ inline std::string create_counter_file(dftu_utils_test::TestEnvironment& env,
         ts += 1000;
     }
     ofs.close();
-    std::string gz = pfw + ".gz";
+    dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
@@ -136,17 +136,17 @@ inline std::string create_counter_file(dftu_utils_test::TestEnvironment& env,
 
 // Collects every streamed line.
 struct StringSink : dftracer::utils::trace::views::ExportSink {
-    std::string buffer;
+    dftracer::utils::dstd::String buffer;
     void write(dftracer::utils::dstd::StringView data) override {
         buffer.append(data);
     }
 
-    std::vector<std::string> lines() const {
-        std::vector<std::string> out;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> lines() const {
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
         std::size_t start = 0;
         while (start < buffer.size()) {
             auto nl = buffer.find('\n', start);
-            if (nl == std::string::npos) break;
+            if (nl == dftracer::utils::dstd::String::npos) break;
             out.emplace_back(buffer.substr(start, nl - start));
             start = nl + 1;
         }
@@ -154,11 +154,12 @@ struct StringSink : dftracer::utils::trace::views::ExportSink {
     }
 };
 
-inline std::size_t count_containing(const std::vector<std::string>& lines,
-                                    const std::string& needle) {
+inline std::size_t count_containing(
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& lines,
+    const dftracer::utils::dstd::String& needle) {
     std::size_t n = 0;
     for (const auto& l : lines)
-        if (l.find(needle) != std::string::npos) ++n;
+        if (l.find(needle) != dftracer::utils::dstd::String::npos) ++n;
     return n;
 }
 
@@ -196,10 +197,10 @@ inline double bnum(const dftracer::utils::dataframe::DataFrame& b,
     return c.data<double>()[row];
 }
 
-inline std::string bstr(const dftracer::utils::dataframe::DataFrame& b,
-                        std::int64_t row,
-                        dftracer::utils::dstd::StringView name) {
-    return std::string(
+inline dftracer::utils::dstd::String bstr(
+    const dftracer::utils::dataframe::DataFrame& b, std::int64_t row,
+    dftracer::utils::dstd::StringView name) {
+    return dftracer::utils::dstd::String(
         b.columns[static_cast<std::size_t>(bcol(b, name))].string_at(row));
 }
 
@@ -210,8 +211,8 @@ inline std::string bstr(const dftracer::utils::dataframe::DataFrame& b,
 // concern.
 struct SharedIndexedTrace {
     dftu_utils_test::TestEnvironment env{200};
-    std::string gz;
-    std::string idx;
+    dftracer::utils::dstd::String gz;
+    dftracer::utils::dstd::String idx;
     SharedIndexedTrace() {
         gz = create_mixed_trace(env, 30, 20);
         idx = dftracer::utils::trace::internal::determine_index_path(gz, "");

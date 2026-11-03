@@ -15,9 +15,11 @@
 #include <cstdint>
 #include <cstring>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::Series;
-using dftracer::utils::dstd::Condition;
+using dstd::Condition;
 namespace duql = dftracer::utils::duql;
 namespace dataframe = dftracer::utils::dataframe;
 
@@ -28,8 +30,8 @@ int bit_at(const Series& mask, int i) {
 }
 
 // 'T', 'F' or 'N' (null) per row; a null row must store data 0.
-dftracer::utils::dstd::String truth(const Series& m) {
-    dftracer::utils::dstd::String out;
+dstd::String truth(const Series& m) {
+    dstd::String out;
     for (int i = 0; i < m.length(); ++i) {
         if (m.is_null(i)) {
             CHECK(bit_at(m, i) == 0);
@@ -56,7 +58,7 @@ std::int64_t kept_rows(const char* q, const DataFrame& b) {
 }
 
 DataFrame nullable_x() {
-    dftracer::utils::dstd::Vector<std::int64_t> x{1, 0, 3, 2};
+    dstd::Vector<std::int64_t> x{1, 0, 3, 2};
     std::uint8_t valid = 0b1101;
     DataFrame b;
     b.names = {"x", "cat"};
@@ -68,7 +70,7 @@ DataFrame nullable_x() {
 
 TEST_SUITE("query vec_mask") {
     TEST_CASE("numeric + string predicate lowers to a SIMD mask") {
-        dftracer::utils::dstd::Vector<std::int64_t> dur{50, 150, 200, 80, 300};
+        dstd::Vector<std::int64_t> dur{50, 150, 200, 80, 300};
         DataFrame b;
         b.names = {"dur", "cat"};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
@@ -88,7 +90,7 @@ TEST_SUITE("query vec_mask") {
     }
 
     TEST_CASE("in-list lowers to OR-of-equals") {
-        dftracer::utils::dstd::Vector<std::int64_t> x{1, 2, 3, 4};
+        dstd::Vector<std::int64_t> x{1, 2, 3, 4};
         DataFrame b;
         b.names = {"x"};
         b.columns.push_back(Series::flat_i64(x.data(), 4));
@@ -117,7 +119,7 @@ TEST_SUITE("query vec_mask") {
     }
 
     TEST_CASE("unsupported predicate throws DuqlErrc::Unsupported") {
-        dftracer::utils::dstd::Vector<std::int64_t> v{1};
+        dstd::Vector<std::int64_t> v{1};
         DataFrame b;
         b.names = {"name"};
         b.columns.push_back(Series::flat_i64(v.data(), 1));
@@ -174,10 +176,10 @@ TEST_SUITE("query vec_mask") {
     TEST_CASE("Kleene and/or/not truth table") {
         using dataframe::TypeId;
         // a = TTT FFF NNN, b = TFN TFN TFN; null slots carry data 1.
-        dftracer::utils::dstd::Vector<std::uint8_t> ad{0b11000111, 0b1};
-        dftracer::utils::dstd::Vector<std::uint8_t> av{0b00111111, 0b0};
-        dftracer::utils::dstd::Vector<std::uint8_t> bd{0b01101101, 0b1};
-        dftracer::utils::dstd::Vector<std::uint8_t> bv{0b11011011, 0b0};
+        dstd::Vector<std::uint8_t> ad{0b11000111, 0b1};
+        dstd::Vector<std::uint8_t> av{0b00111111, 0b0};
+        dstd::Vector<std::uint8_t> bd{0b01101101, 0b1};
+        dstd::Vector<std::uint8_t> bv{0b11011011, 0b0};
         Series a = Series::flat(TypeId::Bool, ad.data(), 9, av.data());
         Series c = Series::flat(TypeId::Bool, bd.data(), 9, bv.data());
         CHECK(truth(a & c) == "TFNFFFNFN");
@@ -187,7 +189,7 @@ TEST_SUITE("query vec_mask") {
     }
 
     TEST_CASE("query plan: where + select + order by + limit") {
-        dftracer::utils::dstd::Vector<std::int64_t> dur{50, 150, 200, 80, 300};
+        dstd::Vector<std::int64_t> dur{50, 150, 200, 80, 300};
         DataFrame b;
         b.names = {"dur", "cat"};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
@@ -204,16 +206,14 @@ TEST_SUITE("query vec_mask") {
         DataFrame out = dataframe::execute(plan, b);
         // dur>60: {150,200,80,300}; sort desc -> 300,200,150,80; limit 2.
         REQUIRE(out.num_rows() == 2);
-        REQUIRE(out.names ==
-                dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                    "dur", "cat"});
+        REQUIRE(out.names == dstd::Vector<dstd::String>{"dur", "cat"});
         CHECK(out.columns[0].data<std::int64_t>()[0] == 300);
         CHECK(out.columns[0].data<std::int64_t>()[1] == 200);
         CHECK(out.columns[1].string_at(0) == "net");
     }
 
     TEST_CASE("query plan: where + group by/agg + order by + limit") {
-        dftracer::utils::dstd::Vector<std::int64_t> dur{10, 5, 20, 15, 30};
+        dstd::Vector<std::int64_t> dur{10, 5, 20, 15, 30};
         DataFrame b;
         b.names = {"cat", "dur"};
         b.columns.push_back(Series::strings({"io", "cpu", "io", "io", "net"}));
@@ -229,8 +229,7 @@ TEST_SUITE("query vec_mask") {
         // groups io(3),cpu(1),net(1); order by count desc -> io first.
         REQUIRE(out.num_rows() == 3);
         REQUIRE(out.names ==
-                dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                    "cat", "count", "sum_dur"});
+                dstd::Vector<dstd::String>{"cat", "count", "sum_dur"});
         CHECK(out.columns[0].string_at(0) == "io");
         CHECK(out.columns[1].data<std::int64_t>()[0] == 3);
         CHECK(out.columns[2].data<std::int64_t>()[0] == 45);  // io dur 10+20+15
@@ -246,7 +245,7 @@ TEST_SUITE("query vec_mask") {
         CHECK(std::strstr(s, "io") != nullptr);
         dftu_duql_string_free(s);
 
-        dftracer::utils::dstd::Vector<std::int64_t> dur{50, 150, 200};
+        dstd::Vector<std::int64_t> dur{50, 150, 200};
         Series cdur = Series::flat_i64(dur.data(), 3);
         Series ccat = Series::strings({"io", "io", "net"});
         const dftu_series* cols[2] = {cdur.handle(), ccat.handle()};

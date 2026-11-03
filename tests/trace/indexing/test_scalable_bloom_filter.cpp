@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <doctest/doctest.h>
 
-#include <string>
-#include <vector>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::index::extensions;
 
@@ -15,7 +15,7 @@ double false_positive_rate(const ScalableBloomFilter& bf, std::size_t inserted,
                            std::size_t probes) {
     std::size_t hits = 0;
     for (std::size_t i = 0; i < probes; ++i) {
-        if (bf.possibly_contains("absent-" + std::to_string(inserted + i))) {
+        if (bf.possibly_contains("absent-" + dstd::to_string(inserted + i))) {
             ++hits;
         }
     }
@@ -29,10 +29,10 @@ TEST_SUITE("ScalableBloomFilter") {
         ScalableBloomFilter bf(64, 0.01);
         const std::size_t n = 20000;
         for (std::size_t i = 0; i < n; ++i) {
-            bf.add("value-" + std::to_string(i));
+            bf.add("value-" + dstd::to_string(i));
         }
         for (std::size_t i = 0; i < n; ++i) {
-            REQUIRE(bf.possibly_contains("value-" + std::to_string(i)));
+            REQUIRE(bf.possibly_contains("value-" + dstd::to_string(i)));
         }
         CHECK(bf.num_levels() > 1);
     }
@@ -43,14 +43,14 @@ TEST_SUITE("ScalableBloomFilter") {
         BloomFilter fixed(1024, 0.01);
         ScalableBloomFilter scalable(1024, 0.01);
         for (std::size_t i = 0; i < n; ++i) {
-            auto v = "value-" + std::to_string(i);
+            auto v = "value-" + dstd::to_string(i);
             fixed.add(v);
             scalable.add(v);
         }
 
         std::size_t fixed_hits = 0;
         for (std::size_t i = 0; i < 2000; ++i) {
-            if (fixed.possibly_contains("absent-" + std::to_string(n + i))) {
+            if (fixed.possibly_contains("absent-" + dstd::to_string(n + i))) {
                 ++fixed_hits;
             }
         }
@@ -64,7 +64,7 @@ TEST_SUITE("ScalableBloomFilter") {
         ScalableBloomFilter bf(1024, 0.01);
         for (std::size_t rep = 0; rep < 10; ++rep) {
             for (std::size_t i = 0; i < 500; ++i) {
-                bf.add("value-" + std::to_string(i));
+                bf.add("value-" + dstd::to_string(i));
             }
         }
         CHECK(bf.num_entries() == 500);
@@ -74,7 +74,7 @@ TEST_SUITE("ScalableBloomFilter") {
         ScalableBloomFilter bf(64, 0.01);
         const std::size_t n = 5000;
         for (std::size_t i = 0; i < n; ++i) {
-            bf.add("value-" + std::to_string(i));
+            bf.add("value-" + dstd::to_string(i));
         }
 
         auto blob = bf.serialize();
@@ -84,7 +84,7 @@ TEST_SUITE("ScalableBloomFilter") {
         CHECK(restored.num_levels() == bf.num_levels());
         CHECK(restored.num_entries() == bf.num_entries());
         for (std::size_t i = 0; i < n; ++i) {
-            REQUIRE(restored.possibly_contains("value-" + std::to_string(i)));
+            REQUIRE(restored.possibly_contains("value-" + dstd::to_string(i)));
         }
     }
 
@@ -106,14 +106,14 @@ TEST_SUITE("ScalableBloomFilter") {
         ScalableBloomFilter a(1024, 0.01);
         ScalableBloomFilter b(1024, 0.01);
         for (std::size_t i = 0; i < 3000; ++i) {
-            a.add("a-" + std::to_string(i));
-            b.add("b-" + std::to_string(i));
+            a.add("a-" + dstd::to_string(i));
+            b.add("b-" + dstd::to_string(i));
         }
 
         a.merge_from(b);
         for (std::size_t i = 0; i < 3000; ++i) {
-            REQUIRE(a.possibly_contains("a-" + std::to_string(i)));
-            REQUIRE(a.possibly_contains("b-" + std::to_string(i)));
+            REQUIRE(a.possibly_contains("a-" + dstd::to_string(i)));
+            REQUIRE(a.possibly_contains("b-" + dstd::to_string(i)));
         }
     }
 
@@ -122,7 +122,7 @@ TEST_SUITE("ScalableBloomFilter") {
         for (std::size_t slice = 0; slice < 32; ++slice) {
             ScalableBloomFilter s(1024, 0.01);
             for (std::size_t i = 0; i < 2000; ++i) {
-                s.add("s" + std::to_string(slice) + "-" + std::to_string(i));
+                s.add("s" + dstd::to_string(slice) + "-" + dstd::to_string(i));
             }
             parent.merge_from(s);
         }

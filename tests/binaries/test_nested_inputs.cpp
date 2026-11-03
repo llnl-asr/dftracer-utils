@@ -1,20 +1,23 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
-#include <set>
 #include <sstream>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace {
 
 constexpr int EVENTS_PER_FILE = 20;
 
-std::string trace(int file) {
-    std::ostringstream out;
+dstd::String trace(int file) {
+    dftu_utils_test::TextOut out;
     out << "[\n";
     for (int i = 0; i < EVENTS_PER_FILE; ++i)
         out << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":)"
@@ -25,23 +28,23 @@ std::string trace(int file) {
     return out.str();
 }
 
-std::set<std::string> files_under(const std::string& dir) {
-    std::set<std::string> out;
+dstd::Set<dstd::String> files_under(const dstd::String& dir) {
+    dstd::Set<dstd::String> out;
     for (const auto& e : dftu_utils_test::walk_dir(dir))
-        if ((e.kind == dftracer::utils::dstd::fs::FileKind::File))
-            out.insert(std::string(e.path.str()));
+        if ((e.kind == dstd::fs::FileKind::File))
+            out.insert(dstd::String(e.path.str()));
     return out;
 }
 
-std::string tool(const char* env, const char* name) {
-    const std::string path = dftu_utils_test::find_binary_by_name(env, name);
+dstd::String tool(const char* env, const char* name) {
+    const dstd::String path = dftu_utils_test::find_binary_by_name(env, name);
     REQUIRE_MESSAGE(!path.empty(), name << " not found");
     dftu_utils_test::set_test_library_path(path);
     return path;
 }
 
-int run(const std::string& binary, const std::vector<std::string>& args,
-        std::string* out = nullptr) {
+int run(const dstd::String& binary, const dstd::Vector<dstd::String>& args,
+        dstd::String* out = nullptr) {
     int rc = -1;
     const auto text =
         dftu_utils_test::run_process_capture(binary, args, true, &rc);
@@ -57,25 +60,23 @@ TEST_SUITE("NestedInputs") {
         "every tool reads the traces in the subfolders of -d and "
         "writes nothing beside them") {
         dftu_utils_test::TestEnvironment env(10);
-        const std::string in = env.get_dir() + "/in";
-        const std::string work = env.get_dir() + "/work";
-        const std::vector<std::string> dirs = {in + "/a", in + "/a/b",
-                                               in + "/c/d/e"};
+        const dstd::String in = env.get_dir() + "/in";
+        const dstd::String work = env.get_dir() + "/work";
+        const dstd::Vector<dstd::String> dirs = {in + "/a", in + "/a/b",
+                                                 in + "/c/d/e"};
         for (std::size_t i = 0; i < dirs.size(); ++i) {
-            REQUIRE(dftracer::utils::dstd::fs::create_directories(dirs[i])
-                        .has_value());
+            REQUIRE(dstd::fs::create_directories(dirs[i]).has_value());
             dftu_utils_test::write_gz_trace(
-                dirs[i] + "/t" + std::to_string(i) + ".pfw.gz",
+                dirs[i] + "/t" + dstd::to_string(i) + ".pfw.gz",
                 trace(static_cast<int>(i)));
         }
-        REQUIRE(
-            dftracer::utils::dstd::fs::create_directories(work).has_value());
+        REQUIRE(dstd::fs::create_directories(work).has_value());
         const auto inputs = files_under(in);
         REQUIRE(inputs.size() == dirs.size());
-        const std::string total =
-            std::to_string(EVENTS_PER_FILE * static_cast<int>(dirs.size()));
+        const dstd::String total =
+            dstd::to_string(EVENTS_PER_FILE * static_cast<int>(dirs.size()));
 
-        std::string out;
+        dstd::String out;
         SUBCASE("dftracer_index") {
             CHECK(run(tool("DFTRACER_UTILS_INDEX_PATH", "dftracer_index"),
                       {in, "--index-dir", work + "/idx"}) == 0);
@@ -84,15 +85,15 @@ TEST_SUITE("NestedInputs") {
             CHECK(run(tool("DFTRACER_UTILS_EVENT_COUNT_PATH",
                            "dftracer_event_count"),
                       {in, "--index-dir", work + "/idx"}, &out) == 0);
-            CHECK(out.find(total) != std::string::npos);
+            CHECK(out.find(total) != dstd::String::npos);
         }
         SUBCASE("dftracer_info") {
             CHECK(run(tool("DFTRACER_UTILS_INFO_PATH", "dftracer_info"),
                       {in, "--index-dir", work + "/idx"}, &out) == 0);
             CHECK(out.find("Total Files:        " +
-                           std::to_string(dirs.size())) != std::string::npos);
+                           dstd::to_string(dirs.size())) != dstd::String::npos);
             CHECK(out.find("Valid Events:       " + total) !=
-                  std::string::npos);
+                  dstd::String::npos);
         }
         SUBCASE("dftracer_stats") {
             CHECK(run(tool("DFTRACER_UTILS_STATS_PATH", "dftracer_stats"),

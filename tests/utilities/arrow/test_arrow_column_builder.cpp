@@ -3,21 +3,21 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/arrow.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 
-#include <string>
-#include <vector>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::utilities::arrow;
 
-static std::string child_schema_name(const ArrowExportResult& r, int64_t i) {
+static dstd::String child_schema_name(const ArrowExportResult& r, int64_t i) {
     return r.get_schema()->children[i]->name;
 }
 
-static std::string child_schema_format(const ArrowExportResult& r, int64_t i) {
+static dstd::String child_schema_format(const ArrowExportResult& r, int64_t i) {
     return r.get_schema()->children[i]->format;
 }
 
@@ -32,7 +32,7 @@ TEST_CASE("RecordBatchBuilder - Static schema mode") {
                           {"value", ColumnType::Double},
                           {"name", ColumnType::String}});
 
-        std::string s0 = "alice", s1 = "bob", s2 = "carol";
+        dstd::String s0 = "alice", s1 = "bob", s2 = "carol";
 
         b.append_int64(0, 1);
         b.append_double(1, 1.1);
@@ -60,9 +60,9 @@ TEST_CASE("RecordBatchBuilder - Static schema mode") {
         CHECK(child_schema_name(result, 2) == "name");
 
         // nanoarrow format strings: "l"=int64, "g"=float64, "u"=utf8 string
-        CHECK(child_schema_format(result, 0) == std::string("l"));
-        CHECK(child_schema_format(result, 1) == std::string("g"));
-        CHECK(child_schema_format(result, 2) == std::string("u"));
+        CHECK(child_schema_format(result, 0) == dstd::String("l"));
+        CHECK(child_schema_format(result, 1) == dstd::String("g"));
+        CHECK(child_schema_format(result, 2) == dstd::String("u"));
     }
 
     SUBCASE("reserve and reset cycle for streaming") {
@@ -109,7 +109,7 @@ TEST_CASE("RecordBatchBuilder - Dynamic schema mode") {
         size_t y = b.add_or_get_column("y", ColumnType::String);
         CHECK(y == 1);
 
-        std::string hello = "hello";
+        dstd::String hello = "hello";
         b.append_int64(x, 43);
         b.append_string(y, hello);
         b.end_row();
@@ -235,9 +235,9 @@ TEST_CASE("RecordBatchBuilder - HIST list<struct> column") {
     CHECK(result.num_rows() == 2);
     CHECK(result.num_columns() == 2);
     // list<item: struct<lo,hi,count>>: format "+l" with a struct child.
-    CHECK(child_schema_format(result, 1) == std::string("+l"));
-    CHECK(std::string(result.get_schema()->children[1]->children[0]->format) ==
-          std::string("+s"));
+    CHECK(child_schema_format(result, 1) == dstd::String("+l"));
+    CHECK(dstd::String(result.get_schema()->children[1]->children[0]->format) ==
+          dstd::String("+s"));
 }
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW

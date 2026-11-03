@@ -19,8 +19,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <string>
 #include <utility>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::Series;
@@ -28,13 +29,11 @@ using dftracer::utils::dataframe::lazy_internal::HashArena;
 
 namespace {
 
-bool put(HashArena& a, std::uint64_t hash,
-         const dftracer::utils::dstd::String& key) {
+bool put(HashArena& a, std::uint64_t hash, const dstd::String& key) {
     return a.insert(hash, key.data(), static_cast<std::uint32_t>(key.size()));
 }
 
-bool has(const HashArena& a, std::uint64_t hash,
-         const dftracer::utils::dstd::String& key) {
+bool has(const HashArena& a, std::uint64_t hash, const dstd::String& key) {
     return a.contains(hash, key.data(), static_cast<std::uint32_t>(key.size()));
 }
 
@@ -60,20 +59,20 @@ TEST_SUITE("hash arena") {
     TEST_CASE("many colliding keys all stay distinct and findable") {
         HashArena a;
         for (int i = 0; i < 200; ++i)
-            CHECK(put(a, 7, "k" + dftracer::utils::dstd::to_string(i)));
+            CHECK(put(a, 7, "k" + dstd::to_string(i)));
         for (int i = 0; i < 200; ++i) {
-            CHECK_FALSE(put(a, 7, "k" + dftracer::utils::dstd::to_string(i)));
-            CHECK(has(a, 7, "k" + dftracer::utils::dstd::to_string(i)));
+            CHECK_FALSE(put(a, 7, "k" + dstd::to_string(i)));
+            CHECK(has(a, 7, "k" + dstd::to_string(i)));
         }
     }
 
     TEST_CASE("lazy unique keeps the first of equal-length keys in order") {
         // Row keys ("ab","c") and ("a","bc") have the same total bytes and
         // would be the same row if the cell boundary were not part of the key.
-        const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> a{
-            "ab", "a", "ab", "xy", "a", "xy", "ab"};
-        const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> b{
-            "c", "bc", "c", "zz", "bc", "zw", "c"};
+        const dstd::Vector<dstd::String> a{"ab", "a",  "ab", "xy",
+                                           "a",  "xy", "ab"};
+        const dstd::Vector<dstd::String> b{"c",  "bc", "c", "zz",
+                                           "bc", "zw", "c"};
         DataFrame df;
         df.names = {"a", "b"};
         df.columns.push_back(Series::strings(a));
@@ -82,9 +81,8 @@ TEST_SUITE("hash arena") {
                             .submit(df.lazy().unique().collect(2))
                             .get();
         REQUIRE(out.num_rows() == 4);
-        const dftracer::utils::dstd::Vector<dftracer::utils::dstd::Pair<
-            dftracer::utils::dstd::String, dftracer::utils::dstd::String>>
-            want{{"ab", "c"}, {"a", "bc"}, {"xy", "zz"}, {"xy", "zw"}};
+        const dstd::Vector<dstd::Pair<dstd::String, dstd::String>> want{
+            {"ab", "c"}, {"a", "bc"}, {"xy", "zz"}, {"xy", "zw"}};
         for (std::int64_t i = 0; i < 4; ++i) {
             CHECK(out.column("a").string_at(i) ==
                   want[static_cast<std::size_t>(i)].first);
@@ -101,7 +99,7 @@ TEST_SUITE("hash arena") {
             HashArena a(*pool);
             for (int i = 0; i < 5000; ++i)
                 CHECK(put(a, static_cast<std::uint64_t>(i) * 2654435761u,
-                          "key" + dftracer::utils::dstd::to_string(i)));
+                          "key" + dstd::to_string(i)));
             CHECK(pool->live() >= a.bytes());
             CHECK(a.bytes() > 0);
         }
@@ -118,13 +116,12 @@ TEST_SUITE("hash arena") {
         // chunks and start the next ones.
         constexpr int KEYS = 40000;
         auto key_of = [](int i) {
-            return "key-" + dftracer::utils::dstd::to_string(i) +
-                   dftracer::utils::dstd::String(56, 'x');
+            return "key-" + dstd::to_string(i) + dstd::String(56, 'x');
         };
         // One hash for two keys. The chain must keep them apart.
         constexpr std::uint64_t SHARED = 99;
-        const dftracer::utils::dstd::String first = "shared-" + key_of(0);
-        const dftracer::utils::dstd::String second = "shared-" + key_of(1);
+        const dstd::String first = "shared-" + key_of(0);
+        const dstd::String second = "shared-" + key_of(1);
         std::size_t key_bytes = first.size() + second.size();
         std::size_t key_max = std::max(first.size(), second.size());
         for (int i = 0; i < KEYS; ++i) {
@@ -157,8 +154,7 @@ TEST_SUITE("hash arena") {
         bool bounded = true;
         while (large < 2) {
             const std::size_t before = a.table_buckets();
-            const dftracer::utils::dstd::String key =
-                "k" + dftracer::utils::dstd::to_string(at);
+            const dstd::String key = "k" + dstd::to_string(at);
             const std::uint64_t bound =
                 a.bytes_after(1, key.size(), key.size());
             REQUIRE(put(a, ++at, key));
@@ -174,8 +170,7 @@ TEST_SUITE("hash arena") {
         CHECK(bounded);
         bool all = true;
         for (std::uint64_t k = 1; k <= at; ++k)
-            all =
-                all && has(a, k, "k" + dftracer::utils::dstd::to_string(k - 1));
+            all = all && has(a, k, "k" + dstd::to_string(k - 1));
         CHECK(all);
     }
 
@@ -187,8 +182,7 @@ TEST_SUITE("hash arena") {
         REQUIRE(pool);
         HashArena a(*pool);
         for (std::uint64_t i = 0; i < 57000; ++i) {
-            const dftracer::utils::dstd::String key =
-                dftracer::utils::dstd::to_string(i * 2654435761u);
+            const dstd::String key = dstd::to_string(i * 2654435761u);
             REQUIRE(put(a, i * 0x9e3779b97f4a7c15ULL, key));
         }
         CHECK(a.bytes() < (std::uint64_t{5} << 20));
@@ -200,16 +194,15 @@ TEST_SUITE("hash arena") {
         std::uint64_t at = 0;
         for (int round = 0; round < 20; ++round) {
             const std::size_t keys = 1u << (round % 12);
-            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> batch;
+            dstd::Vector<dstd::String> batch;
             std::size_t key_bytes = 0;
             for (std::size_t k = 0; k < keys; ++k) {
-                batch.push_back("r" + dftracer::utils::dstd::to_string(round) +
-                                "k" + dftracer::utils::dstd::to_string(k));
+                batch.push_back("r" + dstd::to_string(round) + "k" +
+                                dstd::to_string(k));
                 key_bytes += batch.back().size();
             }
             const std::uint64_t bound = a.bytes_after(keys, key_bytes);
-            for (const dftracer::utils::dstd::String& key : batch)
-                put(a, ++at, key);
+            for (const dstd::String& key : batch) put(a, ++at, key);
             CHECK(a.bytes() <= bound);
         }
     }

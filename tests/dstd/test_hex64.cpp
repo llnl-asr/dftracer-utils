@@ -3,10 +3,10 @@
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <doctest/doctest.h>
 
-#include <string>
+using namespace dftracer::utils;
 
-using dftracer::utils::dstd::hash::format_hex64;
-using dftracer::utils::dstd::hash::parse_hex64;
+using dstd::hash::format_hex64;
+using dstd::hash::parse_hex64;
 
 TEST_SUITE("hex64") {
     TEST_CASE("hex64 - round trips every value") {

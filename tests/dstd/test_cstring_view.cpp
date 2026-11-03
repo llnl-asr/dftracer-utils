@@ -27,7 +27,7 @@ TEST_CASE("CStringView from strings points at their buffer") {
     CHECK(from_dstd.c_str() == owned.c_str());
     CHECK(from_dstd.size() == 5);
 
-    std::string legacy("xyz");
+    std::string legacy("xyz");  // keep std: CStringView takes a std::string
     dstd::CStringView from_std = legacy;
     CHECK(from_std.c_str() == legacy.c_str());
     CHECK(from_std.view() == "xyz");

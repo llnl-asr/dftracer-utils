@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <algorithm>
-#include <map>
 #include <sstream>
 #include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -29,10 +30,10 @@ struct Event {
 
 // Events over gzip members of `member_bytes`, plus one thread_name record, and
 // an index for them.
-std::string write_trace(TestEnvironment& env, const std::string& name,
-                        const std::vector<Event>& events,
-                        std::size_t member_bytes) {
-    std::ostringstream out;
+dstd::String write_trace(TestEnvironment& env, const dstd::String& name,
+                         const dstd::Vector<Event>& events,
+                         std::size_t member_bytes) {
+    dftu_utils_test::TextOut out;
     out << "[\n";
     out << R"({"name":"thread_name","ph":"M","pid":1,"tid":1,)"
            R"("args":{"name":"main"}})"
@@ -45,7 +46,7 @@ std::string write_trace(TestEnvironment& env, const std::string& name,
     out << "]\n";
     const auto plain = env.get_dir() + "/" + name + ".pfw";
     {
-        std::ofstream(plain.c_str()) << out.str();
+        dftu_utils_test::FileOut(plain) << out.str();
     }
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
@@ -56,18 +57,18 @@ std::string write_trace(TestEnvironment& env, const std::string& name,
     return gz;
 }
 
-View view_of(const std::string& gz) {
+View view_of(const dstd::String& gz) {
     return View::from_file(
         dstd::String(gz),
-        dstd::String(std::string(determine_index_path(gz, ""))));
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-std::int64_t rows_in(const std::string& gz, double b, double e) {
+std::int64_t rows_in(const dstd::String& gz, double b, double e) {
     return view_of(gz).time_range(b, e).collect().get().num_rows();
 }
 
-double agg_in(const std::string& gz, double b, double e, AggOp op,
-              const std::string& field) {
+double agg_in(const dstd::String& gz, double b, double e, AggOp op,
+              const dstd::String& field) {
     auto df = view_of(gz)
                   .time_range(b, e)
                   .group_by({GroupKey::name()})
@@ -87,7 +88,7 @@ struct Occ {
     double active = 0;
 };
 
-std::map<std::string, Occ> occupancy(const View& v) {
+dstd::Map<dstd::String, Occ> occupancy(const View& v) {
     auto df = v.group_by({GroupKey::name()})
                   .agg({{AggOp::Count, "", "n"},
                         {AggOp::Sum, "dur", "s"},
@@ -96,9 +97,9 @@ std::map<std::string, Occ> occupancy(const View& v) {
                         {AggOp::Active, "", "a"}})
                   .collect()
                   .get();
-    std::map<std::string, Occ> out;
+    dstd::Map<dstd::String, Occ> out;
     for (std::int64_t r = 0; r < df.num_rows(); ++r) {
-        const std::string key =
+        const dstd::String key =
             bhas(df, "time_bucket") ? bstr(df, r, "time_bucket") : "";
         out[key] = {bnum(df, r, "n"), bnum(df, r, "s"), bnum(df, r, "b"),
                     bnum(df, r, "u"), bnum(df, r, "a")};
@@ -106,14 +107,14 @@ std::map<std::string, Occ> occupancy(const View& v) {
     return out;
 }
 
-Occ window_occ(const std::string& gz, double b, double e) {
+Occ window_occ(const dstd::String& gz, double b, double e) {
     auto m = occupancy(view_of(gz).time_range(b, e));
     return m.empty() ? Occ{} : m.begin()->second;
 }
 
 // The length of the union of `events` clamped to [b, e).
-double union_in(const std::vector<Event>& events, double b, double e) {
-    std::vector<dstd::Pair<double, double>> iv;
+double union_in(const dstd::Vector<Event>& events, double b, double e) {
+    dstd::Vector<dstd::Pair<double, double>> iv;
     for (const auto& ev : events) {
         const double s = std::max(static_cast<double>(ev.ts), b);
         const double t = std::min(static_cast<double>(ev.ts + ev.dur), e);
@@ -138,18 +139,18 @@ double union_in(const std::vector<Event>& events, double b, double e) {
 TEST_SUITE("TimeWindow") {
     TEST_CASE("a window keeps the events that start in it") {
         TestEnvironment env(10);
-        std::vector<Event> events;
+        dstd::Vector<Event> events;
         for (int i = 0; i < 10; ++i)
             events.push_back({1000 + static_cast<std::uint64_t>(i) * 100, 5});
         const auto gz = write_trace(env, "one", events, 1 << 20);
 
         auto df = view_of(gz).time_range(1200, 1500).collect().get();
         REQUIRE(df.num_rows() == 3);
-        std::vector<double> ts;
+        dstd::Vector<double> ts;
         for (std::int64_t r = 0; r < df.num_rows(); ++r)
             ts.push_back(bnum(df, r, "ts"));
         std::sort(ts.begin(), ts.end());
-        CHECK(ts == std::vector<double>{1200, 1300, 1400});
+        CHECK(ts == dstd::Vector<double>{1200, 1300, 1400});
 
         CHECK(agg_in(gz, 1200, 1500, AggOp::Count, "") == 3);
         CHECK(view_of(gz)
@@ -182,7 +183,7 @@ TEST_SUITE("TimeWindow") {
         TestEnvironment env(10);
         // Long events: many start in one chunk and end several chunks later,
         // so start pruning and end pruning differ.
-        std::vector<Event> events;
+        dstd::Vector<Event> events;
         for (int i = 0; i < 4000; ++i)
             events.push_back(
                 {1000000 + static_cast<std::uint64_t>(i) * 50,
@@ -199,11 +200,11 @@ TEST_SUITE("TimeWindow") {
             return n;
         };
         for (auto [b, e] :
-             std::vector<dstd::Pair<double, double>>{{1010000, 1060000},
-                                                     {1000000, 1000050},
-                                                     {1199950, 1300000},
-                                                     {0, 1000000},
-                                                     {1100025, 1100075}}) {
+             dstd::Vector<dstd::Pair<double, double>>{{1010000, 1060000},
+                                                      {1000000, 1000050},
+                                                      {1199950, 1300000},
+                                                      {0, 1000000},
+                                                      {1100025, 1100075}}) {
             CAPTURE(b);
             CAPTURE(e);
             CHECK(rows_in(gz, b, e) == expect(b, e));
@@ -222,7 +223,7 @@ TEST_SUITE("TimeWindow") {
         TestEnvironment env(10);
         // Every chunk holds clockless events at ts 0 next to real ones, so its
         // start bounds always reach 0.
-        std::vector<Event> events;
+        dstd::Vector<Event> events;
         for (int i = 0; i < 4000; ++i)
             events.push_back(
                 {i % 5 == 0 ? 0
@@ -239,7 +240,7 @@ TEST_SUITE("TimeWindow") {
                          : 0;
             return n;
         };
-        for (auto [b, e] : std::vector<dstd::Pair<double, double>>{
+        for (auto [b, e] : dstd::Vector<dstd::Pair<double, double>>{
                  {11000000, 12000000}, {0, 1}, {0, 2000000}, {19000000, 0}}) {
             CAPTURE(b);
             CAPTURE(e);
@@ -280,7 +281,7 @@ TEST_SUITE("TimeWindow") {
 
     TEST_CASE("occupancy of adjacent windows tiles") {
         TestEnvironment env(10);
-        std::vector<Event> events;
+        dstd::Vector<Event> events;
         for (int i = 0; i < 4000; ++i)
             events.push_back(
                 {1000000 + static_cast<std::uint64_t>(i) * 50,
@@ -330,7 +331,7 @@ TEST_SUITE("TimeWindow") {
 
     TEST_CASE("buckets of many events tile the window") {
         TestEnvironment env(10);
-        std::vector<Event> events;
+        dstd::Vector<Event> events;
         for (int i = 0; i < 4000; ++i)
             events.push_back(
                 {1000000 + static_cast<std::uint64_t>(i) * 50,
@@ -341,7 +342,7 @@ TEST_SUITE("TimeWindow") {
             occupancy(view_of(gz).time_range(a, c).time_bucket(10000));
         Occ total;
         for (const auto& [k, o] : m) {
-            const double b = std::stod(k);
+            const double b = dftu_utils_test::to_number<double>(k);
             CAPTURE(k);
             CHECK(o.busy ==
                   union_in(events, std::max(a, b), std::min(c, b + 10000)));
@@ -357,7 +358,7 @@ TEST_SUITE("TimeWindow") {
 
     TEST_CASE("occupancy without a window or bucket is unchanged") {
         TestEnvironment env(10);
-        const std::vector<Event> events{{1000, 100}, {1050, 100}, {2000, 50}};
+        const dstd::Vector<Event> events{{1000, 100}, {1050, 100}, {2000, 50}};
         const auto gz = write_trace(env, "plain", events, 1 << 20);
         const auto m = occupancy(view_of(gz));
         REQUIRE(m.size() == 1);
@@ -399,7 +400,7 @@ TEST_SUITE("TimeWindow") {
         CHECK(bnum(df, 0, "b") == 400);
         int seen = 0;
         for (std::size_t c = 0; c < df.names.size(); ++c)
-            if (df.names[c].find("bytes") != std::string::npos) {
+            if (df.names[c].find("bytes") != dstd::String::npos) {
                 CAPTURE(df.names[c]);
                 CHECK(bnum(df, 0, df.names[c]) == 1);
                 ++seen;

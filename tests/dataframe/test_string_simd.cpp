@@ -10,20 +10,19 @@
 #include <dftracer/utils/dataframe/internal/string_simd.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <functional>
-#include <optional>
 #include <random>
-#include <string>
-#include <string_view>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::TypeId;
@@ -31,8 +30,8 @@ namespace simd = dftracer::utils::dataframe::strsimd;
 
 namespace {
 
-using Row = dftracer::utils::dstd::Optional<std::string>;
-using Rows = std::vector<Row>;
+using Row = dstd::Optional<dstd::String>;
+using Rows = dstd::Vector<Row>;
 
 bool alpha(unsigned char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
@@ -44,8 +43,8 @@ bool space(unsigned char c) { return c == ' ' || (c >= 9 && c <= 13); }
 
 // ---- references: Python str semantics over ASCII, a byte outside is plain --
 
-std::string r_capitalize(const std::string& s) {
-    std::string o = s;
+dstd::String r_capitalize(const dstd::String& s) {
+    dstd::String o = s;
     for (std::size_t i = 0; i < o.size(); ++i) {
         const auto c = static_cast<unsigned char>(o[i]);
         if (i == 0) {
@@ -56,8 +55,8 @@ std::string r_capitalize(const std::string& s) {
     }
     return o;
 }
-std::string r_title(const std::string& s) {
-    std::string o = s;
+dstd::String r_title(const dstd::String& s) {
+    dstd::String o = s;
     bool start = true;
     for (char& ch : o) {
         const auto c = static_cast<unsigned char>(ch);
@@ -71,8 +70,8 @@ std::string r_title(const std::string& s) {
     }
     return o;
 }
-std::string r_swapcase(const std::string& s) {
-    std::string o = s;
+dstd::String r_swapcase(const dstd::String& s) {
+    dstd::String o = s;
     for (char& ch : o) {
         const auto c = static_cast<unsigned char>(ch);
         if (lower(c))
@@ -83,13 +82,13 @@ std::string r_swapcase(const std::string& s) {
     return o;
 }
 template <class P>
-bool all_nonempty(const std::string& s, P p) {
+bool all_nonempty(const dstd::String& s, P p) {
     if (s.empty()) return false;
     for (char c : s)
         if (!p(static_cast<unsigned char>(c))) return false;
     return true;
 }
-bool r_is(const std::string& s, int cls) {
+bool r_is(const dstd::String& s, int cls) {
     switch (cls) {
         case DFTU_STR_ALNUM:
             return all_nonempty(
@@ -138,26 +137,26 @@ bool r_is(const std::string& s, int cls) {
         }
     }
 }
-std::string r_pad(const std::string& s, std::int64_t w, char f, int mode) {
+dstd::String r_pad(const dstd::String& s, std::int64_t w, char f, int mode) {
     const auto len = static_cast<std::int64_t>(s.size());
     if (len >= w) return s;
     const std::int64_t gap = w - len;
     const std::int64_t left = mode == 0   ? gap
                               : mode == 1 ? 0
                                           : gap / 2 + (gap & w & 1);
-    return std::string(static_cast<std::size_t>(left), f) + s +
-           std::string(static_cast<std::size_t>(gap - left), f);
+    return dstd::String(static_cast<std::size_t>(left), f) + s +
+           dstd::String(static_cast<std::size_t>(gap - left), f);
 }
-std::string r_zfill(const std::string& s, std::int64_t w) {
+dstd::String r_zfill(const dstd::String& s, std::int64_t w) {
     const auto len = static_cast<std::int64_t>(s.size());
     if (len >= w) return s;
     const auto n = static_cast<std::size_t>(w - len);
     if (!s.empty() && (s[0] == '+' || s[0] == '-'))
-        return s.substr(0, 1) + std::string(n, '0') + s.substr(1);
-    return std::string(n, '0') + s;
+        return s.substr(0, 1) + dstd::String(n, '0') + s.substr(1);
+    return dstd::String(n, '0') + s;
 }
-std::string r_slice(const std::string& s, std::int64_t start,
-                    std::int64_t length) {
+dstd::String r_slice(const dstd::String& s, std::int64_t start,
+                     std::int64_t length) {
     const auto len = static_cast<std::int64_t>(s.size());
     std::int64_t b = start < 0 ? start + len : start;
     b = std::clamp<std::int64_t>(b, 0, len);
@@ -166,13 +165,14 @@ std::string r_slice(const std::string& s, std::int64_t start,
     return s.substr(static_cast<std::size_t>(b),
                     static_cast<std::size_t>(e - b));
 }
-std::vector<std::string> r_split(const std::string& s, const std::string& sep) {
+dstd::Vector<dstd::String> r_split(const dstd::String& s,
+                                   const dstd::String& sep) {
     if (sep.empty()) return {s};
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     std::size_t pos = 0;
     for (;;) {
         const std::size_t hit = s.find(sep, pos);
-        if (hit == std::string::npos) {
+        if (hit == dstd::String::npos) {
             out.push_back(s.substr(pos));
             return out;
         }
@@ -180,24 +180,24 @@ std::vector<std::string> r_split(const std::string& s, const std::string& sep) {
         pos = hit + sep.size();
     }
 }
-std::vector<std::string> r_partition(const std::string& s,
-                                     const std::string& sep, bool right) {
+dstd::Vector<dstd::String> r_partition(const dstd::String& s,
+                                       const dstd::String& sep, bool right) {
     const std::size_t hit = right ? s.rfind(sep) : s.find(sep);
-    if (hit == std::string::npos)
-        return right ? std::vector<std::string>{"", "", s}
-                     : std::vector<std::string>{s, "", ""};
+    if (hit == dstd::String::npos)
+        return right ? dstd::Vector<dstd::String>{"", "", s}
+                     : dstd::Vector<dstd::String>{s, "", ""};
     return {s.substr(0, hit), sep, s.substr(hit + sep.size())};
 }
 
 // ---- data ----
 
 Series make(const Rows& rows) {
-    std::vector<dftracer::utils::dstd::StringView> views;
-    std::vector<std::uint8_t> validity((rows.size() + 7) / 8, 0);
+    dstd::Vector<dstd::StringView> views;
+    dstd::Vector<std::uint8_t> validity((rows.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
-        views.push_back(rows[i] ? dftracer::utils::dstd::StringView(*rows[i])
-                                : dftracer::utils::dstd::StringView());
+        views.push_back(rows[i] ? dstd::StringView(*rows[i])
+                                : dstd::StringView());
         if (rows[i])
             validity[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         else
@@ -208,9 +208,9 @@ Series make(const Rows& rows) {
 
 // The rows after `junk` leading bytes of the data buffer: offsets[0] == junk.
 Series make_offset(const Rows& rows, std::size_t junk) {
-    std::string data(junk, '#');
-    std::vector<std::int32_t> offsets{static_cast<std::int32_t>(junk)};
-    std::vector<std::uint8_t> validity((rows.size() + 7) / 8, 0);
+    dstd::String data(junk, '#');
+    dstd::Vector<std::int32_t> offsets{static_cast<std::int32_t>(junk)};
+    dstd::Vector<std::uint8_t> validity((rows.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < rows.size(); ++i) {
         if (rows[i]) {
             data += *rows[i];
@@ -225,10 +225,10 @@ Series make_offset(const Rows& rows, std::size_t junk) {
 
 Rows corpus(unsigned seed, bool bytes) {
     std::mt19937_64 rng(seed);
-    static const std::string kAlphabet = "abcxyzABCXYZ0189 \t\n+-_,.|ab--,,";
+    static const dstd::String kAlphabet = "abcxyzABCXYZ0189 \t\n+-_,.|ab--,,";
     Rows rows;
     auto add = [&](std::size_t len) {
-        std::string s;
+        dstd::String s;
         for (std::size_t k = 0; k < len; ++k)
             s.push_back(bytes ? static_cast<char>(rng() & 0xFF)
                               : kAlphabet[rng() % kAlphabet.size()]);
@@ -237,11 +237,11 @@ Rows corpus(unsigned seed, bool bytes) {
     for (std::size_t len = 0; len <= 130; ++len) add(len);  // 0..130 in a row
     for (int k = 0; k < 400; ++k) add(rng() % 300);
     add(129);  // a long string ends the buffer
-    rows.back() = std::string(129, 'q');
+    rows.back() = dstd::String(129, 'q');
     return rows;
 }
 
-std::vector<Rows> corpora() {
+dstd::Vector<Rows> corpora() {
     return {corpus(1, false), corpus(2, true),        Rows{},
             Rows(37, Row{}),  Rows{Row{""}, Row{""}}, Rows{Row{"x"}}};
 }
@@ -254,12 +254,12 @@ void expect_strings(const Series& got, const Rows& want, const char* what) {
     for (std::size_t i = 0; i < want.size(); ++i) {
         const auto ii = static_cast<std::int64_t>(i);
         REQUIRE(got.is_null(ii) == !want[i].has_value());
-        if (want[i]) REQUIRE(std::string(got.string_at(ii)) == *want[i]);
+        if (want[i]) REQUIRE(dstd::String(got.string_at(ii)) == *want[i]);
     }
 }
 
 void expect_bools(const Series& got, const Rows& in,
-                  const std::vector<bool>& want, const char* what) {
+                  const dstd::Vector<bool>& want, const char* what) {
     INFO(what);
     REQUIRE(got.valid());
     REQUIRE(got.type() == TypeId::Bool);
@@ -272,7 +272,7 @@ void expect_bools(const Series& got, const Rows& in,
 }
 
 Rows map_rows(const Rows& in,
-              const std::function<std::string(const std::string&)>& f) {
+              const dstd::Function<dstd::String(const dstd::String&)>& f) {
     Rows out;
     for (const Row& r : in) out.push_back(r ? Row{f(*r)} : Row{});
     return out;
@@ -288,10 +288,10 @@ void both_modes(Body body) {
     simd::set_force_scalar(false);
 }
 
-std::vector<std::string> list_row(const Series& list, std::int64_t i) {
+dstd::Vector<dstd::String> list_row(const Series& list, std::int64_t i) {
     const std::int32_t* off = dftu_series_offsets(list.handle());
     Series child{dftu_series_child(list.handle(), 0)};
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     for (std::int32_t k = off[i]; k < off[i + 1]; ++k)
         out.emplace_back(child.string_at(k));
     return out;
@@ -302,11 +302,11 @@ std::vector<std::string> list_row(const Series& list, std::int64_t i) {
 TEST_SUITE("string simd") {
     TEST_CASE("reports the dispatched target") {
         std::printf("string kernels: Highway target %s\n", simd::target_name());
-        CHECK(std::string(simd::target_name()).size() > 0);
+        CHECK(dstd::String(simd::target_name()).size() > 0);
     }
 
     TEST_CASE("bit helpers") {
-        std::vector<std::uint64_t> b(4, 0);
+        dstd::Vector<std::uint64_t> b(4, 0);
         for (std::size_t i : {0u, 63u, 64u, 130u, 255u})
             b[i >> 6] |= std::uint64_t{1} << (i & 63);
         CHECK(simd::bits_any(b.data(), 0, 1));
@@ -342,7 +342,7 @@ TEST_SUITE("string simd") {
         for (const Rows& in : corpora()) {
             Series s = make(in);
             for (int cls = DFTU_STR_ALNUM; cls <= DFTU_STR_TITLE; ++cls) {
-                std::vector<bool> want;
+                dstd::Vector<bool> want;
                 for (const Row& r : in)
                     want.push_back(r ? r_is(*r, cls) : false);
                 both_modes([&](const char* mode) {
@@ -359,7 +359,7 @@ TEST_SUITE("string simd") {
         // under both strategies, the vector kernels and the forced byte loop.
         std::mt19937 rng(7);
         auto build = [&](int kind, std::size_t len, int cls) {
-            std::string s(len, 'a');  // good for alnum/alpha/lower
+            dstd::String s(len, 'a');  // good for alnum/alpha/lower
             if (cls == DFTU_STR_DIGIT || cls == DFTU_STR_DECIMAL ||
                 cls == DFTU_STR_NUMERIC)
                 s.assign(len, '5');
@@ -381,7 +381,7 @@ TEST_SUITE("string simd") {
                 for (int kind = 0; kind < 4; ++kind)
                     in.push_back(build(kind, len, cls));
             in.push_back(Row{});
-            std::vector<bool> want;
+            dstd::Vector<bool> want;
             for (const Row& r : in) want.push_back(r ? r_is(*r, cls) : false);
             Series s = make(in);
             for (simd::PredStrategy st :
@@ -405,27 +405,27 @@ TEST_SUITE("string simd") {
                     expect_strings(
                         Series{dftu_series_str_pad_start(s.handle(), w, '*')},
                         map_rows(in,
-                                 [&](const std::string& x) {
+                                 [&](const dstd::String& x) {
                                      return r_pad(x, w, '*', 0);
                                  }),
                         mode);
                     expect_strings(
                         Series{dftu_series_str_pad_end(s.handle(), w, '*')},
                         map_rows(in,
-                                 [&](const std::string& x) {
+                                 [&](const dstd::String& x) {
                                      return r_pad(x, w, '*', 1);
                                  }),
                         mode);
                     expect_strings(
                         Series{dftu_series_str_center(s.handle(), w, '*')},
                         map_rows(in,
-                                 [&](const std::string& x) {
+                                 [&](const dstd::String& x) {
                                      return r_pad(x, w, '*', 2);
                                  }),
                         mode);
                     expect_strings(Series{dftu_series_str_zfill(s.handle(), w)},
                                    map_rows(in,
-                                            [&](const std::string& x) {
+                                            [&](const dstd::String& x) {
                                                 return r_zfill(x, w);
                                             }),
                                    mode);
@@ -434,21 +434,21 @@ TEST_SUITE("string simd") {
                     expect_strings(
                         Series{dftu_series_str_repeat(s.handle(), n)},
                         map_rows(in,
-                                 [&](const std::string& x) {
-                                     std::string o;
+                                 [&](const dstd::String& x) {
+                                     dstd::String o;
                                      for (std::int64_t k = 0; k < n; ++k)
                                          o += x;
                                      return o;
                                  }),
                         mode);
                 }
-                for (const std::string p : {"a", "ab", "", "--"}) {
+                for (const dstd::String p : {"a", "ab", "", "--"}) {
                     expect_strings(
                         Series{dftu_series_str_remove_prefix(
                             s.handle(), p.data(),
                             static_cast<std::int32_t>(p.size()))},
                         map_rows(in,
-                                 [&](const std::string& x) {
+                                 [&](const dstd::String& x) {
                                      return !p.empty() && x.compare(0, p.size(),
                                                                     p) == 0
                                                 ? x.substr(p.size())
@@ -461,7 +461,7 @@ TEST_SUITE("string simd") {
                             static_cast<std::int32_t>(p.size()))},
                         map_rows(
                             in,
-                            [&](const std::string& x) {
+                            [&](const dstd::String& x) {
                                 return !p.empty() && x.size() >= p.size() &&
                                                x.compare(x.size() - p.size(),
                                                          p.size(), p) == 0
@@ -471,13 +471,12 @@ TEST_SUITE("string simd") {
                         mode);
                 }
                 for (auto [st, ln] :
-                     std::vector<dftracer::utils::dstd::Pair<std::int64_t,
-                                                             std::int64_t>>{
+                     dstd::Vector<dstd::Pair<std::int64_t, std::int64_t>>{
                          {0, 3}, {2, -1}, {-3, 2}, {100, 5}, {0, 0}}) {
                     expect_strings(
                         Series{dftu_series_str_slice(s.handle(), st, ln)},
                         map_rows(in,
-                                 [&](const std::string& x) {
+                                 [&](const dstd::String& x) {
                                      return r_slice(x, st, ln);
                                  }),
                         mode);
@@ -491,7 +490,7 @@ TEST_SUITE("string simd") {
             Series s = make(in);
             both_modes([&](const char* mode) {
                 INFO(mode);
-                for (const std::string sep : {",", "--", "ab", "", "abc"}) {
+                for (const dstd::String sep : {",", "--", "ab", "", "abc"}) {
                     Series parts{dftu_series_str_split(
                         s.handle(), sep.data(),
                         static_cast<std::int32_t>(sep.size()))};
@@ -508,17 +507,17 @@ TEST_SUITE("string simd") {
                     REQUIRE(joined.valid());
                     for (std::size_t i = 0; i < in.size(); ++i) {
                         if (!in[i]) continue;
-                        std::string want;
+                        dstd::String want;
                         const auto p = r_split(*in[i], sep);
                         for (std::size_t k = 0; k < p.size(); ++k)
                             want += (k ? "|" : "") + p[k];
-                        REQUIRE(std::string(joined.string_at(
+                        REQUIRE(dstd::String(joined.string_at(
                                     static_cast<std::int64_t>(i))) == want);
                     }
                     Series glued{dftu_series_list_join(parts.handle(), "", 0)};
                     REQUIRE(glued.valid());
                 }
-                for (const std::string sep : {",", "--", "ab", "abc"}) {
+                for (const dstd::String sep : {",", "--", "ab", "abc"}) {
                     for (int right : {0, 1}) {
                         Series parts{dftu_series_str_partition(
                             s.handle(), sep.data(),
@@ -533,7 +532,8 @@ TEST_SUITE("string simd") {
                         }
                     }
                 }
-                for (const std::string n : {",", "--", "ab", "", "abc", "b-"}) {
+                for (const dstd::String n :
+                     {",", "--", "ab", "", "abc", "b-"}) {
                     Series r{dftu_series_str_rfind(
                         s.handle(), n.data(),
                         static_cast<std::int32_t>(n.size()))};
@@ -544,7 +544,7 @@ TEST_SUITE("string simd") {
                         if (!in[i]) continue;
                         const std::size_t hit = in[i]->rfind(n);
                         const std::int64_t want =
-                            hit == std::string::npos
+                            hit == dstd::String::npos
                                 ? -1
                                 : static_cast<std::int64_t>(hit);
                         REQUIRE(r.data<std::int64_t>()[i] == want);
@@ -581,7 +581,7 @@ TEST_SUITE("string simd") {
                 Series{dftu_series_str_pad_start(cut.handle(), 20, '.')},
                 map_rows(
                     cut_rows,
-                    [](const std::string& x) { return r_pad(x, 20, '.', 0); }),
+                    [](const dstd::String& x) { return r_pad(x, 20, '.', 0); }),
                 mode);
             Series parts{dftu_series_str_split(cut.handle(), ",", 1)};
             REQUIRE(parts.valid());
@@ -599,8 +599,8 @@ TEST_SUITE("string simd") {
     }
 
     TEST_CASE("output past the int32 offsets is refused, not wrapped") {
-        const Rows in{Row{std::string(1 << 20, 'a')},
-                      Row{std::string(1 << 20, 'b')}};
+        const Rows in{Row{dstd::String(1 << 20, 'a')},
+                      Row{dstd::String(1 << 20, 'b')}};
         Series s = make(in);
         CHECK(dftu_series_str_repeat(s.handle(), 1 << 12) == nullptr);
     }

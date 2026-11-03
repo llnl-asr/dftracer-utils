@@ -11,9 +11,15 @@
 #include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_op_codes.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/trace/schema.h>
@@ -25,19 +31,12 @@
 
 #include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <memory>
-#include <span>
-#include <string>
-#include <string_view>
 #include <utility>
 #include <variant>
-#include <vector>
 
 using namespace dftracer::utils;
 
 using dftracer::utils::Runtime;
-using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::AggCol;
 using dftracer::utils::plugins::AggOp;
 using dftracer::utils::plugins::NamedResultRegistry;
@@ -45,6 +44,7 @@ using dftracer::utils::plugins::OwnedArrow;
 using dftracer::utils::plugins::OwnedDataFrame;
 using dftracer::utils::plugins::PluginFold;
 using dftracer::utils::plugins::SharedResultRegistry;
+using dstd::StringIntern;
 namespace agg = dftracer::utils::plugins::agg;
 namespace views = dftracer::utils::trace::views;
 using views::detail::CoverageSet;
@@ -65,8 +65,8 @@ struct HostFixture {
     StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    std::unique_ptr<PluginFold> fold =
-        std::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<PluginFold> fold =
+        dstd::make_unique<PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     dftu_str intern_str(const char* s) {
         return host().intern(host().h, s,
@@ -139,11 +139,10 @@ TEST_CASE("plugin cxx: Sketch RAII adds, merges, and frees") {
 
 TEST_CASE("plugin cxx: Io ops are co_await-able directly") {
     dftu_utils_test::TestEnvironment env(0);
-    std::string path = env.get_dir() + "/probe.txt";
-    const std::string body = "alpha\nbeta\ngamma\n";
+    dstd::String path = env.get_dir() + "/probe.txt";
+    const dstd::String body = "alpha\nbeta\ngamma\n";
     {
-        std::ofstream f(path.c_str(), std::ios::binary);
-        f << body;
+        (void)dstd::fs::write_file(dstd::PathView(path), body);
     }
 
     HostFixture fx;
@@ -176,8 +175,8 @@ TEST_CASE("plugin cxx: AggCol builds a dftu_agg_col without hand casts") {
     const dftu_agg_col raw =
         AggCol(AggOp::Pct).value("dur").out("p90_dur").param(0.9).raw();
     CHECK(raw.op == DFTU_AGG_PCT);
-    CHECK(std::string(raw.value) == "dur");
-    CHECK(std::string(raw.out) == "p90_dur");
+    CHECK(dstd::String(raw.value) == "dur");
+    CHECK(dstd::String(raw.out) == "p90_dur");
     CHECK(raw.param == doctest::Approx(0.9));
     CHECK(raw.by == nullptr);
 
@@ -207,8 +206,8 @@ TEST_CASE("plugin cxx: agg:: factories fill only the fields their op takes") {
     // The occupancy ops take the (ts, dur) pair plus the snap tolerance.
     const dftu_agg_col conc = agg::concurrency("ts", "dur", "conc", 4.0).raw();
     CHECK(conc.op == DFTU_AGG_CONCURRENCY);
-    CHECK(std::string(conc.value) == "ts");
-    CHECK(std::string(conc.by) == "dur");
+    CHECK(dstd::String(conc.value) == "ts");
+    CHECK(dstd::String(conc.by) == "dur");
     CHECK(conc.param == doctest::Approx(4.0));
 
     const dftu_agg_col util = agg::utilization("ts", "dur", "util").raw();
@@ -217,7 +216,7 @@ TEST_CASE("plugin cxx: agg:: factories fill only the fields their op takes") {
 
     const dftu_agg_col act = agg::active("ts", "dur", "peak").raw();
     CHECK(act.op == DFTU_AGG_ACTIVE);
-    CHECK(std::string(act.by) == "dur");
+    CHECK(dstd::String(act.by) == "dur");
 }
 
 namespace {
@@ -370,7 +369,7 @@ TEST_CASE("plugin cxx: make_plugin dispatches a Batch-view step") {
     REQUIRE(slice != nullptr);
 
     const std::uint32_t N = 4;
-    std::vector<std::uint64_t> pid(N), ts(N);
+    dstd::Vector<std::uint64_t> pid(N), ts(N);
     for (std::uint32_t i = 0; i < N; ++i) {
         pid[i] = 10 + i;
         ts[i] = 500 + i;
@@ -437,12 +436,12 @@ dftu_plugin make_agg_facade_plugin() {
     return p;
 }
 
-std::string cell_str(const dftu_series* col, std::int64_t r) {
+dstd::String cell_str(const dftu_series* col, std::int64_t r) {
     dftu_series* flat = dftu_series_materialize(col);
     const std::int32_t* off = dftu_series_offsets(flat);
     const char* data = static_cast<const char*>(dftu_series_data(flat));
-    std::string out(data + off[r],
-                    static_cast<std::size_t>(off[r + 1] - off[r]));
+    dstd::String out(data + off[r],
+                     static_cast<std::size_t>(off[r + 1] - off[r]));
     dftu_series_free(flat);
     return out;
 }
@@ -478,7 +477,7 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
 
     // Merged counts: pid 1 -> 3, pid 2 -> 2. Argmax tid by duration: pid 1 at
     // dur 30 -> tid 300; pid 2 at dur 50 -> tid 500.
-    const std::vector<dstd::Vector<FoldEvent>> slices = {
+    const dstd::Vector<dstd::Vector<FoldEvent>> slices = {
         {evt(1, 10, 100), evt(1, 30, 300), evt(2, 5, 50)},
         {evt(1, 20, 200), evt(2, 50, 500)}};
     for (const auto& evs : slices) {

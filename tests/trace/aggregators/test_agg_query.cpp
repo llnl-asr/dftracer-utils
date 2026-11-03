@@ -6,10 +6,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
@@ -36,15 +40,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
-#include <map>
 #include <memory>
-#include <set>
 #include <sstream>
-#include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace agg = dftracer::utils::index::schemas::dft::agg;
@@ -70,15 +70,15 @@ constexpr double SKETCH_ACCURACY = 0.01;
 
 struct Ev {
     bool counter = false;
-    std::string cat;
-    std::string name;
+    dstd::String cat;
+    dstd::String name;
     std::uint64_t pid = 0;
     std::uint64_t tid = 0;
     std::uint64_t ts = 0;
     std::uint64_t dur = 0;
     bool has_dur = true;
-    std::string fhash;
-    std::vector<dstd::Pair<std::string, std::uint64_t>> args;
+    dstd::String fhash;
+    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> args;
 };
 
 class Acc {
@@ -140,11 +140,11 @@ agg::AggregationConfig make_config(std::uint64_t interval_us) {
 // ret that is a descriptor and must not count as a size. Compute carries
 // numeric args only. "rare" has fewer than 64 events, so its quantiles stay
 // exact. Every 17th POSIX transfer is a pre-aggregated counter.
-std::vector<Ev> make_events(std::uint64_t seed) {
+dstd::Vector<Ev> make_events(std::uint64_t seed) {
     static const char* const FILE_HASHES[] = {
         "1a2b3c4d", "deadbeef", "0badf00d", "cafe1234",
         "feed5678", "abcdef01", "13572468"};
-    std::vector<Ev> out;
+    dstd::Vector<Ev> out;
     std::uint64_t s = seed;
     for (int i = 0; i < EVENTS; ++i) {
         Ev e;
@@ -211,9 +211,9 @@ std::vector<Ev> make_events(std::uint64_t seed) {
 
 // With `cut_mid_line` the gzip members are cut every CHECKPOINT_SIZE bytes of
 // text wherever that falls, so most members end inside a line.
-std::string write_trace(const std::string& dir, int n,
-                        const std::vector<Ev>& events, bool cut_mid_line) {
-    std::ostringstream out;
+dstd::String write_trace(const dstd::String& dir, int n,
+                         const dstd::Vector<Ev>& events, bool cut_mid_line) {
+    dftu_utils_test::TextOut out;
     out << "[\n";
     int id = 0;
     for (const Ev& e : events) {
@@ -232,20 +232,20 @@ std::string write_trace(const std::string& dir, int n,
         out << "}}\n";
     }
     out << "]\n";
-    const std::string pfw = dir + "/t" + std::to_string(n) + ".pfw";
+    const dstd::String pfw = dir + "/t" + dstd::to_string(n) + ".pfw";
     {
-        std::ofstream file(pfw.c_str());
+        dftu_utils_test::FileOut file(pfw);
         file << out.str();
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     if (!cut_mid_line) {
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             pfw, gz, CHECKPOINT_SIZE));
     } else {
-        const std::string text = out.str();
+        const dstd::String text = out.str();
         utilities::fileio::compress::GzipMemberCompressor comp;
         REQUIRE(comp.valid());
-        std::ofstream file(gz.c_str(), std::ios::binary);
+        dftu_utils_test::FileOut file(gz);
         for (std::size_t at = 0; at < text.size(); at += CHECKPOINT_SIZE) {
             const std::size_t len = std::min(CHECKPOINT_SIZE, text.size() - at);
             auto member = comp.compress_member(text.data() + at, len);
@@ -258,14 +258,14 @@ std::string write_trace(const std::string& dir, int n,
     return gz;
 }
 
-std::string lower(std::string s) {
+dstd::String lower(dstd::String s) {
     for (char& c : s)
         if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
     return s;
 }
 
 bool is_transfer(const Ev& e) {
-    const std::string c = lower(e.cat);
+    const dstd::String c = lower(e.cat);
     return (c == "posix" || c == "stdio") &&
            (e.name == "read" || e.name == "write" || e.name == "fread" ||
             e.name == "fwrite");
@@ -277,15 +277,15 @@ struct Ask {
     bool by_file = false;
     std::uint64_t window = 0;
     bool quantiles = false;
-    std::set<std::string> categories;
-    std::set<std::string> names;
-    std::set<std::uint64_t> pids;
+    dstd::Set<dstd::String> categories;
+    dstd::Set<dstd::String> names;
+    dstd::Set<std::uint64_t> pids;
     std::uint64_t ts_begin = 0;
     std::uint64_t ts_end = UINT64_MAX;
 };
 
-using Key = dstd::Tuple<std::string, std::string, std::uint64_t, std::uint64_t,
-                        std::uint64_t, std::uint64_t>;
+using Key = dstd::Tuple<dstd::String, dstd::String, std::uint64_t,
+                        std::uint64_t, std::uint64_t, std::uint64_t>;
 
 bool kept(const Ev& e, const Ask& a) {
     if (!a.categories.empty() && !a.categories.count(lower(e.cat)))
@@ -309,16 +309,16 @@ Key key_of(const Ev& e, const Ask& a) {
 }
 
 struct Truth {
-    std::set<std::uint64_t> pids, tids, files, pid_tids, pid_files;
-    std::map<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>> spans;
-    std::vector<double> dur, size, off;
+    dstd::Set<std::uint64_t> pids, tids, files, pid_tids, pid_files;
+    dstd::Map<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>> spans;
+    dstd::Vector<double> dur, size, off;
     agg::AggregationMetrics metrics{0.01};
 };
 
 // A per-event aggregator, one state per group key of the query.
-std::map<Key, Truth> reference(const std::vector<Ev>& events, const Ask& ask,
-                               const agg::AggregationConfig& cfg) {
-    std::map<Key, Truth> out;
+dstd::Map<Key, Truth> reference(const dstd::Vector<Ev>& events, const Ask& ask,
+                                const agg::AggregationConfig& cfg) {
+    dstd::Map<Key, Truth> out;
     for (const Ev& e : events) {
         if (!kept(e, ask)) continue;
         Truth& t = out[key_of(e, ask)];
@@ -366,7 +366,7 @@ void check_stat(const FieldStat& a, const FieldStat& b, const char* what) {
                std::max(std::abs(a.moment_mean()), 1.0), MOMENT_TOL));
 }
 
-double exact_rule(std::vector<double> v, double q) {
+double exact_rule(dstd::Vector<double> v, double q) {
     std::sort(v.begin(), v.end());
     const std::size_t n = v.size();
     if (q <= 0.0) return v.front();
@@ -379,12 +379,12 @@ double exact_rule(std::vector<double> v, double q) {
 }
 
 void check_quantiles(const agg::QuantileStore& q,
-                     const std::vector<double>& truth, const char* what) {
+                     const dstd::Vector<double>& truth, const char* what) {
     INFO("quantiles of ", what);
     REQUIRE(q.count() == truth.size());
     if (truth.empty()) return;
     CHECK(q.is_exact() == (truth.size() <= agg::QuantileStore::EXACT_CAPACITY));
-    std::vector<double> sorted = truth;
+    dstd::Vector<double> sorted = truth;
     std::sort(sorted.begin(), sorted.end());
     const std::size_t last = sorted.size() - 1;
     for (double p : {0.1, 0.5, 0.9, 0.99}) {
@@ -402,8 +402,8 @@ void check_quantiles(const agg::QuantileStore& q,
 }
 
 Key row_key(const AggQueryResult& r, const trace::AggKey& k) {
-    return {std::string(r.text(k.cat)),
-            std::string(r.text(k.name)),
+    return {dstd::String(r.text(k.cat)),
+            dstd::String(r.text(k.name)),
             k.pid,
             k.tid,
             k.file,
@@ -446,17 +446,17 @@ void check_group(const agg::AggPartial& p, const Truth& t, bool quantiles) {
 
 struct Fixture {
     dftu_utils_test::TestEnvironment env{10};
-    std::vector<Ev> events;  // all files
-    std::vector<std::string> files;
-    std::string index_dir;
-    std::string index_path;
+    dstd::Vector<Ev> events;  // all files
+    dstd::Vector<dstd::String> files;
+    dstd::String index_dir;
+    dstd::String index_path;
 };
 
-std::unique_ptr<Fixture> build(std::uint64_t interval_us,
-                               const std::string& tag,
+dstd::UniquePtr<Fixture> build(std::uint64_t interval_us,
+                               const dstd::String& tag,
                                bool cut_mid_line = false,
                                bool reversed = false) {
-    auto fx = std::make_unique<Fixture>();
+    auto fx = dstd::make_unique<Fixture>();
     for (int i = 0; i < FILES; ++i) {
         auto events = make_events(1000 + static_cast<std::uint64_t>(i));
         if (reversed) std::reverse(events.begin(), events.end());
@@ -473,7 +473,7 @@ std::unique_ptr<Fixture> build(std::uint64_t interval_us,
     auto ix = index::Indexer::open(
         dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o);
     ix.build();
-    fx->index_path = std::string(
+    fx->index_path = dstd::String(
         trace::internal::determine_index_path(fx->files[0], fx->index_dir));
     return fx;
 }
@@ -507,7 +507,7 @@ Runtime& runtime() {
 AggQueryResult run(const AggQuery& q) {
     Runtime& rt = runtime();
     AggQueryResult out;
-    std::string error;
+    dstd::String error;
     rt.block_on(
         coro::named("agg-query",
                     coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -541,7 +541,7 @@ AggQueryResult check(const Fixture& fx, const Ask& ask,
         check_group(p, t->second, ask.quantiles);
     }
     const auto& s = r.stats;
-    MESSAGE(std::string(what), ": files ", s.files, ", without partials ",
+    MESSAGE(dstd::String(what), ": files ", s.files, ", without partials ",
             s.files_without_partials, ", partials read ", s.partials_read,
             ", merged ", s.partials_merged, ", pruned ", s.partials_pruned,
             ", re-read ", s.partials_reread, " in ", s.chunks_reread,
@@ -572,8 +572,8 @@ std::size_t partial_count(const Fixture& fx) {
 // A trace of counters, pre-aggregated records and events over three processes,
 // two threads and five 5 s windows, some naming a file in fhash and some naming
 // none, with an int64, a uint64 and a double arg on nearly every record.
-std::string mixed_trace() {
-    std::ostringstream out;
+dstd::String mixed_trace() {
+    dftu_utils_test::TextOut out;
     out << "[\n";
     for (int i = 0; i < 600; ++i) {
         const std::uint64_t pid = 700 + static_cast<std::uint64_t>(i % 3);
@@ -714,9 +714,9 @@ TEST_SUITE("AggQuery") {
         // One process and thread per file, every event in one 5 s window: no
         // partial crosses a window or holds a second pid or tid.
         dftu_utils_test::TestEnvironment env{10};
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int f = 0; f < 3; ++f) {
-            std::vector<Ev> events;
+            dstd::Vector<Ev> events;
             for (int i = 0; i < 200; ++i) {
                 Ev e;
                 e.cat = i % 2 == 0 ? "POSIX" : "STDIO";
@@ -731,7 +731,7 @@ TEST_SUITE("AggQuery") {
             }
             files.push_back(write_trace(env.get_dir(), f, events, false));
         }
-        const std::string index_dir = env.get_dir() + "/idx_cmp";
+        const dstd::String index_dir = env.get_dir() + "/idx_cmp";
         index::IndexerOptions o;
         o.index_dir = index_dir;
         o.checkpoint_size = CHECKPOINT_SIZE;
@@ -744,7 +744,7 @@ TEST_SUITE("AggQuery") {
         filters.emplace_back();
         dstd::StringIntern strings;
         trace::comparator::SideAggregate side;
-        std::string error;
+        dstd::String error;
         runtime().block_on(coro::named(
             "comparator-side",
             coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -780,7 +780,7 @@ TEST_SUITE("AggQuery") {
             const AggQueryResult a = run(full);
             const AggQueryResult b = run(trimmed);
             REQUIRE(a.rows.size() == b.rows.size());
-            std::map<Key, const agg::AggPartial*> by_key;
+            dstd::Map<Key, const agg::AggPartial*> by_key;
             for (const auto& [k, p] : a.rows) by_key[row_key(a, k)] = &p;
             for (const auto& [k, p] : b.rows) {
                 const auto it = by_key.find(row_key(b, k));
@@ -933,13 +933,13 @@ TEST_SUITE("AggQuery") {
     }
 
     TEST_CASE("a re-read answers from the chunk column blocks") {
-        auto fx = std::make_unique<Fixture>();
-        const std::string pfw = fx->env.get_dir() + "/mixed.pfw";
+        auto fx = dstd::make_unique<Fixture>();
+        const dstd::String pfw = fx->env.get_dir() + "/mixed.pfw";
         {
-            std::ofstream file(pfw.c_str());
+            dftu_utils_test::FileOut file(pfw);
             file << mixed_trace();
         }
-        const std::string gz = pfw + ".gz";
+        const dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             pfw, gz, CHECKPOINT_SIZE));
         (void)dstd::fs::remove(pfw);
@@ -952,7 +952,7 @@ TEST_SUITE("AggQuery") {
         index::Indexer::open(
             dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o)
             .build();
-        fx->index_path = std::string(
+        fx->index_path = dstd::String(
             trace::internal::determine_index_path(gz, fx->index_dir));
 
         // Every key finer than category and name, with quantiles: the stored
@@ -1084,8 +1084,8 @@ TEST_SUITE("AggQuery") {
     TEST_CASE("a read of many tiny events decodes them in bounded batches") {
         constexpr int TINY_EVENTS = 40000;
         constexpr std::size_t ONE_CHUNK = std::size_t{64} << 20;
-        auto fx = std::make_unique<Fixture>();
-        std::ostringstream text;
+        auto fx = dstd::make_unique<Fixture>();
+        dftu_utils_test::TextOut text;
         text << "[\n";
         for (int i = 0; i < TINY_EVENTS; ++i)
             text << R"({"id":)" << i << R"(,"name":"r","cat":"c","pid":1,)"
@@ -1102,7 +1102,7 @@ TEST_SUITE("AggQuery") {
         index::Indexer::open(
             dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o)
             .build();
-        fx->index_path = std::string(
+        fx->index_path = dstd::String(
             trace::internal::determine_index_path(fx->files[0], fx->index_dir));
 
         AggQuery q = make_query(*fx, Ask{}, FIVE_SECONDS_US);
@@ -1149,7 +1149,7 @@ TEST_SUITE("AggQuery") {
         q.ordered = true;
         q.workers = 1;
         const AggQueryResult serial = run(q);
-        std::map<Key, const agg::AggPartial*> want;
+        dstd::Map<Key, const agg::AggPartial*> want;
         for (const auto& [k, p] : serial.rows) want[row_key(serial, k)] = &p;
         q.workers = 0;
         for (int round = 0; round < 8; ++round) {

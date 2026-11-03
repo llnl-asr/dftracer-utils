@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/memory/settings.h>
 #include <doctest/doctest.h>
@@ -12,6 +13,8 @@
 #include <cstring>
 #include <string>
 
+using namespace dftracer::utils;
+
 namespace dut = dftracer::utils;
 namespace mem = dftracer::utils::memory;
 
@@ -20,9 +23,10 @@ namespace {
 constexpr std::size_t MIB = std::size_t{1} << 20;
 constexpr const char* PREFIX = "dftracer-utils memory: peak=";
 
+// keep std: fresh_process::Result holds a std::string
 bool read_peak(const std::string& output, std::size_t& peak) {
     std::size_t at = output.find(PREFIX);
-    if (at == std::string::npos) return false;
+    if (at == output.npos) return false;
     unsigned long long value = 0;
     if (std::sscanf(output.c_str() + at, "dftracer-utils memory: peak=%llu",
                     &value) != 1) {
@@ -53,11 +57,11 @@ TEST_CASE("the report shows a peak at least as large as a block held") {
     std::size_t peak = 0;
     REQUIRE(read_peak(result.output, peak));
     CHECK(peak >= 64 * MIB);
-    CHECK(result.output.find(" live=") != std::string::npos);
-    CHECK(result.output.find(" measured=") != std::string::npos);
-    CHECK(result.output.find(" limit=") != std::string::npos);
+    CHECK(result.output.find(" live=") != dstd::String::npos);
+    CHECK(result.output.find(" measured=") != dstd::String::npos);
+    CHECK(result.output.find(" limit=") != dstd::String::npos);
     std::size_t at = result.output.find(" heap_peak=");
-    REQUIRE(at != std::string::npos);
+    REQUIRE(at != dstd::String::npos);
     unsigned long long heap_peak = 0;
     REQUIRE(std::sscanf(result.output.c_str() + at, " heap_peak=%llu",
                         &heap_peak) == 1);
@@ -70,5 +74,5 @@ TEST_CASE("no report without the variable") {
     ::unsetenv(dut::common::constants::memory_settings::REPORT_ENV);
     auto result = fresh_process::run("child: hold a block and exit");
     REQUIRE(result.ok());
-    CHECK(result.output.find("dftracer-utils memory:") == std::string::npos);
+    CHECK(result.output.find("dftracer-utils memory:") == dstd::String::npos);
 }

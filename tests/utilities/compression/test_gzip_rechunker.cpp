@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -12,8 +13,6 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <testing_utilities.h>
-
-#include <fstream>
 
 using namespace dftracer::utils;
 namespace gzc = dftracer::utils::utilities::fileio::compress;
@@ -36,19 +35,18 @@ dstd::String write_single_member_gz(const dstd::String& path,
     gzc::GzipMemberCompressor comp;
     auto member = comp.compress_member(payload.data(), payload.size());
     REQUIRE(member.has_value());
-    std::ofstream ofs(path.c_str(), std::ios::binary);
-    ofs.write(reinterpret_cast<const char*>(member->data()),
-              static_cast<std::streamsize>(member->size()));
-    ofs.close();
+    dstd::String ofs;
+    ofs.append(reinterpret_cast<const char*>(member->data()), member->size());
+    (void)dstd::fs::write_file(dstd::PathView(path), ofs);
     return path;
 }
 
 // Decode every member; returns (concatenated bytes, per-member last byte).
-dftracer::utils::dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
+dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
     const dstd::String& path) {
     int fd = ::open(path.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
-    dftracer::utils::dstd::ScopedFd sfd(fd);
+    dstd::ScopedFd sfd(fd);
     struct stat st;
     REQUIRE(::fstat(sfd.get(), &st) == 0);
     const auto size = static_cast<std::uint64_t>(st.st_size);
@@ -66,8 +64,7 @@ dftracer::utils::dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
     return {out, last_bytes};
 }
 
-dftracer::utils::dstd::Pair<dstd::String, int> decode_all(
-    const dstd::String& path) {
+dstd::Pair<dstd::String, int> decode_all(const dstd::String& path) {
     auto [bytes, lasts] = decode_members(path);
     return {bytes, static_cast<int>(lasts.size())};
 }
@@ -75,7 +72,7 @@ dftracer::utils::dstd::Pair<dstd::String, int> decode_all(
 bool needs_rechunk(const dstd::String& path, std::size_t cap) {
     int fd = ::open(path.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
-    dftracer::utils::dstd::ScopedFd sfd(fd);
+    dstd::ScopedFd sfd(fd);
     struct stat st;
     REQUIRE(::fstat(sfd.get(), &st) == 0);
     return gzc::gzip_first_member(sfd.get(),
@@ -89,7 +86,7 @@ bool needs_rechunk(const dstd::String& path, std::size_t cap) {
 TEST_SUITE("gzip_rechunker") {
     TEST_CASE("needs_rechunk flags a member over the cap only") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_probe");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         const dstd::String gz = dstd::String((dir / "one.pfw.gz").str());
         const auto payload = make_lines(2000);  // ~90 KB uncompressed
         write_single_member_gz(gz, payload);
@@ -97,12 +94,12 @@ TEST_SUITE("gzip_rechunker") {
         CHECK(needs_rechunk(gz, 1024));         // member > 1 KB -> yes
         CHECK_FALSE(needs_rechunk(gz, 10 * 1024 * 1024));  // under cap -> no
 
-        dftracer::utils::dstd::fs::remove_all(dir).has_value();
+        dstd::fs::remove_all(dir).has_value();
     }
 
     TEST_CASE("first_member samples past a tiny first member") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_sample");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         const dstd::String gz = dstd::String((dir / "wrapped.pfw.gz").str());
         const auto payload = make_lines(5000);
         {
@@ -111,16 +108,17 @@ TEST_SUITE("gzip_rechunker") {
             auto body = comp.compress_member(payload.data(), payload.size());
             REQUIRE(head.has_value());
             REQUIRE(body.has_value());
-            std::ofstream ofs(gz.c_str(), std::ios::binary);
-            ofs.write(reinterpret_cast<const char*>(head->data()),
-                      static_cast<std::streamsize>(head->size()));
-            ofs.write(reinterpret_cast<const char*>(body->data()),
-                      static_cast<std::streamsize>(body->size()));
+            dstd::String ofs;
+            ofs.append(reinterpret_cast<const char*>(head->data()),
+                       head->size());
+            ofs.append(reinterpret_cast<const char*>(body->data()),
+                       body->size());
+            (void)dstd::fs::write_file(dstd::PathView(gz), ofs);
         }
 
         int fd = ::open(gz.c_str(), O_RDONLY);
         REQUIRE(fd >= 0);
-        dftracer::utils::dstd::ScopedFd sfd(fd);
+        dstd::ScopedFd sfd(fd);
         struct stat st;
         REQUIRE(::fstat(sfd.get(), &st) == 0);
         const auto size = static_cast<std::uint64_t>(st.st_size);
@@ -139,12 +137,12 @@ TEST_SUITE("gzip_rechunker") {
         CHECK(sampled.compressed == size);
         CHECK_FALSE(sampled.exceeds_cap);
 
-        (void)dftracer::utils::dstd::fs::remove_all(dir);
+        (void)dstd::fs::remove_all(dir);
     }
 
     TEST_CASE("rechunk preserves bytes and produces multiple members") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_split");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         const dstd::String in = dstd::String((dir / "big.pfw.gz").str());
         const dstd::String out = dstd::String((dir / "out.pfw.gz").str());
         const auto payload = make_lines(5000);
@@ -164,12 +162,12 @@ TEST_SUITE("gzip_rechunker") {
             CHECK(last_bytes[i] == '\n');
         }
 
-        (void)dftracer::utils::dstd::fs::remove_all(dir);
+        (void)dstd::fs::remove_all(dir);
     }
 
     TEST_CASE("rechunk handles a payload with no trailing newline") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_nonl");
-        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         const dstd::String in = dstd::String((dir / "in.pfw.gz").str());
         const dstd::String out = dstd::String((dir / "out.pfw.gz").str());
         dstd::String payload = make_lines(1000);
@@ -179,6 +177,6 @@ TEST_SUITE("gzip_rechunker") {
         gzc::gzip_rechunk_to_members(in, out, 4 * 1024, 6).get();
         CHECK(decode_all(out).first == payload);
 
-        (void)dftracer::utils::dstd::fs::remove_all(dir);
+        (void)dstd::fs::remove_all(dir);
     }
 }

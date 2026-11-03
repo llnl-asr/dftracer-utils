@@ -20,13 +20,16 @@
 #include <thread>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using namespace dftracer::utils::memory;
 
 namespace {
 
+// keep std: memory tests link only memory
 std::string g_reports;
 
-void capture(dftracer::utils::dstd::StringView text) noexcept {
+void capture(dstd::StringView text) noexcept {
     g_reports.append(text.data(), text.size());
 }
 
@@ -68,10 +71,17 @@ struct ReportedSite {
     std::size_t blocks = 0;
 };
 
-std::vector<ReportedSite> sites_of(const std::string& text,
-                                   const std::string& pool) {
+// keep std: memory tests link only memory
+std::vector<ReportedSite> sites_of(
+    // keep std: memory tests link only memory
+    const std::string& text,
+    // keep std: memory tests link only memory
+    const std::string& pool) {
+    // keep std: memory tests link only memory
     std::vector<ReportedSite> out;
+    // keep std: memory tests link only memory
     std::string key = "pool " + pool + " site 0x";
+    // keep std: memory tests link only memory
     for (std::size_t at = text.find(key); at != std::string::npos;
          at = text.find(key, at + 1)) {
         unsigned long long site = 0;
@@ -93,6 +103,7 @@ void expect_abort(const char* test_case, const char* text) {
     REQUIRE(result.announced);
     CHECK(WIFSIGNALED(result.status));
     CHECK(WTERMSIG(result.status) == SIGABRT);
+    // keep std: memory tests link only memory
     CHECK(result.output.find(text) != std::string::npos);
 }
 
@@ -124,7 +135,9 @@ TEST_CASE("a planted leak in a scratch pool reports its path and sites") {
     }
     pool.close();
     CHECK(g_reports.find("pool root/debug leak closed with ") !=
+          // keep std: memory tests link only memory
           std::string::npos);
+    // keep std: memory tests link only memory
     CHECK(g_reports.find(" in 3 blocks\n") != std::string::npos);
     auto sites = sites_of(g_reports, "root/debug leak");
     REQUIRE(sites.size() == 2);
@@ -209,8 +222,10 @@ TEST_CASE("many threads allocate and free across threads") {
     std::size_t before = Manager::get().root().live();
     constexpr int THREADS = 8;
     constexpr int ROUNDS = 5000;
+    // keep std: memory tests link only memory
     std::vector<std::atomic<void*>> mailbox(THREADS);
     for (auto& m : mailbox) m.store(nullptr);
+    // keep std: memory tests link only memory
     std::vector<std::thread> threads;
     for (int t = 0; t < THREADS; ++t) {
         threads.emplace_back([&, t] {
@@ -380,7 +395,9 @@ TEST_CASE("exit check fails a planted leak" * doctest::skip()) {
     REQUIRE(result.announced);
     CHECK(WIFEXITED(result.status));
     CHECK(WEXITSTATUS(result.status) == 70);
+    // keep std: memory tests link only memory
     CHECK(result.output.find("exit check failed") != std::string::npos);
+    // keep std: memory tests link only memory
     CHECK(result.output.find("pool root/exit leak holds") != std::string::npos);
     auto sites =
         sites_of(result.output.substr(result.output.find("exit check failed")),
@@ -388,6 +405,7 @@ TEST_CASE("exit check fails a planted leak" * doctest::skip()) {
     REQUIRE(sites.size() == 1);
     unsigned long long planter = 0;
     std::size_t at = result.output.find("planter 0x");
+    // keep std: memory tests link only memory
     REQUIRE(at != std::string::npos);
     REQUIRE(std::sscanf(result.output.c_str() + at, "planter 0x%llx",
                         &planter) == 1);

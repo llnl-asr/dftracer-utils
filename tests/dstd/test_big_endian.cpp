@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <limits>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -45,8 +44,8 @@ TEST_SUITE("big_endian") {
         CHECK(b[1] == 0xF0);
     }
 
-    TEST_CASE("big_endian - append to std::string and vectors") {
-        std::string s;
+    TEST_CASE("big_endian - append to dstd::String and vectors") {
+        dstd::String s;
         dstd::append_u16_be(s, 0xBEEF);
         dstd::append_u32_be(s, 0x01020304U);
         dstd::append_u64_be(s, 0x0102030405060708ULL);
@@ -56,7 +55,7 @@ TEST_SUITE("big_endian") {
         CHECK(static_cast<unsigned char>(s[2]) == 0x01);
         CHECK(static_cast<unsigned char>(s[13]) == 0x08);
 
-        std::vector<std::uint8_t> v;
+        dstd::Vector<std::uint8_t> v;
         dstd::append_f64_be(v, 1.0);
         REQUIRE(v.size() == 8);
         CHECK(v[0] == 0x3F);
@@ -89,7 +88,7 @@ TEST_SUITE("big_endian") {
     TEST_CASE("varint - byte layout") {
         struct Case {
             std::uint64_t value;
-            std::vector<std::uint8_t> bytes;
+            dstd::Vector<std::uint8_t> bytes;
         };
         const Case cases[] = {
             {0, {0x00}},
@@ -101,7 +100,7 @@ TEST_SUITE("big_endian") {
              {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01}},
         };
         for (const auto& c : cases) {
-            std::string s;
+            dstd::String s;
             dstd::append_varint(s, c.value);
             REQUIRE(s.size() == c.bytes.size());
             for (std::size_t i = 0; i < s.size(); ++i)
@@ -155,7 +154,7 @@ TEST_SUITE("big_endian") {
                               {std::numeric_limits<std::uint64_t>::max(), 10}};
         for (const auto& c : cases) {
             CHECK(dstd::varint_size(c.value) == c.bytes);
-            std::string s;
+            dstd::String s;
             dstd::append_varint(s, c.value);
             CHECK(s.size() == c.bytes);
         }

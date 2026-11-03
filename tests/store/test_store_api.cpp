@@ -5,6 +5,10 @@
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/store.h>
 #include <dftracer/utils/store/writer.h>
@@ -15,19 +19,16 @@
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
-#include <string>
 #include <thread>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
-using dftracer::utils::dstd::ByteView;
+using dstd::ByteView;
 using store::Batch;
 using store::Cursor;
 using store::FoldKind;
@@ -39,23 +40,24 @@ using store::ScopeState;
 using store::SourceStat;
 using store::Store;
 
-ByteView view_of(const std::string& bytes) {
+ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-std::string to_std(ByteView bytes) {
-    return std::string(reinterpret_cast<const char*>(bytes.data()),
-                       bytes.size());
+dstd::String to_std(ByteView bytes) {
+    return dstd::String(reinterpret_cast<const char*>(bytes.data()),
+                        bytes.size());
 }
 
-NamespaceSpec spec_of(const std::string& name, FoldKind fold = FoldKind::None) {
+NamespaceSpec spec_of(const dstd::String& name,
+                      FoldKind fold = FoldKind::None) {
     NamespaceSpec spec;
     spec.name = dstd::String(name.data(), name.size());
     spec.fold = fold;
     return spec;
 }
 
-ScopeKey scope_of(const std::string& path) {
+ScopeKey scope_of(const dstd::String& path) {
     return ScopeKey::file(dstd::StringView(path.data(), path.size()));
 }
 
@@ -78,7 +80,7 @@ dstd::Expected<void, dstd::Error> run(
 }
 
 void put_all(Store& store, const Namespace& ns, const ScopeKey& scope,
-             const std::vector<dstd::Pair<std::string, std::string>>& rows,
+             const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& rows,
              bool building = false) {
     Batch batch =
         building ? store.building_batch(ns, scope) : store.batch(ns, scope);
@@ -88,9 +90,9 @@ void put_all(Store& store, const Namespace& ns, const ScopeKey& scope,
     REQUIRE(run(store.commit(std::move(batch))).has_value());
 }
 
-dstd::Optional<std::string> get_value(Store& store, const Namespace& ns,
-                                      const ScopeKey& scope,
-                                      const std::string& key) {
+dstd::Optional<dstd::String> get_value(Store& store, const Namespace& ns,
+                                       const ScopeKey& scope,
+                                       const dstd::String& key) {
     auto snapshot = store.snapshot();
     REQUIRE(snapshot.has_value());
     auto found = snapshot->get(ns, scope, view_of(key));
@@ -99,8 +101,8 @@ dstd::Optional<std::string> get_value(Store& store, const Namespace& ns,
     return to_std((*found)->bytes());
 }
 
-std::vector<dstd::Pair<std::string, std::string>> collect(Cursor cursor) {
-    std::vector<dstd::Pair<std::string, std::string>> rows;
+dstd::Vector<dstd::Pair<dstd::String, dstd::String>> collect(Cursor cursor) {
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> rows;
     while (!cursor.at_end()) {
         auto value = cursor.value();
         REQUIRE(value.has_value());
@@ -111,7 +113,7 @@ std::vector<dstd::Pair<std::string, std::string>> collect(Cursor cursor) {
     return rows;
 }
 
-using Rows = std::vector<dstd::Pair<std::string, std::string>>;
+using Rows = dstd::Vector<dstd::Pair<dstd::String, dstd::String>>;
 
 // Read once by the first snapshot of the process, so set before main.
 const int REFRESH_EVERY_SNAPSHOT = [] {
@@ -146,7 +148,7 @@ TEST_SUITE("store api") {
         put_all(first, a, scope, {{"k", "v"}});
         REQUIRE(run(first.flush()).has_value());
         CHECK(get_value(second, b, scope, "k") ==
-              dstd::Optional<std::string>("v"));
+              dstd::Optional<dstd::String>("v"));
     }
 
     TEST_CASE("a namespace registered twice gives one handle") {
@@ -174,9 +176,9 @@ TEST_SUITE("store api") {
         put_all(store, ns, scope, {{"k", "v1"}, {"j", "v2"}});
         REQUIRE(run(store.flush()).has_value());
         CHECK(get_value(store, ns, scope, "k") ==
-              dstd::Optional<std::string>("v1"));
+              dstd::Optional<dstd::String>("v1"));
         CHECK(get_value(store, ns, scope, "j") ==
-              dstd::Optional<std::string>("v2"));
+              dstd::Optional<dstd::String>("v2"));
         CHECK_FALSE(get_value(store, ns, scope, "x").has_value());
 
         auto snapshot = store.snapshot();
@@ -192,7 +194,7 @@ TEST_SUITE("store api") {
         put_all(store, ns, scope, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
         REQUIRE(run(store.flush()).has_value());
 
-        const std::string c = "c", missing = "zz", a = "a";
+        const dstd::String c = "c", missing = "zz", a = "a";
         const dstd::Vector<ByteView> keys{view_of(c), view_of(missing),
                                           view_of(a)};
         auto snapshot = store.snapshot();
@@ -221,14 +223,14 @@ TEST_SUITE("store api") {
 
         auto snapshot = store.snapshot();
         REQUIRE(snapshot.has_value());
-        const std::string prefix = "ab";
+        const dstd::String prefix = "ab";
         CHECK(collect(snapshot->scan(ns, first, view_of(prefix))) ==
               Rows{{"ab1", "x"}, {"ab2", "y"}});
-        const std::string begin = "ab2", end = "b1";
+        const dstd::String begin = "ab2", end = "b1";
         CHECK(
             collect(snapshot->scan(ns, first, view_of(begin), view_of(end))) ==
             Rows{{"ab2", "y"}, {"ac1", "z"}});
-        const std::string low, high;
+        const dstd::String low, high;
         CHECK(collect(snapshot->scan_all(ns, view_of(low), view_of(high))) ==
               Rows{{"ab1", "x"},
                    {"ab2", "y"},
@@ -263,7 +265,7 @@ TEST_SUITE("store api") {
         put_all(store, ns, scope, {{"k1", "v1"}, {"k2", "v2"}});
         REQUIRE(run(store.flush()).has_value());
 
-        const std::string low, high;
+        const dstd::String low, high;
         Cursor cursor = [&] {
             auto snapshot = store.snapshot();
             REQUIRE(snapshot.has_value());
@@ -284,16 +286,16 @@ TEST_SUITE("store api") {
         put_all(store, ns, scope, {{"k", "new"}, {"n", "added"}}, true);
         REQUIRE(run(store.flush()).has_value());
         CHECK(get_value(store, ns, scope, "k") ==
-              dstd::Optional<std::string>("old"));
+              dstd::Optional<dstd::String>("old"));
         CHECK_FALSE(get_value(store, ns, scope, "n").has_value());
 
         const dstd::Vector<SourceStat> sources{SourceStat{1, 2, 3}};
         const Publish target{&ns, &scope, 7, &sources};
         REQUIRE(run(store.publish({&target, 1})).has_value());
         CHECK(get_value(store, ns, scope, "k") ==
-              dstd::Optional<std::string>("new"));
+              dstd::Optional<dstd::String>("new"));
         CHECK(get_value(store, ns, scope, "n") ==
-              dstd::Optional<std::string>("added"));
+              dstd::Optional<dstd::String>("added"));
         auto snapshot = store.snapshot();
         REQUIRE(snapshot.has_value());
         const store::CopyInfo info = snapshot->copy_info(ns, scope);
@@ -327,9 +329,9 @@ TEST_SUITE("store api") {
                                 {&right, &scope, 0, nullptr}};
         REQUIRE(run(store.publish(good)).has_value());
         CHECK(get_value(store, left, scope, "k") ==
-              dstd::Optional<std::string>("l"));
+              dstd::Optional<dstd::String>("l"));
         CHECK(get_value(store, right, scope, "k") ==
-              dstd::Optional<std::string>("r"));
+              dstd::Optional<dstd::String>("r"));
     }
 
     TEST_CASE("a publish applies a drop, a fail and a new copy together") {
@@ -353,7 +355,7 @@ TEST_SUITE("store api") {
             {&fresh, &unbuilt, 0, nullptr, Publish::Change::Ready}};
         CHECK_FALSE(run(store.publish(refused)).has_value());
         CHECK(get_value(store, gone, scope, "k") ==
-              dstd::Optional<std::string>("old"));
+              dstd::Optional<dstd::String>("old"));
 
         const Publish changes[] = {
             {&gone, &scope, 0, nullptr, Publish::Change::Dropped},
@@ -369,7 +371,7 @@ TEST_SUITE("store api") {
         CHECK(after->copy_info(fresh, scope).state == ScopeState::Ready);
         CHECK(after->copy_info(fresh, scope).params_hash == 9);
         CHECK(get_value(store, fresh, scope, "k") ==
-              dstd::Optional<std::string>("new"));
+              dstd::Optional<dstd::String>("new"));
         CHECK_FALSE(get_value(store, gone, scope, "k").has_value());
 
         CHECK(before->copy_info(gone, scope).state == ScopeState::Ready);
@@ -395,7 +397,7 @@ TEST_SUITE("store api") {
         put_all(store, ns, scope, {{"k", "whole"}});
         REQUIRE(run(store.flush()).has_value());
         CHECK(get_value(store, ns, scope, "k") ==
-              dstd::Optional<std::string>("whole"));
+              dstd::Optional<dstd::String>("whole"));
     }
 
     TEST_CASE("fold namespaces fold, and a plain put on one is refused") {
@@ -406,7 +408,7 @@ TEST_SUITE("store api") {
         const ScopeKey scope = scope_of("/traces/a.pfw");
 
         const auto eight = [](std::int64_t value) {
-            std::string bytes(8, '\0');
+            dstd::String bytes(8, '\0');
             dstd::write_u64_le(reinterpret_cast<std::uint8_t*>(bytes.data()),
                                static_cast<std::uint64_t>(value));
             return bytes;
@@ -418,7 +420,7 @@ TEST_SUITE("store api") {
         }
         REQUIRE(run(store.flush()).has_value());
         CHECK(get_value(store, ns, scope, "k") ==
-              dstd::Optional<std::string>(eight(7)));
+              dstd::Optional<dstd::String>(eight(7)));
 
         Batch refused = store.batch(ns, scope);
         refused.put(view_of("k"), view_of(eight(1)));
@@ -437,7 +439,7 @@ TEST_SUITE("store api") {
         REQUIRE(run(store.flush()).has_value());
         CHECK(get_value(store, ns, dropped, "a").has_value());
 
-        const std::string begin = "b", end = "c";
+        const dstd::String begin = "b", end = "c";
         REQUIRE(
             store.erase(ns, erased, view_of(begin), view_of(end)).has_value());
         REQUIRE(store.drop(ns, dropped).has_value());
@@ -467,7 +469,7 @@ TEST_SUITE("store api") {
         REQUIRE(run(store.close()).has_value());
 
         const Namespace again = register_ns(store, spec_of("dftu.test.erase"));
-        const std::string begin = "a", end = "c";
+        const dstd::String begin = "a", end = "c";
         auto refused =
             store.erase(again, written, view_of(begin), view_of(end));
         REQUIRE_FALSE(refused.has_value());
@@ -476,9 +478,9 @@ TEST_SUITE("store api") {
                   .has_value());
         REQUIRE(run(store.flush()).has_value());
         CHECK(get_value(store, again, written, "a") ==
-              dstd::Optional<std::string>("1"));
+              dstd::Optional<dstd::String>("1"));
         CHECK(get_value(store, again, written, "b") ==
-              dstd::Optional<std::string>("2"));
+              dstd::Optional<dstd::String>("2"));
     }
 
     TEST_CASE("a write after close opens a new writer") {
@@ -492,26 +494,26 @@ TEST_SUITE("store api") {
         put_all(store, ns, kept, {{"before", "1"}});
         REQUIRE(run(store.close()).has_value());
         CHECK(get_value(store, ns, kept, "before") ==
-              dstd::Optional<std::string>("1"));
+              dstd::Optional<dstd::String>("1"));
 
         put_all(store, ns, scope, {{"after", "2"}});
         REQUIRE(run(store.flush()).has_value());
         CHECK(get_value(store, ns, kept, "before") ==
-              dstd::Optional<std::string>("1"));
+              dstd::Optional<dstd::String>("1"));
         CHECK(get_value(store, ns, scope, "after") ==
-              dstd::Optional<std::string>("2"));
+              dstd::Optional<dstd::String>("2"));
 
         const Namespace later = register_ns(store, spec_of("dftu.test.later"));
         put_all(store, later, scope, {{"x", "y"}});
         REQUIRE(run(store.flush()).has_value());
         CHECK(get_value(store, later, scope, "x") ==
-              dstd::Optional<std::string>("y"));
+              dstd::Optional<dstd::String>("y"));
 
         REQUIRE(Store::close_all().has_value());
         put_all(store, ns, scope, {{"again", "3"}});
         REQUIRE(run(store.flush()).has_value());
         CHECK(get_value(store, ns, scope, "again") ==
-              dstd::Optional<std::string>("3"));
+              dstd::Optional<dstd::String>("3"));
         REQUIRE(run(store.close()).has_value());
     }
 
@@ -525,19 +527,21 @@ TEST_SUITE("store api") {
         // them at its interval with no flush.
         Rows rows;
         for (int i = 0; i < 512; ++i) {
-            const std::string key = "k" + std::to_string(1000 + i);
+            const dstd::String key = "k" + dstd::to_string(1000 + i);
             rows.emplace_back(
-                key, std::string(16 * 1024, static_cast<char>('a' + (i % 26))));
+                key,
+                dstd::String(16 * 1024, static_cast<char>('a' + (i % 26))));
         }
         put_all(store, ns, scope, rows);
-        dstd::Optional<std::string> seen = get_value(store, ns, scope, "k1000");
+        dstd::Optional<dstd::String> seen =
+            get_value(store, ns, scope, "k1000");
         const auto deadline =
             std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (!seen && std::chrono::steady_clock::now() < deadline) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             seen = get_value(store, ns, scope, "k1000");
         }
-        CHECK(seen == dstd::Optional<std::string>(rows[0].second));
+        CHECK(seen == dstd::Optional<dstd::String>(rows[0].second));
     }
 
     TEST_CASE("a batch made before a close is refused after it") {
@@ -554,7 +558,7 @@ TEST_SUITE("store api") {
         put_all(store, ns, scope, {{"k", "fresh"}});
         REQUIRE(run(store.flush()).has_value());
         CHECK(get_value(store, ns, scope, "k") ==
-              dstd::Optional<std::string>("fresh"));
+              dstd::Optional<dstd::String>("fresh"));
     }
 
     TEST_CASE("a directory reopens after every handle is gone") {
@@ -570,11 +574,11 @@ TEST_SUITE("store api") {
         Store again = open_store(dir);
         const Namespace ns = register_ns(again, spec);
         CHECK(get_value(again, ns, scope, "k") ==
-              dstd::Optional<std::string>("v"));
+              dstd::Optional<dstd::String>("v"));
         put_all(again, ns, scope, {{"k2", "v2"}});
         REQUIRE(run(again.flush()).has_value());
         CHECK(get_value(again, ns, scope, "k2") ==
-              dstd::Optional<std::string>("v2"));
+              dstd::Optional<dstd::String>("v2"));
     }
 
     TEST_CASE("a data file another writer adds is picked up") {
@@ -605,9 +609,9 @@ TEST_SUITE("store api") {
                     .has_value());
 
         CHECK(get_value(store, ns, other, "k") ==
-              dstd::Optional<std::string>("foreign"));
+              dstd::Optional<dstd::String>("foreign"));
         CHECK(get_value(store, ns, own, "k") ==
-              dstd::Optional<std::string>("own"));
+              dstd::Optional<dstd::String>("own"));
     }
 
     TEST_CASE("flush and close finish when the caller drives them itself") {
@@ -620,15 +624,16 @@ TEST_SUITE("store api") {
         for (int round = 0; round < 4; ++round) {
             Batch batch = store.batch(ns, scope);
             for (int i = 0; i < 256; ++i) {
-                const std::string key = "k" + std::to_string(round * 1000 + i);
-                const std::string value(4096, static_cast<char>('a' + round));
+                const dstd::String key =
+                    "k" + dstd::to_string(round * 1000 + i);
+                const dstd::String value(4096, static_cast<char>('a' + round));
                 batch.put(view_of(key), view_of(value));
             }
             REQUIRE(store.commit(std::move(batch)).get().has_value());
             REQUIRE(store.flush().get().has_value());
         }
         CHECK(get_value(store, ns, scope, "k3000") ==
-              dstd::Optional<std::string>(std::string(4096, 'd')));
+              dstd::Optional<dstd::String>(dstd::String(4096, 'd')));
         REQUIRE(store.close().get().has_value());
     }
 }

@@ -7,16 +7,17 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
+#include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -28,21 +29,21 @@ namespace {
 
 namespace scan = dftracer::utils::trace::views::detail::scan;
 
-std::string cache_of(const std::string& gz) {
-    return std::string(determine_index_path(gz, ""));
+dstd::String cache_of(const dstd::String& gz) {
+    return dstd::String(determine_index_path(gz, ""));
 }
 
-std::string rollups_of(const std::string& gz) {
-    return std::string(dftracer::utils::index::rollups_dir(cache_of(gz)));
+dstd::String rollups_of(const dstd::String& gz) {
+    return dstd::String(dftracer::utils::index::rollups_dir(cache_of(gz)));
 }
 
-std::string views_of(const std::string& gz) {
-    return std::string(dftracer::utils::index::views_dir(cache_of(gz)));
+dstd::String views_of(const dstd::String& gz) {
+    return dstd::String(dftracer::utils::index::views_dir(cache_of(gz)));
 }
 
 // Signatures in the rollup store, from its usage records.
-std::vector<std::uint64_t> rollup_sigs(const std::string& gz) {
-    std::vector<std::uint64_t> out;
+dstd::Vector<std::uint64_t> rollup_sigs(const dstd::String& gz) {
+    dstd::Vector<std::uint64_t> out;
     auto db = dftracer::utils::index::cache::open_rollup_db(
         rollups_of(gz),
         dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
@@ -50,7 +51,7 @@ std::vector<std::uint64_t> rollup_sigs(const std::string& gz) {
     return out;
 }
 
-std::uint64_t rollup_bytes(const std::string& gz) {
+std::uint64_t rollup_bytes(const dstd::String& gz) {
     std::uint64_t total = 0;
     auto db = dftracer::utils::index::cache::open_rollup_db(
         rollups_of(gz),
@@ -59,30 +60,30 @@ std::uint64_t rollup_bytes(const std::string& gz) {
     return total;
 }
 
-View by_cat(const std::string& gz, const std::string& query) {
+View by_cat(const dstd::String& gz, const dstd::String& query) {
     return View::from_file(
                dstd::String(gz),
-               dstd::String(std::string(determine_index_path(gz, ""))))
+               dstd::String(dstd::String(determine_index_path(gz, ""))))
         .duql(query)
         .group_by({GroupKey::cat()})
         .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
 }
 
-std::vector<std::string> canon(const dataframe::DataFrame& df) {
-    std::vector<std::string> rows;
+dstd::Vector<dstd::String> canon(const dataframe::DataFrame& df) {
+    dstd::Vector<dstd::String> rows;
     for (std::int64_t r = 0; r < df.num_rows(); ++r)
         rows.push_back(bstr(df, r, "cat") + "|" +
-                       std::to_string(bnum(df, r, "n")) + "|" +
-                       std::to_string(bnum(df, r, "total")));
+                       dstd::to_string(bnum(df, r, "n")) + "|" +
+                       dstd::to_string(bnum(df, r, "total")));
     std::sort(rows.begin(), rows.end());
     return rows;
 }
 
-std::string indexed_trace(TestEnvironment& env) {
-    std::string gz = create_mixed_trace(env, 30, 20);
+dstd::String indexed_trace(TestEnvironment& env) {
+    dstd::String gz = create_mixed_trace(env, 30, 20);
     StringSink warm;
     View::from_file(dstd::String(gz),
-                    dstd::String(std::string(determine_index_path(gz, ""))))
+                    dstd::String(dstd::String(determine_index_path(gz, ""))))
         .sink_json(warm)
         .get();
     return gz;
@@ -102,7 +103,7 @@ TEST_SUITE("QueryCache") {
                                      ".dftindex-cache")
                         .value());
         auto store = dftracer::utils::store::Store::open(
-            (dstd::Path(std::string(determine_index_path(gz, ""))) / "store")
+            (dstd::Path(dstd::String(determine_index_path(gz, ""))) / "store")
                 .str());
         REQUIRE(store.has_value());
         auto snapshot = store->snapshot();
@@ -121,7 +122,7 @@ TEST_SUITE("QueryCache") {
     TEST_CASE("deleting the cache changes no result") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         const auto agg = canon(by_cat(gz, "dur >= 0").collect().get());
         StringSink rows;
         View::from_file(dstd::String(gz), dstd::String(idx))
@@ -153,7 +154,7 @@ TEST_SUITE("QueryCache") {
     TEST_CASE("a root holding only caches is not mistaken for an index") {
         TestEnvironment env(200);
         const auto gz = create_mixed_trace(env, 30, 20);
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         by_cat(gz, "dur >= 0").materialize().get();
         const dstd::Path store = dstd::Path(idx) / "store";
         REQUIRE(dstd::fs::exists(store).value());
@@ -178,7 +179,7 @@ TEST_SUITE("QueryCache") {
         const auto gz = indexed_trace(env);
         const auto want = canon(by_cat(gz, "dur >= 0").collect().get());
         REQUIRE(dstd::fs::create_directories(cache_of(gz)).has_value());
-        std::ofstream((rollups_of(gz)).c_str()) << "x";
+        dftu_utils_test::FileOut(rollups_of(gz)) << "x";
         CHECK_NOTHROW(by_cat(gz, "dur >= 0").materialize().get());
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == want);
     }
@@ -186,8 +187,8 @@ TEST_SUITE("QueryCache") {
     TEST_CASE("the rollup store evicts the least recently used rollup") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
-        const std::string idx = std::string(determine_index_path(gz, ""));
-        auto plan = [&](const std::string& q) {
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        auto plan = [&](const dstd::String& q) {
             return scan::agg(
                 scan::group_by(scan::filter(scan::from_file(dstd::String(gz),
                                                             dstd::String(idx)),
@@ -195,7 +196,7 @@ TEST_SUITE("QueryCache") {
                                {GroupKey::cat()}),
                 {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
-        auto materialize = [&](const std::string& q) {
+        auto materialize = [&](const dstd::String& q) {
             return canon(
                 run(scan::collect_frame(scan::materialize(plan(q), 0, 0))));
         };
@@ -207,7 +208,7 @@ TEST_SUITE("QueryCache") {
         const std::uint64_t two = rollup_bytes(gz);
 
         // Room for two rollups of this shape; A is used again, so B goes.
-        ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES", std::to_string(two).c_str(),
+        ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES", dstd::to_string(two).c_str(),
                  1);
         CHECK(materialize("dur >= 0") == a);
         materialize("dur >= 2");
@@ -222,7 +223,7 @@ TEST_SUITE("QueryCache") {
         "a rollup made under one record schema is not reused by another") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto view = [&](bool generic) {
             View v = View::from_file(dstd::String(gz), dstd::String(idx));
             if (generic) v = v.record_schema("generic");
@@ -238,17 +239,17 @@ TEST_SUITE("QueryCache") {
     TEST_CASE("a view larger than the whole budget is not kept") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
-        const std::string idx = std::string(determine_index_path(gz, ""));
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES", "1", 1);
         View::from_file(dstd::String(gz), dstd::String(idx))
             .duql(R"(name == "read")")
             .materialize()
             .get();
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
-        std::vector<std::string> views;
+        dstd::Vector<dstd::String> views;
         for (const auto& e :
              dftu_utils_test::list_dir(dstd::Path(views_of(gz))))
-            views.push_back(std::string(e.path.str()));
+            views.push_back(dstd::String(e.path.str()));
         CHECK(views.empty());
         StringSink rows;
         const auto st = View::from_file(dstd::String(gz), dstd::String(idx))

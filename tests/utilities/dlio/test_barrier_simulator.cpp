@@ -95,7 +95,7 @@ TEST_SUITE("variance") {
 TEST_SUITE("WorkerQueue") {
     TEST_CASE("produce_batches fills exactly to capacity") {
         WorkerQueue q(/*num_workers=*/2, /*prefetch_factor=*/3);
-        auto sampler = []() -> dftracer::utils::dstd::Pair<double, double> {
+        auto sampler = []() -> dstd::Pair<double, double> {
             return {1.0, 0.5};
         };
         auto intervals = q.produce_batches(0.0, sampler);
@@ -105,7 +105,7 @@ TEST_SUITE("WorkerQueue") {
 
     TEST_CASE("consume_batch on ready batch returns base_overhead") {
         WorkerQueue q(1, 1);
-        auto sampler = []() -> dftracer::utils::dstd::Pair<double, double> {
+        auto sampler = []() -> dstd::Pair<double, double> {
             return {2.0, 1.0};
         };
         q.produce_batches(0.0, sampler);
@@ -127,7 +127,7 @@ TEST_SUITE("WorkerQueue") {
     TEST_CASE(
         "consume_batch on not-yet-ready batch returns wait + base_overhead") {
         WorkerQueue q(1, 1);
-        auto sampler = []() -> dftracer::utils::dstd::Pair<double, double> {
+        auto sampler = []() -> dstd::Pair<double, double> {
             return {10.0, 5.0};
         };
         q.produce_batches(0.0, sampler);

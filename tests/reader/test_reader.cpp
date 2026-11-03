@@ -4,6 +4,9 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/store/error.h>
@@ -14,10 +17,7 @@
 #include <testing_utilities.h>
 
 #include <fstream>
-#include <memory>
 #include <random>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::gzip;
@@ -30,10 +30,10 @@ TEST_CASE("C++ Indexer - Basic functionality") {
     TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     SUBCASE("Build index") {
         auto indexer =
@@ -88,10 +88,10 @@ TEST_CASE("C++ Reader - Basic functionality") {
     TestEnvironment env;
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
@@ -139,7 +139,7 @@ TEST_CASE("C++ Reader - Basic functionality") {
         // Read using streaming API
         const std::size_t buffer_size = 1024;
         char buffer[1024];
-        std::string result;
+        dstd::String result;
 
         // Stream data until no more available
         std::size_t bytes_read = reader->read(0, 50, buffer, buffer_size);
@@ -190,10 +190,10 @@ TEST_CASE("C++ API - Data range reading") {
     TestEnvironment env;
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
@@ -211,7 +211,7 @@ TEST_CASE("C++ API - Data range reading") {
         // read first 50 bytes using streaming API
         const std::size_t buffer_size = 1024;
         char buffer[1024];
-        std::string content;
+        dstd::String content;
 
         // Stream data until no more available
         std::size_t bytes_read = reader->read(0, 50, buffer, buffer_size);
@@ -219,7 +219,7 @@ TEST_CASE("C++ API - Data range reading") {
         content.append(buffer, bytes_read);
 
         CHECK(content.size() <= 50);
-        CHECK(content.find("{") != std::string::npos);
+        CHECK(content.find("{") != dstd::String::npos);
     }
 }
 
@@ -227,10 +227,10 @@ TEST_CASE("C++ API - Edge cases") {
     TestEnvironment env;
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
@@ -255,8 +255,8 @@ TEST_CASE("C++ API - Edge cases") {
         // Use cross-platform non-existent path
         dstd::Path non_existent =
             dstd::fs::temp_directory() / "nonexistent" / "file.gz";
-        CHECK_THROWS(ReaderFactory::create(std::string(non_existent.str()),
-                                           std::string(non_existent.str())));
+        CHECK_THROWS(ReaderFactory::create(dstd::String(non_existent.str()),
+                                           dstd::String(non_existent.str())));
     }
 }
 
@@ -264,10 +264,10 @@ TEST_CASE("C++ API - Integration test") {
     TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Complete workflow using C++ API
     {
@@ -287,7 +287,7 @@ TEST_CASE("C++ API - Integration test") {
         char buffer[1024];
 
         // Read first range [0, 100)
-        std::string content1;
+        dstd::String content1;
         std::size_t bytes_read;
         std::size_t offset1 = 0;
         std::size_t end1 = 100;
@@ -300,7 +300,7 @@ TEST_CASE("C++ API - Integration test") {
         CHECK(content1.size() <= 100);
 
         // Read second range [100, 200)
-        std::string content2;
+        dstd::String content2;
         std::size_t offset2 = 100;
         std::size_t end2 = 200;
         while (offset2 < end2 &&
@@ -312,8 +312,8 @@ TEST_CASE("C++ API - Integration test") {
         CHECK(content2.size() <= 100);
 
         // Verify data content
-        CHECK(content1.find("{") != std::string::npos);
-        CHECK(content2.find("{") != std::string::npos);
+        CHECK(content1.find("{") != dstd::String::npos);
+        CHECK(content2.find("{") != dstd::String::npos);
 
         // All resources are automatically cleaned up when objects go out of
         // scope
@@ -324,10 +324,10 @@ TEST_CASE("C++ API - Memory safety stress test" * doctest::test_suite("vg")) {
     TestEnvironment env(valgrind_scale(100000, 100));
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index
     {
@@ -363,10 +363,10 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
     TestEnvironment env;
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     SUBCASE("Indexer with invalid chunk size should throw in constructor") {
         CHECK_THROWS_AS(
@@ -429,10 +429,10 @@ TEST_CASE("C++ API - Advanced indexer functionality") {
     TestEnvironment env;
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     SUBCASE("Multiple indexer instances for same file") {
         auto indexer1 =
@@ -483,10 +483,10 @@ TEST_CASE("C++ API - Advanced reader functionality" *
     TestEnvironment env;
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
@@ -507,7 +507,7 @@ TEST_CASE("C++ API - Advanced reader functionality" *
 
         // Both should work independently
         char buffer1[1024], buffer2[1024];
-        std::string result1, result2;
+        dstd::String result1, result2;
 
         // Read from first reader [0, 100)
         std::size_t bytes_read1;
@@ -561,7 +561,7 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         std::size_t max_bytes = reader->get_max_bytes();
 
         char buffer[2048];
-        std::string result;
+        dstd::String result;
 
         // Small reads [0, 10)
         result.clear();
@@ -611,7 +611,7 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         std::size_t max_bytes = reader->get_max_bytes();
 
         char buffer[1024];
-        std::string result;
+        dstd::String result;
         std::size_t bytes_read;
 
         if (max_bytes > 100) {
@@ -652,10 +652,10 @@ TEST_CASE("C++ API - JSON boundary detection") {
     TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
@@ -673,7 +673,7 @@ TEST_CASE("C++ API - JSON boundary detection") {
         // Request 100 bytes - should get AT LEAST 100 bytes due to boundary
         // extension
         char buffer[2048];
-        std::string content;
+        dstd::String content;
         std::size_t bytes_read;
         std::size_t offset = 0;
         std::size_t end = 100;
@@ -691,7 +691,7 @@ TEST_CASE("C++ API - JSON boundary detection") {
 
         // Should contain complete JSON objects
         std::size_t last_brace = content.rfind('}');
-        REQUIRE(last_brace != std::string::npos);
+        REQUIRE(last_brace != dstd::String::npos);
         CHECK(last_brace <
               content.length() - 1);  // '}' should not be the last character
         CHECK(content[last_brace + 1] ==
@@ -701,7 +701,7 @@ TEST_CASE("C++ API - JSON boundary detection") {
     SUBCASE("Output should not cut off in middle of JSON") {
         // Request 500 bytes - this should not cut off mid-JSON
         char buffer[2048];
-        std::string content;
+        dstd::String content;
         std::size_t bytes_read;
         std::size_t offset = 0;
         std::size_t end = 500;
@@ -718,7 +718,7 @@ TEST_CASE("C++ API - JSON boundary detection") {
         std::size_t name_pos = content.find("\"name_");
         std::size_t last_brace_pos = content.rfind('}');
         bool has_incomplete_name =
-            (name_pos != std::string::npos) && (name_pos > last_brace_pos);
+            (name_pos != dstd::String::npos) && (name_pos > last_brace_pos);
         CHECK_FALSE(has_incomplete_name);
 
         // Verify it ends with complete JSON boundary (}\n)
@@ -730,13 +730,13 @@ TEST_CASE("C++ API - JSON boundary detection") {
 
     SUBCASE("Multiple range reads should maintain boundaries") {
         // Read multiple consecutive ranges
-        std::vector<std::string> segments;
+        dstd::Vector<dstd::String> segments;
         std::size_t current_pos = 0;
         std::size_t segment_size = 200;
 
         for (int i = 0; i < 5; ++i) {
             char buffer[2048];
-            std::string content;
+            dstd::String content;
             std::size_t bytes_read;
             std::size_t offset = current_pos;
             std::size_t end = current_pos + segment_size;
@@ -769,7 +769,7 @@ TEST_CASE("C++ API - JSON boundary detection") {
         for (const auto& segment : segments) {
             std::size_t json_count = 0;
             std::size_t pos = 0;
-            while ((pos = segment.find("}\n", pos)) != std::string::npos) {
+            while ((pos = segment.find("}\n", pos)) != dstd::String::npos) {
                 json_count++;
                 pos += 2;
             }
@@ -784,10 +784,10 @@ TEST_CASE("C++ API - Regression and stress tests") {
         TestEnvironment env(valgrind_scale(10000, 5));
         REQUIRE(env.is_valid());
 
-        std::string gz_file = env.create_test_gzip_file();
+        dstd::String gz_file = env.create_test_gzip_file();
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         // Build index
         {
@@ -806,7 +806,7 @@ TEST_CASE("C++ API - Regression and stress tests") {
         // Read large chunks [1000, 50000)
         if (max_bytes > 50000) {
             char buffer[4096];
-            std::string content;
+            dstd::String content;
 
             std::size_t bytes_read;
             std::size_t offset = 1000;
@@ -820,7 +820,7 @@ TEST_CASE("C++ API - Regression and stress tests") {
 
             // Check data integrity instead of strict size limits
             CHECK(!content.empty());
-            CHECK(content.find("{") != std::string::npos);
+            CHECK(content.find("{") != dstd::String::npos);
             CHECK(content.back() == '\n');
 
             // Verify we got complete lines (reasonable size range)
@@ -846,13 +846,13 @@ TEST_CASE("C++ API - Regression and stress tests") {
         REQUIRE(env.is_valid());
 
         // Create test data with specific pattern that might trigger the bug
-        std::string test_dir = env.get_dir();
-        std::string gz_file = test_dir + "/regression_test.gz";
-        std::string idx_file = test_dir + "/regression_test.gz.idx";
-        std::string txt_file = test_dir + "/regression_test.txt";
+        dstd::String test_dir = env.get_dir();
+        dstd::String gz_file = test_dir + "/regression_test.gz";
+        dstd::String idx_file = test_dir + "/regression_test.gz.idx";
+        dstd::String txt_file = test_dir + "/regression_test.txt";
 
         // Create test data similar to trace.pfw.gz format
-        std::ofstream f(txt_file.c_str());
+        dftu_utils_test::FileOut f(txt_file);
         REQUIRE(f.is_open());
 
         f << "[\n";  // JSON array start
@@ -880,7 +880,7 @@ TEST_CASE("C++ API - Regression and stress tests") {
 
         SUBCASE("Original failing case: 0 to 10000 bytes") {
             char buffer[4096];
-            std::string content;
+            dstd::String content;
 
             std::size_t bytes_read;
             std::size_t offset = 0;
@@ -895,22 +895,22 @@ TEST_CASE("C++ API - Regression and stress tests") {
             CHECK(content.size() <= 10000);
 
             // Should NOT end with incomplete patterns like "name_%
-            CHECK(content.find("\"name_%") == std::string::npos);
-            CHECK(content.find("\"cat_%") == std::string::npos);
+            CHECK(content.find("\"name_%") == dstd::String::npos);
+            CHECK(content.find("\"cat_%") == dstd::String::npos);
 
             // Should end with complete JSON line
             CHECK(content.back() == '\n');
             CHECK(content[content.length() - 2] == '}');
 
             // Should contain the pattern but complete
-            CHECK(content.find("\"name\":\"name_") != std::string::npos);
-            CHECK(content.find("\"cat\":\"cat_") != std::string::npos);
+            CHECK(content.find("\"name\":\"name_") != dstd::String::npos);
+            CHECK(content.find("\"cat\":\"cat_") != dstd::String::npos);
         }
 
         SUBCASE("Small range minimum bytes check") {
             // This was returning only 44 bytes instead of at least 100
             char buffer[2048];
-            std::string content;
+            dstd::String content;
 
             std::size_t bytes_read;
             std::size_t offset = 0;
@@ -940,10 +940,10 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     TestEnvironment env;
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
@@ -960,7 +960,7 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         // Read using raw API
         const std::size_t buffer_size = 1024;
         char buffer[1024];
-        std::string raw_result;
+        dstd::String raw_result;
 
         // Stream raw data until no more available [0, 50)
         std::size_t bytes_read;
@@ -989,7 +989,7 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
 
         const std::size_t buffer_size = 1024;
         char buffer1[1024], buffer2[1024];
-        std::string raw_result, regular_result;
+        dstd::String raw_result, regular_result;
 
         // Raw read (new default behavior) [0, 100)
         std::size_t bytes_read1;
@@ -1039,7 +1039,7 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
 
         const std::size_t buffer_size = 512;
         char buffer1[512], buffer2[512];
-        std::string result1, result2;
+        dstd::String result1, result2;
 
         // Test explicit gz_path overload [0, 75)
         std::size_t bytes_read1;
@@ -1077,7 +1077,7 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t max_bytes = reader->get_max_bytes();
 
         char buffer[1024];
-        std::string result;
+        dstd::String result;
 
         // Single byte read [0, 1)
         result.clear();
@@ -1117,7 +1117,7 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         // Use very small buffer to test streaming behavior
         const std::size_t small_buffer_size = 16;
         char small_buffer[16];
-        std::string result;
+        dstd::String result;
         std::size_t total_calls = 0;
 
         std::size_t bytes_read;
@@ -1146,13 +1146,13 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         char buffer[1024];
 
         // Read multiple non-overlapping ranges
-        std::vector<std::string> segments;
-        std::vector<dstd::Pair<std::size_t, std::size_t>> ranges = {
+        dstd::Vector<dstd::String> segments;
+        dstd::Vector<dstd::Pair<std::size_t, std::size_t>> ranges = {
             {0, 50}, {50, 100}, {100, 150}};
 
         for (const auto& range : ranges) {
             if (range.second <= max_bytes) {
-                std::string segment;
+                dstd::String segment;
                 std::size_t bytes_read;
                 std::size_t offset = range.first;
                 std::size_t end = range.second;
@@ -1184,7 +1184,7 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         char buffer[4096];
 
         // Read entire file with raw API [0, max_bytes)
-        std::string raw_content;
+        dstd::String raw_content;
         std::size_t bytes_read1;
         std::size_t offset1 = 0;
         while (offset1 < max_bytes &&
@@ -1195,7 +1195,7 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         }
 
         // Read entire file with line-boundary aware API [0, max_bytes)
-        std::string json_content;
+        dstd::String json_content;
         std::size_t bytes_read2;
         std::size_t offset2 = 0;
         while (offset2 < max_bytes &&
@@ -1226,21 +1226,21 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
             std::size_t json_last_newline =
                 json_content.rfind('\n', json_content.size() - 2);
 
-            if (raw_last_newline != std::string::npos &&
-                json_last_newline != std::string::npos) {
-                std::string raw_last_line =
+            if (raw_last_newline != dstd::String::npos &&
+                json_last_newline != dstd::String::npos) {
+                dstd::String raw_last_line =
                     raw_content.substr(raw_last_newline + 1);
-                std::string json_last_line =
+                dstd::String json_last_line =
                     json_content.substr(json_last_newline + 1);
 
                 // Last JSON lines should be identical
                 CHECK(raw_last_line == json_last_line);
 
                 // Should contain valid JSON structure
-                CHECK(raw_last_line.find('{') != std::string::npos);
-                CHECK(raw_last_line.find('}') != std::string::npos);
-                CHECK(json_last_line.find('{') != std::string::npos);
-                CHECK(json_last_line.find('}') != std::string::npos);
+                CHECK(raw_last_line.find('{') != dstd::String::npos);
+                CHECK(raw_last_line.find('}') != dstd::String::npos);
+                CHECK(json_last_line.find('{') != dstd::String::npos);
+                CHECK(json_last_line.find('}') != dstd::String::npos);
             }
         }
     }
@@ -1251,10 +1251,10 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     TestEnvironment env(valgrind_scale(10000, 10));
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first with smaller chunk size to force checkpoint creation
     {
@@ -1295,7 +1295,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         CHECK(line_count == 5);  // Should have exactly 5 lines
 
         // Verify it starts with expected pattern (actual test data format)
-        CHECK(result.find("\"id\": 1") != std::string::npos);
+        CHECK(result.find("\"id\": 1") != dstd::String::npos);
     }
 
     SUBCASE("Line reading accuracy - specific line numbers") {
@@ -1304,14 +1304,14 @@ TEST_CASE("C++ Reader - Line reading functionality" *
 
         // Test specific line numbers that should contain predictable content
         for (std::size_t line_num :
-             std::vector<std::size_t>({1, 10, 50, 100})) {
+             dstd::Vector<std::size_t>({1, 10, 50, 100})) {
             dstd::String result = reader->read_lines(line_num, line_num);
             CHECK(!result.empty());
 
             // Should contain id: N where N = line_num
-            std::string expected_pattern =
-                "\"id\": " + std::to_string(line_num);
-            CHECK(result.find(expected_pattern) != std::string::npos);
+            dstd::String expected_pattern =
+                "\"id\": " + dstd::to_string(line_num);
+            CHECK(result.find(expected_pattern) != dstd::String::npos);
 
             // Should have exactly one line
             std::size_t line_count = 0;
@@ -1339,12 +1339,12 @@ TEST_CASE("C++ Reader - Line reading functionality" *
               6);  // Should have exactly 6 lines (10, 11, 12, 13, 14, 15)
 
         // Should start with line 10 and end with line 15
-        CHECK(result.find("\"id\": 10") != std::string::npos);
-        CHECK(result.find("\"id\": 15") != std::string::npos);
+        CHECK(result.find("\"id\": 10") != dstd::String::npos);
+        CHECK(result.find("\"id\": 15") != dstd::String::npos);
 
         // Should not contain line 9 or 16
-        CHECK(result.find("\"id\": 9") == std::string::npos);
-        CHECK(result.find("\"id\": 16") == std::string::npos);
+        CHECK(result.find("\"id\": 9") == dstd::String::npos);
+        CHECK(result.find("\"id\": 16") == dstd::String::npos);
     }
 
     SUBCASE("Line reading consistency with sed behavior") {
@@ -1355,8 +1355,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         // Line 1 should contain id: 1, line 2 should contain id: 2, etc.
         for (std::size_t i = 1; i <= 5; ++i) {
             dstd::String result = reader->read_lines(i, i);
-            std::string expected_id = "\"id\": " + std::to_string(i);
-            CHECK(result.find(expected_id) != std::string::npos);
+            dstd::String expected_id = "\"id\": " + dstd::to_string(i);
+            CHECK(result.find(expected_id) != dstd::String::npos);
         }
     }
 
@@ -1397,8 +1397,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
             CHECK(line_count == 100);
 
             // Should start with line 1 and end with line 100
-            CHECK(result.find("\"id\": 1") != std::string::npos);
-            CHECK(result.find("\"id\": 100") != std::string::npos);
+            CHECK(result.find("\"id\": 1") != dstd::String::npos);
+            CHECK(result.find("\"id\": 100") != dstd::String::npos);
         }
     }
 
@@ -1437,7 +1437,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         std::size_t total_lines = indexer->get_num_lines();
 
         // Test single line reads at different positions
-        std::vector<std::size_t> test_lines = {
+        dstd::Vector<std::size_t> test_lines = {
             1, total_lines / 4, total_lines / 2, total_lines - 1, total_lines};
 
         for (std::size_t line_num : test_lines) {
@@ -1453,8 +1453,9 @@ TEST_CASE("C++ Reader - Line reading functionality" *
                 CHECK(line_count == 1);
 
                 // Should contain the expected id pattern
-                std::string expected_id = "\"id\": " + std::to_string(line_num);
-                CHECK(result.find(expected_id) != std::string::npos);
+                dstd::String expected_id =
+                    "\"id\": " + dstd::to_string(line_num);
+                CHECK(result.find(expected_id) != dstd::String::npos);
             }
         }
     }
@@ -1464,19 +1465,19 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
     TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     SUBCASE("Indexer with various checkpoint sizes") {
         for (double ckpt_size_mb : {0.1, 0.5, 1.0, 2.0, 5.0}) {
             std::size_t ckpt_size = mb_to_b(ckpt_size_mb);
             auto indexer = CheckpointIndexerFactory::create(
-                gz_file, idx_file + std::to_string(ckpt_size_mb), ckpt_size);
+                gz_file, idx_file + dstd::to_string(ckpt_size_mb), ckpt_size);
             CHECK_NOTHROW(indexer->build());
             CHECK(indexer->get_checkpoint_size() <= ckpt_size);
-            (void)dstd::fs::remove(idx_file + std::to_string(ckpt_size_mb));
+            (void)dstd::fs::remove(idx_file + dstd::to_string(ckpt_size_mb));
         }
     }
 
@@ -1493,7 +1494,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
         std::size_t max_bytes = reader->get_max_bytes();
 
         // Test various range sizes to trigger different internal paths
-        std::vector<dstd::Pair<std::size_t, std::size_t>> ranges = {
+        dstd::Vector<dstd::Pair<std::size_t, std::size_t>> ranges = {
             {0, 1},                               // Very small range
             {0, 10},                              // Small range
             {0, 100},                             // Medium range
@@ -1507,7 +1508,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             std::size_t end = range.second;
             if (end <= max_bytes) {
                 char buffer[2048];
-                std::string result;
+                dstd::String result;
 
                 std::size_t bytes_read;
                 std::size_t offset = start;
@@ -1551,7 +1552,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
         }
 
         // Create multiple readers
-        std::vector<dstd::SharedPtr<Reader>> readers;
+        dstd::Vector<dstd::SharedPtr<Reader>> readers;
         for (int i = 0; i < 5; ++i) {
             readers.push_back(ReaderFactory::create(gz_file, idx_file));
             CHECK(readers.back()->is_valid());
@@ -1560,7 +1561,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
         // All should be able to read simultaneously [0, 50)
         for (auto& reader : readers) {
             char buffer[1024];
-            std::string result;
+            dstd::String result;
 
             std::size_t bytes_read;
             std::size_t offset = 0;
@@ -1591,7 +1592,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
 
         if (max_bytes > 10) {
             char buffer[1024];
-            std::string result;
+            dstd::String result;
             std::size_t bytes_read;
 
             // Read from near the end [max_bytes - 100, max_bytes - 1)
@@ -1625,8 +1626,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
     SUBCASE("Large file handling") {
         // Create larger test environment
         TestEnvironment large_env(valgrind_scale(5000, 10));
-        std::string large_gz = large_env.create_test_gzip_file();
-        std::string large_idx = large_env.get_index_path(large_gz);
+        dstd::String large_gz = large_env.create_test_gzip_file();
+        dstd::String large_idx = large_env.get_index_path(large_gz);
 
         // Build index with small chunks to force more complex compression
         {
@@ -1641,7 +1642,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
         // Read various large ranges
         if (max_bytes > 1000) {
             char buffer[2048];
-            std::string result;
+            dstd::String result;
             std::size_t bytes_read;
 
             // First range [0, 1000)

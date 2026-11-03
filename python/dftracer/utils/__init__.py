@@ -32,9 +32,11 @@ from .dftracer_utils_ext import (  # noqa: F401
     DFTUtilsPipelineError,
     DFTUtilsReaderError,
     DFTUtilsValueError,
+    consolidate_shard_set,
     get_log_level,
     set_log_color,
     set_log_level,
+    write_shard_set,
 )
 from .dftracer_utils_ext import (
     get_default_runtime as _get_default_native_runtime,
@@ -154,4 +156,6 @@ __all__ = [
     "get_log_level",
     "set_log_color",
     "set_log_level",
+    "write_shard_set",
+    "consolidate_shard_set",
 ]

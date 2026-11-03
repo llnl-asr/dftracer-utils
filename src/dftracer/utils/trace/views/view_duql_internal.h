@@ -580,6 +580,34 @@ class Applier {
     // Row `a` differs from row `b`, null included.
     dataframe::Expr differs(const dstd::String& a, const dstd::String& b);
 
+    // The window passes a `window` stage collects: over the order, over the
+    // reverse order, then over the order again for what reads the first two.
+    struct WindowPasses {
+        dstd::Vector<WinSpec> forward, reverse, last, ranged, distribution;
+        dstd::Vector<const duql::PipelineWinCall*> ranks;
+        dstd::Vector<const duql::PipelineWinCall*> dist;
+        dstd::Vector<dstd::Pair<dstd::String, const duql::PipelineWinCall*>>
+            edges;
+        dstd::Vector<dstd::Pair<const duql::PipelineWinCall*, dstd::String>>
+            partition;
+        dstd::Vector<dstd::String> sort_keys;
+        dstd::String pos;
+    };
+    // A sum, mean, min, max or count over its `over` frame, else over the
+    // whole partition.
+    void window_framed(WindowPasses& p, WinSpec s,
+                       const duql::PipelineWinCall& c);
+    // The column call number `i` reads, computed when it is not a column.
+    dstd::String window_input(const duql::PipelineWinCall& c, std::size_t i);
+    // An argmax or argmin over its frame, which also reads the `by` column.
+    void window_arg(WindowPasses& p, const duql::PipelineWinCall& c,
+                    std::size_t i, const dstd::String& in);
+    void window_call(WindowPasses& p, const duql::PipelineWinCall& c,
+                     std::size_t i);
+    // Ranks: a row starts a run of peers when its sort keys differ from the
+    // row before it in the partition.
+    void window_peers(WindowPasses& p, bool peers);
+
     void stage(const duql::PipelineWindow& w);
 
     static dftu_scalar plugin_scalar(const duql::LiteralValue& v);

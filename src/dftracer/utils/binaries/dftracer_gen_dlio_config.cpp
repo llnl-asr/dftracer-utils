@@ -5,7 +5,9 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -20,9 +22,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <exception>
-#include <fstream>
-#include <optional>
-#include <string>
 #include <type_traits>
 #include <variant>
 
@@ -333,15 +332,21 @@ int main(int argc, char** argv) {
                 prep_block_ptr = &(*prep_block_storage);
             }
 
-            std::ofstream out{std::string(cli.output)};
+            const dstd::String out_path(cli.output);
+            dstd::ScopedFile out(std::fopen(out_path.c_str(), "w"));
             if (!out) {
                 DFTRACER_UTILS_LOG_ERROR("Cannot open %s for writing",
-                                         dstd::String(cli.output).c_str());
+                                         out_path.c_str());
                 return 1;
             }
-            if (!dlio::write_dlio_yaml(out, &comp_block, prep_block_ptr)) {
+            dstd::String yaml =
+                dlio::render_dlio_yaml(&comp_block, prep_block_ptr);
+            yaml += "\n";
+            const bool wrote = std::fwrite(yaml.data(), 1, yaml.size(),
+                                           out.get()) == yaml.size();
+            if (!wrote || std::fclose(out.release()) != 0) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to write %s",
-                                         dstd::String(cli.output).c_str());
+                                         out_path.c_str());
                 return 1;
             }
             std::printf("  Wrote DLIO config: %s\n",

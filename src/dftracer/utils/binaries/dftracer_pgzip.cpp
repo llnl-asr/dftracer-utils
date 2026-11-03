@@ -17,11 +17,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
-#include <fstream>
 #include <mutex>
 #include <stdexcept>
-#include <string_view>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace fileio = dftracer::utils::utilities::fileio;

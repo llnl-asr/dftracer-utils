@@ -46,7 +46,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
-#include <string>
 #include <type_traits>
 
 namespace dftracer::utils::binaries {

@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -47,13 +48,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <string>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
@@ -323,7 +319,7 @@ static DetailedStatistics to_detailed(const TraceStatistics& stats) {
     }
 
     for (const auto& [name, category] : m.name_category)
-        d.group_key_category[name] = std::string(category);
+        d.group_key_category[name] = category;
     d.events_scanned = m.total_events;
     d.chunks_scanned = stats.num_chunks;
     d.chunks_skipped = 0;
@@ -334,7 +330,7 @@ static DetailedStatistics to_detailed(const TraceStatistics& stats) {
 // Resolve a group key for display, looking up hash values if needed
 static dstd::String resolve_display_key(
     const dstd::String& key,
-    const std::unordered_map<dstd::String, dstd::String>& hash_resolutions) {
+    const dstd::HashMap<dstd::String, dstd::String>& hash_resolutions) {
     if (!hash_resolutions.empty()) {
         auto it = hash_resolutions.find(key);
         if (it != hash_resolutions.end()) {
@@ -429,12 +425,12 @@ static void print_detailed_global_duration(const DetailedStatistics& detailed) {
 // Per-group duration table, split by category.
 static void print_detailed_grouped_duration(
     const DetailedStatistics& detailed, std::uint64_t top_n,
-    const std::unordered_map<dstd::String, dstd::String>& hash_resolutions) {
+    const dstd::HashMap<dstd::String, dstd::String>& hash_resolutions) {
     if (!detailed.grouped_duration.empty()) {
         using DurPair = dstd::Pair<dstd::String, const DistributionStats*>;
 
         // Group entries by category
-        std::unordered_map<dstd::String, dstd::Vector<DurPair>> by_category;
+        dstd::Map<dstd::String, dstd::Vector<DurPair>> by_category;
         for (const auto& [key, dist] : detailed.grouped_duration) {
             auto cat_it = detailed.group_key_category.find(key);
             dstd::String cat = (cat_it != detailed.group_key_category.end())
@@ -528,7 +524,7 @@ static void print_detailed_grouped_duration(
 // Per-group I/O metrics table (or simple global I/O stats when ungrouped).
 static void print_detailed_grouped_io(
     const DetailedStatistics& detailed, std::uint64_t top_n,
-    const std::unordered_map<dstd::String, dstd::String>& hash_resolutions) {
+    const dstd::HashMap<dstd::String, dstd::String>& hash_resolutions) {
     if (!detailed.grouped_io.empty()) {
         // Check if this is the global (no grouping) case
         bool is_global = (detailed.grouped_io.size() == 1 &&
@@ -648,7 +644,7 @@ static void print_detailed_grouped_io(
 static void print_text_detailed(
     const dstd::String& file_path, const DetailedStatistics& detailed,
     std::uint64_t total_chunks, std::uint64_t top_n,
-    const std::unordered_map<dstd::String, dstd::String>& hash_resolutions,
+    const dstd::HashMap<dstd::String, dstd::String>& hash_resolutions,
     const TraceStatistics* summary = nullptr,
     std::uint64_t top_n_pid_tid = 10) {
     print_detailed_header(file_path, detailed, total_chunks, summary,
@@ -687,7 +683,7 @@ static coro::CoroTask<void> process_file_detailed(
             .collect(detail_needs);
 
     // Hash resolution (sequential, all chunks done)
-    std::unordered_map<dstd::String, dstd::String> hash_resolutions;
+    dstd::HashMap<dstd::String, dstd::String> hash_resolutions;
     if (needs_hash_resolution &&
         common::unwrap(dstd::fs::exists(
             dstd::PathView(dftracer::utils::index::store_dir(index_path))))) {
@@ -981,7 +977,7 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
                 partition.files_needing_index.size());
 
     {
-        auto batch_config = std::make_shared<
+        auto batch_config = dstd::make_shared<
             dftracer::utils::index::build::IndexBuildBatchConfig>();
         batch_config->file_paths.reserve(partition.files_needing_index.size());
         for (const auto& item : partition.files_needing_index) {
@@ -1135,7 +1131,7 @@ static coro::CoroTask<int> run_detailed_stats(
         std::printf("==========================================\n");
         std::printf("Consolidated Detailed (%zu files)\n", files_ptr->size());
         std::printf("==========================================\n");
-        std::unordered_map<dstd::String, dstd::String> no_resolutions;
+        dstd::HashMap<dstd::String, dstd::String> no_resolutions;
         print_text_detailed(config_ptr->directory, *aggregate_detailed,
                             aggregate_detailed->chunks_scanned +
                                 aggregate_detailed->chunks_skipped,
@@ -1221,7 +1217,7 @@ static coro::CoroTask<void> process_index_group(
         // fold and no write. The rest go through the View path below.
         // Release the ReadOnly index handle before materialize(), which opens
         // the same index ReadWrite to persist.
-        std::unordered_map<std::size_t, std::uint64_t> num_chunks_map;
+        dstd::HashMap<std::size_t, std::uint64_t> num_chunks_map;
         ChunkStatistics fast_total;
         std::uint64_t fast_chunks = 0;
         std::size_t fast_files = 0;
@@ -1458,7 +1454,7 @@ static coro::CoroTask<int> output_aggregate_stats(
         std::printf("==========================================\n");
         if (config_ptr->report_type == StatisticsQueryType::Summary) {
             auto detailed = to_detailed(agg->total);
-            std::unordered_map<dstd::String, dstd::String> no_resolutions;
+            dstd::HashMap<dstd::String, dstd::String> no_resolutions;
             print_text_detailed(agg->total.file_path, detailed,
                                 agg->total.num_chunks, config_ptr->top_n,
                                 no_resolutions, &agg->total,

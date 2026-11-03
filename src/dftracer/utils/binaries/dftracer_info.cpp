@@ -31,7 +31,6 @@
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
-#include <memory>
 #include <mutex>
 
 using namespace dftracer::utils;
@@ -567,7 +566,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
         co_return (bad == 0) ? 0 : 1;
     }
 
-    std::unordered_map<dstd::String, index::Snapshot> snapshots;
+    dstd::HashMap<dstd::String, index::Snapshot> snapshots;
     for (const auto& r : all_results) {
         auto it = snapshots.find(r.index_path);
         if (it == snapshots.end())

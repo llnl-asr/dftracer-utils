@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -30,13 +31,14 @@
 #include <ctime>
 #include <exception>
 #include <mutex>
+#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::task_graph;
 using ExtractInput = trace::ChunkExtractorUtilityInput;
 using ExtractResult = trace::ChunkExtractorUtilityOutput;
+// keep std: Task decodes a vector input parameter only as std::vector
 using ExtractChunksOutput = std::vector<ExtractResult>;
-// std types (tasks step)
 namespace gzc = utilities::fileio::compress;
 
 class SplitArgParse : public binaries::ArgParse {
@@ -117,6 +119,11 @@ struct FileGroup {
     double ratio = 1.0;
 };
 
+// keep std: Task decodes a vector input parameter only as std::vector
+using FileGroups = std::vector<FileGroup>;
+// keep std: TaskGraph::reduce hands the reducer a std::vector
+using FileProbes = std::vector<FileProbe>;
+
 constexpr std::uint64_t RATIO_SAMPLE_BYTES = 1 << 20;
 
 /// A group ends with a short chunk, so it holds several chunks of input, but
@@ -143,9 +150,8 @@ struct RechunkDir {
 
 // The target is a small share of the input when there are many threads, so
 // that every thread gets a group.
-std::vector<FileGroup> group_files(const std::vector<FileProbe>& probes,
-                                   std::size_t chunk_bytes,
-                                   std::size_t threads) {
+FileGroups group_files(dstd::Span<const FileProbe> probes,
+                       std::size_t chunk_bytes, std::size_t threads) {
     std::uint64_t total = 0;
     for (const auto& probe : probes) {
         if (probe.ok) total += probe.bytes;
@@ -154,8 +160,7 @@ std::vector<FileGroup> group_files(const std::vector<FileProbe>& probes,
         total / (threads * 2), chunk_bytes * GROUP_MIN_CHUNKS,
         chunk_bytes * GROUP_MAX_CHUNKS);
 
-    std::vector<FileGroup> groups;
-    // std types (tasks step)
+    FileGroups groups;
     FileGroup group;
     double group_bytes = 0;
     double group_plain = 0;
@@ -377,17 +382,13 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 
     dstd::Vector<dstd::String> split_files;
     auto* split_files_ptr = &split_files;
-    auto groups_task = graph.reduce<std::vector<FileGroup>>(
-        // std types (tasks step)
+    auto groups_task = graph.reduce<FileGroups>(
         file_probes, split_every{input_files.size()},
         [chunk_size_bytes, executor_threads, split_files_ptr](
-            CoroScope&, std::vector<FileProbe> probes)
-        // use std types (tasks step)
-        -> coro::CoroTask<std::vector<FileGroup>> {
-            // the extractor use std
-            // types (tasks step)
-            auto groups =
-                group_files(probes, chunk_size_bytes, executor_threads);
+            CoroScope&, FileProbes probes) -> coro::CoroTask<FileGroups> {
+            auto groups = group_files(
+                dstd::Span<const FileProbe>(probes.data(), probes.size()),
+                chunk_size_bytes, executor_threads);
             for (const auto& group : groups) {
                 split_files_ptr->insert(split_files_ptr->end(),
                                         group.files.begin(), group.files.end());
@@ -408,10 +409,9 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 
     auto task_extract_chunks = make_task(
         [app_name_ptr, output_dir_ptr, split_results_ptr, compress, verify,
-         executor_threads, member_size_bytes, chunk_size_bytes,
-         memory_budget](CoroScope&, std::vector<FileGroup> groups)
-        // use std types (tasks step)
-        -> coro::CoroTask<ExtractChunksOutput> {
+         executor_threads, member_size_bytes, chunk_size_bytes, memory_budget](
+            CoroScope&,
+            FileGroups groups) -> coro::CoroTask<ExtractChunksOutput> {
             co_return co_await coro::with_scope(
                 [&](coro::Scope& scope) -> coro::CoroTask<ExtractChunksOutput> {
                     DFTRACER_UTILS_LOG_INFO(

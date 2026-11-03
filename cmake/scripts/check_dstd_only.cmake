@@ -38,7 +38,8 @@ set(_dirs
     src/dftracer/utils/dataframe
     include/dftracer/utils/server
     src/dftracer/utils/server
-    src/dftracer/utils/python)
+    src/dftracer/utils/python
+    src/dftracer/utils/binaries)
 
 # The Task, TaskGraph and Pipeline trees move in a later step.
 set(_skip

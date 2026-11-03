@@ -21,11 +21,7 @@
 
 #include <chrono>
 #include <cstdio>
-#include <memory>
 #include <ranges>
-#include <string>
-#include <string_view>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftracer::utils::index::gzip::CheckpointIndexerFactory;

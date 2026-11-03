@@ -26,7 +26,6 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
-#include <optional>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::comparator;

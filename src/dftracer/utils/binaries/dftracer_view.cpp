@@ -31,7 +31,6 @@
 #include <cstdlib>
 #include <exception>
 #include <limits>
-#include <memory>
 
 // MPI is compiled in only when the build enabled it (config.h macro). The same
 // source then produces a distribution-capable dftracer_view; without MPI it is
@@ -43,8 +42,6 @@
 #include <dftracer/utils/runtime/distributed/mpi_transport.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 
-#include <string>
-#include <vector>
 #endif
 
 using namespace dftracer::utils;
@@ -583,13 +580,13 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         dstd::String extra;
         if (min_duration > 0) {
             if (!extra.empty()) extra += " and ";
-            extra +=
-                "dur >= " + std::to_string(static_cast<uint64_t>(min_duration));
+            extra += "dur >= " +
+                     dstd::to_string(static_cast<uint64_t>(min_duration));
         }
         if (max_duration > 0) {
             if (!extra.empty()) extra += " and ";
-            extra +=
-                "dur <= " + std::to_string(static_cast<uint64_t>(max_duration));
+            extra += "dur <= " +
+                     dstd::to_string(static_cast<uint64_t>(max_duration));
         }
         query = duql::parse_or_throw(extra);
     }
@@ -845,7 +842,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
 
     ExportStats stats;
     // collect() returns only its table, so its scans count here.
-    auto scans = std::make_shared<ScanCounter>();
+    auto scans = dstd::make_shared<ScanCounter>();
     // Apply the parsed view options to a base View; shared by the single-node
     // and distributed paths so both aggregate identically. The projection and
     // row window (--select/--offset/--limit) are applied by `windowed`.

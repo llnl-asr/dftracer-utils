@@ -17,9 +17,7 @@
 
 #include <cstdio>
 #include <exception>
-#include <string>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;

@@ -24,7 +24,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <memory>
 #include <numeric>
 
 using namespace dftracer::utils;

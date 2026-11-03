@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -29,7 +30,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <random>
-#include <string>
 #include <vector>
 
 using namespace dftracer::utils;
@@ -55,7 +55,7 @@ using trace_gen::TraceWriter;
 // ---------------------------------------------------------------------------
 struct QuerySpec {
     dstd::String label;
-    std::unordered_map<dstd::String, dstd::Vector<dstd::String>> predicates;
+    dstd::Map<dstd::String, dstd::Vector<dstd::String>> predicates;
 };
 
 static coro::CoroTask<int> run_verify(
@@ -412,7 +412,7 @@ int main(int argc, char** argv) {
             dstd::Vector<dstd::String> host_names(num_hosts);
             dstd::Vector<dstd::String> host_hashes(num_hosts);
             for (int h = 0; h < num_hosts; ++h) {
-                host_names[h] = "node-" + std::to_string(h);
+                host_names[h] = "node-" + dstd::to_string(h);
                 host_hashes[h] = make_hash(host_names[h]);
             }
 
@@ -420,7 +420,7 @@ int main(int argc, char** argv) {
             dstd::Vector<dstd::String> train_file_hashes(num_train_files);
             for (int f = 0; f < num_train_files; ++f) {
                 train_file_names[f] =
-                    "/data/train/shard_" + std::to_string(f) + ".h5";
+                    "/data/train/shard_" + dstd::to_string(f) + ".h5";
                 train_file_hashes[f] = make_hash(train_file_names[f]);
             }
 
@@ -428,7 +428,7 @@ int main(int argc, char** argv) {
             dstd::Vector<dstd::String> val_file_hashes(num_val_files);
             for (int f = 0; f < num_val_files; ++f) {
                 val_file_names[f] =
-                    "/data/val/val_" + std::to_string(f) + ".h5";
+                    "/data/val/val_" + dstd::to_string(f) + ".h5";
                 val_file_hashes[f] = make_hash(val_file_names[f]);
             }
 
@@ -486,7 +486,7 @@ int main(int argc, char** argv) {
             auto* script_name_ptr = &script_name;
             auto* sref_ptr = &script_hash;
             auto* rank_event_counts_ptr = &rank_event_counts;
-            std::vector<dstd::SharedPtr<Task>> rank_tasks;
+            dstd::Vector<dstd::SharedPtr<Task>> rank_tasks;
             for (int rank = 0; rank < num_ranks; ++rank) {
                 auto task = make_task(
                     [rank, base_seed, num_ranks, num_hosts, num_train_files,
@@ -969,7 +969,7 @@ int main(int argc, char** argv) {
                         (*rank_event_counts_ptr)[rank] = rank_events;
                         co_return;
                     },
-                    "Rank-" + std::to_string(rank));
+                    "Rank-" + dstd::to_string(rank));
                 rank_tasks.push_back(task);
             }
 
@@ -1125,7 +1125,9 @@ int main(int argc, char** argv) {
                 final_task = verify_task;
             }
 
-            pipeline.set_source(rank_tasks);
+            // keep std: Pipeline::set_source takes std::vector
+            pipeline.set_source(std::vector<dstd::SharedPtr<Task>>(
+                rank_tasks.begin(), rank_tasks.end()));
             pipeline.set_destination(final_task);
             pipeline.execute();
 

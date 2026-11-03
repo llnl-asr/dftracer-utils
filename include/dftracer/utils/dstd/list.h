@@ -9,6 +9,7 @@
 namespace dftracer::utils::dstd {
 
 template <class T>
+// keep std: defines dstd::List
 using List = std::list<T, memory::Allocator<T>>;
 
 }  // namespace dftracer::utils::dstd

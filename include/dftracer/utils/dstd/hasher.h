@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <dftracer/utils/dstd/string.h>
+// keep std: the vendored hash backs dstd::Hash
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstddef>
@@ -28,8 +29,9 @@ struct StringHash {
     using is_avalanching = void;
 
     // wyhash through ankerl: FNV-1a in dstd/hash/ reads one byte per step.
-    std::size_t operator()(std::string_view s) const noexcept {
-        return ankerl::unordered_dense::hash<std::string_view>{}(s);
+    std::size_t operator()(StringView s) const noexcept {
+        // keep std: the vendored hash backs dstd::Hash
+        return ankerl::unordered_dense::hash<StringView>{}(s);
     }
 };
 
@@ -37,7 +39,7 @@ template <>
 struct Hash<String> : StringHash {};
 
 template <>
-struct Hash<std::string_view> : StringHash {};
+struct Hash<StringView> : StringHash {};
 
 template <>
 struct Hash<const char*> : StringHash {};
@@ -48,7 +50,7 @@ struct Hash<const char*> : StringHash {};
 struct StringEqual {
     using is_transparent = void;
 
-    bool operator()(std::string_view a, std::string_view b) const noexcept {
+    bool operator()(StringView a, StringView b) const noexcept {
         return a == b;
     }
 };
@@ -56,7 +58,7 @@ struct StringEqual {
 /// The default equality of HashMap and HashSet for key type @p T.
 template <class T>
 using Equal = std::conditional_t<std::is_same_v<T, String> ||
-                                     std::is_same_v<T, std::string_view> ||
+                                     std::is_same_v<T, StringView> ||
                                      std::is_same_v<T, const char*>,
                                  StringEqual, std::equal_to<>>;
 

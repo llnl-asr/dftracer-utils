@@ -9,10 +9,12 @@
 namespace dftracer::utils::dstd {
 
 template <class T>
+// keep std: defines dstd::Vector
 using Vector = std::vector<T, memory::Allocator<T>>;
 
 /// Charged to the pool its allocator names, on any thread.
 template <class T>
+// keep std: defines dstd::Vector
 using PoolVector = std::vector<T, memory::PoolAllocator<T>>;
 
 }  // namespace dftracer::utils::dstd

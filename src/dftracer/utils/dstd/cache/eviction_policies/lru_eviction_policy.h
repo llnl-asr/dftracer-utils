@@ -3,11 +3,11 @@
 #define DFTRACER_UTILS_DSTD_CACHE_EVICTION_POLICIES_LRU_EVICTION_POLICY_H
 
 #include <dftracer/utils/dstd/cache/eviction_policy.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/list.h>
+#include <dftracer/utils/dstd/optional.h>
 
 #include <cstddef>
-#include <list>
-#include <optional>
-#include <unordered_map>
 
 namespace dftracer::utils::dstd::cache {
 
@@ -33,8 +33,8 @@ class LruEvictionPolicy final : public EvictionPolicy<Key> {
         pos_.erase(it);
     }
 
-    std::optional<Key> pop_victim() override {
-        if (order_.empty()) return std::nullopt;
+    Optional<Key> pop_victim() override {
+        if (order_.empty()) return nullopt;
         Key victim = order_.back();
         order_.pop_back();
         pos_.erase(victim);
@@ -44,8 +44,8 @@ class LruEvictionPolicy final : public EvictionPolicy<Key> {
     std::size_t size() const override { return pos_.size(); }
 
    private:
-    std::list<Key> order_;  // front = most recently used
-    std::unordered_map<Key, typename std::list<Key>::iterator> pos_;
+    List<Key> order_;  // front = most recently used
+    HashMap<Key, typename List<Key>::iterator> pos_;
 };
 
 }  // namespace dftracer::utils::dstd::cache

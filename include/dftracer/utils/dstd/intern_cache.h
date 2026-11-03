@@ -2,8 +2,10 @@
 #ifndef DFTRACER_UTILS_DSTD_INTERN_CACHE_H
 #define DFTRACER_UTILS_DSTD_INTERN_CACHE_H
 
+#include <dftracer/utils/dstd/hasher.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <array>
 #include <cstddef>
@@ -25,13 +27,12 @@ class InternCache {
 
     explicit InternCache(StringIntern& intern) : intern_(&intern) {}
 
-    std::uint32_t get_or_insert(std::string_view sv) {
+    std::uint32_t get_or_insert(StringView sv) {
         if (sv.size() > MAX_BYTES) return intern_->get_or_insert(sv);
-        if (!slots_) slots_ = std::make_unique<std::array<Slot, SLOTS>>();
+        if (!slots_) slots_ = make_unique<std::array<Slot, SLOTS>>();
         Words key{};
         std::memcpy(key.words, sv.data(), sv.size());
-        const std::uint64_t h =
-            ankerl::unordered_dense::hash<std::string_view>{}(sv);
+        const std::uint64_t h = Hash<StringView>{}(sv);
         Slot& slot = (*slots_)[h & (SLOTS - 1)];
         if (slot.size == sv.size() && slot.key.words[0] == key.words[0] &&
             slot.key.words[1] == key.words[1] &&
@@ -55,7 +56,7 @@ class InternCache {
     };
 
     StringIntern* intern_;
-    std::unique_ptr<std::array<Slot, SLOTS>> slots_;
+    UniquePtr<std::array<Slot, SLOTS>> slots_;
 };
 
 }  // namespace dftracer::utils::dstd

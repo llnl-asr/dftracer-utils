@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_DSTD_CONST_STRING_H
 #define DFTRACER_UTILS_DSTD_CONST_STRING_H
 
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstddef>
 #include <string_view>
 
@@ -20,17 +22,17 @@ struct ConstString {
 
     consteval ConstString() = default;
 
-    consteval ConstString(std::string_view sv) : len(sv.size()) {
+    consteval ConstString(StringView sv) : len(sv.size()) {
         for (std::size_t i = 0; i < len; ++i) data[i] = sv[i];
     }
 
-    consteval ConstString& append(std::string_view sv) {
+    consteval ConstString& append(StringView sv) {
         for (std::size_t i = 0; i < sv.size(); ++i) data[len++] = sv[i];
         return *this;
     }
 
-    constexpr std::string_view view() const { return {data, len}; }
-    constexpr operator std::string_view() const { return {data, len}; }
+    constexpr StringView view() const { return {data, len}; }
+    constexpr operator StringView() const { return {data, len}; }
 };
 
 }  // namespace dftracer::utils::dstd

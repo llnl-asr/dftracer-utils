@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DSTD_HASH_FNV1A_H
 
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -22,7 +23,7 @@ inline std::uint64_t fnv1a_hash(const void* data, std::size_t len) {
 
 /// constexpr so an id can be minted at compile time (e.g. an error domain);
 /// same value as the byte-buffer overload.
-inline constexpr std::uint64_t fnv1a_hash(std::string_view data) {
+inline constexpr std::uint64_t fnv1a_hash(StringView data) {
     std::uint64_t hash = FNV1A_OFFSET_BASIS;
     for (char c : data) {
         hash ^= static_cast<std::uint8_t>(c);

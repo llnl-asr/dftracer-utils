@@ -2,6 +2,10 @@
 #ifndef DFTRACER_UTILS_DSTD_STRING_ARENA_H
 #define DFTRACER_UTILS_DSTD_STRING_ARENA_H
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
@@ -18,18 +22,19 @@ struct StringArena {
     /// A block is left uninitialized, so an arena that stays small costs no
     /// zero fill.
     struct Block {
-        std::unique_ptr<char[]> data;
+        UniquePtr<char[]> data;
         std::size_t size;
-        explicit Block(std::size_t n) : data(new char[n]), size(n) {}
+        explicit Block(std::size_t n)
+            : data(make_unique_for_overwrite<char[]>(n)), size(n) {}
     };
-    std::vector<Block> blocks;
+    Vector<Block> blocks;
     std::size_t pos = 0;
 
     explicit StringArena(std::size_t first_block = BLOCK_SIZE) {
         blocks.emplace_back(first_block);
     }
 
-    std::string_view push(const char *data, std::size_t len) {
+    StringView push(const char *data, std::size_t len) {
         if (pos + len > blocks.back().size) {
             blocks.emplace_back(std::max(BLOCK_SIZE, len));
             pos = 0;
@@ -41,7 +46,7 @@ struct StringArena {
     }
 
     /// `first` then `second`, next to each other.
-    std::string_view push(std::string_view first, std::string_view second) {
+    StringView push(StringView first, StringView second) {
         const std::size_t len = first.size() + second.size();
         if (pos + len > blocks.back().size) {
             blocks.emplace_back(std::max(BLOCK_SIZE, len));

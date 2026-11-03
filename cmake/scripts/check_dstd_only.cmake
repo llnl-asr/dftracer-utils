@@ -14,6 +14,9 @@ endif()
 find_program(_awk awk REQUIRED)
 
 set(_dirs
+    include/dftracer/utils/dstd
+    src/dftracer/utils/dstd
+    examples
     include/dftracer/utils/common
     src/dftracer/utils/common
     include/dftracer/utils/coro
@@ -89,6 +92,7 @@ FNR == 1 { kept = 0 }
   if (line ~ /\/\/ keep std: /) { kept = (line ~ /^[ \t]*\/\//); next }
   if (kept) { kept = 0; next }
   sub(/\/\/.*$/, "", line)
+  if (line ~ /^[ \t]*(\/\*|\*)/) next
   if (line ~ /ankerl::/ || line ~ /dstd\/vendor\/unordered_dense\.h/) {
     print FILENAME ":" FNR ": " $0 "  (use dstd::HashMap or dstd::HashSet)"
     hits++
@@ -114,6 +118,7 @@ if(SELF_TEST)
        "std::vector<int> a;\n"
        "dstd::Vector<int> b;\n"
        "// std::string in a comment\n"
+       " * std::string in a doc comment\n"
        "std::string_view c;  // keep std: test\n"
        "std::atomic<int> d;\n"
        "// keep std: test\n"
@@ -126,9 +131,9 @@ if(SELF_TEST)
   string(REGEX REPLACE "[^\n]" "" _newlines "${_out}")
   string(LENGTH "${_newlines}" _n)
   if(NOT _rc OR NOT _n EQUAL 4 OR NOT _out MATCHES ":1: std::vector"
-     OR NOT _out MATCHES ":8: dstd::UniquePtr" OR NOT _out MATCHES ":9: ankerl"
-     OR NOT _out MATCHES ":10: #include")
-    message(FATAL_ERROR "dstd_only self test: expected hits on lines 1, 8, 9 and 10, got:\n${_out}")
+     OR NOT _out MATCHES ":9: dstd::UniquePtr" OR NOT _out MATCHES ":10: ankerl"
+     OR NOT _out MATCHES ":11: #include")
+    message(FATAL_ERROR "dstd_only self test: expected hits on lines 1, 9, 10 and 11, got:\n${_out}")
   endif()
   return()
 endif()

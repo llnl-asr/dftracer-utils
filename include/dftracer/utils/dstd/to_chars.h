@@ -54,6 +54,7 @@ inline char* to_chars_double(char* first, char* last, double v) noexcept {
     }
     return nullptr;
 #else
+    // keep std: implements dstd::to_chars
     auto [p, ec] = std::to_chars(first, last, v);
     return ec == std::errc{} ? p : nullptr;
 #endif
@@ -85,6 +86,7 @@ inline char* to_chars_float(char* first, char* last, float v) noexcept {
     }
     return nullptr;
 #else
+    // keep std: implements dstd::to_chars
     auto [p, ec] = std::to_chars(first, last, v);
     return ec == std::errc{} ? p : nullptr;
 #endif
@@ -102,12 +104,14 @@ inline String float_text(float v) {
 /// is available on every supported platform (only the floating-point one is
 /// availability-gated), so no fallback is needed.
 inline char* to_chars_u64(char* first, char* last, std::uint64_t v) noexcept {
+    // keep std: implements dstd::to_chars
     auto [p, ec] = std::to_chars(first, last, v);
     return ec == std::errc{} ? p : nullptr;
 }
 
 /// Signed sibling of to_chars_u64; the integer overload is always available.
 inline char* to_chars_i64(char* first, char* last, std::int64_t v) noexcept {
+    // keep std: implements dstd::to_chars
     auto [p, ec] = std::to_chars(first, last, v);
     return ec == std::errc{} ? p : nullptr;
 }
@@ -116,6 +120,7 @@ inline char* to_chars_i64(char* first, char* last, std::int64_t v) noexcept {
 template <class I>
 inline String int_text(I v) {
     char buf[24];
+    // keep std: implements dstd::to_chars
     auto [p, ec] = std::to_chars(buf, buf + sizeof(buf), v);
     return ec == std::errc{} ? String(buf, p) : String();
 }
@@ -149,6 +154,7 @@ inline std::from_chars_result from_chars_double(const char* first,
     out = v;
     return {first + (end - buf), std::errc{}};
 #else
+    // keep std: implements dstd::to_chars
     return std::from_chars(first, last, out);
 #endif
 }
@@ -168,6 +174,7 @@ template <class T>
     requires IS_CHARS_NUMBER<T>
 inline ToCharsResult to_chars(char* first, char* last, T v) noexcept {
     if constexpr (std::is_integral_v<T>) {
+        // keep std: implements dstd::to_chars
         return std::to_chars(first, last, v);
     } else {
         char* p = std::is_same_v<T, float>
@@ -186,6 +193,7 @@ template <class T>
 inline FromCharsResult from_chars(const char* first, const char* last,
                                   T& out) noexcept {
     if constexpr (std::is_integral_v<T>) {
+        // keep std: implements dstd::to_chars
         return std::from_chars(first, last, out);
     } else if constexpr (std::is_same_v<T, double>) {
         return from_chars_double(first, last, out);

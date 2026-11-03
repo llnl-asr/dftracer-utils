@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_DSTD_BYTE_VIEW_H
 #define DFTRACER_UTILS_DSTD_BYTE_VIEW_H
 
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -28,12 +31,11 @@ class ByteView {
     ByteView(const char* data, std::size_t len)
         : data_(reinterpret_cast<const std::byte*>(data)), size_(len) {}
 
-    ByteView(std::string_view sv) : ByteView(sv.data(), sv.size()) {}
+    ByteView(StringView sv) : ByteView(sv.data(), sv.size()) {}
 
-    ByteView(const std::vector<unsigned char>& v)
-        : ByteView(v.data(), v.size()) {}
+    ByteView(const Vector<unsigned char>& v) : ByteView(v.data(), v.size()) {}
 
-    ByteView(const std::vector<std::byte>& v) : ByteView(v.data(), v.size()) {}
+    ByteView(const Vector<std::byte>& v) : ByteView(v.data(), v.size()) {}
 
     const std::byte* data() const { return data_; }
     std::size_t size() const { return size_; }
@@ -76,10 +78,10 @@ class MutableByteView {
     MutableByteView(char* data, std::size_t len)
         : data_(reinterpret_cast<std::byte*>(data)), size_(len) {}
 
-    MutableByteView(std::vector<unsigned char>& v)
+    MutableByteView(Vector<unsigned char>& v)
         : MutableByteView(v.data(), v.size()) {}
 
-    MutableByteView(std::string& s) : MutableByteView(s.data(), s.size()) {}
+    MutableByteView(String& s) : MutableByteView(s.data(), s.size()) {}
 
     std::byte* data() const { return data_; }
     std::size_t size() const { return size_; }

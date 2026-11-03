@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DSTD_CACHE_EVICTION_POLICY_H
 
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 
 #include <cstddef>
 #include <optional>
@@ -26,7 +27,7 @@ class EvictionPolicy {
     /// Drop a key from tracking (e.g. removed by the cache directly).
     virtual void remove(const Key& key) = 0;
     /// Remove and return the next key to evict, or nullopt if empty.
-    virtual std::optional<Key> pop_victim() = 0;
+    virtual Optional<Key> pop_victim() = 0;
     virtual std::size_t size() const = 0;
 };
 

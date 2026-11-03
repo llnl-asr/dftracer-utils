@@ -13,6 +13,7 @@ namespace dftracer::utils::dstd {
 
 using String =
     std::basic_string<char, std::char_traits<char>, memory::Allocator<char>>;
+// keep std: defines dstd::StringView and its hash
 using StringView = std::string_view;
 
 }  // namespace dftracer::utils::dstd
@@ -23,6 +24,7 @@ template <>
 struct std::hash<dftracer::utils::dstd::String> {
     std::size_t operator()(
         const dftracer::utils::dstd::String& s) const noexcept {
+        // keep std: defines dstd::StringView and its hash
         return std::hash<std::string_view>{}(s);
     }
 };

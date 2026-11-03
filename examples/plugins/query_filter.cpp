@@ -40,8 +40,8 @@ struct QueryFilter {
                               static_cast<unsigned long long>(matched),
                               static_cast<unsigned long long>(total));
         if (n > 0)
-            h.log(DFTU_LOG_INFO,
-                  std::string_view(line, static_cast<std::size_t>(n)));
+            h.log(DFTU_LOG_INFO, dftracer::utils::dstd::StringView(
+                                     line, static_cast<std::size_t>(n)));
     }
 };
 

@@ -7,6 +7,7 @@
 namespace dftracer::utils::dstd {
 
 template <class A, class B>
+// keep std: defines dstd::Pair
 using Pair = std::pair<A, B>;
 
 }  // namespace dftracer::utils::dstd

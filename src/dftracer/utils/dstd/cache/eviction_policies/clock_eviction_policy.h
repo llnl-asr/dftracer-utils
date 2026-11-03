@@ -3,11 +3,11 @@
 #define DFTRACER_UTILS_DSTD_CACHE_EVICTION_POLICIES_CLOCK_EVICTION_POLICY_H
 
 #include <dftracer/utils/dstd/cache/eviction_policy.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/list.h>
+#include <dftracer/utils/dstd/optional.h>
 
 #include <cstddef>
-#include <list>
-#include <optional>
-#include <unordered_map>
 
 namespace dftracer::utils::dstd::cache {
 
@@ -36,8 +36,8 @@ class ClockEvictionPolicy final : public EvictionPolicy<Key> {
         pos_.erase(it);
     }
 
-    std::optional<Key> pop_victim() override {
-        if (ring_.empty()) return std::nullopt;
+    Optional<Key> pop_victim() override {
+        if (ring_.empty()) return nullopt;
         // At most two sweeps: one to clear all set bits, one to find a clear.
         for (std::size_t steps = 0; steps <= 2 * ring_.size(); ++steps) {
             if (hand_ == ring_.end()) hand_ = ring_.begin();
@@ -51,7 +51,7 @@ class ClockEvictionPolicy final : public EvictionPolicy<Key> {
             hand_ = ring_.erase(hand_);
             return victim;
         }
-        return std::nullopt;  // unreachable
+        return nullopt;  // unreachable
     }
 
     std::size_t size() const override { return pos_.size(); }
@@ -61,9 +61,9 @@ class ClockEvictionPolicy final : public EvictionPolicy<Key> {
         Key key;
         bool ref;
     };
-    std::list<Slot> ring_;
-    std::unordered_map<Key, typename std::list<Slot>::iterator> pos_;
-    typename std::list<Slot>::iterator hand_ = ring_.end();
+    List<Slot> ring_;
+    HashMap<Key, typename List<Slot>::iterator> pos_;
+    typename List<Slot>::iterator hand_ = ring_.end();
 };
 
 }  // namespace dftracer::utils::dstd::cache

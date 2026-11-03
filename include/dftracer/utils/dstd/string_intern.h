@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_DSTD_STRING_INTERN_H
 #define DFTRACER_UTILS_DSTD_STRING_INTERN_H
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -82,27 +85,26 @@ class StringIntern {
 
     /// Throws std::logic_error on a deterministic id collision and
     /// std::length_error when the chunk table or the id space is exhausted.
-    std::uint32_t get_or_insert(std::string_view sv);
+    std::uint32_t get_or_insert(StringView sv);
 
     /// The id of `sv`, or NO_ID when the table does not hold it. Takes no
     /// lock.
-    std::uint32_t find(std::string_view sv) const;
+    std::uint32_t find(StringView sv) const;
 
     /// Insert at a specific id, for loading a persisted dictionary. A
     /// conflicting id is reported, not rebound, and `resolve(id)` names the
     /// string it holds. Must precede any `resolve(id)` at that id.
-    [[nodiscard]] InsertStatus insert_at_id(std::uint32_t id,
-                                            std::string_view sv);
+    [[nodiscard]] InsertStatus insert_at_id(std::uint32_t id, StringView sv);
 
     /// Empty means no string at this id. An id past the table's reach throws
     /// std::out_of_range.
-    std::string_view resolve(std::uint32_t id) const;
+    StringView resolve(std::uint32_t id) const;
 
     Location locate(std::uint32_t id) const;
 
     /// Valid for any chunk index that `locate` returned. The chunk outlives the
     /// intern while the returned pointer is held.
-    std::shared_ptr<Chunk> chunk(std::uint32_t i) const;
+    SharedPtr<Chunk> chunk(std::uint32_t i) const;
 
     /// Number of strings interned, and the id of the n-th in insertion order.
     /// Content-derived ids are sparse, so walk these rather than the id range.
@@ -110,7 +112,7 @@ class StringIntern {
 
     std::uint32_t entry_id(std::size_t n) const;
 
-    std::string_view intern(std::string_view sv);
+    StringView intern(StringView sv);
 
     std::size_t size() const {
         return num_strings_.load(std::memory_order_acquire);
@@ -124,7 +126,7 @@ class StringIntern {
     }
 
    private:
-    using ChunkRef = std::shared_ptr<Chunk>;
+    using ChunkRef = SharedPtr<Chunk>;
 
     static constexpr std::size_t CHUNK_BLOCK_BITS = 8;
     static constexpr std::size_t CHUNK_BLOCK_SIZE = 1u << CHUNK_BLOCK_BITS;
@@ -195,23 +197,23 @@ class StringIntern {
     };
 
     const char* slot_value(std::uint32_t id) const;
-    static std::string_view record_view(const char* rec);
+    static StringView record_view(const char* rec);
     static std::uint32_t record_chunk(const char* rec);
     const ChunkRef* chunk_ref(std::uint32_t i) const;
     static std::size_t shard_of(std::size_t h);
     [[noreturn]] static void throw_collision(const char* existing,
-                                             std::string_view sv);
+                                             StringView sv);
     std::uint32_t add_chunk(std::size_t bytes);
-    const char* write_record(Shard& sh, std::string_view sv);
+    const char* write_record(Shard& sh, StringView sv);
     Index* make_index(std::size_t slots);
     static void delete_index(Index* idx);
-    std::uint32_t lookup(std::size_t h, std::string_view sv) const;
+    std::uint32_t lookup(std::size_t h, StringView sv) const;
     void index_insert(Shard& sh, std::size_t h, std::uint32_t id);
     Index* grow_index(Shard& sh);
     void advance_num_strings(std::uint32_t id);
     void log_entry(std::uint32_t id);
     bool bind_slot(std::uint32_t id, const char* str, bool cas);
-    std::size_t hash(std::string_view sv) const;
+    std::size_t hash(StringView sv) const;
     template <class T>
     T* make_array(std::size_t n) const;
     template <class T>
@@ -224,7 +226,7 @@ class StringIntern {
     template <class Block, std::size_t N>
     void free_directory(Directory<Block, N>& dir,
                         std::size_t block_size) noexcept;
-    std::shared_ptr<Chunk> make_chunk(std::size_t bytes);
+    SharedPtr<Chunk> make_chunk(std::size_t bytes);
 
     memory::Pool* pool_;
     Directory<Slot, DIRECTORY_SIZE> directory_;

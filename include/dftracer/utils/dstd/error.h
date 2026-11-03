@@ -28,11 +28,11 @@ enum class Condition : std::uint16_t {
 };
 
 struct ErrorDomain {
-    std::string_view name;
+    StringView name;
     std::uint64_t id;
 };
 
-constexpr ErrorDomain make_error_domain(std::string_view name) noexcept {
+constexpr ErrorDomain make_error_domain(StringView name) noexcept {
     return {name, hash::fnv1a_hash(name)};
 }
 
@@ -40,7 +40,7 @@ struct ErrorCodeInfo {
     const ErrorDomain* domain;
     std::int32_t code;
     Condition condition;
-    std::string_view name;
+    StringView name;
 };
 
 inline constexpr ErrorDomain CORE_ERROR_DOMAIN =
@@ -75,7 +75,7 @@ constexpr const ErrorCodeInfo& error_info(Condition condition) noexcept {
                                             : CORE_ERROR_INFOS[0];
 }
 
-constexpr std::string_view condition_name(Condition condition) noexcept {
+constexpr StringView condition_name(Condition condition) noexcept {
     return error_info(condition).name;
 }
 
@@ -90,8 +90,7 @@ class [[nodiscard]] Error {
     template <ErrorEnum E>
     Error(E code) noexcept : info_(&error_info(code)) {}
     template <ErrorEnum E>
-    Error(E code, std::string_view message) noexcept
-        : info_(&error_info(code)) {
+    Error(E code, StringView message) noexcept : info_(&error_info(code)) {
         if (!message.empty()) context_ = make_context(message);
     }
     Error(const Error&) noexcept;
@@ -111,8 +110,8 @@ class [[nodiscard]] Error {
         return info_->domain->id == domain.id;
     }
     const ErrorDomain& domain() const noexcept { return *info_->domain; }
-    std::string_view name() const noexcept { return info_->name; }
-    std::string_view message() const noexcept;
+    StringView name() const noexcept { return info_->name; }
+    StringView message() const noexcept;
     /// The message with a terminating NUL, "" when there is none.
     const char* c_str() const noexcept;
     String format() const;
@@ -120,7 +119,7 @@ class [[nodiscard]] Error {
    private:
     struct Context;
 
-    static Context* make_context(std::string_view message) noexcept;
+    static Context* make_context(StringView message) noexcept;
     static void retain_context(Context* context) noexcept;
     static void release_context(Context* context) noexcept;
 

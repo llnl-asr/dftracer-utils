@@ -54,6 +54,7 @@ struct Delete<T[]> {
 };
 
 template <class T>
+// keep std: defines dstd::UniquePtr and dstd::SharedPtr
 using UniquePtr = std::unique_ptr<T, Delete<T>>;
 
 namespace detail {
@@ -128,15 +129,22 @@ UniquePtr<T> make_unique_for_overwrite(std::size_t n) {
  * std::shared_ptr would take the count block from the global operator new.
  */
 template <class T>
+// keep std: defines dstd::UniquePtr and dstd::SharedPtr
 class SharedPtr : public std::shared_ptr<T> {
    public:
+    // keep std: defines dstd::UniquePtr and dstd::SharedPtr
     using std::shared_ptr<T>::shared_ptr;
+    // keep std: defines dstd::UniquePtr and dstd::SharedPtr
     using std::shared_ptr<T>::reset;
 
     SharedPtr() noexcept = default;
+    // keep std: defines dstd::UniquePtr and dstd::SharedPtr
     SharedPtr(const std::shared_ptr<T>& other) noexcept
+        // keep std: defines dstd::UniquePtr and dstd::SharedPtr
         : std::shared_ptr<T>(other) {}
+    // keep std: defines dstd::UniquePtr and dstd::SharedPtr
     SharedPtr(std::shared_ptr<T>&& other) noexcept
+        // keep std: defines dstd::UniquePtr and dstd::SharedPtr
         : std::shared_ptr<T>(std::move(other)) {}
 
     template <class Y>
@@ -144,6 +152,7 @@ class SharedPtr : public std::shared_ptr<T> {
     template <class Y, class D>
     SharedPtr(Y*, D) = delete;
     template <class Y, class D>
+    // keep std: defines dstd::UniquePtr and dstd::SharedPtr
     SharedPtr(std::unique_ptr<Y, D>&&) = delete;
     template <class Y>
     void reset(Y*) = delete;
@@ -152,6 +161,7 @@ class SharedPtr : public std::shared_ptr<T> {
 };
 
 template <class T>
+// keep std: defines dstd::UniquePtr and dstd::SharedPtr
 using WeakPtr = std::weak_ptr<T>;
 
 /// One block for the object and its control block, from memory::allocate.
@@ -198,6 +208,7 @@ SharedPtr<T> adopt_shared_ptr(T* p, D deleter) {
 
 template <class T>
 struct std::hash<dftracer::utils::dstd::SharedPtr<T>>
+    // keep std: defines dstd::UniquePtr and dstd::SharedPtr
     : std::hash<std::shared_ptr<T>> {};
 
 #endif  // DFTRACER_UTILS_DSTD_MEMORY_H

@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_DSTD_HASH_HEX64_H
 #define DFTRACER_UTILS_DSTD_HASH_HEX64_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -14,8 +17,8 @@ namespace dftracer::utils::dstd::hash {
 /// must keep its original text.
 inline constexpr std::size_t HEX64_DIGITS = 16;
 
-inline std::optional<std::uint64_t> parse_hex64(std::string_view sv) {
-    if (sv.size() != HEX64_DIGITS) return std::nullopt;
+inline Optional<std::uint64_t> parse_hex64(StringView sv) {
+    if (sv.size() != HEX64_DIGITS) return nullopt;
     std::uint64_t v = 0;
     for (char c : sv) {
         std::uint64_t d;
@@ -24,7 +27,7 @@ inline std::optional<std::uint64_t> parse_hex64(std::string_view sv) {
         else if (c >= 'a' && c <= 'f')
             d = static_cast<std::uint64_t>(c - 'a' + 10);
         else
-            return std::nullopt;
+            return nullopt;
         v = (v << 4) | d;
     }
     return v;
@@ -39,8 +42,8 @@ inline void format_hex64(std::uint64_t v, char* out) {
     }
 }
 
-inline std::string format_hex64(std::uint64_t v) {
-    std::string s(HEX64_DIGITS, '0');
+inline String format_hex64(std::uint64_t v) {
+    String s(HEX64_DIGITS, '0');
     format_hex64(v, s.data());
     return s;
 }

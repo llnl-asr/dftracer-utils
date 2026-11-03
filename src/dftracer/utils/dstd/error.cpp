@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/memory/heap.h>
 
 #include <atomic>
@@ -56,7 +58,7 @@ Error& Error::operator=(Error&& other) noexcept {
 
 Error::~Error() { release_context(context_); }
 
-std::string_view Error::message() const noexcept {
+StringView Error::message() const noexcept {
     if (context_ == nullptr) return {};
     return {reinterpret_cast<const char*>(context_ + 1), context_->length};
 }
@@ -67,9 +69,9 @@ const char* Error::c_str() const noexcept {
 }
 
 String Error::format() const {
-    const std::string_view domain_name = domain().name;
-    const std::string_view condition_text = condition_name(condition());
-    const std::string_view text = message();
+    const StringView domain_name = domain().name;
+    const StringView condition_text = condition_name(condition());
+    const StringView text = message();
 
     String out;
     out.reserve(domain_name.size() + 1 + INT32_DIGITS + 1 +
@@ -78,7 +80,7 @@ String Error::format() const {
     out.push_back('#');
     char code_buffer[INT32_DIGITS + 1];
     const auto code_end =
-        std::to_chars(code_buffer, code_buffer + sizeof(code_buffer), code());
+        to_chars(code_buffer, code_buffer + sizeof(code_buffer), code());
     out.append(code_buffer,
                static_cast<std::size_t>(code_end.ptr - code_buffer));
     out.push_back(' ');
@@ -88,7 +90,7 @@ String Error::format() const {
     return out;
 }
 
-Error::Context* Error::make_context(std::string_view message) noexcept {
+Error::Context* Error::make_context(StringView message) noexcept {
     if (message.size() >
         std::numeric_limits<std::size_t>::max() - sizeof(Context) - 1)
         return nullptr;

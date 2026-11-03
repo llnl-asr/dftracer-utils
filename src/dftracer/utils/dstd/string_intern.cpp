@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hasher.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/manager.h>
 
@@ -15,6 +18,12 @@ namespace dftracer::utils::dstd {
 
 namespace {
 constexpr std::size_t CHUNK_ALIGN = 8;
+
+String id_text(std::uint32_t id) {
+    char buf[16];
+    const auto r = to_chars(buf, buf + sizeof(buf), id);
+    return String(buf, r.ptr);
+}
 }  // namespace
 
 StringIntern::Chunk::Chunk(std::size_t size, memory::Pool& pool)
@@ -46,11 +55,11 @@ StringIntern::~StringIntern() {
     free_directory(log_, BLOCK_SIZE);
 }
 
-std::uint32_t StringIntern::find(std::string_view sv) const {
+std::uint32_t StringIntern::find(StringView sv) const {
     return lookup(hash(sv), sv);
 }
 
-std::uint32_t StringIntern::get_or_insert(std::string_view sv) {
+std::uint32_t StringIntern::get_or_insert(StringView sv) {
     const auto h = hash(sv);
     if (auto id = lookup(h, sv); id != NO_ID) return id;
 
@@ -81,7 +90,7 @@ std::uint32_t StringIntern::get_or_insert(std::string_view sv) {
 }
 
 StringIntern::InsertStatus StringIntern::insert_at_id(std::uint32_t id,
-                                                      std::string_view sv) {
+                                                      StringView sv) {
     if (id >= FAST_CAPACITY) return InsertStatus::OutOfRange;
 
     const auto h = hash(sv);
@@ -103,13 +112,13 @@ StringIntern::InsertStatus StringIntern::insert_at_id(std::uint32_t id,
     return InsertStatus::Ok;
 }
 
-std::string_view StringIntern::resolve(std::uint32_t id) const {
+StringView StringIntern::resolve(std::uint32_t id) const {
     if (id >= FAST_CAPACITY) {
-        throw std::out_of_range("string intern: id " + std::to_string(id) +
-                                " is out of range");
+        throw std::out_of_range(
+            ("string intern: id " + id_text(id) + " is out of range").c_str());
     }
     const auto* p = slot_value(id);
-    return p ? record_view(p) : std::string_view{};
+    return p ? record_view(p) : StringView{};
 }
 
 StringIntern::Location StringIntern::locate(std::uint32_t id) const {
@@ -121,8 +130,7 @@ StringIntern::Location StringIntern::locate(std::uint32_t id) const {
             static_cast<std::uint32_t>(v.data() - chunk_ref(c)->get()->data())};
 }
 
-std::shared_ptr<StringIntern::Chunk> StringIntern::chunk(
-    std::uint32_t i) const {
+SharedPtr<StringIntern::Chunk> StringIntern::chunk(std::uint32_t i) const {
     return *chunk_ref(i);
 }
 
@@ -150,7 +158,7 @@ std::uint32_t StringIntern::entry_id(std::size_t n) const {
     return v == 0 ? 0 : v - 1;
 }
 
-std::string_view StringIntern::intern(std::string_view sv) {
+StringView StringIntern::intern(StringView sv) {
     return resolve(get_or_insert(sv));
 }
 
@@ -161,7 +169,7 @@ const char* StringIntern::slot_value(std::uint32_t id) const {
     return block[id & (BLOCK_SIZE - 1)].load(std::memory_order_acquire);
 }
 
-std::string_view StringIntern::record_view(const char* rec) {
+StringView StringIntern::record_view(const char* rec) {
     std::uint32_t len;
     std::memcpy(&len, rec, sizeof len);
     return {rec + RECORD_HEADER, len};
@@ -184,11 +192,12 @@ std::size_t StringIntern::shard_of(std::size_t h) {
     return (h >> 40) & (SHARDS - 1);
 }
 
-void StringIntern::throw_collision(const char* existing, std::string_view sv) {
+void StringIntern::throw_collision(const char* existing, StringView sv) {
     throw std::logic_error(
-        "string intern: deterministic id collision between '" +
-        std::string(record_view(existing)) + "' and '" + std::string(sv) +
-        "'; the dictionary is too large for this id space");
+        ("string intern: deterministic id collision between '" +
+         String(record_view(existing)) + "' and '" + String(sv) +
+         "'; the dictionary is too large for this id space")
+            .c_str());
 }
 
 std::uint32_t StringIntern::add_chunk(std::size_t bytes) {
@@ -212,7 +221,7 @@ std::uint32_t StringIntern::add_chunk(std::size_t bytes) {
 }
 
 /// Caller holds the shard's mutex. Publish the result through a slot.
-const char* StringIntern::write_record(Shard& sh, std::string_view sv) {
+const char* StringIntern::write_record(Shard& sh, StringView sv) {
     const std::size_t need = (RECORD_HEADER + sv.size() + 3) & ~std::size_t{3};
     std::uint32_t c;
     std::size_t off;
@@ -259,7 +268,7 @@ void StringIntern::delete_index(Index* idx) {
     free_array(idx, 1);
 }
 
-std::uint32_t StringIntern::lookup(std::size_t h, std::string_view sv) const {
+std::uint32_t StringIntern::lookup(std::size_t h, StringView sv) const {
     const auto* idx =
         shards_[shard_of(h)].index.load(std::memory_order_acquire);
     if (!idx) return NO_ID;
@@ -344,8 +353,9 @@ void StringIntern::log_entry(std::uint32_t id) {
 
 bool StringIntern::bind_slot(std::uint32_t id, const char* str, bool cas) {
     if (id >= FAST_CAPACITY) {
-        throw std::length_error("string intern: exhausted the id space at " +
-                                std::to_string(id));
+        throw std::length_error(
+            ("string intern: exhausted the id space at " + id_text(id))
+                .c_str());
     }
     auto& dir = entry(directory_, id >> BLOCK_BITS);
     auto* block = dir.load(std::memory_order_acquire);
@@ -374,10 +384,10 @@ bool StringIntern::bind_slot(std::uint32_t id, const char* str, bool cas) {
 /// Deterministic ids are this hash, so it must agree across processes and stay
 /// as stored. It is FNV-1a, unlike std::hash. Other tables take wyhash, which
 /// is faster.
-std::size_t StringIntern::hash(std::string_view sv) const {
+std::size_t StringIntern::hash(StringView sv) const {
     if (deterministic_ids_.load(std::memory_order_relaxed))
         return hash::fnv1a_mix(hash::fnv1a_hash(sv));
-    return Hash<std::string_view>{}(sv);
+    return Hash<StringView>{}(sv);
 }
 
 template <class T>
@@ -436,8 +446,7 @@ void StringIntern::free_directory(Directory<Block, N>& dir,
     }
 }
 
-std::shared_ptr<StringIntern::Chunk> StringIntern::make_chunk(
-    std::size_t bytes) {
+SharedPtr<StringIntern::Chunk> StringIntern::make_chunk(std::size_t bytes) {
     return std::allocate_shared<Chunk>(memory::PoolAllocator<Chunk>(*pool_),
                                        bytes, *pool_);
 }

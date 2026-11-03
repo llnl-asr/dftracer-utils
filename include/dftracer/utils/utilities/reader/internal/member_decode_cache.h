@@ -51,6 +51,12 @@ struct MemberKeyHash {
 
 }  // namespace dftracer::utils::utilities::reader::internal
 
+namespace dftracer::utils::dstd {
+template <>
+struct Hash<utilities::reader::internal::MemberKey>
+    : utilities::reader::internal::MemberKeyHash {};
+}  // namespace dftracer::utils::dstd
+
 namespace std {
 template <>
 struct hash<dftracer::utils::utilities::reader::internal::MemberKey> {

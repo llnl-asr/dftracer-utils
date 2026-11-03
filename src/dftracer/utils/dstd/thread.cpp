@@ -16,6 +16,7 @@
 namespace dftracer::utils::dstd {
 
 unsigned Thread::hardware_concurrency() noexcept {
+    // keep std: implements dstd::Thread
     return std::thread::hardware_concurrency();
 }
 

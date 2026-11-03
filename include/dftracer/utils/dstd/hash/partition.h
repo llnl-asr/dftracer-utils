@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -24,7 +25,7 @@ inline std::size_t partition_of(std::uint64_t h, std::size_t parts,
 }
 
 /// The partition of a byte key.
-inline std::size_t partition_of(std::string_view key, std::size_t parts,
+inline std::size_t partition_of(StringView key, std::size_t parts,
                                 int depth = 0) {
     return partition_of(fnv1a_hash(key), parts, depth);
 }

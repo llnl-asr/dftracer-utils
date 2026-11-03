@@ -8,6 +8,7 @@
 namespace dftracer::utils::dstd {
 
 template <class T, std::size_t Extent = std::dynamic_extent>
+// keep std: defines dstd::Span
 using Span = std::span<T, Extent>;
 
 }  // namespace dftracer::utils::dstd

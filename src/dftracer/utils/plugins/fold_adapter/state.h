@@ -6,15 +6,12 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/state_registry.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::plugins {
 
@@ -49,7 +46,7 @@ class StateAccum {
     StateAccum(const StateAccum&) = delete;
     StateAccum& operator=(const StateAccum&) = delete;
 
-    const std::string& name() const { return reg_->name; }
+    const dstd::String& name() const { return reg_->name; }
     /// Runs written so far; 0 means the state never left memory.
     std::size_t runs() const { return runs_.size(); }
     /// True once the state ran past the budget with no serialize/deserialize
@@ -77,7 +74,7 @@ class StateAccum {
     // shared so a worker's directory outlives the worker once a master fold
     // has adopted the runs inside it.
     dstd::SharedPtr<SpillDir> dir_;
-    std::vector<dstd::SharedPtr<SpillDir>> adopted_dirs_;
+    dstd::Vector<dstd::SharedPtr<SpillDir>> adopted_dirs_;
     dstd::Vector<dstd::Path> runs_;
 };
 

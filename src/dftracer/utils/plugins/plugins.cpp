@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/queue.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/build_host.h>
@@ -21,16 +27,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <deque>
 #include <functional>
 #include <memory>
-#include <optional>
-#include <queue>
-#include <string>
-#include <string_view>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::plugins {
 
@@ -46,26 +45,26 @@ struct Plugins::Impl {
         void* handle = nullptr;
         dftu_plugin* plugin = nullptr;
         bool owned = true; /* injected test plugins are not owned */
-        std::string name;  /* load-path stem, used to tag the plugin's logs */
-        std::string path;  /* as given to Builder::add; empty for injected test
+        dstd::String name; /* load-path stem, used to tag the plugin's logs */
+        dstd::String path; /* as given to Builder::add; empty for injected test
                               plugins */
         /* State types the factory registered; one instance per fold slice. */
         StateRegistry states;
         /* Op names the factory registered via dftu_op_register; the op
            registry outlives the plugin, so these must be unregistered before
            dlclose or a later lookup strcmps a name in unmapped memory. */
-        std::vector<std::string> registered_ops;
+        dstd::Vector<dstd::String> registered_ops;
         /* Provider names the factory registered via
            dftu_svc_providers::register_provider; the provider registry
            outlives the plugin, so these must be unregistered before dlclose or
            a later LazyFrame::scan calls into unmapped memory. */
-        std::vector<std::string> registered_providers;
+        dstd::Vector<dstd::String> registered_providers;
         /* Node names registered via dftu_svc_nodes::register_node; same
            reason as the providers. */
-        std::vector<std::string> registered_nodes;
+        dstd::Vector<dstd::String> registered_nodes;
         /* Index extension names registered via
            dftu_svc_index::register_extension; same reason as the providers. */
-        std::vector<std::string> registered_index_extensions;
+        dstd::Vector<dstd::String> registered_index_extensions;
     };
 
     ~Impl() {
@@ -74,13 +73,13 @@ struct Plugins::Impl {
         // dftu_lazyframe_from_provider or destroy() may otherwise dereference
         // memory that dlclose just unmapped.
         for (auto& p : plugins) {
-            for (const std::string& name : p.registered_ops)
+            for (const dstd::String& name : p.registered_ops)
                 ::dftu_op_unregister(name.c_str());
-            for (const std::string& name : p.registered_providers)
+            for (const dstd::String& name : p.registered_providers)
                 ::dftu_provider_unregister(name.c_str());
-            for (const std::string& name : p.registered_nodes)
+            for (const dstd::String& name : p.registered_nodes)
                 ::dftu_node_unregister(name.c_str());
-            for (const std::string& name : p.registered_index_extensions)
+            for (const dstd::String& name : p.registered_index_extensions)
                 index::extensions::unregister_plugin_extension(name);
             if (p.owned && p.plugin && p.plugin->destroy)
                 p.plugin->destroy(p.plugin->self);
@@ -88,12 +87,12 @@ struct Plugins::Impl {
         }
     }
 
-    std::vector<Loaded> plugins;
+    dstd::Vector<Loaded> plugins;
     // deque pins each ConfigTree so factory-held roots stay valid until
     // teardown.
-    std::deque<ConfigTree> configs;
+    dstd::Deque<ConfigTree> configs;
     // Providers before consumers; a full permutation of plugin indices.
-    std::vector<std::size_t> order;
+    dstd::Vector<std::size_t> order;
     // The union prune, settled once at build. run() applies it directly;
     // attach() only offers it to the session (see Plugins::attach()).
     dstd::Optional<Query> prune;
@@ -101,21 +100,21 @@ struct Plugins::Impl {
 
 struct Plugins::Builder::State {
     struct Pending {
-        std::string path;
+        dstd::String path;
         ConfigTree config;
         bool has_config = false;
         // Parsed at build() rather than add(), so a malformed literal fails
         // through the Result build() already returns instead of throwing out
         // of add().
-        dstd::Optional<std::string> config_json;
+        dstd::Optional<dstd::String> config_json;
     };
-    std::vector<Pending> pending;
+    dstd::Vector<Pending> pending;
 };
 
 /// Private-member seam for plugins_internal.h; keeps the C ABI out of
 /// plugins.h.
 struct PluginsInternalAccess {
-    static Plugins make(std::unique_ptr<Plugins::Impl> impl) {
+    static Plugins make(dstd::UniquePtr<Plugins::Impl> impl) {
         return Plugins(std::move(impl));
     }
     static const Plugins::Impl& impl(const Plugins& set) { return *set.impl_; }
@@ -125,13 +124,13 @@ namespace {
 
 // The path's file stem (drop directory and the final extension), used to tag
 // the plugin's log lines. "/x/y/name_edges.so" -> "name_edges".
-std::string plugin_name_from_path(dstd::StringView path) {
+dstd::String plugin_name_from_path(dstd::StringView path) {
     std::size_t slash = path.find_last_of("/\\");
     dstd::StringView base =
         slash == dstd::StringView::npos ? path : path.substr(slash + 1);
     std::size_t dot = base.find_last_of('.');
     if (dot != dstd::StringView::npos && dot != 0) base = base.substr(0, dot);
-    return std::string(base);
+    return dstd::String(base);
 }
 
 const char* value_kind_name(std::int32_t kind) {
@@ -172,11 +171,11 @@ const char* op_kind_name(dftu_op_sig sig) {
 // is not in the registry (it cannot be, while its plugin is loaded, but a
 // describe() that silently dropped an op would be worse than one that says
 // less about it).
-std::string op_summary(const std::string& name) {
+dstd::String op_summary(const dstd::String& name) {
     const dftu_op_desc* desc = ::dftu_op_find(name.c_str());
     if (!desc) return name;
     // dftu_op_signature returns a thread_local buffer reused by the next call.
-    std::string out = name + ::dftu_op_signature(desc->sig);
+    dstd::String out = name + ::dftu_op_signature(desc->sig);
     out += " [";
     out += op_kind_name(desc->sig);
     out += "]";
@@ -201,8 +200,8 @@ bool kind_accepts(std::int32_t declared, std::int32_t given) {
 // Empty when `config` satisfies what `plugin` declares, else the one reason to
 // reject the load. A plugin that declares no keys is not validated: an
 // undeclared config is the plugin's own business.
-std::string config_violation(const dftu_plugin* plugin,
-                             const dftu_value* config) {
+dstd::String config_violation(const dftu_plugin* plugin,
+                              const dftu_value* config) {
     if (!plugin->config_keys) return {};
     const dftu_config_key* keys = plugin->config_keys(plugin->self);
     if (!keys) return {};
@@ -214,11 +213,12 @@ std::string config_violation(const dftu_plugin* plugin,
         const dftu_value* v = config ? dftu_obj_get(config, k->name) : nullptr;
         if (!v) {
             if (k->required)
-                return std::string("required key '") + k->name + "' is missing";
+                return dstd::String("required key '") + k->name +
+                       "' is missing";
             continue;
         }
         if (!kind_accepts(k->kind, v->kind))
-            return std::string("key '") + k->name + "' must be " +
+            return dstd::String("key '") + k->name + "' must be " +
                    value_kind_name(k->kind) + ", got " +
                    value_kind_name(v->kind);
     }
@@ -231,7 +231,7 @@ std::string config_violation(const dftu_plugin* plugin,
         for (const dftu_config_key* k = keys; k->name && !declared; ++k)
             declared = given == k->name;
         if (!declared)
-            return "unknown key '" + std::string(given) +
+            return "unknown key '" + dstd::String(given) +
                    "'; the plugin declares its keys, so this is a typo or a "
                    "key it does not read";
     }
@@ -241,8 +241,8 @@ std::string config_violation(const dftu_plugin* plugin,
 // ConfigTree::from_json_string throws; convert that into the plugin set's
 // Result so a malformed literal fails at build() alongside every other
 // plugin load error, not by throwing out of Builder::add.
-common::Result<ConfigTree> parse_config_json(const std::string& path,
-                                             const std::string& json) {
+common::Result<ConfigTree> parse_config_json(const dstd::String& path,
+                                             const dstd::String& json) {
     try {
         return ConfigTree::from_json_string(json);
     } catch (const std::exception& e) {
@@ -273,7 +273,7 @@ void expose_dataframe_abi() {
     dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
 }
 
-common::Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
+common::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
                                                   const dftu_value* config) {
     expose_dataframe_abi();
     void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
@@ -303,13 +303,14 @@ common::Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
     // that registration here too or it dangles the instant dlclose unmaps the
     // plugin's fn/name.
     auto unregister_all = [&build_host]() {
-        for (const std::string& name : build_host.registered_ops())
+        for (const dstd::String& name : build_host.registered_ops())
             ::dftu_op_unregister(name.c_str());
-        for (const std::string& name : build_host.registered_providers())
+        for (const dstd::String& name : build_host.registered_providers())
             ::dftu_provider_unregister(name.c_str());
-        for (const std::string& name : build_host.registered_nodes())
+        for (const dstd::String& name : build_host.registered_nodes())
             ::dftu_node_unregister(name.c_str());
-        for (const std::string& name : build_host.registered_index_extensions())
+        for (const dstd::String& name :
+             build_host.registered_index_extensions())
             index::extensions::unregister_plugin_extension(name);
     };
 
@@ -343,12 +344,12 @@ common::Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
         dlclose(handle);
         return common::make_error(
             common::ErrorCode::InvalidArgument,
-            "plugin '" + path + "' ABI version " + std::to_string(got) +
+            "plugin '" + path + "' ABI version " + dstd::to_string(got) +
                 " does not match host " +
-                std::to_string(DFTRACER_UTILS_PLUGIN_ABI_VERSION));
+                dstd::to_string(DFTRACER_UTILS_PLUGIN_ABI_VERSION));
     }
 
-    if (std::string bad = config_violation(plugin, config); !bad.empty()) {
+    if (dstd::String bad = config_violation(plugin, config); !bad.empty()) {
         if (plugin->destroy) plugin->destroy(plugin->self);
         unregister_all();
         dlclose(handle);
@@ -368,16 +369,16 @@ common::Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
         // (the C++ SDK backs it with the holder's `plan` member), so destroy()
         // frees it and dlclose() unmaps the code it came from. Reading it
         // afterwards to build the message is a use-after-free.
-        const std::string plan(pq);
+        const dstd::String plan(pq);
         auto parsed = Query::from_string(plan);
         if (!parsed) {
             if (plugin->destroy) plugin->destroy(plugin->self);
             unregister_all();
             dlclose(handle);
-            return common::make_error(
-                common::ErrorCode::InvalidArgument,
-                "plugin '" + path + "' plan_duql '" + plan +
-                    "' does not parse: " + std::string(parsed.error().message));
+            return common::make_error(common::ErrorCode::InvalidArgument,
+                                      "plugin '" + path + "' plan_duql '" +
+                                          plan + "' does not parse: " +
+                                          dstd::String(parsed.error().message));
         }
     }
 
@@ -396,21 +397,19 @@ common::Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
 // Kahn topological sort of `n` nodes over `from -> to` edges (from must precede
 // to). Ready nodes are drained lowest-index first so an independent set keeps
 // its registration order. A short return signals a cycle.
-std::vector<std::size_t> topo_sort(
+dstd::Vector<std::size_t> topo_sort(
     std::size_t n,
-    const std::vector<dstd::Pair<std::size_t, std::size_t>>& edges) {
-    std::vector<std::vector<std::size_t>> succ(n);
-    std::vector<std::size_t> indeg(n, 0);
+    const dstd::Vector<dstd::Pair<std::size_t, std::size_t>>& edges) {
+    dstd::Vector<dstd::Vector<std::size_t>> succ(n);
+    dstd::Vector<std::size_t> indeg(n, 0);
     for (const auto& [a, b] : edges) {
         succ[a].push_back(b);
         ++indeg[b];
     }
-    std::priority_queue<std::size_t, std::vector<std::size_t>,
-                        std::greater<std::size_t>>
-        ready;
+    dstd::PriorityQueue<std::size_t, std::greater<std::size_t>> ready;
     for (std::size_t i = 0; i < n; ++i)
         if (indeg[i] == 0) ready.push(i);
-    std::vector<std::size_t> order;
+    dstd::Vector<std::size_t> order;
     order.reserve(n);
     while (!ready.empty()) {
         std::size_t u = ready.top();
@@ -424,14 +423,14 @@ std::vector<std::size_t> topo_sort(
 
 // The plugin name a diagnostic should use: the load-path stem, or the index for
 // an injected plugin that has none.
-std::string plugin_label(const Plugins::Impl& impl, std::size_t i) {
-    const std::string& name = impl.plugins[i].name;
-    return name.empty() ? ("plugin " + std::to_string(i)) : ("'" + name + "'");
+dstd::String plugin_label(const Plugins::Impl& impl, std::size_t i) {
+    const dstd::String& name = impl.plugins[i].name;
+    return name.empty() ? ("plugin " + dstd::to_string(i)) : ("'" + name + "'");
 }
 
-std::vector<std::string> name_list(const char* const* (*slot)(void*),
-                                   void* self) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> name_list(const char* const* (*slot)(void*),
+                                     void* self) {
+    dstd::Vector<dstd::String> out;
     if (!slot) return out;
     const char* const* names = slot(self);
     if (!names) return out;
@@ -446,7 +445,7 @@ common::Result<void> settle_order(Plugins::Impl& impl) {
     for (std::size_t i = 0; i < impl.plugins.size(); ++i) {
         const dftu_plugin* pl = impl.plugins[i].plugin;
         for (const auto* slot : {&pl->provides, &pl->consumes})
-            for (const std::string& name : name_list(*slot, pl->self))
+            for (const dstd::String& name : name_list(*slot, pl->self))
                 if (is_host_namespace(name))
                     return common::make_error(
                         common::ErrorCode::InvalidArgument,
@@ -456,10 +455,10 @@ common::Result<void> settle_order(Plugins::Impl& impl) {
                             "is refused to plugins");
     }
 
-    std::unordered_map<std::string, std::size_t> producer;
+    dstd::HashMap<dstd::String, std::size_t> producer;
     for (std::size_t i = 0; i < impl.plugins.size(); ++i) {
         const dftu_plugin* pl = impl.plugins[i].plugin;
-        for (const std::string& name : name_list(pl->provides, pl->self)) {
+        for (const dstd::String& name : name_list(pl->provides, pl->self)) {
             auto [it, fresh] = producer.emplace(name, i);
             if (!fresh)
                 return common::make_error(
@@ -471,10 +470,10 @@ common::Result<void> settle_order(Plugins::Impl& impl) {
         }
     }
 
-    std::vector<dstd::Pair<std::size_t, std::size_t>> edges;
+    dstd::Vector<dstd::Pair<std::size_t, std::size_t>> edges;
     for (std::size_t i = 0; i < impl.plugins.size(); ++i) {
         const dftu_plugin* pl = impl.plugins[i].plugin;
-        for (const std::string& name : name_list(pl->consumes, pl->self)) {
+        for (const dstd::String& name : name_list(pl->consumes, pl->self)) {
             auto it = producer.find(name);
             if (it == producer.end())
                 return common::make_error(
@@ -487,7 +486,7 @@ common::Result<void> settle_order(Plugins::Impl& impl) {
 
     impl.order = topo_sort(impl.plugins.size(), edges);
     if (impl.order.size() != impl.plugins.size()) {
-        std::vector<bool> sorted(impl.plugins.size(), false);
+        dstd::Vector<bool> sorted(impl.plugins.size(), false);
         for (std::size_t i : impl.order) sorted[i] = true;
         std::size_t stuck = 0;
         while (stuck < sorted.size() && sorted[stuck]) ++stuck;
@@ -501,7 +500,7 @@ common::Result<void> settle_order(Plugins::Impl& impl) {
 }
 
 void settle_prune(Plugins::Impl& impl) {
-    std::vector<const char*> plan_queries;
+    dstd::Vector<const char*> plan_queries;
     plan_queries.reserve(impl.plugins.size());
     for (const auto& p : impl.plugins)
         plan_queries.push_back(p.plugin->plan_duql
@@ -515,10 +514,10 @@ void settle_prune(Plugins::Impl& impl) {
 namespace detail {
 
 dstd::Optional<Query> plugin_union_prune_query(
-    const std::vector<const char*>& plan_queries) {
+    const dstd::Vector<const char*>& plan_queries) {
     namespace q = duql;
     if (plan_queries.empty()) return dstd::nullopt;
-    std::vector<std::string> distinct;
+    dstd::Vector<dstd::StringView> distinct;
     for (const char* s : plan_queries) {
         if (!s || !*s) return dstd::nullopt;
         dstd::StringView sv{s};
@@ -531,7 +530,7 @@ dstd::Optional<Query> plugin_union_prune_query(
             distinct.emplace_back(sv);
     }
     if (distinct.size() == 1) return q::try_parse(distinct.front());
-    std::string uni;
+    dstd::String uni;
     for (const auto& d : distinct) {
         if (!uni.empty()) uni += " or ";
         uni += '(';
@@ -543,19 +542,19 @@ dstd::Optional<Query> plugin_union_prune_query(
 
 }  // namespace detail
 
-Plugins::Builder::Builder() : state_(std::make_unique<State>()) {}
+Plugins::Builder::Builder() : state_(dstd::make_unique<State>()) {}
 Plugins::Builder::~Builder() = default;
 Plugins::Builder::Builder(Builder&&) noexcept = default;
 Plugins::Builder& Plugins::Builder::operator=(Builder&&) noexcept = default;
 
-Plugins::Builder& Plugins::Builder::add(std::string path, ConfigTree config) {
+Plugins::Builder& Plugins::Builder::add(dstd::String path, ConfigTree config) {
     state_->pending.push_back(
         {std::move(path), std::move(config), true, dstd::nullopt});
     return *this;
 }
 
-Plugins::Builder& Plugins::Builder::add(std::string path,
-                                        std::string config_json) {
+Plugins::Builder& Plugins::Builder::add(dstd::String path,
+                                        dstd::String config_json) {
     State::Pending pending;
     pending.path = std::move(path);
     pending.config_json = std::move(config_json);
@@ -563,14 +562,14 @@ Plugins::Builder& Plugins::Builder::add(std::string path,
     return *this;
 }
 
-Plugins::Builder& Plugins::Builder::add(std::string path) {
+Plugins::Builder& Plugins::Builder::add(dstd::String path) {
     state_->pending.push_back(
         {std::move(path), ConfigTree{}, false, dstd::nullopt});
     return *this;
 }
 
 common::Result<Plugins> Plugins::Builder::build() {
-    auto impl = std::make_unique<Impl>();
+    auto impl = dstd::make_unique<Impl>();
     impl->plugins.reserve(state_->pending.size());
     for (auto& pending : state_->pending) {
         const dftu_value* root = nullptr;
@@ -595,15 +594,15 @@ common::Result<Plugins> Plugins::Builder::build() {
 
 Plugins::Builder Plugins::builder() { return Builder{}; }
 
-Plugins::Plugins(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+Plugins::Plugins(dstd::UniquePtr<Impl> impl) : impl_(std::move(impl)) {}
 Plugins::Plugins(Plugins&&) noexcept = default;
 Plugins& Plugins::operator=(Plugins&&) noexcept = default;
 Plugins::~Plugins() = default;
 
 std::size_t Plugins::size() const { return impl_->plugins.size(); }
 
-std::vector<Plugins::PluginInfo> Plugins::describe() const {
-    std::vector<PluginInfo> out;
+dstd::Vector<Plugins::PluginInfo> Plugins::describe() const {
+    dstd::Vector<PluginInfo> out;
     out.reserve(impl_->plugins.size());
     for (const auto& p : impl_->plugins) {
         PluginInfo info;
@@ -613,12 +612,12 @@ std::vector<Plugins::PluginInfo> Plugins::describe() const {
         info.provides = name_list(p.plugin->provides, p.plugin->self);
         info.consumes = name_list(p.plugin->consumes, p.plugin->self);
         info.reads = name_list(p.plugin->reads, p.plugin->self);
-        for (const std::string& op : p.registered_ops)
+        for (const dstd::String& op : p.registered_ops)
             info.ops.push_back(op_summary(op));
         if (p.plugin->config_keys) {
             const dftu_config_key* keys = p.plugin->config_keys(p.plugin->self);
             for (; keys && keys->name; ++keys) {
-                std::string line = keys->name;
+                dstd::String line = keys->name;
                 line += " (";
                 line += keys->kind == DFTU_CONFIG_ANY
                             ? "any"
@@ -626,7 +625,7 @@ std::vector<Plugins::PluginInfo> Plugins::describe() const {
                 if (keys->required) line += ", required";
                 line += ")";
                 if (keys->doc && *keys->doc)
-                    line += std::string(" - ") + keys->doc;
+                    line.append(" - ").append(keys->doc);
                 info.config_keys.push_back(std::move(line));
             }
         }
@@ -645,12 +644,12 @@ coro::CoroTask<common::Result<PluginRun>> Plugins::run(const View& view) const {
     // One registry for the whole scan; every plugin's finalize publishes its
     // merged accumulators here and later plugins read them by name.
     SharedResultRegistry shared;
-    std::vector<std::unique_ptr<PluginFold>> owned;
+    dstd::Vector<dstd::UniquePtr<PluginFold>> owned;
     owned.reserve(impl_->plugins.size());
-    std::vector<Fold*> folds;
+    dstd::Vector<Fold*> folds;
     folds.reserve(impl_->plugins.size());
     for (std::size_t i : impl_->order) {
-        owned.push_back(std::make_unique<PluginFold>(
+        owned.push_back(dstd::make_unique<PluginFold>(
             impl_->plugins[i].plugin, intern, &shared, &out.results,
             impl_->plugins[i].name, view.memory_budget_bytes(),
             &impl_->plugins[i].states));
@@ -667,9 +666,9 @@ trace::views::Deferred<PluginRun> Plugins::attach(
     namespace views = trace::views;
     // Captured by the factory closures (owned by the session through execute)
     // so it outlives the scan.
-    auto shared = std::make_shared<SharedResultRegistry>();
-    auto out = std::make_shared<PluginRun>();
-    auto executed = std::make_shared<bool>(false);
+    auto shared = dstd::make_shared<SharedResultRegistry>();
+    auto out = dstd::make_shared<PluginRun>();
+    auto executed = dstd::make_shared<bool>(false);
     NamedResultRegistry* named = &out->results;
     const std::size_t n = impl_->order.size();
     if (n == 0) {
@@ -683,7 +682,7 @@ trace::views::Deferred<PluginRun> Plugins::attach(
     for (std::size_t idx = 0; idx < n; ++idx) {
         std::size_t i = impl_->order[idx];
         const dftu_plugin* plugin = impl_->plugins[i].plugin;
-        std::string name = impl_->plugins[i].name;
+        dstd::String name = impl_->plugins[i].name;
         const StateRegistry* states = &impl_->plugins[i].states;
         // A session does not expose its plan's budget here, so an attached
         // plugin's accumulators spill on the auto policy rather than on an
@@ -691,22 +690,25 @@ trace::views::Deferred<PluginRun> Plugins::attach(
         session.attach_fold_factory(
             [plugin, shared, named, name,
              states](dftracer::utils::dstd::StringIntern& intern)
-                -> std::unique_ptr<views::detail::Fold> {
+            // keep std: the factory returns std::unique_ptr
+            -> std::unique_ptr<views::detail::Fold> {
+                // keep std: the factory returns std::unique_ptr
                 return std::make_unique<PluginFold>(
                     plugin, intern, shared.get(), named, name, 0, states);
             },
             // The fused scan finalizes every attached fold together, so the
             // last one to finalize marks the handle resolved.
             idx + 1 == n
-                ? std::function<void()>([executed]() { *executed = true; })
-                : std::function<void()>([]() {}));
+                ? std::function<void()>(  // keep std: attach_fold_factory
+                      [executed]() { *executed = true; })
+                : std::function<void()>([]() {}));  // keep std: session api
     }
     return {out, executed};
 }
 
 common::Result<Plugins> build_injected_plugins(
-    std::vector<dftu_plugin*> plugins) {
-    auto impl = std::make_unique<Plugins::Impl>();
+    dstd::Vector<dftu_plugin*> plugins) {
+    auto impl = dstd::make_unique<Plugins::Impl>();
     impl->plugins.reserve(plugins.size());
     for (dftu_plugin* pl : plugins)
         impl->plugins.push_back(
@@ -717,7 +719,7 @@ common::Result<Plugins> build_injected_plugins(
     return PluginsInternalAccess::make(std::move(impl));
 }
 
-std::vector<std::size_t> fold_order(const Plugins& set) {
+dstd::Vector<std::size_t> fold_order(const Plugins& set) {
     return PluginsInternalAccess::impl(set).order;
 }
 

@@ -9,8 +9,6 @@
 #include <dftracer/utils/plugins/state_registry.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
 #include <utility>
 
 namespace dftracer::utils::plugins {
@@ -193,7 +191,7 @@ void build_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 
 }  // namespace
 
-BuildHost::BuildHost(std::string plugin_name)
+BuildHost::BuildHost(dstd::String plugin_name)
     : plugin_name_(plugin_name.empty() ? "plugin" : std::move(plugin_name)) {
     host_.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     host_.h = this;

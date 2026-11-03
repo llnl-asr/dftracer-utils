@@ -5,8 +5,10 @@
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/mask.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/fields.h>
@@ -15,13 +17,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <type_traits>
-#include <unordered_set>
 #include <variant>
-#include <vector>
 
 namespace dataframe = dftracer::utils::dataframe;
 
@@ -135,7 +132,7 @@ dataframe::Series compare_mask(const dataframe::Series& col, CompareOp op,
 dataframe::Series in_mask(const dataframe::Series& col, const ArrayNode& arr,
                           bool negated) {
     if (is_string(col)) {
-        std::unordered_set<dstd::StringView> set;
+        dstd::HashSet<dstd::StringView> set;
         for (const LiteralNode& e : arr.elements)
             if (const auto* lit = std::get_if<dstd::String>(&e.value))
                 set.insert(*lit);
@@ -178,7 +175,7 @@ dataframe::Series leaf_mask(const ExprLeaf& leaf,
         cols.push_back({b.names[i], b.columns[i].data_type(), false});
         inputs.push_back(&b.columns[i]);
     }
-    std::vector<const TQuant*> quants;
+    dstd::Vector<const TQuant*> quants;
     for_each_term(*leaf.term, [&](const Term& t) {
         if (const auto* q = std::get_if<TQuant>(&t.node)) quants.push_back(q);
     });

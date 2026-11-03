@@ -3,11 +3,9 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/store/extent_size.h>
-
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::store::engine {
 
@@ -65,7 +63,7 @@ dstd::Expected<std::uint32_t, dstd::Error> extent_size_for(
             return override_error("must be a plain number of bytes");
         override_bytes = *parsed;
     }
-    const std::string path(dir.data(), dir.size());
+    const dstd::String path(dir.data(), dir.size());
     return choose_extent_size(common::lustre_stripe(path).size, override_bytes);
 }
 

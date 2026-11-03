@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_COMPOSE_H
 #define DFTRACER_UTILS_PLUGINS_COMPOSE_H
 
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin.h>
 
@@ -10,7 +11,6 @@
 #include <cstdint>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 // The columnar handles (defined in dftracer/utils/dataframe/abi.h). Forward
 // declared so a column/table crosses a compose pipe as a first-class typed
@@ -97,7 +97,7 @@ inline Composed operator||(Composed a, Composed b) {
 template <class Range, class MakeTask>
 Composed map(const dftu_plugin_host* host, Range&& items, MakeTask make_task) {
     const dftu_svc_coro* c = detail::coro_ext(host);
-    std::vector<dftu_task*> ts;
+    dstd::Vector<dftu_task*> ts;
     for (auto&& item : items) ts.push_back(make_task(item));
     return Composed{host,
                     c && c->when_all

@@ -2,10 +2,9 @@
 #ifndef DFTRACER_UTILS_PLUGINS_STATE_REGISTRY_H
 #define DFTRACER_UTILS_PLUGINS_STATE_REGISTRY_H
 
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::plugins {
 
@@ -14,19 +13,19 @@ namespace dftracer::utils::plugins {
 /// plugin passes need not outlive the call; `name` owns the key and `self`
 /// must outlive the plugin.
 struct RegisteredState {
-    std::string name;
+    dstd::String name;
     dftu_state_desc desc{};
     void* self = nullptr;
 };
 
 /// A plugin's registered state types, in registration order. Settled by
 /// Plugins::Builder::build() and read by every PluginFold slice.
-using StateRegistry = std::vector<RegisteredState>;
+using StateRegistry = dstd::Vector<RegisteredState>;
 
 /// Copy `desc` into `out` under the ABI's registration rules; returns 0 on
 /// success and non-zero (having logged the reason) otherwise.
 int register_state_into(StateRegistry& out, const dftu_state_desc* desc,
-                        void* self, const std::string& plugin_name);
+                        void* self, const dstd::String& plugin_name);
 
 }  // namespace dftracer::utils::plugins
 

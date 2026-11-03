@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -20,9 +21,7 @@
 #include <cstdint>
 #include <cstring>
 #include <map>
-#include <memory>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -538,7 +537,7 @@ void run_child(const std::string& root, int child, int round,
     if (!created.has_value()) {
         child_fail("create: " + std::string(created.error().message()));
     }
-    std::unique_ptr<Writer> writer = std::move(*created);
+    dstd::UniquePtr<Writer> writer = std::move(*created);
 
     auto raw = writer->add_namespace(put_spec("proc.raw"));
     if (!raw.has_value()) child_fail("add proc.raw");

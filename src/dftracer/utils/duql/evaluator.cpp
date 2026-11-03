@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/calendar.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -27,7 +28,6 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <string>
 #include <variant>
 
 namespace dftracer::utils::duql {
@@ -534,7 +534,7 @@ dstd::Optional<V> parse_number(dstd::StringView s) {
     if constexpr (std::is_same_v<V, double>)
         res = dstd::from_chars_double(s.data(), s.data() + s.size(), out);
     else
-        res = std::from_chars(s.data(), s.data() + s.size(), out);
+        res = dstd::from_chars(s.data(), s.data() + s.size(), out);
     if (res.ec != std::errc{} || res.ptr != s.data() + s.size())
         return dstd::nullopt;
     return out;
@@ -778,7 +778,7 @@ Value members(const Value& v, bool keys) {
     if (!el || el->get_object().get(obj) != simdjson::SUCCESS) return VNull{};
     dstd::Vector<dstd::Pair<dstd::StringView, simdjson::dom::element>> fields;
     for (auto f : obj) fields.emplace_back(f.key, f.value);
-    std::stable_sort(
+    dstd::stable_sort(
         fields.begin(), fields.end(),
         [](const auto& a, const auto& b) { return a.first < b.first; });
     dstd::String out = "[";
@@ -845,10 +845,10 @@ Value sort_array(const Value& v) {
     }
     for (std::size_t i = 1; i < present.size(); ++i)
         if (!cmp(present[i].first, present[0].first)) return VNull{};
-    std::stable_sort(present.begin(), present.end(),
-                     [](const auto& a, const auto& b) {
-                         return *cmp(a.first, b.first) < 0;
-                     });
+    dstd::stable_sort(present.begin(), present.end(),
+                      [](const auto& a, const auto& b) {
+                          return *cmp(a.first, b.first) < 0;
+                      });
     dstd::String out = "[";
     for (const auto& p : present) append_element(out, p.second);
     for (std::size_t i = 0; i < arr.size() - present.size(); ++i)

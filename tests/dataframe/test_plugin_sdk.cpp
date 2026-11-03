@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin/map.h>
 #include <dftracer/utils/plugins/plugin/node.h>
 #include <dftracer/utils/plugins/plugin/source.h>
@@ -23,10 +24,9 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
 
+using namespace dftracer::utils;
 namespace df = dftracer::utils::dataframe;
 namespace pl = dftracer::utils::plugins;
 
@@ -36,7 +36,7 @@ df::DataFrame run(dftracer::utils::coro::CoroTask<df::DataFrame> t) {
     return dftracer::utils::default_runtime().submit(std::move(t)).get();
 }
 
-std::vector<std::int64_t> ints(const df::DataFrame& f, const char* name) {
+dstd::Vector<std::int64_t> ints(const df::DataFrame& f, const char* name) {
     const df::Series& c = f.column(name);
     const std::int64_t* p = c.data<std::int64_t>();
     return {p, p + c.length()};
@@ -60,7 +60,7 @@ class RangeSource {
     RangeSource(const RangeSource&) = delete;
     ~RangeSource() { --c_->sources_alive; }
 
-    std::vector<std::string> names() const { return {"id", "val"}; }
+    dstd::Vector<dstd::String> names() const { return {"id", "val"}; }
 
     void schema(pl::SchemaBuilder& b) const {
         b.add("id", DFTU_TYPE_INT64, false);
@@ -87,14 +87,14 @@ class RangeSource {
     };
 
     pl::ScanResult<Cursor> scan(const pl::ScanView& req) const {
-        std::vector<std::int64_t> ids, vals;
+        dstd::Vector<std::int64_t> ids, vals;
         for (std::int64_t i = lo_; i < hi_; ++i) {
             ids.push_back(i);
             vals.push_back(i * 10);
         }
         const auto n = static_cast<std::int64_t>(ids.size());
-        std::vector<const char*> names;
-        std::vector<dftu_series*> cols;
+        dstd::Vector<const char*> names;
+        dstd::Vector<dftu_series*> cols;
         auto want = [&](const char* name) {
             if (req.projection.empty()) return true;
             for (dftracer::utils::dstd::StringView p : req.projection)
@@ -113,7 +113,7 @@ class RangeSource {
         }
         pl::OwnedFrame f(dftu_dataframe_new(
             names.data(), cols.data(), static_cast<std::int32_t>(cols.size())));
-        return {std::make_unique<Cursor>(std::move(f), fail_, c_), {}};
+        return {dstd::make_unique<Cursor>(std::move(f), fail_, c_), {}};
     }
 
     // `id > k` (and `id >= k`) narrows the range exactly.
@@ -132,7 +132,7 @@ class RangeSource {
         if (lo <= lo_) return dftracer::utils::dstd::nullopt;
         ++c_->filters_absorbed;
         return pl::Applied<RangeSource>{
-            std::make_unique<RangeSource>(c_, lo, hi_, fail_),
+            dstd::make_unique<RangeSource>(c_, lo, hi_, fail_),
             pl::Apply::Exact};
     }
 
@@ -142,7 +142,8 @@ class RangeSource {
         const std::int64_t hi = std::min(hi_, lo + n);
         if (lo == lo_ && hi == hi_) return dftracer::utils::dstd::nullopt;
         return pl::Applied<RangeSource>{
-            std::make_unique<RangeSource>(c_, lo, hi, fail_), pl::Apply::Exact};
+            dstd::make_unique<RangeSource>(c_, lo, hi, fail_),
+            pl::Apply::Exact};
     }
 
     // Records the offer of an inner join on id, then leaves it to the engine.
@@ -171,7 +172,7 @@ struct Root {
     Root(dftracer::utils::dstd::SharedPtr<Counters> c, std::int64_t lo,
          std::int64_t hi, bool fail = false)
         : self(pl::make_source_self(
-              std::make_unique<RangeSource>(std::move(c), lo, hi, fail))),
+              dstd::make_unique<RangeSource>(std::move(c), lo, hi, fail))),
           source(df::make_provider_source(*vt, self)) {}
     ~Root() {
         source.reset();
@@ -189,18 +190,18 @@ TEST_SUITE("plugin SDK source") {
     }
 
     TEST_CASE("a plain scan reads every row with typed columns") {
-        auto c = std::make_shared<Counters>();
+        auto c = dstd::make_shared<Counters>();
         Root r(c, 0, 5);
         df::LazyFrame lf = df::LazyFrame::scan(r.source);
         df::Schema s = r.source->schema();
         REQUIRE(s.fields.size() == 2);
         CHECK(s.fields[0].type.id == df::TypeId::Int64);
         df::DataFrame f = run(lf.collect());
-        CHECK(ints(f, "id") == std::vector<std::int64_t>{0, 1, 2, 3, 4});
+        CHECK(ints(f, "id") == dstd::Vector<std::int64_t>{0, 1, 2, 3, 4});
     }
 
     TEST_CASE("an absorbed filter and limit reach the class") {
-        auto c = std::make_shared<Counters>();
+        auto c = dstd::make_shared<Counters>();
         {
             Root r(c, 0, 10);
             df::LazyFrame lf = df::LazyFrame::scan(r.source)
@@ -208,37 +209,37 @@ TEST_SUITE("plugin SDK source") {
                                    .head(3);
             CHECK(lf.explain() == "scan [id, val]");
             df::DataFrame f = run(lf.collect());
-            CHECK(ints(f, "id") == std::vector<std::int64_t>{5, 6, 7});
-            CHECK(ints(f, "val") == std::vector<std::int64_t>{50, 60, 70});
+            CHECK(ints(f, "id") == dstd::Vector<std::int64_t>{5, 6, 7});
+            CHECK(ints(f, "val") == dstd::Vector<std::int64_t>{50, 60, 70});
             CHECK(c->filters_absorbed >= 1);
         }
         CHECK(c->sources_alive == 0);
     }
 
     TEST_CASE("an untranslatable filter stays with the engine") {
-        auto c = std::make_shared<Counters>();
+        auto c = dstd::make_shared<Counters>();
         Root r(c, 0, 10);
         df::LazyFrame lf =
             df::LazyFrame::scan(r.source).filter(df::col(1) > std::int64_t{60});
-        CHECK(lf.explain().find("filter") != std::string::npos);
+        CHECK(lf.explain().find("filter") != dstd::String::npos);
         CHECK(ints(run(lf.collect()), "id") ==
-              std::vector<std::int64_t>{7, 8, 9});
+              dstd::Vector<std::int64_t>{7, 8, 9});
         CHECK(c->filters_absorbed == 0);
     }
 
     TEST_CASE("a join offers the other side as the class type") {
-        auto c = std::make_shared<Counters>();
+        auto c = dstd::make_shared<Counters>();
         Root left(c, 0, 5);
         Root right(c, 3, 8);
         df::LazyFrame lf = df::LazyFrame::scan(left.source)
                                .join(df::LazyFrame::scan(right.source), {"id"});
         df::DataFrame f = run(lf.collect());
         CHECK(c->joins_absorbed >= 1);
-        CHECK(ints(f, "id") == std::vector<std::int64_t>{3, 4});
+        CHECK(ints(f, "id") == dstd::Vector<std::int64_t>{3, 4});
     }
 
     TEST_CASE("a cursor exception surfaces as a scan error") {
-        auto c = std::make_shared<Counters>();
+        auto c = dstd::make_shared<Counters>();
         Root r(c, 0, 3, true);
         CHECK_THROWS_WITH(run(df::LazyFrame::scan(r.source).collect()),
                           doctest::Contains("range cursor broke"));
@@ -274,7 +275,7 @@ class DoubleVal {
             const std::int64_t n = dftu_series_length(val);
             const auto* v =
                 static_cast<const std::int64_t*>(dftu_series_data(val));
-            std::vector<std::int64_t> doubled(v, v + n);
+            dstd::Vector<std::int64_t> doubled(v, v + n);
             for (std::int64_t& x : doubled) x *= 2;
             const char* names[] = {"id", "val"};
             dftu_series* cols[] = {
@@ -288,12 +289,12 @@ class DoubleVal {
         dftracer::utils::dstd::Optional<pl::InputCursor> in_;
     };
 
-    std::unique_ptr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
+    dstd::UniquePtr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
                                  std::uint64_t) const {
         if (mode_ == OpenMode::Throw) throw std::runtime_error("no open");
         if (mode_ == OpenMode::DropInput)
-            return std::make_unique<Cursor>(dftracer::utils::dstd::nullopt);
-        return std::make_unique<Cursor>(std::move(in));
+            return dstd::make_unique<Cursor>(dftracer::utils::dstd::nullopt);
+        return dstd::make_unique<Cursor>(std::move(in));
     }
 
    private:
@@ -301,11 +302,11 @@ class DoubleVal {
 };
 
 struct RegisteredNode {
-    std::string name;
-    RegisteredNode(std::string n, OpenMode mode) : name(std::move(n)) {
+    dstd::String name;
+    RegisteredNode(dstd::String n, OpenMode mode) : name(std::move(n)) {
         REQUIRE(dftu_node_register(
                     name.c_str(), pl::node_vtable<DoubleVal>(),
-                    pl::make_node_self(std::make_unique<DoubleVal>(mode))) ==
+                    pl::make_node_self(dstd::make_unique<DoubleVal>(mode))) ==
                 0);
     }
     ~RegisteredNode() { dftu_node_unregister(name.c_str()); }
@@ -315,22 +316,22 @@ struct RegisteredNode {
 
 TEST_SUITE("plugin SDK node") {
     TEST_CASE("a node class runs as a plan step") {
-        auto c = std::make_shared<Counters>();
+        auto c = dstd::make_shared<Counters>();
         RegisteredNode node("sdk.double", OpenMode::Normal);
         {
             Root r(c, 0, 4);
             df::LazyFrame lf =
                 df::LazyFrame::scan(r.source).op("sdk.double", df::OpArgs{});
-            CHECK(lf.explain().find("op sdk.double") != std::string::npos);
+            CHECK(lf.explain().find("op sdk.double") != dstd::String::npos);
             df::DataFrame f = run(lf.collect());
-            CHECK(ints(f, "id") == std::vector<std::int64_t>{0, 1, 2, 3});
-            CHECK(ints(f, "val") == std::vector<std::int64_t>{0, 20, 40, 60});
+            CHECK(ints(f, "id") == dstd::Vector<std::int64_t>{0, 1, 2, 3});
+            CHECK(ints(f, "val") == dstd::Vector<std::int64_t>{0, 20, 40, 60});
         }
         CHECK(c->cursors_destroyed == 1);
     }
 
     TEST_CASE("a throwing open leaves the upstream with the host") {
-        auto c = std::make_shared<Counters>();
+        auto c = dstd::make_shared<Counters>();
         RegisteredNode node("sdk.double_throw", OpenMode::Throw);
         {
             Root r(c, 0, 4);
@@ -343,7 +344,7 @@ TEST_SUITE("plugin SDK node") {
     }
 
     TEST_CASE("an input dropped inside open is still destroyed once") {
-        auto c = std::make_shared<Counters>();
+        auto c = dstd::make_shared<Counters>();
         RegisteredNode node("sdk.double_drop", OpenMode::DropInput);
         {
             Root r(c, 0, 4);
@@ -358,7 +359,7 @@ TEST_SUITE("plugin SDK node") {
 
 TEST_SUITE("plugin sdk batch strings") {
     TEST_CASE("Event reads dictionary and selection string columns") {
-        const std::vector<dftracer::utils::dstd::StringView> cats{
+        const dstd::Vector<dftracer::utils::dstd::StringView> cats{
             "POSIX", "", "STDIO", "POSIX"};
         const std::uint8_t cat_valid = 0b1101;
         df::Series cat = df::Series::strings(
@@ -368,7 +369,7 @@ TEST_SUITE("plugin sdk batch strings") {
                              .dictionary_encode();
         REQUIRE(cat.encoding() == df::Encoding::Dictionary);
 
-        const std::vector<dftracer::utils::dstd::StringView> names{
+        const dstd::Vector<dftracer::utils::dstd::StringView> names{
             "a", "open", "b", "read", "c", "write", "d", "close"};
         const std::uint8_t keep_odd = 0b10101010;
         const df::Series mask =
@@ -398,9 +399,9 @@ TEST_SUITE("plugin sdk batch strings") {
         CHECK(batch[3].name() == "close");
     }
     TEST_CASE("Event reads a view string column inline and out of line") {
-        const std::string long_row = "a view row longer than twelve bytes";
+        const dstd::String long_row = "a view row longer than twelve bytes";
         std::uint8_t views[3 * 16] = {};
-        const auto put = [&](int row, const std::string& str,
+        const auto put = [&](int row, const dstd::String& str,
                              std::int32_t offset) {
             std::uint8_t* v = views + row * 16;
             const auto size = static_cast<std::int32_t>(str.size());

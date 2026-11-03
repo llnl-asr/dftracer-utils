@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/data_file.h>
@@ -23,7 +25,6 @@
 #include <fstream>
 #include <iterator>
 #include <map>
-#include <memory>
 #include <string>
 #include <thread>
 #include <utility>
@@ -170,7 +171,7 @@ Runtime& store_runtime() {
     return runtime;
 }
 
-std::unique_ptr<Writer> make_writer(const dftu_utils_test::ScopedTestDir& dir,
+dstd::UniquePtr<Writer> make_writer(const dftu_utils_test::ScopedTestDir& dir,
                                     const WriterOptions& options) {
     auto created =
         Writer::create(dir.str(), *store_runtime().executor(), options);

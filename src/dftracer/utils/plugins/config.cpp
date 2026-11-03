@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/config.h>
 #include <simdjson.h>
 
 #include <cerrno>
-#include <charconv>
 #include <cstdlib>
 #include <stdexcept>
-#include <string>
 
 namespace dftracer::utils::plugins {
 
@@ -18,7 +19,7 @@ ConfigTree::Node ConfigTree::build_node(const simdjson::dom::element& el) {
         case simdjson::dom::element_type::OBJECT: {
             n.kind = DFTU_VAL_OBJECT;
             for (auto kv : simdjson::dom::object(el))
-                n.members.emplace_back(std::string(kv.key),
+                n.members.emplace_back(dstd::String(kv.key),
                                        build_node(kv.value));
             break;
         }
@@ -30,7 +31,7 @@ ConfigTree::Node ConfigTree::build_node(const simdjson::dom::element& el) {
         }
         case simdjson::dom::element_type::STRING:
             n.kind = DFTU_VAL_STR;
-            n.str = std::string(dstd::StringView(el.get_string()));
+            n.str = dstd::String(dstd::StringView(el.get_string()));
             break;
         case simdjson::dom::element_type::INT64:
             n.kind = DFTU_VAL_I64;
@@ -56,33 +57,35 @@ ConfigTree::Node ConfigTree::build_node(const simdjson::dom::element& el) {
     return n;
 }
 
-ConfigTree ConfigTree::from_json_file(const std::string& path) {
+ConfigTree ConfigTree::from_json_file(dstd::StringView path) {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
     const auto err = parser.load(path).get(doc);
     if (err) {
-        throw std::runtime_error("failed to parse plugin config '" + path +
-                                 "': " + simdjson::error_message(err));
+        dstd::String msg("failed to parse plugin config '");
+        msg.append(path).append("': ").append(simdjson::error_message(err));
+        throw std::runtime_error(msg.c_str());
     }
     if (doc.type() != simdjson::dom::element_type::OBJECT) {
-        throw std::runtime_error("plugin config '" + path +
-                                 "' root must be a JSON object");
+        dstd::String msg("plugin config '");
+        msg.append(path).append("' root must be a JSON object");
+        throw std::runtime_error(msg.c_str());
     }
     ConfigTree tree;
     tree.root_node_ = build_node(doc);
     return tree;
 }
 
-ConfigTree ConfigTree::from_json_string(const std::string& json) {
+ConfigTree ConfigTree::from_json_string(dstd::StringView json) {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
     // The padded copy must outlive `doc`, which borrows its buffer.
     simdjson::padded_string padded(json);
     const auto err = parser.parse(padded).get(doc);
     if (err) {
-        throw std::runtime_error(
-            std::string("failed to parse plugin config: ") +
-            simdjson::error_message(err));
+        dstd::String msg("failed to parse plugin config: ");
+        msg.append(simdjson::error_message(err));
+        throw std::runtime_error(msg.c_str());
     }
     if (doc.type() != simdjson::dom::element_type::OBJECT) {
         throw std::runtime_error("plugin config root must be a JSON object");
@@ -105,7 +108,7 @@ ConfigTree::Node ConfigTree::infer_leaf(dstd::StringView raw) {
         std::int64_t iv = 0;
         const char* first = raw.data();
         const char* last = raw.data() + raw.size();
-        const auto r = std::from_chars(first, last, iv);
+        const auto r = dstd::from_chars(first, last, iv);
         if (r.ec == std::errc() && r.ptr == last) {
             n.kind = DFTU_VAL_I64;
             n.i64 = iv;
@@ -113,7 +116,7 @@ ConfigTree::Node ConfigTree::infer_leaf(dstd::StringView raw) {
         }
     }
     {
-        const std::string s(raw);
+        const dstd::String s(raw);
         errno = 0;
         char* end = nullptr;
         const double dv = std::strtod(s.c_str(), &end);
@@ -135,14 +138,14 @@ ConfigTree::Node ConfigTree::infer_leaf(dstd::StringView raw) {
         return n;
     }
     n.kind = DFTU_VAL_STR;
-    n.str = std::string(raw);
+    n.str = dstd::String(raw);
     return n;
 }
 
 void ConfigTree::set(dstd::StringView dotted_key, dstd::StringView raw_value) {
     dirty_ = true;
 
-    std::vector<dstd::StringView> segs;
+    dstd::Vector<dstd::StringView> segs;
     std::size_t start = 0;
     while (start <= dotted_key.size()) {
         const auto dot = dotted_key.find('.', start);
@@ -163,7 +166,7 @@ void ConfigTree::set(dstd::StringView dotted_key, dstd::StringView raw_value) {
         }
         Node* child = find_member(*cur, segs[i]);
         if (!child) {
-            cur->members.emplace_back(std::string(segs[i]), Node{});
+            cur->members.emplace_back(dstd::String(segs[i]), Node{});
             child = &cur->members.back().second;
         }
         if (child->kind != DFTU_VAL_OBJECT) {
@@ -181,7 +184,7 @@ void ConfigTree::set(dstd::StringView dotted_key, dstd::StringView raw_value) {
     if (Node* leaf = find_member(*cur, segs.back())) {
         *leaf = std::move(value);
     } else {
-        cur->members.emplace_back(std::string(segs.back()), std::move(value));
+        cur->members.emplace_back(dstd::String(segs.back()), std::move(value));
     }
 }
 
@@ -221,14 +224,14 @@ void ConfigTree::materialize_into(const Node& node, dftu_value* out) const {
             break;
         case DFTU_VAL_STR: {
             strings_.push_back(node.str);
-            const std::string& s = strings_.back();
+            const dstd::String& s = strings_.back();
             out->count = static_cast<std::uint32_t>(s.size());
             out->as.str = s.c_str();
             break;
         }
         case DFTU_VAL_ARRAY: {
             value_arrays_.emplace_back();
-            std::vector<dftu_value>& arr = value_arrays_.back();
+            dstd::Vector<dftu_value>& arr = value_arrays_.back();
             arr.resize(node.items.size());
             out->count = static_cast<std::uint32_t>(node.items.size());
             out->as.items = arr.data();
@@ -239,16 +242,16 @@ void ConfigTree::materialize_into(const Node& node, dftu_value* out) const {
         }
         case DFTU_VAL_OBJECT: {
             value_arrays_.emplace_back();
-            std::vector<dftu_value>& vals = value_arrays_.back();
+            dstd::Vector<dftu_value>& vals = value_arrays_.back();
             vals.resize(node.members.size());
             member_arrays_.emplace_back();
-            std::vector<dftu_member>& mem = member_arrays_.back();
+            dstd::Vector<dftu_member>& mem = member_arrays_.back();
             mem.resize(node.members.size());
             out->count = static_cast<std::uint32_t>(node.members.size());
             out->as.members = mem.data();
             for (std::size_t i = 0; i < node.members.size(); ++i) {
                 strings_.push_back(node.members[i].first);
-                const std::string& k = strings_.back();
+                const dstd::String& k = strings_.back();
                 mem[i].key = k.c_str();
                 mem[i].key_len = static_cast<std::uint32_t>(k.size());
                 mem[i].value = &vals[i];
@@ -263,7 +266,7 @@ void ConfigTree::materialize() const {
     strings_.clear();
     value_arrays_.clear();
     member_arrays_.clear();
-    root_ = std::make_unique<dftu_value>();
+    root_ = dstd::make_unique<dftu_value>();
     materialize_into(root_node_, root_.get());
     dirty_ = false;
 }

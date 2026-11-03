@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
@@ -19,9 +20,7 @@
 
 #include <cstdint>
 #include <memory>
-#include <span>
 #include <string>
-#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -130,8 +129,8 @@ TEST_SUITE("PluginResults") {
 
         auto it = named.results().find("counts");
         REQUIRE(it != named.results().end());
-        REQUIRE(std::holds_alternative<std::vector<std::byte>>(it->second));
-        const auto& bytes = std::get<std::vector<std::byte>>(it->second);
+        REQUIRE(std::holds_alternative<dstd::Vector<std::byte>>(it->second));
+        const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
         std::string got(reinterpret_cast<const char*>(bytes.data()),
                         bytes.size());
         CHECK(got == "count=" + std::to_string(total));

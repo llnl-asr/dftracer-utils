@@ -4,7 +4,13 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/varint.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/store/extent_size.h>
 #include <dftracer/utils/store/writer.h>
@@ -18,9 +24,7 @@
 #include <cstring>
 #include <limits>
 #include <random>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::store::engine {
 namespace {
@@ -117,8 +121,8 @@ std::uint64_t random_bits() {
     return rng() ^ (rng() << 32U);
 }
 
-std::string path_of(dstd::StringView dir, dstd::StringView name) {
-    std::string out(dir.data(), dir.size());
+dstd::String path_of(dstd::StringView dir, dstd::StringView name) {
+    dstd::String out(dir.data(), dir.size());
     if (!out.empty() && out.back() != '/') out.push_back('/');
     out.append(name.data(), name.size());
     return out;
@@ -207,7 +211,7 @@ dstd::Optional<dstd::Error> Writer::latched() const {
     return latched_error_;
 }
 
-dstd::Expected<std::unique_ptr<Writer>, dstd::Error> Writer::create(
+dstd::Expected<dstd::UniquePtr<Writer>, dstd::Error> Writer::create(
     dstd::StringView dir, TaskExecutor& executor,
     const WriterOptions& options) {
     if (!executor.has_io_backend()) {
@@ -273,10 +277,10 @@ dstd::Expected<std::unique_ptr<Writer>, dstd::Error> Writer::create(
         DataFileWriter::create(path, extent_size, options.host, options.label);
     if (!file) return dstd::Unexpected<dstd::Error>(file.error());
 
-    std::unique_ptr<Writer> writer(
-        new Writer(std::move(name), std::move(path), extent_size,
-                   std::move(generations), std::move(*file),
-                   std::move(extent_pool), extent_quota, executor, options));
+    auto writer = dstd::make_unique<Writer>(
+        std::move(name), std::move(path), extent_size, std::move(generations),
+        std::move(*file), std::move(extent_pool), extent_quota, executor,
+        options);
     writer->committer_.start();
     return writer;
 }

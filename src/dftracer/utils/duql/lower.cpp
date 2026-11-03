@@ -29,7 +29,6 @@
 #include <functional>
 #include <limits>
 #include <optional>
-#include <string>
 #include <utility>
 
 namespace dftracer::utils::duql {
@@ -983,7 +982,7 @@ class Lowering {
         }
         std::int64_t n = 0;
         const auto r =
-            std::from_chars(text.data(), text.data() + text.size(), n);
+            dstd::from_chars(text.data(), text.data() + text.size(), n);
         if (r.ec != std::errc{} || n < 0)
             fail(span, "a row count must be a non-negative integer");
         return n;
@@ -1358,8 +1357,8 @@ class Lowering {
         if (n.seed.starts_with('$'))
             out.seed = static_cast<decltype(out.seed)>(count(n.seed, span));
         else if (!n.seed.empty() &&
-                 std::from_chars(n.seed.data(), n.seed.data() + n.seed.size(),
-                                 out.seed)
+                 dstd::from_chars(n.seed.data(), n.seed.data() + n.seed.size(),
+                                  out.seed)
                          .ec != std::errc{})
             fail(span, "Invalid seed");
         return out;

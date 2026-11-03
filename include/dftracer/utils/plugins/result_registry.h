@@ -4,8 +4,11 @@
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/ops.h>
 #include <dftracer/utils/plugins/owned_arrow.h>
 
@@ -14,11 +17,6 @@
 #include <cstring>
 #include <initializer_list>
 #include <mutex>
-#include <span>
-#include <string>
-#include <unordered_map>
-#include <variant>
-#include <vector>
 
 // Host-side named result channel backing dft.ext.result. Policy-free: it moves
 // opaque bytes or a user-schema Arrow array and never interprets either.
@@ -197,13 +195,13 @@ struct OwnedLazyFrame {
     }
 
     OwnedLazyFrame select(std::initializer_list<const char*> names) const {
-        std::vector<const char*> v(names);
+        dstd::Vector<const char*> v(names);
         return apply("dftu.lazy.select",
                      dataframe::OpArgs().strlist(
                          1, v.data(), static_cast<std::int32_t>(v.size())));
     }
     OwnedLazyFrame rename(std::initializer_list<const char*> names) const {
-        std::vector<const char*> v(names);
+        dstd::Vector<const char*> v(names);
         return apply("dftu.lazy.rename",
                      dataframe::OpArgs().strlist(
                          1, v.data(), static_cast<std::int32_t>(v.size())));
@@ -211,7 +209,7 @@ struct OwnedLazyFrame {
     OwnedLazyFrame unpivot(
         std::initializer_list<const char*> id_vars,
         std::initializer_list<const char*> value_vars) const {
-        std::vector<const char*> ids(id_vars), vals(value_vars);
+        dstd::Vector<const char*> ids(id_vars), vals(value_vars);
         return apply(
             "dftu.lazy.unpivot",
             dataframe::OpArgs()
@@ -221,7 +219,7 @@ struct OwnedLazyFrame {
     }
     OwnedLazyFrame melt(std::initializer_list<const char*> id_vars,
                         std::initializer_list<const char*> value_vars) const {
-        std::vector<const char*> ids(id_vars), vals(value_vars);
+        dstd::Vector<const char*> ids(id_vars), vals(value_vars);
         return apply(
             "dftu.lazy.melt",
             dataframe::OpArgs()
@@ -231,8 +229,8 @@ struct OwnedLazyFrame {
     }
     OwnedLazyFrame group_by(std::initializer_list<const char*> keys,
                             std::initializer_list<dftu_group_agg> aggs) const {
-        std::vector<const char*> k(keys);
-        std::vector<dftu_group_agg> a(aggs);
+        dstd::Vector<const char*> k(keys);
+        dstd::Vector<dftu_group_agg> a(aggs);
         return apply(
             "dftu.lazy.group_by",
             dataframe::OpArgs()
@@ -241,7 +239,7 @@ struct OwnedLazyFrame {
     }
     OwnedLazyFrame sort_by_multi(std::initializer_list<const char*> by,
                                  bool descending) const {
-        std::vector<const char*> v(by);
+        dstd::Vector<const char*> v(by);
         return apply(
             "dftu.lazy.sort_by_multi",
             dataframe::OpArgs()
@@ -282,8 +280,8 @@ struct OwnedLazyFrame {
                         const char* suffix = nullptr,
                         bool nulls_equal = false) const {
         if (left_on.size() != right_on.size()) return OwnedLazyFrame{};
-        std::vector<const char*> l(left_on);
-        std::vector<const char*> r(right_on);
+        dstd::Vector<const char*> l(left_on);
+        dstd::Vector<const char*> r(right_on);
         const dftu_lazyframe* in[2] = {handle, other.handle};
         return apply(
             "dftu.lazy.join", in, 2,
@@ -348,7 +346,7 @@ struct OwnedLazyFrame {
     void* host_ = nullptr;
 };
 
-using NamedResult = dstd::Variant<std::vector<std::byte>, OwnedArrow,
+using NamedResult = dstd::Variant<dstd::Vector<std::byte>, OwnedArrow,
                                   OwnedDataFrame, OwnedLazyFrame>;
 
 class NamedResultRegistry {
@@ -366,7 +364,7 @@ class NamedResultRegistry {
 
     void emit_blob(const char* name, const void* data, std::uint64_t len) {
         if (!name) return;
-        std::vector<std::byte> bytes(static_cast<std::size_t>(len));
+        dstd::Vector<std::byte> bytes(static_cast<std::size_t>(len));
         if (len && data)
             std::memcpy(bytes.data(), data, static_cast<std::size_t>(len));
         std::lock_guard<std::mutex> lock(mutex_);
@@ -409,11 +407,11 @@ class NamedResultRegistry {
     }
 
     /// Drained after the scan completes, so no lock is needed by the reader.
-    std::unordered_map<std::string, NamedResult>& results() { return results_; }
+    dstd::HashMap<dstd::String, NamedResult>& results() { return results_; }
 
    private:
     std::mutex mutex_;
-    std::unordered_map<std::string, NamedResult> results_;
+    dstd::HashMap<dstd::String, NamedResult> results_;
 };
 
 }  // namespace dftracer::utils::plugins

@@ -2,7 +2,10 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/fold_adapter/state.h>
@@ -11,12 +14,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <fstream>
 #include <iterator>
-#include <memory>
-#include <string>
 #include <utility>
-#include <vector>
 
 // Tier-2 mergeable state: a plugin registers a dftu_state_desc from its
 // factory and the host drives it exactly as it drives a dftu_agg accumulator -
@@ -51,7 +50,7 @@ void SpillDir::charge(std::uint64_t bytes) noexcept {
 }
 
 const dstd::Path& StateAccum::dir_path() {
-    if (!dir_) dir_ = std::make_shared<SpillDir>();
+    if (!dir_) dir_ = dstd::make_shared<SpillDir>();
     return dir_->path();
 }
 
@@ -111,12 +110,10 @@ void StateAccum::maybe_spill() {
     bool written = false;
     if (!dir.empty()) {
         const dstd::Path path =
-            dir.view() / ("run_" + std::to_string(runs_.size()) + ".bin");
-        std::ofstream os(path.c_str(), std::ios::binary | std::ios::trunc);
-        os.write(static_cast<const char*>(out.data),
-                 static_cast<std::streamsize>(out.len));
-        os.close();
-        if (os) {
+            dir.view() / ("run_" + dstd::to_string(runs_.size()) + ".bin");
+        const dstd::StringView blob(static_cast<const char*>(out.data),
+                                    static_cast<std::size_t>(out.len));
+        if (dstd::fs::write_file(path, blob)) {
             dir_->charge(out.len);
             runs_.push_back(path);
             written = true;
@@ -199,7 +196,7 @@ bool StateAccum::finalize(::dftu_result_value* out) {
 }
 
 void PluginFold::states_update(const ::dftu_dataframe* df) {
-    for (std::unique_ptr<StateAccum>& s : state_accums_) s->update(df);
+    for (dstd::UniquePtr<StateAccum>& s : state_accums_) s->update(df);
 }
 
 void PluginFold::states_merge(PluginFold& other) {
@@ -210,7 +207,7 @@ void PluginFold::states_merge(PluginFold& other) {
 }
 
 void PluginFold::states_finalize() {
-    for (std::unique_ptr<StateAccum>& s : state_accums_) {
+    for (dstd::UniquePtr<StateAccum>& s : state_accums_) {
         ::dftu_result_value v{};
         if (s->finalize(&v)) result_emit(s->name().c_str(), &v);
     }
@@ -218,14 +215,14 @@ void PluginFold::states_finalize() {
 
 std::size_t PluginFold::state_spill_runs(const char* name) const {
     if (!name) return 0;
-    for (const std::unique_ptr<StateAccum>& s : state_accums_)
+    for (const dstd::UniquePtr<StateAccum>& s : state_accums_)
         if (s->name() == name) return s->runs();
     return 0;
 }
 
 bool PluginFold::state_spill_refused(const char* name) const {
     if (!name) return false;
-    for (const std::unique_ptr<StateAccum>& s : state_accums_)
+    for (const dstd::UniquePtr<StateAccum>& s : state_accums_)
         if (s->name() == name) return s->spill_refused();
     return false;
 }

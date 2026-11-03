@@ -3,24 +3,24 @@
 #define DFTRACER_UTILS_DUQL_OVERLAP_H
 
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
 /// Each row's matches as CSR lists: row `i` matches the side rows
 /// `rows[offsets[i]..offsets[i + 1])`, in ascending side row order.
 struct OverlapMatches {
-    std::vector<std::int64_t> offsets;
-    std::vector<std::int64_t> rows;
+    dstd::Vector<std::int64_t> offsets;
+    dstd::Vector<std::int64_t> rows;
 };
 
 /// One frame's part of an overlap match: FLAT key, start and duration
 /// columns, of equal length. `scale` multiplies the duration into the unit of
 /// the start.
 struct OverlapColumns {
-    std::vector<dataframe::Series> keys;
+    dstd::Vector<dataframe::Series> keys;
     dataframe::Series start;
     dataframe::Series duration;
     double scale = 1;

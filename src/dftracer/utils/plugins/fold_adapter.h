@@ -4,8 +4,13 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/result_registry.h>
@@ -15,11 +20,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
-#include <memory>
-#include <optional>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -31,8 +32,9 @@ namespace dftracer::utils::plugins {
 // Host-owned parallel writer handed to the plugin as an opaque dftu_writer*;
 // num_workers/gzip are captured at writer_create for a later writer_open.
 struct PluginWriter {
+    // keep std: fileio make_sharded_writer returns std::unique_ptr
     std::unique_ptr<utilities::fileio::parallel::ParallelWriter> writer;
-    std::string path;
+    dstd::String path;
     std::size_t num_workers = 1;
     bool gzip = false;
 };
@@ -40,8 +42,8 @@ struct PluginWriter {
 // Host-owned trace writer handed to the plugin as an opaque dftu_trace_writer*.
 // trace_close compresses `buffer` into gzip members as a re-indexable .pfw.gz.
 struct PluginTraceWriter {
-    std::string path;
-    std::string buffer;
+    dstd::String path;
+    dstd::String buffer;
     std::uint64_t next_id = 0;
 };
 
@@ -58,7 +60,7 @@ struct ComposeOp {
     dftu_type out_ty = DFTU_T_VOID;
     std::uint32_t in_size = 0;
     std::uint32_t out_size = 0;
-    std::vector<ComposeOp*> children;
+    dstd::Vector<ComposeOp*> children;
 
     ComposeOp() = default;
     ComposeOp(const ComposeOp&) = delete;
@@ -82,12 +84,12 @@ class StateAccum;
 // aggregate by name. merge and finalize are serialized, so no locking is
 // needed. The registry borrows; the producing fold owns each AggAccum.
 struct SharedResultRegistry {
-    std::unordered_map<std::uint64_t, AggAccum*> aggs;
+    dstd::HashMap<std::uint64_t, AggAccum*> aggs;
     /// Which plugin published each key, so a second publisher of the same name
     /// is refused instead of silently replacing the first. A name declared in
     /// `provides` is already rejected at build(); this catches the accumulator
     /// a plugin creates without declaring it.
-    std::unordered_map<std::uint64_t, std::string> owners;
+    dstd::HashMap<std::uint64_t, dstd::String> owners;
 };
 
 // Name-keyed registry of stable-address elements. Deque-backed so an element
@@ -136,7 +138,7 @@ class StableRegistry {
     }
 
    private:
-    std::deque<T> items_;
+    dstd::Deque<T> items_;
     IndexMap index_;
 };
 
@@ -159,7 +161,7 @@ class PluginFold : public trace::views::detail::Fold {
                dftracer::utils::dstd::StringIntern& intern,
                SharedResultRegistry* results = nullptr,
                NamedResultRegistry* named_results = nullptr,
-               std::string plugin_name = {}, std::uint64_t memory_budget = 0,
+               dstd::String plugin_name = {}, std::uint64_t memory_budget = 0,
                const StateRegistry* states = nullptr);
     ~PluginFold() override;
 
@@ -172,14 +174,16 @@ class PluginFold : public trace::views::detail::Fold {
     bool needs_args() const override { return true; }
     bool reads_every_field() const override { return true; }
 
+    // keep std: trace::views::detail::Fold::slice returns std::unique_ptr
     std::unique_ptr<Fold> slice() const override {
+        // keep std: Fold::slice returns std::unique_ptr
         return std::make_unique<PluginFold>(plugin_, *intern_, results_,
                                             named_results_, plugin_name_,
                                             memory_budget_, states_);
     }
 
     /// Name this plugin logs under (its load-path stem); empty if unknown.
-    const std::string& plugin_name() const { return plugin_name_; }
+    const dstd::String& plugin_name() const { return plugin_name_; }
 
     void step(const FoldBatch& batch) override;
     void seal_unit(const ScanUnit&) override {}
@@ -296,7 +300,7 @@ class PluginFold : public trace::views::detail::Fold {
     void states_finalize();
 
     const dftu_plugin* plugin_;
-    std::string plugin_name_;
+    dstd::String plugin_name_;
     dftracer::utils::dstd::StringIntern* intern_;
     void* slice_;
     dftu_plugin_host host_{};
@@ -314,24 +318,25 @@ class PluginFold : public trace::views::detail::Fold {
     // A batch an earlier plugin rewrote, as this plugin sees it.
     dataframe::DataFrame rewritten_batch(
         const dataframe::DataFrame& frame,
+        // keep std: DataFrame::names and build_row_frame speak std::string
         const std::vector<std::string>& projection);
     bool query_on_rewrite_refused_ = false;
 
     // dft.ext.agg accumulators; unique_ptr keeps each handed-out dftu_agg*
     // stable and lets the header forward-declare AggAccum.
-    StableRegistry<std::unique_ptr<AggAccum>> aggs_;
+    StableRegistry<dstd::UniquePtr<AggAccum>> aggs_;
 
     // One live instance per registered state type, parallel to *states_.
     const StateRegistry* states_ = nullptr;
-    std::vector<std::unique_ptr<StateAccum>> state_accums_;
+    dstd::Vector<dstd::UniquePtr<StateAccum>> state_accums_;
 
     // unique_ptr keeps each CoroTask address stable so when_all/then can
     // reference them; cleared once the awaited root completes.
-    std::vector<std::unique_ptr<coro::CoroTask<void>>> task_arena_;
+    dstd::Vector<dstd::UniquePtr<coro::CoroTask<void>>> task_arena_;
     // deque keeps op node addresses stable as combinators reference children.
-    std::deque<ComposeOp> compose_ops_;
-    std::vector<std::unique_ptr<PluginWriter>> writers_;
-    std::vector<std::unique_ptr<PluginTraceWriter>> trace_writers_;
+    dstd::Deque<ComposeOp> compose_ops_;
+    dstd::Vector<dstd::UniquePtr<PluginWriter>> writers_;
+    dstd::Vector<dstd::UniquePtr<PluginTraceWriter>> trace_writers_;
 
     // This plugin's own plan_duql, compiled once from the C string the
     // plugin's dftu_plugin::plan_duql returns. Unset means deliver every
@@ -341,14 +346,16 @@ class PluginFold : public trace::views::detail::Fold {
 
     // dftu_svc_duql::duql_compile/duql_matches: queries a plugin compiles
     // itself, independent of plan_duql above.
-    std::deque<Query> compiled_queries_;
+    dstd::Deque<Query> compiled_queries_;
     ValueMap match_qmap_;
 
+    // keep std: trace::views::EventRows is built from a std::vector
     std::vector<FoldEvent> col_scratch_;  // batch materialization
 
     // The columns dftu_plugin::reads declared, snapshotted once at
     // construction. Empty means the plugin declared none, which build_row_frame
     // reads as "every column".
+    // keep std: DataFrame::names and build_row_frame speak std::string
     std::vector<std::string> projection_;
 };
 

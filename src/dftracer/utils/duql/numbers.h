@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/variant.h>
 
 #include <charconv>
@@ -121,10 +122,10 @@ inline dstd::Optional<Number> parse_number(dstd::StringView text) {
     const char* first = text.data();
     const char* last = first + text.size();
     if (std::int64_t i = 0;
-        std::from_chars(first, last, i).ptr == last && !text.empty())
+        dstd::from_chars(first, last, i).ptr == last && !text.empty())
         return Number{i};
     if (std::uint64_t u = 0;
-        std::from_chars(first, last, u).ptr == last && !text.empty())
+        dstd::from_chars(first, last, u).ptr == last && !text.empty())
         return Number{u};
     if (text.empty() || !may_start_double(text.front())) return dstd::nullopt;
     // strtod, not from_chars: the double overload is not on older macOS.

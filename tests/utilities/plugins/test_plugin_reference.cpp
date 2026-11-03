@@ -6,6 +6,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -74,7 +75,7 @@ PluginRun run_single(const Plugins& set, const View& view) {
 int32_t reference_ok(PluginRun& run) {
     auto it = run.results.results().find("reference_ok");
     REQUIRE(it != run.results.results().end());
-    const auto& bytes = std::get<std::vector<std::byte>>(it->second);
+    const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
     REQUIRE(bytes.size() == sizeof(std::int32_t));
     std::int32_t ok = 0;
     std::memcpy(&ok, bytes.data(), sizeof(ok));
@@ -87,7 +88,7 @@ int32_t reference_ok(PluginRun& run) {
 std::uint64_t reference_dur_sum(PluginRun& run) {
     auto it = run.results.results().find("reference_plugin.dur_sum");
     REQUIRE(it != run.results.results().end());
-    const auto& bytes = std::get<std::vector<std::byte>>(it->second);
+    const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
     REQUIRE(bytes.size() == sizeof(std::uint64_t));
     std::uint64_t sum = 0;
     std::memcpy(&sum, bytes.data(), sizeof(sum));

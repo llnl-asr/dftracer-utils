@@ -10,10 +10,7 @@
 #include <dftracer/utils/plugins/plugin/source.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string_view>
 #include <utility>
 
 /* A LazyFrame plan node written as a C++ class. node_vtable<N>() adapts N to
@@ -23,7 +20,7 @@
  * N provides:
  *   void output_schema(const SchemaView& in, const OpArgs& args,
  *                      SchemaBuilder& out) const;
- *   std::unique_ptr<C> open(InputCursor in, const OpArgs& args,
+ *   dstd::UniquePtr<C> open(InputCursor in, const OpArgs& args,
  *                           std::uint64_t memory_budget) const;
  * where C is a cursor type as in plugin/source.h (next, and optionally
  * narrow / resident_bytes / reclaim). The cursor owns `in` and pulls it with
@@ -138,7 +135,7 @@ namespace detail {
 
 template <class N>
 struct NodeBox {
-    std::unique_ptr<N> node;
+    dstd::UniquePtr<N> node;
 };
 
 template <class N>
@@ -156,7 +153,7 @@ struct NodeVt {
     static void* open(void* self, void* in_self, const dftu_cursor_vt* in_vt,
                       const dftu_op_arg* args, std::uint64_t memory_budget,
                       void** out_cursor_self, const dftu_cursor_vt** out_vt) {
-        auto own = std::make_shared<InputOwnership>();
+        auto own = dstd::make_shared<InputOwnership>();
         try {
             auto cursor = static_cast<NodeBox<N>*>(self)->node->open(
                 InputCursor(in_self, in_vt, own), OpArgs(args), memory_budget);
@@ -194,7 +191,7 @@ const dftu_node_vt* node_vtable() {
 /// Wrap `node` as the `self` its vtable expects. Ownership passes to whoever
 /// calls the vtable's destroy() on it.
 template <class N>
-void* make_node_self(std::unique_ptr<N> node) {
+void* make_node_self(dstd::UniquePtr<N> node) {
     return new detail::NodeBox<N>{std::move(node)};
 }
 

@@ -28,7 +28,10 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin.h>
 
@@ -37,9 +40,8 @@
 #include <cstring>
 #include <memory>
 #include <optional>
-#include <string>
-#include <vector>
 
+using namespace dftracer::utils;
 namespace {
 
 std::atomic<int> g_rows_source_destroy{0};
@@ -170,7 +172,7 @@ class SdkRange {
     SdkRange(const SdkRange&) = delete;
     ~SdkRange() { --g_sdk_alive; }
 
-    std::vector<std::string> names() const { return {"id", "val"}; }
+    dstd::Vector<dstd::String> names() const { return {"id", "val"}; }
 
     class Cursor {
        public:
@@ -188,12 +190,12 @@ class SdkRange {
 
     dftracer::utils::plugins::ScanResult<Cursor> scan(
         const dftracer::utils::plugins::ScanView&) const {
-        std::vector<int64_t> ids, vals;
+        dstd::Vector<int64_t> ids, vals;
         for (int64_t i = lo_; i < hi_; ++i) {
             ids.push_back(i);
             vals.push_back(i * 10);
         }
-        return {std::make_unique<Cursor>(dftracer::utils::plugins::OwnedFrame(
+        return {dstd::make_unique<Cursor>(dftracer::utils::plugins::OwnedFrame(
                     make_rows_frame(ids.data(), vals.data(),
                                     static_cast<int64_t>(ids.size())))),
                 {}};
@@ -207,7 +209,7 @@ class SdkRange {
             return dftracer::utils::dstd::nullopt;
         ++g_sdk_filters;
         return dftracer::utils::plugins::Applied<SdkRange>{
-            std::make_unique<SdkRange>(cmp->rhs.value.i + 1, hi_)};
+            dstd::make_unique<SdkRange>(cmp->rhs.value.i + 1, hi_)};
     }
 
    private:
@@ -236,7 +238,7 @@ class DoubleVal {
             const int64_t n = ::dftu_series_length(val);
             const auto* v =
                 static_cast<const int64_t*>(::dftu_series_data(val));
-            std::vector<int64_t> doubled(v, v + n);
+            dstd::Vector<int64_t> doubled(v, v + n);
             for (int64_t& x : doubled) x *= 2;
             ::dftu_series* cols[] = {
                 id, ::dftu_series_new_flat(DFTU_TYPE_INT64, doubled.data(), n,
@@ -250,10 +252,10 @@ class DoubleVal {
         dftracer::utils::plugins::InputCursor in_;
     };
 
-    std::unique_ptr<Cursor> open(dftracer::utils::plugins::InputCursor in,
+    dstd::UniquePtr<Cursor> open(dftracer::utils::plugins::InputCursor in,
                                  const dftracer::utils::plugins::OpArgs&,
                                  std::uint64_t) const {
-        return std::make_unique<Cursor>(std::move(in));
+        return dstd::make_unique<Cursor>(std::move(in));
     }
 };
 
@@ -319,9 +321,9 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
 
     dftracer::utils::plugins::plugin(h, nullptr)
         .source<SdkRange>("provider_fixture.sdk",
-                          std::make_unique<SdkRange>(0, 10))
+                          dstd::make_unique<SdkRange>(0, 10))
         .node<DoubleVal>("provider_fixture.double",
-                         std::make_unique<DoubleVal>());
+                         dstd::make_unique<DoubleVal>());
 
     std::memset(&g_plugin, 0, sizeof(g_plugin));
     g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;

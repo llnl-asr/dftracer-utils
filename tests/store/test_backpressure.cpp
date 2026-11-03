@@ -3,7 +3,9 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/data_file.h>
@@ -22,9 +24,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <future>
 #include <map>
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -182,7 +182,7 @@ Runtime& store_runtime() {
     return runtime;
 }
 
-std::unique_ptr<Writer> make_writer(const dftu_utils_test::ScopedTestDir& dir,
+dstd::UniquePtr<Writer> make_writer(const dftu_utils_test::ScopedTestDir& dir,
                                     const WriterOptions& options) {
     auto created =
         Writer::create(dir.str(), *store_runtime().executor(), options);
@@ -671,7 +671,7 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
     memory::PoolHandle budget_pool = child_pool("backpressure budget", 0);
     REQUIRE(static_cast<bool>(budget_pool));
 
-    std::unique_ptr<Writer> writer;
+    dstd::UniquePtr<Writer> writer;
     {
         memory::Scope pool_scope(*budget_pool.get());
         auto created = Writer::create(dir.str(), *store_runtime().executor(),
@@ -776,7 +776,7 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
     memory::PoolHandle budget_pool = child_pool("refused budget", LIMIT_BYTES);
     REQUIRE(static_cast<bool>(budget_pool));
 
-    std::unique_ptr<Writer> writer;
+    dstd::UniquePtr<Writer> writer;
     {
         memory::Scope pool_scope(*budget_pool.get());
         auto created = Writer::create(dir.str(), *store_runtime().executor(),
@@ -933,7 +933,7 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     memory::PoolHandle budget_pool = child_pool("limit budget", LIMIT_BYTES);
     REQUIRE(static_cast<bool>(budget_pool));
 
-    std::unique_ptr<Writer> writer;
+    dstd::UniquePtr<Writer> writer;
     {
         memory::Scope pool_scope(*budget_pool.get());
         auto created = Writer::create(dir.str(), *store_runtime().executor(),

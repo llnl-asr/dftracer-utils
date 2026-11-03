@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/overlap.h>
 #include <doctest/doctest.h>
 #include <mmix_lcg.h>
@@ -8,9 +9,8 @@
 
 #include <chrono>
 #include <cstdint>
-#include <string>
-#include <vector>
 
+using namespace dftracer::utils;
 namespace df = dftracer::utils::dataframe;
 using namespace dftracer::utils::duql;
 
@@ -25,10 +25,10 @@ struct Rng {
 };
 
 struct Table {
-    std::vector<std::int64_t> key;
-    std::vector<std::int64_t> start;
-    std::vector<std::int64_t> duration;
-    std::vector<std::uint8_t> key_ok, start_ok, duration_ok;
+    dstd::Vector<std::int64_t> key;
+    dstd::Vector<std::int64_t> start;
+    dstd::Vector<std::int64_t> duration;
+    dstd::Vector<std::uint8_t> key_ok, start_ok, duration_ok;
 };
 
 Table random_table(Rng& rng, int n, int keys, int span, int max_dur) {
@@ -46,9 +46,9 @@ Table random_table(Rng& rng, int n, int keys, int span, int max_dur) {
     return t;
 }
 
-df::Series column(const std::vector<std::int64_t>& v,
-                  const std::vector<std::uint8_t>& ok) {
-    std::vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
+df::Series column(const dstd::Vector<std::int64_t>& v,
+                  const dstd::Vector<std::uint8_t>& ok) {
+    dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (ok[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
     return df::Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
@@ -89,11 +89,12 @@ OverlapMatches nested_loop(const Table& rows, const Table& side) {
 
 TEST_CASE("overlap equals a nested loop") {
     Rng rng{7};
-    for (const auto& c : std::vector<std::vector<int>>{{200, 150, 3, 100, 20},
-                                                       {300, 300, 1, 50, 5},
-                                                       {100, 400, 5, 1000, 400},
-                                                       {0, 10, 2, 10, 3},
-                                                       {10, 0, 2, 10, 3}}) {
+    for (const auto& c :
+         dstd::Vector<dstd::Vector<int>>{{200, 150, 3, 100, 20},
+                                         {300, 300, 1, 50, 5},
+                                         {100, 400, 5, 1000, 400},
+                                         {0, 10, 2, 10, 3},
+                                         {10, 0, 2, 10, 3}}) {
         const int n = c[0], m = c[1], keys = c[2], span = c[3], dur = c[4];
         CAPTURE(n);
         CAPTURE(m);
@@ -121,8 +122,8 @@ TEST_CASE("overlap is half open and zero-length intervals sit inside") {
     const auto m = overlap_matches(columns_of(rows), columns_of(side));
     // [10,15) meets [0,10) not and takes [10,20); [9,11) takes both; [5,5)
     // is inside [0,10) only; [4,8) takes [0,10) and the zero-length row at 5.
-    const std::vector<std::int64_t> rows_want = {1, 0, 1, 0, 0, 2};
-    const std::vector<std::int64_t> offsets_want = {0, 1, 3, 4, 6};
+    const dstd::Vector<std::int64_t> rows_want = {1, 0, 1, 0, 0, 2};
+    const dstd::Vector<std::int64_t> offsets_want = {0, 1, 3, 4, 6};
     CHECK(m.offsets == offsets_want);
     CHECK(m.rows == rows_want);
 }
@@ -146,7 +147,7 @@ TEST_CASE("overlap compares doubles and scaled durations") {
     const double dur[] = {1.0, 1.0};
     OverlapColumns side;
     side.keys.push_back(
-        df::Series::flat_i64(std::vector<std::int64_t>{1, 1}.data(), 2));
+        df::Series::flat_i64(dstd::Vector<std::int64_t>{1, 1}.data(), 2));
     side.start = df::Series::flat_f64(start, 2);
     side.duration = df::Series::flat_f64(dur, 2);
     const std::int64_t one = 1, at = 1, len = 3000;
@@ -156,5 +157,5 @@ TEST_CASE("overlap compares doubles and scaled durations") {
     rows.duration = df::Series::flat_i64(&len, 1);
     rows.scale = 0.001;  // 3000 ns is 3 in the unit of the start
     const auto m = overlap_matches(rows, side);
-    CHECK(m.rows == std::vector<std::int64_t>{0, 1});
+    CHECK(m.rows == dstd::Vector<std::int64_t>{0, 1});
 }

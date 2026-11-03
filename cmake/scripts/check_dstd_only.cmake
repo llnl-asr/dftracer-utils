@@ -19,7 +19,15 @@ set(_dirs
     include/dftracer/utils/coro
     src/dftracer/utils/coro
     include/dftracer/utils/runtime
-    src/dftracer/utils/runtime)
+    src/dftracer/utils/runtime
+    include/dftracer/utils/store
+    src/dftracer/utils/store
+    include/dftracer/utils/json
+    src/dftracer/utils/json
+    include/dftracer/utils/duql
+    src/dftracer/utils/duql
+    include/dftracer/utils/plugins
+    src/dftracer/utils/plugins)
 
 # The Task, TaskGraph and Pipeline trees move in a later step.
 set(_skip

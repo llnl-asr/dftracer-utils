@@ -6,10 +6,10 @@
 #include <dftracer/utils/dataframe/agg_spill.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 
 #include <string>
-#include <string_view>
 #include <vector>
 
 // Private seam shared by the fold_adapter extension translation units
@@ -26,8 +26,10 @@ namespace dftracer::utils::plugins {
 // scan's memory budget, so a high-cardinality key does not grow `state`
 // without limit; it holds the spilled runs and drains them at finalize.
 struct AggAccum {
-    std::string name;
+    dstd::String name;
+    // keep std: dataframe::AggSpiller::drain takes std::vector<std::string>
     std::vector<std::string> key_names;
+    // keep std: dataframe::agg_accumulate reads these as std::string
     std::vector<std::string> value_names;
     dataframe::AggStatePtr state;
     dataframe::AggSpiller spiller;

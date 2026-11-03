@@ -7,6 +7,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -21,7 +22,6 @@
 #include <cstring>
 #include <fstream>
 #include <string>
-#include <vector>
 
 using dftracer::utils::plugins::NamedResult;
 using dftracer::utils::plugins::PluginRun;
@@ -84,7 +84,8 @@ TEST_CASE("an op registered by the factory is live before the scan") {
 
     auto it = run.results.results().find("doubled_rows");
     REQUIRE(it != run.results.results().end());
-    const auto& bytes = std::get<std::vector<std::byte>>(it->second);
+    const auto& bytes =
+        std::get<dftracer::utils::dstd::Vector<std::byte>>(it->second);
     REQUIRE(bytes.size() == sizeof(std::int64_t));
     std::int64_t total = 0;
     std::memcpy(&total, bytes.data(), sizeof(total));
@@ -149,7 +150,8 @@ TEST_CASE("the scan-time host refuses to register an op") {
     // The plugin records whether register_op said no from on_batch.
     auto it = run.results.results().find("scan_register_refused");
     REQUIRE(it != run.results.results().end());
-    const auto& bytes = std::get<std::vector<std::byte>>(it->second);
+    const auto& bytes =
+        std::get<dftracer::utils::dstd::Vector<std::byte>>(it->second);
     REQUIRE(bytes.size() == sizeof(std::int64_t));
     std::int64_t refused = 0;
     std::memcpy(&refused, bytes.data(), sizeof(refused));

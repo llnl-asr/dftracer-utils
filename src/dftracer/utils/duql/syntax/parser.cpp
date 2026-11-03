@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -11,7 +12,6 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
-#include <string>
 #include <system_error>
 
 namespace dftracer::utils::duql::syntax {
@@ -63,12 +63,12 @@ class Parser {
             const char* end = v.text.data() + v.text.size();
             int major = 0;
             int minor = 0;
-            auto [p, ec] = std::from_chars(v.text.data(), end, major);
+            auto [p, ec] = dstd::from_chars(v.text.data(), end, major);
             bool ok = ec == std::errc{};
             if (ok && p != end) {
                 ok = *p == '.';
                 if (ok) {
-                    auto [p2, ec2] = std::from_chars(p + 1, end, minor);
+                    auto [p2, ec2] = dstd::from_chars(p + 1, end, minor);
                     ok = ec2 == std::errc{} && p2 == end;
                 }
             }
@@ -1085,8 +1085,8 @@ class Parser {
             const bool negative = accept(Tok::Minus);
             const Token& n = expect(Tok::Int, "an array index");
             std::int64_t v = 0;
-            const auto r = std::from_chars(n.text.data(),
-                                           n.text.data() + n.text.size(), v);
+            const auto r = dstd::from_chars(n.text.data(),
+                                            n.text.data() + n.text.size(), v);
             if (r.ec != std::errc{}) fail(n, "Array index out of range");
             expect(Tok::Rbracket, "']'");
             PathStep step;
@@ -1192,17 +1192,15 @@ class Parser {
         lit.number_text = dstd::String(t.text);
         if (t.kind == Tok::Int) {
             std::int64_t v = 0;
-            const auto r = std::from_chars(t.text.data(),
-                                           t.text.data() + t.text.size(), v);
+            const auto r = dstd::from_chars(t.text.data(),
+                                            t.text.data() + t.text.size(), v);
             if (r.ec != std::errc{})
                 fail(t, "Invalid integer: '" + dstd::String(t.text) + "'");
             lit.value = static_cast<std::uint64_t>(v);
         } else {
-            try {
-                lit.value = std::stod(std::string(t.text));
-            } catch (...) {
-                fail(t, "Invalid float: '" + dstd::String(t.text) + "'");
-            }
+            const dstd::Optional<double> d = dstd::from_chars<double>(t.text);
+            if (!d) fail(t, "Invalid float: '" + dstd::String(t.text) + "'");
+            lit.value = *d;
         }
         advance();
         return make(std::move(lit), t);

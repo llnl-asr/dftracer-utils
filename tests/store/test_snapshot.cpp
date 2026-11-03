@@ -4,9 +4,13 @@
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/crc.h>
@@ -33,7 +37,6 @@
 #include <fstream>
 #include <iterator>
 #include <map>
-#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -155,7 +158,7 @@ Runtime& store_runtime() {
     return runtime;
 }
 
-std::unique_ptr<Writer> make_writer(
+dstd::UniquePtr<Writer> make_writer(
     const dftu_utils_test::ScopedTestDir& dir,
     const WriterOptions& options = small_extents()) {
     auto created =

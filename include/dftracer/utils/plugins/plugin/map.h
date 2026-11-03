@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/arrow_abi.h>
 #include <dftracer/utils/plugins/owned_arrow.h>
@@ -17,13 +18,8 @@
 #include <cstring>
 #include <initializer_list>
 #include <iterator>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::plugins {
 
@@ -292,7 +288,7 @@ class Host {
                         const dftu_op_arg* args = nullptr) const {
         const dftu_svc_ops* e = ext(DFTU_SVC_OPS, ops_ext_);
         if (!e || !e->run) return nullptr;
-        std::vector<const dftu_series*> vin(in);
+        dstd::Vector<const dftu_series*> vin(in);
         dftu_result_series res =
             e->run(h_->h, name, vin.data(),
                    static_cast<std::uint32_t>(vin.size()), args);
@@ -305,7 +301,7 @@ class Host {
         const dftu_op_arg* args = nullptr) const {
         const dftu_svc_ops* e = ext(DFTU_SVC_OPS, ops_ext_);
         if (!e || !e->run_frame) return nullptr;
-        std::vector<const dftu_dataframe*> vin(in);
+        dstd::Vector<const dftu_dataframe*> vin(in);
         dftu_result_frame res =
             e->run_frame(h_->h, name, vin.data(),
                          static_cast<std::uint32_t>(vin.size()), args);
@@ -502,8 +498,8 @@ class Agg {
 inline Agg Host::agg(const char* name,
                      std::initializer_list<const char*> key_names,
                      std::initializer_list<AggCol> cols) const {
-    std::vector<const char*> keys(key_names.begin(), key_names.end());
-    std::vector<dftu_agg_col> specs;
+    dstd::Vector<const char*> keys(key_names.begin(), key_names.end());
+    dstd::Vector<dftu_agg_col> specs;
     specs.reserve(cols.size());
     for (const AggCol& c : cols) specs.push_back(c.raw());
     dftu_agg* a =
@@ -764,7 +760,7 @@ class Batch {
     const dftu_dataframe* df_ = nullptr;
     std::int64_t n_ = 0;
     detail::ColBuf cat_, name_, fhash_, hhash_, pid_, tid_, ts_, dur_, ph_;
-    std::vector<dstd::Pair<std::string, detail::ColBuf>> dyn_;
+    dstd::Vector<dstd::Pair<dstd::String, detail::ColBuf>> dyn_;
 };
 
 inline const dftu_dataframe* Event::frame() const noexcept { return b_->raw(); }
@@ -882,7 +878,7 @@ inline Batch::Batch(const dftu_dataframe* df) noexcept
         if (!n) continue;
         dstd::StringView nv{n};
         if (nv.substr(0, ARGS_PREFIX.size()) != ARGS_PREFIX) continue;
-        std::string bare(nv.substr(ARGS_PREFIX.size()));
+        dstd::String bare(nv.substr(ARGS_PREFIX.size()));
         dyn_.emplace_back(std::move(bare), resolve(df_, n));
     }
 }

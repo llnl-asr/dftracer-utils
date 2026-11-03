@@ -9,6 +9,8 @@
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
@@ -130,7 +132,7 @@ dftu_dataframe* xform_transform(void*, const dftu_dataframe* df,
     dftu_series* fdur = dftu_series_materialize(dur);
     const auto* p = static_cast<const std::uint64_t*>(dftu_series_data(fpid));
     const auto* d = static_cast<const std::uint64_t*>(dftu_series_data(fdur));
-    std::vector<std::uint64_t> pids, durs, twice;
+    dstd::Vector<std::uint64_t> pids, durs, twice;
     for (std::int64_t i = 0; i < dftu_series_length(fpid); ++i) {
         if (p[i] != 1) continue;
         pids.push_back(p[i]);
@@ -211,7 +213,7 @@ std::string make_trace(dftu_utils_test::TestEnvironment& env) {
     return gz;
 }
 
-void run_host(std::vector<dftu_plugin*> plugins, std::vector<ViewFile> files) {
+void run_host(dstd::Vector<dftu_plugin*> plugins, std::vector<ViewFile> files) {
     auto set = build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));

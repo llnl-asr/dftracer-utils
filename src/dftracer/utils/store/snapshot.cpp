@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
+#include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/scope_filter.h>
 #include <dftracer/utils/store/snapshot.h>
@@ -23,11 +28,8 @@
 #include <limits>
 #include <memory>
 #include <numeric>
-#include <string>
-#include <string_view>
 #include <system_error>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::store::engine {
 namespace {
@@ -64,8 +66,8 @@ ByteView bytes_of(const dstd::RawBuffer<std::uint8_t>& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-std::string path_string(dstd::StringView dir, dstd::StringView name) {
-    std::string out(dir.data(), dir.size());
+dstd::String path_string(dstd::StringView dir, dstd::StringView name) {
+    dstd::String out(dir.data(), dir.size());
     if (!out.empty() && out.back() != '/') out.push_back('/');
     out.append(name.data(), name.size());
     return out;
@@ -339,11 +341,11 @@ constexpr std::int64_t COMMIT_GRAIN = 4;
 /// holds read together. A record may list the same extent ref again, and one
 /// ref belongs to one commit: the first listing of an offset is the one kept.
 void fill_commit(detail::Commit& commit,
-                 std::vector<const ExtentRefItem*> refs) {
-    std::stable_sort(refs.begin(), refs.end(),
-                     [](const ExtentRefItem* a, const ExtentRefItem* b) {
-                         return a->offset < b->offset;
-                     });
+                 dstd::Vector<const ExtentRefItem*> refs) {
+    dstd::stable_sort(refs.begin(), refs.end(),
+                      [](const ExtentRefItem* a, const ExtentRefItem* b) {
+                          return a->offset < b->offset;
+                      });
     dstd::Vector<detail::CommitExtent> blocks;
     for (const ExtentRefItem* ref : refs) {
         if (blocks.empty() || blocks.back().ref.offset != ref->offset) {
@@ -362,19 +364,19 @@ void build_commits(detail::FileData& file, std::size_t file_index) {
     // its directory names the segments of each copy.
     if (index.tail.has_value()) return;
     const dstd::Vector<IndexedExtentRef>& extent_refs = index.extent_refs;
-    std::vector<std::size_t> order(extent_refs.size());
+    dstd::Vector<std::size_t> order(extent_refs.size());
     std::iota(order.begin(), order.end(), std::size_t{0});
-    std::stable_sort(order.begin(), order.end(),
-                     [&extent_refs](std::size_t a, std::size_t b) {
-                         return extent_refs[a].sequence <
-                                extent_refs[b].sequence;
-                     });
+    dstd::stable_sort(order.begin(), order.end(),
+                      [&extent_refs](std::size_t a, std::size_t b) {
+                          return extent_refs[a].sequence <
+                                 extent_refs[b].sequence;
+                      });
     for (std::size_t at = 0; at < order.size();) {
         const std::uint64_t sequence = extent_refs[order[at]].sequence;
         auto commit = dstd::make_unique<detail::Commit>();
         commit->sequence = sequence;
         commit->file_index = file_index;
-        std::vector<const ExtentRefItem*> refs;
+        dstd::Vector<const ExtentRefItem*> refs;
         bool synced = true;
         while (at < order.size() &&
                extent_refs[order[at]].sequence == sequence) {
@@ -578,11 +580,11 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     Runtime* const runtime =
         names.size() >= PARALLEL_OPEN_FILES ? fork_join_runtime() : nullptr;
 
-    std::vector<dstd::Optional<detail::FileData>> opened(names.size());
-    std::vector<dstd::Optional<dstd::Error>> open_errors(names.size());
-    std::vector<std::uint8_t> from_summary(names.size(), 0);
+    dstd::Vector<dstd::Optional<detail::FileData>> opened(names.size());
+    dstd::Vector<dstd::Optional<dstd::Error>> open_errors(names.size());
+    dstd::Vector<std::uint8_t> from_summary(names.size(), 0);
     const auto open_one = [&](std::size_t index) {
-        const std::string path = path_string(dir, names[index]);
+        const dstd::String path = path_string(dir, names[index]);
         const auto listed_entry = summarized.find(names[index]);
         if (listed_entry != summarized.end()) {
             auto reader =
@@ -669,13 +671,13 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
     CheckReport report;
     report.files = files_.size();
     const std::size_t file_count = files_.size();
-    std::vector<dstd::Optional<dstd::Error>> failures(file_count);
-    std::vector<std::uint64_t> commits(file_count, 0);
-    std::vector<std::uint64_t> blocks(file_count, 0);
-    std::vector<std::uint64_t> metadata(file_count, 0);
-    std::vector<std::uint64_t> segments(file_count, 0);
-    std::vector<dstd::Vector<BadCommit>> bad_commits(file_count);
-    std::vector<dstd::Vector<BadSegment>> bad_segments(file_count);
+    dstd::Vector<dstd::Optional<dstd::Error>> failures(file_count);
+    dstd::Vector<std::uint64_t> commits(file_count, 0);
+    dstd::Vector<std::uint64_t> blocks(file_count, 0);
+    dstd::Vector<std::uint64_t> metadata(file_count, 0);
+    dstd::Vector<std::uint64_t> segments(file_count, 0);
+    dstd::Vector<dstd::Vector<BadCommit>> bad_commits(file_count);
+    dstd::Vector<dstd::Vector<BadSegment>> bad_segments(file_count);
 
     const auto check_file = [&](std::size_t index) {
         const detail::FileData& file = files_[index];
@@ -840,7 +842,7 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
         }
         if (stopped) return;
 
-        std::vector<std::uint64_t> sequences;
+        dstd::Vector<std::uint64_t> sequences;
         sequences.reserve(pending.size());
         for (const Pending& entry : pending)
             sequences.push_back(entry.sequence);
@@ -849,7 +851,7 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                         sequences.end());
         commits[index] = sequences.size();
         // Per extent: 0 not checked yet, 1 good, 2 bad.
-        std::vector<std::uint8_t> seen(file.extent_slots.size(), 0);
+        dstd::Vector<std::uint8_t> seen(file.extent_slots.size(), 0);
         dstd::Vector<BigRun> bigs;
 
         std::sort(pending.begin(), pending.end(),
@@ -1327,8 +1329,8 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
     if (again != detail::LoadState::Unknown) return state_of(again);
 
     const DataFileReader& reader = files_[commit.file_index].reader;
-    std::vector<std::size_t> extent_blocks;
-    std::vector<std::size_t> big_blocks;
+    dstd::Vector<std::size_t> extent_blocks;
+    dstd::Vector<std::size_t> big_blocks;
     for (std::size_t block = 0; block < commit.blocks.size(); ++block) {
         const detail::CommitExtent& held = commit.blocks[block];
         if (held.listed != nullptr && !held.listed->segments.empty()) {
@@ -1344,7 +1346,7 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
     dstd::Vector<ExtentRef> refs;
     dstd::Vector<ExtentTarget> targets;
     dstd::Vector<dstd::Vector<std::uint8_t>> stored(commit.blocks.size());
-    std::vector<std::uint8_t> bad(commit.blocks.size(), 0);
+    dstd::Vector<std::uint8_t> bad(commit.blocks.size(), 0);
     for (const std::size_t block : extent_blocks) {
         refs.push_back(commit.blocks[block].ref);
         targets.push_back({&stored[block], &bad[block]});
@@ -1488,7 +1490,7 @@ detail::LoadStatus Snapshot::load_index(detail::Commit& commit) const {
                                                      : detail::LoadState::Bad;
     } else {
         commit.listed_refs = std::move(*refs);
-        std::vector<const ExtentRefItem*> listed;
+        dstd::Vector<const ExtentRefItem*> listed;
         listed.reserve(commit.listed_refs.size());
         for (const ExtentRefItem& ref : commit.listed_refs)
             listed.push_back(&ref);
@@ -2269,7 +2271,7 @@ dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get(
     if (sources.empty()) return dstd::Optional<Value>{};
     // The batch ordinal, not the record, tells the versions of a key apart:
     // extent writes complete in any order, so a record mixes batches.
-    std::stable_sort(
+    dstd::stable_sort(
         sources.begin(), sources.end(),
         [](const detail::ValueSource& a, const detail::ValueSource& b) {
             return a.ordinal < b.ordinal;

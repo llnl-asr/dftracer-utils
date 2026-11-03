@@ -198,8 +198,8 @@ static common::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
     for (const auto& block : plugin_args.blocks) {
         if (block_has_config(plugin_args.shared, block)) {
             try {
-                // keep std: unswept API
-                builder.add(std::string(block.path),
+                builder.add(dftracer::utils::dstd::String(block.path.data(),
+                                                          block.path.size()),
                             build_config(plugin_args.shared, block));
             } catch (const std::exception& e) {
                 return common::make_error(
@@ -208,20 +208,20 @@ static common::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
                                     "' config error: ", e.what()));
             }
         } else {
-            // keep std: unswept API
-            builder.add(std::string(block.path));
+            builder.add(dftracer::utils::dstd::String(block.path.data(),
+                                                      block.path.size()));
         }
     }
     return builder.build();
 }
 
-// keep std: unswept API
-static dstd::String join_or_none(const std::vector<std::string>& names) {
+static std::string join_or_none(
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& names) {
     if (names.empty()) return "(none)";
     dstd::String out;
     for (const auto& name : names) {
         if (!out.empty()) out += ", ";
-        out += name;
+        out.append(name.data(), name.size());
     }
     return out;
 }

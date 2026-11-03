@@ -17,11 +17,10 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <coroutine>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <mutex>
-#include <vector>
 
 namespace dftracer::utils::coro {
 
@@ -178,9 +177,9 @@ class Committer {
     dstd::Optional<dstd::Error> latched_error_;
     std::uint64_t next_sequence_ = 1;
     std::atomic<std::uint64_t> records_{0};
-    std::vector<std::uint8_t> announced_namespaces_;
-    std::vector<std::uint8_t> announced_scopes_;
-    std::vector<std::uint8_t> announced_copies_;
+    dstd::Vector<std::uint8_t> announced_namespaces_;
+    dstd::Vector<std::uint8_t> announced_scopes_;
+    dstd::Vector<std::uint8_t> announced_copies_;
 };
 
 /// Test-only: counts the group commit syncs and fails the next record write

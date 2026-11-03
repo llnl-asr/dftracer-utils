@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
-#include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
 #include <algorithm>
 #include <cmath>
@@ -104,12 +104,9 @@ BloomFilter BloomFilter::from_blob(const unsigned char* data,
 }
 
 BloomFilter::Hashes BloomFilter::hash(dstd::StringView value) {
-    utilities::hash::Fnv1aHasherUtility hasher;
-    hasher.update(value);
-    const std::uint64_t raw = hasher.get_hash().value;
-    // FNV-1a leaves correlated high bits for similar short keys, which
-    // breaks Lemire reduction in the blocked path. Run a SplitMix64-style
-    // finisher to fully avalanche, then derive a second hash for masking.
+    const std::uint64_t raw = dstd::hash::xxh3_64(value);
+    // Run a SplitMix64-style finisher over the XXH3 hash, then derive a
+    // second hash for masking.
     std::uint64_t h1 = raw;
     h1 = (h1 ^ (h1 >> 30)) * dstd::hash::SPLITMIX64_MUL1;
     h1 = (h1 ^ (h1 >> 27)) * dstd::hash::SPLITMIX64_MUL2;

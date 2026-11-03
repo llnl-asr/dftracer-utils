@@ -219,7 +219,7 @@ the frame it returns takes pandas spellings such as masks, ``merge`` and
 
 The output is a long format. Every line has a ``gtype``, the genesis record type, and a ``run`` id and
 none has the dftracer fields ``ph``, ``pid``, ``tid`` or ``args``. The
-``run`` id is the FNV-1a hash of
+``run`` id is the XXH3-64 hash of
 ``app|system|unique_input|nodes|ppn|papi_set``, so the same run gets the
 same id in any output and files from separate invocations can be
 concatenated. There are three kinds of line:

@@ -2,7 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/versions.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -89,7 +89,7 @@ dstd::Optional<std::uint64_t> lookup_signature(
         add(dstd::to_string(file->stat().mtime));
         add(dstd::to_string(file->stat().size));
     }
-    return dftracer::utils::dstd::hash::fnv1a_hash(sig);
+    return dftracer::utils::dstd::hash::xxh3_64(sig);
 }
 
 dstd::SharedPtr<CacheStore> open_lookup_db(dstd::StringView path,

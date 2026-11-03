@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/store/scope_filter.h>
 
 #include <algorithm>
@@ -8,38 +8,20 @@
 namespace dftracer::utils::store::engine {
 namespace {
 
-void mix_bytes(std::uint64_t& hash, const void* data, std::size_t length) {
-    const auto* bytes = static_cast<const std::uint8_t*>(data);
-    for (std::size_t i = 0; i < length; ++i) {
-        hash ^= bytes[i];
-        hash *= dstd::hash::FNV1A_PRIME;
-    }
-}
-
-void mix_u32(std::uint64_t& hash, std::uint32_t value) {
-    const std::uint8_t bytes[4] = {static_cast<std::uint8_t>(value),
-                                   static_cast<std::uint8_t>(value >> 8U),
-                                   static_cast<std::uint8_t>(value >> 16U),
-                                   static_cast<std::uint8_t>(value >> 24U)};
-    mix_bytes(hash, bytes, sizeof(bytes));
-}
-
-/// Each string goes in with its length first, so no two keys mix the same
-/// bytes.
+/// Each string is hashed alone, so no two keys feed the same bytes.
 template <class Path>
 std::uint64_t hash_key(dstd::StringView name, std::uint32_t version,
                        ScopeKind kind, dstd::Span<const Path> paths) {
-    std::uint64_t hash = dstd::hash::FNV1A_OFFSET_BASIS;
-    mix_u32(hash, static_cast<std::uint32_t>(name.size()));
-    mix_bytes(hash, name.data(), name.size());
-    mix_u32(hash, version);
-    mix_u32(hash, static_cast<std::uint32_t>(kind));
-    mix_u32(hash, static_cast<std::uint32_t>(paths.size()));
+    std::uint64_t hash = dstd::hash::xxh3_64(name);
+    hash = dstd::hash::splitmix64(hash ^ version);
+    hash = dstd::hash::splitmix64(
+        hash ^ ((static_cast<std::uint64_t>(kind) << 32U) | paths.size()));
     for (const Path& path : paths) {
-        mix_u32(hash, static_cast<std::uint32_t>(path.size()));
-        mix_bytes(hash, path.data(), path.size());
+        hash =
+            dstd::hash::splitmix64(hash ^ dstd::hash::xxh3_64(dstd::StringView(
+                                              path.data(), path.size())));
     }
-    return dstd::hash::fnv1a_mix(hash);
+    return hash;
 }
 
 std::uint64_t probe_bit(std::uint64_t hash, std::size_t probe,

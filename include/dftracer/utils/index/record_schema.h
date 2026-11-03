@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 
 #include <dftracer/utils/dstd/cstring_view.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
@@ -62,7 +62,7 @@ inline std::int64_t entity_id(dstd::StringView text) {
         ec == std::errc() && ptr == end && !text.empty())
         return v;
     return static_cast<std::int64_t>(
-        dftracer::utils::dstd::hash::fnv1a_hash(text) & 0x7FFFFFFFULL);
+        dftracer::utils::dstd::hash::xxh3_64(text) & 0x7FFFFFFFULL);
 }
 
 /// "bool", "int", "float", "string" or "json".

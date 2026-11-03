@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Hash every string with XXH3-64, in memory and in index, cache and store files.
+  Existing indexes, caches and store data files are rebuilt, and the store skips old data files with a warning.
+  Genesis run ids change.
 - Take the inputs of every command line tool as positional paths, files and folders mixed, and remove `-d`/`--directory` and `--files`.
   `dftracer_index`, `dftracer_split`, `dftracer_gen_dlio_config` and `dftracer_server` take one folder and no files.
 - Use `-f`/`--force` in every tool that forces a rebuild, where `dftracer_info` had `-f`/`--force-rebuild`.

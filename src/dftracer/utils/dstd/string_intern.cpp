@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -382,12 +382,9 @@ bool StringIntern::bind_slot(std::uint32_t id, const char* str, bool cas) {
 }
 
 /// Deterministic ids are this hash, so it must agree across processes and stay
-/// as stored. It is FNV-1a, unlike std::hash. Other tables take wyhash, which
-/// is faster.
+/// as stored. It is XXH3, whose output is fixed by its specification.
 std::size_t StringIntern::hash(StringView sv) const {
-    if (deterministic_ids_.load(std::memory_order_relaxed))
-        return hash::fnv1a_mix(hash::fnv1a_hash(sv));
-    return Hash<StringView>{}(sv);
+    return static_cast<std::size_t>(hash::xxh3_64(sv));
 }
 
 template <class T>

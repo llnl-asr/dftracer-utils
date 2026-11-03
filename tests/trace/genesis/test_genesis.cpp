@@ -209,10 +209,10 @@ bool skipped_with(const GroupResult& r, const dstd::String& text) {
 
 }  // namespace
 
-TEST_CASE("run_id is FNV-1a 64 of the joined run keys") {
+TEST_CASE("run_id is XXH3-64 of the joined run keys") {
     RunKeys k{"laghos", "matrix", "p1_dim2_rs2_tf3.1_pa",
               1,        2,        "papi_set1_branch_cycle"};
-    CHECK(run_id(k) == "c8a6831dbb2f883e");
+    CHECK(run_id(k) == "99986e8a91daf46f");
 }
 
 TEST_CASE("discover reads the matrix layout, one group per set") {

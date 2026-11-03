@@ -2,13 +2,13 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
 #include <array>
 #include <cstddef>
@@ -37,7 +37,7 @@ inline std::uint64_t agg_hash_of_hex(dstd::StringView sv) {
         else if (c >= 'A' && c <= 'F')
             d = static_cast<std::uint64_t>(c - 'A' + 10);
         else
-            return utilities::hash::fnv1a_hash(sv);
+            return dstd::hash::xxh3_64(sv);
         v = (v << 4) | d;
     }
     return v ? v : 1;

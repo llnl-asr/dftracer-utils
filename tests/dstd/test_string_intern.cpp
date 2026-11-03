@@ -283,16 +283,16 @@ TEST_SUITE("StringIntern") {
         dstd::StringIntern intern;
         intern.enable_deterministic_ids();
         const dstd::Pair<const char*, std::uint32_t> expected[] = {
-            {"hello", 229782084},
-            {"world", 62348693},
-            {"read", 100861361},
-            {"write", 33496659},
-            {"args.size", 97378550},
-            {"cat", 208581076},
-            {"POSIX", 130800590},
+            {"hello", 207805693},
+            {"world", 138242494},
+            {"read", 32689650},
+            {"write", 9196506},
+            {"args.size", 263050526},
+            {"cat", 18633966},
+            {"POSIX", 209986609},
             {"/UqBWr9S8D8AAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAA"
              "AAA",
-             218384236},
+             259052688},
         };
         for (const auto& [text, id] : expected) {
             CHECK(intern.get_or_insert(text) == id);

@@ -947,7 +947,7 @@ TEST_SUITE("index store file") {
         CHECK(opened_close->index().extent_refs.size() == 0);
     }
 
-    TEST_CASE("a header with version 1 opens as unsupported") {
+    TEST_CASE("a header with version 2 opens as unsupported") {
         TempDir temp;
         const dstd::String path = temp.file("version.dfs");
 
@@ -958,7 +958,7 @@ TEST_SUITE("index store file") {
 
         dstd::Vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(bytes.size() >= 12);
-        bytes[8] = 1;
+        bytes[8] = 2;
         bytes[9] = 0;
         bytes[10] = 0;
         bytes[11] = 0;

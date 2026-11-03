@@ -2,11 +2,12 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_SYSTEM_METRICS_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_SYSTEM_METRICS_H
 
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
-#include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
 #include <cstdint>
 #include <limits>
@@ -19,10 +20,10 @@ static constexpr std::uint16_t AGG_KEY_NUM_SHARDS = 4096;
 /// Depends on the texts alone, so the buckets of one group share a shard.
 inline std::uint16_t system_shard(dstd::StringView hhash,
                                   dstd::StringView name) {
-    utilities::hash::Fnv1aHashBuilder h;
-    h.update(hhash);
-    h.update(name);
-    return static_cast<std::uint16_t>(h.finish() % AGG_KEY_NUM_SHARDS);
+    const std::uint64_t h = dstd::hash::splitmix64(
+        dstd::hash::xxh3_64(hhash) ^
+        dstd::hash::splitmix64(dstd::hash::xxh3_64(name)));
+    return static_cast<std::uint16_t>(h % AGG_KEY_NUM_SHARDS);
 }
 
 /// System metrics (CPU/GPU %, gauges) share the same MetricStats atom as event

@@ -28,7 +28,7 @@ namespace dftracer::utils::index::extensions {
  *    https://github.com/apache/parquet-format/blob/master/BloomFilter.md
  *
  * Differs from canonical Parquet:
- *  - Underlying hash is FNV1a + SplitMix64 finisher (not xxhash64).
+ *  - Underlying hash is XXH3-64 + SplitMix64 finisher (not xxhash64).
  *  - Custom 12-byte LE header (num_hashes, num_entries, num_bits) instead
  *    of Thrift; num_hashes is unused at insert/test (vestigial).
  *

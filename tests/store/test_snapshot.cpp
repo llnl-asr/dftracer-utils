@@ -2257,18 +2257,18 @@ TEST_SUITE("index store snapshot") {
 
         dstd::Vector<std::uint8_t> bytes =
             read_file(dstd::String(writer->path()));
-        dstd::Vector<std::uint8_t> header_one = bytes;
-        dstd::write_u32_le(header_one.data() + 8, 1);
-        rewrite_header_crc(header_one);
-        write_file(dir.file("w-header-one.dfs"), without_footer(header_one));
-        write_file(dir.file("w-tail-one.dfs"), with_tail_version(bytes, 1));
+        dstd::Vector<std::uint8_t> header_two = bytes;
+        dstd::write_u32_le(header_two.data() + 8, 2);
+        rewrite_header_crc(header_two);
+        write_file(dir.file("w-header-two.dfs"), without_footer(header_two));
+        write_file(dir.file("w-tail-two.dfs"), with_tail_version(bytes, 2));
 
         auto snapshot = engine::Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         REQUIRE(snapshot->skipped().size() == 2);
-        CHECK(dstd::String(snapshot->skipped()[0].name) == "w-header-one.dfs");
+        CHECK(dstd::String(snapshot->skipped()[0].name) == "w-header-two.dfs");
         CHECK(snapshot->skipped()[0].error.is(dstd::Condition::Unsupported));
-        CHECK(dstd::String(snapshot->skipped()[1].name) == "w-tail-one.dfs");
+        CHECK(dstd::String(snapshot->skipped()[1].name) == "w-tail-two.dfs");
         CHECK(snapshot->skipped()[1].error.is(dstd::Condition::Unsupported));
         auto found = snapshot->get(spec, scope, view_of(dstd::String("key-a")));
         REQUIRE(found.has_value());

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -71,6 +72,15 @@ dstd::String path_string(dstd::StringView dir, dstd::StringView name) {
     if (!out.empty() && out.back() != '/') out.push_back('/');
     out.append(name.data(), name.size());
     return out;
+}
+
+void warn_skipped(dstd::StringView dir, dstd::StringView name,
+                  const dstd::Error& error) {
+    const dstd::String path = path_string(dir, name);
+    const bool unsupported = error.is(dstd::Condition::Unsupported);
+    DFTRACER_UTILS_LOG_WARN(
+        "store: skipping data file %s: %s", path.c_str(),
+        unsupported ? "unsupported version" : "cannot be read");
 }
 
 bool has_data_file_suffix(dstd::StringView name) {
@@ -612,6 +622,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
 
     for (std::size_t index = 0; index < names.size(); ++index) {
         if (open_errors[index]) {
+            warn_skipped(dir, names[index], *open_errors[index]);
             skipped_.push_back({names[index], *open_errors[index]});
             continue;
         }
@@ -628,6 +639,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     for (detail::FileData& file : files_) {
         auto directory = build_file_directory(file);
         if (!directory) {
+            warn_skipped(dir, file.name, directory.error());
             skipped_.push_back({file.name, directory.error()});
             continue;
         }

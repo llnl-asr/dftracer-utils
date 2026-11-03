@@ -41,7 +41,7 @@ namespace {
 constexpr dstd::StringView FILE_MAGIC = "DFTUSTR0";
 constexpr dstd::StringView TRAILER_MAGIC = "DFTUEND0";
 constexpr dstd::StringView RECORD_MAGIC = "DFTUREC0";
-constexpr std::uint32_t FORMAT_VERSION = 0;
+constexpr std::uint32_t FORMAT_VERSION = 1;
 constexpr std::uint64_t RECORD_HEADER_BYTES = 40;
 
 struct HeaderInfo {

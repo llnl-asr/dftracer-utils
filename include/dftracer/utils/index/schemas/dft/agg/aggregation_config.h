@@ -75,7 +75,7 @@ struct AggregationConfig {
         }
         // An aggregation built without one of these parts, or that held records
         // of an unknown phase, is stale.
-        text("partials+bins+columns+file+phase");
+        text("partials+bins+columns+file+phase+xxh3");
         return h.finish();
     }
 };

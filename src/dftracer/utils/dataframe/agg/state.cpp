@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -238,12 +239,10 @@ void set_insert(AggState::StringSet& set, dstd::String v, std::size_t group,
     set.insert(std::move(v));
 }
 
-// KMV element hash. FNV-1a avalanches poorly, so the mix is what makes the
-// bottom-k order (and the [0,1) normalization the estimator divides by)
-// uniform.
+// KMV element hash. XXH3 avalanches, which makes the bottom-k order (and the
+// [0,1) normalization the estimator divides by) uniform.
 std::uint64_t kmv_hash(dstd::StringView v) {
-    return dftracer::utils::dstd::hash::fnv1a_mix(
-        dftracer::utils::dstd::hash::fnv1a_hash(v));
+    return dftracer::utils::dstd::hash::xxh3_64(v);
 }
 
 }  // namespace

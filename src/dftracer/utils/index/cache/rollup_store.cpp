@@ -4,7 +4,7 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_canonical
 #include <dftracer/utils/dstd/big_endian.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -207,7 +207,7 @@ dataframe::AggStatePtr read_rollup(const CacheStore& db, std::uint64_t sig) {
 std::uint64_t rest_signature(const trace::views::detail::ViewPlan& plan) {
     dstd::String sig;
     add_rest_fields(sig, plan);
-    return dftracer::utils::dstd::hash::fnv1a_hash(sig);
+    return dftracer::utils::dstd::hash::xxh3_64(sig);
 }
 
 std::uint64_t plan_signature(const trace::views::detail::ViewPlan& plan) {
@@ -221,7 +221,7 @@ std::uint64_t plan_signature(const trace::views::detail::ViewPlan& plan) {
         sig.append(key_identity(g));
         sig.push_back('\0');
     }
-    return dftracer::utils::dstd::hash::fnv1a_hash(sig);
+    return dftracer::utils::dstd::hash::xxh3_64(sig);
 }
 
 dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(

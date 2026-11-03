@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
@@ -154,7 +154,7 @@ std::uint64_t identity_hash(const trace::views::detail::ViewPlan& plan) {
     k += plan.query ? plan.query->source() : "";
     k += phase_tag(plan);
     k += window_tag(plan);
-    return dftracer::utils::dstd::hash::fnv1a_hash(k);
+    return dftracer::utils::dstd::hash::xxh3_64(k);
 }
 
 dstd::String hex8(std::uint64_t h) {

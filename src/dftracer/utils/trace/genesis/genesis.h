@@ -152,7 +152,7 @@ struct GroupProgress {
 coro::CoroTask<Discovery> discover(coro::Scope& ctx,
                                    dstd::Vector<dstd::String> roots);
 
-/// 16-digit lowercase hex FNV-1a of `app|system|unique_input|nodes|ppn|
+/// 16-digit lowercase hex XXH3-64 of `app|system|unique_input|nodes|ppn|
 /// papi_set`.
 dstd::String run_id(const RunKeys& keys);
 

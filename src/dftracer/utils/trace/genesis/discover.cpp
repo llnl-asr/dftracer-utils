@@ -2,8 +2,8 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -309,7 +309,7 @@ dstd::String run_id(const RunKeys& k) {
                              "|" + dstd::to_string(k.nodes) + "|" +
                              dstd::to_string(k.ppn) + "|" + k.papi_set;
     dstd::String id(16, '\0');
-    dstd::hash::format_hex64(dstd::hash::fnv1a_hash(key), id.data());
+    dstd::hash::format_hex64(dstd::hash::xxh3_64(key), id.data());
     return id;
 }
 

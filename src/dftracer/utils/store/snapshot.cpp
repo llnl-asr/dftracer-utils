@@ -667,328 +667,379 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     return {};
 }
 
-dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
-    CheckReport report;
-    report.files = files_.size();
-    const std::size_t file_count = files_.size();
-    dstd::Vector<dstd::Optional<dstd::Error>> failures(file_count);
-    dstd::Vector<std::uint64_t> commits(file_count, 0);
-    dstd::Vector<std::uint64_t> blocks(file_count, 0);
-    dstd::Vector<std::uint64_t> metadata(file_count, 0);
-    dstd::Vector<std::uint64_t> segments(file_count, 0);
-    dstd::Vector<dstd::Vector<BadCommit>> bad_commits(file_count);
-    dstd::Vector<dstd::Vector<BadSegment>> bad_segments(file_count);
+namespace {
 
-    const auto check_file = [&](std::size_t index) {
-        const detail::FileData& file = files_[index];
-        const auto fail = [&](const dstd::Error& error) {
-            failures[index] = error;
-        };
-        const auto bad_commit = [&](std::uint64_t sequence) {
-            bad_commits[index].push_back({file.name, sequence});
-        };
-        const auto block_error = [](const detail::LoadStatus& status) {
-            return status.state == detail::LoadState::Failed
-                       ? status.error
-                       : dstd::Error(dstd::Condition::Parse);
-        };
-        struct BigRun {
-            BigRef ref;
-            std::uint64_t sequence = 0;
-        };
-        detail::PageHold walked;
-        const auto walkable = [&](const detail::ExtentSlot& extent,
-                                  const detail::SegmentSlot& slot,
-                                  std::uint64_t sequence,
-                                  dstd::Vector<BigRun>* bigs) {
-            auto bytes = read_raw(file, extent, slot.offset_in_extent,
-                                  slot.length, walked);
-            if (!bytes) return false;
-            auto view = SegmentView::open(*bytes);
-            if (!view) return false;
-            if (bigs != nullptr) {
-                for (SegmentView::Cursor at = view->lower_bound(ByteView{});
-                     !at.at_end(); at.next()) {
-                    if (at.entry().is_big()) {
-                        bigs->push_back({at.entry().big_ref(), sequence});
-                    }
-                }
-            }
-            return true;
-        };
+struct FileCheckOut {
+    dstd::Optional<dstd::Error> failure;
+    std::uint64_t commits = 0;
+    std::uint64_t blocks = 0;
+    std::uint64_t metadata = 0;
+    std::uint64_t segments = 0;
+    dstd::Vector<BadCommit> bad_commits;
+    dstd::Vector<BadSegment> bad_segments;
+};
 
-        if (!file.reader.index().tail.has_value()) {
-            for (const dstd::UniquePtr<detail::Commit>& owned : file.commits) {
-                detail::Commit& commit = *owned;
-                ++commits[index];
-                const detail::LoadStatus status = load_index(commit);
-                if (status.state != detail::LoadState::Good) {
-                    if (status.state == detail::LoadState::Failed) {
-                        fail(status.error);
-                        return;
-                    }
-                    bad_commit(commit.sequence);
-                    continue;
-                }
-                blocks[index] += commit.blocks.size();
-                if (!commit.synced) {
-                    const detail::LoadStatus checked = verify_commit(commit);
-                    if (checked.state == detail::LoadState::Failed) {
-                        fail(checked.error);
-                        return;
-                    }
-                    if (checked.state != detail::LoadState::Good) {
-                        bad_commit(commit.sequence);
-                        continue;
-                    }
-                } else {
-                    for (std::size_t block = 0; block < commit.blocks.size();
-                         ++block) {
-                        const detail::CommitExtent& held = commit.blocks[block];
-                        BlockReads reads;
-                        auto verified =
-                            file.reader.verify_block(held.ref, &reads);
-                        reads_->add(0, 1, 0, reads);
-                        if (!verified) {
-                            if (!verified.error().is(dstd::Condition::Parse)) {
-                                fail(verified.error());
-                                return;
-                            }
-                            bad_commit(commit.sequence);
-                            continue;
-                        }
-                        if (held.listed == nullptr ||
-                            held.listed->segments.empty()) {
-                            continue;
-                        }
-                        const detail::LoadStatus extent =
-                            load_extent(commit, block);
-                        if (extent.state == detail::LoadState::Failed) {
-                            fail(extent.error);
-                            return;
-                        }
-                        if (extent.state != detail::LoadState::Good) {
-                            bad_commit(commit.sequence);
-                        }
-                    }
-                }
-                for (const dstd::UniquePtr<detail::LazyBlock>& block :
-                     commit.segment_blocks) {
-                    for (const detail::SegmentSlot& slot : block->segments) {
-                        // An extent that does not verify is reported as its
-                        // commit, since its bytes are not there to walk.
-                        if (commit.synced &&
-                            load_extent(commit, slot.block).state !=
-                                detail::LoadState::Good) {
-                            continue;
-                        }
-                        ++segments[index];
-                        const detail::ExtentSlot& extent =
-                            commit.extent_slots[slot.block];
-                        if (walkable(extent, slot, commit.sequence, nullptr)) {
-                            continue;
-                        }
-                        bad_segments[index].push_back(
-                            {file.name, commit.blocks[slot.block].ref.offset,
-                             slot.offset_in_extent});
-                    }
-                }
-            }
-            return;
+struct BigRun {
+    BigRef ref;
+    std::uint64_t sequence = 0;
+};
+
+struct PendingSegments {
+    std::uint64_t sequence = 0;
+    std::uint32_t copy_id = 0;
+    BlockHandle segments;
+};
+
+template <class T, class Offset>
+void sort_by_offset(dstd::Vector<T>& items, Offset offset_of) {
+    std::sort(items.begin(), items.end(), [&](const T& a, const T& b) {
+        if (offset_of(a) != offset_of(b)) return offset_of(a) < offset_of(b);
+        return a.sequence < b.sequence;
+    });
+}
+
+}  // namespace
+
+struct Snapshot::FileCheck {
+    const Snapshot& snapshot;
+    const detail::FileData& file;
+    FileCheckOut& out;
+    detail::PageHold walked;
+
+    void fail(const dstd::Error& error) { out.failure = error; }
+
+    void bad_commit(std::uint64_t sequence) {
+        out.bad_commits.push_back({file.name, sequence});
+    }
+
+    template <class T, class Offset>
+    void bad_commits_from(const dstd::Vector<T>& items, std::size_t at,
+                          Offset offset_of) {
+        const auto offset = offset_of(items[at]);
+        for (; at < items.size() && offset_of(items[at]) == offset; ++at) {
+            bad_commit(items[at].sequence);
         }
+    }
 
-        struct Pending {
-            std::uint64_t sequence = 0;
-            std::uint32_t copy_id = 0;
-            BlockHandle segments;
-        };
-        dstd::Vector<Pending> pending;
-        bool stopped = false;
-        const auto walk = [&](const detail::LazyBlock& node,
-                              std::uint32_t level, auto&& self) -> void {
-            if (stopped) return;
-            detail::LazyBlock& block = const_cast<detail::LazyBlock&>(node);
-            ++metadata[index];
-            const detail::LoadStatus status = load_block(file, block);
-            if (status.state != detail::LoadState::Good) {
-                fail(block_error(status));
-                stopped = true;
-                return;
-            }
-            if (level > 1) {
-                for (const dstd::UniquePtr<detail::LazyBlock>& child :
-                     node.children) {
-                    self(*child, level - 1, self);
-                }
-                return;
-            }
-            for (std::size_t i = 0; i < node.directory->size(); ++i) {
-                auto entry = node.directory->entry(i);
-                if (!entry) {
-                    fail(dstd::Error(dstd::Condition::Parse));
-                    stopped = true;
-                    return;
-                }
-                for (const DirectoryCopy& copy : entry->copies) {
-                    for (const DirectoryCommit& range : copy.commits) {
-                        pending.push_back(
-                            {range.sequence, copy.local_id, range.segments});
-                    }
-                }
-            }
-        };
-        for (const dstd::UniquePtr<detail::LazyBlock>& root : file.roots) {
-            walk(*root, file.directory_levels, walk);
+    // Verifies one block. False when the read itself failed; `good` is false
+    // when its bytes do not match.
+    bool verify(const ExtentRef& ref, bool& good) {
+        BlockReads reads;
+        auto verified = file.reader.verify_block(ref, &reads);
+        snapshot.reads_->add(0, 1, 0, reads);
+        good = static_cast<bool>(verified);
+        if (!verified && !verified.error().is(dstd::Condition::Parse)) {
+            fail(verified.error());
+            return false;
         }
-        if (stopped) return;
+        return true;
+    }
 
-        dstd::Vector<std::uint64_t> sequences;
-        sequences.reserve(pending.size());
-        for (const Pending& entry : pending)
-            sequences.push_back(entry.sequence);
-        std::sort(sequences.begin(), sequences.end());
-        sequences.erase(std::unique(sequences.begin(), sequences.end()),
-                        sequences.end());
-        commits[index] = sequences.size();
-        // Per extent: 0 not checked yet, 1 good, 2 bad.
-        dstd::Vector<std::uint8_t> seen(file.extent_slots.size(), 0);
-        dstd::Vector<BigRun> bigs;
+    static dstd::Error block_error(const detail::LoadStatus& status) {
+        return status.state == detail::LoadState::Failed
+                   ? status.error
+                   : dstd::Error(dstd::Condition::Parse);
+    }
 
-        std::sort(pending.begin(), pending.end(),
-                  [](const Pending& a, const Pending& b) {
-                      if (a.segments.offset != b.segments.offset) {
-                          return a.segments.offset < b.segments.offset;
-                      }
-                      return a.sequence < b.sequence;
-                  });
-        for (std::size_t i = 0; i < pending.size(); ++i) {
-            if (pending[i].segments.empty()) continue;
-            if (i > 0 &&
-                pending[i - 1U].segments.offset == pending[i].segments.offset) {
-                continue;
+    bool walkable(const detail::ExtentSlot& extent,
+                  const detail::SegmentSlot& slot, std::uint64_t sequence,
+                  dstd::Vector<BigRun>* bigs) {
+        auto bytes = snapshot.read_raw(file, extent, slot.offset_in_extent,
+                                       slot.length, walked);
+        if (!bytes) return false;
+        auto view = SegmentView::open(*bytes);
+        if (!view) return false;
+        if (bigs != nullptr) {
+            for (SegmentView::Cursor at = view->lower_bound(ByteView{});
+                 !at.at_end(); at.next()) {
+                if (at.entry().is_big()) {
+                    bigs->push_back({at.entry().big_ref(), sequence});
+                }
             }
-            detail::LazyBlock block;
-            block.kind = detail::BlockKind::Segments;
-            block.handle = pending[i].segments;
-            ++metadata[index];
-            const detail::LoadStatus status = load_block(file, block);
+        }
+        return true;
+    }
+
+    // A file without a tail: its commits are checked one by one.
+    void check_commits() {
+        for (const dstd::UniquePtr<detail::Commit>& owned : file.commits) {
+            detail::Commit& commit = *owned;
+            ++out.commits;
+            const detail::LoadStatus status = snapshot.load_index(commit);
             if (status.state != detail::LoadState::Good) {
                 if (status.state == detail::LoadState::Failed) {
                     fail(status.error);
                     return;
                 }
-                for (std::size_t at = i; at < pending.size(); ++at) {
-                    if (pending[at].segments.offset ==
-                        pending[i].segments.offset) {
-                        bad_commit(pending[at].sequence);
-                    }
-                }
+                bad_commit(commit.sequence);
                 continue;
             }
-            for (const detail::SegmentSlot& slot : block.segments) {
-                if (slot.extent_index >= seen.size()) {
-                    bad_commit(slot.sequence);
+            out.blocks += commit.blocks.size();
+            if (!commit.synced) {
+                const detail::LoadStatus checked =
+                    snapshot.verify_commit(commit);
+                if (checked.state == detail::LoadState::Failed) {
+                    fail(checked.error);
+                    return;
+                }
+                if (checked.state != detail::LoadState::Good) {
+                    bad_commit(commit.sequence);
                     continue;
                 }
-                std::uint8_t& known = seen[slot.extent_index];
-                if (known == 0) {
-                    ++blocks[index];
-                    BlockReads reads;
-                    auto verified =
-                        file.reader.verify_block(slot.extent, &reads);
-                    reads_->add(0, 1, 0, reads);
-                    if (!verified &&
-                        !verified.error().is(dstd::Condition::Parse)) {
-                        fail(verified.error());
-                        return;
-                    }
-                    known = verified ? 1 : 2;
-                    if (known == 1) {
-                        const detail::LoadStatus extent =
-                            load_extent(file, slot.extent_index, slot.extent);
-                        if (extent.state == detail::LoadState::Failed) {
-                            fail(extent.error);
-                            return;
-                        }
-                        if (extent.state != detail::LoadState::Good) known = 2;
-                    }
-                }
-                if (known != 1) {
-                    bad_commit(slot.sequence);
-                    continue;
-                }
-                ++segments[index];
-                if (walkable(file.extent_slots.slot(slot.extent_index), slot,
-                             slot.sequence, &bigs)) {
-                    continue;
-                }
-                bad_segments[index].push_back(
-                    {file.name, slot.extent.offset, slot.offset_in_extent});
+            } else if (!check_synced_blocks(commit)) {
+                return;
+            }
+            check_commit_segments(commit);
+        }
+    }
+
+    bool check_synced_blocks(detail::Commit& commit) {
+        for (std::size_t block = 0; block < commit.blocks.size(); ++block) {
+            const detail::CommitExtent& held = commit.blocks[block];
+            bool good = false;
+            if (!verify(held.ref, good)) return false;
+            if (!good) {
+                bad_commit(commit.sequence);
+                continue;
+            }
+            if (held.listed == nullptr || held.listed->segments.empty()) {
+                continue;
+            }
+            const detail::LoadStatus extent =
+                snapshot.load_extent(commit, block);
+            if (extent.state == detail::LoadState::Failed) {
+                fail(extent.error);
+                return false;
+            }
+            if (extent.state != detail::LoadState::Good) {
+                bad_commit(commit.sequence);
             }
         }
+        return true;
+    }
 
-        // Each run is read once. No directory block names them.
-        std::sort(bigs.begin(), bigs.end(),
-                  [](const BigRun& a, const BigRun& b) {
-                      if (a.ref.offset != b.ref.offset) {
-                          return a.ref.offset < b.ref.offset;
-                      }
-                      return a.sequence < b.sequence;
-                  });
-        for (std::size_t i = 0; i < bigs.size(); ++i) {
-            if (i > 0 && bigs[i - 1U].ref.offset == bigs[i].ref.offset) {
+    void check_commit_segments(detail::Commit& commit) {
+        for (const dstd::UniquePtr<detail::LazyBlock>& block :
+             commit.segment_blocks) {
+            for (const detail::SegmentSlot& slot : block->segments) {
+                // An extent that does not verify is reported as its
+                // commit, since its bytes are not there to walk.
+                if (commit.synced &&
+                    snapshot.load_extent(commit, slot.block).state !=
+                        detail::LoadState::Good) {
+                    continue;
+                }
+                ++out.segments;
+                const detail::ExtentSlot& extent =
+                    commit.extent_slots[slot.block];
+                if (walkable(extent, slot, commit.sequence, nullptr)) {
+                    continue;
+                }
+                out.bad_segments.push_back(
+                    {file.name, commit.blocks[slot.block].ref.offset,
+                     slot.offset_in_extent});
+            }
+        }
+    }
+
+    // Returns false when a block of the tree does not load.
+    bool walk_tree(const detail::LazyBlock& node, std::uint32_t level,
+                   dstd::Vector<PendingSegments>& pending) {
+        detail::LazyBlock& block = const_cast<detail::LazyBlock&>(node);
+        ++out.metadata;
+        const detail::LoadStatus status = snapshot.load_block(file, block);
+        if (status.state != detail::LoadState::Good) {
+            fail(block_error(status));
+            return false;
+        }
+        if (level > 1) {
+            for (const dstd::UniquePtr<detail::LazyBlock>& child :
+                 node.children) {
+                if (!walk_tree(*child, level - 1, pending)) return false;
+            }
+            return true;
+        }
+        for (std::size_t i = 0; i < node.directory->size(); ++i) {
+            auto entry = node.directory->entry(i);
+            if (!entry) {
+                fail(dstd::Error(dstd::Condition::Parse));
+                return false;
+            }
+            for (const DirectoryCopy& copy : entry->copies) {
+                for (const DirectoryCommit& range : copy.commits) {
+                    pending.push_back(
+                        {range.sequence, copy.local_id, range.segments});
+                }
+            }
+        }
+        return true;
+    }
+
+    void count_commits(const dstd::Vector<PendingSegments>& pending) {
+        dstd::Vector<std::uint64_t> sequences;
+        sequences.reserve(pending.size());
+        for (const PendingSegments& entry : pending) {
+            sequences.push_back(entry.sequence);
+        }
+        std::sort(sequences.begin(), sequences.end());
+        sequences.erase(std::unique(sequences.begin(), sequences.end()),
+                        sequences.end());
+        out.commits = sequences.size();
+    }
+
+    // Per extent: 0 not checked yet, 1 good, 2 bad. False on a failed read.
+    bool classify_extent(const detail::SegmentSlot& slot,
+                         dstd::Vector<std::uint8_t>& seen,
+                         std::uint8_t& known_out) {
+        std::uint8_t& known = seen[slot.extent_index];
+        if (known == 0) {
+            ++out.blocks;
+            bool good = false;
+            if (!verify(slot.extent, good)) return false;
+            known = good ? 1 : 2;
+            if (known == 1) {
+                const detail::LoadStatus extent =
+                    snapshot.load_extent(file, slot.extent_index, slot.extent);
+                if (extent.state == detail::LoadState::Failed) {
+                    fail(extent.error);
+                    return false;
+                }
+                if (extent.state != detail::LoadState::Good) known = 2;
+            }
+        }
+        known_out = known;
+        return true;
+    }
+
+    bool check_segment_block(const detail::LazyBlock& block,
+                             dstd::Vector<std::uint8_t>& seen,
+                             dstd::Vector<BigRun>& bigs) {
+        for (const detail::SegmentSlot& slot : block.segments) {
+            if (slot.extent_index >= seen.size()) {
+                bad_commit(slot.sequence);
                 continue;
             }
-            ++blocks[index];
+            std::uint8_t known = 0;
+            if (!classify_extent(slot, seen, known)) return false;
+            if (known != 1) {
+                bad_commit(slot.sequence);
+                continue;
+            }
+            ++out.segments;
+            if (walkable(file.extent_slots.slot(slot.extent_index), slot,
+                         slot.sequence, &bigs)) {
+                continue;
+            }
+            out.bad_segments.push_back(
+                {file.name, slot.extent.offset, slot.offset_in_extent});
+        }
+        return true;
+    }
+
+    bool check_pending(dstd::Vector<PendingSegments>& pending,
+                       dstd::Vector<BigRun>& bigs) {
+        const auto offset_of = [](const PendingSegments& entry) {
+            return entry.segments.offset;
+        };
+        // Per extent: 0 not checked yet, 1 good, 2 bad.
+        dstd::Vector<std::uint8_t> seen(file.extent_slots.size(), 0);
+        sort_by_offset(pending, offset_of);
+        for (std::size_t i = 0; i < pending.size(); ++i) {
+            if (pending[i].segments.empty()) continue;
+            if (i > 0 && offset_of(pending[i - 1U]) == offset_of(pending[i])) {
+                continue;
+            }
+            detail::LazyBlock block;
+            block.kind = detail::BlockKind::Segments;
+            block.handle = pending[i].segments;
+            ++out.metadata;
+            const detail::LoadStatus status = snapshot.load_block(file, block);
+            if (status.state != detail::LoadState::Good) {
+                if (status.state == detail::LoadState::Failed) {
+                    fail(status.error);
+                    return false;
+                }
+                bad_commits_from(pending, i, offset_of);
+                continue;
+            }
+            if (!check_segment_block(block, seen, bigs)) return false;
+        }
+        return true;
+    }
+
+    // Each run is read once. No directory block names them.
+    bool check_bigs(dstd::Vector<BigRun>& bigs) {
+        const auto offset_of = [](const BigRun& run) { return run.ref.offset; };
+        sort_by_offset(bigs, offset_of);
+        for (std::size_t i = 0; i < bigs.size(); ++i) {
+            if (i > 0 && offset_of(bigs[i - 1U]) == offset_of(bigs[i])) {
+                continue;
+            }
+            ++out.blocks;
             const BigRef& big = bigs[i].ref;
-            bool bad = big.length == 0 ||
-                       big.length > std::numeric_limits<std::uint32_t>::max();
-            if (!bad) {
-                BlockReads reads;
-                auto verified = file.reader.verify_block(
+            bool good = big.length != 0 &&
+                        big.length <= std::numeric_limits<std::uint32_t>::max();
+            if (good &&
+                !verify(
                     ExtentRef{big.offset,
                               static_cast<std::uint32_t>(big.length), big.crc},
-                    &reads);
-                reads_->add(0, 1, 0, reads);
-                if (!verified) {
-                    if (!verified.error().is(dstd::Condition::Parse)) {
-                        fail(verified.error());
-                        return;
-                    }
-                    bad = true;
-                }
+                    good)) {
+                return false;
             }
-            if (!bad) continue;
-            for (std::size_t at = i;
-                 at < bigs.size() && bigs[at].ref.offset == big.offset; ++at) {
-                bad_commit(bigs[at].sequence);
-            }
+            if (!good) bad_commits_from(bigs, i, offset_of);
         }
+        return true;
+    }
+
+    void run() {
+        if (!file.reader.index().tail.has_value()) {
+            check_commits();
+            return;
+        }
+        dstd::Vector<PendingSegments> pending;
+        for (const dstd::UniquePtr<detail::LazyBlock>& root : file.roots) {
+            if (!walk_tree(*root, file.directory_levels, pending)) return;
+        }
+        count_commits(pending);
+        dstd::Vector<BigRun> bigs;
+        if (!check_pending(pending, bigs)) return;
+        check_bigs(bigs);
+    }
+};
+
+dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
+    CheckReport report;
+    report.files = files_.size();
+    const std::size_t file_count = files_.size();
+    dstd::Vector<FileCheckOut> outs(file_count);
+
+    const auto check_file = [&](std::size_t index) {
+        FileCheck{*this, files_[index], outs[index], {}}.run();
     };
     for_each_index(fork_join_runtime(), file_count, 1, check_file);
 
     for (std::size_t index = 0; index < file_count; ++index) {
-        if (failures[index]) {
-            return dstd::Unexpected<dstd::Error>(*failures[index]);
+        FileCheckOut& out = outs[index];
+        if (out.failure) {
+            return dstd::Unexpected<dstd::Error>(*out.failure);
         }
-        report.commits += commits[index];
-        report.blocks += blocks[index];
-        report.metadata_blocks += metadata[index];
-        report.segments += segments[index];
+        report.commits += out.commits;
+        report.blocks += out.blocks;
+        report.metadata_blocks += out.metadata;
+        report.segments += out.segments;
         // A commit is reported once, however many of its blocks fail.
-        std::sort(bad_commits[index].begin(), bad_commits[index].end(),
+        std::sort(out.bad_commits.begin(), out.bad_commits.end(),
                   [](const BadCommit& a, const BadCommit& b) {
                       return a.sequence < b.sequence;
                   });
-        for (std::size_t at = 0; at < bad_commits[index].size(); ++at) {
-            const BadCommit& bad = bad_commits[index][at];
-            if (at > 0 &&
-                bad_commits[index][at - 1U].sequence == bad.sequence) {
+        for (std::size_t at = 0; at < out.bad_commits.size(); ++at) {
+            const BadCommit& bad = out.bad_commits[at];
+            if (at > 0 && out.bad_commits[at - 1U].sequence == bad.sequence) {
                 continue;
             }
             report.bad_commits.push_back(bad);
         }
-        for (const BadSegment& bad : bad_segments[index]) {
+        for (const BadSegment& bad : out.bad_segments) {
             report.bad_segments.push_back(bad);
         }
     }

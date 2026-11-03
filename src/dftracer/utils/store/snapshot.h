@@ -785,6 +785,7 @@ class Snapshot {
         const detail::FileData& file, const detail::ExtentSlot& extent,
         const detail::SegmentSlot& slot, std::size_t first_page,
         std::size_t end_page, detail::PageHold& hold) const;
+    struct FileCheck;
     /// Reads the extent refs of a summary commit once, under its index mutex,
     /// and builds its blocks, extents and segments.
     detail::LoadStatus load_index(detail::Commit& commit) const;

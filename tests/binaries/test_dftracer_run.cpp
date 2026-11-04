@@ -26,10 +26,10 @@ dstd::String env_or_probe(const char* var, const dstd::String& name) {
 }
 
 dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                           int num_events) {
-    auto trace_gz = env.create_dft_test_gzip_file(num_events);
+                           int event_count) {
+    auto trace_gz = env.create_dft_test_gzip_file(event_count);
     if (trace_gz.empty()) return "";
-    dstd::String pfw_path = env.get_dir() + "/trace.pfw.gz";
+    dstd::String pfw_path = env.dir() + "/trace.pfw.gz";
     REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
@@ -108,8 +108,7 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50).empty());
 
-        RunResult r =
-            run_capture_stderr(run, {env.get_dir(), "--plugin", plugin});
+        RunResult r = run_capture_stderr(run, {env.dir(), "--plugin", plugin});
         CHECK(r.exit_code == 0);
         long events = first_capture(r.err, "events=([0-9]+)");
         long with_dur = first_capture(r.err, "with_dur=([0-9]+)");
@@ -133,8 +132,7 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 40).empty());
 
-        RunResult r =
-            run_capture_stderr(run, {env.get_dir(), "--plugin", plugin});
+        RunResult r = run_capture_stderr(run, {env.dir(), "--plugin", plugin});
         CHECK(r.exit_code == 0);
 
         long total = 0;
@@ -170,8 +168,7 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50).empty());
 
-        RunResult r =
-            run_capture_stderr(run, {env.get_dir(), "--plugin", plugin});
+        RunResult r = run_capture_stderr(run, {env.dir(), "--plugin", plugin});
         CHECK(r.exit_code == 0);
         long matched = first_capture(r.err, "matched=([0-9]+)");
         long total = first_capture(r.err, "total=([0-9]+)");
@@ -202,7 +199,7 @@ TEST_SUITE("DFTracerRun") {
         // Consumer first on the command line: the fold order comes from the
         // declared provides/consumes, so the producer still runs first.
         RunResult r = run_capture_stderr(
-            run, {env.get_dir(), "--plugin", consumer, "--plugin", producer});
+            run, {env.dir(), "--plugin", consumer, "--plugin", producer});
         CHECK(r.exit_code == 0);
         CHECK(r.err.find("perbatch_consumer: WIRED") != dstd::String::npos);
         // Every generated event carries a duration, so the producer's summed
@@ -229,7 +226,7 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(!create_pfw_gz(env, 20).empty());
 
         RunResult r =
-            run_capture_stderr(run, {env.get_dir(), "--plugin", consumer});
+            run_capture_stderr(run, {env.dir(), "--plugin", consumer});
         CHECK(r.exit_code != 0);
         CHECK(r.err.find("com.example.perbatch_dur") != dstd::String::npos);
         CHECK(r.err.find("no loaded plugin provides") != dstd::String::npos);
@@ -258,7 +255,7 @@ TEST_SUITE("DFTracerRun") {
         // Consumer first on the command line: agg_result still finds the
         // producer's merged accumulator because the fold order is derived.
         RunResult r = run_capture_stderr(
-            run, {env.get_dir(), "--plugin", consumer, "--plugin", producer});
+            run, {env.dir(), "--plugin", consumer, "--plugin", producer});
         CHECK(r.exit_code == 0);
         CHECK(r.err.find("dur_stats_consumer: WIRED") != dstd::String::npos);
         // The merged count equals the whole-scan event count only if every
@@ -290,7 +287,7 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(!create_pfw_gz(env, 20).empty());
 
         RunResult r =
-            run_capture_stderr(run, {env.get_dir(), "--plugin", consumer});
+            run_capture_stderr(run, {env.dir(), "--plugin", consumer});
         CHECK(r.exit_code != 0);
         CHECK(r.err.find("com.example.dur_stats") != dstd::String::npos);
         CHECK(r.err.find("no loaded plugin provides") != dstd::String::npos);
@@ -357,7 +354,7 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(!create_pfw_gz(env, 10).empty());
 
         RunResult r = run_capture_stderr(
-            run, {env.get_dir(), "--plugin", "/no/such/plugin.so"});
+            run, {env.dir(), "--plugin", "/no/such/plugin.so"});
         CHECK(r.exit_code != 0);
     }
 }

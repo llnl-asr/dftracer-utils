@@ -34,7 +34,7 @@ namespace {
 constexpr int EVENTS = 16;
 
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
-    const dstd::String dir = env.get_dir() + "/reference_trace";
+    const dstd::String dir = env.dir() + "/reference_trace";
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     const dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;
@@ -107,7 +107,7 @@ TEST_CASE("reference_plugin: every service reports OK") {
     auto set = plugins::Plugins::builder()
                    .add(REFERENCE_PLUGIN_PATH,
                         plugins::ConfigTree::from_json_string(
-                            R"({"workdir": ")" + env.get_dir() + R"("})"))
+                            R"({"workdir": ")" + env.dir() + R"("})"))
                    .build();
     INFO((set.has_value() ? dstd::String{}
                           : dstd::String(set.error().message())));
@@ -132,7 +132,7 @@ TEST_CASE("reference_plugin: a forced-missing service fails loudly") {
     auto set = plugins::Plugins::builder()
                    .add(REFERENCE_PLUGIN_PATH,
                         plugins::ConfigTree::from_json_string(
-                            R"({"workdir": ")" + env.get_dir() +
+                            R"({"workdir": ")" + env.dir() +
                             R"(", "force_missing": "dftu.svc.agg@1"})"))
                    .build();
     INFO((set.has_value() ? dstd::String{}

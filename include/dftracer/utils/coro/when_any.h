@@ -141,9 +141,8 @@ struct WhenAnySharedState : detail::WhenAnyCompletionState {
         cancellation_tokens.reserve(awaitables.size());
 
         for (auto& awaitable : awaitables) {
-            if constexpr (requires { awaitable.get_cancellation_token(); }) {
-                cancellation_tokens.push_back(
-                    awaitable.get_cancellation_token());
+            if constexpr (requires { awaitable.cancellation_token(); }) {
+                cancellation_tokens.push_back(awaitable.cancellation_token());
             } else {
                 cancellation_tokens.push_back(nullptr);
             }
@@ -181,7 +180,7 @@ struct WhenAnySharedState : detail::WhenAnyCompletionState {
  * WhenAnyAwaitable - Completes when first awaitable completes
  *
  * Losers are cancelled and awaited before when_any returns. An awaitable may
- * expose get_cancellation_token() (its token is set) and cancel() (called once
+ * expose cancellation_token() (its token is set) and cancel() (called once
  * from the winner's thread, possibly while the loser runs, so it must be
  * thread-safe and make the loser finish). An awaitable with neither runs to
  * completion and delays the return.
@@ -472,11 +471,9 @@ struct WhenAnyTupleState : detail::WhenAnyCompletionState {
             [this](auto&... a) {
                 (
                     [&](auto& aw) {
-                        if constexpr (requires {
-                                          aw.get_cancellation_token();
-                                      }) {
+                        if constexpr (requires { aw.cancellation_token(); }) {
                             cancellation_tokens.push_back(
-                                aw.get_cancellation_token());
+                                aw.cancellation_token());
                         } else {
                             cancellation_tokens.push_back(nullptr);
                         }

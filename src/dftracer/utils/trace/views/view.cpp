@@ -621,10 +621,10 @@ coro::CoroTask<ExportStats> scan_batches(
     detail::scan::ScanPlan v,
     dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
         on_batch,
-    std::size_t num_slots, std::uint64_t limit) {
+    std::size_t slot_count, std::uint64_t limit) {
     const std::uint64_t cap = v->limit;
     co_return co_await detail::scan::for_each_batch(
-        v, std::move(on_batch), num_slots,
+        v, std::move(on_batch), slot_count,
         cap && limit ? std::min(cap, limit) : (cap ? cap : limit));
 }
 
@@ -784,9 +784,9 @@ dataframe::LazyFrame View::compare(const View& variant) const {
 coro::CoroTask<ExportStats> View::for_each_batch(
     dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
         on_batch,
-    std::size_t num_slots, std::uint64_t limit) const {
+    std::size_t slot_count, std::uint64_t limit) const {
     return scan_batches(absorbed("for_each_batch", Need::EventsHead),
-                        std::move(on_batch), num_slots, limit);
+                        std::move(on_batch), slot_count, limit);
 }
 
 coro::CoroTask<ExportStats> View::run_folds(

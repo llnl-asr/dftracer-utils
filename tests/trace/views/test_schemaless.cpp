@@ -43,7 +43,7 @@ namespace {
 dstd::String write_gz(TestEnvironment& env, const dstd::String& name,
                       const dstd::Vector<dstd::String>& lines,
                       std::size_t member_bytes = 256) {
-    const dstd::String plain = env.get_dir() + "/" + name + ".ndjson";
+    const dstd::String plain = env.dir() + "/" + name + ".ndjson";
     {
         dftu_utils_test::FileOut o(plain);
         for (const auto& l : lines) o << l << "\n";
@@ -436,7 +436,7 @@ source: |
 )",
                                "test");
         TestEnvironment env(10);
-        const dstd::String plain = env.get_dir() + "/t.ndjson";
+        const dstd::String plain = env.dir() + "/t.ndjson";
         {
             dftu_utils_test::FileOut o(plain);
             o << R"({"n":2.0,"meta":{"b":1,"a":[1,2]}})" << "\n"
@@ -897,7 +897,7 @@ fields:
             dstd::String(src),
             dstd::String(dstd::String(determine_index_path(src, ""))));
         TraceWriteOptions opts;
-        opts.output_path = env.get_dir() + "/out.pfw.gz";
+        opts.output_path = env.dir() + "/out.pfw.gz";
         opts.build_index = true;
         opts.member_size = 1024;
         (void)vs.sink_trace(opts).get();
@@ -932,7 +932,7 @@ fields:
             R"({"k":6,"s":"e"})"};
         const dstd::String gz = write_gz(env, "ride", lines, 40);
         const dstd::String idx =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/ri"));
+            dstd::String(determine_index_path(gz, env.dir() + "/ri"));
         const View v = View::from_file(dstd::String(gz), dstd::String(idx))
                            .record_schema("generic");
         (void)v.select({"k"}).collect().get();
@@ -964,7 +964,7 @@ fields:
                             dstd::String(determine_index_path(src, "")))
                 .record_schema("generic");
         TraceWriteOptions opts;
-        opts.output_path = env.get_dir() + "/out.ndjson.gz";
+        opts.output_path = env.dir() + "/out.ndjson.gz";
         opts.build_index = true;
         opts.member_size = 40;
         const ExportStats st = vs.sink_trace(opts).get();
@@ -1007,7 +1007,7 @@ fields:
             const dstd::String gz = write_gz(env, "deep", lines, 1 << 24);
             const View v = View::from_file(
                 dstd::String(gz),
-                dstd::String(determine_index_path(gz, env.get_dir() + "/di")));
+                dstd::String(determine_index_path(gz, env.dir() + "/di")));
             const dataframe::DataFrame f = v.collect().get();
             REQUIRE(f.num_rows() == 4);
             dstd::Map<dstd::String, std::size_t> longest;
@@ -1049,10 +1049,11 @@ fields:
                 R"({"k":3,"s":"arr","v":)" + arr + "}"};
             TestEnvironment env(10);
             const dstd::String gz = write_gz(env, "pdeep", lines, 1 << 24);
-            const View v = View::from_file(dstd::String(gz),
-                                           dstd::String(determine_index_path(
-                                               gz, env.get_dir() + "/pi")))
-                               .record_schema("generic");
+            const View v =
+                View::from_file(
+                    dstd::String(gz),
+                    dstd::String(determine_index_path(gz, env.dir() + "/pi")))
+                    .record_schema("generic");
             const dataframe::DataFrame f = v.collect().get();
             REQUIRE(f.num_rows() == 3);
             std::size_t long_texts = 0;
@@ -1076,8 +1077,8 @@ fields:
             dstd::String(dstd::String(determine_index_path(ref, ""))));
 
         const dstd::String agg = write_gz(env, "agg", lines, 1024);
-        const dstd::String agg_idx = dstd::String(
-            determine_index_path(agg, env.get_dir() + "/agg_index"));
+        const dstd::String agg_idx =
+            dstd::String(determine_index_path(agg, env.dir() + "/agg_index"));
         REQUIRE_FALSE(dstd::fs::exists(agg_idx).value());
         const View va =
             View::from_file(dstd::String(agg), dstd::String(agg_idx));
@@ -1088,8 +1089,8 @@ fields:
         CHECK(count_of(va, "where size < 50") == 50);
 
         const dstd::String dump = write_gz(env, "dump", lines, 1024);
-        const dstd::String dump_idx = dstd::String(
-            determine_index_path(dump, env.get_dir() + "/dump_index"));
+        const dstd::String dump_idx =
+            dstd::String(determine_index_path(dump, env.dir() + "/dump_index"));
         REQUIRE_FALSE(dstd::fs::exists(dump_idx).value());
         StringSink sink;
         (void)View::from_file(dstd::String(dump), dstd::String(dump_idx))
@@ -1110,8 +1111,8 @@ fields:
         // A time window takes no bootstrap; the next whole read builds the
         // tier along the way.
         const dstd::String late = write_gz(env, "late", lines, 1024);
-        const dstd::String late_idx = dstd::String(
-            determine_index_path(late, env.get_dir() + "/late_index"));
+        const dstd::String late_idx =
+            dstd::String(determine_index_path(late, env.dir() + "/late_index"));
         const View vl =
             View::from_file(dstd::String(late), dstd::String(late_idx));
         CHECK(count_of(vl, "time_range 1000 .. 2000") == 100);

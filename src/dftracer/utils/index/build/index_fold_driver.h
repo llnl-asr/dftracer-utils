@@ -216,7 +216,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     static constexpr std::size_t PARSER_RETAIN_BYTES =
         2 * trace::PARSE_BATCH_BYTES;
 
-    void begin(std::size_t /*num_checkpoints*/) override {}
+    void begin(std::size_t /*checkpoint_count*/) override {}
     void bind_scope(coro::Scope* scope) override { scope_ = scope; }
     coro::CoroTask<void> on_checkpoint(std::size_t /*cp*/) override {
         co_return;

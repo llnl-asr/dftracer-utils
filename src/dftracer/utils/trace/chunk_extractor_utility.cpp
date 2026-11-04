@@ -19,11 +19,11 @@ using utilities::fileio::ChunkWriterConfig;
 
 dstd::StringView event_of_line(dstd::StringView line) {
     const char* trimmed;
-    std::size_t trimmed_length;
+    std::size_t trimmed_size;
     if (json::trim_and_validate(line.data(), line.length(), trimmed,
-                                trimmed_length) &&
-        trimmed_length > 8) {
-        return dstd::StringView(trimmed, trimmed_length);
+                                trimmed_size) &&
+        trimmed_size > 8) {
+        return dstd::StringView(trimmed, trimmed_size);
     }
     return {};
 }
@@ -122,7 +122,7 @@ ChunkExtractorUtility::extract_and_write(
                 if (input.compute_hash) {
                     hasher.reset();
                     hasher.update(event);
-                    content_hash += hasher.get_hash().value;
+                    content_hash += hasher.hash().value;
                 }
             }
         }

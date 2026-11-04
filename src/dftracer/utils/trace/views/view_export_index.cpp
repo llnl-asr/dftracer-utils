@@ -73,7 +73,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     const std::size_t part_size = opts.part_size;  // 0 = single file
     const bool multi = part_size > 0;
 
-    const std::size_t num_producers = std::max<std::size_t>(
+    const std::size_t producer_count = std::max<std::size_t>(
         1, std::min<std::size_t>(std::max<std::size_t>(units.size(), 1),
                                  MAX_PRODUCERS));
 
@@ -183,7 +183,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     utilities::fileio::GzipWriterOptions wopts;
     wopts.member_size = member_size;
     wopts.level = opts.level;
-    wopts.workers = opts.num_workers;
+    wopts.workers = opts.worker_count;
     wopts.part_size = part_size;
     wopts.compress = opts.compress;
     wopts.part_name = [&](std::size_t i) {
@@ -219,7 +219,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     }
     auto writer = std::move(*opened);
 
-    auto ch = coro::make_channel<dstd::String>(2 * num_producers + 1);
+    auto ch = coro::make_channel<dstd::String>(2 * producer_count + 1);
 
     co_await coro::with_scope([&](coro::Scope& child) -> coro::CoroTask<void> {
         // Consumer: append batches in arrival order; the writer cuts
@@ -251,11 +251,11 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             auto prod = ch->producer();
             co_await coro::with_scope([&](coro::Scope& workers)
                                           -> coro::CoroTask<void> {
-                for (std::size_t w = 0; w < num_producers; ++w) {
+                for (std::size_t w = 0; w < producer_count; ++w) {
                     workers.spawn([&, w]() -> coro::CoroTask<void> {
                         dstd::String batch;
                         for (std::size_t i = w; i < units.size();
-                             i += num_producers) {
+                             i += producer_count) {
                             if (is_cancelled(plan) ||
                                 failed.load(std::memory_order_relaxed))
                                 co_return;

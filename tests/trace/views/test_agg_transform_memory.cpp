@@ -130,7 +130,7 @@ TEST_CASE("a group-key transform holds no more than one morsel" *
           doctest::skip(instrumentation::active())) {
     TestEnvironment env(200);
     REQUIRE(env.is_valid());
-    const dstd::String gz = write_trace(env.get_dir());
+    const dstd::String gz = write_trace(env.dir());
     // One run's peak swings, so each side is the lowest of a
     // few runs. The first run builds the index; the rest start together, since
     // each child's peak is its own.

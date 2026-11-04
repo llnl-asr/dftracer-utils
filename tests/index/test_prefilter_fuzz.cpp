@@ -254,7 +254,7 @@ TEST_CASE("the pre-filter never drops a match") {
     dftu_utils_test::TestEnvironment env(10);
     std::mt19937 rng(20260925);
     const auto lines = make_lines(rng, EVENT_LINES);
-    const dstd::String plain = env.get_dir() + "/fuzz.pfw";
+    const dstd::String plain = env.dir() + "/fuzz.pfw";
     {
         dstd::String out;
         for (const auto& l : lines) out += common::str_cat(l, "\n");
@@ -307,7 +307,7 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
             c + "[" + dstd::to_string(rng() % 50) + sep +
             dstd::to_string(pick(PIDS)) + "]}");
     }
-    const dstd::String plain = env.get_dir() + "/fuzz.ndjson";
+    const dstd::String plain = env.dir() + "/fuzz.ndjson";
     {
         dstd::String out;
         for (const auto& l : lines) out += common::str_cat(l, "\n");

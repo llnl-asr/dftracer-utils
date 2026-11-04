@@ -72,7 +72,7 @@ struct CancelledAtOnce {
 
 template <typename Body>
 void run_on_pool(Body& body) {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
     auto task =
         make_task([&body](CoroScope&) -> CoroTask<void> { co_await body(); },

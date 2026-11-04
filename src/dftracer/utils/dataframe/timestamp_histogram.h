@@ -25,7 +25,7 @@ class TimestampHistogram {
                        std::uint64_t ts_end_us) const;
     dstd::Vector<double> expansion_weights(std::uint64_t bucket_start_us,
                                            std::uint64_t bucket_end_us,
-                                           std::size_t num_sub_buckets) const;
+                                           std::size_t sub_bucket_count) const;
 
     dstd::Vector<std::uint8_t> serialize() const;
     static TimestampHistogram deserialize(const std::uint8_t* data,
@@ -33,7 +33,7 @@ class TimestampHistogram {
 
     std::uint64_t total_count() const { return total_count_; }
     bool empty() const { return bins_.empty(); }
-    std::size_t num_bins() const { return bins_.size(); }
+    std::size_t bin_count() const { return bins_.size(); }
 
     const dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>>& bins() const {
         return bins_;

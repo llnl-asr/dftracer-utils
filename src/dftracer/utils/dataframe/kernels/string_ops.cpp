@@ -294,10 +294,10 @@ dftu_series* ascii_fold_w(const dftu_series* v, std::uint8_t lo,
         out->null_count = v->null_count;
         out->validity = v->validity;
         offsets_of<Off>(*out) = offsets_of<Off>(*v);  // byte lengths unchanged
-        const std::size_t data_len = v->data.block() ? v->data.size() : 0;
-        out->data = new_buffer(data_len);
-        if (data_len != 0)
-            ascii_fold_simd(v->data.data(), writable(out->data), data_len, lo,
+        const std::size_t data_size = v->data.block() ? v->data.size() : 0;
+        out->data = new_buffer(data_size);
+        if (data_size != 0)
+            ascii_fold_simd(v->data.data(), writable(out->data), data_size, lo,
                             hi, add);
         return out;
     }
@@ -559,16 +559,17 @@ dftracer::utils::dstd::StringView pattern_text(const char* pattern,
 }  // namespace
 
 dftu_series* dftu_series_str_eq(const dftu_series* v, const char* rhs,
-                                int32_t rhs_len) {
-    dftracer::utils::dstd::StringView r(rhs, static_cast<std::size_t>(rhs_len));
+                                int32_t rhs_size) {
+    dftracer::utils::dstd::StringView r(rhs,
+                                        static_cast<std::size_t>(rhs_size));
     return string_mask(
         v, [r](dftracer::utils::dstd::StringView s) { return s == r; });
 }
 
 dftu_series* dftu_series_str_contains(const dftu_series* v, const char* needle,
-                                      int32_t needle_len) {
+                                      int32_t needle_size) {
     dftracer::utils::dstd::StringView n(needle,
-                                        static_cast<std::size_t>(needle_len));
+                                        static_cast<std::size_t>(needle_size));
     return string_mask(v, [n](dftracer::utils::dstd::StringView s) {
         return substr_find(s.data(), static_cast<std::int64_t>(s.size()),
                            n.data(), static_cast<std::int64_t>(n.size())) >= 0;
@@ -577,26 +578,26 @@ dftu_series* dftu_series_str_contains(const dftu_series* v, const char* needle,
 
 dftu_series* dftu_series_str_starts_with(const dftu_series* v,
                                          const char* prefix,
-                                         int32_t prefix_len) {
+                                         int32_t prefix_size) {
     dftracer::utils::dstd::StringView p(prefix,
-                                        static_cast<std::size_t>(prefix_len));
+                                        static_cast<std::size_t>(prefix_size));
     return string_mask(v, [p](dftracer::utils::dstd::StringView s) {
         return s.starts_with(p);
     });
 }
 
 dftu_series* dftu_series_str_ends_with(const dftu_series* v, const char* suffix,
-                                       int32_t suffix_len) {
+                                       int32_t suffix_size) {
     dftracer::utils::dstd::StringView p(suffix,
-                                        static_cast<std::size_t>(suffix_len));
+                                        static_cast<std::size_t>(suffix_size));
     return string_mask(
         v, [p](dftracer::utils::dstd::StringView s) { return s.ends_with(p); });
 }
 
 dftu_series* dftu_series_str_matches(const dftu_series* v, const char* pattern,
-                                     int32_t pattern_len) {
+                                     int32_t pattern_size) {
     const auto p = compiled(duql::compile_regex(
-        pattern_text(pattern, pattern_len), false, /*whole=*/true));
+        pattern_text(pattern, pattern_size), false, /*whole=*/true));
     if (!p) return nullptr;
     return pattern_predicate(v, *p);
 }
@@ -641,13 +642,13 @@ dftu_series* str_extract_w(const dftu_series* v,
 }  // namespace
 
 dftu_series* dftu_series_str_extract(const dftu_series* v, const char* pattern,
-                                     int32_t pattern_len, int64_t group) {
+                                     int32_t pattern_size, int64_t group) {
     if (!v || !pattern || group < 0) return nullptr;
     DFTU_FLAT_OPERAND(
         v, flat_v,
-        dftu_series_str_extract(flat_v, pattern, pattern_len, group));
+        dftu_series_str_extract(flat_v, pattern, pattern_size, group));
     const auto re = compiled(
-        duql::compile_regex(pattern_text(pattern, pattern_len), false));
+        duql::compile_regex(pattern_text(pattern, pattern_size), false));
     if (!re) return nullptr;
     const auto g = static_cast<std::size_t>(group);
     if (g > duql::capture_count(*re)) return nullptr;
@@ -658,34 +659,34 @@ dftu_series* dftu_series_str_extract(const dftu_series* v, const char* pattern,
 
 dftu_series* dftu_series_str_regex_replace(const dftu_series* v,
                                            const char* pattern,
-                                           int32_t pattern_len, const char* to,
-                                           int32_t to_len) {
+                                           int32_t pattern_size, const char* to,
+                                           int32_t to_size) {
     if (!v || !pattern || !to) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_regex_replace(flat_v, pattern,
-                                                    pattern_len, to, to_len));
+                                                    pattern_size, to, to_size));
     const auto re = compiled(
-        duql::compile_regex(pattern_text(pattern, pattern_len), false));
+        duql::compile_regex(pattern_text(pattern, pattern_size), false));
     if (!re) return nullptr;
     auto sub = duql::compile_substitution(
         *re, dftracer::utils::dstd::StringView(
-                 to, static_cast<std::size_t>(to_len)));
+                 to, static_cast<std::size_t>(to_size)));
     if (!sub) return nullptr;
     return regex_replace_flat(v, *re, *sub);
 }
 
 dftu_series* dftu_series_str_search(const dftu_series* v, const char* pattern,
-                                    int32_t pattern_len) {
+                                    int32_t pattern_size) {
     const auto p = compiled(
-        duql::compile_regex(pattern_text(pattern, pattern_len), false));
+        duql::compile_regex(pattern_text(pattern, pattern_size), false));
     if (!p) return nullptr;
     return pattern_predicate(v, *p);
 }
 
 dftu_series* dftu_series_str_like(const dftu_series* v, const char* pattern,
-                                  int32_t pattern_len) {
+                                  int32_t pattern_size) {
     const auto p = compiled(
-        duql::compile_like(pattern_text(pattern, pattern_len), false, '\\'));
+        duql::compile_like(pattern_text(pattern, pattern_size), false, '\\'));
     if (!p) return nullptr;
     return pattern_predicate(v, *p);
 }
@@ -736,9 +737,9 @@ dftu_series* dftu_series_str_len_chars(const dftu_series* v) {
 }
 
 dftu_series* dftu_series_str_find(const dftu_series* v, const char* needle,
-                                  int32_t needle_len) {
+                                  int32_t needle_size) {
     dftracer::utils::dstd::StringView n(needle,
-                                        static_cast<std::size_t>(needle_len));
+                                        static_cast<std::size_t>(needle_size));
     return string_int64(v, [n](dftracer::utils::dstd::StringView s) {
         return substr_find(s.data(), static_cast<std::int64_t>(s.size()),
                            n.data(), static_cast<std::int64_t>(n.size()));
@@ -875,29 +876,31 @@ dftu_series* dftu_series_str_rstrip(const dftu_series* v) {
 }
 
 dftu_series* dftu_series_str_replace(const dftu_series* v, const char* pat,
-                                     int32_t pat_len, const char* repl,
-                                     int32_t repl_len) {
+                                     int32_t pat_size, const char* repl,
+                                     int32_t repl_size) {
     DFTU_FLAT_OPERAND(
         v, flat_v,
-        dftu_series_str_replace(flat_v, pat, pat_len, repl, repl_len));
+        dftu_series_str_replace(flat_v, pat, pat_size, repl, repl_size));
 
-    dftracer::utils::dstd::StringView p(pat, static_cast<std::size_t>(pat_len));
+    dftracer::utils::dstd::StringView p(pat,
+                                        static_cast<std::size_t>(pat_size));
     dftracer::utils::dstd::StringView r(repl,
-                                        static_cast<std::size_t>(repl_len));
+                                        static_cast<std::size_t>(repl_size));
     return string_transform(v, [p, r](dftracer::utils::dstd::StringView s) {
         return replace_literal(s, p, r, false);
     });
 }
 dftu_series* dftu_series_str_replace_all(const dftu_series* v, const char* pat,
-                                         int32_t pat_len, const char* repl,
-                                         int32_t repl_len) {
+                                         int32_t pat_size, const char* repl,
+                                         int32_t repl_size) {
     DFTU_FLAT_OPERAND(
         v, flat_v,
-        dftu_series_str_replace_all(flat_v, pat, pat_len, repl, repl_len));
+        dftu_series_str_replace_all(flat_v, pat, pat_size, repl, repl_size));
 
-    dftracer::utils::dstd::StringView p(pat, static_cast<std::size_t>(pat_len));
+    dftracer::utils::dstd::StringView p(pat,
+                                        static_cast<std::size_t>(pat_size));
     dftracer::utils::dstd::StringView r(repl,
-                                        static_cast<std::size_t>(repl_len));
+                                        static_cast<std::size_t>(repl_size));
     return string_transform(v, [p, r](dftracer::utils::dstd::StringView s) {
         return replace_literal(s, p, r, true);
     });
@@ -1241,14 +1244,14 @@ dftu_series* case_impl(const dftu_series* v, dataframe::strsimd::CaseKind kind,
         out->validity = v->validity;
         using Off = std::remove_const_t<std::remove_pointer_t<decltype(f.off)>>;
         offsets_of<Off>(*out) = offsets_of<Off>(*v);  // byte lengths unchanged
-        const std::size_t data_len = v->data.block() ? v->data.size() : 0;
-        out->data = new_buffer(data_len);
-        if (data_len == 0) return out;
+        const std::size_t data_size = v->data.block() ? v->data.size() : 0;
+        out->data = new_buffer(data_size);
+        if (data_size == 0) return out;
         const std::uint8_t* in = v->data.data();
         std::uint8_t* o = writable(out->data);
         dataframe::strsimd::case_map(
             capitalize ? dataframe::strsimd::CaseKind::Lower : kind, in, o,
-            data_len);
+            data_size);
         if (capitalize || kind == dataframe::strsimd::CaseKind::Title) {
             // A row's first byte has no previous byte: it is upper-cased when
             // lower, whatever sat before it in the buffer.
@@ -1791,34 +1794,35 @@ dftu_series* dftu_series_str_zfill(const dftu_series* v, int64_t width) {
 }
 
 dftu_series* dftu_series_str_split(const dftu_series* v, const char* sep,
-                                   int32_t sep_len) {
+                                   int32_t sep_size) {
     if (!v || !is_string_kind(v->type)) return nullptr;
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_split(flat_v, sep, sep_len));
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_split(flat_v, sep, sep_size));
     // An empty separator is no split point: one part, the whole row.
     const dftracer::utils::dstd::StringView s_sep(
-        sep, static_cast<std::size_t>(sep_len));
+        sep, static_cast<std::size_t>(sep_size));
     return with_flat(v, [&](const auto& f) { return split_impl(v, f, s_sep); });
 }
 
 dftu_series* dftu_series_str_partition(const dftu_series* v, const char* sep,
-                                       int32_t sep_len, int32_t from_right) {
-    if (!v || !is_string_kind(v->type) || sep_len <= 0) return nullptr;
+                                       int32_t sep_size, int32_t from_right) {
+    if (!v || !is_string_kind(v->type) || sep_size <= 0) return nullptr;
     DFTU_FLAT_OPERAND(
-        v, flat_v, dftu_series_str_partition(flat_v, sep, sep_len, from_right));
+        v, flat_v,
+        dftu_series_str_partition(flat_v, sep, sep_size, from_right));
     const dftracer::utils::dstd::StringView s_sep(
-        sep, static_cast<std::size_t>(sep_len));
+        sep, static_cast<std::size_t>(sep_size));
     return with_flat(v, [&](const auto& f) {
         return partition_impl(v, f, s_sep, from_right != 0);
     });
 }
 
 dftu_series* dftu_series_str_rfind(const dftu_series* v, const char* needle,
-                                   int32_t needle_len) {
+                                   int32_t needle_size) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
-                      dftu_series_str_rfind(flat_v, needle, needle_len));
+                      dftu_series_str_rfind(flat_v, needle, needle_size));
     const dftracer::utils::dstd::StringView n(
-        needle, static_cast<std::size_t>(needle_len));
+        needle, static_cast<std::size_t>(needle_size));
     return with_flat(v, [&](const auto& f) { return rfind_impl(v, f, n); });
 }
 
@@ -1843,9 +1847,10 @@ dftu_series* dftu_series_str_is(const dftu_series* v, int32_t cls) {
 }
 
 dftu_series* dftu_series_str_count(const dftu_series* v, const char* pat,
-                                   int32_t pat_len) {
+                                   int32_t pat_size) {
     if (!v || !is_string_kind(v->type)) return nullptr;
-    dftracer::utils::dstd::StringView p(pat, static_cast<std::size_t>(pat_len));
+    dftracer::utils::dstd::StringView p(pat,
+                                        static_cast<std::size_t>(pat_size));
     return string_int64(v, [p](dftracer::utils::dstd::StringView s) {
         return count_literal(s, p);
     });
@@ -1895,8 +1900,8 @@ dftu_series* dftu_series_str_cat(const dftu_series* a, const dftu_series* b) {
 }
 
 dftu_series* dftu_series_list_join(const dftu_series* v, const char* sep,
-                                   int32_t sep_len) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_list_join(flat_v, sep, sep_len));
+                                   int32_t sep_size) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_list_join(flat_v, sep, sep_size));
     if (!v || v->type != TypeId::List || v->encoding != Encoding::Flat)
         return nullptr;
     if (!dftu_series_offsets(v) || !v->child() ||
@@ -1904,19 +1909,19 @@ dftu_series* dftu_series_list_join(const dftu_series* v, const char* sep,
         return nullptr;
     const dftu_series& child = *v->child();
     const dftracer::utils::dstd::StringView s(
-        sep, static_cast<std::size_t>(sep_len));
+        sep, static_cast<std::size_t>(sep_size));
     return is_wide_offset_type(child.type)
                ? join_impl<std::int64_t>(v, child, s)
                : join_impl<std::int32_t>(v, child, s);
 }
 
 dftu_series* dftu_series_str_findall(const dftu_series* v, const char* pattern,
-                                     int32_t pattern_len) {
+                                     int32_t pattern_size) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
-                      dftu_series_str_findall(flat_v, pattern, pattern_len));
+                      dftu_series_str_findall(flat_v, pattern, pattern_size));
     const auto re = compiled(
-        duql::compile_regex(pattern_text(pattern, pattern_len), false));
+        duql::compile_regex(pattern_text(pattern, pattern_size), false));
     if (!re) return nullptr;
     LimitedRows limited;
     dftu_series* out = list_transform(
@@ -2298,8 +2303,8 @@ class Wrapper {
         return true;
     }
 
-    void handle_long_word(std::size_t pos, std::int64_t cur_len) {
-        const std::int64_t space_left = width_ - cur_len;
+    void handle_long_word(std::size_t pos, std::int64_t cur_size) {
+        const std::int64_t space_left = width_ - cur_size;
         if (break_long_ && space_left > 0) {
             std::int64_t end = space_left;
             WrapChunk& chunk = chunks_[pos];
@@ -2331,20 +2336,20 @@ class Wrapper {
         bool any_line = false;
         while (pos < total) {
             line_.clear();
-            std::int64_t cur_len = 0;
+            std::int64_t cur_size = 0;
             if (drop_ws_ && any_line && space_chunk(chunks_[pos])) ++pos;
             while (pos < total) {
                 const std::int64_t l = chunks_[pos].len();
-                if (cur_len + l > width_) break;
+                if (cur_size + l > width_) break;
                 line_.push_back(chunks_[pos++]);
-                cur_len += l;
+                cur_size += l;
             }
             if (pos < total && chunks_[pos].len() > width_) {
                 taken_ = false;
-                handle_long_word(pos, cur_len);
+                handle_long_word(pos, cur_size);
                 if (taken_) ++pos;
-                cur_len = 0;
-                for (const WrapChunk& c : line_) cur_len += c.len();
+                cur_size = 0;
+                for (const WrapChunk& c : line_) cur_size += c.len();
             }
             if (drop_ws_ && !line_.empty() && space_chunk(line_.back()))
                 line_.pop_back();

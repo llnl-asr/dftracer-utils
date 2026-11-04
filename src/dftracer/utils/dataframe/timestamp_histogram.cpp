@@ -78,19 +78,19 @@ double TimestampHistogram::selectivity(std::uint64_t ts_start_us,
 
 dstd::Vector<double> TimestampHistogram::expansion_weights(
     std::uint64_t bucket_start_us, std::uint64_t bucket_end_us,
-    std::size_t num_sub_buckets) const {
-    dstd::Vector<double> weights(num_sub_buckets, 0.0);
-    if (num_sub_buckets == 0 || bucket_start_us >= bucket_end_us)
+    std::size_t sub_bucket_count) const {
+    dstd::Vector<double> weights(sub_bucket_count, 0.0);
+    if (sub_bucket_count == 0 || bucket_start_us >= bucket_end_us)
         return weights;
 
     std::uint64_t sub_width =
-        (bucket_end_us - bucket_start_us) / num_sub_buckets;
+        (bucket_end_us - bucket_start_us) / sub_bucket_count;
     if (sub_width == 0) sub_width = 1;
 
     std::uint64_t total_in_range = 0;
-    for (std::size_t i = 0; i < num_sub_buckets; ++i) {
+    for (std::size_t i = 0; i < sub_bucket_count; ++i) {
         std::uint64_t sub_start = bucket_start_us + i * sub_width;
-        std::uint64_t sub_end = (i + 1 < num_sub_buckets)
+        std::uint64_t sub_end = (i + 1 < sub_bucket_count)
                                     ? bucket_start_us + (i + 1) * sub_width
                                     : bucket_end_us;
         std::uint64_t c = count_in_range(sub_start, sub_end);
@@ -102,7 +102,7 @@ dstd::Vector<double> TimestampHistogram::expansion_weights(
         double inv = 1.0 / static_cast<double>(total_in_range);
         for (auto& w : weights) w *= inv;
     } else {
-        double uniform = 1.0 / static_cast<double>(num_sub_buckets);
+        double uniform = 1.0 / static_cast<double>(sub_bucket_count);
         for (auto& w : weights) w = uniform;
     }
 
@@ -134,13 +134,13 @@ TimestampHistogram TimestampHistogram::deserialize(const std::uint8_t* data,
     const auto* ptr = data;
     const auto* end = data + len;
 
-    std::uint64_t num_bins = 0;
+    std::uint64_t bin_count = 0;
     if (!dstd::read_varint(ptr, end, hist.total_count_)) return hist;
-    if (!dstd::read_varint(ptr, end, num_bins)) return hist;
+    if (!dstd::read_varint(ptr, end, bin_count)) return hist;
 
-    hist.bins_.reserve(static_cast<std::size_t>(num_bins));
+    hist.bins_.reserve(static_cast<std::size_t>(bin_count));
     std::uint64_t prev_idx = 0;
-    for (std::uint64_t i = 0; i < num_bins; ++i) {
+    for (std::uint64_t i = 0; i < bin_count; ++i) {
         std::uint64_t delta = 0;
         std::uint64_t count = 0;
         if (!dstd::read_varint(ptr, end, delta) ||

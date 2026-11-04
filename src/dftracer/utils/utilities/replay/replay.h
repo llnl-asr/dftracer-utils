@@ -162,7 +162,7 @@ class TraceExecutor {
     /**
      * Get human-readable name for this executor
      */
-    virtual dstd::String get_name() const = 0;
+    virtual dstd::String name() const = 0;
 };
 
 /**
@@ -172,7 +172,7 @@ class PosixExecutor : public TraceExecutor {
    public:
     bool execute(const Trace& trace, const ReplayConfig& config) override;
     bool can_handle(const Trace& trace) const override;
-    dstd::String get_name() const override { return "POSIX"; }
+    dstd::String name() const override { return "POSIX"; }
 
    private:
     /// Keys are interned via the replay @ref dstd::StringIntern pool.
@@ -199,7 +199,7 @@ class DFTracerExecutor : public TraceExecutor {
    public:
     bool execute(const Trace& trace, const ReplayConfig& config) override;
     bool can_handle(const Trace& trace) const override;
-    dstd::String get_name() const override { return "DFTracer"; }
+    dstd::String name() const override { return "DFTracer"; }
 
    private:
     void sleep_for_duration(double duration_microseconds);

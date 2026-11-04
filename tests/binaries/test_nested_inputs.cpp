@@ -60,8 +60,8 @@ TEST_SUITE("NestedInputs") {
         "every tool reads the traces in the subfolders of -d and "
         "writes nothing beside them") {
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::String in = env.get_dir() + "/in";
-        const dstd::String work = env.get_dir() + "/work";
+        const dstd::String in = env.dir() + "/in";
+        const dstd::String work = env.dir() + "/work";
         const dstd::Vector<dstd::String> dirs = {in + "/a", in + "/a/b",
                                                  in + "/c/d/e"};
         for (std::size_t i = 0; i < dirs.size(); ++i) {

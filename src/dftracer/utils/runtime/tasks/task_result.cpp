@@ -99,7 +99,7 @@ std::any TaskResult::get_ready() const {
     return value_;  // returns COPY
 }
 
-std::exception_ptr TaskResult::get_exception() const { return exception_; }
+std::exception_ptr TaskResult::exception() const { return exception_; }
 
 bool TaskResult::is_ready() const {
     auto s = static_cast<State>(state_.load(std::memory_order_acquire));

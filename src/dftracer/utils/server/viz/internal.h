@@ -159,7 +159,7 @@ inline dstd::Vector<trace::views::ViewFile> to_view_files(
         vf.file_path = fi->path;
         vf.index_path = fi->index_path;
         vf.uncompressed_size = fi->uncompressed_size;
-        vf.num_checkpoints = fi->num_checkpoints;
+        vf.checkpoint_count = fi->checkpoint_count;
         vf.checkpoint_size = fi->checkpoint_size;
         v.push_back(std::move(vf));
     }

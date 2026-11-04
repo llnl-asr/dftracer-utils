@@ -71,14 +71,14 @@ coro::CoroTask<void>* as_task(::dftu_task* t) {
     return reinterpret_cast<coro::CoroTask<void>*>(t);
 }
 
-const char* host_resolve(void* h, dftu_str id, std::uint32_t* out_len) {
-    if (out_len) *out_len = 0;
+const char* host_resolve(void* h, dftu_str id, std::uint32_t* out_size) {
+    if (out_size) *out_size = 0;
     if (id == DFTU_STR_NONE ||
         id >= dftracer::utils::dstd::StringIntern::FAST_CAPACITY)
         return nullptr;
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
     dstd::StringView sv = intern.resolve(id);
-    if (out_len) *out_len = static_cast<std::uint32_t>(sv.size());
+    if (out_size) *out_size = static_cast<std::uint32_t>(sv.size());
     // Interned bytes are stable for the scan, so they outlive the call.
     return sv.data();
 }
@@ -422,14 +422,14 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
 }
 
 ::dftu_writer* host_writer_create(void* h, const char* path,
-                                  std::uint32_t num_workers, int gzip) {
-    return static_cast<PluginFold*>(h)->create_writer(path, num_workers, gzip);
+                                  std::uint32_t worker_count, int gzip) {
+    return static_cast<PluginFold*>(h)->make_writer(path, worker_count, gzip);
 }
 
 ::dftu_task* host_writer_open(void* h, ::dftu_writer* w) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](PluginWriter* pw) -> coro::CoroTask<void> {
-            co_await pw->writer->open(pw->path, pw->num_workers, pw->gzip,
+            co_await pw->writer->open(pw->path, pw->worker_count, pw->gzip,
                                       nullptr);
         }(reinterpret_cast<PluginWriter*>(w)));
 }
@@ -687,8 +687,8 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
                 if (close_rc != 0) co_return;
                 rc = 0;
             }()));
-        ArrowSchemaMove(res.get_schema(), s);
-        ArrowArrayMove(res.get_array(), a);
+        ArrowSchemaMove(res.schema(), s);
+        ArrowArrayMove(res.array(), a);
         return rc;
     } catch (...) {
         return -1;
@@ -708,13 +708,13 @@ int host_arrow_read_ipc(void*, [[maybe_unused]] const char* path,
     try {
         utilities::arrow::IpcReader reader;
         if (reader.open(path) != 0) return -1;
-        if (reader.num_batches() == 0) return -1;
+        if (reader.batch_count() == 0) return -1;
         utilities::arrow::ArrowExportResult res = reader.read_batch(0);
-        if (!res.get_array() || !res.get_schema() ||
-            !res.get_array()->release || !res.get_schema()->release)
+        if (!res.array() || !res.schema() || !res.array()->release ||
+            !res.schema()->release)
             return -1;
-        ArrowArrayMove(res.get_array(), out);
-        ArrowSchemaMove(res.get_schema(), out_schema);
+        ArrowArrayMove(res.array(), out);
+        ArrowSchemaMove(res.schema(), out_schema);
         return 0;
     } catch (...) {
         return -1;
@@ -725,7 +725,7 @@ int host_arrow_read_ipc(void*, [[maybe_unused]] const char* path,
 }
 
 ::dftu_trace_writer* host_trace_open_write(void* h, const char* path) {
-    return static_cast<PluginFold*>(h)->create_trace_writer(path);
+    return static_cast<PluginFold*>(h)->make_trace_writer(path);
 }
 
 int host_trace_write(void*, ::dftu_trace_writer* w, const dftu_dataframe* df) {
@@ -814,7 +814,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                         on_batch(cdf, ud);
                         dftu_dataframe_free(cdf);
                     },
-                    /*num_slots=*/1, /*limit=*/0);
+                    /*slot_count=*/1, /*limit=*/0);
             }()));
         return 0;
     } catch (...) {
@@ -850,8 +850,8 @@ void host_port_publish(void* h, std::uint64_t key, const void* data,
 }
 
 const void* host_port_consume(void* h, std::uint64_t key,
-                              std::uint32_t* out_len) {
-    return static_cast<PluginFold*>(h)->port_consume(key, out_len);
+                              std::uint32_t* out_size) {
+    return static_cast<PluginFold*>(h)->port_consume(key, out_size);
 }
 
 const dftu_svc_ports g_ports = {host_port_key, host_port_publish,
@@ -1087,13 +1087,13 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     }(this, graph, in, out, rc));
 }
 
-::dftu_writer* PluginFold::create_writer(const char* path,
-                                         std::uint32_t num_workers, int gzip) {
+::dftu_writer* PluginFold::make_writer(const char* path,
+                                       std::uint32_t worker_count, int gzip) {
     try {
         auto pw = dstd::make_unique<PluginWriter>();
         pw->writer = utilities::fileio::parallel::make_sharded_writer();
         pw->path = path ? path : "";
-        pw->num_workers = num_workers ? num_workers : 1;
+        pw->worker_count = worker_count ? worker_count : 1;
         pw->gzip = gzip != 0;
         writers_.push_back(std::move(pw));
         return reinterpret_cast<::dftu_writer*>(writers_.back().get());
@@ -1102,7 +1102,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     }
 }
 
-::dftu_trace_writer* PluginFold::create_trace_writer(const char* path) {
+::dftu_trace_writer* PluginFold::make_trace_writer(const char* path) {
     if (!path) return nullptr;
     try {
         auto tw = dstd::make_unique<PluginTraceWriter>();

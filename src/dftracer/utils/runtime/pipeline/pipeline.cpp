@@ -213,7 +213,7 @@ PipelineOutput Pipeline::execute(const std::any& input) {
 
     if (destination_) {
         try {
-            output[destination_->get_id()] = destination_->result().get();
+            output[destination_->id()] = destination_->result().get();
         } catch (...) {
             if (error_policy_ == ErrorPolicy::FailFast) {
                 throw;
@@ -221,9 +221,9 @@ PipelineOutput Pipeline::execute(const std::any& input) {
         }
     } else {
         for (const auto& task : all_tasks_) {
-            if (task->get_children().empty()) {
+            if (task->children().empty()) {
                 try {
-                    output[task->get_id()] = task->result().get();
+                    output[task->id()] = task->result().get();
                 } catch (...) {
                     if (error_policy_ == ErrorPolicy::FailFast) {
                         throw;
@@ -253,14 +253,14 @@ void Pipeline::collect_all_tasks() {
 void Pipeline::collect_tasks_dfs(
     dstd::SharedPtr<Task> task,
     std::unordered_set<common::TaskIndex>& visited) {
-    if (!task || visited.find(task->get_id()) != visited.end()) {
+    if (!task || visited.find(task->id()) != visited.end()) {
         return;
     }
 
-    visited.insert(task->get_id());
+    visited.insert(task->id());
     all_tasks_.push_back(task);
 
-    for (const auto& child : task->get_children()) {
+    for (const auto& child : task->children()) {
         collect_tasks_dfs(child, visited);
     }
 }
@@ -281,17 +281,17 @@ bool Pipeline::is_reachable_dfs(
         return false;
     }
 
-    if (current->get_id() == target->get_id()) {
+    if (current->id() == target->id()) {
         return true;
     }
 
-    if (visited.find(current->get_id()) != visited.end()) {
+    if (visited.find(current->id()) != visited.end()) {
         return false;
     }
 
-    visited.insert(current->get_id());
+    visited.insert(current->id());
 
-    for (const auto& child : current->get_children()) {
+    for (const auto& child : current->children()) {
         if (is_reachable_dfs(child, target, visited)) {
             return true;
         }
@@ -305,7 +305,7 @@ bool Pipeline::has_cycles() {
     std::unordered_set<common::TaskIndex> rec_stack;
 
     for (const auto& task : all_tasks_) {
-        if (visited.find(task->get_id()) == visited.end()) {
+        if (visited.find(task->id()) == visited.end()) {
             if (has_cycles_dfs(task, visited, rec_stack)) {
                 return true;
             }
@@ -322,11 +322,10 @@ bool Pipeline::has_cycles_dfs(
         return false;
     }
 
-    common::TaskIndex id = task->get_id();
+    common::TaskIndex id = task->id();
 
     if (rec_stack.find(id) != rec_stack.end()) {
-        DFTRACER_UTILS_LOG_ERROR("Cycle detected at task '%s'",
-                                 task->get_name());
+        DFTRACER_UTILS_LOG_ERROR("Cycle detected at task '%s'", task->name());
         return true;
     }
 
@@ -337,7 +336,7 @@ bool Pipeline::has_cycles_dfs(
     visited.insert(id);
     rec_stack.insert(id);
 
-    for (const auto& child : task->get_children()) {
+    for (const auto& child : task->children()) {
         if (has_cycles_dfs(child, visited, rec_stack)) {
             return true;
         }

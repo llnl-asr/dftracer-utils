@@ -558,8 +558,8 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             IndexedFileLineIterator iter(config);
 
-            CHECK(iter.get_reader() == reader);
-            CHECK(iter.get_reader() != nullptr);
+            CHECK(iter.reader() == reader);
+            CHECK(iter.reader() != nullptr);
         }
     }
 }

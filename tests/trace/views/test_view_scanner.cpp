@@ -27,7 +27,7 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 
 static dstd::String create_pfw_gz(TestEnvironment& env, int n) {
-    dstd::String pfw = env.get_dir() + "/trace.pfw";
+    dstd::String pfw = env.dir() + "/trace.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
@@ -45,7 +45,7 @@ static dstd::String create_pfw_gz(TestEnvironment& env, int n) {
 // SH/FH entries through non-standard field names (exec_hash/cmd_hash/cwd), and
 // one SH nothing references.
 static dstd::String create_metadata_pfw_gz(TestEnvironment& env) {
-    dstd::String pfw = env.get_dir() + "/meta.pfw";
+    dstd::String pfw = env.dir() + "/meta.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"host1","value":"H1"}})"
         << "\n"
@@ -101,7 +101,7 @@ static CollectedViewOutput collect_view_output(ViewScannerUtility& reader,
 }
 
 static dstd::String create_refused_gz(TestEnvironment& env) {
-    dstd::String pfw = env.get_dir() + "/refused.pfw";
+    dstd::String pfw = env.dir() + "/refused.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
         ofs << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
@@ -127,7 +127,7 @@ static dstd::String create_refused_gz(TestEnvironment& env) {
 // A two-member trace whose first member ends inside a line: the newline that
 // ends it opens the second member, and the file's last line has none.
 static dstd::String write_newline_split_trace(TestEnvironment& env,
-                                              std::size_t& first_len) {
+                                              std::size_t& first_size) {
     auto line = [](int i) {
         return R"({"name":"read","cat":"POSIX","ph":"X","pid":1,"tid":1,"ts":)" +
                dstd::to_string(1000 + i) + R"(,"dur":1,"args":{}})";
@@ -135,8 +135,8 @@ static dstd::String write_newline_split_trace(TestEnvironment& env,
     dstd::String first, second;
     for (int i = 0; i < 10; ++i) first += (i ? "\n" : "") + line(i);
     for (int i = 10; i < 20; ++i) second += "\n" + line(i);
-    first_len = first.size();
-    const dstd::String gz = env.get_dir() + "/split_line.pfw.gz";
+    first_size = first.size();
+    const dstd::String gz = env.dir() + "/split_line.pfw.gz";
     dftu_utils_test::FileOut out(gz);
     for (const auto* text : {&first, &second}) {
         dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp;
@@ -152,8 +152,8 @@ TEST_SUITE("ViewScanner") {
     TEST_CASE("ViewScanner - a line ending at a member end is read once") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::size_t first_len = 0;
-        const dstd::String gz = write_newline_split_trace(env, first_len);
+        std::size_t first_size = 0;
+        const dstd::String gz = write_newline_split_trace(env, first_size);
         auto scan = [&](std::size_t begin, std::size_t end) {
             ViewScannerInput input;
             input.with_file_path(dstd::String(gz))
@@ -165,9 +165,9 @@ TEST_SUITE("ViewScanner") {
             ViewScannerUtility reader;
             return collect_view_output(reader, input).events;
         };
-        auto events = scan(0, first_len);
+        auto events = scan(0, first_size);
         const auto rest =
-            scan(first_len, std::numeric_limits<std::size_t>::max());
+            scan(first_size, std::numeric_limits<std::size_t>::max());
         events.insert(events.end(), rest.begin(), rest.end());
         dstd::Vector<dstd::String> ts;
         for (const auto& e : events) {
@@ -184,7 +184,7 @@ TEST_SUITE("ViewScanner") {
     TEST_CASE("ViewScanner - a line longer than the read buffer is kept") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/longline.pfw";
+        dstd::String pfw = env.dir() + "/longline.pfw";
         dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 5; ++i) {
             dstd::String line =
@@ -289,7 +289,7 @@ TEST_SUITE("ViewScanner") {
         "ViewScanner - a metadata record with a bad byte is still dropped") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/badmeta.pfw";
+        dstd::String pfw = env.dir() + "/badmeta.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":1,"args":{}})"

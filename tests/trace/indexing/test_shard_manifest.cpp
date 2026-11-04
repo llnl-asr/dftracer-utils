@@ -34,8 +34,8 @@ TEST_SUITE("shard_manifest") {
         REQUIRE(out.shards.size() == in.shards.size());
         for (std::size_t i = 0; i < in.shards.size(); ++i) {
             CHECK(out.shards[i].path == in.shards[i].path);
-            CHECK(out.shards[i].num_files == in.shards[i].num_files);
-            CHECK(out.shards[i].num_events == in.shards[i].num_events);
+            CHECK(out.shards[i].file_count == in.shards[i].file_count);
+            CHECK(out.shards[i].event_count == in.shards[i].event_count);
         }
     }
 
@@ -56,8 +56,8 @@ TEST_SUITE("shard_manifest") {
             index::store::read_shard_manifest(dstd::String(dir.path().str()));
         REQUIRE(loaded.has_value());
         REQUIRE(loaded->shards.size() == 2);
-        CHECK(loaded->shards[1].num_files == 73);
-        CHECK(loaded->shards[1].num_events == 512);
+        CHECK(loaded->shards[1].file_count == 73);
+        CHECK(loaded->shards[1].event_count == 512);
     }
 
     TEST_CASE("reading a directory with no manifest returns nullopt") {

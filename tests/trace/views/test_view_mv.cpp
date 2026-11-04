@@ -232,7 +232,7 @@ TEST_SUITE("ViewMV") {
         // Two files in their own dirs (so each gets its own index), each with
         // 30 read + 20 fwrite events at a distinct ts range.
         auto write_mixed = [&](const char* sub, int ts0) {
-            dstd::String d = env.get_dir() + "/" + sub;
+            dstd::String d = env.dir() + "/" + sub;
             REQUIRE(dstd::fs::create_directories(d).has_value());
             dstd::String pfw = d + "/trace.pfw";
             dftu_utils_test::FileOut ofs(pfw);
@@ -257,7 +257,7 @@ TEST_SUITE("ViewMV") {
              dstd::String(dstd::String(determine_index_path(a, "")))},
             {dstd::String(b),
              dstd::String(dstd::String(determine_index_path(b, "")))}};
-        const dstd::String vroot = env.get_dir() + "/mv";
+        const dstd::String vroot = env.dir() + "/mv";
 
         auto full = [&]() {
             return View::from_files(both)

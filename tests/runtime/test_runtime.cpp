@@ -145,7 +145,7 @@ TEST_CASE("Runtime - shutdown is idempotent") {
 TEST_CASE("Runtime - get_progress reports completed task") {
     Runtime rt(2);
     rt.submit(noop_async(), "tracked").wait();
-    auto progress = rt.get_progress();
+    auto progress = rt.progress();
     CHECK(progress.total_tasks_submitted == 1);
     CHECK(progress.tasks_completed == 1);
 }
@@ -190,7 +190,7 @@ TEST_CASE("Runtime - submit exception does not crash runtime") {
 
 TEST_CASE("Runtime - progress starts at zero") {
     Runtime rt(2);
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     CHECK(p.total_tasks_submitted == 0);
     CHECK(p.tasks_completed == 0);
     CHECK(p.tasks_failed == 0);
@@ -201,7 +201,7 @@ TEST_CASE("Runtime - progress starts at zero") {
 
 TEST_CASE("Runtime - progress workers present") {
     Runtime rt(2);
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     CHECK(p.workers.size() == 2);
     for (const auto &w : p.workers) {
         CHECK(w.local_queue_depth == 0);
@@ -213,7 +213,7 @@ TEST_CASE("Runtime - progress accumulates across submits") {
     rt.submit(noop_async(), "a").wait();
     rt.submit(noop_async(), "b").wait();
     rt.submit(add_async(1, 2), "c").wait();
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     CHECK(p.total_tasks_submitted == 3);
     CHECK(p.tasks_completed == 3);
     CHECK(p.tasks_failed == 0);
@@ -224,7 +224,7 @@ TEST_CASE("Runtime - progress tracks async submit") {
     rt.submit(noop_async(), "bg");
     rt.submit(noop_async(), "bg2");
     rt.wait_all();
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     CHECK(p.total_tasks_submitted >= 2);
     CHECK(p.tasks_completed >= 2);
 }
@@ -232,7 +232,7 @@ TEST_CASE("Runtime - progress tracks async submit") {
 TEST_CASE("Runtime - progress task details") {
     Runtime rt(2);
     rt.submit(noop_async(), "my_task").wait();
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     REQUIRE(p.root_tasks.size() == 1);
     CHECK(p.root_tasks[0].name == "my_task");
     CHECK(p.root_tasks[0].state == TaskState::Completed);
@@ -242,31 +242,31 @@ TEST_CASE("Runtime - progress task details") {
 }
 
 TEST_CASE("Runtime - progress keeps only the task history limit") {
-    Runtime rt(ExecutorConfig{.num_threads = 2, .task_history = 2}, false);
+    Runtime rt(ExecutorConfig{.thread_count = 2, .task_history = 2}, false);
     rt.submit(noop_async(), "first").wait();
     rt.submit(noop_async(), "second").wait();
     rt.submit(noop_async(), "third").wait();
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     CHECK(p.root_tasks.size() == 2);
     CHECK(p.tasks_completed == 3);
 }
 
 TEST_CASE("Runtime - a task that raises counts as failed") {
-    Runtime rt(ExecutorConfig{.num_threads = 2, .task_history = 0}, false);
+    Runtime rt(ExecutorConfig{.thread_count = 2, .task_history = 0}, false);
     CHECK_THROWS_AS(rt.submit(throw_async(), "throw").get(),
                     std::runtime_error);
     CHECK_THROWS_AS(rt.submit(throw_void_async(), "throw_void").wait(),
                     std::runtime_error);
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     CHECK(p.tasks_failed == 2);
     CHECK(p.tasks_completed == 0);
 }
 
 TEST_CASE("Runtime - a failed task keeps its message in the history") {
-    Runtime rt(ExecutorConfig{.num_threads = 2, .task_history = 2}, false);
+    Runtime rt(ExecutorConfig{.thread_count = 2, .task_history = 2}, false);
     CHECK_THROWS_AS(rt.submit(throw_async(), "throw").get(),
                     std::runtime_error);
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     REQUIRE(p.root_tasks.size() == 1);
     CHECK(p.root_tasks[0].state == TaskState::Failed);
     REQUIRE(p.recent_errors.size() == 1);
@@ -279,7 +279,7 @@ TEST_CASE("Runtime - progress multiple tasks have names") {
     rt.submit(noop_async(), "first").wait();
     rt.submit(add_async(1, 2), "second").wait();
     rt.submit(string_async(), "third").wait();
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     REQUIRE(p.root_tasks.size() == 3);
     dstd::Set<dstd::String> names;
     for (const auto &t : p.root_tasks) {
@@ -296,7 +296,7 @@ TEST_CASE("Runtime - progress no failures on success") {
     for (int i = 0; i < 5; ++i) {
         rt.submit(noop_async(), "ok").wait();
     }
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     CHECK(p.tasks_failed == 0);
     CHECK(p.tasks_completed == 5);
     CHECK(p.recent_errors.empty());
@@ -368,7 +368,7 @@ TEST_CASE("Runtime - wait_all waits for multiple tasks") {
         rt.submit(add_async(i, i), "batch-" + dstd::to_string(i));
     }
     rt.wait_all();
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     CHECK(p.tasks_completed == 20);
 }
 
@@ -392,7 +392,7 @@ TEST_CASE("Runtime - wait_all then submit again works") {
     rt.submit(noop_async(), "second-batch");
     rt.wait_all();
 
-    auto p = rt.get_progress();
+    auto p = rt.progress();
     CHECK(p.tasks_completed == 2);
 }
 

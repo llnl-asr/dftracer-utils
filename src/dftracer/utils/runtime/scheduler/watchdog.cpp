@@ -82,7 +82,7 @@ void Watchdog::register_task_start(common::TaskIndex task_id,
 
     DFTRACER_UTILS_LOG_DEBUG(
         "Watchdog: registered task '%s' (ID: %ld) with timeout: %lld ms",
-        task->get_name(), task_id,
+        task->name(), task_id,
         static_cast<long long>(effective_timeout.count()));
 }
 
@@ -92,7 +92,7 @@ void Watchdog::unregister_task(common::TaskIndex task_id) {
     auto it = active_tasks_.find(task_id);
     if (it != active_tasks_.end()) {
         DFTRACER_UTILS_LOG_DEBUG("Watchdog: unregistered task '%s' (ID: %ld)",
-                                 it->second.task->get_name(), task_id);
+                                 it->second.task->name(), task_id);
 
         active_tasks_.erase(it);
     }
@@ -116,7 +116,7 @@ void Watchdog::set_default_task_timeout(std::chrono::milliseconds timeout) {
     default_task_timeout_ = timeout;
 }
 
-size_t Watchdog::get_active_task_count() const {
+size_t Watchdog::active_task_count() const {
     std::lock_guard<std::mutex> lock(active_tasks_mutex_);
     return active_tasks_.size();
 }
@@ -203,7 +203,7 @@ bool Watchdog::check_task_timeouts() {
             DFTRACER_UTILS_LOG_ERROR(
                 "Task timeout: '%s' (ID: %ld) ran for %lld ms (limit: %lld "
                 "ms)",
-                execution.task->get_name(), task_id,
+                execution.task->name(), task_id,
                 static_cast<long long>(elapsed_ms.count()),
                 static_cast<long long>(execution.timeout.count()));
 
@@ -212,7 +212,7 @@ bool Watchdog::check_task_timeouts() {
                 std::snprintf(
                     buf, sizeof(buf),
                     "Task '%s' timed out after %lld ms (limit: %lld ms)",
-                    execution.task->get_name(),
+                    execution.task->name(),
                     static_cast<long long>(elapsed_ms.count()),
                     static_cast<long long>(execution.timeout.count()));
                 trigger_timeout(buf);
@@ -229,10 +229,10 @@ bool Watchdog::check_task_timeouts() {
             DFTRACER_UTILS_LOG_WARN(
                 "Long-running task: '%s' (ID: %ld) has been running for %lld "
                 "ms",
-                execution.task->get_name(), task_id,
+                execution.task->name(), task_id,
                 static_cast<long long>(elapsed_ms.count()));
 
-            trigger_warning(execution.task->get_name(), elapsed_ms.count());
+            trigger_warning(execution.task->name(), elapsed_ms.count());
         }
     }
 

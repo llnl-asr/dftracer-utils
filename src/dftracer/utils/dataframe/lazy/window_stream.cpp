@@ -1903,14 +1903,14 @@ class WindowStreamCursor : public Cursor {
         NumCells apart_cells;
         if (var_fn && w.to_end) apart_cells = read_cells(cols[s.ext_at]);
         Series hist;
-        std::int64_t hist_len = 0;
+        std::int64_t hist_size = 0;
         dstd::Vector<std::int64_t> src;
         if (suffix) {
             hist = s.have_hist ? s.hist.share()
                                : cols[s.ext_at]
                                      .take(dstd::Vector<std::int64_t>{-1})
                                      .materialize();
-            hist_len = hist.length();
+            hist_size = hist.length();
             src.assign(emit, -1);
         }
         const auto cell_at = [&](std::size_t i) {
@@ -2131,7 +2131,7 @@ class WindowStreamCursor : public Cursor {
             } else if (cnt == 0 || cnt < w.min_count) {
                 okv[r] = 0;
             } else if (suffix) {
-                src[r] = hist_len + ri - std::min(w.before, local);
+                src[r] = hist_size + ri - std::min(w.before, local);
             } else if (mean_fn) {
                 bits[r] = dstd::double_bits(s.win_sum.mean(cnt));
             } else if (float_acc) {
@@ -2149,10 +2149,11 @@ class WindowStreamCursor : public Cursor {
                 concat_columns({&hist, &cols[s.ext_at]}).materialize();
             put(res, w.out, all.take(src).materialize());
             const auto rows = static_cast<std::int64_t>(emit);
-            const std::int64_t keep_n = std::min(w.before, hist_len - 1 + rows);
+            const std::int64_t keep_n =
+                std::min(w.before, hist_size - 1 + rows);
             dstd::Vector<std::int64_t> idx{-1};
             for (std::int64_t i = 0; i < keep_n; ++i)
-                idx.push_back(hist_len + rows - keep_n + i);
+                idx.push_back(hist_size + rows - keep_n + i);
             s.hist = all.take(idx).materialize();
             s.have_hist = true;
             return;

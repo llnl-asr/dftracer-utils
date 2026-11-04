@@ -46,7 +46,7 @@ TEST_SUITE("View unified F filter") {
         // fields, and aggregated records hold only args.dur, which `dur`
         // reads for them. Pruning must answer as a full scan does.
         TestEnvironment env(10);
-        const dstd::String plain = env.get_dir() + "/shadow.pfw";
+        const dstd::String plain = env.dir() + "/shadow.pfw";
         {
             dftu_utils_test::FileOut out(plain);
             for (int i = 0; i < 4000; ++i)

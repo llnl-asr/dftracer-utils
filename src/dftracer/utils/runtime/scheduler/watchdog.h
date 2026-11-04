@@ -180,7 +180,7 @@ class Watchdog {
     /**
      * Get number of active tasks being monitored
      */
-    size_t get_active_task_count() const;
+    size_t active_task_count() const;
 
    private:
     /**

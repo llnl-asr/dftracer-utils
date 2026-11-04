@@ -108,9 +108,9 @@ dstd::StringViewMap<std::uint64_t> decode_count_map_value(
     dstd::StringView value) {
     Cursor cursor(value);
     dstd::StringViewMap<std::uint64_t> counts;
-    auto num_entries = cursor.u32();
-    counts.reserve(num_entries);
-    for (std::uint32_t i = 0; i < num_entries; ++i) {
+    auto entry_count = cursor.u32();
+    counts.reserve(entry_count);
+    for (std::uint32_t i = 0; i < entry_count; ++i) {
         auto key = cursor.str();
         counts.emplace(std::move(key), cursor.u64());
     }
@@ -121,7 +121,7 @@ FileMetadataResult decode_metadata_record(dstd::StringView value) {
     Cursor cursor(value);
     FileMetadataResult meta;
     meta.checkpoint_size = cursor.u64();
-    meta.num_lines = cursor.u64();
+    meta.line_count = cursor.u64();
     meta.max_bytes = cursor.u64();
     meta.truncated = (cursor.u64() & encoding::METADATA_FLAG_TRUNCATED) != 0;
     return meta;

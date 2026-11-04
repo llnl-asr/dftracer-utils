@@ -72,7 +72,7 @@ static int initialize_stream(StreamPrivate *p) {
         auto dequeued = dftracer::utils::python::byte_size(*batch);
         astate->bytes_in_queue.fetch_sub(dequeued, std::memory_order_acq_rel);
 
-        bool added = p->reconciler.merge(batch->get_schema());
+        bool added = p->reconciler.merge(batch->schema());
         if (!p->reconciler.last_error().empty()) {
             mark_error(p, p->reconciler.last_error());
             return EIO;
@@ -144,8 +144,7 @@ static int stream_get_next(struct ArrowArrayStream *s, struct ArrowArray *out) {
         astate->bytes_in_queue.fetch_sub(dequeued, std::memory_order_acq_rel);
     }
 
-    if (p->reconciler.reconcile(batch->get_schema(), batch->get_array(), out) !=
-        0) {
+    if (p->reconciler.reconcile(batch->schema(), batch->array(), out) != 0) {
         mark_error(p, p->reconciler.last_error().empty()
                           ? "schema reconciliation failed"
                           : p->reconciler.last_error());

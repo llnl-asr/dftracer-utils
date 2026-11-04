@@ -126,7 +126,7 @@ coro::CoroTask<DetailedStatistics> DetailStatsView::collect(
         for (const auto& c : *needs.filter_categories) cat_filter.insert(c);
 
     const dstd::Vector<dstd::String>* group_by = needs.group_by;
-    std::size_t slots = needs.num_slots ? needs.num_slots : 4;
+    std::size_t slots = needs.slot_count ? needs.slot_count : 4;
 
     auto fold = [group_by, &name_filter, &cat_filter](
                     DetailedStatistics& acc,

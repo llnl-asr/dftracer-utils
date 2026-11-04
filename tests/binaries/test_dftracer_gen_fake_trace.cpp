@@ -59,7 +59,7 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        dstd::String out_dir = env.get_dir() + "/output";
+        dstd::String out_dir = env.dir() + "/output";
         int rc = run_gen_fake_trace(
             binary, {"-o", out_dir, "--num-processes", "1", "--num-epochs", "1",
                      "--steps-per-epoch", "1", "--num-train-files", "1",
@@ -81,7 +81,7 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        dstd::String out_dir = env.get_dir() + "/output";
+        dstd::String out_dir = env.dir() + "/output";
         int rc = run_gen_fake_trace(
             binary, {"-o", out_dir, "--num-processes", "3", "--num-epochs", "1",
                      "--steps-per-epoch", "1", "--num-train-files", "1",
@@ -106,7 +106,7 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        dstd::String out_dir = env.get_dir() + "/output";
+        dstd::String out_dir = env.dir() + "/output";
         int rc = run_gen_fake_trace(
             binary, {"-o", out_dir, "--num-processes", "1", "--num-epochs", "1",
                      "--steps-per-epoch", "1", "--num-train-files", "1",
@@ -132,8 +132,8 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        dstd::String out1 = env.get_dir() + "/run1";
-        dstd::String out2 = env.get_dir() + "/run2";
+        dstd::String out1 = env.dir() + "/run1";
+        dstd::String out2 = env.dir() + "/run2";
 
         dstd::Vector<dstd::String> common_args = {"--num-processes",
                                                   "1",
@@ -178,7 +178,7 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        dstd::String out_dir = env.get_dir() + "/output";
+        dstd::String out_dir = env.dir() + "/output";
         // Use minimal parameters to keep the test fast.
         int rc = run_gen_fake_trace(
             binary, {"-o", out_dir, "--num-processes", "1", "--num-epochs", "1",

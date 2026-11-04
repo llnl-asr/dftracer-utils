@@ -28,7 +28,7 @@ constexpr int RECORDS = 3000;
 // w0..w2, `status` is "n/a" for every 11th record and an integer otherwise,
 // and `tags` is an array written with and without spaces.
 dstd::String write_log(TestEnvironment& env) {
-    const dstd::String plain = env.get_dir() + "/log.ndjson";
+    const dstd::String plain = env.dir() + "/log.ndjson";
     {
         dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i) {

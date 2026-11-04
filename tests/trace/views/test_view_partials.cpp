@@ -63,7 +63,7 @@ struct Fixture {
     explicit Fixture(bool extras = false, bool mixed = false) {
         REQUIRE(env.is_valid());
         for (int i = 0; i < FILES; ++i) {
-            const dstd::String dir = env.get_dir() + "/f" + dstd::to_string(i);
+            const dstd::String dir = env.dir() + "/f" + dstd::to_string(i);
             REQUIRE(dstd::fs::create_directories(dir).has_value());
             const dstd::String plain = dir + "/t.pfw";
             const dstd::String pid = dstd::to_string(100 + i);
@@ -111,7 +111,7 @@ struct Fixture {
         aggregation.compute_percentiles = true;
         if (extras) aggregation.extra_group_keys = {"epoch", "step"};
         index::IndexerOptions o;
-        o.index_dir = env.get_dir() + "/idx";
+        o.index_dir = env.dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
         o.aggregation = aggregation;
         index::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();

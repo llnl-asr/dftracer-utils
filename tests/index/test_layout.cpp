@@ -68,8 +68,7 @@ TEST_SUITE("index layout") {
         dftu_utils_test::TestEnvironment env(10);
         REQUIRE(env.is_valid());
         const dftracer::utils::dstd::String root =
-            dftracer::utils::dstd::String(env.get_dir().data(),
-                                          env.get_dir().size()) +
+            dftracer::utils::dstd::String(env.dir().data(), env.dir().size()) +
             "/.dftindex";
         const dftracer::utils::dstd::String trace = "/traces/layout.pfw.gz";
         const index::gzip::GzipMemberRecord member{1,    4096, 512, 100,

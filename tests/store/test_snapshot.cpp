@@ -4725,7 +4725,7 @@ TEST_SUITE("index store snapshot") {
         auto pages = store::engine::ExtentPages::open(view_of(*stored));
         REQUIRE(pages.has_value());
         REQUIRE(pages->size() > 100);
-        REQUIRE(pages->entry(0).raw_length == store::engine::PAGE_BYTES);
+        REQUIRE(pages->entry(0).raw_size == store::engine::PAGE_BYTES);
 
         auto snapshot = engine::Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());

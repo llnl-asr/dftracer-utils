@@ -354,7 +354,7 @@ void ReplayEngine::execute(const Trace& trace, Lane& lane) {
             dstd::String msg = "Failed to execute ";
             msg.append(trace.func_name);
             msg += " with ";
-            msg += executor->get_name();
+            msg += executor->name();
             result.error_messages.push_back(std::move(msg));
         }
     } else {

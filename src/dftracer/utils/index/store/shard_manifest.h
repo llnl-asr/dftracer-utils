@@ -11,14 +11,14 @@
 namespace dftracer::utils::index::store {
 
 /// One immutable index shard of an index root. `path` names the shard's own
-/// index root, relative to the root holding the manifest. `num_files` counts
-/// the trace files the shard indexes and `num_events` its event count.
+/// index root, relative to the root holding the manifest. `file_count` counts
+/// the trace files the shard indexes and `event_count` its event count.
 struct IndexShardEntry {
     dstd::String path;
-    std::uint64_t num_files = 0;
-    std::uint64_t num_events = 0;
+    std::uint64_t file_count = 0;
+    std::uint64_t event_count = 0;
 
-    bool empty() const noexcept { return num_files == 0; }
+    bool empty() const noexcept { return file_count == 0; }
 };
 
 /// Catalog of the immutable shards one index root collects before its merge.

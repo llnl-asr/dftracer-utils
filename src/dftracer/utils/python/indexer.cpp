@@ -257,7 +257,7 @@ static PyObject *CheckpointIndexer_get_max_bytes(CheckpointIndexerObject *self,
     }
 
     try {
-        return PyLong_FromUnsignedLongLong((*self->handle)->get_max_bytes());
+        return PyLong_FromUnsignedLongLong((*self->handle)->max_bytes());
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return NULL;
@@ -272,7 +272,7 @@ static PyObject *CheckpointIndexer_get_num_lines(CheckpointIndexerObject *self,
     }
 
     try {
-        return PyLong_FromUnsignedLongLong((*self->handle)->get_num_lines());
+        return PyLong_FromUnsignedLongLong((*self->handle)->line_count());
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return NULL;

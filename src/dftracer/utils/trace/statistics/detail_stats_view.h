@@ -25,7 +25,7 @@ struct DetailNeeds {
     const dstd::Vector<dstd::String>* filter_names = nullptr;
     const dstd::Vector<dstd::String>* filter_categories = nullptr;
     const duql::Query* query = nullptr;  ///< chunk pruning; null = scan all
-    std::size_t num_slots = 0;  ///< parallel scan width; 0 = a small default
+    std::size_t slot_count = 0;  ///< parallel scan width; 0 = a small default
 };
 
 /// A detailed-statistics view over one or more trace files: the per-group

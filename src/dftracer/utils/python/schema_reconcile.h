@@ -30,7 +30,7 @@ class SchemaReconciler {
                   ArrowArray *out) const;
 
     bool finalized() const { return finalized_; }
-    int64_t num_known_columns() const {
+    int64_t known_column_count() const {
         return static_cast<int64_t>(child_schemas_.size());
     }
     const dstd::String &last_error() const { return last_error_; }

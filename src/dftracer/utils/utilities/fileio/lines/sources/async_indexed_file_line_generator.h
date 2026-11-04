@@ -43,8 +43,8 @@ inline coro::AsyncGenerator<Line> async_indexed_file_lines(
     // Resolve end if needed
     if (config.range_type() == reader::internal::RangeType::LineRange &&
         config.end() == 0) {
-        std::size_t num_lines = config.reader()->get_num_lines();
-        config = config.with_line_range(config.start(), num_lines);
+        std::size_t line_count = config.reader()->line_count();
+        config = config.with_line_range(config.start(), line_count);
     }
 
     // Build stream config

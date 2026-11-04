@@ -12,7 +12,7 @@ using namespace dftracer::utils::trace::statistics;
 static TraceStatistics make_test_stats() {
     TraceStatistics ts;
     ts.success = true;
-    ts.num_chunks = 2;
+    ts.chunk_count = 2;
     ts.file_path = "/test/file.pfw.gz";
     ts.index_path = "/test/file.pfw.gz.idx";
 

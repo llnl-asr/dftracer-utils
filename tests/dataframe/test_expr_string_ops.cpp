@@ -116,7 +116,7 @@ TEST_SUITE("expr string ops") {
               S{"Read ", "pread64", "x"});
         CHECK(strs(eval(expr_str_map(StrMapOp::Rstrip, expr_col(0)), in)) ==
               S{"  Read", "pread64", "x"});
-        CHECK(i64s(eval(expr_str_len(expr_col(0), false), in)) == I{7, 7, 1});
+        CHECK(i64s(eval(expr_str_size(expr_col(0), false), in)) == I{7, 7, 1});
         CHECK(i64s(eval(expr_str_find(expr_col(0), "ead"), in)) == I{3, 2, -1});
         CHECK(strs(eval(expr_str_replace(expr_col(0), "ea", "EA", false),
                         in)) == S{"  REAd ", "prEAd64", "x"});
@@ -130,11 +130,11 @@ TEST_SUITE("expr string ops") {
               S{"Rea", "ead", ""});
         Series utf = Series::strings({"héllo"});
         dstd::Vector<const Series*> uin{&utf};
-        CHECK(i64s(eval(expr_str_len(expr_col(0), false), uin)) == I{6});
-        CHECK(i64s(eval(expr_str_len(expr_col(0), true), uin)) == I{5});
+        CHECK(i64s(eval(expr_str_size(expr_col(0), false), uin)) == I{6});
+        CHECK(i64s(eval(expr_str_size(expr_col(0), true), uin)) == I{5});
 
         check_inferred(expr_str_map(StrMapOp::Upper, expr_col(0)), s);
-        check_inferred(expr_str_len(expr_col(0), true), s);
+        check_inferred(expr_str_size(expr_col(0), true), s);
         check_inferred(expr_str_find(expr_col(0), "e"), s);
         check_inferred(expr_str_replace(expr_col(0), "e", "E", true), s);
         check_inferred(expr_str_slice(expr_col(0), 0, 1), s);
@@ -193,7 +193,7 @@ TEST_SUITE("expr string ops") {
         CHECK_THROWS_AS(
             eval(expr_is_in(expr_col(0), Series::flat_i64(set.data(), 1)), sin),
             std::invalid_argument);
-        CHECK(infer_type(expr_str_len(expr_col(0), false),
+        CHECK(infer_type(expr_str_size(expr_col(0), false),
                          {dftracer::utils::dataframe::scalar(TypeId::Unknown)})
                   .id == TypeId::Unknown);
     }
@@ -400,7 +400,7 @@ TEST_SUITE("expr string ops") {
         const dftu_series* in[1] = {s.handle()};
         Series r_pred{dftu_expr_eval(pred, in, 1)};
         Series r_up{dftu_expr_eval(up, in, 1)};
-        Series r_len{dftu_expr_eval(len, in, 1)};
+        Series r_size{dftu_expr_eval(len, in, 1)};
         Series r_find{dftu_expr_eval(find, in, 1)};
         Series r_rep{dftu_expr_eval(rep, in, 1)};
         Series r_sl{dftu_expr_eval(sl, in, 1)};
@@ -408,7 +408,7 @@ TEST_SUITE("expr string ops") {
         CHECK(bools(r_pred) ==
               dstd::Vector<bool>{false, true, false, false, false});
         CHECK(strs(r_up)[0] == "READ");
-        CHECK(i64s(r_len) == dstd::Vector<std::int64_t>{4, 7, 5, 5, 5});
+        CHECK(i64s(r_size) == dstd::Vector<std::int64_t>{4, 7, 5, 5, 5});
         CHECK(i64s(r_find) == dstd::Vector<std::int64_t>{3, 4, -1, -1, 3});
         CHECK(strs(r_rep)[0] == "Read");
         CHECK(strs(r_sl) ==

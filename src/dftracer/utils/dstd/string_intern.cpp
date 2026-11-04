@@ -78,7 +78,7 @@ std::uint32_t StringIntern::get_or_insert(StringView sv) {
         }
     } else {
         id = static_cast<std::uint32_t>(
-            num_strings_.fetch_add(1, std::memory_order_relaxed));
+            string_count_.fetch_add(1, std::memory_order_relaxed));
     }
 
     const char* rec = write_record(sh, sv);
@@ -86,7 +86,7 @@ std::uint32_t StringIntern::get_or_insert(StringView sv) {
         throw_collision(slot_value(id), sv);
     }
     index_insert(sh, h, id);
-    if (det) advance_num_strings(id);
+    if (det) advance_string_count(id);
     return id;
 }
 
@@ -109,7 +109,7 @@ StringIntern::InsertStatus StringIntern::insert_at_id(std::uint32_t id,
         bind_slot(id, write_record(sh, sv), true);
         index_insert(sh, h, id);
     }
-    advance_num_strings(id);
+    advance_string_count(id);
     return InsertStatus::Ok;
 }
 
@@ -202,7 +202,7 @@ void StringIntern::throw_collision(const char* existing, StringView sv) {
 }
 
 std::uint32_t StringIntern::add_chunk(std::size_t bytes) {
-    const auto n = num_chunks_.fetch_add(1, std::memory_order_relaxed);
+    const auto n = chunk_count_.fetch_add(1, std::memory_order_relaxed);
     if (n >= CHUNK_DIRECTORY_SIZE * CHUNK_BLOCK_SIZE) {
         throw std::length_error("string intern: exhausted the chunk table");
     }
@@ -325,10 +325,10 @@ StringIntern::Index* StringIntern::grow_index(Shard& sh) {
     return fresh;
 }
 
-void StringIntern::advance_num_strings(std::uint32_t id) {
+void StringIntern::advance_string_count(std::uint32_t id) {
     const std::size_t need = static_cast<std::size_t>(id) + 1;
-    auto cur = num_strings_.load(std::memory_order_relaxed);
-    while (need > cur && !num_strings_.compare_exchange_weak(
+    auto cur = string_count_.load(std::memory_order_relaxed);
+    while (need > cur && !string_count_.compare_exchange_weak(
                              cur, need, std::memory_order_release,
                              std::memory_order_relaxed)) {
     }

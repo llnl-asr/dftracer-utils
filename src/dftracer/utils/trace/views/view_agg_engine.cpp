@@ -606,7 +606,7 @@ dataframe::DataFrame finalize_engine_result(const dataframe::AggState& st,
     names.reserve(1 + plan.group_by.size());
     if (plan.time_bucket_us > 0) names.push_back("time_bucket");
     for (const auto& gk : plan.group_by) names.emplace_back(group_col_name(gk));
-    if (clips_occupancy(plan) && dataframe::agg_num_groups(st) > 0) {
+    if (clips_occupancy(plan) && dataframe::agg_group_count(st) > 0) {
         const auto win = occupancy_window(plan).value_or(dstd::Pair(
             std::uint64_t{0}, std::numeric_limits<std::uint64_t>::max()));
         dataframe::AggStatePtr clipped = dataframe::agg_clip_occupancy(

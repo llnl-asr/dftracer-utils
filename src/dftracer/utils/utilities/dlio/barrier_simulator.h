@@ -16,8 +16,8 @@ using Rng = std::mt19937_64;
 using Sampler = dstd::Function<double(Rng&)>;
 
 struct BarrierSimulatorContext {
-    int num_ranks = 0;
-    int num_steps = 0;
+    int rank_count = 0;
+    int step_count = 0;
     double trace_e2e_duration = 0.0;
 
     dstd::Vector<dstd::Vector<double>> fetch_block_trace;
@@ -41,7 +41,7 @@ struct BarrierSimulatorContext {
     bool sync_mode = false;
     int accumulate_grad_batches = 1;
     bool enable_preprocess_simulation = false;
-    int num_workers = 8;
+    int worker_count = 8;
     int prefetch_factor = 2;
     double preprocess_slowdown_factor = 1.0;
     double base_fetch_iter_overhead = 0.0;

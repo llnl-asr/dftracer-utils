@@ -1241,7 +1241,7 @@ TEST_SUITE("vec") {
         CHECK(vals.string_at(3) == "x");
 
         // list: len and get (negative index from the end, short row null)
-        Series ln = sp.list_len();
+        Series ln = sp.list_size();
         REQUIRE(ln.valid());
         CHECK(ln.type() == TypeId::Int64);
         CHECK(ln.data<std::int64_t>()[0] == 3);

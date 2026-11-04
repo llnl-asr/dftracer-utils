@@ -30,11 +30,11 @@ class ArrowExportResult {
     ArrowExportResult(const ArrowExportResult&) = delete;
     ArrowExportResult& operator=(const ArrowExportResult&) = delete;
 
-    ArrowArray* get_array() noexcept { return array_.get(); }
-    const ArrowArray* get_array() const noexcept { return array_.get(); }
+    ArrowArray* array() noexcept { return array_.get(); }
+    const ArrowArray* array() const noexcept { return array_.get(); }
 
-    ArrowSchema* get_schema() noexcept { return schema_.get(); }
-    const ArrowSchema* get_schema() const noexcept { return schema_.get(); }
+    ArrowSchema* schema() noexcept { return schema_.get(); }
+    const ArrowSchema* schema() const noexcept { return schema_.get(); }
 
     nanoarrow::UniqueArray release_array() { return std::move(array_); }
     nanoarrow::UniqueSchema release_schema() { return std::move(schema_); }

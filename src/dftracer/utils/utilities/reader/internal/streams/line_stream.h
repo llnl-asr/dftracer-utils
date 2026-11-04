@@ -229,9 +229,9 @@ class LineStream : public ReaderStream {
             }
 
             std::size_t newline_pos = newline_ptr - current_span_.data();
-            std::size_t line_length = newline_pos - span_pos_ + 1;
+            std::size_t line_size = newline_pos - span_pos_ + 1;
 
-            if (line_length > buffer_size) {
+            if (line_size > buffer_size) {
                 return {0, false, false};
             }
 
@@ -246,9 +246,9 @@ class LineStream : public ReaderStream {
 
             if (should_output) {
                 std::memcpy(buffer, current_span_.data() + span_pos_,
-                            line_length);
+                            line_size);
                 span_pos_ = newline_pos + 1;
-                return {line_length, false, false};
+                return {line_size, false, false};
             }
 
             span_pos_ = newline_pos + 1;
@@ -270,25 +270,25 @@ class LineStream : public ReaderStream {
         return false;
     }
 
-    void finalize_line_with_accumulator(std::size_t line_length) {
-        line_accumulator_.append(current_span_.data() + span_pos_, line_length);
+    void finalize_line_with_accumulator(std::size_t line_size) {
+        line_accumulator_.append(current_span_.data() + span_pos_, line_size);
         line_accumulator_.push_back('\n');
         current_line_ = std::move(line_accumulator_);
         line_accumulator_.clear();
     }
 
-    void finalize_line_direct(std::size_t line_length) {
-        current_line_.assign(current_span_.data() + span_pos_, line_length);
+    void finalize_line_direct(std::size_t line_size) {
+        current_line_.assign(current_span_.data() + span_pos_, line_size);
         current_line_.push_back('\n');
     }
 
     bool process_complete_line(std::size_t newline_pos) {
-        std::size_t line_length = newline_pos - span_pos_;
+        std::size_t line_size = newline_pos - span_pos_;
 
         if (!line_accumulator_.empty()) {
-            finalize_line_with_accumulator(line_length);
+            finalize_line_with_accumulator(line_size);
         } else {
-            finalize_line_direct(line_length);
+            finalize_line_direct(line_size);
         }
 
         span_pos_ = newline_pos + 1;

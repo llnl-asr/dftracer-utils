@@ -21,12 +21,12 @@ using namespace dftracer::utils;
 namespace {
 
 dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                           int num_events, int id) {
-    auto trace_gz = env.create_dft_test_gzip_file(num_events);
+                           int event_count, int id) {
+    auto trace_gz = env.create_dft_test_gzip_file(event_count);
     if (trace_gz.empty()) return "";
 
     dstd::String pfw_path =
-        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+        env.dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
     REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
@@ -102,7 +102,7 @@ TEST_SUITE("DFTracerInfo") {
             REQUIRE(!f.empty());
         }
 
-        int rc = run_info(binary, {env.get_dir()});
+        int rc = run_info(binary, {env.dir()});
         CHECK(rc == 0);
     }
 
@@ -169,7 +169,7 @@ TEST_SUITE("DFTracerInfo") {
         REQUIRE(!f.empty());
 
         int rc = 0;
-        long n1 = valid_events(run_info_capture(binary, {env.get_dir()}, &rc));
+        long n1 = valid_events(run_info_capture(binary, {env.dir()}, &rc));
         CHECK(rc == 0);
         CHECK(n1 > 0);
 
@@ -179,7 +179,7 @@ TEST_SUITE("DFTracerInfo") {
         (void)dstd::fs::remove(f);
         REQUIRE(dstd::fs::rename(raw, f).has_value());
 
-        long n2 = valid_events(run_info_capture(binary, {env.get_dir()}, &rc));
+        long n2 = valid_events(run_info_capture(binary, {env.dir()}, &rc));
         CHECK(rc == 0);
         CHECK(n2 > n1);
     }

@@ -105,7 +105,7 @@ struct BatchWriteState {
     dstd::String index_path;
     IndexBuildBatchMetrics metrics;
     index::build::ChunkIndexerConfig bloom_config;
-    std::size_t num_files = 0;
+    std::size_t file_count = 0;
     dstd::Vector<std::uint64_t> file_costs;
     std::size_t parallelism = 0;
     std::size_t checkpoint_size = 0;
@@ -462,11 +462,11 @@ dstd::Vector<std::size_t> cut_blocks(std::size_t files,
 static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
     std::size_t parse_workers = std::max<std::size_t>(1, state->parallelism);
     const auto block_starts = dstd::make_shared<dstd::Vector<std::size_t>>(
-        cut_blocks(state->num_files, state->file_costs, parse_workers));
+        cut_blocks(state->file_count, state->file_costs, parse_workers));
     DFTRACER_UTILS_LOG_INFO(
         "IndexBatch: streaming pipeline begin (%zu files, workers=%zu "
         "blocks=%zu)",
-        state->num_files, parse_workers, block_starts->size() - 1);
+        state->file_count, parse_workers, block_starts->size() - 1);
 
     auto writer_metrics = dstd::make_shared<index::build::BatchWriterMetrics>();
 
@@ -502,7 +502,7 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
     parse_workers = plan.workers;
     auto admission = dstd::make_shared<Admission>(
         budget, parse_workers, plan.sink_bytes,
-        std::min(state->num_files, parse_workers), state->num_files);
+        std::min(state->file_count, parse_workers), state->file_count);
     admission->spill = budget != NO_BUDGET;
     admission->schema = state->schema;
     auto* admission_ptr = admission.get();
@@ -563,7 +563,7 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
 
     state->metrics.parse_ns = parse_ns->load(std::memory_order_relaxed);
 
-    state->metrics.files_parsed = state->num_files;
+    state->metrics.files_parsed = state->file_count;
     state->metrics.write_ns =
         writer_metrics->write_ns.load(std::memory_order_relaxed);
     state->metrics.schema_ns =
@@ -577,14 +577,14 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
         admission->max_spill_runs.load(std::memory_order_relaxed);
     DFTRACER_UTILS_LOG_INFO(
         "IndexBatch: streaming pipeline complete (parsed=%zu written=%zu)",
-        state->num_files, state->metrics.files_written);
+        state->file_count, state->metrics.files_written);
     co_return;
 }
 
 static dstd::UniquePtr<BatchWriteState> init_batch_write_state(
     IndexBuildBatchConfig& config) {
     auto state = dstd::make_unique<BatchWriteState>();
-    state->num_files = config.file_paths.size();
+    state->file_count = config.file_paths.size();
     state->file_costs = config.file_costs;
     state->parallelism = config.parallelism;
     state->checkpoint_size = config.checkpoint_size;
@@ -600,7 +600,7 @@ static dstd::UniquePtr<BatchWriteState> init_batch_write_state(
                                          DEFAULT_BLOOM_DIMENSIONS.end())
             : std::move(config.bloom_dimensions));
     state->results =
-        dstd::make_shared<dstd::Vector<IndexBuildResult>>(state->num_files);
+        dstd::make_shared<dstd::Vector<IndexBuildResult>>(state->file_count);
     state->index_path =
         determine_index_path(config.file_paths.front(), config.index_dir);
     dstd::Vector<PreparedFile> prepared;
@@ -615,7 +615,7 @@ static dstd::UniquePtr<BatchWriteState> init_batch_write_state(
         dstd::make_shared<dstd::Vector<PreparedFile>>(std::move(prepared));
     state->parsed_jobs =
         dstd::make_shared<dstd::Vector<dstd::Optional<ParsedBloomJob>>>(
-            state->num_files);
+            state->file_count);
     if (config.agg_fold_factory) {
         state->agg_fold_factory = std::move(config.agg_fold_factory);
     }
@@ -626,9 +626,9 @@ static void finalize_batch_result(BatchWriteState* state,
                                   IndexBuildBatchResult* out) {
     out->results = std::move(*state->results);
     out->metrics = state->metrics;
-    out->metrics.files_enqueued = state->num_files;
+    out->metrics.files_enqueued = state->file_count;
 
-    for (std::size_t i = 0; i < state->num_files; ++i) {
+    for (std::size_t i = 0; i < state->file_count; ++i) {
         auto& job_opt = (*state->parsed_jobs)[i];
         if (job_opt && job_opt->agg_output) {
             out->agg_outputs.push_back(std::move(*job_opt->agg_output));

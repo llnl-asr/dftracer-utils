@@ -56,7 +56,7 @@ TEST_SUITE("View") {
         SUBCASE("engine path is served by a subsuming rollup, not a rescan") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const dstd::String rgz = write_agg_engine_trace(renv.get_dir());
+            const dstd::String rgz = write_agg_engine_trace(renv.dir());
             const dstd::String ridx =
                 dstd::String(determine_index_path(rgz, ""));
             auto fine = [&] {
@@ -89,7 +89,7 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: same-grain full vocab matches a scan") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const dstd::String rgz = write_agg_engine_trace(renv.get_dir());
+            const dstd::String rgz = write_agg_engine_trace(renv.dir());
             const dstd::String ridx =
                 dstd::String(determine_index_path(rgz, ""));
             auto q = [&] {
@@ -122,7 +122,7 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: coarsening Pct/SetUnion matches a scan") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const dstd::String rgz = write_agg_engine_trace(renv.get_dir());
+            const dstd::String rgz = write_agg_engine_trace(renv.dir());
             const dstd::String ridx =
                 dstd::String(determine_index_path(rgz, ""));
             auto specs = [] {
@@ -162,7 +162,7 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: occupancy exact same-grain and coarsening") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const dstd::String rgz = write_agg_engine_trace(renv.get_dir());
+            const dstd::String rgz = write_agg_engine_trace(renv.dir());
             const dstd::String ridx =
                 dstd::String(determine_index_path(rgz, ""));
             auto occ = [&](dstd::Vector<GroupKey> gb) {
@@ -195,7 +195,7 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: Hist same-grain and coarsening") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const dstd::String rgz = write_agg_engine_trace(renv.get_dir());
+            const dstd::String rgz = write_agg_engine_trace(renv.dir());
             const dstd::String ridx =
                 dstd::String(determine_index_path(rgz, ""));
             auto check_hist = [&](const dataframe::DataFrame& expect,

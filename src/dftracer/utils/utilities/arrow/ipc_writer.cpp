@@ -31,9 +31,9 @@ using FileBlock = ArrowIpcFileBlock;
 // BufferPool
 // ---------------------------------------------------------------------------
 
-BufferPool::BufferPool(std::size_t num_slots, std::size_t initial_capacity) {
-    slots_.reserve(num_slots);
-    for (std::size_t i = 0; i < num_slots; ++i) {
+BufferPool::BufferPool(std::size_t slot_count, std::size_t initial_capacity) {
+    slots_.reserve(slot_count);
+    for (std::size_t i = 0; i < slot_count; ++i) {
         auto slot = dstd::make_unique<Slot>();
         slot->data.reserve(initial_capacity);
         slots_.push_back(std::move(slot));
@@ -70,8 +70,8 @@ static void collect_flat_buffers(ArrowArrayView* view,
                                  dstd::Vector<ArrowBufferView>& out,
                                  bool is_root = false) {
     if (!is_root) {
-        std::int64_t num_buffers = ArrowArrayViewGetNumBuffers(view);
-        for (std::int64_t i = 0; i < num_buffers; i++) {
+        std::int64_t buffer_count = ArrowArrayViewGetNumBuffers(view);
+        for (std::int64_t i = 0; i < buffer_count; i++) {
             out.push_back(ArrowArrayViewGetBufferView(view, i));
         }
     }
@@ -308,7 +308,7 @@ coro::CoroTask<int> IpcWriter::open(dstd::CStringView path,
 // ---------------------------------------------------------------------------
 
 coro::CoroTask<int> IpcWriter::write_schema(ArrowExportResult& batch) {
-    ArrowSchema* schema = batch.get_schema();
+    ArrowSchema* schema = batch.schema();
 
     // Deep copy schema for footer
     auto* schema_cp = new ArrowSchema;
@@ -358,8 +358,8 @@ coro::CoroTask<int> IpcWriter::write_schema(ArrowExportResult& batch) {
 static int encode_batch_uncompressed(ArrowExportResult& batch,
                                      dstd::Vector<uint8_t>& out_header,
                                      dstd::Vector<uint8_t>& out_body) {
-    ArrowSchema* schema = batch.get_schema();
-    ArrowArray* array = batch.get_array();
+    ArrowSchema* schema = batch.schema();
+    ArrowArray* array = batch.array();
 
     ArrowArrayView view;
     ArrowError error;
@@ -443,8 +443,8 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
         co_return result;
     }
 
-    ArrowSchema* schema = batch.get_schema();
-    ArrowArray* array = batch.get_array();
+    ArrowSchema* schema = batch.schema();
+    ArrowArray* array = batch.array();
 
     ArrowArrayView view;
     int rc = init_array_view(view, schema, array);

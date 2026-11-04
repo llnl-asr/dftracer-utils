@@ -16,16 +16,16 @@ namespace {
 
 class ShardedWriter final : public ParallelWriter {
    public:
-    coro::CoroTask<int> open(dstd::String path, std::size_t num_workers,
+    coro::CoroTask<int> open(dstd::String path, std::size_t worker_count,
                              bool gzip_extension,
                              coro::Scope* /*scope*/) override {
         base_path_ = std::move(path);
         const dstd::String ext = gzip_extension ? ".gz" : "";
-        shard_paths_.resize(num_workers);
-        shard_fds_.assign(num_workers, -1);
-        shard_offsets_.assign(num_workers, 0);
-        per_worker_last_.assign(num_workers, dstd::nullopt);
-        for (std::size_t i = 0; i < num_workers; ++i) {
+        shard_paths_.resize(worker_count);
+        shard_fds_.assign(worker_count, -1);
+        shard_offsets_.assign(worker_count, 0);
+        per_worker_last_.assign(worker_count, dstd::nullopt);
+        for (std::size_t i = 0; i < worker_count; ++i) {
             shard_paths_[i] = base_path_ + ".shard_" + dstd::to_string(i) + ext;
             ssize_t fd = co_await ::dftracer::utils::io::open(
                 shard_paths_[i].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);

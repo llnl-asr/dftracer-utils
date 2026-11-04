@@ -13,7 +13,7 @@
 using namespace dftracer::utils;
 
 TEST_CASE("CoroScope - Simple spawn test") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<int> counter{0};

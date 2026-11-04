@@ -16,7 +16,7 @@
 
 namespace dftracer::utils::dataframe {
 
-std::int64_t agg_num_groups(const AggState& st) { return st.ngroups(); }
+std::int64_t agg_group_count(const AggState& st) { return st.ngroups(); }
 
 const dstd::Vector<AggSpec>& agg_specs(const AggState& st) { return st.specs; }
 
@@ -148,7 +148,7 @@ dstd::Vector<dstd::Vector<std::int64_t>> agg_split_groups(const AggState& st,
     if (parts == 0)
         throw std::invalid_argument("agg_split_groups: parts must be > 0");
     dstd::Vector<dstd::Vector<std::int64_t>> out(parts);
-    const std::int64_t groups = agg_num_groups(st);
+    const std::int64_t groups = agg_group_count(st);
     for (std::int64_t g = 0; g < groups; ++g) {
         std::size_t h = 0;
         for (std::size_t k = 0; k < st.nkeys; ++k) {

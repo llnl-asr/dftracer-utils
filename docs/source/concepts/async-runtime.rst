@@ -99,7 +99,7 @@ Two levels of "run this coroutine" exist, for different callers:
   ``Executor`` plus a ``Watchdog``, with no DAG or scheduler overhead. It is
   what the Python bindings and other callers use to run
   coroutines on a thread pool. Its worker count is elastic when configured
-  with a ``min_workers`` floor below the ``num_threads`` cap, so a
+  with a ``min_workers`` floor below the ``thread_count`` cap, so a
   mostly-idle process does not pin a full thread pool on a shared HPC login
   node.
 - ``Executor`` (``coro/executor.h``) is the thread pool and run

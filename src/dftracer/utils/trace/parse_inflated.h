@@ -94,26 +94,26 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
                         std::size_t len, Emit&& emit, Refused&& refused) {
     constexpr bool HAS_REFUSED =
         !std::is_same_v<std::decay_t<Refused>, NoRefused>;
-    std::size_t parse_len = 0;
+    std::size_t parse_size = 0;
     for (std::size_t i = len; i-- > 0;) {
         if (base[i] == '\n') {
-            parse_len = i + 1;
+            parse_size = i + 1;
             break;
         }
     }
     // A record longer than the whole chunk: carry it to the next.
-    if (parse_len == 0) return len;
+    if (parse_size == 0) return len;
 
     parser.threaded = false;
     // `pos` is the start of the lines not yet delivered.
     std::size_t pos = 0;
-    while (pos < parse_len) {
+    while (pos < parse_size) {
         std::size_t covered = pos;
         {
             simdjson::dom::document_stream stream;
             auto err =
                 parser
-                    .parse_many(base + pos, parse_len - pos, PARSE_BATCH_BYTES)
+                    .parse_many(base + pos, parse_size - pos, PARSE_BATCH_BYTES)
                     .get(stream);
             if (!err) {
                 for (auto it = stream.begin(); it != stream.end(); ++it) {
@@ -125,14 +125,14 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
                 }
             }
         }
-        if (covered >= parse_len) break;
+        if (covered >= parse_size) break;
 
         // A bad record can desync the structural scan of the batch and
         // swallow the rest of it as one rejected document.
         std::size_t start = covered;
         if (start > pos) {  // resume at the line after the last record parsed
             std::size_t rest = start;
-            while (start < parse_len && base[start] != '\n') ++start;
+            while (start < parse_size && base[start] != '\n') ++start;
             if constexpr (HAS_REFUSED) {
                 // More records after the last one parsed, on its line.
                 while (rest < start &&
@@ -142,10 +142,10 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
                 if (rest < start)
                     hand_over_refused(base, len, rest, start, refused);
             }
-            if (start < parse_len) ++start;
+            if (start < parse_size) ++start;
         }
         std::size_t end = start;
-        while (end < parse_len && base[end] != '\n') ++end;
+        while (end < parse_size && base[end] != '\n') ++end;
         const bool long_line = end - start > PARSE_BATCH_BYTES / 2;
         if (long_line) {
             if (end > start) {
@@ -161,9 +161,9 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
         }
         // Re-parse whatever it did not reach, line by line, so a malformed
         // record drops only itself.
-        for (std::size_t at = start; at < parse_len;) {
+        for (std::size_t at = start; at < parse_size;) {
             std::size_t stop = at;
-            while (stop < parse_len && base[stop] != '\n') ++stop;
+            while (stop < parse_size && base[stop] != '\n') ++stop;
             if (stop > at) {
                 auto r = parser.parse(base + at, stop - at);
                 if (!r.error())
@@ -177,7 +177,7 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
         break;
     }
 
-    return len - parse_len;
+    return len - parse_size;
 }
 
 template <typename Emit>

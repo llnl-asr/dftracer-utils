@@ -201,7 +201,7 @@ coro::CoroTask<std::size_t> hash_events(const dstd::String& path) {
         if (!event.empty()) {
             hasher.reset();
             hasher.update(event);
-            content_hash += hasher.get_hash().value;
+            content_hash += hasher.hash().value;
         }
     }
     co_return content_hash;

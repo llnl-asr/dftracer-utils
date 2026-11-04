@@ -122,7 +122,7 @@ TEST_SUITE("DynamicWorkers") {
 
     TEST_CASE("elastic pool grows under load and shrinks when idle") {
         // Floor 1, cap 4: starts small (HPC politeness), grows on demand.
-        Runtime rt(ExecutorConfig{.num_threads = 4, .min_workers = 1});
+        Runtime rt(ExecutorConfig{.thread_count = 4, .min_workers = 1});
         auto* exec = static_cast<ThreadPoolExecutor*>(rt.executor());
         REQUIRE(exec->live_workers() == 1);  // starts at the floor
 
@@ -145,7 +145,7 @@ TEST_SUITE("DynamicWorkers") {
         // A long keep-alive holds grown workers parked-and-ready across idle
         // gaps instead of retiring them, for near-eager latency.
         Runtime rt(
-            ExecutorConfig{.num_threads = 4,
+            ExecutorConfig{.thread_count = 4,
                            .min_workers = 1,
                            .elastic_keepalive = std::chrono::seconds(30)});
         auto* exec = static_cast<ThreadPoolExecutor*>(rt.executor());

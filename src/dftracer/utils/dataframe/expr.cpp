@@ -446,7 +446,7 @@ Expr expr_str_map(StrMapOp op, const Expr& a) {
                 nullptr);
 }
 Expr expr_lower(const Expr& a) { return expr_str_map(StrMapOp::Lower, a); }
-Expr expr_str_len(const Expr& a, bool chars) {
+Expr expr_str_size(const Expr& a, bool chars) {
     return make(ExprKind::StrLen, chars ? 1 : 0, {}, a.node(), nullptr);
 }
 Expr expr_str_find(const Expr& a, dftracer::utils::dstd::StringView needle) {
@@ -693,7 +693,7 @@ Expr expr_convert(ConvertOp op, const Expr& a) {
     return make(ExprKind::Convert, static_cast<std::int32_t>(op), {}, a.node(),
                 nullptr);
 }
-Expr expr_list_len(const Expr& a) {
+Expr expr_list_size(const Expr& a) {
     return make(ExprKind::ListLen, 0, {}, a.node(), nullptr);
 }
 Expr expr_list_get(const Expr& a, std::int64_t index) {
@@ -3917,8 +3917,8 @@ int32_t dftu_expr_as_not(const dftu_expr* e, dftu_expr** a) {
     return 1;
 }
 int32_t dftu_expr_as_col_str_pred(const dftu_expr* e, int32_t* col, int32_t* op,
-                                  const char** pattern, int32_t* pattern_len) {
-    if (!e || !col || !op || !pattern || !pattern_len) return 0;
+                                  const char** pattern, int32_t* pattern_size) {
+    if (!e || !col || !op || !pattern || !pattern_size) return 0;
     std::int32_t c = -1;
     dataframe::StrPredOp sop{};
     dftracer::utils::dstd::StringView pat;
@@ -3926,7 +3926,7 @@ int32_t dftu_expr_as_col_str_pred(const dftu_expr* e, int32_t* col, int32_t* op,
     *col = c;
     *op = static_cast<int32_t>(sop);
     *pattern = pat.data();
-    *pattern_len = static_cast<int32_t>(pat.size());
+    *pattern_size = static_cast<int32_t>(pat.size());
     return 1;
 }
 int32_t dftu_expr_as_col_is_in(const dftu_expr* e, int32_t* col,
@@ -3959,12 +3959,12 @@ dftu_expr* dftu_expr_lower(const dftu_expr* a) {
     return wrap(dataframe::expr_lower(unwrap(a)));
 }
 dftu_expr* dftu_expr_str_pred(int32_t op, const dftu_expr* a,
-                              const char* pattern, int32_t pattern_len) {
-    if (!a || (pattern_len > 0 && !pattern)) return nullptr;
+                              const char* pattern, int32_t pattern_size) {
+    if (!a || (pattern_size > 0 && !pattern)) return nullptr;
     return wrap(dataframe::expr_str_pred(
         static_cast<dataframe::StrPredOp>(op), unwrap(a),
         dftracer::utils::dstd::StringView(
-            pattern ? pattern : "", static_cast<std::size_t>(pattern_len))));
+            pattern ? pattern : "", static_cast<std::size_t>(pattern_size))));
 }
 dftu_expr* dftu_expr_str_pred_col(int32_t op, const dftu_expr* a,
                                   const dftu_expr* needle) {
@@ -3999,43 +3999,43 @@ dftu_expr* dftu_expr_str_map(int32_t op, const dftu_expr* a) {
                                         unwrap(a)));
 }
 dftu_expr* dftu_expr_str_fn(int32_t fn, const dftu_expr* a, const dftu_expr* b,
-                            const char* text, int32_t text_len,
-                            const char* text2, int32_t text2_len, int64_t i0,
+                            const char* text, int32_t text_size,
+                            const char* text2, int32_t text2_size, int64_t i0,
                             int64_t i1) {
-    if (!a || fn < 0 || fn > DFTU_STR_FN_WRAP || (text_len > 0 && !text) ||
-        (text2_len > 0 && !text2))
+    if (!a || fn < 0 || fn > DFTU_STR_FN_WRAP || (text_size > 0 && !text) ||
+        (text2_size > 0 && !text2))
         return nullptr;
     const dataframe::Expr other = b ? unwrap(b) : dataframe::Expr{};
     return wrap(dataframe::expr_str_fn(
         static_cast<dataframe::StrFn>(fn), unwrap(a), b ? &other : nullptr,
         dftracer::utils::dstd::StringView(text ? text : "",
-                                          static_cast<std::size_t>(text_len)),
+                                          static_cast<std::size_t>(text_size)),
         dftracer::utils::dstd::StringView(text2 ? text2 : "",
-                                          static_cast<std::size_t>(text2_len)),
+                                          static_cast<std::size_t>(text2_size)),
         i0, i1));
 }
 dftu_expr* dftu_expr_str_len(const dftu_expr* a, int32_t chars) {
     if (!a) return nullptr;
-    return wrap(dataframe::expr_str_len(unwrap(a), chars != 0));
+    return wrap(dataframe::expr_str_size(unwrap(a), chars != 0));
 }
 dftu_expr* dftu_expr_str_find(const dftu_expr* a, const char* needle,
-                              int32_t needle_len) {
-    if (!a || (needle_len > 0 && !needle)) return nullptr;
+                              int32_t needle_size) {
+    if (!a || (needle_size > 0 && !needle)) return nullptr;
     return wrap(dataframe::expr_str_find(
         unwrap(a),
         dftracer::utils::dstd::StringView(
-            needle ? needle : "", static_cast<std::size_t>(needle_len))));
+            needle ? needle : "", static_cast<std::size_t>(needle_size))));
 }
 dftu_expr* dftu_expr_str_replace(const dftu_expr* a, const char* from,
-                                 int32_t from_len, const char* to,
-                                 int32_t to_len, int32_t all) {
-    if (!a || (from_len > 0 && !from) || (to_len > 0 && !to)) return nullptr;
+                                 int32_t from_size, const char* to,
+                                 int32_t to_size, int32_t all) {
+    if (!a || (from_size > 0 && !from) || (to_size > 0 && !to)) return nullptr;
     return wrap(dataframe::expr_str_replace(
         unwrap(a),
         dftracer::utils::dstd::StringView(from ? from : "",
-                                          static_cast<std::size_t>(from_len)),
+                                          static_cast<std::size_t>(from_size)),
         dftracer::utils::dstd::StringView(to ? to : "",
-                                          static_cast<std::size_t>(to_len)),
+                                          static_cast<std::size_t>(to_size)),
         all != 0));
 }
 dftu_expr* dftu_expr_date_part(const dftu_expr* a, int32_t part,
@@ -4046,11 +4046,11 @@ dftu_expr* dftu_expr_date_part(const dftu_expr* a, int32_t part,
     return wrap(dataframe::expr_date_part(unwrap(a), part, ns_per_unit));
 }
 dftu_expr* dftu_expr_format_time(const dftu_expr* a, const char* fmt,
-                                 int32_t fmt_len, int64_t ns_per_unit) {
-    if (!a || fmt_len < 0 || (fmt_len > 0 && !fmt) || ns_per_unit <= 0)
+                                 int32_t fmt_size, int64_t ns_per_unit) {
+    if (!a || fmt_size < 0 || (fmt_size > 0 && !fmt) || ns_per_unit <= 0)
         return nullptr;
     const dftracer::utils::dstd::StringView f(
-        fmt ? fmt : "", static_cast<std::size_t>(fmt_len));
+        fmt ? fmt : "", static_cast<std::size_t>(fmt_size));
     if (!dftracer::utils::common::invalid_time_format(f).empty())
         return nullptr;
     return wrap(dataframe::expr_format_time(unwrap(a), f, ns_per_unit));
@@ -4151,7 +4151,7 @@ dftu_expr* dftu_expr_convert(int32_t op, const dftu_expr* a) {
 }
 dftu_expr* dftu_expr_list_len(const dftu_expr* a) {
     if (!a) return nullptr;
-    return wrap(dataframe::expr_list_len(unwrap(a)));
+    return wrap(dataframe::expr_list_size(unwrap(a)));
 }
 dftu_expr* dftu_expr_list_get(const dftu_expr* a, int64_t index) {
     if (!a) return nullptr;

@@ -43,7 +43,7 @@ dstd::String encode_counts(const CountsGranule& counts);
 dstd::Optional<CountsGranule> decode_counts(dstd::StringView bytes);
 
 dstd::String encode_bloom(dstd::Span<const unsigned char> bloom,
-                          std::uint64_t num_entries);
+                          std::uint64_t entry_count);
 dstd::Optional<ScalableBloomFilter> decode_bloom(dstd::StringView bytes);
 
 /// Postings key a value by this hash.

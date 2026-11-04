@@ -108,25 +108,25 @@ class GzipIndexer : public CheckpointIndexer {
     }
 
     // Metadata - BaseIndexer interface implementation
-    const dstd::String &get_index_path() const override;
-    const dstd::String &get_archive_path() const override;
-    const dstd::String &get_gz_path() const;
-    std::uint64_t get_checkpoint_size() const override;
-    std::uint64_t get_max_bytes() const override;
-    std::uint64_t get_num_lines() const override;
+    const dstd::String &index_path() const override;
+    const dstd::String &archive_path() const override;
+    const dstd::String &gz_path() const;
+    std::uint64_t checkpoint_size() const override;
+    std::uint64_t max_bytes() const override;
+    std::uint64_t line_count() const override;
 
     // Lookup
     bool find_member(std::size_t target_offset,
                      GzipMemberRecord &member) const override;
-    dstd::Vector<GzipMemberRecord> get_members() const override;
+    dstd::Vector<GzipMemberRecord> members() const override;
     dstd::Vector<std::uint64_t> piece_heads() const override;
     dstd::String restart_window(std::uint64_t member_idx) const override;
 
-    inline common::ArchiveFormat get_format_type() const override {
+    inline common::ArchiveFormat format_type() const override {
         return common::ArchiveFormat::Gzip;
     }
-    inline const char *get_format_name() const override {
-        return dftracer::utils::common::get_format_name(get_format_type());
+    inline const char *format_name() const override {
+        return dftracer::utils::common::get_format_name(format_type());
     }
 
    private:
@@ -141,8 +141,8 @@ class GzipIndexer : public CheckpointIndexer {
     mutable std::atomic<bool> cached_is_valid_{false};
     mutable std::atomic<std::uint64_t> cached_max_bytes_{0};
     mutable std::atomic<bool> cached_max_bytes_ready_{false};
-    mutable std::atomic<std::uint64_t> cached_num_lines_{0};
-    mutable std::atomic<bool> cached_num_lines_ready_{false};
+    mutable std::atomic<std::uint64_t> cached_line_count_{0};
+    mutable std::atomic<bool> cached_line_count_ready_{false};
     mutable std::atomic<std::uint64_t> cached_checkpoint_size_{0};
     mutable std::atomic<bool> cached_checkpoint_size_ready_{false};
     mutable dstd::Vector<GzipMemberRecord> cached_members_;

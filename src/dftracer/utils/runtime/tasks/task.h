@@ -162,7 +162,7 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get task ID (pointer address)
      */
-    common::TaskIndex get_id() const {
+    common::TaskIndex id() const {
         return reinterpret_cast<common::TaskIndex>(this);
     }
 
@@ -201,7 +201,7 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get parent tasks (returns a copy for thread safety)
      */
-    std::vector<dstd::SharedPtr<Task>> get_parents() const {
+    std::vector<dstd::SharedPtr<Task>> parents() const {
         std::vector<dstd::SharedPtr<Task>> result;
         result.reserve(parents_.size());
         for (const auto& weak_parent : parents_) {
@@ -215,9 +215,7 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get child tasks (returns a copy for thread safety)
      */
-    std::vector<dstd::SharedPtr<Task>> get_children() const {
-        return children_;
-    }
+    std::vector<dstd::SharedPtr<Task>> children() const { return children_; }
 
     /**
      * Check if all parents have completed
@@ -232,18 +230,18 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get input type
      */
-    std::type_index get_input_type() const { return input_type_; }
+    std::type_index input_type() const { return input_type_; }
 
     /**
      * Get output type
      */
-    std::type_index get_output_type() const { return output_type_; }
+    std::type_index output_type() const { return output_type_; }
 
     /**
      * Get task name. Returns user name if set, otherwise caller's
      * function name from source_location (const char*, zero allocation).
      */
-    const char* get_name() const {
+    const char* name() const {
         if (!name_.empty()) return name_.data();
         return loc_.function_name();
     }
@@ -251,7 +249,7 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get source location where the task was created.
      */
-    const std::source_location& get_location() const { return loc_; }
+    const std::source_location& location() const { return loc_; }
 
     /**
      * Check if task has custom combiner
@@ -266,7 +264,7 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get initial input (if set)
      */
-    const dstd::Optional<std::any>& get_initial_input() const {
+    const dstd::Optional<std::any>& initial_input() const {
         return initial_input_;
     }
 
@@ -280,7 +278,7 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get task timeout (0 = no timeout)
      */
-    std::chrono::milliseconds get_timeout() const { return timeout_; }
+    std::chrono::milliseconds timeout() const { return timeout_; }
 
     /**
      * Check if task has timeout set

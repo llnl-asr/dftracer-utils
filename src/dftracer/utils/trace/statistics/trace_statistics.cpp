@@ -29,15 +29,15 @@ double TraceStatistics::duration_stddev_us() const {
     return std::sqrt(merged.duration_variance());
 }
 
-std::size_t TraceStatistics::num_categories() const {
+std::size_t TraceStatistics::category_count() const {
     return merged.category_counts.size();
 }
 
-std::size_t TraceStatistics::num_unique_names() const {
+std::size_t TraceStatistics::unique_name_count() const {
     return merged.name_counts.size();
 }
 
-std::size_t TraceStatistics::num_pid_tids() const {
+std::size_t TraceStatistics::pid_tid_count() const {
     return merged.pid_tid_counts.size();
 }
 
@@ -84,13 +84,13 @@ dstd::String TraceStatistics::to_json() const {
         ss += '"';
     } else {
         ss += ",\"num_chunks\":";
-        internal::append_value(ss, num_chunks);
+        internal::append_value(ss, chunk_count);
         ss += ",\"num_categories\":";
-        internal::append_value(ss, num_categories());
+        internal::append_value(ss, category_count());
         ss += ",\"num_unique_names\":";
-        internal::append_value(ss, num_unique_names());
+        internal::append_value(ss, unique_name_count());
         ss += ",\"num_pid_tids\":";
-        internal::append_value(ss, num_pid_tids());
+        internal::append_value(ss, pid_tid_count());
 
         ss += ",\"time_range\":{";
         if (merged.min_timestamp_us !=

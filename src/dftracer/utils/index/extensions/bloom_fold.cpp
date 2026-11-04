@@ -43,7 +43,7 @@ constexpr std::uint64_t RECORD_BYTES = 32;
 
 // The bits of a chunk bloom sized for `values`, as write_chunk sizes it.
 std::uint64_t bloom_bytes(std::size_t values, double false_positive_rate) {
-    return BloomFilter::optimal_num_bits(values + 1, false_positive_rate) / 8;
+    return BloomFilter::optimal_bit_count(values + 1, false_positive_rate) / 8;
 }
 
 }  // namespace

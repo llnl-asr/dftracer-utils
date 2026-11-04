@@ -43,7 +43,7 @@ struct Event {
 // Record i: op read on even i, lat i, io.off 10*i on multiples of 3, tags on
 // multiples of 5, and hosts on multiples of 7.
 dstd::String write_access(TestEnvironment& env, const dstd::String& extra) {
-    const dstd::String plain = env.get_dir() + "/access.ndjson";
+    const dstd::String plain = env.dir() + "/access.ndjson";
     {
         dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i) {
@@ -140,7 +140,7 @@ TEST_SUITE("TypedRows") {
 
     TEST_CASE("dftracer metadata records are left out unless selected") {
         TestEnvironment env(10);
-        const dstd::String pfw = env.get_dir() + "/meta.pfw";
+        const dstd::String pfw = env.dir() + "/meta.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"M","name":"process_name","pid":1,"tid":1,)"
@@ -169,7 +169,7 @@ TEST_SUITE("TypedRows") {
 
     TEST_CASE("lines with a huge number, a bad escape or bad bytes are kept") {
         TestEnvironment env(10);
-        const dstd::String plain = env.get_dir() + "/wide.ndjson";
+        const dstd::String plain = env.dir() + "/wide.ndjson";
         {
             dftu_utils_test::FileOut out(plain);
             out << R"({"k":1,"inf":1e400,"s":"a"})" << "\n";

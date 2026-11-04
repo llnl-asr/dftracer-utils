@@ -17,7 +17,7 @@ TEST_SUITE("MetricStats") {
 
         CHECK(stats.count() == 1);
         CHECK(stats.mean() == doctest::Approx(42.0));
-        CHECK(stats.get_stddev() == 0.0);
+        CHECK(stats.stddev() == 0.0);
         CHECK(stats.total() == 42);
         CHECK(stats.min() == 42);
         CHECK(stats.max() == 42);
@@ -35,7 +35,7 @@ TEST_SUITE("MetricStats") {
         CHECK(stats.max() == 20);
 
         // stddev = sqrt(((10-15)^2 + (20-15)^2) / 1) = sqrt(50) ~ 7.071
-        double stddev = stats.get_stddev();
+        double stddev = stats.stddev();
         CHECK(stddev == doctest::Approx(std::sqrt(50.0)).epsilon(0.001));
     }
 
@@ -56,7 +56,7 @@ TEST_SUITE("MetricStats") {
 
         // Sample stddev = sqrt(sum((x-mean)^2) / (n-1))
         // = sqrt((9+1+1+1+0+0+4+16)/7) = sqrt(32/7) ~ 2.138
-        double stddev = stats.get_stddev();
+        double stddev = stats.stddev();
         CHECK(stddev == doctest::Approx(std::sqrt(32.0 / 7.0)).epsilon(0.01));
     }
 
@@ -68,9 +68,9 @@ TEST_SUITE("MetricStats") {
 
         CHECK(stats.count() == 10);
         CHECK(stats.mean() == doctest::Approx(5.0));
-        CHECK(stats.get_stddev() == doctest::Approx(0.0).epsilon(1e-10));
-        CHECK(stats.get_skewness() == doctest::Approx(0.0).epsilon(1e-10));
-        CHECK(stats.get_kurtosis() == doctest::Approx(0.0).epsilon(1e-10));
+        CHECK(stats.stddev() == doctest::Approx(0.0).epsilon(1e-10));
+        CHECK(stats.skewness() == doctest::Approx(0.0).epsilon(1e-10));
+        CHECK(stats.kurtosis() == doctest::Approx(0.0).epsilon(1e-10));
     }
 
     TEST_CASE("MetricStats - Merge equivalence") {
@@ -100,8 +100,8 @@ TEST_SUITE("MetricStats") {
         CHECK(first_half.total() == single.total());
         CHECK(first_half.min() == single.min());
         CHECK(first_half.max() == single.max());
-        CHECK(first_half.get_stddev() ==
-              doctest::Approx(single.get_stddev()).epsilon(0.01));
+        CHECK(first_half.stddev() ==
+              doctest::Approx(single.stddev()).epsilon(0.01));
     }
 
     TEST_CASE("MetricStats - Merge with empty") {

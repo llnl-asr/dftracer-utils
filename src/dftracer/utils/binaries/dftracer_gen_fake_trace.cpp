@@ -140,7 +140,7 @@ static coro::CoroTask<int> run_verify(
             }
 
             std::size_t file_size = metadata.uncompressed_size;
-            std::size_t num_ckpts = metadata.num_checkpoints;
+            std::size_t ckpt_count = metadata.checkpoint_count;
 
             struct ChunkWork {
                 std::uint64_t idx;
@@ -149,14 +149,14 @@ static coro::CoroTask<int> run_verify(
             };
             dstd::Vector<ChunkWork> chunks;
 
-            if (num_ckpts == 0) {
+            if (ckpt_count == 0) {
                 chunks.push_back({0, 0, file_size});
             } else {
-                std::size_t bytes_per = file_size / num_ckpts;
-                for (std::size_t i = 0; i < num_ckpts; ++i) {
+                std::size_t bytes_per = file_size / ckpt_count;
+                for (std::size_t i = 0; i < ckpt_count; ++i) {
                     std::size_t start = i * bytes_per;
                     std::size_t end =
-                        (i + 1 == num_ckpts) ? file_size : (i + 1) * bytes_per;
+                        (i + 1 == ckpt_count) ? file_size : (i + 1) * bytes_per;
                     chunks.push_back(
                         {static_cast<std::uint64_t>(i), start, end});
                 }
@@ -185,7 +185,7 @@ static coro::CoroTask<int> run_verify(
                         *build, IndexExtension::Bloom, dim,
                         output.checkpoint_idx,
                         index::extensions::kinds::encode_bloom(
-                            blob, bloom.num_entries()));
+                            blob, bloom.entry_count()));
 
                     auto it = file_blooms.find(dim);
                     if (it == file_blooms.end()) {
@@ -203,7 +203,7 @@ static coro::CoroTask<int> run_verify(
                 auto blob = bloom.serialize();
                 index::put_path_file(*build, IndexExtension::Bloom, dim,
                                      index::extensions::kinds::encode_bloom(
-                                         blob, bloom.num_entries()));
+                                         blob, bloom.entry_count()));
             }
             for (const auto& dim : all_dimensions)
                 index::put_path(*build, IndexExtension::Bloom, dim);
@@ -301,14 +301,14 @@ class GenFakeTraceArgParse : public binaries::ArgParse {
     binaries::PipelineArgs pipeline;
 
     dstd::StringView output;
-    int num_ranks = 8;
-    int num_hosts = 4;
-    int num_epochs = 500;
+    int rank_count = 8;
+    int host_count = 4;
+    int epoch_count = 500;
     int steps_per_epoch = 1000;
     int checkpoint_every = 5;
     int validation_every = 2;
-    int num_train_files = 8;
-    int num_val_files = 2;
+    int train_file_count = 8;
+    int val_file_count = 2;
     int step_dur_ms = 100;
     double step_duration_ms = 100;
     std::uint64_t base_seed = 42;
@@ -326,11 +326,11 @@ class GenFakeTraceArgParse : public binaries::ArgParse {
                     "Output folder for the trace files")
             .required();
 
-        parser().option(num_ranks, {"--num-processes"}, "Number of ranks");
+        parser().option(rank_count, {"--num-processes"}, "Number of ranks");
 
-        parser().option(num_hosts, {"--num-hosts"}, "Number of hosts");
+        parser().option(host_count, {"--num-hosts"}, "Number of hosts");
 
-        parser().option(num_epochs, {"--num-epochs"}, "Training epochs");
+        parser().option(epoch_count, {"--num-epochs"}, "Training epochs");
 
         parser().option(steps_per_epoch, {"--steps-per-epoch"},
                         "Steps per epoch");
@@ -341,10 +341,10 @@ class GenFakeTraceArgParse : public binaries::ArgParse {
         parser().option(validation_every, {"--validation-every"},
                         "Validate every N epochs");
 
-        parser().option(num_train_files, {"--num-train-files"},
+        parser().option(train_file_count, {"--num-train-files"},
                         "Training data shards");
 
-        parser().option(num_val_files, {"--num-val-files"},
+        parser().option(val_file_count, {"--num-val-files"},
                         "Validation data shards");
 
         parser().duration(
@@ -378,14 +378,14 @@ namespace {
 
 struct GenOptions {
     dstd::StringView output_dir;
-    int num_ranks = 0;
-    int num_hosts = 0;
-    int num_epochs = 0;
+    int rank_count = 0;
+    int host_count = 0;
+    int epoch_count = 0;
     int steps_per_epoch = 0;
     int checkpoint_every = 0;
     int validation_every = 0;
-    int num_train_files = 0;
-    int num_val_files = 0;
+    int train_file_count = 0;
+    int val_file_count = 0;
     int step_dur_ms = 0;
     std::uint64_t step_dur_us = 0;
     std::uint64_t base_seed = 0;
@@ -394,14 +394,14 @@ struct GenOptions {
 
     explicit GenOptions(const GenFakeTraceArgParse& cli)
         : output_dir(cli.output),
-          num_ranks(cli.num_ranks),
-          num_hosts(cli.num_hosts),
-          num_epochs(cli.num_epochs),
+          rank_count(cli.rank_count),
+          host_count(cli.host_count),
+          epoch_count(cli.epoch_count),
           steps_per_epoch(cli.steps_per_epoch),
           checkpoint_every(cli.checkpoint_every),
           validation_every(cli.validation_every),
-          num_train_files(cli.num_train_files),
-          num_val_files(cli.num_val_files),
+          train_file_count(cli.train_file_count),
+          val_file_count(cli.val_file_count),
           step_dur_ms(cli.step_dur_ms),
           step_dur_us(static_cast<std::uint64_t>(cli.step_dur_ms) * 1000ULL),
           base_seed(cli.base_seed),
@@ -425,24 +425,24 @@ struct TraceNames {
 
 TraceNames make_trace_names(const GenOptions& opts) {
     TraceNames names;
-    names.host_names.resize(opts.num_hosts);
-    names.host_hashes.resize(opts.num_hosts);
-    for (int h = 0; h < opts.num_hosts; ++h) {
+    names.host_names.resize(opts.host_count);
+    names.host_hashes.resize(opts.host_count);
+    for (int h = 0; h < opts.host_count; ++h) {
         names.host_names[h] = "node-" + dstd::to_string(h);
         names.host_hashes[h] = make_hash(names.host_names[h]);
     }
 
-    names.train_file_names.resize(opts.num_train_files);
-    names.train_file_hashes.resize(opts.num_train_files);
-    for (int f = 0; f < opts.num_train_files; ++f) {
+    names.train_file_names.resize(opts.train_file_count);
+    names.train_file_hashes.resize(opts.train_file_count);
+    for (int f = 0; f < opts.train_file_count; ++f) {
         names.train_file_names[f] =
             "/data/train/shard_" + dstd::to_string(f) + ".h5";
         names.train_file_hashes[f] = make_hash(names.train_file_names[f]);
     }
 
-    names.val_file_names.resize(opts.num_val_files);
-    names.val_file_hashes.resize(opts.num_val_files);
-    for (int f = 0; f < opts.num_val_files; ++f) {
+    names.val_file_names.resize(opts.val_file_count);
+    names.val_file_hashes.resize(opts.val_file_count);
+    for (int f = 0; f < opts.val_file_count; ++f) {
         names.val_file_names[f] = "/data/val/val_" + dstd::to_string(f) + ".h5";
         names.val_file_hashes[f] = make_hash(names.val_file_names[f]);
     }
@@ -459,13 +459,13 @@ void print_banner(const GenOptions& opts) {
     std::printf("==========================================\n");
     std::printf("DFTracer Fake Trace Generator (UNet3D)\n");
     std::printf("==========================================\n");
-    std::printf("  Ranks: %d   Hosts: %d\n", opts.num_ranks, opts.num_hosts);
-    std::printf("  Epochs: %d   Steps/epoch: %d\n", opts.num_epochs,
+    std::printf("  Ranks: %d   Hosts: %d\n", opts.rank_count, opts.host_count);
+    std::printf("  Epochs: %d   Steps/epoch: %d\n", opts.epoch_count,
                 opts.steps_per_epoch);
     std::printf("  Checkpoint every: %d   Validation every: %d\n",
                 opts.checkpoint_every, opts.validation_every);
-    std::printf("  Train shards: %d   Val files: %d\n", opts.num_train_files,
-                opts.num_val_files);
+    std::printf("  Train shards: %d   Val files: %d\n", opts.train_file_count,
+                opts.val_file_count);
     std::printf("  Step duration: %d ms   Format: .pfw.gz\n", opts.step_dur_ms);
     std::printf("  Seed: %llu   Verify: %s\n",
                 static_cast<unsigned long long>(opts.base_seed),
@@ -475,8 +475,8 @@ void print_banner(const GenOptions& opts) {
 }
 
 dstd::Vector<dstd::String> plan_files(const GenOptions& opts) {
-    dstd::Vector<dstd::String> generated_files(opts.num_ranks);
-    for (int rank = 0; rank < opts.num_ranks; ++rank) {
+    dstd::Vector<dstd::String> generated_files(opts.rank_count);
+    for (int rank = 0; rank < opts.rank_count; ++rank) {
         generated_files[rank] = dstd::String(
             common::str_cat(opts.output_dir, "/rank_", rank, ".pfw.gz"));
     }
@@ -512,7 +512,7 @@ struct RankTrace {
           ckref(trace_names.ckpt_file_hash),
           rng(options.base_seed +
               static_cast<std::uint64_t>(rank_index) * 10000ULL),
-          host_idx(rank_index % options.num_hosts),
+          host_idx(rank_index % options.host_count),
           my_hhash(trace_names.host_hashes[host_idx]),
           pid(1000 + static_cast<std::uint64_t>(rank_index)),
           tid_main(pid * 10),
@@ -540,11 +540,11 @@ struct RankTrace {
 
     void emit_header() {
         // Train shards this rank reads (round-robin)
-        for (int f = rank; f < opts.num_train_files; f += opts.num_ranks) {
+        for (int f = rank; f < opts.train_file_count; f += opts.rank_count) {
             my_train_shards.push_back(f);
         }
         if (my_train_shards.empty()) {
-            my_train_shards.push_back(rank % opts.num_train_files);
+            my_train_shards.push_back(rank % opts.train_file_count);
         }
 
         emit_metadata(writer, "HH", my_hhash, names.host_names[host_idx],
@@ -554,7 +554,7 @@ struct RankTrace {
             emit_metadata(writer, "FH", my_hhash, names.train_file_names[si],
                           names.train_file_hashes[si]);
         }
-        for (int vi = 0; vi < opts.num_val_files; ++vi) {
+        for (int vi = 0; vi < opts.val_file_count; ++vi) {
             emit_metadata(writer, "FH", my_hhash, names.val_file_names[vi],
                           names.val_file_hashes[vi]);
         }
@@ -588,9 +588,9 @@ struct RankTrace {
         }
 
         // pread / read / fread (randomly 3-5 calls)
-        int num_reads = 3 + static_cast<int>(rng() % 3);
+        int read_count = 3 + static_cast<int>(rng() % 3);
         const char* read_ops[] = {"pread", "read", "fread"};
-        for (int r = 0; r < num_reads; ++r) {
+        for (int r = 0; r < read_count; ++r) {
             auto a = make_event(read_ops[r % 3], "POSIX", tid_io, ts,
                                 jitter(rng, 20), 2);
             a.fhash = data_fhash;
@@ -712,7 +712,7 @@ struct RankTrace {
         const int val_steps = 10;
         for (int vs = 0; vs < val_steps; ++vs) {
             char extra[256];
-            int vf_idx = vs % opts.num_val_files;
+            int vf_idx = vs % opts.val_file_count;
             const dstd::String& vf_hash = names.val_file_hashes[vf_idx];
             std::uint64_t vio_size = jitter(rng, 4096);
             std::uint64_t val_step_start = ts;
@@ -730,9 +730,9 @@ struct RankTrace {
             }
 
             // read calls (2-3, level=2)
-            int num_reads = 2 + static_cast<int>(rng() % 2);
+            int read_count = 2 + static_cast<int>(rng() % 2);
             const char* read_ops[] = {"pread", "read", "fread"};
-            for (int r = 0; r < num_reads; ++r) {
+            for (int r = 0; r < read_count; ++r) {
                 auto a = make_event(read_ops[r % 3], "POSIX", tid_io, ts,
                                     jitter(rng, 20), 2);
                 a.fhash = vf_hash;
@@ -825,8 +825,8 @@ struct RankTrace {
         }
 
         // pwrite calls (10-20, level=1)
-        int num_writes = 10 + static_cast<int>(rng() % 11);
-        for (int wr = 0; wr < num_writes; ++wr) {
+        int write_count = 10 + static_cast<int>(rng() % 11);
+        for (int wr = 0; wr < write_count; ++wr) {
             auto a = make_event((wr % 2 == 0) ? "pwrite" : "write", "POSIX",
                                 tid_io, ts, jitter(rng, 50), 1);
             a.fhash = ckref;
@@ -880,7 +880,7 @@ struct RankTrace {
 
     void run() {
         emit_header();
-        for (int epoch = 0; epoch < opts.num_epochs; ++epoch) {
+        for (int epoch = 0; epoch < opts.epoch_count; ++epoch) {
             for (int step = 0; step < opts.steps_per_epoch; ++step) {
                 emit_train_step(epoch, step);
             }
@@ -909,7 +909,7 @@ dstd::Vector<dstd::SharedPtr<Task>> add_rank_tasks(
     const auto* generated_files_ptr = &generated_files;
     auto* rank_event_counts_ptr = &rank_event_counts;
     dstd::Vector<dstd::SharedPtr<Task>> rank_tasks;
-    for (int rank = 0; rank < opts.num_ranks; ++rank) {
+    for (int rank = 0; rank < opts.rank_count; ++rank) {
         auto task = make_task(
             [rank, opts_ptr, names_ptr, generated_files_ptr,
              rank_event_counts_ptr](CoroScope&) -> coro::CoroTask<void> {
@@ -934,12 +934,12 @@ dstd::SharedPtr<Task> make_summary_task(
     const auto* rank_event_counts_for_summary = &rank_event_counts;
     const auto* generated_files_for_summary = &generated_files;
     return make_task(
-        [num_ranks = opts.num_ranks, checkpoint_every = opts.checkpoint_every,
+        [rank_count = opts.rank_count, checkpoint_every = opts.checkpoint_every,
          validation_every = opts.validation_every, names_ptr,
          rank_event_counts_for_summary,
          generated_files_for_summary](CoroScope&) -> coro::CoroTask<void> {
             std::size_t total_events = 0;
-            for (int rank = 0; rank < num_ranks; ++rank) {
+            for (int rank = 0; rank < rank_count; ++rank) {
                 std::printf("  rank %d: %zu events -> %s\n", rank,
                             (*rank_event_counts_for_summary)[rank],
                             (*generated_files_for_summary)[rank].c_str());
@@ -950,7 +950,7 @@ dstd::SharedPtr<Task> make_summary_task(
             std::printf("Generation complete\n");
             std::printf("==========================================\n");
             std::printf("  Total events: %zu\n", total_events);
-            std::printf("  Total files:  %d\n", num_ranks);
+            std::printf("  Total files:  %d\n", rank_count);
             std::printf("\nInteresting queries for bloom filter testing:\n");
             std::printf(
                 "  1. name=pwrite                   (checkpoint I/O, "
@@ -1091,7 +1091,7 @@ int main(int argc, char** argv) {
             print_banner(opts);
 
             dstd::Vector<dstd::String> generated_files = plan_files(opts);
-            dstd::Vector<std::size_t> rank_event_counts(opts.num_ranks, 0);
+            dstd::Vector<std::size_t> rank_event_counts(opts.rank_count, 0);
 
             auto pipeline_config = binaries::build_pipeline_config(
                 "DFTracer Fake Trace Generator", cli.pipeline);

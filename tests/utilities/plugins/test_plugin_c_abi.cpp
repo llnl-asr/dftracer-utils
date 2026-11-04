@@ -244,7 +244,7 @@ TEST_CASE("C ABI: dftu_svc_trace write then read round-trips from C") {
     const std::uint32_t N = 20;
     TestFrame frame = trace_test_frame(N);
 
-    dstd::String path = env.get_dir() + "/c_abi.pfw.gz";
+    dstd::String path = env.dir() + "/c_abi.pfw.gz";
     int read = 0;
     REQUIRE(dftu_test_trace_roundtrip(&host, path.c_str(), frame.df, &read) ==
             0);
@@ -255,7 +255,7 @@ TEST_CASE("C ABI: dftu_io write/read round-trips from C") {
     dftu_utils_test::TestEnvironment env(0);
     HostFixture fx;
     dftu_plugin_host& host = fx.host();
-    dstd::String path = env.get_dir() + "/io_c.bin";
+    dstd::String path = env.dir() + "/io_c.bin";
     dstd::String data = "hello-io";
     char buf[16] = {0};
     int fd = -1;
@@ -293,7 +293,7 @@ TEST_CASE("C ABI: dftu_svc_writer create/open/chunk/close from C") {
     dftu_utils_test::TestEnvironment env(0);
     HostFixture fx;
     dftu_plugin_host& host = fx.host();
-    dstd::String path = env.get_dir() + "/writer_c.out";
+    dstd::String path = env.dir() + "/writer_c.out";
     dstd::String data = "chunk-from-c";
 
     ::dftu_writer* w = dftu_test_writer_create(&host, path.c_str());

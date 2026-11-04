@@ -103,11 +103,11 @@ void write_u64_le_at(dstd::Vector<std::uint8_t>& bytes, std::size_t offset,
 }
 
 std::size_t header_tail_field_offset(const dstd::Vector<std::uint8_t>& file) {
-    const std::size_t host_length =
+    const std::size_t host_size =
         std::size_t{file[44]} | (std::size_t{file[45]} << 8U);
-    const std::size_t label_length =
+    const std::size_t label_size =
         std::size_t{file[46]} | (std::size_t{file[47]} << 8U);
-    return 48U + host_length + label_length;
+    return 48U + host_size + label_size;
 }
 
 std::uint64_t header_tail_offset(const dstd::Vector<std::uint8_t>& file) {
@@ -124,9 +124,9 @@ void rewrite_header_crc(dstd::Vector<std::uint8_t>& header) {
 
 std::size_t record_crc_offset(const dstd::Vector<std::uint8_t>& file,
                               std::uint64_t record_offset) {
-    const std::uint32_t body_length =
+    const std::uint32_t body_size =
         read_u32_le_at(file, static_cast<std::size_t>(record_offset) + 12U);
-    return static_cast<std::size_t>(record_offset) + 40U + body_length;
+    return static_cast<std::size_t>(record_offset) + 40U + body_size;
 }
 
 void rewrite_record_crc(dstd::Vector<std::uint8_t>& file,
@@ -297,7 +297,7 @@ struct SegmentBlockEntry {
     std::uint32_t extent_index = 0;
     std::uint64_t sequence = 0;
     std::uint64_t extent_offset = 0;
-    std::uint32_t extent_length = 0;
+    std::uint32_t extent_size = 0;
     std::uint32_t extent_crc = 0;
     std::uint32_t offset_in_extent = 0;
     std::uint32_t length = 0;
@@ -365,7 +365,7 @@ SegmentBlockView read_segment_block(const engine::DataFileReader& reader,
         entry.extent_index = read_u32_le_at(raw, at);
         entry.sequence = read_u64_le_at(raw, at + 4U);
         entry.extent_offset = read_u64_le_at(raw, at + 12U);
-        entry.extent_length = read_u32_le_at(raw, at + 20U);
+        entry.extent_size = read_u32_le_at(raw, at + 20U);
         entry.extent_crc = read_u32_le_at(raw, at + 24U);
         entry.offset_in_extent = read_u32_le_at(raw, at + 28U);
         entry.length = read_u32_le_at(raw, at + 32U);
@@ -549,10 +549,10 @@ dstd::Vector<RecordMeta> scan_record_metas(
         if (std::memcmp(file.data() + offset, "DFTUREC0", 8) != 0) continue;
         const std::uint32_t kind = read_u32_le_at(file, offset + 8U);
         if (kind < 1 || kind > 3) continue;
-        const std::uint32_t body_length = read_u32_le_at(file, offset + 12U);
+        const std::uint32_t body_size = read_u32_le_at(file, offset + 12U);
         const std::uint64_t sequence = read_u64_le_at(file, offset + 16U);
         const std::uint64_t self_offset = read_u64_le_at(file, offset + 32U);
-        const std::size_t crc_end = offset + 40U + body_length;
+        const std::size_t crc_end = offset + 40U + body_size;
         if (sequence == 0 || self_offset != offset ||
             crc_end + 4U > file.size()) {
             continue;
@@ -1899,7 +1899,7 @@ TEST_SUITE("index store file") {
         CHECK(small_block.entries[0].sequence == 1);
         CHECK(small_block.entries[1].sequence == 2);
         CHECK(small_block.entries[0].extent_offset == first_extent->offset);
-        CHECK(small_block.entries[0].extent_length == first_extent->length);
+        CHECK(small_block.entries[0].extent_size == first_extent->length);
         CHECK(small_block.entries[0].extent_crc == first_extent->crc);
         CHECK(small_block.entries[0].offset_in_extent == 0);
         CHECK(small_block.entries[0].length == first.bytes.size());
@@ -2075,12 +2075,12 @@ TEST_SUITE("index store file") {
             ++extents;
             extent_bytes += ref.length;
             table_bytes +=
-                store::engine::ExtentPages::table_length(view_of(*stored)) -
+                store::engine::ExtentPages::table_size(view_of(*stored)) -
                 store::engine::EXTENT_HEADER_BYTES;
             pages += view->size();
-            page_raw_bytes += view->raw_length();
+            page_raw_bytes += view->raw_size();
             for (std::size_t page = 0; page < view->size(); ++page) {
-                page_bytes += view->entry(page).stored_length;
+                page_bytes += view->entry(page).stored_size;
                 if (view->entry(page).codec == store::PageCodec::Zstd) {
                     ++compressed;
                 }

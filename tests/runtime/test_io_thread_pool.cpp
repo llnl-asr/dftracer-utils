@@ -204,14 +204,14 @@ TEST_CASE("an eager executor holds more threads than an elastic one") {
     auto held = [](std::size_t min_workers) {
         const std::size_t before = settled_threads();
         ExecutorConfig config;
-        config.num_threads = 2;
+        config.thread_count = 2;
         config.io_pool_size = 8;
         config.min_workers = min_workers;
         config.io_backend_type = io::IoBackendType::Threadpool;
         auto executor = make_task_executor(config);
         executor->start();
         const std::size_t during = settled_threads();
-        CHECK(executor->get_io_pool_size() == 8);
+        CHECK(executor->io_pool_size() == 8);
         executor->shutdown();
         return during - before;
     };

@@ -73,7 +73,7 @@ TEST_SUITE("stats via View") {
                 .collect()
                 .get();
 
-        // num_categories == distinct groups; total events == sum of counts.
+        // category_count == distinct groups; total events == sum of counts.
         CHECK(cats.num_rows() == 2);      // posix, stdio
         CHECK(sum_i64(cats, "n") == 50);  // 30 + 20
     }
@@ -90,7 +90,7 @@ TEST_SUITE("stats via View") {
                 .agg({{AggOp::Count, "", "n"}})
                 .collect()
                 .get();
-        CHECK(names.num_rows() > 0);  // num_unique_names
+        CHECK(names.num_rows() > 0);  // unique_name_count
         CHECK(sum_i64(names, "n") == 50);
 
         dataframe::DataFrame pt =
@@ -99,7 +99,7 @@ TEST_SUITE("stats via View") {
                 .agg({{AggOp::Count, "", "n"}})
                 .collect()
                 .get();
-        CHECK(pt.num_rows() > 0);  // num_pid_tids
+        CHECK(pt.num_rows() > 0);  // pid_tid_count
         CHECK(sum_i64(pt, "n") == 50);
     }
 
@@ -312,7 +312,7 @@ TEST_SUITE("stats via View") {
         REQUIRE(env.is_valid());
         // Distinct pid/tid groups: pid/tid are String group columns, so reading
         // them as int64 would yield garbage keys.
-        dstd::String pfw = env.get_dir() + "/pt.pfw";
+        dstd::String pfw = env.dir() + "/pt.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 10; ++i)

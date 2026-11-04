@@ -893,8 +893,9 @@ dstd::String ProvenanceGraph::to_json() const {
 }
 
 coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
-    const views::View& view, std::size_t num_slots, ProvenanceOptions options) {
-    if (num_slots == 0) num_slots = 1;
+    const views::View& view, std::size_t slot_count,
+    ProvenanceOptions options) {
+    if (slot_count == 0) slot_count = 1;
     // Relations may sit on events of any category (the entity API attaches
     // them to whatever event the app relates), so scan everything and let a
     // byte-level prefilter skip lines that cannot hold provenance.
@@ -905,7 +906,7 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
                 if (maybe_provenance(ev)) ingest(a, ev);
         },
         [](Acc&& x, Acc&& y) { return merge(std::move(x), std::move(y)); },
-        num_slots, 0);
+        slot_count, 0);
     ProvenanceGraph g = finish(std::move(scan.value));
     if (!options.include_io || g.activities.empty()) co_return g;
 
@@ -923,7 +924,7 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
         [](IoAcc&& x, IoAcc&& y) {
             return merge_io(std::move(x), std::move(y));
         },
-        num_slots, 0);
+        slot_count, 0);
     IoAcc& io_acc = ios.value;
     g.stats.io_events = io_acc.events;
     g.stats.io_attributed = io_acc.attributed;

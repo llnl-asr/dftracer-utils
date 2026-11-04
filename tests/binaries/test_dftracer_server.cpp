@@ -43,12 +43,12 @@ int valgrind_timeout_scale() {
 /// Create a DFTracer gzip file with .pfw.gz extension
 /// (the server scans for .pfw and .pfw.gz patterns).
 dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                           int num_events, int id) {
-    auto trace_gz = env.create_dft_test_gzip_file(num_events);
+                           int event_count, int id) {
+    auto trace_gz = env.create_dft_test_gzip_file(event_count);
     if (trace_gz.empty()) return "";
 
     dstd::String pfw_path =
-        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+        env.dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
     REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
@@ -404,7 +404,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
 
     // -- GET /api/files returns 200 with JSON object --
     {
@@ -826,7 +826,7 @@ TEST_CASE("DFTracer Server - graceful shutdown via SIGTERM") {
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
 
     CHECK(port_is_listening(port));
 
@@ -874,12 +874,12 @@ TEST_CASE("DFTracer Server - multi-run break detection") {
     // 2%).
     auto raw = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
     REQUIRE(!raw.empty());
-    dstd::String pfw = env.get_dir() + "/multirun.pfw.gz";
+    dstd::String pfw = env.dir() + "/multirun.pfw.gz";
     REQUIRE(dstd::fs::rename(raw, pfw).has_value());
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
     REQUIRE(wait_for_http(port));
 
     auto resp = http_request(port,
@@ -910,7 +910,7 @@ TEST_CASE("DFTracer Server - rebuilds stale index on changed source") {
 
     dftu_utils_test::TestEnvironment env(1);
     REQUIRE(env.is_valid());
-    dstd::String pfw = env.get_dir() + "/mr.pfw.gz";
+    dstd::String pfw = env.dir() + "/mr.pfw.gz";
 
     auto v1 = env.create_dft_multirun_gzip_file(2, 1000000, 10000);
     REQUIRE(!v1.empty());
@@ -918,7 +918,7 @@ TEST_CASE("DFTracer Server - rebuilds stale index on changed source") {
     {
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
         auto body = extract_body(
             http_request(port,
@@ -937,7 +937,7 @@ TEST_CASE("DFTracer Server - rebuilds stale index on changed source") {
     {
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
         auto body = extract_body(
             http_request(port,
@@ -966,7 +966,7 @@ TEST_CASE("DFTracer Server - density surfaces ph=C counters as blocks") {
 
     dftu_utils_test::TestEnvironment env(1);
     REQUIRE(env.is_valid());
-    dstd::String path = env.get_dir() + "/ctr.pfw.gz";
+    dstd::String path = env.dir() + "/ctr.pfw.gz";
     gzFile f = gzopen(path.c_str(), "wb");
     REQUIRE(f != nullptr);
     gzputs(f, "[\n");
@@ -993,7 +993,7 @@ TEST_CASE("DFTracer Server - density surfaces ph=C counters as blocks") {
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
     REQUIRE(wait_for_http(port));
 
     auto resp = http_request(
@@ -1028,7 +1028,7 @@ TEST_CASE(
 
     dftu_utils_test::TestEnvironment env(1);
     REQUIRE(env.is_valid());
-    dstd::String path = env.get_dir() + "/untimed.pfw.gz";
+    dstd::String path = env.dir() + "/untimed.pfw.gz";
     gzFile f = gzopen(path.c_str(), "wb");
     REQUIRE(f != nullptr);
     gzputs(f, "[\n");
@@ -1051,7 +1051,7 @@ TEST_CASE(
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
     REQUIRE(wait_for_http(port));
 
     auto get = [&](const dstd::String& target) {
@@ -1106,7 +1106,7 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
         CAPTURE(UNTIMED);
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
-        dstd::String path = env.get_dir() + "/many_untimed.pfw.gz";
+        dstd::String path = env.dir() + "/many_untimed.pfw.gz";
         gzFile f = gzopen(path.c_str(), "wb");
         REQUIRE(f != nullptr);
         gzputs(f, "[\n");
@@ -1126,7 +1126,7 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
 
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
 
         auto get = [&](const dstd::String& target) {
@@ -1190,8 +1190,8 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
 
     dftu_utils_test::TestEnvironment env(1);
     REQUIRE(env.is_valid());
-    dstd::String pfw = env.get_dir() + "/mr.pfw.gz";
-    dstd::String cache = env.get_dir() + "/.dftviz_summary";
+    dstd::String pfw = env.dir() + "/mr.pfw.gz";
+    dstd::String cache = env.dir() + "/.dftviz_summary";
     const dstd::String breaks_req =
         "GET /api/viz/breaks HTTP/1.1\r\n"
         "Host: localhost\r\nConnection: close\r\n\r\n";
@@ -1204,7 +1204,7 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
     {
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
         auto body = extract_body(http_request(port, breaks_req));
         CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
@@ -1219,7 +1219,7 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
     {
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
         auto body = extract_body(http_request(port, breaks_req));
         CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
@@ -1238,7 +1238,7 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
     {
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
         auto body = extract_body(http_request(port, breaks_req));
         CHECK(body.find("\"begin\":2010000,\"end\":2020000") !=
@@ -1268,7 +1268,7 @@ TEST_CASE("DFTracer Server - calltree endpoint") {
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
     REQUIRE(wait_for_http(port));
 
     // Root fields come right after `"tree":{` in serialization order.
@@ -1424,12 +1424,12 @@ TEST_CASE("DFTracer Server - CM time_metric scales viz to microseconds") {
 
     dftu_utils_test::TestEnvironment env(1);
     REQUIRE(env.is_valid());
-    auto ns_file = create_ns_pfw_gz(env.get_dir());
+    auto ns_file = create_ns_pfw_gz(env.dir());
     REQUIRE(!ns_file.empty());
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
 
     // /info bounds are microseconds (5000100..5020000), not native ns.
     {

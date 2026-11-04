@@ -54,9 +54,9 @@ dftu_series* paths_column(const dstd::Vector<filesystem::FileEntry>& entries,
     return Series::strings(paths).release();
 }
 
-dftu_series* scan_dir(const char* root, std::int32_t root_len) {
+dftu_series* scan_dir(const char* root, std::int32_t root_size) {
     filesystem::DirectoryScannerUtilityInput input{
-        dstd::StringView(root, static_cast<std::size_t>(root_len))};
+        dstd::StringView(root, static_cast<std::size_t>(root_size))};
     dstd::Vector<filesystem::FileEntry> entries;
     if (!run_sync("dftu.fs.scan_dir",
                   [&](coro::Scope& scope) -> coro::CoroTask<void> {
@@ -68,10 +68,10 @@ dftu_series* scan_dir(const char* root, std::int32_t root_len) {
     return paths_column(entries, false);
 }
 
-dftu_series* scan_dir_pattern(const char* root, std::int32_t root_len,
-                              const char* pattern, std::int32_t pattern_len) {
+dftu_series* scan_dir_pattern(const char* root, std::int32_t root_size,
+                              const char* pattern, std::int32_t pattern_size) {
     filesystem::PatternDirectoryScannerUtilityInput input(
-        to_string(root, root_len), {to_string(pattern, pattern_len)});
+        to_string(root, root_size), {to_string(pattern, pattern_size)});
     dstd::Vector<filesystem::FileEntry> entries;
     if (!run_sync("dftu.fs.scan_dir_pattern",
                   [&](coro::Scope& scope) -> coro::CoroTask<void> {
@@ -83,11 +83,11 @@ dftu_series* scan_dir_pattern(const char* root, std::int32_t root_len,
     return paths_column(entries, true);
 }
 
-std::int32_t compress(const char* in, std::int32_t in_len, const char* out,
-                      std::int32_t out_len) {
+std::int32_t compress(const char* in, std::int32_t in_size, const char* out,
+                      std::int32_t out_size) {
     fileio::FileCompressionUtilityInput input =
-        fileio::FileCompressionUtilityInput::from_file(to_string(in, in_len))
-            .with_output(to_string(out, out_len));
+        fileio::FileCompressionUtilityInput::from_file(to_string(in, in_size))
+            .with_output(to_string(out, out_size));
     bool ok = false;
     if (!run_sync("dftu.file.compress",
                   [&](coro::Scope&) -> coro::CoroTask<void> {
@@ -99,11 +99,11 @@ std::int32_t compress(const char* in, std::int32_t in_len, const char* out,
     return ok ? 1 : 0;
 }
 
-std::int32_t decompress(const char* in, std::int32_t in_len, const char* out,
-                        std::int32_t out_len) {
+std::int32_t decompress(const char* in, std::int32_t in_size, const char* out,
+                        std::int32_t out_size) {
     fileio::FileDecompressionUtilityInput input =
-        fileio::FileDecompressionUtilityInput::from_file(to_string(in, in_len))
-            .with_output(to_string(out, out_len));
+        fileio::FileDecompressionUtilityInput::from_file(to_string(in, in_size))
+            .with_output(to_string(out, out_size));
     bool ok = false;
     if (!run_sync("dftu.file.decompress",
                   [&](coro::Scope&) -> coro::CoroTask<void> {
@@ -116,8 +116,8 @@ std::int32_t decompress(const char* in, std::int32_t in_len, const char* out,
 }
 
 dftu_series* line_filter(const dftu_series* lines, const char* needle,
-                         std::int32_t needle_len) {
-    dftu_series* mask = dftu_series_str_contains(lines, needle, needle_len);
+                         std::int32_t needle_size) {
+    dftu_series* mask = dftu_series_str_contains(lines, needle, needle_size);
     if (!mask) return nullptr;
     dftu_series* selected = dftu_series_filter(lines, mask);
     dftu_series_free(mask);

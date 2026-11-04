@@ -77,7 +77,7 @@ TEST_SUITE("dlio trace loader") {
         dstd::Vector<dstd::String> files;
         std::uint64_t dur_sum = 0;
         for (int i = 0; i < FILES; ++i)
-            files.emplace_back(write_rank(env.get_dir(), i, dur_sum));
+            files.emplace_back(write_rank(env.dir(), i, dur_sum));
 
         index::schemas::dft::agg::AggregationConfig config;
         config.time_interval_us = 5'000'000;
@@ -85,7 +85,7 @@ TEST_SUITE("dlio trace loader") {
         config.compute_percentiles = true;
 
         index::IndexerOptions o;
-        o.index_dir = env.get_dir() + "/idx";
+        o.index_dir = env.dir() + "/idx";
         o.checkpoint_size = CHECKPOINT_SIZE;
         o.parallelism = 2;
         o.aggregation = config;
@@ -102,8 +102,8 @@ TEST_SUITE("dlio trace loader") {
         REQUIRE(a.any_data);
         CHECK(a.chunks_reread == 0);
         CHECK(a.quantiles_available);
-        CHECK(a.num_ranks == FILES);
-        CHECK(a.trace_fetch_block_metrics.num_samples ==
+        CHECK(a.rank_count == FILES);
+        CHECK(a.trace_fetch_block_metrics.sample_count ==
               static_cast<std::uint64_t>(FILES * EVENTS_PER_NAME));
         CHECK(a.trace_fetch_block_metrics.accumulated_time ==
               doctest::Approx(static_cast<double>(dur_sum) * 1e-6));

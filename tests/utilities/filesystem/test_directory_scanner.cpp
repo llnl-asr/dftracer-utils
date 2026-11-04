@@ -333,15 +333,15 @@ TEST_CASE("DirectoryScannerUtility - Edge Cases") {
     }
 
     SUBCASE("Many files") {
-        const int num_files = 100;
-        for (int i = 0; i < num_files; ++i) {
+        const int file_count = 100;
+        for (int i = 0; i < file_count; ++i) {
             fixture.create_file("file" + dstd::to_string(i) + ".txt");
         }
 
         DirectoryScannerUtilityInput input{fixture.path().str(), false};
         auto result = run_scan(*scanner, input);
 
-        CHECK(result.size() == num_files);
+        CHECK(result.size() == file_count);
     }
 }
 

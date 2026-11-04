@@ -33,7 +33,7 @@ constexpr dstd::StringView EXT = "index_minmax.range";
 // hold rising ranges of v.
 dstd::String write_records(dftu_utils_test::TestEnvironment& env,
                            const dstd::String& name) {
-    const dstd::String plain = env.get_dir() + "/" + name + ".ndjson";
+    const dstd::String plain = env.dir() + "/" + name + ".ndjson";
     {
         dstd::String out;
         for (int i = 0; i < RECORDS; ++i)

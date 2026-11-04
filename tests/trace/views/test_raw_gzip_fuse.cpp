@@ -63,7 +63,7 @@ ViewPlan count_plan(const dstd::String& gz, const dstd::String& idx) {
 // FH/HH metadata (ph=M, cat "dftracer") plus data events (ph=X, POSIX/STDIO).
 // The metadata must land in the row sets but NOT in a cat aggregation.
 dstd::String create_meta_trace(TestEnvironment& env) {
-    dstd::String pfw = env.get_dir() + "/mt.pfw";
+    dstd::String pfw = env.dir() + "/mt.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
         ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/a.bin","value":"fh1"}})"
@@ -126,7 +126,7 @@ TEST_SUITE("RawGzipFuse") {
         // Reference: build the index eagerly, aggregate through the normal
         // fused scan.
         dstd::String ref_idx =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/refi"));
+            dstd::String(determine_index_path(gz, env.dir() + "/refi"));
         {
             StringSink s;
             View::from_file(dstd::String(gz), dstd::String(ref_idx))
@@ -149,7 +149,7 @@ TEST_SUITE("RawGzipFuse") {
         // Prototype: no index for this path. One pass builds it while
         // aggregating.
         dstd::String idx =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/onei"));
+            dstd::String(determine_index_path(gz, env.dir() + "/onei"));
         ViewPlan pp = count_plan(gz, idx);
         ensure_schema(pp);
         dstd::StringIntern intern;
@@ -237,7 +237,7 @@ TEST_SUITE("RawGzipFuse") {
         dstd::String gz = create_meta_trace(env);
 
         dstd::String ref_idx =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/ri"));
+            dstd::String(determine_index_path(gz, env.dir() + "/ri"));
         {
             StringSink s;
             View::from_file(dstd::String(gz), dstd::String(ref_idx))
@@ -251,7 +251,7 @@ TEST_SUITE("RawGzipFuse") {
                        .get();
 
         dstd::String boot_idx =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/bi"));
+            dstd::String(determine_index_path(gz, env.dir() + "/bi"));
         REQUIRE_FALSE(dstd::fs::exists(boot_idx).value());
         auto boot = View::from_file(dstd::String(gz), dstd::String(boot_idx))
                         .group_by({GroupKey::cat()})
@@ -280,7 +280,7 @@ TEST_SUITE("RawGzipFuse") {
             create_meta_trace(env);  // 2 metadata + 20 data events
 
         dstd::String idx =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/ei"));
+            dstd::String(determine_index_path(gz, env.dir() + "/ei"));
         REQUIRE_FALSE(dstd::fs::exists(idx).value());
         StringSink boot;
         View::from_file(dstd::String(gz), dstd::String(idx))
@@ -312,7 +312,7 @@ TEST_SUITE("RawGzipFuse") {
     TEST_CASE("View.sink_json drops a metadata record with a bad byte") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/badmeta.pfw";
+        dstd::String pfw = env.dir() + "/badmeta.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << dstd::String(
@@ -335,7 +335,7 @@ TEST_SUITE("RawGzipFuse") {
         (void)dstd::fs::remove(pfw);
 
         dstd::String idx =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/ei"));
+            dstd::String(determine_index_path(gz, env.dir() + "/ei"));
         StringSink boot;
         View::from_file(dstd::String(gz), dstd::String(idx))
             .sink_json(boot)
@@ -350,7 +350,7 @@ TEST_SUITE("RawGzipFuse") {
         "bad bytes and drops the metadata ones") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/refused.pfw";
+        dstd::String pfw = env.dir() + "/refused.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/a\q","value":"fh1","n":1e400}})"
@@ -374,7 +374,7 @@ TEST_SUITE("RawGzipFuse") {
         (void)dstd::fs::remove(pfw);
 
         dstd::String idx =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/ei"));
+            dstd::String(determine_index_path(gz, env.dir() + "/ei"));
         StringSink boot;
         View::from_file(dstd::String(gz), dstd::String(idx))
             .sink_json(boot)
@@ -395,7 +395,7 @@ TEST_SUITE("RawGzipFuse") {
         dstd::String gz = create_meta_trace(env);  // cats POSIX + STDIO
 
         dstd::String ref_idx =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/fr"));
+            dstd::String(determine_index_path(gz, env.dir() + "/fr"));
         {
             StringSink s;
             View::from_file(dstd::String(gz), dstd::String(ref_idx))
@@ -411,7 +411,7 @@ TEST_SUITE("RawGzipFuse") {
         REQUIRE(ref.num_rows() == 1);  // only POSIX
 
         dstd::String fresh =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/ff"));
+            dstd::String(determine_index_path(gz, env.dir() + "/ff"));
         REQUIRE_FALSE(dstd::fs::exists(fresh).value());
         auto got = View::from_file(dstd::String(gz), dstd::String(fresh))
                        .duql(R"(cat == "POSIX")")
@@ -437,7 +437,7 @@ TEST_SUITE("RawGzipFuse") {
             create_meta_trace(env);  // data events carry fhash=fh1
 
         dstd::String ref_idx =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/nr"));
+            dstd::String(determine_index_path(gz, env.dir() + "/nr"));
         {
             StringSink s;
             View::from_file(dstd::String(gz), dstd::String(ref_idx))
@@ -452,7 +452,7 @@ TEST_SUITE("RawGzipFuse") {
                        .get();
 
         dstd::String fresh =
-            dstd::String(determine_index_path(gz, env.get_dir() + "/nf"));
+            dstd::String(determine_index_path(gz, env.dir() + "/nf"));
         auto got = View::from_file(dstd::String(gz), dstd::String(fresh))
                        .duql(R"(fhash == "fh1")")
                        .group_by({GroupKey::cat()})
@@ -586,7 +586,7 @@ static dstd::Vector<dftu_utils_test::IndexRecord> index_contents(
 TEST_CASE("a first-touch query under a small budget spills the same index") {
     TestEnvironment env(10);
     REQUIRE(env.is_valid());
-    const dstd::String gz = write_multi_member(env.get_dir());
+    const dstd::String gz = write_multi_member(env.dir());
     auto count = [&](const dstd::String& idx, std::uint64_t budget) {
         return View::from_file(dstd::String(gz), dstd::String(idx))
             .memory_budget(budget)
@@ -597,13 +597,13 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
             .num_rows();
     };
     const dstd::String held =
-        dstd::String(determine_index_path(gz, env.get_dir() + "/held"));
+        dstd::String(determine_index_path(gz, env.dir() + "/held"));
     const dstd::String spilled =
-        dstd::String(determine_index_path(gz, env.get_dir() + "/spilled"));
+        dstd::String(determine_index_path(gz, env.dir() + "/spilled"));
     // The default budget holds every chunk, and the tier is still written
     // as sorted runs.
     const dstd::String runs =
-        dstd::String(determine_index_path(gz, env.get_dir() + "/runs"));
+        dstd::String(determine_index_path(gz, env.dir() + "/runs"));
     CHECK(count(held, dftracer::utils::memory::NO_SPILL_BUDGET) ==
           count(spilled, 4096));
     CHECK(count(runs, 0) ==
@@ -618,14 +618,13 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
 TEST_CASE("a fold that throws while parsing ahead ends the index pass") {
     TestEnvironment env(10);
     REQUIRE(env.is_valid());
-    const dstd::String gz = write_multi_member(env.get_dir());
+    const dstd::String gz = write_multi_member(env.dir());
     dstd::StringIntern intern;
     dftracer::utils::index::extensions::BloomFold bloom(intern);
     ThrowingFold thrower;
     std::array<Fold*, 2> folds{&bloom, &thrower};
-    IndexFoldDriver driver(
-        intern, folds, dstd::String(dstd::StringView(gz)),
-        dstd::String(dstd::StringView(env.get_dir() + "/idx")));
+    IndexFoldDriver driver(intern, folds, dstd::String(dstd::StringView(gz)),
+                           dstd::String(dstd::StringView(env.dir() + "/idx")));
     dftracer::utils::index::build::ParseGate gate(nullptr, 8);
     driver.set_parse_gate(gate);
     bool threw = false;
@@ -651,11 +650,9 @@ TEST_CASE("a fold that throws while parsing ahead ends the index pass") {
 TEST_CASE("parsing ahead steps the folds with the same events in order") {
     TestEnvironment env(10);
     REQUIRE(env.is_valid());
-    const dstd::String gz = write_multi_member(env.get_dir());
-    const auto inline_log =
-        record_index_pass(gz, env.get_dir() + "/idx_inline", 0);
-    const auto ahead_log =
-        record_index_pass(gz, env.get_dir() + "/idx_ahead", 8);
+    const dstd::String gz = write_multi_member(env.dir());
+    const auto inline_log = record_index_pass(gz, env.dir() + "/idx_inline", 0);
+    const auto ahead_log = record_index_pass(gz, env.dir() + "/idx_ahead", 8);
     // 40 * 300 events plus the 7 that straddle a member boundary.
     CHECK(inline_log.size() == 40 * 300 + 7);
     CHECK(ahead_log == inline_log);
@@ -670,11 +667,9 @@ TEST_CASE(
     TestEnvironment env(10);
     REQUIRE(env.is_valid());
     // Each member inflates to about 7 MB, above the driver's parse piece.
-    const dstd::String gz = write_multi_member(env.get_dir(), 6, 60000);
-    const auto inline_log =
-        record_index_pass(gz, env.get_dir() + "/idx_inline", 0);
-    const auto ahead_log =
-        record_index_pass(gz, env.get_dir() + "/idx_ahead", 8);
+    const dstd::String gz = write_multi_member(env.dir(), 6, 60000);
+    const auto inline_log = record_index_pass(gz, env.dir() + "/idx_inline", 0);
+    const auto ahead_log = record_index_pass(gz, env.dir() + "/idx_ahead", 8);
     CHECK(inline_log.size() == 6 * 60000 + 1);
     CHECK(ahead_log == inline_log);
 }

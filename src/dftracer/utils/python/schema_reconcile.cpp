@@ -249,7 +249,7 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
 
     // For each known union column (all except the final _extra), try to take
     // it from the input batch. If missing, null-pad.
-    int64_t n_known = num_known_columns();
+    int64_t n_known = known_column_count();
     for (int64_t i = 0; i < n_known; ++i) {
         const dstd::String &name = names_[static_cast<size_t>(i)];
         auto it = in_idx.find(name);

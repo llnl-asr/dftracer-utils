@@ -158,7 +158,7 @@ void write_shard_set(const dstd::String& root,
             common::unwrap(dftracer::utils::index::plan::open_snapshot(dir));
 
         dftracer::utils::index::store::IndexShardEntry entry;
-        entry.num_files =
+        entry.file_count =
             static_cast<std::uint64_t>(common::unwrap(snapshot.files()).size());
 
         const dstd::Path rel =
@@ -187,7 +187,7 @@ std::size_t consolidate_shard_set(const dstd::String& root) {
         if (shard.empty()) continue;
         shard_roots.push_back(
             dstd::String((dstd::PathView(root) / shard.path).str()));
-        files += shard.num_files;
+        files += shard.file_count;
     }
 
     dftracer::utils::index::release_root(root);

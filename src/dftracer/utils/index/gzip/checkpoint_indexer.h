@@ -40,11 +40,11 @@ class CheckpointIndexer {
     virtual void set_visitors(VisitorList) {}
 
     // Metadata accessors
-    virtual const dstd::String &get_index_path() const = 0;
-    virtual const dstd::String &get_archive_path() const = 0;
-    virtual std::uint64_t get_checkpoint_size() const = 0;
-    virtual std::uint64_t get_max_bytes() const = 0;
-    virtual std::uint64_t get_num_lines() const = 0;
+    virtual const dstd::String &index_path() const = 0;
+    virtual const dstd::String &archive_path() const = 0;
+    virtual std::uint64_t checkpoint_size() const = 0;
+    virtual std::uint64_t max_bytes() const = 0;
+    virtual std::uint64_t line_count() const = 0;
 
     /// Member record (a member or a piece of one) containing `target_offset`
     /// (uncompressed). A RESTART piece also needs its `restart_window`.
@@ -53,7 +53,7 @@ class CheckpointIndexer {
 
     /// Every member record in file order. Empty when the file was never
     /// indexed.
-    virtual dstd::Vector<GzipMemberRecord> get_members() const = 0;
+    virtual dstd::Vector<GzipMemberRecord> members() const = 0;
 
     /// The compressed offsets of the HEAD records, the members too big to hold
     /// whole. Empty when there are none or the file was never indexed.
@@ -64,8 +64,8 @@ class CheckpointIndexer {
     virtual dstd::String restart_window(std::uint64_t member_idx) const = 0;
 
     // Archive format identification
-    virtual common::ArchiveFormat get_format_type() const = 0;
-    virtual const char *get_format_name() const = 0;
+    virtual common::ArchiveFormat format_type() const = 0;
+    virtual const char *format_name() const = 0;
 
    protected:
     CheckpointIndexer() = default;

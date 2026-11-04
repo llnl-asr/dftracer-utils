@@ -127,8 +127,8 @@ class BloomCore {
             std::uint32_t pid_tid_dim = NO_SLOT;
             bool pid_in_bloom = false;
             bool tid_in_bloom = false;
-            std::uint8_t pid_len = 0;
-            std::uint8_t tid_len = 0;
+            std::uint8_t pid_size = 0;
+            std::uint8_t tid_size = 0;
             char pid_buf[24] = {};
             char tid_buf[24] = {};
             ChunkStatistics::PidSlots stats;

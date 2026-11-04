@@ -61,14 +61,13 @@ int compare_bytes(ByteView a, ByteView b) {
     return 0;
 }
 
-std::size_t encoded_entry_size(std::size_t key_length,
-                               std::uint64_t value_length) {
-    const bool big = value_length > BIG_VALUE_BYTES;
-    const std::uint64_t stored = big ? 20U : value_length;
+std::size_t encoded_entry_size(std::size_t key_size, std::uint64_t value_size) {
+    const bool big = value_size > BIG_VALUE_BYTES;
+    const std::uint64_t stored = big ? 20U : value_size;
     const std::uint64_t value_code =
         (static_cast<std::uint64_t>(stored) << 1U) | (big ? 1U : 0U);
-    return dstd::varint_size(key_length) + dstd::varint_size(value_code) +
-           key_length + static_cast<std::size_t>(stored);
+    return dstd::varint_size(key_size) + dstd::varint_size(value_code) +
+           key_size + static_cast<std::size_t>(stored);
 }
 
 bool same_name(const dstd::String& name, dstd::StringView other) {
@@ -91,13 +90,13 @@ struct SegmentSizer {
     std::size_t group_bytes = 0;
     bool have_group = false;
 
-    void add(std::size_t key_length, std::size_t entry_bytes) {
+    void add(std::size_t key_size, std::size_t entry_bytes) {
         if (have_group && group_bytes + entry_bytes > GRANULE_BYTES) {
             group_bytes = 0;
             have_group = false;
         }
         if (!have_group) {
-            index_bytes += 8U + dstd::varint_size(key_length) + key_length;
+            index_bytes += 8U + dstd::varint_size(key_size) + key_size;
             have_group = true;
         }
         group_bytes += entry_bytes;
@@ -131,8 +130,8 @@ dstd::String path_of(dstd::StringView dir, dstd::StringView name) {
 struct KeyGroup {
     std::size_t begin = 0;
     std::size_t end = 0;
-    std::size_t key_length = 0;
-    std::uint64_t value_length = 0;
+    std::size_t key_size = 0;
+    std::uint64_t value_size = 0;
 };
 
 /// Frees a batch whose extent no write carried and releases the bytes it
@@ -680,18 +679,18 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
         KeyGroup group;
         group.begin = i;
         group.end = end;
-        group.key_length = batch.entries_[order[i]].key.size();
+        group.key_size = batch.entries_[order[i]].key.size();
         if (batch.fold_ == FoldKind::Concat) {
             std::uint64_t total = 0;
             for (std::size_t at = i; at < end; ++at) {
                 total += batch.entries_[order[at]].value.size();
             }
-            group.value_length = total;
+            group.value_size = total;
         } else if (batch.fold_ == FoldKind::None ||
                    batch.fold_ == FoldKind::Last) {
-            group.value_length = batch.entries_[order[end - 1U]].value.size();
+            group.value_size = batch.entries_[order[end - 1U]].value.size();
         } else {
-            group.value_length = 8;
+            group.value_size = 8;
         }
         groups.push_back(group);
         i = end;
@@ -699,8 +698,8 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
 
     SegmentSizer sizer;
     for (const KeyGroup& group : groups) {
-        sizer.add(group.key_length,
-                  encoded_entry_size(group.key_length, group.value_length));
+        sizer.add(group.key_size,
+                  encoded_entry_size(group.key_size, group.value_size));
     }
     if (sizer.size() >
         static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {

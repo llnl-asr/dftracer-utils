@@ -181,11 +181,11 @@ class IndexedFileLineIterator {
         if (config_.range_type() == dftracer::utils::utilities::reader::
                                         internal::RangeType::LineRange) {
             if (config_.end() == 0) {
-                std::size_t num_lines = config_.reader()->get_num_lines();
+                std::size_t line_count = config_.reader()->line_count();
                 DFTRACER_UTILS_LOG_DEBUG(
                     "IndexedFileLineIterator: end=0, setting to num_lines=%zu",
-                    num_lines);
-                config_ = config_.with_line_range(config_.start(), num_lines);
+                    line_count);
+                config_ = config_.with_line_range(config_.start(), line_count);
             }
 
             DFTRACER_UTILS_LOG_DEBUG(
@@ -353,7 +353,7 @@ class IndexedFileLineIterator {
      * @brief Get the underlying Reader.
      */
     dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
-    get_reader() const {
+    reader() const {
         return config_.reader();
     }
 

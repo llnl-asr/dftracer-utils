@@ -30,7 +30,7 @@ using Catalog = dstd::Map<dstd::String, dstd::Tuple<int, int, std::uint64_t>>;
 
 dstd::String write_gz(TestEnvironment& env, const dstd::String& dir,
                       const dstd::Vector<dstd::String>& lines) {
-    const dstd::String d = env.get_dir() + "/" + dir;
+    const dstd::String d = env.dir() + "/" + dir;
     REQUIRE(dstd::fs::create_directories(d).has_value());
     const dstd::String plain = d + "/t.ndjson";
     {

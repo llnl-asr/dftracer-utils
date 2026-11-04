@@ -96,8 +96,8 @@ coro::CoroTask<int> PartitionWriter::open(dstd::StringView output_dir,
 }
 
 int64_t PartitionWriter::calculate_uncompressed_size(ArrowExportResult& batch) {
-    ArrowSchema* schema = batch.get_schema();
-    ArrowArray* array = batch.get_array();
+    ArrowSchema* schema = batch.schema();
+    ArrowArray* array = batch.array();
 
     ArrowArrayView view;
     if (init_array_view(view, schema, array) != NANOARROW_OK) {
@@ -109,8 +109,8 @@ int64_t PartitionWriter::calculate_uncompressed_size(ArrowExportResult& batch) {
     struct BufferCounter {
         static void count(ArrowArrayView* v, int64_t& total, bool is_root) {
             if (!is_root) {
-                int64_t num_buffers = ArrowArrayViewGetNumBuffers(v);
-                for (int64_t i = 0; i < num_buffers; i++) {
+                int64_t buffer_count = ArrowArrayViewGetNumBuffers(v);
+                for (int64_t i = 0; i < buffer_count; i++) {
                     ArrowBufferView buf = ArrowArrayViewGetBufferView(v, i);
                     total += buf.size_bytes;
                 }

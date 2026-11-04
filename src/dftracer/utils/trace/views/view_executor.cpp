@@ -527,7 +527,7 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
     // the gather + fan-out. The projection parser is used under sink_mtx.
     dftracer::utils::json::RecordParser proj_parser;
     ExportStats stats = co_await for_each_scanned_batch(
-        plan, vdef, /*num_slots=*/0, cap,
+        plan, vdef, /*slot_count=*/0, cap,
         [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
             std::lock_guard<std::mutex> lk(sink_mtx);
             for (const auto& ev : events) {
@@ -563,19 +563,19 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     std::uint64_t skipped = 0;
     auto units = co_await gather_units(plan, vdef, skipped);
 
-    const std::size_t baseline = std::max<std::size_t>(1, opts.num_workers);
+    const std::size_t baseline = std::max<std::size_t>(1, opts.worker_count);
     const auto sizing =
         utilities::fileio::parallel::make_writer_for_path(
             {dstd::String(opts.output_path), baseline,
              opts.member_size ? opts.member_size : DEFAULT_FLUSH_BYTES,
              BUFFER_HEADROOM_BYTES, opts.compress})
             .sizing;
-    const std::size_t num_workers = sizing.num_workers;
+    const std::size_t worker_count = sizing.worker_count;
 
     utilities::fileio::GzipWriterOptions wopts;
     wopts.member_size = sizing.flush_threshold;
     wopts.level = opts.level;
-    wopts.workers = num_workers;
+    wopts.workers = worker_count;
     wopts.compress = opts.compress;
     wopts.ordered = false;
     wopts.memory_budget = plan.memory_budget;
@@ -588,11 +588,11 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     }
     auto writer = std::move(*opened);
 
-    dstd::Vector<ScanCounts> counts_v(num_workers);
+    dstd::Vector<ScanCounts> counts_v(worker_count);
     bool ok = true;
 
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        for (std::size_t w = 0; w < num_workers; ++w) {
+        for (std::size_t w = 0; w < worker_count; ++w) {
             scope.spawn([&, w]() -> coro::CoroTask<void> {
                 auto prod = writer.producer();
                 if (!prod) {
@@ -601,7 +601,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
                 }
                 bool stop = false;
                 for (std::size_t i = w; !stop && i < units.size();
-                     i += num_workers) {
+                     i += worker_count) {
                     if (is_cancelled(plan)) break;
                     ViewScannerInput sin =
                         make_scanner_input(units[i], vdef, vdef.query);
@@ -1693,7 +1693,7 @@ dstd::Optional<dataframe::DataFrame> run_reconstruct_if_cached(
 }
 
 coro::CoroTask<ExportStats> run_scan_batches(
-    const dstd::SharedPtr<const ViewPlan>& plan_ptr, std::size_t num_slots,
+    const dstd::SharedPtr<const ViewPlan>& plan_ptr, std::size_t slot_count,
     std::uint64_t limit,
     const dstd::Function<
         void(std::size_t, const dstd::Vector<dstd::StringView>&)>& on_batch) {
@@ -1702,7 +1702,7 @@ coro::CoroTask<ExportStats> run_scan_batches(
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     // map_batches wants a fixed slot count; treat 0 as 1.
     ExportStats stats = co_await for_each_scanned_batch(
-        plan, vdef, num_slots ? num_slots : 1, limit, on_batch);
+        plan, vdef, slot_count ? slot_count : 1, limit, on_batch);
     stats.served_from_mv = from_mv;
     co_return stats;
 }
@@ -2176,7 +2176,7 @@ ExportStats merge_counters_partials(
     if (state) {
         emit_counters_from_state(*state, p, sink);
         st.events_matched =
-            static_cast<std::uint64_t>(dataframe::agg_num_groups(*state));
+            static_cast<std::uint64_t>(dataframe::agg_group_count(*state));
     }
     return st;
 }

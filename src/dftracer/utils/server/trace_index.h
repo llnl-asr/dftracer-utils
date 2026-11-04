@@ -42,9 +42,9 @@ class TraceIndex {
         std::uint64_t max_timestamp_us = 0;
         std::uint64_t compressed_size = 0;
         std::uint64_t uncompressed_size = 0;
-        std::size_t num_checkpoints = 0;
+        std::size_t checkpoint_count = 0;
         std::uint64_t checkpoint_size = 0;
-        std::uint64_t num_lines = 0;
+        std::uint64_t line_count = 0;
         double size_mb = 0;
     };
 

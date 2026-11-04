@@ -213,9 +213,9 @@ struct PipelineConfig {
     /**
      * Create parallel execution configuration
      */
-    static PipelineConfig parallel(std::size_t num_threads = 0) {
+    static PipelineConfig parallel(std::size_t thread_count = 0) {
         return PipelineConfig()
-            .with_compute_threads(num_threads)  // 0 = hardware_concurrency
+            .with_compute_threads(thread_count)  // 0 = hardware_concurrency
             .with_watchdog(true);
     }
 
@@ -236,11 +236,11 @@ struct PipelineConfig {
      * Create configuration with timeouts
      */
     static PipelineConfig with_timeouts(
-        std::size_t num_threads = 0,
+        std::size_t thread_count = 0,
         std::chrono::seconds global_timeout = std::chrono::seconds(60),
         std::chrono::seconds task_timeout = std::chrono::seconds(30)) {
         return PipelineConfig()
-            .with_compute_threads(num_threads)
+            .with_compute_threads(thread_count)
             .with_watchdog(true)
             .with_global_timeout(global_timeout)
             .with_task_timeout(task_timeout);

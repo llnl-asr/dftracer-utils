@@ -69,10 +69,10 @@ class HashArena {
     }
 
     /// At most what bytes() reads after `keys` more inserts of `key_bytes` in
-    /// total, none longer than `max_len`, counting the chunks and every
+    /// total, none longer than `max_size`, counting the chunks and every
     /// container that would grow, so a caller can reserve first.
     std::uint64_t bytes_after(std::size_t keys, std::size_t key_bytes,
-                              std::size_t max_len) const noexcept {
+                              std::size_t max_size) const noexcept {
         std::size_t buckets = std::max<std::size_t>(head_.bucket_count(), 4);
         std::size_t cap = table_capacity(buckets);
         const std::size_t entries = head_.size() + keys;
@@ -92,7 +92,7 @@ class HashArena {
             cap = table_capacity(buckets);
         }
         values = doubled(values, entries);
-        return records_after(keys, key_bytes, max_len) +
+        return records_after(keys, key_bytes, max_size) +
                values * sizeof(Head::value_type) +
                buckets * sizeof(Head::bucket_type);
     }
@@ -138,14 +138,14 @@ class HashArena {
     // for the next chunk takes a chunk of its own and still advances the
     // doubling, so the chunks after it count at the largest size.
     std::uint64_t records_after(std::size_t keys, std::size_t key_bytes,
-                                std::size_t max_len) const noexcept {
+                                std::size_t max_size) const noexcept {
         constexpr std::uint64_t PER = RECORD_HEADER;
         constexpr std::uint64_t CHUNK_HEADER = memory::Arena::CHUNK_HEADER;
         constexpr std::uint64_t MAX_CHUNK = memory::ARENA_MAX_CHUNK;
         const std::uint64_t held = keys_.chunk_bytes();
         std::uint64_t left = static_cast<std::uint64_t>(keys) * PER + key_bytes;
         if (left <= keys_.room()) return held;
-        const std::uint64_t largest = PER + max_len;
+        const std::uint64_t largest = PER + max_size;
         std::uint64_t total = held;
         std::uint64_t chunk = keys_.next_chunk();
         if (largest + CHUNK_HEADER > chunk) {

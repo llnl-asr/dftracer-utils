@@ -109,7 +109,7 @@ TEST_SUITE("dftracer_view_mpi") {
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
         // Inputs live in their own dir so the .pfw outputs are not rescanned.
-        const dstd::String in = env.get_dir() + "/in";
+        const dstd::String in = env.dir() + "/in";
         REQUIRE(dstd::fs::create_directories(in).has_value());
         // Two shards, cpu util means 40 and 80 -> combined mean 60 over 4.
         write_counter_file(in + "/r0.pfw.gz", "cpu", {40, 40});
@@ -119,7 +119,7 @@ TEST_SUITE("dftracer_view_mpi") {
         // path. Single-rank parity is covered by the non-MPI
         // test_dftracer_view; here we assert the distributed result against the
         // known-correct value.
-        const dstd::String o = env.get_dir() + "/o.pfw";
+        const dstd::String o = env.dir() + "/o.pfw";
         const dstd::Vector<dstd::String> args = {
             in,      "--counters", "--group-by", "name",
             "--agg", "mean:util",  "--output",   o};
@@ -144,14 +144,14 @@ TEST_SUITE("dftracer_view_mpi") {
 
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
-        const dstd::String in = env.get_dir() + "/in";
+        const dstd::String in = env.dir() + "/in";
         REQUIRE(dstd::fs::create_directories(in).has_value());
         write_counter_file(in + "/r0.pfw.gz", "cpu", {40, 40});
         write_counter_file(in + "/r1.pfw.gz", "cpu", {80, 80});
 
         // No --counters: aggregate mode -> collect() table via print_table.
         // Distributed run only; the merged table must carry the correct mean.
-        const dstd::String o = env.get_dir() + "/a.json";
+        const dstd::String o = env.dir() + "/a.json";
         const dstd::Vector<dstd::String> args = {
             in, "--group-by", "name", "--agg", "mean:util", "--output", o};
         REQUIRE(dftu_utils_test::run_mpi(launcher, 2, bin, args) == 0);
@@ -179,12 +179,12 @@ TEST_SUITE("dftracer_view_mpi") {
 
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
-        const dstd::String in = env.get_dir() + "/in";
+        const dstd::String in = env.dir() + "/in";
         REQUIRE(dstd::fs::create_directories(in).has_value());
         write_event_file(in + "/r0.pfw.gz", "io", 0, 500000);
         write_event_file(in + "/r1.pfw.gz", "io", 0, 500000);  // overlaps r0
 
-        const dstd::String o = env.get_dir() + "/occ.json";
+        const dstd::String o = env.dir() + "/occ.json";
         const dstd::Vector<dstd::String> args = {
             in, "--group-by", "name", "--agg", "busy", "--output", o};
         REQUIRE(dftu_utils_test::run_mpi(launcher, 2, bin, args) == 0);
@@ -211,13 +211,13 @@ TEST_SUITE("dftracer_view_mpi") {
 
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
-        const dstd::String in = env.get_dir() + "/in";
+        const dstd::String in = env.dir() + "/in";
         REQUIRE(dstd::fs::create_directories(in).has_value());
         write_counter_file(in + "/r0.pfw.gz", "cpu", {40, 40});
         write_counter_file(in + "/r1.pfw.gz", "cpu", {80, 80});
 
         // Distributed --merge: each rank writes its shard, rank 0 concatenates.
-        const dstd::String o = env.get_dir() + "/m.pfw";
+        const dstd::String o = env.dir() + "/m.pfw";
         const dstd::Vector<dstd::String> args = {in, "--merge", "--output", o};
         REQUIRE(dftu_utils_test::run_mpi(launcher, 2, bin, args) == 0);
 

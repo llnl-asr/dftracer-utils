@@ -82,7 +82,7 @@ TEST_SUITE("IndexedFileReader") {
 
             CHECK(reader != nullptr);
             CHECK(dstd::fs::exists(db_root).value());
-            CHECK(reader->get_num_lines() > 0);
+            CHECK(reader->line_count() > 0);
         }
 
         SUBCASE("Force rebuild existing index") {
@@ -114,7 +114,7 @@ TEST_SUITE("IndexedFileReader") {
             CHECK(dstd::fs::exists(db_root).value());
 
             // Reader should work
-            CHECK(reader->get_num_lines() > 0);
+            CHECK(reader->line_count() > 0);
         }
     }
 
@@ -138,7 +138,7 @@ TEST_SUITE("IndexedFileReader") {
             CHECK(dstd::fs::exists(db_root).value());
 
             // Verify reader works
-            CHECK(reader->get_num_lines() == 20);
+            CHECK(reader->line_count() == 20);
         }
 
         SUBCASE("Fluent configuration API") {
@@ -157,7 +157,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(reader->get_num_lines() > 0);
+            CHECK(reader->line_count() > 0);
         }
 
         SUBCASE("Constructor with all parameters") {
@@ -222,7 +222,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(reader->get_num_lines() == 15);
+            CHECK(reader->line_count() == 15);
         }
 
         // TODO: Enable when TAR.GZ support is implemented
@@ -238,7 +238,7 @@ TEST_SUITE("IndexedFileReader") {
 
         //     CHECK(reader != nullptr);
         //     // TAR.GZ files have different structure, just verify it works
-        //     CHECK(reader->get_num_lines() >= 0);
+        //     CHECK(reader->line_count() >= 0);
         // }
     }
 
@@ -273,7 +273,7 @@ TEST_SUITE("IndexedFileReader") {
             CHECK(reader != nullptr);
             // Note: We can't easily verify rebuild happened without checking
             // internals but the reader should still work
-            CHECK(reader->get_num_lines() >= 0);
+            CHECK(reader->line_count() >= 0);
         }
 
         SUBCASE("No rebuild when index is up to date") {
@@ -296,7 +296,7 @@ TEST_SUITE("IndexedFileReader") {
 
             CHECK(reader != nullptr);
             CHECK(dstd::fs::exists(db_root).value());
-            CHECK(reader->get_num_lines() > 0);
+            CHECK(reader->line_count() > 0);
         }
     }
 
@@ -344,9 +344,9 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
             REQUIRE(reader != nullptr);
 
-            CHECK(reader->get_num_lines() == 10);
-            CHECK(dstd::StringView(reader->get_archive_path()) == gz_path);
-            CHECK(dstd::StringView(reader->get_index_path()) ==
+            CHECK(reader->line_count() == 10);
+            CHECK(dstd::StringView(reader->archive_path()) == gz_path);
+            CHECK(dstd::StringView(reader->index_path()) ==
                   dstd::String(determine_index_path(gz_path, "")));
         }
     }

@@ -83,7 +83,7 @@ class GroupFold {
     dstd::HashMap<dstd::String, std::int64_t> groups_;
     dstd::StringViewMap<std::int64_t> str_groups_;
     std::int64_t null_group_ = -1;
-    std::int64_t num_groups_ = 0;
+    std::int64_t group_count_ = 0;
     std::int64_t rows_ = 0;
     dstd::Vector<dstd::Vector<dataframe::Series>> key_parts_;
     dataframe::AggStatePtr engine_;

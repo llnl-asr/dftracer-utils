@@ -159,7 +159,7 @@ struct Fixture {
     Fixture() {
         REQUIRE(env.is_valid());
         for (int i = 0; i < FILES; ++i) {
-            const dstd::String dir = env.get_dir() + "/f" + dstd::to_string(i);
+            const dstd::String dir = env.dir() + "/f" + dstd::to_string(i);
             REQUIRE(dstd::fs::create_directories(dir).has_value());
             const dstd::String plain = dir + "/t.pfw";
             {
@@ -173,7 +173,7 @@ struct Fixture {
             gz.push_back(out);
         }
         index::IndexerOptions o;
-        o.index_dir = env.get_dir() + "/idx";
+        o.index_dir = env.dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
         index::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
         index_path =
@@ -532,7 +532,7 @@ TEST_SUITE("ViewIndexParity") {
         "a trace counts the events of a counter, a frame counts its rows") {
         TestEnvironment env{201};
         REQUIRE(env.is_valid());
-        const dstd::String plain = env.get_dir() + "/preagg.pfw";
+        const dstd::String plain = env.dir() + "/preagg.pfw";
         {
             dftu_utils_test::FileOut o(plain);
             o << R"({"ph":"C","name":"pwrite","cat":"STDIO","pid":7,"tid":2,)"
@@ -544,7 +544,7 @@ TEST_SUITE("ViewIndexParity") {
         REQUIRE(compress_file_to_gzip(plain, gz));
         (void)dstd::fs::remove(plain);
         index::IndexerOptions o;
-        o.index_dir = env.get_dir() + "/idx";
+        o.index_dir = env.dir() + "/idx";
         index::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
         const dstd::String index =
             dstd::String(determine_index_path(gz, o.index_dir));
@@ -579,7 +579,7 @@ TEST_SUITE("ViewIndexParity") {
         REQUIRE(env.is_valid());
         dstd::Vector<dstd::String> gz;
         for (int i = 0; i < 2; ++i) {
-            const dstd::String dir = env.get_dir() + "/f" + dstd::to_string(i);
+            const dstd::String dir = env.dir() + "/f" + dstd::to_string(i);
             REQUIRE(dstd::fs::create_directories(dir).has_value());
             const dstd::String plain = dir + "/t.pfw";
             {
@@ -599,7 +599,7 @@ TEST_SUITE("ViewIndexParity") {
             gz.push_back(out);
         }
         index::IndexerOptions opts;
-        opts.index_dir = env.get_dir() + "/idx";
+        opts.index_dir = env.dir() + "/idx";
         opts.aggregation.time_interval_us = INTERVAL_US;
         opts.aggregation.extra_group_keys = {"epoch"};
         index::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
@@ -638,7 +638,7 @@ TEST_SUITE("ViewIndexParity") {
     TEST_CASE("the first aggregate of an unindexed trace equals the next") {
         TestEnvironment env{206};
         REQUIRE(env.is_valid());
-        const dstd::String plain = env.get_dir() + "/t.pfw";
+        const dstd::String plain = env.dir() + "/t.pfw";
         {
             dftu_utils_test::FileOut o(plain);
             for (int k = 0; k < 2; ++k)
@@ -654,7 +654,7 @@ TEST_SUITE("ViewIndexParity") {
         const dstd::String gz = plain + ".gz";
         REQUIRE(compress_file_to_gzip(plain, gz));
         (void)dstd::fs::remove(plain);
-        const dstd::String index_dir = env.get_dir() + "/idx";
+        const dstd::String index_dir = env.dir() + "/idx";
         const dstd::String index =
             dstd::String(determine_index_path(gz, index_dir));
         REQUIRE_FALSE(dstd::fs::exists(index).value());
@@ -699,7 +699,7 @@ TEST_SUITE("ViewIndexParity") {
     TEST_CASE("a missing or unreadable index root reads the trace") {
         TestEnvironment env{204};
         REQUIRE(env.is_valid());
-        const dstd::String plain = env.get_dir() + "/t.pfw";
+        const dstd::String plain = env.dir() + "/t.pfw";
         {
             dftu_utils_test::FileOut o(plain);
             for (int i = 0; i < 12; ++i)
@@ -709,7 +709,7 @@ TEST_SUITE("ViewIndexParity") {
                   << R"(,"dur":)" << (10 + i) << R"(,"args":{"ret":)"
                   << (i * 512) << "}}\n";
         }
-        const dstd::String junk = env.get_dir() + "/junk.idx";
+        const dstd::String junk = env.dir() + "/junk.idx";
         {
             dftu_utils_test::FileOut o(junk);
             o << "not a database\n";
@@ -719,7 +719,7 @@ TEST_SUITE("ViewIndexParity") {
             plain, gz, MEMBER_BYTES));
         (void)dstd::fs::remove(plain);
         index::IndexerOptions opts;
-        opts.index_dir = env.get_dir() + "/idx";
+        opts.index_dir = env.dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
         index::Indexer::open({dstd::String(dstd::StringView(gz))}, opts)
             .build();
@@ -731,7 +731,7 @@ TEST_SUITE("ViewIndexParity") {
         const AggSpec sum_dur{AggOp::Sum, "dur", "sum_dur"};
 
         const dstd::Vector<ViewFile> missing{
-            {dstd::String(gz), dstd::String(env.get_dir() + "/no-such")}};
+            {dstd::String(gz), dstd::String(env.dir() + "/no-such")}};
         const dstd::Vector<ViewFile> unreadable{
             {dstd::String(gz), dstd::String(junk)}};
         const Cells want = view_cells({{dstd::String(gz), dstd::String(index)}},
@@ -751,7 +751,7 @@ TEST_SUITE("ViewIndexParity") {
         REQUIRE(env.is_valid());
         dstd::Vector<dstd::String> gz;
         for (int i = 0; i < 2; ++i) {
-            const dstd::String dir = env.get_dir() + "/f" + dstd::to_string(i);
+            const dstd::String dir = env.dir() + "/f" + dstd::to_string(i);
             REQUIRE(dstd::fs::create_directories(dir).has_value());
             const dstd::String plain = dir + "/t.pfw";
             {
@@ -765,7 +765,7 @@ TEST_SUITE("ViewIndexParity") {
             gz.push_back(out);
         }
         index::IndexerOptions opts;
-        opts.index_dir = env.get_dir() + "/idx";
+        opts.index_dir = env.dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
         index::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
         const dstd::Vector<ViewFile> files{

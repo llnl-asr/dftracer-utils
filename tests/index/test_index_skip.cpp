@@ -64,10 +64,10 @@ dstd::String trace_path(const dstd::String& dir, int id) {
 }
 
 void write_trace(dftu_utils_test::TestEnvironment& env, int id,
-                 int num_events) {
-    auto made = env.create_dft_test_gzip_file(num_events);
+                 int event_count) {
+    auto made = env.create_dft_test_gzip_file(event_count);
     REQUIRE(!made.empty());
-    REQUIRE(dstd::fs::rename(made, trace_path(env.get_dir(), id)).has_value());
+    REQUIRE(dstd::fs::rename(made, trace_path(env.dir(), id)).has_value());
 }
 
 }  // namespace
@@ -75,7 +75,7 @@ void write_trace(dftu_utils_test::TestEnvironment& env, int id,
 TEST_CASE("a second dftracer_index skips files that did not change") {
     dftu_utils_test::TestEnvironment env(50);
     REQUIRE(env.is_valid());
-    const dstd::String dir = env.get_dir();
+    const dstd::String dir = env.dir();
     for (int i = 0; i < FILE_COUNT; ++i) write_trace(env, i, 50 + i);
 
     const auto first = run_index(dir, false);

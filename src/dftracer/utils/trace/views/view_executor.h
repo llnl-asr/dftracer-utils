@@ -175,10 +175,10 @@ dataframe::DataFrame merge_partials_to_table(
     const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials);
 
 // Drive the plan's index-pruned parallel scan; invoke `on_batch(slot, events)`
-// per decoded batch on worker slots in [0, num_slots), stopping at `limit`
+// per decoded batch on worker slots in [0, slot_count), stopping at `limit`
 // (0 = unlimited).
 coro::CoroTask<ExportStats> run_scan_batches(
-    const dstd::SharedPtr<const ViewPlan>& plan, std::size_t num_slots,
+    const dstd::SharedPtr<const ViewPlan>& plan, std::size_t slot_count,
     std::uint64_t limit,
     const dstd::Function<
         void(std::size_t, const dstd::Vector<dstd::StringView>&)>& on_batch);

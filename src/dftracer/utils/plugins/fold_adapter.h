@@ -29,11 +29,11 @@
 namespace dftracer::utils::plugins {
 
 // Host-owned parallel writer handed to the plugin as an opaque dftu_writer*;
-// num_workers/gzip are captured at writer_create for a later writer_open.
+// worker_count/gzip are captured at writer_create for a later writer_open.
 struct PluginWriter {
     dstd::UniquePtr<utilities::fileio::parallel::ParallelWriter> writer;
     dstd::String path;
-    std::size_t num_workers = 1;
+    std::size_t worker_count = 1;
     bool gzip = false;
 };
 
@@ -200,9 +200,9 @@ class PluginFold : public trace::views::detail::Fold {
     void port_publish(std::uint64_t key, const void* data, std::uint32_t len) {
         if (port_bus_) port_bus_->publish(key, data, len);
     }
-    const void* port_consume(std::uint64_t key, std::uint32_t* out_len) const {
-        if (port_bus_) return port_bus_->consume(key, out_len);
-        if (out_len) *out_len = 0;
+    const void* port_consume(std::uint64_t key, std::uint32_t* out_size) const {
+        if (port_bus_) return port_bus_->consume(key, out_size);
+        if (out_size) *out_size = 0;
         return nullptr;
     }
 
@@ -262,9 +262,9 @@ class PluginFold : public trace::views::detail::Fold {
     // host utilities through the dftu_op engine.
 
     dftracer::utils::dstd::StringIntern& intern_table() { return *intern_; }
-    ::dftu_writer* create_writer(const char* path, std::uint32_t num_workers,
-                                 int gzip);
-    ::dftu_trace_writer* create_trace_writer(const char* path);
+    ::dftu_writer* make_writer(const char* path, std::uint32_t worker_count,
+                               int gzip);
+    ::dftu_trace_writer* make_trace_writer(const char* path);
     int close_trace_writer(::dftu_trace_writer* w);
 
     // The fully wired host service table.

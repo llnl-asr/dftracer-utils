@@ -694,9 +694,9 @@ class Vectorizer {
             case Fn::Len: {
                 const V v = arg(c, 0);
                 if (v.k == K::Str)
-                    return {dataframe::expr_str_len(v.e, true), K::Int};
+                    return {dataframe::expr_str_size(v.e, true), K::Int};
                 if (v.k == K::List)
-                    return {dataframe::expr_list_len(v.e), K::Int};
+                    return {dataframe::expr_list_size(v.e), K::Int};
                 return null();
             }
             case Fn::Concat: {

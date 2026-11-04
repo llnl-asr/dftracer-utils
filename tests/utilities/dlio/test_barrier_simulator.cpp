@@ -94,7 +94,7 @@ TEST_SUITE("variance") {
 
 TEST_SUITE("WorkerQueue") {
     TEST_CASE("produce_batches fills exactly to capacity") {
-        WorkerQueue q(/*num_workers=*/2, /*prefetch_factor=*/3);
+        WorkerQueue q(/*worker_count=*/2, /*prefetch_factor=*/3);
         auto sampler = []() -> dstd::Pair<double, double> {
             return {1.0, 0.5};
         };
@@ -141,46 +141,46 @@ TEST_SUITE("WorkerQueue") {
 
 TEST_SUITE("BarrierSimulator") {
     // Build a context with deterministic constant samplers and trace data.
-    // Each rank runs num_steps iterations with constant fetch_iter=0.05s,
+    // Each rank runs step_count iterations with constant fetch_iter=0.05s,
     // constant fetch_block=0.1s, no preprocess simulation, aggregated mode.
-    static BarrierSimulatorContext make_ctx(int num_ranks, int num_steps) {
+    static BarrierSimulatorContext make_ctx(int rank_count, int step_count) {
         BarrierSimulatorContext ctx;
-        ctx.num_ranks = num_ranks;
-        ctx.num_steps = num_steps;
+        ctx.rank_count = rank_count;
+        ctx.step_count = step_count;
         ctx.is_aggregated_trace = true;  // skip clamp-to-trace-bounds
         ctx.sync_mode = false;
 
         // Pre-loaded fetch_iter trace lets the simulator skip RNG-driven path.
-        ctx.fetch_iter_trace.assign(num_ranks,
-                                    dstd::Vector<double>(num_steps, 0.05));
+        ctx.fetch_iter_trace.assign(rank_count,
+                                    dstd::Vector<double>(step_count, 0.05));
         // Trace fetch_block values (used by CDF similarity check).
-        ctx.fetch_block_trace.assign(num_ranks,
-                                     dstd::Vector<double>(num_steps, 0.1));
+        ctx.fetch_block_trace.assign(rank_count,
+                                     dstd::Vector<double>(step_count, 0.1));
 
         ctx.fetch_iter_stats = constant_stat(0.05);
         ctx.fetch_block_stats = constant_stat(0.1);
         ctx.preprocess_stats = constant_stat(0.01);
         ctx.getitem_stats = constant_stat(0.02);
 
-        ctx.trace_e2e_duration = num_steps * (0.05 + 0.1);
+        ctx.trace_e2e_duration = step_count * (0.05 + 0.1);
         ctx.trace_rank_variance = 0.0;
-        ctx.trace_per_rank_throughput.assign(num_ranks, 1.0 / 0.15);
+        ctx.trace_per_rank_throughput.assign(rank_count, 1.0 / 0.15);
         return ctx;
     }
 
     TEST_CASE("async mode, constant work - e2e equals per-rank wall clock") {
-        const int num_ranks = 4;
-        const int num_steps = 10;
-        auto ctx = make_ctx(num_ranks, num_steps);
+        const int rank_count = 4;
+        const int step_count = 10;
+        auto ctx = make_ctx(rank_count, step_count);
 
         BarrierSimulator sim;
         auto result =
             sim.simulate(ctx, /*base_seed=*/42,
                          /*fetch_block_sampler=*/[](Rng&) { return 0.1; });
 
-        const double expected_per_rank = num_steps * (0.05 + 0.1);  // 1.5s
+        const double expected_per_rank = step_count * (0.05 + 0.1);  // 1.5s
         CHECK(result.per_rank_completion_time.size() ==
-              static_cast<std::size_t>(num_ranks));
+              static_cast<std::size_t>(rank_count));
         for (double t : result.per_rank_completion_time) {
             CHECK(t == doctest::Approx(expected_per_rank).epsilon(EPSILON));
         }
@@ -197,17 +197,17 @@ TEST_SUITE("BarrierSimulator") {
 
         // Component accumulated times.
         CHECK(result.fetch_block_metrics.accumulated_time ==
-              doctest::Approx(num_ranks * num_steps * 0.1));
+              doctest::Approx(rank_count * step_count * 0.1));
         CHECK(result.fetch_iter_metrics.accumulated_time ==
-              doctest::Approx(num_ranks * num_steps * 0.05));
-        CHECK(result.fetch_block_metrics.num_samples ==
-              static_cast<std::uint64_t>(num_ranks * num_steps));
+              doctest::Approx(rank_count * step_count * 0.05));
+        CHECK(result.fetch_block_metrics.sample_count ==
+              static_cast<std::uint64_t>(rank_count * step_count));
     }
 
     TEST_CASE("sync mode with barrier every step - lockstep advance") {
-        const int num_ranks = 3;
-        const int num_steps = 5;
-        auto ctx = make_ctx(num_ranks, num_steps);
+        const int rank_count = 3;
+        const int step_count = 5;
+        auto ctx = make_ctx(rank_count, step_count);
         ctx.sync_mode = true;
         ctx.accumulate_grad_batches = 1;
 
@@ -215,7 +215,7 @@ TEST_SUITE("BarrierSimulator") {
         auto result =
             sim.simulate(ctx, /*base_seed=*/123, [](Rng&) { return 0.1; });
 
-        const double expected = num_steps * 0.15;
+        const double expected = step_count * 0.15;
         // In sync mode all ranks finish at the same time; e2e = rank_times[0].
         CHECK(result.e2e_duration == doctest::Approx(expected).epsilon(1e-6));
         for (double t : result.per_rank_completion_time) {
@@ -228,7 +228,7 @@ TEST_SUITE("BarrierSimulator") {
 
     TEST_CASE(
         "throughput metrics populated when trace throughput is provided") {
-        auto ctx = make_ctx(/*num_ranks=*/2, /*num_steps=*/8);
+        auto ctx = make_ctx(/*rank_count=*/2, /*step_count=*/8);
         BarrierSimulator sim;
         auto result = sim.simulate(ctx, 7, [](Rng&) { return 0.1; });
 

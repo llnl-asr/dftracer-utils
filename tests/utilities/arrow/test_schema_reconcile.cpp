@@ -46,13 +46,12 @@ TEST_CASE("a column whose type differs from the locked one goes to _extra") {
     auto second = double_batch();
 
     python::SchemaReconciler reconciler;
-    reconciler.merge(first.get_schema());
-    reconciler.merge(second.get_schema());
+    reconciler.merge(first.schema());
+    reconciler.merge(second.schema());
     REQUIRE(reconciler.finalize() == 0);
 
     ArrowArray same{};
-    REQUIRE(reconciler.reconcile(first.get_schema(), first.get_array(),
-                                 &same) == 0);
+    REQUIRE(reconciler.reconcile(first.schema(), first.array(), &same) == 0);
     {
         View x(NANOARROW_TYPE_INT64, same.children[0]);
         CHECK(ArrowArrayViewGetIntUnsafe(&x.view, 0) == 7);
@@ -62,8 +61,7 @@ TEST_CASE("a column whose type differs from the locked one goes to _extra") {
     same.release(&same);
 
     ArrowArray other{};
-    REQUIRE(reconciler.reconcile(second.get_schema(), second.get_array(),
-                                 &other) == 0);
+    REQUIRE(reconciler.reconcile(second.schema(), second.array(), &other) == 0);
     {
         View x(NANOARROW_TYPE_INT64, other.children[0]);
         CHECK(ArrowArrayViewIsNull(&x.view, 0));

@@ -267,7 +267,7 @@ TEST_CASE("a blocking get() on its own run loop does not wait") {
 }
 
 TEST_CASE("a frame destroyed while it waits leaks nothing") {
-    Runtime rt(ExecutorConfig{.num_threads = 2, .task_history = 0}, false);
+    Runtime rt(ExecutorConfig{.thread_count = 2, .task_history = 0}, false);
     Budget budget(64 * MIB);
     memory::PoolHandle holds = open_pool("holds");
     memory::PoolHandle pool = open_pool("task");

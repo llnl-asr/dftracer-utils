@@ -27,8 +27,8 @@ using namespace dftu_utils_test;
 
 // Helper function to create a test file with variable line lengths
 static dstd::String create_variable_line_test_file(
-    const dstd::String& test_dir, std::size_t num_lines,
-    std::size_t min_line_length = 50, std::size_t max_line_length = 500) {
+    const dstd::String& test_dir, std::size_t line_count,
+    std::size_t min_line_size = 50, std::size_t max_line_size = 500) {
     dstd::String txt_file = test_dir + "/variable_lines.txt";
     dstd::String gz_file = test_dir + "/variable_lines.gz";
 
@@ -39,11 +39,11 @@ static dstd::String create_variable_line_test_file(
     }
 
     std::mt19937 rng(42);  // Fixed seed for reproducibility
-    std::uniform_int_distribution<std::size_t> dist(min_line_length,
-                                                    max_line_length);
+    std::uniform_int_distribution<std::size_t> dist(min_line_size,
+                                                    max_line_size);
 
-    for (std::size_t i = 1; i <= num_lines; ++i) {
-        std::size_t line_length = dist(rng);
+    for (std::size_t i = 1; i <= line_count; ++i) {
+        std::size_t line_size = dist(rng);
 
         // Create JSON line with variable padding to reach desired length
         dftu_utils_test::TextOut line;
@@ -51,9 +51,9 @@ static dstd::String create_variable_line_test_file(
              << "\",\"data\":\"";
 
         // Fill with padding to reach target length
-        std::size_t current_len = line.str().length();
-        std::size_t padding_needed = (line_length > current_len + 10)
-                                         ? (line_length - current_len - 10)
+        std::size_t current_size = line.str().length();
+        std::size_t padding_needed = (line_size > current_size + 10)
+                                         ? (line_size - current_size - 10)
                                          : 0;
 
         for (std::size_t j = 0; j < padding_needed; ++j) {
@@ -80,8 +80,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         TestEnvironment env(valgrind_scale(1000, 10));
         REQUIRE(env.is_valid());
 
-        dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(1000, 10));
+        dstd::String gz_file =
+            create_variable_line_test_file(env.dir(), valgrind_scale(1000, 10));
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -98,7 +98,7 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         REQUIRE(reader != nullptr);
         REQUIRE(reader->is_valid());
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         auto stream = reader->stream(StreamConfig()
                                          .stream_type(StreamType::LineBytes)
                                          .range_type(RangeType::ByteRange)
@@ -131,7 +131,7 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         REQUIRE(env.is_valid());
 
         dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(10000, 100), 100, 300);
+            env.dir(), valgrind_scale(10000, 100), 100, 300);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -145,7 +145,7 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         std::size_t chunk_size = max_bytes / 2;  // Split file in half
 
         // Read first chunk
@@ -207,7 +207,7 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         REQUIRE(env.is_valid());
 
         dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(5000, 50), 80, 250);
+            env.dir(), valgrind_scale(5000, 50), 80, 250);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -221,7 +221,7 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         std::size_t mid_point = max_bytes / 2;
 
         dstd::Vector<char> buffer(512 * 1024);
@@ -305,8 +305,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         TestEnvironment env(valgrind_scale(3000, 30));
         REQUIRE(env.is_valid());
 
-        dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(3000, 30));
+        dstd::String gz_file =
+            create_variable_line_test_file(env.dir(), valgrind_scale(3000, 30));
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -320,18 +320,18 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
-        std::size_t num_chunks = 8;
-        std::size_t chunk_size = max_bytes / num_chunks;
+        std::size_t max_bytes = reader->max_bytes();
+        std::size_t chunk_count = 8;
+        std::size_t chunk_size = max_bytes / chunk_count;
 
         dstd::Vector<dstd::String> chunks;
         dstd::Vector<char> buffer(256 * 1024);
 
         // Read all chunks
-        for (std::size_t i = 0; i < num_chunks; ++i) {
+        for (std::size_t i = 0; i < chunk_count; ++i) {
             std::size_t start = i * chunk_size;
             std::size_t end =
-                (i == num_chunks - 1) ? max_bytes : (i + 1) * chunk_size;
+                (i == chunk_count - 1) ? max_bytes : (i + 1) * chunk_size;
 
             auto stream = reader->stream(StreamConfig()
                                              .stream_type(StreamType::LineBytes)
@@ -387,7 +387,7 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         REQUIRE(env.is_valid());
 
         dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(10000, 100), 100, 400);
+            env.dir(), valgrind_scale(10000, 100), 100, 400);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -402,19 +402,19 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         {
             auto reader = ReaderFactory::create(gz_file, idx_file);
             REQUIRE(reader != nullptr);
-            max_bytes = reader->get_max_bytes();
+            max_bytes = reader->max_bytes();
         }
 
-        const int num_threads = valgrind_threads(4);
-        std::size_t chunk_size = max_bytes / num_threads;
+        const int thread_count = valgrind_threads(4);
+        std::size_t chunk_size = max_bytes / thread_count;
 
-        dstd::Vector<dstd::String> chunks(num_threads);
+        dstd::Vector<dstd::String> chunks(thread_count);
         dstd::Vector<dstd::Thread> threads;
         std::atomic<bool> error_occurred{false};
 
         // Launch threads to read different chunks in parallel
         // Each thread creates its own reader to avoid sharing indexer
-        for (int i = 0; i < num_threads; ++i) {
+        for (int i = 0; i < thread_count; ++i) {
             threads.emplace_back([&, i]() {
                 try {
                     // Create separate reader per thread
@@ -425,7 +425,7 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
                     }
 
                     std::size_t start = i * chunk_size;
-                    std::size_t end = (i == num_threads - 1)
+                    std::size_t end = (i == thread_count - 1)
                                           ? max_bytes
                                           : (i + 1) * chunk_size;
 
@@ -499,7 +499,7 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         REQUIRE(env.is_valid());
 
         dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(20000, 200), 80, 350);
+            env.dir(), valgrind_scale(20000, 200), 80, 350);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -514,18 +514,18 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         {
             auto reader = ReaderFactory::create(gz_file, idx_file);
             REQUIRE(reader != nullptr);
-            max_bytes = reader->get_max_bytes();
+            max_bytes = reader->max_bytes();
         }
 
-        const int num_threads = valgrind_threads(16);
-        std::size_t chunk_size = max_bytes / num_threads;
+        const int thread_count = valgrind_threads(16);
+        std::size_t chunk_size = max_bytes / thread_count;
 
-        dstd::Vector<dstd::String> chunks(num_threads);
+        dstd::Vector<dstd::String> chunks(thread_count);
         dstd::Vector<dstd::Thread> threads;
         std::atomic<int> errors{0};
         std::atomic<int> completed{0};
 
-        for (int i = 0; i < num_threads; ++i) {
+        for (int i = 0; i < thread_count; ++i) {
             threads.emplace_back([&, i]() {
                 try {
                     // Create separate reader per thread
@@ -536,7 +536,7 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
                     }
 
                     std::size_t start = i * chunk_size;
-                    std::size_t end = (i == num_threads - 1)
+                    std::size_t end = (i == thread_count - 1)
                                           ? max_bytes
                                           : (i + 1) * chunk_size;
 
@@ -577,7 +577,7 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         INFO("Errors: ", errors.load());
 
         CHECK(errors == 0);
-        CHECK(completed == num_threads);
+        CHECK(completed == thread_count);
 
         // Verify completeness
         dstd::Vector<dstd::String> all_lines;
@@ -603,8 +603,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         TestEnvironment env(valgrind_scale(5000, 50));
         REQUIRE(env.is_valid());
 
-        dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(5000, 50));
+        dstd::String gz_file =
+            create_variable_line_test_file(env.dir(), valgrind_scale(5000, 50));
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -619,17 +619,17 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         {
             auto reader = ReaderFactory::create(gz_file, idx_file);
             REQUIRE(reader != nullptr);
-            max_bytes = reader->get_max_bytes();
+            max_bytes = reader->max_bytes();
         }
 
-        const int num_threads = valgrind_threads(8);
+        const int thread_count = valgrind_threads(8);
 
-        dstd::Vector<dstd::String> results(num_threads);
+        dstd::Vector<dstd::String> results(thread_count);
         dstd::Vector<dstd::Thread> threads;
         std::atomic<bool> error_occurred{false};
 
         // All threads read the SAME range (but with separate reader instances)
-        for (int i = 0; i < num_threads; ++i) {
+        for (int i = 0; i < thread_count; ++i) {
             threads.emplace_back([&, i]() {
                 try {
                     // Create separate reader per thread
@@ -707,8 +707,7 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
 
-        dstd::String gz_file =
-            create_variable_line_test_file(env.get_dir(), 10);
+        dstd::String gz_file = create_variable_line_test_file(env.dir(), 10);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -722,7 +721,7 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         auto stream = reader->stream(StreamConfig()
                                          .stream_type(StreamType::LineBytes)
                                          .range_type(RangeType::ByteRange)
@@ -752,8 +751,8 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         REQUIRE(env.is_valid());
 
         // Create file with very uniform line lengths
-        dstd::String txt_file = env.get_dir() + "/uniform.txt";
-        dstd::String gz_file = env.get_dir() + "/uniform.gz";
+        dstd::String txt_file = env.dir() + "/uniform.txt";
+        dstd::String gz_file = env.dir() + "/uniform.gz";
 
         dftu_utils_test::FileOut f(txt_file);
         for (int i = 1; i <= 100; ++i) {
@@ -776,7 +775,7 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         REQUIRE(reader != nullptr);
 
         // Read in chunks that might align with line boundaries
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         std::size_t mid = max_bytes / 2;
 
         auto stream1 = reader->stream(StreamConfig()
@@ -821,8 +820,7 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        dstd::String gz_file =
-            create_variable_line_test_file(env.get_dir(), 100);
+        dstd::String gz_file = create_variable_line_test_file(env.dir(), 100);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -869,7 +867,7 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
         REQUIRE(env.is_valid());
 
         dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(10000, 100), 450, 550);
+            env.dir(), valgrind_scale(10000, 100), 450, 550);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -883,7 +881,7 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         // 4MB at full scale; mid-file when scaled down under Valgrind
         std::size_t boundary = (max_bytes > 4194304) ? 4194304 : max_bytes / 2;
 
@@ -951,7 +949,7 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
         REQUIRE(env.is_valid());
 
         dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(5000, 50), 230, 350);
+            env.dir(), valgrind_scale(5000, 50), 230, 350);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -965,7 +963,7 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         // Prime offset; large prime at full scale, smaller when scaled down
         std::size_t boundary = (max_bytes > 1299709) ? 1299709 : 10007;
 
@@ -1039,8 +1037,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
         TestEnvironment env(valgrind_scale(5000, 50));
         REQUIRE(env.is_valid());
 
-        dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(5000, 50));
+        dstd::String gz_file =
+            create_variable_line_test_file(env.dir(), valgrind_scale(5000, 50));
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -1054,7 +1052,7 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         std::size_t mid = max_bytes / 2;
 
         dstd::Vector<char> buffer(256 * 1024);
@@ -1111,7 +1109,7 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
         REQUIRE(env.is_valid());
 
         dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(15000, 150), 90, 280);
+            env.dir(), valgrind_scale(15000, 150), 90, 280);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -1125,7 +1123,7 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
 
         // Read full file once for reference
         auto stream_ref = reader->stream(StreamConfig()
@@ -1153,13 +1151,13 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
 
         // Test with different worker counts
         for (int raw_workers : {2, 4, 8, 16}) {
-            int num_workers = valgrind_threads(raw_workers);
-            std::size_t chunk_size = max_bytes / num_workers;
+            int worker_count = valgrind_threads(raw_workers);
+            std::size_t chunk_size = max_bytes / worker_count;
 
-            dstd::Vector<dstd::String> chunks(num_workers);
+            dstd::Vector<dstd::String> chunks(worker_count);
             dstd::Vector<dstd::Thread> threads;
 
-            for (int i = 0; i < num_workers; ++i) {
+            for (int i = 0; i < worker_count; ++i) {
                 threads.emplace_back([&, i]() {
                     // Create separate reader per thread
                     auto thread_reader =
@@ -1167,7 +1165,7 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
                     if (!thread_reader) return;
 
                     std::size_t start = i * chunk_size;
-                    std::size_t end = (i == num_workers - 1)
+                    std::size_t end = (i == worker_count - 1)
                                           ? max_bytes
                                           : (i + 1) * chunk_size;
 
@@ -1207,7 +1205,7 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
             std::size_t unique_count =
                 std::distance(worker_lines.begin(), last);
 
-            INFO("Workers: ", num_workers);
+            INFO("Workers: ", worker_count);
             INFO("Total lines: ", worker_lines.size());
             INFO("Unique lines: ", unique_count);
 
@@ -1224,7 +1222,7 @@ TEST_CASE("LINE_BYTES Stream - Event Ordering Verification") {
         REQUIRE(env.is_valid());
 
         dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(8000, 80), 100, 300);
+            env.dir(), valgrind_scale(8000, 80), 100, 300);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -1238,7 +1236,7 @@ TEST_CASE("LINE_BYTES Stream - Event Ordering Verification") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         std::size_t chunk_size = max_bytes / 8;
 
         // Read in 8 chunks
@@ -1326,8 +1324,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
         TestEnvironment env(n_buf_lines);
         REQUIRE(env.is_valid());
 
-        dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), n_buf_lines, 100, 300);
+        dstd::String gz_file =
+            create_variable_line_test_file(env.dir(), n_buf_lines, 100, 300);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -1341,7 +1339,7 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
         auto reference_reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reference_reader != nullptr);
 
-        std::size_t max_bytes = reference_reader->get_max_bytes();
+        std::size_t max_bytes = reference_reader->max_bytes();
 
         // Read full file with default buffer to get reference
         auto ref_stream =
@@ -1422,8 +1420,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
         TestEnvironment env(n_chunk_lines);
         REQUIRE(env.is_valid());
 
-        dstd::String gz_file = create_variable_line_test_file(
-            env.get_dir(), n_chunk_lines, 80, 200);
+        dstd::String gz_file =
+            create_variable_line_test_file(env.dir(), n_chunk_lines, 80, 200);
         REQUIRE(!gz_file.empty());
 
         dstd::String idx_file = env.get_index_path(gz_file);
@@ -1437,7 +1435,7 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
         std::size_t max_bytes;
         {
             auto reader = ReaderFactory::create(gz_file, idx_file);
-            max_bytes = reader->get_max_bytes();
+            max_bytes = reader->max_bytes();
         }
 
         std::size_t mid_point = max_bytes / 2;

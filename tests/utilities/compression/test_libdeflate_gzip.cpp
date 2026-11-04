@@ -111,9 +111,9 @@ TEST_SUITE("libdeflate_gzip") {
 
         // Member 2: decode starting exactly after member 1.
         const std::uint8_t* m2 = file.data() + r1->in_bytes;
-        const std::size_t m2_len = file.size() - r1->in_bytes;
+        const std::size_t m2_size = file.size() - r1->in_bytes;
         dstd::Vector<std::uint8_t> out_b(b.size());
-        auto r2 = dec.decompress(m2, m2_len, out_b.data(), out_b.size());
+        auto r2 = dec.decompress(m2, m2_size, out_b.data(), out_b.size());
         REQUIRE(r2.has_value());
         CHECK(r2->out_bytes == b.size());
         CHECK(r2->in_bytes == mb->size());

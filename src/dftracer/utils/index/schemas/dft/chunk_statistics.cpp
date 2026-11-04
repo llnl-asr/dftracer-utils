@@ -337,8 +337,8 @@ dstd::Vector<std::uint8_t> ChunkStatistics::serialize_name_duration_sketches()
     return serialize_sketch_map(name_duration_sketches);
 }
 
-// Binary format: uint32_t num_entries, then per entry:
-//   uint32_t key_len, char[key_len], uint32_t blob_len, uint8_t[blob_len]
+// Binary format: uint32_t entry_count, then per entry:
+//   uint32_t key_size, char[key_size], uint32_t blob_size, uint8_t[blob_size]
 dstd::Vector<std::uint8_t> ChunkStatistics::serialize_sketch_map(
     const dstd::StringViewMap<dataframe::DDSketch>& sketches) {
     dstd::Vector<std::uint8_t> buf;
@@ -352,12 +352,12 @@ dstd::Vector<std::uint8_t> ChunkStatistics::serialize_sketch_map(
     dstd::Vector<std::uint8_t> sketch_blob;
     for (const auto& [key, sketch] : sketches) {
         sketch.serialize_into(sketch_blob);
-        auto key_len = static_cast<std::uint32_t>(key.size());
-        auto blob_len = static_cast<std::uint32_t>(sketch_blob.size());
+        auto key_size = static_cast<std::uint32_t>(key.size());
+        auto blob_size = static_cast<std::uint32_t>(sketch_blob.size());
 
-        dstd::append_u32_le(buf, key_len);
-        buf.insert(buf.end(), key.data(), key.data() + key_len);
-        dstd::append_u32_le(buf, blob_len);
+        dstd::append_u32_le(buf, key_size);
+        buf.insert(buf.end(), key.data(), key.data() + key_size);
+        dstd::append_u32_le(buf, blob_size);
         buf.insert(buf.end(), sketch_blob.begin(), sketch_blob.end());
     }
 
@@ -442,21 +442,21 @@ ChunkStatistics::deserialize_name_duration_sketches(const std::uint8_t* data,
     if (!data || len < sizeof(std::uint32_t)) return result;
 
     dstd::LeReader r(data, len);
-    std::uint32_t num_entries = 0;
-    r.u32(num_entries);
+    std::uint32_t entry_count = 0;
+    r.u32(entry_count);
 
-    for (std::uint32_t i = 0; i < num_entries && r.remaining() > 0; ++i) {
-        std::uint32_t key_len = 0;
-        if (!r.u32(key_len)) break;
-        const std::uint8_t* key_bytes = r.take(key_len);
+    for (std::uint32_t i = 0; i < entry_count && r.remaining() > 0; ++i) {
+        std::uint32_t key_size = 0;
+        if (!r.u32(key_size)) break;
+        const std::uint8_t* key_bytes = r.take(key_size);
         if (!key_bytes) break;
-        dstd::String key(reinterpret_cast<const char*>(key_bytes), key_len);
+        dstd::String key(reinterpret_cast<const char*>(key_bytes), key_size);
 
-        std::uint32_t blob_len = 0;
-        if (!r.u32(blob_len)) break;
-        const std::uint8_t* blob = r.take(blob_len);
+        std::uint32_t blob_size = 0;
+        if (!r.u32(blob_size)) break;
+        const std::uint8_t* blob = r.take(blob_size);
         if (!blob) break;
-        result[key] = dataframe::DDSketch::deserialize(blob, blob_len);
+        result[key] = dataframe::DDSketch::deserialize(blob, blob_size);
     }
 
     return result;

@@ -132,7 +132,7 @@ Expr expr_str_map(StrMapOp op, const Expr& a);
 /// ASCII-lowercase a String column: expr_str_map(StrMapOp::Lower, a).
 Expr expr_lower(const Expr& a);
 /// Per-row length as Int64: bytes, or UTF-8 codepoints when `chars`.
-Expr expr_str_len(const Expr& a, bool chars);
+Expr expr_str_size(const Expr& a, bool chars);
 /// Byte index of the first `needle` per row, or -1, as Int64.
 Expr expr_str_find(const Expr& a, dstd::StringView needle);
 /// Replace the first (or with `all`, every) occurrence of `from` with `to`.
@@ -288,7 +288,7 @@ Expr expr_convert(ConvertOp op, const Expr& a);
 /// List columns: element count, the element at `index` (negative counts from
 /// the end; out of range is null), the sum of numeric elements (null when an
 /// element is not numeric), and whether an element equals `value`.
-Expr expr_list_len(const Expr& a);
+Expr expr_list_size(const Expr& a);
 Expr expr_list_get(const Expr& a, std::int64_t index);
 Expr expr_list_sum(const Expr& a);
 Expr expr_list_contains(const Expr& a, Scalar value);

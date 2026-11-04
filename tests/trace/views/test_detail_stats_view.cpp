@@ -59,7 +59,7 @@ TEST_SUITE("detail stats via View") {
     TEST_CASE("an event without dur adds no duration") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        const dstd::String pfw = env.get_dir() + "/instants.pfw";
+        const dstd::String pfw = env.dir() + "/instants.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 5; ++i)
@@ -92,7 +92,7 @@ TEST_SUITE("detail stats via View") {
     TEST_CASE("a line the DOM parser refuses is scanned") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        const dstd::String pfw = env.get_dir() + "/refused.pfw";
+        const dstd::String pfw = env.dir() + "/refused.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 5; ++i)

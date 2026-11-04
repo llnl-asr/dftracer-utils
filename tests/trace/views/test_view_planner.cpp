@@ -51,7 +51,7 @@ static void populate_test_idx(const dstd::String& index_path,
         auto name_blob = name_bloom.serialize();
         dftu_utils_test::put_chunk_bloom(
             writer, static_cast<std::uint64_t>(ckpt), "name", name_blob,
-            name_bloom.num_entries());
+            name_bloom.entry_count());
 
         BloomFilter cat_bloom(100, 0.01);
         for (const auto& c : chunks[ckpt].cats) {
@@ -61,7 +61,7 @@ static void populate_test_idx(const dstd::String& index_path,
         auto cat_blob = cat_bloom.serialize();
         dftu_utils_test::put_chunk_bloom(
             writer, static_cast<std::uint64_t>(ckpt), "cat", cat_blob,
-            cat_bloom.num_entries());
+            cat_bloom.entry_count());
 
         const auto m = static_cast<std::uint64_t>(ckpt);
         dftracer::utils::index::put_gzip_member(
@@ -78,11 +78,11 @@ static void populate_test_idx(const dstd::String& index_path,
 
     auto name_blob = file_name_bloom.serialize();
     dftu_utils_test::put_file_bloom(writer, "name", name_blob,
-                                    file_name_bloom.num_entries());
+                                    file_name_bloom.entry_count());
 
     auto cat_blob = file_cat_bloom.serialize();
     dftu_utils_test::put_file_bloom(writer, "cat", cat_blob,
-                                    file_cat_bloom.num_entries());
+                                    file_cat_bloom.entry_count());
 
     dftracer::utils::index::put_path(
         writer, index::store::IndexExtension::Bloom, "name");
@@ -108,7 +108,7 @@ TEST_SUITE("ViewPlannerUtility") {
             .with_file_path(dstd::String(file_path))
             .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
-            .with_num_checkpoints(4);
+            .with_checkpoint_count(4);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -144,7 +144,7 @@ TEST_SUITE("ViewPlannerUtility") {
             .with_file_path(dstd::String(file_path))
             .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
-            .with_num_checkpoints(4);
+            .with_checkpoint_count(4);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -177,7 +177,7 @@ TEST_SUITE("ViewPlannerUtility") {
             .with_file_path(dstd::String(file_path))
             .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
-            .with_num_checkpoints(4);
+            .with_checkpoint_count(4);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -208,7 +208,7 @@ TEST_SUITE("ViewPlannerUtility") {
             .with_file_path(dstd::String(file_path))
             .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
-            .with_num_checkpoints(4);
+            .with_checkpoint_count(4);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -230,7 +230,7 @@ TEST_SUITE("ViewPlannerUtility") {
             .with_file_path("/fake/file.pfw.gz")
             .with_index_path("")  // No bloom index
             .with_uncompressed_size(30000)
-            .with_num_checkpoints(3);
+            .with_checkpoint_count(3);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -252,7 +252,7 @@ TEST_SUITE("ViewPlannerUtility") {
             .with_file_path("/fake/file.pfw.gz")
             .with_index_path("")
             .with_uncompressed_size(10000)
-            .with_num_checkpoints(0);
+            .with_checkpoint_count(0);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -283,9 +283,9 @@ TEST_SUITE("ViewPlannerUtility") {
             auto blob = fhash_bloom.serialize();
 
             dftu_utils_test::put_file_bloom(writer, "fhash", blob,
-                                            fhash_bloom.num_entries());
+                                            fhash_bloom.entry_count());
             dftu_utils_test::put_chunk_bloom(writer, 0, "fhash", blob,
-                                             fhash_bloom.num_entries());
+                                             fhash_bloom.entry_count());
             dftracer::utils::index::put_path(
                 writer, index::store::IndexExtension::Bloom, "fhash");
             dftu_utils_test::mark_built(writer);
@@ -301,7 +301,7 @@ TEST_SUITE("ViewPlannerUtility") {
             .with_file_path(dstd::String(file_path))
             .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(10000)
-            .with_num_checkpoints(1);
+            .with_checkpoint_count(1);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -337,7 +337,7 @@ TEST_SUITE("ViewPlannerUtility") {
             .with_file_path(dstd::String(file_path))
             .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(10000)
-            .with_num_checkpoints(3);
+            .with_checkpoint_count(3);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();

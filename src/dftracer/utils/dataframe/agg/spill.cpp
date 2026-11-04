@@ -59,7 +59,7 @@ class RunSource : public GroupSource {
 class LiveSource : public GroupSource {
    public:
     explicit LiveSource(const AggState& live) : live_(&live) {
-        order_.resize(static_cast<std::size_t>(agg_num_groups(live)));
+        order_.resize(static_cast<std::size_t>(agg_group_count(live)));
         std::iota(order_.begin(), order_.end(), std::int64_t{0});
         std::sort(order_.begin(), order_.end(),
                   [&](std::int64_t a, std::int64_t b) {
@@ -118,7 +118,7 @@ bool AggSpiller::maybe_spill(AggStatePtr& state) {
     spill::write_agg_run(*state, impl_->new_run_path());
     DFTRACER_UTILS_LOG_DEBUG(
         "Aggregation spilled run %d (%lld groups) past the %llu byte budget",
-        impl_->next_id - 1, static_cast<long long>(agg_num_groups(*state)),
+        impl_->next_id - 1, static_cast<long long>(agg_group_count(*state)),
         static_cast<unsigned long long>(impl_->budget));
     state = agg_new(std::move(specs));
     return true;

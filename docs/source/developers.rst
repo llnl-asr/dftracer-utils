@@ -523,7 +523,7 @@ For hot loops, reuse a single ``HasherUtility`` instance with ``reset()``:
     for (const auto& event : events) {
         hasher.reset();  // Clear state before each hash
         hasher.update(event.data);
-        auto hash = hasher.get_hash();
+        auto hash = hasher.hash();
         // ... use hash ...
     }
 
@@ -531,7 +531,7 @@ For hot loops, reuse a single ``HasherUtility`` instance with ``reset()``:
     // for (const auto& event : events) {
     //     HasherUtility temp_hasher;  // BAD!
     //     temp_hasher.update(event.data);
-    //     auto hash = temp_hasher.get_hash();
+    //     auto hash = temp_hasher.hash();
     // }
 
 Anti-Patterns to Avoid

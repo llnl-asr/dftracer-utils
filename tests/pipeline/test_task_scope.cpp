@@ -175,7 +175,7 @@ static coro::CoroTask<void> scope_producer_multi_consumer_count_helper(
 // ============================================================================
 
 TEST_CASE("CoroScope - Basic construction and spawning") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> task_count{0};
@@ -201,7 +201,7 @@ TEST_CASE("CoroScope - Basic construction and spawning") {
 }
 
 TEST_CASE("CoroScope - Automatic join via ctx.scope()") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -227,7 +227,7 @@ TEST_CASE("CoroScope - Automatic join via ctx.scope()") {
 }
 
 TEST_CASE("CoroScope - More threads than tasks") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 12});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 12});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -252,7 +252,7 @@ TEST_CASE("CoroScope - More threads than tasks") {
 }
 
 TEST_CASE("CoroScope - Regression test for hang fix") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -280,7 +280,7 @@ TEST_CASE("CoroScope - spawn_producer unwinds registration on spawn failure") {
     // CoroScope with nullptr executor will segfault on spawn,
     // so we test that the channel registration is cleaned up.
     // Using an executor that gets shut down immediately to force failure.
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 1});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 1});
     executor.shutdown();
     auto scope = CoroScope::long_lived(&executor);
     coro::Channel<int> channel(4);
@@ -290,12 +290,12 @@ TEST_CASE("CoroScope - spawn_producer unwinds registration on spawn failure") {
             channel, [](CoroScope&) -> coro::Generator<int> { co_yield 1; }),
         dftracer::utils::common::DFTUtilsException);
 
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
     CHECK(channel.is_closed() == true);
 }
 
 TEST_CASE("CoroScope - spawn_transforms unwinds bulk registration on failure") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 1});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 1});
     executor.shutdown();
     auto scope = CoroScope::long_lived(&executor);
     coro::Channel<int> input(4);
@@ -308,7 +308,7 @@ TEST_CASE("CoroScope - spawn_transforms unwinds bulk registration on failure") {
                         }),
                     dftracer::utils::common::DFTUtilsException);
 
-    CHECK(output.num_producers() == 0);
+    CHECK(output.producer_count() == 0);
     CHECK(output.is_closed() == true);
 }
 
@@ -317,7 +317,7 @@ TEST_CASE("CoroScope - spawn_transforms unwinds bulk registration on failure") {
 // ============================================================================
 
 TEST_CASE("CoroScope - spawn_producer with synchronous Generator") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> items_received{0};
@@ -344,7 +344,7 @@ TEST_CASE("CoroScope - spawn_producer with synchronous Generator") {
 }
 
 TEST_CASE("CoroScope - spawn_consumers with multiple consumers") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> items_processed{0};
@@ -370,7 +370,7 @@ TEST_CASE("CoroScope - spawn_consumers with multiple consumers") {
 }
 
 TEST_CASE("CoroScope - spawn_async_producer with AsyncGenerator and I/O") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -421,7 +421,7 @@ TEST_CASE("CoroScope - spawn_async_producer with AsyncGenerator and I/O") {
 // ============================================================================
 
 TEST_CASE("CoroScope - spawn_async_producer with AsyncGenerator") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> items_received{0};
@@ -469,7 +469,7 @@ TEST_CASE("CoroScope - spawn_async_producer with AsyncGenerator") {
 }
 
 TEST_CASE("CoroScope - AsyncGenerator with multiple async producers") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> total_items{0};
@@ -516,7 +516,7 @@ TEST_CASE("CoroScope - AsyncGenerator with multiple async producers") {
 }
 
 TEST_CASE("CoroScope - Generator produces correct sum") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sync_result{0};
@@ -556,7 +556,7 @@ TEST_CASE("CoroScope - Generator produces correct sum") {
 }
 
 TEST_CASE("CoroScope - AsyncGenerator produces correct sum") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> async_result{0};
@@ -601,7 +601,7 @@ TEST_CASE("CoroScope - AsyncGenerator produces correct sum") {
 
 TEST_CASE(
     "CoroScope - Sequential sync and async generators in same coroutine") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sync_result{0};
@@ -668,7 +668,7 @@ TEST_CASE(
 }
 
 TEST_CASE("CoroScope - AsyncGenerator with complex async operations") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -720,7 +720,7 @@ TEST_CASE("CoroScope - AsyncGenerator with complex async operations") {
 }
 
 TEST_CASE("CoroScope - AsyncGenerator with multiple async consumers") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> items_processed{0};

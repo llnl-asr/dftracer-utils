@@ -93,7 +93,7 @@ The logger lives in ``dftracer/utils/common/logging.h``, namespace
    dftracer::utils::common::logger::set_color(
        dftracer::utils::common::logger::ColorMode::Auto);
    dftracer::utils::common::logger::Level current =
-       dftracer::utils::common::logger::get_level();
+       dftracer::utils::common::logger::level();
 
 Call ``init()`` once at process startup (every ``dftracer_*`` CLI binary and
 the Python extension already do this); ``set_level``/``set_color`` can be

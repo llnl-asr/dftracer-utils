@@ -128,7 +128,7 @@ dftu_plugin make_consumer() {
 
 dstd::String make_trace(dftu_utils_test::TestEnvironment& env,
                         const dstd::String& tag, int n) {
-    dstd::String dir = env.get_dir() + "/" + tag;
+    dstd::String dir = env.dir() + "/" + tag;
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;

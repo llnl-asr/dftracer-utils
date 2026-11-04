@@ -26,7 +26,7 @@ dstd::String path_of(int f) { return "/data/f" + dstd::to_string(f); }
 // FH/HH/SH metadata records, a start event keyed to its executable, then
 // two reads per file in file order, so each chunk holds its own files.
 dstd::String write_trace(TestEnvironment& env) {
-    const dstd::String plain = env.get_dir() + "/r.pfw";
+    const dstd::String plain = env.dir() + "/r.pfw";
     {
         dftu_utils_test::FileOut out(plain);
         for (int f = 0; f < FILES; ++f)

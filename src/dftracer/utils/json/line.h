@@ -6,12 +6,12 @@
 
 namespace dftracer::utils::json {
 bool trim_and_validate(const char* data, std::size_t length, const char*& start,
-                       std::size_t& trimmed_length);
+                       std::size_t& trimmed_size);
 
 // Trim whitespace and trailing commas (for JSON array format)
 bool trim_and_validate_with_comma(const char* data, std::size_t length,
                                   const char*& start,
-                                  std::size_t& trimmed_length);
+                                  std::size_t& trimmed_size);
 }  // namespace dftracer::utils::json
 
 #endif  // DFTRACER_UTILS_JSON_LINE_H

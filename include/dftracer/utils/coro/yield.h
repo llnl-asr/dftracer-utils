@@ -31,7 +31,7 @@ bool timeslice_exceeded() noexcept;
 void set_timeslice_duration(std::chrono::microseconds duration) noexcept;
 
 /// Get the timeslice duration for the current thread.
-std::chrono::microseconds get_timeslice_duration() noexcept;
+std::chrono::microseconds timeslice_duration() noexcept;
 
 /// Suppress (or restore) the current-thread executor context.
 /// Returns the previous value.  Used by @ref SyncScope.
@@ -46,7 +46,7 @@ struct SyncScope {
     std::chrono::microseconds saved_ts;
 
     SyncScope() noexcept
-        : saved_exec(suppress_executor()), saved_ts(get_timeslice_duration()) {
+        : saved_exec(suppress_executor()), saved_ts(timeslice_duration()) {
         set_timeslice_duration(std::chrono::microseconds{0});
     }
     ~SyncScope() noexcept {

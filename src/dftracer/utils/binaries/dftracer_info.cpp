@@ -88,7 +88,7 @@ static coro::CoroTask<dstd::SharedPtr<RootInfoSummary>> load_root_info_summary(
         if (auto summary = common::unwrap(index::scalar_stats(snapshot, file)))
             result->total_events += summary->stats.total_events;
         if (auto meta = common::unwrap(index::file_metadata(snapshot, file))) {
-            result->total_lines += meta->num_lines;
+            result->total_lines += meta->line_count;
             result->total_uncompressed += meta->max_bytes;
         }
     }
@@ -145,15 +145,15 @@ process_index_group_info_sync(dstd::String index_path,
         meta.format = CheckpointIndexerFactory::detect_format(entry.file_path);
         meta.compressed_size = 0;
         meta.checkpoint_size = metadata->checkpoint_size;
-        meta.num_lines = metadata->num_lines;
+        meta.line_count = metadata->line_count;
         meta.uncompressed_size = metadata->max_bytes;
         meta.size_mb =
             static_cast<double>(meta.uncompressed_size) / (1024.0 * 1024.0);
         meta.start_line = 1;
-        meta.end_line = meta.num_lines;
+        meta.end_line = meta.line_count;
 
         if (meta.checkpoint_size > 0 && meta.uncompressed_size > 0) {
-            meta.num_checkpoints =
+            meta.checkpoint_count =
                 (meta.uncompressed_size + meta.checkpoint_size - 1) /
                 meta.checkpoint_size;
         }
@@ -162,11 +162,11 @@ process_index_group_info_sync(dstd::String index_path,
             index::schemas::dft::merged_statistics(snapshot, *file));
         if (merged) {
             meta.valid_events = merged->stats.total_events;
-            if (merged->num_chunks > 0) {
-                meta.num_checkpoints = merged->num_chunks;
+            if (merged->chunk_count > 0) {
+                meta.checkpoint_count = merged->chunk_count;
             }
         } else {
-            meta.valid_events = meta.num_lines;
+            meta.valid_events = meta.line_count;
         }
 
         meta.size_per_line =
@@ -262,7 +262,7 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
     }
 
     std::printf("\nContent:\n");
-    std::printf("  Total Lines: %llu\n", (unsigned long long)info.num_lines);
+    std::printf("  Total Lines: %llu\n", (unsigned long long)info.line_count);
     std::printf("  Valid Events: %zu\n", info.valid_events);
 
     if (info.has_index && info.index_valid) {
@@ -270,7 +270,7 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
         std::printf("  Index Store: %s\n", info.index_path.c_str());
         std::printf("  Checkpoint Size: %s\n",
                     format_size(info.checkpoint_size).c_str());
-        std::printf("  Checkpoints: %zu\n", info.num_checkpoints);
+        std::printf("  Checkpoints: %zu\n", info.checkpoint_count);
         print_extensions(info, snapshot);
     }
 
@@ -281,8 +281,8 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
         std::printf("  Size (MB): %.6f\n", info.size_mb);
         std::printf("  MB per Event: %.8f\n", info.size_per_line);
 
-        if (info.num_checkpoints > 0 && info.num_lines > 0) {
-            auto lines_per_ckpt = info.num_lines / info.num_checkpoints;
+        if (info.checkpoint_count > 0 && info.line_count > 0) {
+            auto lines_per_ckpt = info.line_count / info.checkpoint_count;
             std::printf("\nRandom Access Performance:\n");
             std::printf("  Worst-case lines to scan: %llu (1 checkpoint)\n",
                         (unsigned long long)lines_per_ckpt);
@@ -531,7 +531,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
         for (const auto& r : all_results) {
             if (r.success) {
                 total_uncompressed += r.uncompressed_size;
-                total_lines += r.num_lines;
+                total_lines += r.line_count;
                 total_events += r.valid_events;
                 ok++;
             } else {
@@ -587,7 +587,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
             if (r.success) {
                 ok++;
                 total_uncompressed += r.uncompressed_size;
-                total_lines += r.num_lines;
+                total_lines += r.line_count;
             }
         }
 

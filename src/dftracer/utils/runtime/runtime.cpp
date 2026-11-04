@@ -56,7 +56,7 @@ std::size_t resolve_io_threads(std::size_t requested, std::size_t workers) {
 Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
     common::unwrap(common::configure_memory_from_env());
     ExecutorConfig config;
-    config.num_threads = threads_.load(std::memory_order_relaxed);
+    config.thread_count = threads_.load(std::memory_order_relaxed);
     config.io_pool_size = resolve_io_threads(
         config.io_pool_size, threads_.load(std::memory_order_relaxed));
     executor_ = make_task_executor(config);
@@ -67,12 +67,12 @@ Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
 }
 
 Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
-    : threads_(resolve_threads(config.num_threads)),
+    : threads_(resolve_threads(config.thread_count)),
       io_backend_(config.io_backend_type),
       io_batch_threshold_(config.io_batch_threshold) {
     common::unwrap(common::configure_memory_from_env());
     ExecutorConfig cfg = config;
-    cfg.num_threads = threads_.load(std::memory_order_relaxed);
+    cfg.thread_count = threads_.load(std::memory_order_relaxed);
     cfg.io_pool_size = resolve_io_threads(
         config.io_pool_size, threads_.load(std::memory_order_relaxed));
     executor_ = make_task_executor(cfg);
@@ -86,11 +86,11 @@ Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
 
 Runtime::Runtime(const ExecutorConfig& config,
                  dstd::UniquePtr<Watchdog> watchdog)
-    : threads_(resolve_threads(config.num_threads)),
+    : threads_(resolve_threads(config.thread_count)),
       io_backend_(config.io_backend_type),
       io_batch_threshold_(config.io_batch_threshold) {
     ExecutorConfig cfg = config;
-    cfg.num_threads = threads_.load(std::memory_order_relaxed);
+    cfg.thread_count = threads_.load(std::memory_order_relaxed);
     cfg.io_pool_size = resolve_io_threads(
         config.io_pool_size, threads_.load(std::memory_order_relaxed));
     executor_ = make_task_executor(cfg);
@@ -194,9 +194,7 @@ void Runtime::cleanup_completed_futures() {
         outstanding_futures_.end());
 }
 
-ExecutorProgress Runtime::get_progress() const {
-    return executor_->get_progress();
-}
+ExecutorProgress Runtime::progress() const { return executor_->progress(); }
 
 bool Runtime::is_responsive() const { return executor_->is_responsive(); }
 
@@ -247,7 +245,7 @@ void Runtime::configure(const RuntimeSettings& settings) {
             settings.threads != 0 ? resolve_threads(settings.threads)
                                   : threads_.load(std::memory_order_acquire);
         executor_->set_threads(threads, settings.eager);
-        threads_.store(executor_->get_num_threads(), std::memory_order_release);
+        threads_.store(executor_->thread_count(), std::memory_order_release);
     }
     if (settings.io_threads != 0)
         executor_->grow_io_threads(resolve_io_threads(
@@ -270,7 +268,7 @@ std::size_t Runtime::threads() const {
 }
 
 std::size_t Runtime::io_threads() const {
-    return executor_ ? executor_->get_io_pool_size() : 0;
+    return executor_ ? executor_->io_pool_size() : 0;
 }
 
 namespace {
@@ -299,7 +297,7 @@ DFTRACER_UTILS_NO_THREAD_SAFETY_ANALYSIS void drop_inherited_default() {
 
 ExecutorConfig config_of(const RuntimeSettings& settings) {
     ExecutorConfig cfg;
-    cfg.num_threads = settings.threads;
+    cfg.thread_count = settings.threads;
     cfg.io_pool_size = settings.io_threads;
     const bool eager = settings.eager.value_or(!elastic_default_enabled());
     cfg.min_workers = eager ? 0 : 1;

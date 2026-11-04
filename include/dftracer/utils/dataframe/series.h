@@ -592,7 +592,7 @@ class Series {
     Series str_regex_replace(dstd::StringView pattern,
                              dstd::StringView to) const;
     /// Per-row element count of a List column (Int64).
-    Series list_len() const;
+    Series list_size() const;
     /// The element at `index` (negative from the end) of each row's list,
     /// null where the list is too short.
     Series list_get(std::int64_t index) const;

@@ -503,7 +503,7 @@ CollapsedMap collapse_by_group(const AggQueryResult& windows,
     result.reserve(accum.size());
     for (auto& [gk, a] : accum) {
         CollapsedMetrics cm;
-        cm.num_windows = a.dur_means.size();
+        cm.window_count = a.dur_means.size();
         cm.count_mean = mean_stdev(a.counts).first;
         std::tie(cm.dur_mean_of_means, cm.dur_stdev_of_means) =
             mean_stdev(a.dur_means);

@@ -24,7 +24,7 @@ static dstd::String tmp_path(const char* name) {
     return dftu_utils_test::make_unique_test_path(name).str();
 }
 
-static void write_test_file(const dstd::String& path, int num_batches,
+static void write_test_file(const dstd::String& path, int batch_count,
                             int rows_per_batch,
                             IpcCompression compression = IpcCompression::None) {
     Runtime runtime(2);
@@ -39,7 +39,7 @@ static void write_test_file(const dstd::String& path, int num_batches,
                                 {"name", ColumnType::String},
                                 {"value", ColumnType::Double}});
 
-        for (int b = 0; b < num_batches; ++b) {
+        for (int b = 0; b < batch_count; ++b) {
             builder.reserve(rows_per_batch);
             for (int i = 0; i < rows_per_batch; ++i) {
                 int row_id = b * rows_per_batch + i;
@@ -75,7 +75,7 @@ TEST_CASE("IpcReader - basic read single batch") {
     CHECK_FALSE(reader.is_open());
     CHECK(reader.open(path) == 0);
     CHECK(reader.is_open());
-    CHECK(reader.num_batches() == 1);
+    CHECK(reader.batch_count() == 1);
 
     auto batch = reader.read_batch(0);
     CHECK(batch.valid());
@@ -96,10 +96,10 @@ TEST_CASE("IpcReader - read multiple batches") {
 
     IpcReader reader;
     CHECK(reader.open(path) == 0);
-    CHECK(reader.num_batches() == 5);
+    CHECK(reader.batch_count() == 5);
 
     std::int64_t total_rows = 0;
-    for (std::size_t i = 0; i < reader.num_batches(); ++i) {
+    for (std::size_t i = 0; i < reader.batch_count(); ++i) {
         auto batch = reader.read_batch(i);
         CHECK(batch.valid());
         CHECK(batch.num_rows() == 20);
@@ -192,12 +192,12 @@ TEST_CASE("IpcReader - move semantics") {
     IpcReader r1;
     CHECK(r1.open(path) == 0);
     CHECK(r1.is_open());
-    CHECK(r1.num_batches() == 2);
+    CHECK(r1.batch_count() == 2);
 
     IpcReader r2 = std::move(r1);
     CHECK_FALSE(r1.is_open());
     CHECK(r2.is_open());
-    CHECK(r2.num_batches() == 2);
+    CHECK(r2.batch_count() == 2);
 
     auto batch = r2.read_batch(0);
     CHECK(batch.valid());
@@ -214,7 +214,7 @@ TEST_CASE("IpcReader - read batch out of range") {
 
     IpcReader reader;
     CHECK(reader.open(path) == 0);
-    CHECK(reader.num_batches() == 2);
+    CHECK(reader.batch_count() == 2);
 
     // Valid indices
     CHECK(reader.read_batch(0).valid());
@@ -236,7 +236,7 @@ TEST_CASE("IpcReader - read ZSTD compressed file") {
 
     IpcReader reader;
     CHECK(reader.open(path) == 0);
-    CHECK(reader.num_batches() == 3);
+    CHECK(reader.batch_count() == 3);
 
     auto batches = reader.read_all();
     CHECK(batches.size() == 3);
@@ -293,7 +293,7 @@ TEST_CASE("IpcReader - roundtrip with all column types") {
     {
         IpcReader reader;
         CHECK(reader.open(path) == 0);
-        CHECK(reader.num_batches() == 1);
+        CHECK(reader.batch_count() == 1);
 
         auto batch = reader.read_batch(0);
         CHECK(batch.valid());

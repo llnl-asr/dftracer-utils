@@ -389,7 +389,7 @@ TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
 
 TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
     dftu_utils_test::TestEnvironment env(0);
-    dstd::String path = env.get_dir() + "/config.json";
+    dstd::String path = env.dir() + "/config.json";
     {
         (void)dstd::fs::write_file(
             dstd::PathView(path),

@@ -68,7 +68,7 @@ class Thread {
         auto start = dstd::make_unique<Start<Body>>(std::forward<Fn>(fn), name);
         Thread t;
         const int rc = t.create(&Start<Body>::run, start.get(), stack_size);
-        if (rc != 0) return Unexpected(create_error(rc));
+        if (rc != 0) return Unexpected(make_error(rc));
         (void)start.release();
         return t;
     }
@@ -112,7 +112,7 @@ class Thread {
     };
 
     static void set_current_name(const String& name) noexcept;
-    static Error create_error(int rc);
+    static Error make_error(int rc);
     void launch(void (*run)(void*), void* arg, std::size_t stack_size);
     int create(void (*run)(void*), void* arg, std::size_t stack_size) noexcept;
 

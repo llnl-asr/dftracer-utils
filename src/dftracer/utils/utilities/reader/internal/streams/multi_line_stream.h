@@ -235,7 +235,7 @@ class MultiLineStream : public ReaderStream {
             }
 
             std::size_t newline_pos = newline_ptr - current_span_.data();
-            std::size_t line_len = newline_pos - span_pos_;
+            std::size_t line_size = newline_pos - span_pos_;
 
             // Determine if this line should be output
             bool in_range = is_line_in_output_range();
@@ -246,14 +246,14 @@ class MultiLineStream : public ReaderStream {
                 if (!line_accumulator_.empty()) {
                     // Complete accumulated line
                     line_accumulator_.append(current_span_.data() + span_pos_,
-                                             line_len);
+                                             line_size);
                     output_buffer_.append(line_accumulator_);
                     output_buffer_.push_back('\n');
                     line_accumulator_.clear();
                 } else {
                     // Direct append from span
                     output_buffer_.append(current_span_.data() + span_pos_,
-                                          line_len);
+                                          line_size);
                     output_buffer_.push_back('\n');
                 }
                 lines_output_++;

@@ -251,7 +251,7 @@ int PartitionRouter::compute_bucket(
         combined += '\0';
     }
     return static_cast<int>(dftracer::utils::dstd::hash::xxh3_64(combined) %
-                            static_cast<uint64_t>(config_.num_buckets));
+                            static_cast<uint64_t>(config_.bucket_count));
 }
 
 coro::CoroTask<int> PartitionRouter::route_none(ArrowExportResult& batch) {
@@ -261,8 +261,8 @@ coro::CoroTask<int> PartitionRouter::route_none(ArrowExportResult& batch) {
 }
 
 coro::CoroTask<int> PartitionRouter::route_column(ArrowExportResult& batch) {
-    ArrowSchema* schema = batch.get_schema();
-    ArrowArray* array = batch.get_array();
+    ArrowSchema* schema = batch.schema();
+    ArrowArray* array = batch.array();
     int64_t num_rows = batch.num_rows();
 
     if (num_rows == 0) co_return 0;
@@ -325,8 +325,8 @@ coro::CoroTask<int> PartitionRouter::route_column(ArrowExportResult& batch) {
 }
 
 coro::CoroTask<int> PartitionRouter::route_bucketed(ArrowExportResult& batch) {
-    ArrowSchema* schema = batch.get_schema();
-    ArrowArray* array = batch.get_array();
+    ArrowSchema* schema = batch.schema();
+    ArrowArray* array = batch.array();
     int64_t num_rows = batch.num_rows();
 
     if (num_rows == 0) co_return 0;
@@ -396,8 +396,8 @@ coro::CoroTask<int> PartitionRouter::route_bucketed(ArrowExportResult& batch) {
 }
 
 coro::CoroTask<int> PartitionRouter::route_view(ArrowExportResult& batch) {
-    ArrowSchema* schema = batch.get_schema();
-    ArrowArray* array = batch.get_array();
+    ArrowSchema* schema = batch.schema();
+    ArrowArray* array = batch.array();
     int64_t num_rows = batch.num_rows();
 
     if (num_rows == 0) co_return 0;

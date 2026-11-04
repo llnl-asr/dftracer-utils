@@ -737,14 +737,14 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
         // arr->offset and index the data as they are.
         const std::int32_t* offs =
             static_cast<const std::int32_t*>(arr->buffers[1]) + arr->offset;
-        std::size_t data_len =
+        std::size_t data_size =
             offs != nullptr ? static_cast<std::size_t>(offs[n]) : 0;
         col->offsets = borrow_buffer(
             reinterpret_cast<std::uint8_t*>(const_cast<std::int32_t*>(offs)),
             static_cast<std::size_t>(n + 1) * sizeof(std::int32_t), owner);
         col->data = borrow_buffer(
             static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[2])),
-            data_len, owner);
+            data_size, owner);
         wrap_validity();
         return Series{col};
     }
@@ -753,14 +753,14 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
         // 3 buffers: validity, int64 offsets (n+1), data.
         const std::int64_t* offs =
             static_cast<const std::int64_t*>(arr->buffers[1]) + arr->offset;
-        std::size_t data_len =
+        std::size_t data_size =
             offs != nullptr ? static_cast<std::size_t>(offs[n]) : 0;
         col->offsets = borrow_buffer(
             reinterpret_cast<std::uint8_t*>(const_cast<std::int64_t*>(offs)),
             static_cast<std::size_t>(n + 1) * sizeof(std::int64_t), owner);
         col->data = borrow_buffer(
             static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[2])),
-            data_len, owner);
+            data_size, owner);
         wrap_validity();
         return Series{col};
     }
@@ -776,10 +776,10 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
         return Series{col};
     }
     auto* data = static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[1]));
-    std::size_t data_len = (type == TypeId::FixedSizeBinary)
-                               ? static_cast<std::size_t>(n) * width
-                               : buffer_bytes(type, n);
-    col->data = borrow_buffer(data + ptr_off, data_len, owner);
+    std::size_t data_size = (type == TypeId::FixedSizeBinary)
+                                ? static_cast<std::size_t>(n) * width
+                                : buffer_bytes(type, n);
+    col->data = borrow_buffer(data + ptr_off, data_size, owner);
     wrap_validity();
     return Series{col};
 }

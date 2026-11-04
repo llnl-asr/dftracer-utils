@@ -14,20 +14,20 @@
 namespace dftracer::utils::index::build {
 
 /// Greedy Longest-Processing-Time-first (LPT) bin-packing of files into
-/// `num_workers` partitions, minimising the maximum per-worker total size.
+/// `worker_count` partitions, minimising the maximum per-worker total size.
 ///
 /// Used to eliminate straggler tails in the distributed indexer: workers
 /// see file lists whose total bytes are as balanced as possible.
 ///
 /// Complexity: O(N log N) for the initial sort + O(N log K) for the
-/// min-heap over K = num_workers. `files` is consumed.
+/// min-heap over K = worker_count. `files` is consumed.
 inline dstd::Vector<dstd::Vector<utilities::filesystem::FileEntry>>
 plan_lpt_partition(dstd::Vector<utilities::filesystem::FileEntry> files,
-                   std::size_t num_workers) {
-    if (num_workers == 0) num_workers = 1;
+                   std::size_t worker_count) {
+    if (worker_count == 0) worker_count = 1;
 
     dstd::Vector<dstd::Vector<utilities::filesystem::FileEntry>> buckets(
-        num_workers);
+        worker_count);
     if (files.empty()) return buckets;
 
     std::sort(files.begin(), files.end(),
@@ -37,7 +37,7 @@ plan_lpt_partition(dstd::Vector<utilities::filesystem::FileEntry> files,
     // lightest bucket.
     using HeapEntry = dstd::Pair<std::size_t, std::size_t>;
     dstd::PriorityQueue<HeapEntry, std::greater<>> heap;
-    for (std::size_t i = 0; i < num_workers; ++i) {
+    for (std::size_t i = 0; i < worker_count; ++i) {
         heap.emplace(0, i);
     }
 

@@ -32,7 +32,7 @@ struct SplitEvery {
  * from a single input task.
  *
  * Example:
- *   num_outputs{8} creates 8 parallel tasks from one source
+ *   output_count{8} creates 8 parallel tasks from one source
  */
 struct NumOutputs {
     std::size_t count;
@@ -47,7 +47,7 @@ struct NumOutputs {
  * from input data. Each partition receives a contiguous chunk.
  *
  * Example:
- *   num_partitions{4} splits [1,2,3,4,5,6,7,8] into:
+ *   partition_count{4} splits [1,2,3,4,5,6,7,8] into:
  *     Partition 0: [1,2]
  *     Partition 1: [3,4]
  *     Partition 2: [5,6]

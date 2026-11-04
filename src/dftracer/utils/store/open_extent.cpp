@@ -625,15 +625,15 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append_run(
     auto stored = encode_extent(segment_bytes, starts, EXTENT_ALIGN_BYTES,
                                 codec, dict.get());
     if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
-    const std::uint32_t stored_length =
+    const std::uint32_t stored_size =
         static_cast<std::uint32_t>(stored->size());
     auto* pending = new PendingWrite;
     pending->owner = this;
     pending->buffer = std::move(*stored);
     pending->written.offset =
-        file_.reserve_range(stored_length, EXTENT_ALIGN_BYTES);
-    pending->written.length = stored_length;
-    pending->written.crc = crc32(0, pending->buffer.data(), stored_length);
+        file_.reserve_range(stored_size, EXTENT_ALIGN_BYTES);
+    pending->written.length = stored_size;
+    pending->written.crc = crc32(0, pending->buffer.data(), stored_size);
     info.offset_in_extent = 0;
     info.length = length;
     pending->written.segments.push_back(std::move(info));
@@ -657,17 +657,17 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append(
 }
 
 dstd::Expected<void, dstd::Error> ExtentWriter::append_with(
-    std::uint32_t namespace_id, std::size_t segment_length, ExtentSegment info,
+    std::uint32_t namespace_id, std::size_t segment_size, ExtentSegment info,
     void* context, PageCodec codec, SegmentWriteFn write, void* write_context) {
     const int latched = latched_errno_.load(std::memory_order_acquire);
     if (latched != 0) return dstd::Unexpected<dstd::Error>(latched_error());
-    if (segment_length == 0 ||
-        segment_length > std::numeric_limits<std::uint32_t>::max()) {
+    if (segment_size == 0 ||
+        segment_size > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
     const std::size_t capacity = extent_size_ - EXTENT_HEADER_BYTES;
-    if (segment_length >= capacity) {
-        dstd::Vector<std::uint8_t> run(segment_length);
+    if (segment_size >= capacity) {
+        dstd::Vector<std::uint8_t> run(segment_size);
         write(write_context, run.data());
         return append_run(
             namespace_id,
@@ -677,7 +677,7 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append_with(
     }
 
     NamespaceSlot* slot = find_slot(namespace_id, codec);
-    const std::uint32_t length = static_cast<std::uint32_t>(segment_length);
+    const std::uint32_t length = static_cast<std::uint32_t>(segment_size);
     for (;;) {
         OpenExtent* extent = slot->extent.load(std::memory_order_acquire);
         if (extent == nullptr) extent = publish_extent(*slot, nullptr);

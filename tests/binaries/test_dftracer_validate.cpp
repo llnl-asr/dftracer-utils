@@ -23,8 +23,8 @@ namespace {
 
 // Move a freshly generated valid pfw.gz into `dir`.
 dstd::String make_valid_pfw(dftu_utils_test::TestEnvironment& env,
-                            const dstd::Path& dir, int num_events, int id) {
-    auto gz = env.create_dft_test_gzip_file(num_events);
+                            const dstd::Path& dir, int event_count, int id) {
+    auto gz = env.create_dft_test_gzip_file(event_count);
     if (gz.empty()) return "";
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     dstd::Path dest = dir / ("trace_" + dstd::to_string(id) + ".pfw.gz");
@@ -85,7 +85,7 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        dstd::Path work = dstd::Path(env.get_dir()) / "valid";
+        dstd::Path work = dstd::Path(env.dir()) / "valid";
         REQUIRE(!make_valid_pfw(env, work, 30, 0).empty());
         REQUIRE(!make_valid_pfw(env, work, 20, 1).empty());
 
@@ -105,7 +105,7 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        dstd::Path root = dstd::Path(env.get_dir()) / "nested";
+        dstd::Path root = dstd::Path(env.dir()) / "nested";
         REQUIRE(!make_valid_pfw(env, root / "a", 10, 0).empty());
         REQUIRE(!make_valid_pfw(env, root / "b" / "c", 10, 1).empty());
 
@@ -124,7 +124,7 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
-        auto bad = make_bad_pfw(dstd::Path(env.get_dir()) / "bad", 0);
+        auto bad = make_bad_pfw(dstd::Path(env.dir()) / "bad", 0);
         REQUIRE(!bad.empty());
 
         int rc = -1;
@@ -141,7 +141,7 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
-        dstd::Path empty = dstd::Path(env.get_dir()) / "empty";
+        dstd::Path empty = dstd::Path(env.dir()) / "empty";
         REQUIRE(dstd::fs::create_directories(empty).has_value());
 
         int rc = -1;
@@ -157,8 +157,7 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        auto f =
-            make_valid_pfw(env, dstd::Path(env.get_dir()) / "single", 25, 0);
+        auto f = make_valid_pfw(env, dstd::Path(env.dir()) / "single", 25, 0);
         REQUIRE(!f.empty());
 
         int rc = -1;
@@ -175,8 +174,7 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        auto f =
-            make_valid_pfw(env, dstd::Path(env.get_dir()) / "loglvl", 10, 0);
+        auto f = make_valid_pfw(env, dstd::Path(env.dir()) / "loglvl", 10, 0);
         REQUIRE(!f.empty());
 
         int rc = -1;
@@ -192,8 +190,8 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        auto f = make_valid_pfw(env, dstd::Path(env.get_dir()) / "with space",
-                                10, 0);
+        auto f =
+            make_valid_pfw(env, dstd::Path(env.dir()) / "with space", 10, 0);
         REQUIRE(!f.empty());
 
         int rc = -1;

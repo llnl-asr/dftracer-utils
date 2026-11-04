@@ -43,12 +43,12 @@ using namespace dftracer::utils;
 namespace {
 
 dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                           int num_events, int id) {
-    auto trace_gz = env.create_dft_test_gzip_file(num_events);
+                           int event_count, int id) {
+    auto trace_gz = env.create_dft_test_gzip_file(event_count);
     if (trace_gz.empty()) return "";
 
     dstd::String pfw_path =
-        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+        env.dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
     REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
@@ -56,11 +56,11 @@ dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
 // Rechunk a single-member fixture into a multi-member trace whose members are
 // about `member_bytes` uncompressed, for exercising ingest member handling.
 dstd::String make_multimember_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                                     int num_events, std::size_t member_bytes,
+                                     int event_count, std::size_t member_bytes,
                                      int id) {
-    dstd::String single = create_pfw_gz(env, num_events, id);
+    dstd::String single = create_pfw_gz(env, event_count, id);
     if (single.empty()) return "";
-    dstd::String mm = env.get_dir() + "/mm_" + dstd::to_string(id) + ".pfw.gz";
+    dstd::String mm = env.dir() + "/mm_" + dstd::to_string(id) + ".pfw.gz";
     utilities::fileio::compress::gzip_rechunk_to_members(
         dstd::String(single), dstd::String(mm), member_bytes, 6)
         .get();
@@ -206,11 +206,11 @@ dstd::String cell(const dataframe::Series& c, std::int64_t i) {
 // Create a trace in its own subdir and build its index, with the aggregation
 // tier every build makes, over it; returns the shard's .dftindex path.
 dstd::String build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
-                                    const dstd::String& tag, int num_events,
+                                    const dstd::String& tag, int event_count,
                                     const dstd::String& index_dir = "") {
-    dstd::String dir = env.get_dir() + "/" + tag;
+    dstd::String dir = env.dir() + "/" + tag;
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    dstd::String src = env.create_dft_test_gzip_file(num_events);
+    dstd::String src = env.create_dft_test_gzip_file(event_count);
     dstd::String gz = dir + "/t.pfw.gz";
     REQUIRE(dstd::fs::rename(src, gz).has_value());
 
@@ -284,7 +284,7 @@ TEST_SUITE("DFTracerView") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        int rc = run_view(binary, {"-q", R"(cat == "POSIX")", env.get_dir()});
+        int rc = run_view(binary, {"-q", R"(cat == "POSIX")", env.dir()});
         CHECK(rc == 0);
     }
 
@@ -301,7 +301,7 @@ TEST_SUITE("DFTracerView") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        int rc = run_view(binary, {"-q", R"(cat == "POSIX")", env.get_dir()});
+        int rc = run_view(binary, {"-q", R"(cat == "POSIX")", env.dir()});
         CHECK(rc == 0);
     }
 
@@ -319,14 +319,14 @@ TEST_SUITE("DFTracerView") {
 
         int rc = run_view(
             binary, {"--group-by", "cat", "--agg",
-                     "p99:dur,pct:dur:0.95,skew:dur,kurt:dur", env.get_dir()});
+                     "p99:dur,pct:dur:0.95,skew:dur,kurt:dur", env.dir()});
         CHECK(rc == 0);
 
         // pct without a quantile and pNN without a field are rejected.
         CHECK(run_view(binary, {"--group-by", "cat", "--agg", "pct:dur",
-                                env.get_dir()}) != 0);
-        CHECK(run_view(binary, {"--group-by", "cat", "--agg", "p99",
-                                env.get_dir()}) != 0);
+                                env.dir()}) != 0);
+        CHECK(run_view(binary,
+                       {"--group-by", "cat", "--agg", "p99", env.dir()}) != 0);
     }
 
     TEST_CASE("output to file") {
@@ -343,9 +343,9 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!f.empty());
 
         // File output is always a compressed (.gz) trace.
-        dstd::String output = env.get_dir() + "/view_output.pfw";
+        dstd::String output = env.dir() + "/view_output.pfw";
         int rc = run_view(binary, {"-q", R"(cat == "POSIX")", "--no-index",
-                                   env.get_dir(), "-o", output});
+                                   env.dir(), "-o", output});
         CHECK(rc == 0);
         REQUIRE(dstd::fs::exists(output + ".gz").value());
         CHECK(dstd::fs::file_size(output + ".gz").value() > 0);
@@ -363,7 +363,7 @@ TEST_SUITE("DFTracerView") {
 
         // Inputs in their own dir so the .pfw.gz output is not rescanned as
         // input on a subsequent run.
-        dstd::String in = env.get_dir() + "/in";
+        dstd::String in = env.dir() + "/in";
         REQUIRE(dstd::fs::create_directories(in).has_value());
         auto trace_gz = env.create_dft_test_gzip_file(50);
         REQUIRE(!trace_gz.empty());
@@ -373,13 +373,13 @@ TEST_SUITE("DFTracerView") {
         // --verify re-scans the written+indexed trace via that index and checks
         // the event count round-trips, so rc==0 proves the fused member index
         // is correct.
-        dstd::String output = env.get_dir() + "/merged.pfw";
+        dstd::String output = env.dir() + "/merged.pfw";
         int rc = run_view(binary, {in, "--merge", "--verify", "-o", output});
         CHECK(rc == 0);
         REQUIRE(dstd::fs::exists(output + ".gz").value());
         // The index was built by the write, not a separate pass: its .dftindex
         // directory must exist next to the output.
-        CHECK(dstd::fs::exists(env.get_dir() + "/.dftindex").value());
+        CHECK(dstd::fs::exists(env.dir() + "/.dftindex").value());
     }
 
     TEST_CASE("duql with name filter") {
@@ -397,7 +397,7 @@ TEST_SUITE("DFTracerView") {
 
         int rc = run_view(
             binary, {"-q", R"(cat == "POSIX" and name in ["pread", "pwrite"])",
-                     env.get_dir()});
+                     env.dir()});
         CHECK(rc == 0);
     }
 
@@ -414,13 +414,13 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
-        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String cap = env.dir() + "/cap.txt";
         dstd::String full, narrow;
-        CHECK(run_view_capture(binary, {"-q", "ts >= 0", env.get_dir()}, cap,
+        CHECK(run_view_capture(binary, {"-q", "ts >= 0", env.dir()}, cap,
                                full) == 0);
         CHECK(run_view_capture(binary,
-                               {"--time-range", "0,1000200000", env.get_dir()},
-                               cap, narrow) == 0);
+                               {"--time-range", "0,1000200000", env.dir()}, cap,
+                               narrow) == 0);
         // [0, ts of i=2) keeps only i=1: the window excludes its end.
         CHECK(count_lines(narrow) == 1);
         CHECK(count_lines(full) > count_lines(narrow));
@@ -436,16 +436,15 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
-        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String cap = env.dir() + "/cap.txt";
         dstd::String plain, numeric;
         CHECK(run_view_capture(
-                  binary,
-                  {"--group-by", "cat", "--agg", "count", env.get_dir()}, cap,
-                  plain) == 0);
+                  binary, {"--group-by", "cat", "--agg", "count", env.dir()},
+                  cap, plain) == 0);
         CHECK(run_view_capture(
                   binary,
-                  {"--group-by", "cat", "--agg-numeric-args", env.get_dir()},
-                  cap, numeric) == 0);
+                  {"--group-by", "cat", "--agg-numeric-args", env.dir()}, cap,
+                  numeric) == 0);
         CHECK(!numeric.empty());
         // The fixture carries a numeric arg, so --agg-numeric-args adds a value
         // column that a bare count does not.
@@ -464,7 +463,7 @@ TEST_SUITE("DFTracerView") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        const dstd::String set = env.get_dir() + "/set";
+        const dstd::String set = env.dir() + "/set";
         const dstd::String root =
             set + "/" + dstd::String(dftracer::utils::index::INDEX_ROOT_NAME);
         dstd::String sa = build_aggregated_shard(
@@ -477,18 +476,18 @@ TEST_SUITE("DFTracerView") {
             dstd::String(root), {dstd::String(sa), dstd::String(sb)});
 
         // A flat directory with the same two traces for the baseline query.
-        dstd::String both = env.get_dir() + "/both";
+        dstd::String both = env.dir() + "/both";
         REQUIRE(dstd::fs::create_directories(both).has_value());
-        REQUIRE(dstd::fs::copy_file(env.get_dir() + "/sa/t.pfw.gz",
+        REQUIRE(dstd::fs::copy_file(env.dir() + "/sa/t.pfw.gz",
                                     both + "/a.pfw.gz",
                                     dstd::fs::CopyMode::FailIfExists)
                     .has_value());
-        REQUIRE(dstd::fs::copy_file(env.get_dir() + "/sb/t.pfw.gz",
+        REQUIRE(dstd::fs::copy_file(env.dir() + "/sb/t.pfw.gz",
                                     both + "/b.pfw.gz",
                                     dstd::fs::CopyMode::FailIfExists)
                     .has_value());
 
-        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String cap = env.dir() + "/cap.txt";
         dstd::String shard_out, direct_out;
         CHECK(run_view_capture(binary,
                                {"--group-by", "cat", "--agg", "count", set},
@@ -521,7 +520,7 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        dstd::String dir = env.get_dir() + "/sel";
+        dstd::String dir = env.dir() + "/sel";
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         dstd::String pfw = dir + "/t.pfw";
         {
@@ -533,7 +532,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
         (void)dstd::fs::remove(pfw);
 
-        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String cap = env.dir() + "/cap.txt";
         dstd::String out;
         CHECK(run_view_capture(binary,
                                {gz, "-q", "name == \"read\"", "--select",
@@ -556,7 +555,7 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        dstd::String dir = env.get_dir() + "/sel_refused";
+        dstd::String dir = env.dir() + "/sel_refused";
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         dstd::String pfw = dir + "/t.pfw";
         {
@@ -571,7 +570,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
         (void)dstd::fs::remove(pfw);
 
-        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String cap = env.dir() + "/cap.txt";
         dstd::String out;
         CHECK(run_view_capture(
                   binary,
@@ -594,7 +593,7 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        dstd::String dir = env.get_dir() + "/sel_deep";
+        dstd::String dir = env.dir() + "/sel_deep";
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         dstd::String pfw = dir + "/t.pfw";
         {
@@ -610,7 +609,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
         (void)dstd::fs::remove(pfw);
 
-        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String cap = env.dir() + "/cap.txt";
         dstd::String out;
         CHECK(run_view_capture(
                   binary,
@@ -634,7 +633,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         const dstd::String gz = create_pfw_gz(env, 50, 0);
         REQUIRE(!gz.empty());
-        const dstd::String cap = env.get_dir() + "/cap.txt";
+        const dstd::String cap = env.dir() + "/cap.txt";
         const dstd::String q = "sort -ts | take $n | select ts";
 
         dstd::String out;
@@ -671,7 +670,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         const dstd::String gz = create_pfw_gz(env, 50, 0);
         REQUIRE(!gz.empty());
-        const dstd::String cap = env.get_dir() + "/cap.txt";
+        const dstd::String cap = env.dir() + "/cap.txt";
         auto rows = [&](const dstd::String& q) {
             dstd::String out;
             CHECK(run_view_capture(binary, {gz, "-q", q}, cap, out) == 0);
@@ -708,7 +707,7 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        const dstd::String pfw = env.get_dir() + "/files.pfw";
+        const dstd::String pfw = env.dir() + "/files.pfw";
         {
             dftu_utils_test::FileOut o(pfw);
             o << R"({"ph":"M","name":"FH","pid":1,"tid":1,"args":{"name":"/scratch/a","value":"f1"}})"
@@ -722,7 +721,7 @@ TEST_SUITE("DFTracerView") {
         }
         const dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        const dstd::String cap = env.get_dir() + "/cap.txt";
+        const dstd::String cap = env.dir() + "/cap.txt";
         dstd::String out;
         CHECK(run_view_capture(
                   binary,
@@ -747,7 +746,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         const dstd::String gz = create_pfw_gz(env, 50, 0);
         REQUIRE(!gz.empty());
-        const dstd::String cap = env.get_dir() + "/cap.txt";
+        const dstd::String cap = env.dir() + "/cap.txt";
         const dstd::String q = "where dur >= $min | group cat { n = count() }";
 
         dstd::String out;
@@ -778,7 +777,7 @@ TEST_SUITE("DFTracerView") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        const dstd::String pfw = env.get_dir() + "/hosts.pfw";
+        const dstd::String pfw = env.dir() + "/hosts.pfw";
         {
             dftu_utils_test::FileOut o(pfw);
             for (int i = 0; i < 3; ++i)
@@ -789,7 +788,7 @@ TEST_SUITE("DFTracerView") {
         }
         const dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        const dstd::String cap = env.get_dir() + "/cap.txt";
+        const dstd::String cap = env.dir() + "/cap.txt";
         const dstd::String q =
             "window cat sort ts { g = ts - lag(ts) } | expand hosts"
             " | select ts, g, hosts";
@@ -820,14 +819,14 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
-        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String cap = env.dir() + "/cap.txt";
         dstd::String spilled, in_mem;
         dstd::Vector<dstd::String> agg = {"--group-by", "name", "--agg",
                                           "count,sum:dur"};
         dstd::Vector<dstd::String> a1 = agg;
-        a1.insert(a1.end(), {"--memory-budget", "1", env.get_dir()});
+        a1.insert(a1.end(), {"--memory-budget", "1", env.dir()});
         dstd::Vector<dstd::String> a2 = agg;
-        a2.insert(a2.end(), {"--no-spill", env.get_dir()});
+        a2.insert(a2.end(), {"--no-spill", env.dir()});
         CHECK(run_view_capture(binary, a1, cap, spilled) == 0);
         CHECK(run_view_capture(binary, a2, cap, in_mem) == 0);
         CHECK(!spilled.empty());
@@ -845,7 +844,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
         CHECK(run_view(binary, {"--group-by", "cat", "--agg", "sum:dur",
-                                "--time-scale", "1000", env.get_dir()}) == 0);
+                                "--time-scale", "1000", env.dir()}) == 0);
     }
 
     TEST_CASE("select projects out unselected columns") {
@@ -858,14 +857,14 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
-        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String cap = env.dir() + "/cap.txt";
         dstd::String full, projected;
         dstd::Vector<dstd::String> agg = {"--group-by", "cat", "--agg",
                                           "count,sum:dur"};
         dstd::Vector<dstd::String> a1 = agg;
-        a1.insert(a1.end(), {env.get_dir()});
+        a1.insert(a1.end(), {env.dir()});
         dstd::Vector<dstd::String> a2 = agg;
-        a2.insert(a2.end(), {"--select", "cat,count", env.get_dir()});
+        a2.insert(a2.end(), {"--select", "cat,count", env.dir()});
         CHECK(run_view_capture(binary, a1, cap, full) == 0);
         CHECK(run_view_capture(binary, a2, cap, projected) == 0);
         CHECK(full.find("sum_dur") != dstd::String::npos);
@@ -885,15 +884,15 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
-        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String cap = env.dir() + "/cap.txt";
         dstd::Vector<dstd::String> q = {"--group-by", "cat", "--agg",
-                                        "count,sum:dur", env.get_dir()};
+                                        "count,sum:dur", env.dir()};
         dstd::String baseline, requery;
         CHECK(run_view_capture(binary, q, cap, baseline) == 0);
 
         dstd::Vector<dstd::String> mat = {"--group-by",    "cat",
                                           "--agg",         "count,sum:dur",
-                                          "--materialize", env.get_dir()};
+                                          "--materialize", env.dir()};
         CHECK(run_view(binary, mat) == 0);
 
         CHECK(run_view_capture(binary, q, cap, requery) == 0);
@@ -914,7 +913,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
         CHECK(run_view(binary, {"--group-by", "cat", "--agg", "count",
-                                "--collect-typed", env.get_dir()}) == 0);
+                                "--collect-typed", env.dir()}) == 0);
     }
 
     // --materialize is meaningless without an aggregation and must be rejected.
@@ -929,7 +928,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
         CHECK(run_view(binary, {"-q", R"(cat == "POSIX")", "--materialize",
-                                env.get_dir()}) != 0);
+                                env.dir()}) != 0);
     }
 
     // A single-member input larger than the checkpoint size is read through
@@ -949,12 +948,11 @@ TEST_SUITE("DFTracerView") {
         const auto orig_size = dstd::fs::file_size(orig).value();
 
         int rc = run_view(binary, {"--group-by", "cat", "--agg", "count",
-                                   "--checkpoint-size", "2048", env.get_dir()});
+                                   "--checkpoint-size", "2048", env.dir()});
         CHECK(rc == 0);
         CHECK(dstd::fs::file_size(orig).value() == orig_size);
-        CHECK_FALSE(dstd::fs::exists(env.get_dir() + "/split").value());
-        CHECK_FALSE(
-            dstd::fs::exists(env.get_dir() + "/.dftindex.split").value());
+        CHECK_FALSE(dstd::fs::exists(env.dir() + "/split").value());
+        CHECK_FALSE(dstd::fs::exists(env.dir() + "/.dftindex.split").value());
     }
 
     // A multi-member input whose members already fit under the checkpoint size
@@ -969,13 +967,11 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!make_multimember_pfw_gz(env, 200, 4096, 0).empty());
 
-        int rc =
-            run_view(binary, {"--group-by", "cat", "--agg", "count",
-                              "--checkpoint-size", "1048576", env.get_dir()});
+        int rc = run_view(binary, {"--group-by", "cat", "--agg", "count",
+                                   "--checkpoint-size", "1048576", env.dir()});
         CHECK(rc == 0);
-        CHECK_FALSE(dstd::fs::exists(env.get_dir() + "/split").value());
-        CHECK_FALSE(
-            dstd::fs::exists(env.get_dir() + "/.dftindex.split").value());
+        CHECK_FALSE(dstd::fs::exists(env.dir() + "/split").value());
+        CHECK_FALSE(dstd::fs::exists(env.dir() + "/.dftindex.split").value());
     }
 }
 

@@ -28,8 +28,8 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
         auto indexer =
             CheckpointIndexerFactory::create(gz_file, idx_file, 1024 * 1024);
         REQUIRE(indexer != nullptr);
-        CHECK(dstd::StringView(indexer->get_archive_path()) == gz_file);
-        CHECK(dstd::StringView(indexer->get_index_path()) == db_root);
+        CHECK(dstd::StringView(indexer->archive_path()) == gz_file);
+        CHECK(dstd::StringView(indexer->index_path()) == db_root);
     }
 
     SUBCASE("ReaderFactory creates valid reader") {
@@ -41,8 +41,8 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
         auto reader = ReaderFactory::create(indexer);
         REQUIRE(reader != nullptr);
         CHECK(reader->is_valid());
-        CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
-        CHECK(dstd::StringView(reader->get_index_path()) == db_root);
+        CHECK(dstd::StringView(reader->archive_path()) == gz_file);
+        CHECK(dstd::StringView(reader->index_path()) == db_root);
     }
 
     SUBCASE("Reader factory from files") {
@@ -77,24 +77,24 @@ TEST_CASE("Basic Reading Operations") {
     REQUIRE(reader != nullptr);
 
     SUBCASE("Basic metadata access") {
-        CHECK(reader->get_num_lines() > 0);
-        CHECK(reader->get_max_bytes() > 0);
-        MESSAGE("Lines: " << reader->get_num_lines()
-                          << ", Bytes: " << reader->get_max_bytes());
+        CHECK(reader->line_count() > 0);
+        CHECK(reader->max_bytes() > 0);
+        MESSAGE("Lines: " << reader->line_count()
+                          << ", Bytes: " << reader->max_bytes());
     }
 
     SUBCASE("Line-based reading") {
-        std::size_t num_lines = reader->get_num_lines();
-        if (num_lines > 0) {
+        std::size_t line_count = reader->line_count();
+        if (line_count > 0) {
             dstd::String content = reader->read_lines(
-                1, std::min(num_lines, static_cast<std::size_t>(5)));
+                1, std::min(line_count, static_cast<std::size_t>(5)));
             CHECK(!content.empty());
             CHECK(content.find("\"id\":") != dstd::String::npos);
         }
     }
 
     SUBCASE("Byte-based reading") {
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         if (max_bytes > 0) {
             dstd::Vector<char> buffer(1024);
             std::size_t bytes_read = reader->read(

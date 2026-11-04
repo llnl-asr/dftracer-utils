@@ -36,7 +36,7 @@ namespace dftracer::utils::utilities::arrow {
  * Supports buffer-level ZSTD decompression compatible with
  * pyarrow, polars, and this library's @ref IpcWriter.
  *
- * Sequence: open() -> num_batches() -> read_batch(i) [or read_all()]
+ * Sequence: open() -> batch_count() -> read_batch(i) [or read_all()]
  *
  * Move-only. Not thread-safe.
  */
@@ -59,7 +59,7 @@ class IpcReader {
     bool is_open() const noexcept { return mapped_data_ != nullptr; }
 
     /// Number of record batches in the file.
-    std::size_t num_batches() const noexcept { return num_batches_; }
+    std::size_t batch_count() const noexcept { return batch_count_; }
 
     /// Total rows across all batches.
     std::int64_t total_rows() const noexcept { return total_rows_; }
@@ -88,7 +88,7 @@ class IpcReader {
 
     /// Block metadata
     dstd::Vector<detail::IpcBlock> blocks_;
-    std::size_t num_batches_ = 0;
+    std::size_t batch_count_ = 0;
     std::int64_t total_rows_ = 0;
 
     void reset_state() noexcept;

@@ -476,7 +476,7 @@ TEST_CASE("Vectorscan and PCRE2 agree on non-ASCII and invalid UTF-8") {
 namespace {
 
 // Reference decoder: returns the length of the first scalar value at s, or 0.
-std::size_t ref_scalar_len(const dstd::String& s, std::size_t i) {
+std::size_t ref_scalar_size(const dstd::String& s, std::size_t i) {
     const auto b = [&](std::size_t k) {
         return static_cast<unsigned char>(s[i + k]);
     };
@@ -510,7 +510,7 @@ std::size_t ref_scalar_len(const dstd::String& s, std::size_t i) {
 
 bool ref_valid(const dstd::String& s) {
     for (std::size_t i = 0; i < s.size();) {
-        const std::size_t n = ref_scalar_len(s, i);
+        const std::size_t n = ref_scalar_size(s, i);
         if (n == 0) return false;
         i += n;
     }

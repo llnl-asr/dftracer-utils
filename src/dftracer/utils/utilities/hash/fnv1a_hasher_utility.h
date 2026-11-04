@@ -91,13 +91,13 @@ class Fnv1aHasherUtility {
     }
 
     /// The hash accumulated so far.
-    Hash get_hash() const { return current_hash_; }
+    Hash hash() const { return current_hash_; }
 
     /// Update with each argument in order and return the running hash.
     template <typename... Args>
     Hash process(const Args&... args) {
         (update(args), ...);
-        return get_hash();
+        return hash();
     }
 
    private:

@@ -139,9 +139,9 @@ class TraceReader {
     /// True if a `.dftindex` database was found at construction time.
     bool has_index() const;
     /// Decompressed size (0 if no index for compressed files).
-    std::size_t get_max_bytes();
+    std::size_t max_bytes();
     /// Total line count (0 if no index).
-    std::size_t get_num_lines();
+    std::size_t line_count();
 
     /// How many lines @ref read_json and @ref read_arrow could not read in full
     /// since this reader was made: lines that are no JSON or are cropped, and
@@ -165,7 +165,7 @@ class TraceReader {
     dstd::String index_path_;
     common::ArchiveFormat format_ = common::ArchiveFormat::Unknown;
     std::size_t cached_max_bytes_ = 0;
-    std::size_t cached_num_lines_ = 0;
+    std::size_t cached_line_count_ = 0;
     bool metadata_cached_ = false;
 
     std::atomic<std::size_t> dropped_lines_{0};
@@ -178,7 +178,7 @@ class TraceReader {
     // Logs one warning for the `local` unreadable lines of a finished read.
     void warn_dropped(std::size_t local) const;
 
-    dstd::SharedPtr<internal::Reader> create_indexed_reader();
+    dstd::SharedPtr<internal::Reader> make_indexed_reader();
 
     internal::StreamType resolve_raw_stream_type(
         const ReadConfig& config) const;

@@ -62,8 +62,7 @@ struct Hash<dftracer::utils::utilities::fileio::ChunkSpec> {
         hasher.update(spec.size_mb);
         hasher.update(spec.start_byte);
         hasher.update(spec.end_byte);
-        return static_cast<std::size_t>(
-            hash::splitmix64(hasher.get_hash().value));
+        return static_cast<std::size_t>(hash::splitmix64(hasher.hash().value));
     }
 };
 }  // namespace dftracer::utils::dstd

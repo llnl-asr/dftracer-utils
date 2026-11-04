@@ -23,18 +23,18 @@ class Reader {
     virtual ~Reader() = default;
 
     // Core metadata accessors
-    virtual std::size_t get_max_bytes() const = 0;
-    virtual std::size_t get_num_lines() const = 0;
-    virtual const dstd::String &get_archive_path() const = 0;
-    virtual const dstd::String &get_index_path() const = 0;
+    virtual std::size_t max_bytes() const = 0;
+    virtual std::size_t line_count() const = 0;
+    virtual const dstd::String &archive_path() const = 0;
+    virtual const dstd::String &index_path() const = 0;
     virtual void set_buffer_size(std::size_t size) = 0;
 
     // Estimate line count for a byte range (for pre-allocation)
     virtual std::size_t estimate_lines_in_range(std::size_t start_bytes,
                                                 std::size_t end_bytes) const {
-        if (get_max_bytes() == 0) return 0;
-        double lines_per_byte = static_cast<double>(get_num_lines()) /
-                                static_cast<double>(get_max_bytes());
+        if (max_bytes() == 0) return 0;
+        double lines_per_byte = static_cast<double>(line_count()) /
+                                static_cast<double>(max_bytes());
         double byte_range = static_cast<double>(end_bytes - start_bytes);
         return static_cast<std::size_t>(byte_range * lines_per_byte *
                                         1.1);  // 10% buffer
@@ -116,7 +116,7 @@ class Reader {
     virtual bool is_valid() const = 0;
 
     // Format identification
-    virtual dstd::String get_format_name() const = 0;
+    virtual dstd::String format_name() const = 0;
 
    protected:
     Reader() = default;

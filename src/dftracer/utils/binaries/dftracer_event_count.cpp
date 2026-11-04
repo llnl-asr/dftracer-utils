@@ -85,7 +85,7 @@ IndexedCounts count_from_index(dstd::StringView index_path,
                 file ? common::unwrap(dftracer::utils::index::scalar_stats(
                            snapshot, *file))
                      : dstd::nullopt;
-            if (stats && stats->num_chunks > 0) {
+            if (stats && stats->chunk_count > 0) {
                 counts.total_events +=
                     static_cast<std::size_t>(stats->stats.total_events);
                 counts.files_counted++;

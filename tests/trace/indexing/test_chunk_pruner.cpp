@@ -136,7 +136,7 @@ static void populate_test_idx(
         dftu_utils_test::put_file_bloom(
             writer, "name",
             dstd::Span<const unsigned char>(blob.data(), blob.size()),
-            bloom.num_entries());
+            bloom.entry_count());
     }
 
     dftu_utils_test::mark_built(writer);

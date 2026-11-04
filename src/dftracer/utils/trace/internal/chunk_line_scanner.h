@@ -43,10 +43,10 @@ dftracer::utils::coro::CoroTask<void> scan_chunk_lines(Stream& stream,
             // are the file's last line, which has none.
             if (!newline) newline = data + bytes_read;
 
-            const std::size_t line_len =
+            const std::size_t line_size =
                 static_cast<std::size_t>(newline - line_start);
-            if (line_len > 0) {
-                per_line(dstd::StringView(line_start, line_len), line_index);
+            if (line_size > 0) {
+                per_line(dstd::StringView(line_start, line_size), line_index);
             }
 
             pos = static_cast<std::size_t>(newline - data) + 1;

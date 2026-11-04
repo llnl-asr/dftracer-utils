@@ -24,14 +24,14 @@ namespace {
 // Inputs live in their own folder: split reads every subfolder of -d, so an
 // output folder inside it would be read back as input by the next run.
 dstd::String input_dir(dftu_utils_test::TestEnvironment& env) {
-    const dstd::String dir = env.get_dir() + "/in";
+    const dstd::String dir = env.dir() + "/in";
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     return dir;
 }
 
 dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                           int num_events, int id) {
-    auto trace_gz = env.create_dft_test_gzip_file(num_events);
+                           int event_count, int id) {
+    auto trace_gz = env.create_dft_test_gzip_file(event_count);
     if (trace_gz.empty()) return "";
 
     dstd::String pfw_path =
@@ -154,7 +154,7 @@ TEST_SUITE("DFTracerSplit") {
         auto f = create_pfw_gz(env, 100, 0);
         REQUIRE(!f.empty());
 
-        dstd::String out_dir = env.get_dir() + "/split_out";
+        dstd::String out_dir = env.dir() + "/split_out";
         int rc = run_split(
             binary, {input_dir(env), "-o", out_dir, "--disable-watchdog"});
         CHECK(rc == 0);
@@ -178,7 +178,7 @@ TEST_SUITE("DFTracerSplit") {
 
         // Small checkpoint (member) size over several MB of events -> many
         // members. checkpoint-size is the gzip member size.
-        dstd::String mm = env.get_dir() + "/split_mm";
+        dstd::String mm = env.dir() + "/split_mm";
         int rc =
             run_split(binary, {input_dir(env), "-o", mm, "--checkpoint-size",
                                "1048576", "--disable-watchdog"});
@@ -187,7 +187,7 @@ TEST_SUITE("DFTracerSplit") {
         CHECK(count_gzip_members(mm) >= 2);
 
         // A checkpoint larger than the data -> one member per output file.
-        dstd::String sm = env.get_dir() + "/split_sm";
+        dstd::String sm = env.dir() + "/split_sm";
         rc = run_split(binary, {input_dir(env), "-o", sm, "--checkpoint-size",
                                 "1073741824", "--disable-watchdog"});
         CHECK(rc == 0);
@@ -206,7 +206,7 @@ TEST_SUITE("DFTracerSplit") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 40000, 0).empty());
 
-        dstd::String one = env.get_dir() + "/split_one";
+        dstd::String one = env.dir() + "/split_one";
         int rc = run_split(binary,
                            {input_dir(env), "-o", one, "--disable-watchdog"});
         CHECK(rc == 0);
@@ -214,7 +214,7 @@ TEST_SUITE("DFTracerSplit") {
 
         // 64 KB of gzip is a few MB of events; a chunk ends at a member end
         // past that, so 256 KB members give several chunk files.
-        dstd::String many = env.get_dir() + "/split_many";
+        dstd::String many = env.dir() + "/split_many";
         rc = run_split(binary,
                        {input_dir(env), "-o", many, "--chunk-size", "64KB",
                         "--checkpoint-size", "262144", "--disable-watchdog"});
@@ -237,7 +237,7 @@ TEST_SUITE("DFTracerSplit") {
         REQUIRE(!create_pfw_gz(env, 1000, 0).empty());
 
         dftu_utils_test::set_test_library_path(binary);
-        const dstd::String out = env.get_dir() + "/split_bare";
+        const dstd::String out = env.dir() + "/split_bare";
         int rc = -1;
         const dstd::String text = dftu_utils_test::run_process_capture(
             binary,
@@ -264,13 +264,13 @@ TEST_SUITE("DFTracerSplit") {
             REQUIRE(!create_pfw_gz(env, 5000, id).empty());
         }
 
-        dstd::String open_dir = env.get_dir() + "/split_open";
+        dstd::String open_dir = env.dir() + "/split_open";
         int rc = run_split(binary, {input_dir(env), "-o", open_dir, "--verify",
                                     "--disable-watchdog"});
         CHECK(rc == 0);
         REQUIRE(dstd::fs::exists(open_dir).value());
 
-        dstd::String tight_dir = env.get_dir() + "/split_tight";
+        dstd::String tight_dir = env.dir() + "/split_tight";
         rc = run_split(
             binary, {input_dir(env), "-o", tight_dir, "--memory-budget", "1MB",
                      "--verify", "--disable-watchdog"});
@@ -295,7 +295,7 @@ TEST_SUITE("DFTracerSplit") {
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
         REQUIRE(!create_pfw_gz(env, 50, 1).empty());
 
-        dstd::String out_dir = env.get_dir() + "/split_verify";
+        dstd::String out_dir = env.dir() + "/split_verify";
         int rc = run_split(binary, {input_dir(env), "-o", out_dir, "--verify",
                                     "--disable-watchdog"});
         CHECK(rc == 0);
@@ -311,11 +311,11 @@ TEST_SUITE("DFTracerSplit") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        const int num_events = 80;
-        auto f = create_pfw_gz(env, num_events, 0);
+        const int event_count = 80;
+        auto f = create_pfw_gz(env, event_count, 0);
         REQUIRE(!f.empty());
 
-        dstd::String out_dir = env.get_dir() + "/split_lines";
+        dstd::String out_dir = env.dir() + "/split_lines";
         int rc = run_split(
             binary, {input_dir(env), "-o", out_dir, "--disable-watchdog"});
         CHECK(rc == 0);
@@ -324,7 +324,7 @@ TEST_SUITE("DFTracerSplit") {
         int total_lines = count_gz_lines_in_dir(out_dir);
         // Split output contains all events plus possible metadata lines.
         // Must have at least as many lines as events.
-        CHECK(total_lines >= num_events);
+        CHECK(total_lines >= event_count);
     }
 
     TEST_CASE("split multiple input files") {
@@ -340,7 +340,7 @@ TEST_SUITE("DFTracerSplit") {
         REQUIRE(!create_pfw_gz(env, 30, 0).empty());
         REQUIRE(!create_pfw_gz(env, 30, 1).empty());
 
-        dstd::String out_dir = env.get_dir() + "/split_multi";
+        dstd::String out_dir = env.dir() + "/split_multi";
         int rc = run_split(
             binary, {input_dir(env), "-o", out_dir, "--disable-watchdog"});
         CHECK(rc == 0);
@@ -383,7 +383,7 @@ TEST_SUITE("DFTracerSplit") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        dstd::String out_dir = env.get_dir() + "/split_empty";
+        dstd::String out_dir = env.dir() + "/split_empty";
         int rc = run_split(
             binary, {input_dir(env), "-o", out_dir, "--disable-watchdog"});
         CHECK(rc != 0);
@@ -404,7 +404,7 @@ TEST_SUITE("DFTracerSplit") {
             plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
         }
 
-        dstd::String out_dir = env.get_dir() + "/split_plain";
+        dstd::String out_dir = env.dir() + "/split_plain";
         int rc = run_split(
             binary, {input_dir(env), "-o", out_dir, "--disable-watchdog"});
         CHECK(rc != 0);
@@ -430,7 +430,7 @@ TEST_SUITE("DFTracerSplit") {
         int rc = 0;
         const dstd::String out = dftu_utils_test::run_process_capture(
             binary,
-            {input_dir(env), "-o", env.get_dir() + "/split_plain",
+            {input_dir(env), "-o", env.dir() + "/split_plain",
              "--disable-watchdog"},
             true, &rc);
         CHECK(rc != 0);

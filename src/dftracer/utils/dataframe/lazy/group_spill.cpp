@@ -221,7 +221,7 @@ class GroupByCursor : public Cursor {
             out_names_ = r.names;
             result_ = to_morsel(r);
         } else {
-            if (agg_num_groups(*state) > 0) spill_state(*state);
+            if (agg_group_count(*state) > 0) spill_state(*state);
             for (std::size_t p = 0; p < part_out_.size(); ++p) {
                 std::FILE* f = part_out_[p].release();
                 if (!f || std::fclose(f) != 0)
@@ -366,7 +366,7 @@ class GroupByCursor : public Cursor {
                          }
                          return true;
                      });
-        if (agg_num_groups(*acc) > 0)
+        if (agg_group_count(*acc) > 0)
             write_split(*acc, out, bytes, part.depth + 1);
         for (std::size_t p = 0; p < out.size(); ++p) {
             std::FILE* f = out[p].release();
@@ -407,7 +407,7 @@ class GroupByCursor : public Cursor {
                 split_part(part);
                 continue;
             }
-            if (agg_num_groups(*merged) == 0) continue;
+            if (agg_group_count(*merged) == 0) continue;
             DataFrame r = dyn_specs_.empty()
                               ? agg_finalize(*merged, keys_)
                               : agg_finalize(*merged, keys_, layout_);
@@ -532,7 +532,7 @@ class GroupByDynamicCursor : public Cursor {
 
     // Hands on the windows no later row can reach and keeps the others.
     void close_windows() {
-        if (!seen_ || agg_num_groups(*state_) == 0) return;
+        if (!seen_ || agg_group_count(*state_) == 0) return;
         DataFrame all = agg_finalize(*state_, time_col_);
         const std::int64_t* start = all.columns.front().data<std::int64_t>();
         dstd::Vector<std::int64_t> closed, open;

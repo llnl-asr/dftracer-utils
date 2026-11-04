@@ -29,7 +29,7 @@ class PipelineError : public common::DFTUtilsException {
                                     format_message(type, message)),
           type_(type) {}
 
-    inline Type get_type() const { return type_; }
+    inline Type type() const { return type_; }
 
    private:
     Type type_;

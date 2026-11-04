@@ -86,8 +86,8 @@ TEST_SUITE("BootstrapParallelism") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i)
-            files.push_back(write_trace(env.get_dir(), i));
-        const auto index_dir = env.get_dir() + "/idx";
+            files.push_back(write_trace(env.dir(), i));
+        const auto index_dir = env.dir() + "/idx";
 
         configure_default_runtime({.threads = WORKERS, .eager = true});
         REQUIRE(default_runtime().threads() == WORKERS);
@@ -115,8 +115,8 @@ TEST_SUITE("BootstrapParallelism") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i)
-            files.push_back(write_trace(env.get_dir(), i));
-        const auto index_dir = env.get_dir() + "/idx";
+            files.push_back(write_trace(env.dir(), i));
+        const auto index_dir = env.dir() + "/idx";
 
         configure_default_runtime({.threads = WORKERS, .eager = true});
         const auto store_opens_before =

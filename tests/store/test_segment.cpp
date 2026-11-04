@@ -68,8 +68,8 @@ std::uint32_t read_u32_le_at(dstd::ByteView bytes, std::size_t offset) {
            (static_cast<std::uint32_t>(data[offset + 3U]) << 24U);
 }
 
-dstd::String random_bytes(std::mt19937_64& rng, std::size_t max_length) {
-    std::uniform_int_distribution<std::size_t> length_dist(0, max_length);
+dstd::String random_bytes(std::mt19937_64& rng, std::size_t max_size) {
+    std::uniform_int_distribution<std::size_t> length_dist(0, max_size);
     std::uniform_int_distribution<unsigned> byte_dist(0, 255);
     dstd::String out(length_dist(rng), '\0');
     for (char& c : out) c = static_cast<char>(byte_dist(rng));
@@ -471,7 +471,7 @@ TEST_SUITE("index store segment") {
         REQUIRE(view.granule_count() > 4);
         const std::uint32_t length = static_cast<std::uint32_t>(sealed->size());
         const std::uint32_t head_bytes =
-            engine::SegmentView::head_length(view_of(*sealed));
+            engine::SegmentView::head_size(view_of(*sealed));
         REQUIRE(head_bytes > 0);
         REQUIRE(head_bytes < sealed->size());
         const dstd::ByteView head{sealed->data(), head_bytes};
@@ -532,7 +532,7 @@ TEST_SUITE("index store segment") {
         REQUIRE(sealed.has_value());
         const std::uint32_t length = static_cast<std::uint32_t>(sealed->size());
         const std::uint32_t head_bytes =
-            engine::SegmentView::head_length(view_of(*sealed));
+            engine::SegmentView::head_size(view_of(*sealed));
         REQUIRE(head_bytes > 0);
         const dstd::ByteView head{sealed->data(), head_bytes};
 
@@ -607,7 +607,7 @@ TEST_SUITE("index store segment") {
         REQUIRE(sealed.has_value());
         const std::uint32_t length = static_cast<std::uint32_t>(sealed->size());
         const std::uint32_t head_bytes =
-            engine::SegmentView::head_length(view_of(*sealed));
+            engine::SegmentView::head_size(view_of(*sealed));
         REQUIRE(head_bytes > 0);
         const dstd::String key = "key-3";
 
@@ -623,14 +623,14 @@ TEST_SUITE("index store segment") {
         SUBCASE("a magic that is not a segment magic") {
             dstd::Vector<std::uint8_t> bad(sealed->begin(), sealed->end());
             bad[0] = 'X';
-            CHECK(engine::SegmentView::head_length(
+            CHECK(engine::SegmentView::head_size(
                       dstd::ByteView{bad.data(), head_bytes}) == 0);
             refuses(bad, head_bytes);
         }
         SUBCASE("a reserved byte of the header set") {
             dstd::Vector<std::uint8_t> bad(sealed->begin(), sealed->end());
             bad[17] = 1;
-            CHECK(engine::SegmentView::head_length(
+            CHECK(engine::SegmentView::head_size(
                       dstd::ByteView{bad.data(), head_bytes}) == 0);
             refuses(bad, head_bytes);
         }
@@ -646,7 +646,7 @@ TEST_SUITE("index store segment") {
         SUBCASE("an index entry that runs past the head") {
             dstd::Vector<std::uint8_t> bad(sealed->begin(), sealed->end());
             bad.resize(head_bytes - 1);
-            CHECK(engine::SegmentView::head_length(
+            CHECK(engine::SegmentView::head_size(
                       dstd::ByteView{bad.data(), bad.size()}) == 0);
             refuses(bad, static_cast<std::uint32_t>(bad.size()));
         }

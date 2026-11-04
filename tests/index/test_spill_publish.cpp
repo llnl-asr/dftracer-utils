@@ -92,8 +92,8 @@ dstd::String index_root(const dstd::String& file, const dstd::String& dir) {
 TEST_SUITE("SpillPublish") {
     TEST_CASE("a spilled file is never visible without its tier") {
         dftu_utils_test::TestEnvironment env(10);
-        const auto file = write_trace(env.get_dir(), "spill", 12000);
-        const auto dir = env.get_dir() + "/idx";
+        const auto file = write_trace(env.dir(), "spill", 12000);
+        const auto dir = env.dir() + "/idx";
         const auto logical = index::store::internal::get_logical_path(file);
         auto index = index::Index::open(index_root(file, dir));
         REQUIRE(index);
@@ -135,8 +135,8 @@ TEST_SUITE("SpillPublish") {
 
     TEST_CASE("a file written through is never visible without its rows") {
         dftu_utils_test::TestEnvironment env(10);
-        const auto file = write_trace(env.get_dir(), "through", 12000);
-        const auto dir = env.get_dir() + "/idx";
+        const auto file = write_trace(env.dir(), "through", 12000);
+        const auto dir = env.dir() + "/idx";
         const auto logical = index::store::internal::get_logical_path(file);
         const auto path =
             dstd::String(trace::internal::determine_index_path(file, dir));
@@ -196,8 +196,8 @@ TEST_SUITE("SpillPublish") {
              {memory::NO_SPILL_BUDGET, std::uint64_t{1 * MIB}}) {
             CAPTURE(budget);
             dftu_utils_test::TestEnvironment env(10);
-            const auto file = write_trace(env.get_dir(), "plugin", 12000);
-            const auto dir = env.get_dir() + "/idx";
+            const auto file = write_trace(env.dir(), "plugin", 12000);
+            const auto dir = env.dir() + "/idx";
             const auto logical = index::store::internal::get_logical_path(file);
             REQUIRE(run_build(file, dir, budget).indexed == 1);
 

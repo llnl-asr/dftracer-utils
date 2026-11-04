@@ -238,20 +238,21 @@ AggregatedTraces load_aggregated_traces(
     }
     std::sort(rank_pids.begin(), rank_pids.end());
     out.rank_pids = rank_pids;
-    out.num_ranks = static_cast<int>(rank_pids.size());
+    out.rank_count = static_cast<int>(rank_pids.size());
 
     // Per-rank traces.
     out.fetch_block_trace = flatten_per_rank(acc_fetch_block, rank_pids);
     out.fetch_iter_trace = flatten_per_rank(acc_fetch_iter, rank_pids);
     out.getitem_trace = flatten_per_rank(acc_getitem, rank_pids);
 
-    // num_steps = min length across ranks (conservative — drop straggler
+    // step_count = min length across ranks (conservative — drop straggler
     // steps).
-    out.num_steps = out.num_ranks > 0
-                        ? static_cast<int>(out.fetch_block_trace.front().size())
-                        : 0;
+    out.step_count =
+        out.rank_count > 0
+            ? static_cast<int>(out.fetch_block_trace.front().size())
+            : 0;
     for (const auto& r : out.fetch_block_trace) {
-        out.num_steps = std::min(out.num_steps, static_cast<int>(r.size()));
+        out.step_count = std::min(out.step_count, static_cast<int>(r.size()));
     }
 
     // Flat fitting arrays.
@@ -289,7 +290,7 @@ AggregatedTraces load_aggregated_traces(
     // Trace-side ComponentTimeMetrics: accumulated + union (in seconds).
     auto fill_metrics = [](ComponentTimeMetrics& m, ComponentAccumulator& a) {
         m.accumulated_time = a.accumulated_time_s;
-        m.num_samples = a.total_count;
+        m.sample_count = a.total_count;
         m.union_time = sweep_union(a.boundaries);  // returns seconds
     };
     fill_metrics(out.trace_fetch_block_metrics, acc_fetch_block);
@@ -332,11 +333,11 @@ AggregatedTraces load_aggregated_traces(
 }
 
 BarrierSimulatorContext make_simulator_context(const AggregatedTraces& traces,
-                                               int num_workers,
+                                               int worker_count,
                                                int prefetch_factor) {
     BarrierSimulatorContext ctx;
-    ctx.num_ranks = traces.num_ranks;
-    ctx.num_steps = traces.num_steps;
+    ctx.rank_count = traces.rank_count;
+    ctx.step_count = traces.step_count;
     ctx.is_aggregated_trace = true;
     ctx.sync_mode = false;
 
@@ -359,7 +360,7 @@ BarrierSimulatorContext make_simulator_context(const AggregatedTraces& traces,
     ctx.trace_rank_variance = traces.trace_rank_variance;
     ctx.trace_per_rank_throughput = traces.trace_per_rank_throughput;
 
-    ctx.num_workers = num_workers;
+    ctx.worker_count = worker_count;
     ctx.prefetch_factor = prefetch_factor;
     return ctx;
 }

@@ -431,13 +431,13 @@ TEST_CASE("PatternDirectoryScannerUtility - Performance") {
     auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Many files with pattern matching") {
-        const int num_txt_files = 50;
-        const int num_dat_files = 50;
+        const int txt_file_count = 50;
+        const int dat_file_count = 50;
 
-        for (int i = 0; i < num_txt_files; ++i) {
+        for (int i = 0; i < txt_file_count; ++i) {
             fixture.create_file("file" + dstd::to_string(i) + ".txt");
         }
-        for (int i = 0; i < num_dat_files; ++i) {
+        for (int i = 0; i < dat_file_count; ++i) {
             fixture.create_file("data" + dstd::to_string(i) + ".dat");
         }
 
@@ -445,7 +445,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Performance") {
             fixture.str(), {".txt"}, false};
         auto result = run_scan(*scanner, input);
 
-        CHECK(result.size() == num_txt_files);
+        CHECK(result.size() == txt_file_count);
     }
 
     SUBCASE("Deep recursive scan with filtering") {

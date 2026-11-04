@@ -19,10 +19,10 @@ namespace dftracer::utils::trace::internal {
 // time and size.
 struct IndexedFile {
     dstd::Pair<std::int64_t, std::uint64_t> stamp;
-    std::size_t num_lines = 0;
+    std::size_t line_count = 0;
     std::uint64_t max_bytes = 0;
     std::uint64_t checkpoint_size = 0;
-    std::size_t num_checkpoints = 0;
+    std::size_t checkpoint_count = 0;
 };
 
 // `gate` is a FIFO reader-writer gate. A freshness check holds one permit, and

@@ -1060,11 +1060,11 @@ int main(int argc, char** argv) {
 
     // concat_columns: many large parts, each a disjoint memcpy destination.
     const std::int64_t nparts = 256;
-    const std::int64_t part_len = rows / nparts;
+    const std::int64_t part_size = rows / nparts;
     dftracer::utils::dstd::Vector<Series> parts;
     parts.reserve(static_cast<std::size_t>(nparts));
     for (std::int64_t p = 0; p < nparts; ++p)
-        parts.push_back(Series::flat_i64(v.data() + p * part_len, part_len));
+        parts.push_back(Series::flat_i64(v.data() + p * part_size, part_size));
     dftracer::utils::dstd::Vector<const Series*> part_ptrs;
     for (const Series& part : parts) part_ptrs.push_back(&part);
     auto time_concat = [&](int reps) {

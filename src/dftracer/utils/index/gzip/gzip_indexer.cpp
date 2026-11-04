@@ -68,7 +68,7 @@ struct ParallelInflateMsg {
     std::uint64_t member_c_end = 0;
     // Uncompressed bytes of this chunk; `data` holds them only when a visitor
     // reads them.
-    std::uint64_t data_len = 0;
+    std::uint64_t data_size = 0;
     // This chunk is the recovered prefix of a member cut at end of file.
     bool truncated = false;
     // Bytes of a partial last line that earlier pieces of a cut member sent
@@ -99,8 +99,8 @@ static void drop_front(Bytes& b, std::size_t n) noexcept {
 static dftracer::utils::coro::CoroTask<dstd::Optional<std::uint64_t>>
 decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
                  const utilities::fileio::compress::GzipMemberDecompressor& dec,
-                 Bytes& out, Bytes& comp, std::size_t& out_len, bool& truncated,
-                 std::size_t max_out, bool& too_big) {
+                 Bytes& out, Bytes& comp, std::size_t& out_size,
+                 bool& truncated, std::size_t max_out, bool& too_big) {
     truncated = false;
     too_big = false;
     constexpr std::size_t READ_CHUNK = 1u << 20;
@@ -133,7 +133,7 @@ decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
             if (!keep) co_return dstd::nullopt;
             out.resize(cut.size());
             std::memcpy(out.data(), cut.data(), cut.size());
-            out_len = *keep;
+            out_size = *keep;
             truncated = true;
             co_return static_cast<std::uint64_t>(comp.size());
         }
@@ -150,7 +150,7 @@ decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
         comp.resize(old + static_cast<std::size_t>(n));
         next_read += static_cast<std::uint64_t>(n);
     }
-    out_len = res.out_bytes;
+    out_size = res.out_bytes;
     co_return res.in_bytes;
 }
 
@@ -312,7 +312,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
         while (last > start && data[last - 1] != '\n') --last;
         since_newline = last > start ? data.size() - last
                                      : since_newline + (data.size() - start);
-        msg.data_len = data.size() - start;
+        msg.data_size = data.size() - start;
         if (ship_bytes) {
             drop_front(data, start);
             msg.data = std::move(buf);
@@ -466,7 +466,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
             known->isize <= known->c_size * MAX_DEFLATE_RATIO;
         bool stream_it =
             span >= ckpt_size / 8 || (size_known && known->isize > bound);
-        std::size_t out_len = 0;
+        std::size_t out_size = 0;
         bool truncated = false;
         Bytes& out = *buf;
         dstd::Optional<std::uint64_t> in_bytes;
@@ -479,7 +479,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
             bool too_big = false;
             in_bytes =
                 co_await decode_member_at(fd, c_off, file_size, dec, out, comp,
-                                          out_len, truncated, bound, too_big);
+                                          out_size, truncated, bound, too_big);
             if (too_big) {
                 stream_it = true;
             } else if (!in_bytes) {
@@ -502,7 +502,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
                                                range_c_end);
             continue;
         }
-        if (truncated && out_len == 0) {
+        if (truncated && out_size == 0) {
             ParallelInflateMsg msg;
             msg.seq = seq++;
             msg.truncated = true;
@@ -515,8 +515,8 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         // line that began in the previous slice); drop up to its first \n so
         // the dispatcher sees a clean start.
         if (strip_leading_partial && first) {
-            emit_start = out_len;
-            for (std::size_t i = 0; i < out_len; ++i) {
+            emit_start = out_size;
+            for (std::size_t i = 0; i < out_size; ++i) {
                 if (out[i] == '\n') {
                     emit_start = i + 1;
                     break;
@@ -525,13 +525,13 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         }
         first = false;
 
-        const std::size_t emit_len = out_len - emit_start;
+        const std::size_t emit_size = out_size - emit_start;
         ParallelInflateMsg msg;
         msg.seq = seq++;
-        msg.lines = count_newlines(out.data() + emit_start, emit_len);
-        msg.data_len = emit_len;
+        msg.lines = count_newlines(out.data() + emit_start, emit_size);
+        msg.data_size = emit_size;
         if (ship_bytes) {
-            out.resize(out_len);
+            out.resize(out_size);
             drop_front(out, emit_start);
             msg.data = std::move(buf);
             buf = buffers.take();
@@ -550,15 +550,15 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
     // \n. No member record for it (member_ended stays false).
     Bytes& out = *buf;
     if (extend_to_newline_past_end && range_c_end < file_size) {
-        std::size_t out_len = 0;
+        std::size_t out_size = 0;
         bool truncated = false;
         bool too_big = false;
         auto in_bytes = co_await decode_member_at(
-            fd, range_c_end, file_size, dec, out, comp, out_len, truncated,
+            fd, range_c_end, file_size, dec, out, comp, out_size, truncated,
             std::numeric_limits<std::size_t>::max(), too_big);
         if (!in_bytes) co_return false;
-        std::size_t take = out_len;
-        for (std::size_t i = 0; i < out_len; ++i) {
+        std::size_t take = out_size;
+        for (std::size_t i = 0; i < out_size; ++i) {
             if (out[i] == '\n') {
                 take = i + 1;
                 break;
@@ -567,7 +567,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         ParallelInflateMsg msg;
         msg.seq = seq++;
         msg.lines = count_newlines(out.data(), take);
-        msg.data_len = take;
+        msg.data_size = take;
         if (ship_bytes) {
             msg.data = dstd::make_unique<Bytes>(take);
             std::memcpy(msg.data->data(), out.data(), take);
@@ -700,11 +700,11 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
 
     auto process_msg =
         [&](ParallelInflateMsg& msg) -> dftracer::utils::coro::CoroTask<void> {
-        const std::size_t data_len = static_cast<std::size_t>(msg.data_len);
+        const std::size_t data_size = static_cast<std::size_t>(msg.data_size);
         ++total_chunks_received;
         if (msg.truncated) {
             truncated = true;
-            recovered_bytes += data_len;
+            recovered_bytes += data_size;
         }
         if (msg.drop_tail > 0) {
             std::uint64_t left = msg.drop_tail;
@@ -726,14 +726,14 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
             member_uc_start = global_uc;
         }
 
-        if (has_visitors && data_len > 0) {
+        if (has_visitors && data_size > 0) {
             const char* data = reinterpret_cast<const char*>(msg.data->data());
             for (auto& v : visitors) {
-                co_await v.get().on_chunk(data, data_len, member_idx);
+                co_await v.get().on_chunk(data, data_size, member_idx);
             }
         }
 
-        global_uc += data_len;
+        global_uc += data_size;
         total_lines += msg.lines;
 
         if (msg.member_ended || msg.restart) {
@@ -901,12 +901,12 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
                     std::max<std::uint64_t>(ckpt_size / 4, 1));
     const std::size_t hw =
         std::max<std::size_t>(1, common::available_parallelism());
-    const std::size_t num_workers = std::min<std::size_t>(
+    const std::size_t worker_count = std::min<std::size_t>(
         {ways > 0 ? ways : DEFAULT_MAX_WORKERS, ranges.size(), hw});
     // Two ranges past the workers' keep them busy while the dispatcher
     // consumes the oldest; each range in the window holds its plaintext.
-    InflatePlan plan(std::min<std::size_t>(num_workers + 2, ranges.size()),
-                     num_workers);
+    InflatePlan plan(std::min<std::size_t>(worker_count + 2, ranges.size()),
+                     worker_count);
     plan.fd = fd;
     plan.file_size = file_size;
     plan.ckpt_size = ckpt_size;
@@ -925,7 +925,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
     InflatePlan* plan_ptr = &plan;
     co_await coro::with_scope(
         [&](coro::Scope& child) -> dftracer::utils::coro::CoroTask<void> {
-            for (std::size_t w = 0; w < num_workers; ++w)
+            for (std::size_t w = 0; w < worker_count; ++w)
                 child.spawn([plan_ptr]() { return range_worker(plan_ptr); });
             // In the body, not spawned, so its error leaves the scope after the
             // workers are joined.
@@ -1092,8 +1092,8 @@ GzipIndexer::GzipIndexer(const dstd::String& gz_path,
       cached_is_valid_(false),
       cached_max_bytes_(0),
       cached_max_bytes_ready_(false),
-      cached_num_lines_(0),
-      cached_num_lines_ready_(false),
+      cached_line_count_(0),
+      cached_line_count_ready_(false),
       cached_checkpoint_size_(0),
       cached_checkpoint_size_ready_(false) {
     if (gz_path_.empty()) {
@@ -1133,8 +1133,8 @@ GzipIndexer::GzipIndexer(GzipIndexer&& other) noexcept
       cached_is_valid_(other.cached_is_valid_.load()),
       cached_max_bytes_(other.cached_max_bytes_.load()),
       cached_max_bytes_ready_(other.cached_max_bytes_ready_.load()),
-      cached_num_lines_(other.cached_num_lines_.load()),
-      cached_num_lines_ready_(other.cached_num_lines_ready_.load()),
+      cached_line_count_(other.cached_line_count_.load()),
+      cached_line_count_ready_(other.cached_line_count_ready_.load()),
       cached_checkpoint_size_(other.cached_checkpoint_size_.load()),
       cached_checkpoint_size_ready_(other.cached_checkpoint_size_ready_.load()),
       cached_members_(std::move(other.cached_members_)),
@@ -1153,8 +1153,8 @@ GzipIndexer& GzipIndexer::operator=(GzipIndexer&& other) noexcept {
         cached_is_valid_.store(other.cached_is_valid_.load());
         cached_max_bytes_.store(other.cached_max_bytes_.load());
         cached_max_bytes_ready_.store(other.cached_max_bytes_ready_.load());
-        cached_num_lines_.store(other.cached_num_lines_.load());
-        cached_num_lines_ready_.store(other.cached_num_lines_ready_.load());
+        cached_line_count_.store(other.cached_line_count_.load());
+        cached_line_count_ready_.store(other.cached_line_count_ready_.load());
         cached_checkpoint_size_.store(other.cached_checkpoint_size_.load());
         cached_checkpoint_size_ready_.store(
             other.cached_checkpoint_size_ready_.load());
@@ -1241,8 +1241,8 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
                 common::unwrap(index::file_metadata(*snapshot, *file)))
             metadata = *stored;
     }
-    cached_num_lines_ = metadata.num_lines;
-    cached_num_lines_ready_ = true;
+    cached_line_count_ = metadata.line_count;
+    cached_line_count_ready_ = true;
     cached_max_bytes_ = metadata.max_bytes;
     cached_max_bytes_ready_ = true;
     std::lock_guard<std::mutex> lock(cached_members_mutex_);
@@ -1310,11 +1310,11 @@ bool GzipIndexer::need_rebuild() const {
     }
 }
 
-const dstd::String& GzipIndexer::get_index_path() const { return index_path_; }
+const dstd::String& GzipIndexer::index_path() const { return index_path_; }
 
-const dstd::String& GzipIndexer::get_archive_path() const { return gz_path_; }
+const dstd::String& GzipIndexer::archive_path() const { return gz_path_; }
 
-const dstd::String& GzipIndexer::get_gz_path() const { return gz_path_; }
+const dstd::String& GzipIndexer::gz_path() const { return gz_path_; }
 
 void GzipIndexer::ensure_loaded() const {
     if (cached_loaded_.load(std::memory_order_acquire)) {
@@ -1331,8 +1331,9 @@ void GzipIndexer::ensure_loaded() const {
         store::FileMetadataResult metadata;
         if (auto stored = common::unwrap(index::file_metadata(snapshot, *file)))
             metadata = *stored;
-        cached_num_lines_.store(metadata.num_lines, std::memory_order_relaxed);
-        cached_num_lines_ready_.store(true, std::memory_order_relaxed);
+        cached_line_count_.store(metadata.line_count,
+                                 std::memory_order_relaxed);
+        cached_line_count_ready_.store(true, std::memory_order_relaxed);
         cached_max_bytes_.store(metadata.max_bytes, std::memory_order_relaxed);
         cached_max_bytes_ready_.store(true, std::memory_order_relaxed);
         cached_checkpoint_size_.store(metadata.checkpoint_size,
@@ -1349,19 +1350,19 @@ void GzipIndexer::ensure_loaded() const {
     cached_loaded_.store(true, std::memory_order_release);
 }
 
-std::uint64_t GzipIndexer::get_max_bytes() const {
+std::uint64_t GzipIndexer::max_bytes() const {
     ensure_loaded();
     return cached_max_bytes_.load(std::memory_order_relaxed);
 }
 
-std::uint64_t GzipIndexer::get_checkpoint_size() const {
+std::uint64_t GzipIndexer::checkpoint_size() const {
     ensure_loaded();
     return cached_checkpoint_size_.load(std::memory_order_relaxed);
 }
 
-std::uint64_t GzipIndexer::get_num_lines() const {
+std::uint64_t GzipIndexer::line_count() const {
     ensure_loaded();
-    return cached_num_lines_.load(std::memory_order_relaxed);
+    return cached_line_count_.load(std::memory_order_relaxed);
 }
 
 bool GzipIndexer::find_member(std::size_t target_offset,
@@ -1377,7 +1378,7 @@ bool GzipIndexer::find_member(std::size_t target_offset,
     return false;
 }
 
-dstd::Vector<GzipMemberRecord> GzipIndexer::get_members() const {
+dstd::Vector<GzipMemberRecord> GzipIndexer::members() const {
     ensure_loaded();
     std::lock_guard<std::mutex> lock(cached_members_mutex_);
     return cached_members_;

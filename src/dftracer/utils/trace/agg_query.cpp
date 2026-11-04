@@ -951,8 +951,8 @@ coro::CoroTask<void> Task::read_chunk(const dstd::String& path,
 
     auto reader = co_await open_reader(path);
     const std::uint64_t from = job.whole_file ? 0 : span.uc_offset;
-    const std::uint64_t to = job.whole_file ? reader->get_max_bytes()
-                                            : span.uc_offset + span.uc_size;
+    const std::uint64_t to =
+        job.whole_file ? reader->max_bytes() : span.uc_offset + span.uc_size;
     if (from >= to) co_return;
     auto stream = reader->stream(
         utilities::reader::internal::StreamConfig()

@@ -51,7 +51,7 @@ class ElasticEnv {
 };
 
 std::size_t live_workers(const Pipeline& p) {
-    return p.runtime().get_progress().workers.size();
+    return p.runtime().progress().workers.size();
 }
 
 // An eager pool starts at its full compute width. Nothing clamps that to the

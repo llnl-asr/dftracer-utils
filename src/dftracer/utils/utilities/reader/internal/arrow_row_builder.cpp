@@ -474,11 +474,11 @@ bool process_json_line(RecordBatchBuilder &builder, JsonParser &parser,
                        bool normalize, TimeScaleState &time_scale,
                        const RowBuildOptions &opts) {
     const char *trimmed;
-    std::size_t trimmed_length;
+    std::size_t trimmed_size;
     if (!dftracer::utils::json::trim_and_validate_with_comma(
-            content.data(), content.size(), trimmed, trimmed_length))
+            content.data(), content.size(), trimmed, trimmed_size))
         return false;
-    if (!parser.parse(dstd::StringView(trimmed, trimmed_length))) return false;
+    if (!parser.parse(dstd::StringView(trimmed, trimmed_size))) return false;
     return build_arrow_row(builder, parser, arena, normalize, time_scale, opts);
 }
 

@@ -439,7 +439,7 @@ TEST_CASE("agg_regroup over serialize/deserialize round-trip is exact") {
     // Persist each group as a single-group blob, then rebuild one merged state
     // (the rollup read path), and coarsen that.
     auto rebuilt = dataframe::agg_new(mixed_specs());
-    const std::int64_t ng = dataframe::agg_num_groups(*fine);
+    const std::int64_t ng = dataframe::agg_group_count(*fine);
     for (std::int64_t g = 0; g < ng; ++g) {
         dstd::String blob =
             dataframe::agg_serialize(*dataframe::agg_extract_group(*fine, g));

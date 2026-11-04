@@ -30,10 +30,10 @@ class GzipReader : public Reader {
     GzipReader &operator=(GzipReader &&other) noexcept;
 
     // Reader interface implementation
-    std::size_t get_max_bytes() const override;
-    std::size_t get_num_lines() const override;
-    const dstd::String &get_archive_path() const override;
-    const dstd::String &get_index_path() const override;
+    std::size_t max_bytes() const override;
+    std::size_t line_count() const override;
+    const dstd::String &archive_path() const override;
+    const dstd::String &index_path() const override;
     void set_buffer_size(std::size_t size) override;
 
     coro::CoroTask<std::size_t> read_async(std::size_t start_bytes,
@@ -54,7 +54,7 @@ class GzipReader : public Reader {
 
     void reset() override;
     bool is_valid() const override;
-    dstd::String get_format_name() const override;
+    dstd::String format_name() const override;
 
    private:
     dstd::String gz_path_;

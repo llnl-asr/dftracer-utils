@@ -214,7 +214,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
         if (self->current_batch) {
             auto *batch_obj = (MemoryViewBatchObject *)self->current_batch;
             Py_ssize_t n =
-                static_cast<Py_ssize_t>(batch_obj->data->num_entries());
+                static_cast<Py_ssize_t>(batch_obj->data->entry_count());
             if (self->batch_index < n) {
                 PyObject *mv =
                     MemoryViewBatch_item(batch_obj, self->batch_index);

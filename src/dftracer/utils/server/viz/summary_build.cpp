@@ -1169,7 +1169,8 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             dstd::String version = sarg(se, "version");
             dstd::String date = sarg(se, "date");
             auto ppid = static_cast<std::int64_t>(narg(se, "ppid"));
-            auto num_events = static_cast<std::int64_t>(narg(ee, "num_events"));
+            auto event_count =
+                static_cast<std::int64_t>(narg(ee, "num_events"));
             if (app.empty()) {
                 auto ci = cm_apps.find(pid);
                 if (ci != cm_apps.end()) app = ci->second;
@@ -1209,7 +1210,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             jb.append_comma();
             jb.append_key_value("date", date);
             jb.append_comma();
-            jb.append_key_value("num_events", num_events);
+            jb.append_key_value("num_events", event_count);
             jb.end_object();
             jb.end_object();
             summary->app_spans.push_back(

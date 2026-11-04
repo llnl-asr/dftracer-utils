@@ -114,7 +114,7 @@ static CoroTask<std::size_t> count_arrow_rows(
     AsyncGenerator<dftracer::utils::utilities::arrow::ArrowExportResult> gen) {
     std::size_t n = 0;
     while (auto opt = co_await gen.next()) {
-        n += static_cast<std::size_t>(opt->get_array()->length);
+        n += static_cast<std::size_t>(opt->array()->length);
     }
     co_return n;
 }
@@ -157,7 +157,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("Read all lines with pre-built index") {
         TestEnvironment env(100);
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
-        dstd::String index_dir = env.get_dir();
+        dstd::String index_dir = env.dir();
         dstd::String index_path = env.get_index_path(gz_file);
 
         auto indexer = CheckpointIndexerFactory::create(
@@ -192,7 +192,7 @@ TEST_SUITE("TraceReader") {
         // dotted `args.ret` must select the same events in the ValueMap path.
         TestEnvironment env(100);
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
-        dstd::String index_dir = env.get_dir();
+        dstd::String index_dir = env.dir();
         dstd::String index_path = env.get_index_path(gz_file);
         auto indexer = CheckpointIndexerFactory::create(
             gz_file, index_path, 32 * 1024 * 1024, false);
@@ -308,7 +308,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("read_raw byte range works with index") {
         TestEnvironment env(100);
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
-        dstd::String index_dir = env.get_dir();
+        dstd::String index_dir = env.dir();
         dstd::String index_path = env.get_index_path(gz_file);
 
         auto indexer = CheckpointIndexerFactory::create(
@@ -395,7 +395,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("read_raw indexed and unindexed produce same chunk count") {
         TestEnvironment env(100);
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
-        dstd::String index_dir = env.get_dir();
+        dstd::String index_dir = env.dir();
         dstd::String index_path = env.get_index_path(gz_file);
 
         TraceReader plain_reader({.file_path = dstd::String(gz_file)});
@@ -635,7 +635,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("Query works with index") {
         TestEnvironment env(100);
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
-        dstd::String index_dir = env.get_dir();
+        dstd::String index_dir = env.dir();
         dstd::String index_path = env.get_index_path(gz_file);
 
         auto indexer = CheckpointIndexerFactory::create(
@@ -687,7 +687,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Query with index filters events per-line") {
         TestEnvironment env(100);
-        dstd::String pfw = env.get_dir() + "/multi_cat.pfw";
+        dstd::String pfw = env.dir() + "/multi_cat.pfw";
         {
             dstd::String out;
             for (int i = 0; i < 200; ++i) {
@@ -735,7 +735,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Query file-level skip for raw bytes") {
         TestEnvironment env(100);
-        dstd::String pfw = env.get_dir() + "/raw_skip.pfw";
+        dstd::String pfw = env.dir() + "/raw_skip.pfw";
         {
             dstd::String out;
             for (int i = 0; i < 100; ++i) {
@@ -772,7 +772,7 @@ TEST_SUITE("TraceReader") {
 
     TEST_CASE("Chunk pruning skips non-matching checkpoints") {
         TestEnvironment env(100);
-        dstd::String pfw = env.get_dir() + "/multi_ckpt.pfw";
+        dstd::String pfw = env.dir() + "/multi_ckpt.pfw";
         constexpr int POSIX_BEFORE = 100;
         constexpr int COMPUTE_COUNT = 5;
         constexpr int POSIX_AFTER = 100;
@@ -910,7 +910,7 @@ TEST_SUITE("TraceReader::read_json") {
 
     TEST_CASE("read_json matches read_lines query count") {
         TestEnvironment env(100);
-        dstd::String pfw = env.get_dir() + "/json_vs_lines.pfw";
+        dstd::String pfw = env.dir() + "/json_vs_lines.pfw";
         {
             dstd::String out;
             for (int i = 0; i < 100; ++i) {
@@ -942,7 +942,7 @@ TEST_SUITE("TraceReader::read_json") {
 
     TEST_CASE("read_json works with index and chunk pruning") {
         TestEnvironment env(100);
-        dstd::String pfw = env.get_dir() + "/json_indexed.pfw";
+        dstd::String pfw = env.dir() + "/json_indexed.pfw";
         dstd::String pad(400, 'x');
         {
             dstd::String out;
@@ -1307,7 +1307,7 @@ TEST_SUITE("TraceReader byte windows") {
         REQUIRE(indexer != nullptr);
         std::size_t mid_line_pieces = 0;
         dstd::Vector<std::size_t> cuts;
-        for (const auto& member : indexer->get_members()) {
+        for (const auto& member : indexer->members()) {
             if (member.kind != GzipRecordKind::Restart) continue;
             const auto at = static_cast<std::size_t>(member.uc_offset);
             mid_line_pieces +=
@@ -1353,11 +1353,11 @@ static CoroTask<void> collect_odd_arrow(
     while (auto opt = co_await gen.next()) {
         ArrowArrayView view;
         if (dftracer::utils::utilities::arrow::init_array_view(
-                view, opt->get_schema(), opt->get_array()) != NANOARROW_OK)
+                view, opt->schema(), opt->array()) != NANOARROW_OK)
             co_return;
         int column = -1;
-        for (std::int64_t i = 0; i < opt->get_schema()->n_children; ++i)
-            if (std::strcmp(opt->get_schema()->children[i]->name, name) == 0)
+        for (std::int64_t i = 0; i < opt->schema()->n_children; ++i)
+            if (std::strcmp(opt->schema()->children[i]->name, name) == 0)
                 column = static_cast<int>(i);
         for (std::int64_t r = 0; r < view.length; ++r) {
             ++rows;
@@ -1397,11 +1397,11 @@ static CoroTask<void> collect_odd_cells(
     while (auto opt = co_await gen.next()) {
         ArrowArrayView view;
         if (dftracer::utils::utilities::arrow::init_array_view(
-                view, opt->get_schema(), opt->get_array()) != NANOARROW_OK)
+                view, opt->schema(), opt->array()) != NANOARROW_OK)
             co_return;
         int column = -1;
-        for (std::int64_t i = 0; i < opt->get_schema()->n_children; ++i)
-            if (std::strcmp(opt->get_schema()->children[i]->name, name) == 0)
+        for (std::int64_t i = 0; i < opt->schema()->n_children; ++i)
+            if (std::strcmp(opt->schema()->children[i]->name, name) == 0)
                 column = static_cast<int>(i);
         for (std::int64_t r = 0; r < view.length; ++r) {
             OddCell cell;

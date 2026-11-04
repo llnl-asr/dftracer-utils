@@ -33,21 +33,21 @@ class EventIdCollector : public utilities::reader::internal::LineProcessor {
     coro::CoroTask<bool> process(const char* data,
                                  std::size_t length) override {
         const char* trimmed;
-        std::size_t trimmed_length;
+        std::size_t trimmed_size;
 
         bool valid = trim_commas ? json::trim_and_validate_with_comma(
-                                       data, length, trimmed, trimmed_length)
+                                       data, length, trimmed, trimmed_size)
                                  : json::trim_and_validate(
-                                       data, length, trimmed, trimmed_length);
+                                       data, length, trimmed, trimmed_size);
 
-        if (!valid || trimmed_length <= 8) {
+        if (!valid || trimmed_size <= 8) {
             co_return true;
         }
 
-        auto result = parser.parse(trimmed, trimmed_length);
+        auto result = parser.parse(trimmed, trimmed_size);
         if (result.error())
             result = json::parse_refused(
-                parser, dstd::StringView(trimmed, trimmed_length));
+                parser, dstd::StringView(trimmed, trimmed_size));
         if (result.error()) {
             ++dropped;
             co_return true;

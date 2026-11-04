@@ -35,7 +35,7 @@ namespace {
 // A ph="X" trace in its own subdir, so each shard's sidecar index is distinct.
 dstd::String make_x_trace(TestEnvironment& env, const dstd::String& tag,
                           int posix_n, int stdio_n) {
-    dstd::String dir = env.get_dir() + "/" + tag;
+    dstd::String dir = env.dir() + "/" + tag;
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     dstd::String pfw = dir + "/" + tag + ".pfw";
     dftu_utils_test::FileOut ofs(pfw);
@@ -156,10 +156,10 @@ void check_merged_partials(
     build_shard_index(a, config);
     build_shard_index(b, config);
 
-    dstd::String root = env.get_dir() + "/set";
+    dstd::String root = env.dir() + "/set";
     views::write_shard_set(dstd::String(root),
                            {dstd::String(ia), dstd::String(ib)});
-    dstd::String out = env.get_dir() + "/merged";
+    dstd::String out = env.dir() + "/merged";
     views::merge_shard_set(dstd::String(root), dstd::String(out));
     dstd::String merged_idx = dstd::String(determine_index_path("x", out));
 
@@ -286,7 +286,7 @@ TEST_SUITE("ShardedView") {
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
         manifest.shards.push_back({dstd::String(dstd::StringView(ia)), 1, 0});
         manifest.shards.push_back({dstd::String(dstd::StringView(ib)), 1, 0});
-        dstd::String root = env.get_dir() + "/set";
+        dstd::String root = env.dir() + "/set";
         index::store::write_shard_manifest(root, manifest);
 
         auto configure = [](View v) -> View {
@@ -342,7 +342,7 @@ TEST_SUITE("ShardedView") {
         build_shard_index(a);
         build_shard_index(b);
 
-        dstd::String root = env.get_dir() + "/set";
+        dstd::String root = env.dir() + "/set";
         views::write_shard_set(dstd::String(root),
                                {dstd::String(ia), dstd::String(ib)});
 
@@ -351,7 +351,7 @@ TEST_SUITE("ShardedView") {
         CHECK(manifest->format_version ==
               static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION));
         REQUIRE(manifest->shards.size() == 2);
-        for (const auto& s : manifest->shards) CHECK(s.num_files == 1);
+        for (const auto& s : manifest->shards) CHECK(s.file_count == 1);
 
         auto configure = [](View v) -> View {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
@@ -410,7 +410,7 @@ TEST_SUITE("ShardedView") {
 
         // Copy the index into a directory that holds no traces of its own. Copy
         // rather than move so the cached read-only handle stays valid.
-        dstd::String movedir = env.get_dir() + "/relocated";
+        dstd::String movedir = env.dir() + "/relocated";
         REQUIRE(dstd::fs::create_directories(movedir).has_value());
         dstd::String moved = movedir + "/.dftindex";
         REQUIRE(dstd::fs::copy_tree(ia, moved, dstd::fs::CopyMode::FailIfExists)
@@ -425,7 +425,7 @@ TEST_SUITE("ShardedView") {
         m.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
         m.shards.push_back({dstd::String(dstd::StringView(moved)), 1, 0});
-        dstd::String root = env.get_dir() + "/set";
+        dstd::String root = env.dir() + "/set";
         index::store::write_shard_manifest(root, m);
         auto got = views::ShardedView::from_manifest(dstd::String(root))
                        .aggregate(scan_cfg)
@@ -444,7 +444,7 @@ TEST_SUITE("ShardedView") {
         dstd::String c = make_x_trace(env, "gc", 5, 5);
         const dstd::Vector<dstd::String> files{a, b, c};
 
-        const dstd::String root = env.get_dir() + "/root/.dftindex";
+        const dstd::String root = env.dir() + "/root/.dftindex";
         dstd::Vector<dstd::String> shards;
         for (std::size_t i = 0; i < files.size(); ++i) {
             shards.emplace_back(
@@ -463,7 +463,7 @@ TEST_SUITE("ShardedView") {
             return v.group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
-        const dstd::String single = env.get_dir() + "/single/.dftindex";
+        const dstd::String single = env.dir() + "/single/.dftindex";
         for (const auto& f : files) build_shard_index(f, {}, single);
         auto expect =
             canon(configure(View::from_files(
@@ -500,7 +500,7 @@ TEST_SUITE("ShardedView") {
         dstd::String b = make_x_trace(env, "fb", 10, 40);
         const dstd::Vector<dstd::String> files{a, b};
 
-        const dstd::String root = env.get_dir() + "/root/.dftindex";
+        const dstd::String root = env.dir() + "/root/.dftindex";
         dstd::Vector<dstd::String> shards;
         for (std::size_t i = 0; i < files.size(); ++i) {
             shards.emplace_back(
@@ -557,7 +557,7 @@ TEST_SUITE("ShardedView") {
         build_shard_index(a);
         build_shard_index(b);
 
-        dstd::String root = env.get_dir() + "/set";
+        dstd::String root = env.dir() + "/set";
         views::write_shard_set(dstd::String(root),
                                {dstd::String(ia), dstd::String(ib)});
 
@@ -571,7 +571,7 @@ TEST_SUITE("ShardedView") {
                       .get());
         REQUIRE(sharded.size() == 2);
 
-        dstd::String out = env.get_dir() + "/merged";
+        dstd::String out = env.dir() + "/merged";
         std::size_t n =
             views::merge_shard_set(dstd::String(root), dstd::String(out));
         CHECK(n == 2);
@@ -610,13 +610,13 @@ TEST_SUITE("ShardedView") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         CHECK_THROWS(views::ShardedView::from_manifest(
-            dstd::String(env.get_dir() + "/nope")));
+            dstd::String(env.dir() + "/nope")));
     }
 
     TEST_CASE("from_manifest rejects a manifest with no or another version") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String root = env.get_dir() + "/set";
+        dstd::String root = env.dir() + "/set";
         REQUIRE(dstd::fs::create_directories(root).has_value());
 
         {

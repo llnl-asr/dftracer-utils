@@ -187,7 +187,7 @@ double count_reads(const dstd::Vector<dstd::String>& traces) {
 TEST_SUITE("AggExtension") {
     TEST_CASE("an aggregated file lists a current dftracer.agg entry") {
         dftu_utils_test::TestEnvironment env(10);
-        const auto gz = write_trace(env.get_dir(), "a", 50, 1000);
+        const auto gz = write_trace(env.dir(), "a", 50, 1000);
         auto ix = Indexer::open({dstd::String(dstd::StringView(gz))},
                                 with_aggregation(1'000'000));
         ix.build();
@@ -203,7 +203,7 @@ TEST_SUITE("AggExtension") {
 
     TEST_CASE("an unreadable aggregation config is built again") {
         dftu_utils_test::TestEnvironment env(10);
-        const auto gz = write_trace(env.get_dir(), "fix", 50, 1000);
+        const auto gz = write_trace(env.dir(), "fix", 50, 1000);
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(1'000'000))
             .build();
@@ -276,7 +276,7 @@ TEST_SUITE("AggExtension") {
 
     TEST_CASE("an interval change rebuilds only the tier") {
         dftu_utils_test::TestEnvironment env(10);
-        const auto gz = write_trace(env.get_dir(), "a", 50, 1000);
+        const auto gz = write_trace(env.dir(), "a", 50, 1000);
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(1'000'000))
             .build();
@@ -299,8 +299,8 @@ TEST_SUITE("AggExtension") {
 
     TEST_CASE("a changed source rebuilds the tier and that file only") {
         dftu_utils_test::TestEnvironment env(10);
-        const auto a = write_trace(env.get_dir(), "a", 30, 1000, true);
-        const auto b = write_trace(env.get_dir(), "b", 20, 500'000, true);
+        const auto a = write_trace(env.dir(), "a", 30, 1000, true);
+        const auto b = write_trace(env.dir(), "b", 20, 500'000, true);
         Indexer::open({dstd::String(dstd::StringView(a)),
                        dstd::String(dstd::StringView(b))},
                       with_aggregation(1'000'000))
@@ -308,7 +308,7 @@ TEST_SUITE("AggExtension") {
         CHECK(count_reads({a, b}) == 50);
         plant_sentinel(a);
 
-        write_trace(env.get_dir(), "b", 45, 500'000, true);
+        write_trace(env.dir(), "b", 45, 500'000, true);
         REQUIRE(dstd::fs::set_mtime_ns(
                     b, dstd::fs::mtime_ns(b).value() + 10'000'000'000ULL)
                     .has_value());
@@ -329,8 +329,8 @@ TEST_SUITE("AggExtension") {
 
         // A fresh index over the same files gives the same answer.
         dftu_utils_test::TestEnvironment fresh(10);
-        const auto fa = fresh.get_dir() + "/a.pfw.gz";
-        const auto fb = fresh.get_dir() + "/b.pfw.gz";
+        const auto fa = fresh.dir() + "/a.pfw.gz";
+        const auto fb = fresh.dir() + "/b.pfw.gz";
         REQUIRE(dstd::fs::copy_file(a, fa, dstd::fs::CopyMode::FailIfExists)
                     .has_value());
         REQUIRE(dstd::fs::copy_file(b, fb, dstd::fs::CopyMode::FailIfExists)
@@ -347,14 +347,14 @@ TEST_SUITE("AggExtension") {
 
     TEST_CASE("a file without a current entry makes readers scan") {
         dftu_utils_test::TestEnvironment env(10);
-        const auto a = write_trace(env.get_dir(), "a", 30, 1000);
+        const auto a = write_trace(env.dir(), "a", 30, 1000);
         Indexer::open({dstd::String(dstd::StringView(a))},
                       with_aggregation(1'000'000))
             .build();
         // The tier answers this, and its cache keeps the index open, which a
         // later build must still be able to open for writing.
         CHECK(count_reads({a}) == 30);
-        const auto b = write_trace(env.get_dir(), "b", 20, 500'000);
+        const auto b = write_trace(env.dir(), "b", 20, 500'000);
         auto ix = Indexer::open({dstd::String(dstd::StringView(a)),
                                  dstd::String(dstd::StringView(b))},
                                 with_aggregation(1'000'000));

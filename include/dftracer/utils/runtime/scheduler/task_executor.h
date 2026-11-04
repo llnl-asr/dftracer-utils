@@ -45,11 +45,12 @@ class TaskOwner {
 };
 
 struct ExecutorConfig {
-    std::size_t num_threads = 0;  ///< 0 = hardware_concurrency; the RUNNING cap
-    /// Elastic floor. 0 = num_threads (eager: spawn the full pool up front, no
-    /// resizing). Set 1..num_threads to run an elastic pool: start at this many
-    /// workers, grow toward num_threads on backlog, idle-retire back to it - so
-    /// a mostly-idle runtime does not hold hardware_concurrency threads
+    std::size_t thread_count =
+        0;  ///< 0 = hardware_concurrency; the RUNNING cap
+    /// Elastic floor. 0 = thread_count (eager: spawn the full pool up front, no
+    /// resizing). Set 1..thread_count to run an elastic pool: start at this
+    /// many workers, grow toward thread_count on backlog, idle-retire back to
+    /// it - so a mostly-idle runtime does not hold hardware_concurrency threads
     /// (matters on shared HPC login nodes).
     std::size_t min_workers = 0;
     /// Elastic keep-alive: an idle worker above min_workers is retired only
@@ -60,7 +61,7 @@ struct ExecutorConfig {
     std::size_t io_pool_size = 0;  ///< 0 = one per worker
     io::IoBackendType io_backend_type = io::IoBackendType::Auto;
     unsigned io_batch_threshold = 16;
-    /// Finished tasks kept for get_progress. The oldest are dropped first.
+    /// Finished tasks kept for progress. The oldest are dropped first.
     std::size_t task_history = common::constants::TASK_HISTORY_LIMIT;
 };
 
@@ -182,10 +183,8 @@ class TaskExecutor : public coro::Executor {
                                   dstd::StringView message) = 0;
 
     virtual bool is_running() const = 0;
-    virtual std::size_t get_num_threads() const = 0;
-    std::size_t concurrency() const noexcept override {
-        return get_num_threads();
-    }
+    virtual std::size_t thread_count() const = 0;
+    std::size_t concurrency() const noexcept override { return thread_count(); }
 
     /// Runs this executor's work on the calling thread until `done` holds;
     /// false when this executor cannot lend the calling thread. See
@@ -218,13 +217,13 @@ class TaskExecutor : public coro::Executor {
     virtual void set_deadlock_timeout(std::chrono::seconds timeout) = 0;
 
     virtual bool is_responsive() const = 0;
-    virtual ExecutorProgress get_progress() const = 0;
+    virtual ExecutorProgress progress() const = 0;
 
     /// Without a backend the io layer falls back to blocking syscalls.
     virtual bool has_io_backend() const noexcept = 0;
     /// Must check @ref has_io_backend first.
     virtual io::IoBackend& io_backend() = 0;
-    virtual std::size_t get_io_pool_size() const = 0;
+    virtual std::size_t io_pool_size() const = 0;
 
     /// Records `executor` as the I/O backend owner of the calling thread, or
     /// clears it with null. A worker calls it where it sets

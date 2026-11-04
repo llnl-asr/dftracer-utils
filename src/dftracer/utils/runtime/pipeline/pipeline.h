@@ -106,11 +106,11 @@ class Pipeline {
     void set_progress_callback(
         std::function<void(std::size_t completed, std::size_t total)> callback);
 
-    const std::string& get_name() const { return name_; }
+    const std::string& name() const { return name_; }
 
-    dstd::SharedPtr<Task> get_source() const { return source_; }
+    dstd::SharedPtr<Task> source() const { return source_; }
 
-    dstd::SharedPtr<Task> get_destination() const { return destination_; }
+    dstd::SharedPtr<Task> destination() const { return destination_; }
 
    private:
     bool validate_reachability();

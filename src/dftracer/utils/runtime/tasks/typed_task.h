@@ -134,10 +134,10 @@ class TypedTask : public Task {
      * Validate input type at runtime (for debugging)
      */
     bool validate(const I& in) {
-        bool result = std::type_index(typeid(in)) == this->get_input_type();
+        bool result = std::type_index(typeid(in)) == this->input_type();
         if (!result) {
             std::cerr << "Input type validation failed, expected: "
-                      << this->get_input_type().name()
+                      << this->input_type().name()
                       << ", got: " << typeid(in).name() << std::endl;
         }
         return result;

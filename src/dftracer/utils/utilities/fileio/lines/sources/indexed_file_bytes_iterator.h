@@ -201,7 +201,7 @@ class IndexedFileBytesIterator {
      * @brief Get the underlying Reader.
      */
     dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
-    get_reader() const {
+    reader() const {
         return reader_;
     }
 

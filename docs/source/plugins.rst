@@ -961,7 +961,7 @@ output (``writer_create`` / ``writer_open`` / ``writer_chunk`` / ``writer_close`
       .. code-block:: cpp
 
          Task on_finalize(Host h) {
-             Writer w = h.writer("/tmp/out.pfw.gz", /*num_workers=*/4,
+             Writer w = h.writer("/tmp/out.pfw.gz", /*worker_count=*/4,
                                  /*gzip=*/true);
              if (!w) co_return;
              co_await w.open();

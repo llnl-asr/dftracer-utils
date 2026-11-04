@@ -70,7 +70,7 @@ class SegmentBuilder {
         dstd::ByteView key;
         dstd::ByteView value;
         std::size_t value_offset = 0;
-        std::size_t value_length = 0;
+        std::size_t value_size = 0;
         BigRef big{};
         bool folded = false;
         bool is_big = false;
@@ -173,23 +173,23 @@ class SegmentView {
     /// in place. Zero when `prefix` is shorter, is not a segment header, or an
     /// index entry does not parse. A segment of no granules gives the header
     /// alone.
-    static std::uint32_t head_length(dstd::ByteView prefix);
+    static std::uint32_t head_size(dstd::ByteView prefix);
 
     /// The granule of the segment (`head` holds its header and index) that can
     /// hold `key`: the last one whose first key is at most it. Nullopt for a
     /// key below the first granule or a segment of no granules. A Parse error
-    /// when the header does not match `segment_length` or the granules are
+    /// when the header does not match `segment_size` or the granules are
     /// malformed.
     static dstd::Expected<dstd::Optional<GranuleSpan>, dstd::Error>
-    find_granule(dstd::ByteView head, std::uint32_t segment_length,
+    find_granule(dstd::ByteView head, std::uint32_t segment_size,
                  dstd::ByteView key);
 
-    /// The header and granule index `head` of a segment of `segment_length`,
+    /// The header and granule index `head` of a segment of `segment_size`,
     /// with no entry bytes. Its first keys point into `head`. It checks what
     /// open_index checks except the zero tail. Use it for range_span and
     /// with_window only.
     static dstd::Expected<SegmentView, dstd::Error> open_head(
-        dstd::ByteView head, std::uint32_t segment_length);
+        dstd::ByteView head, std::uint32_t segment_size);
 
     /// The granules of a view from open_head that can hold a key in
     /// [begin, end), as one span. An empty `end` is unbounded. The view must

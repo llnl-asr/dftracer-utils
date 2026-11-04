@@ -38,15 +38,15 @@ bool same(const std::uint8_t* h, const char* needle, std::int64_t m) {
     }
 }
 
-// First index in [0, hay_len - needle_len] whose needle_len bytes match, or
+// First index in [0, hay_size - needle_size] whose needle_size bytes match, or
 // -1. Callers handle the empty needle and needle-longer-than-haystack cases
 // before dispatch.
 template <bool ICASE>
-std::int64_t Find(const char* hay, std::int64_t hay_len, const char* needle,
-                  std::int64_t needle_len) {
+std::int64_t Find(const char* hay, std::int64_t hay_size, const char* needle,
+                  std::int64_t needle_size) {
     const std::uint8_t* hp = reinterpret_cast<const std::uint8_t*>(hay);
-    const std::int64_t last = hay_len - needle_len;  // inclusive last start
-    const std::int64_t m = needle_len;
+    const std::int64_t last = hay_size - needle_size;  // inclusive last start
+    const std::int64_t m = needle_size;
     const auto head = static_cast<std::uint8_t>(needle[0]);
     auto scalar_from = [&](std::int64_t i) -> std::int64_t {
         for (; i <= last; ++i)
@@ -71,7 +71,7 @@ std::int64_t Find(const char* hay, std::int64_t hay_len, const char* needle,
     // scalable ISAs), leaving the scalar tail to cover every position.
     const bool vec_ok = lanes <= 64;
     // Load `lanes` bytes at a time; require i + lanes <= last + 1 so the load
-    // stays in bounds (last + 1 <= hay_len for m >= 1) and every candidate has
+    // stays in bounds (last + 1 <= hay_size for m >= 1) and every candidate has
     // a full needle after it.
     for (; vec_ok && i + static_cast<std::int64_t>(lanes) <= last + 1;
          i += static_cast<std::int64_t>(lanes)) {
@@ -99,14 +99,14 @@ std::int64_t Find(const char* hay, std::int64_t hay_len, const char* needle,
     return scalar_from(i);
 }
 
-std::int64_t SubstrFind(const char* hay, std::int64_t hay_len,
-                        const char* needle, std::int64_t needle_len) {
-    return Find<false>(hay, hay_len, needle, needle_len);
+std::int64_t SubstrFind(const char* hay, std::int64_t hay_size,
+                        const char* needle, std::int64_t needle_size) {
+    return Find<false>(hay, hay_size, needle, needle_size);
 }
 
-std::int64_t SubstrFindIcase(const char* hay, std::int64_t hay_len,
-                             const char* needle, std::int64_t needle_len) {
-    return Find<true>(hay, hay_len, needle, needle_len);
+std::int64_t SubstrFindIcase(const char* hay, std::int64_t hay_size,
+                             const char* needle, std::int64_t needle_size) {
+    return Find<true>(hay, hay_size, needle, needle_size);
 }
 
 }  // namespace HWY_NAMESPACE
@@ -119,20 +119,20 @@ namespace dftracer::utils::duql::detail {
 HWY_EXPORT(SubstrFind);
 HWY_EXPORT(SubstrFindIcase);
 
-std::int64_t substr_find(const char* hay, std::int64_t hay_len,
-                         const char* needle, std::int64_t needle_len) {
-    if (needle_len <= 0)
+std::int64_t substr_find(const char* hay, std::int64_t hay_size,
+                         const char* needle, std::int64_t needle_size) {
+    if (needle_size <= 0)
         return 0;  // empty needle matches at 0 (find semantics)
-    if (needle_len > hay_len) return -1;
-    return HWY_DYNAMIC_DISPATCH(SubstrFind)(hay, hay_len, needle, needle_len);
+    if (needle_size > hay_size) return -1;
+    return HWY_DYNAMIC_DISPATCH(SubstrFind)(hay, hay_size, needle, needle_size);
 }
 
-std::int64_t substr_find_icase(const char* hay, std::int64_t hay_len,
-                               const char* needle, std::int64_t needle_len) {
-    if (needle_len <= 0) return 0;
-    if (needle_len > hay_len) return -1;
-    return HWY_DYNAMIC_DISPATCH(SubstrFindIcase)(hay, hay_len, needle,
-                                                 needle_len);
+std::int64_t substr_find_icase(const char* hay, std::int64_t hay_size,
+                               const char* needle, std::int64_t needle_size) {
+    if (needle_size <= 0) return 0;
+    if (needle_size > hay_size) return -1;
+    return HWY_DYNAMIC_DISPATCH(SubstrFindIcase)(hay, hay_size, needle,
+                                                 needle_size);
 }
 
 }  // namespace dftracer::utils::duql::detail

@@ -27,7 +27,7 @@ constexpr int RECORDS = 3000;
 
 dstd::String gzip_of(TestEnvironment& env, const dstd::String& stem,
                      const dstd::String& body) {
-    const dstd::String plain = env.get_dir() + "/" + stem + ".ndjson";
+    const dstd::String plain = env.dir() + "/" + stem + ".ndjson";
     {
         dftu_utils_test::FileOut out(plain);
         out << body;

@@ -142,7 +142,7 @@ void persist_rollup(CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
                     std::uint64_t time_bucket_us,
                     dstd::Span<const trace::views::GroupKey> group_by,
                     const dataframe::AggState& state) {
-    const std::int64_t ng = dataframe::agg_num_groups(state);
+    const std::int64_t ng = dataframe::agg_group_count(state);
     // agg_group_key renders a null key as "", so the finalized key columns
     // tell a null key apart from an empty one.
     const dataframe::DataFrame finalized =

@@ -16,7 +16,7 @@ namespace {
 
 ExecutorConfig one_thread() {
     ExecutorConfig config;
-    config.num_threads = 1;
+    config.thread_count = 1;
     config.deadlock_timeout = 1s;
     return config;
 }

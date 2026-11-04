@@ -467,11 +467,10 @@ dstd::Expected<RecordItems, dstd::Error> decode_items(dstd::ByteView body) {
     while (at < body.size()) {
         auto tag = decode_varint(body, at);
         if (!tag) return parse_error();
-        auto item_length = decode_varint(body, at);
-        if (!item_length || *item_length > body.size() - at)
-            return parse_error();
-        const dstd::ByteView item_bytes = body.subspan(at, *item_length);
-        at += static_cast<std::size_t>(*item_length);
+        auto item_size = decode_varint(body, at);
+        if (!item_size || *item_size > body.size() - at) return parse_error();
+        const dstd::ByteView item_bytes = body.subspan(at, *item_size);
+        at += static_cast<std::size_t>(*item_size);
 
         switch (*tag) {
             case 1: {
@@ -597,14 +596,14 @@ dstd::Expected<Record, dstd::Error> decode_record(dstd::ByteView bytes) {
 
     const std::uint32_t kind_raw = dstd::read_u32_le(data + 8);
     if (kind_raw < 1 || kind_raw > 3) return parse_error();
-    const std::uint32_t body_length = dstd::read_u32_le(data + 12);
+    const std::uint32_t body_size = dstd::read_u32_le(data + 12);
     const std::uint64_t sequence = dstd::read_u64_le(data + 16);
     if (sequence == 0) return parse_error();
     const std::uint64_t prev_offset = dstd::read_u64_le(data + 24);
     const std::uint64_t offset = dstd::read_u64_le(data + 32);
 
     const std::uint64_t body_end =
-        static_cast<std::uint64_t>(RECORD_HEADER_BYTES) + body_length;
+        static_cast<std::uint64_t>(RECORD_HEADER_BYTES) + body_size;
     if (body_end + 4 > bytes.size()) return parse_error();
     const std::uint32_t stored_crc = dstd::read_u32_le(data + body_end);
     const std::uint32_t crc =
@@ -618,8 +617,7 @@ dstd::Expected<Record, dstd::Error> decode_record(dstd::ByteView bytes) {
     record.offset = offset;
     record.crc = stored_crc;
 
-    auto raw_body =
-        decode_meta(bytes.subspan(RECORD_HEADER_BYTES, body_length));
+    auto raw_body = decode_meta(bytes.subspan(RECORD_HEADER_BYTES, body_size));
     if (!raw_body) return dstd::Unexpected<dstd::Error>(raw_body.error());
     auto decoded = decode_items(
         dstd::ByteView{reinterpret_cast<const std::byte*>(raw_body->data()),

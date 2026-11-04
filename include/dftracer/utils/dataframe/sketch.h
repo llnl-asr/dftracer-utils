@@ -121,7 +121,7 @@ class BasicDDSketch {
     int max_key_ = 0;
     bool initialized_ = false;
     bool collapsed_ = false;
-    int num_bins_ = 0;
+    int bin_count_ = 0;
 
     void ensure_bins(int n) {
         if constexpr (GROWS) {

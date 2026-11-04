@@ -67,9 +67,9 @@ void ScalableBloomFilter::merge_from(const ScalableBloomFilter& other) {
         auto it = std::find_if(
             levels_.begin(), levels_.end(), [&src](const Level& dst) {
                 return dst.capacity == src.capacity &&
-                       dst.filter.num_bits() == src.filter.num_bits() &&
-                       dst.filter.num_hash_functions() ==
-                           src.filter.num_hash_functions();
+                       dst.filter.bit_count() == src.filter.bit_count() &&
+                       dst.filter.hash_function_count() ==
+                           src.filter.hash_function_count();
             });
         if (it != levels_.end()) {
             it->filter.merge_from(src.filter);
@@ -129,7 +129,7 @@ ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
 
     if (!has_chain_magic(data, size)) {
         auto legacy = BloomFilter::from_blob(data, size);
-        const auto entries = legacy.num_entries();
+        const auto entries = legacy.entry_count();
         result.levels_.push_back(
             Level{std::move(legacy), entries > 0 ? entries : 1, entries});
         result.distinct_ = entries;
@@ -153,7 +153,7 @@ ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
         }
         auto filter = BloomFilter::from_blob(data + cursor, blob_size);
         cursor += blob_size;
-        const auto entries = filter.num_entries();
+        const auto entries = filter.entry_count();
         result.distinct_ += entries;
         result.levels_.push_back(
             Level{std::move(filter), entries > 0 ? entries : 1, entries});

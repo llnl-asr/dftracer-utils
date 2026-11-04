@@ -70,11 +70,11 @@ TEST_CASE("level gating suppresses below the threshold") {
 TEST_CASE("set_level / get_level roundtrip and runtime suppression") {
     dftracer::utils::common::logger::set_level(
         dftracer::utils::common::logger::Level::Debug);
-    CHECK(dftracer::utils::common::logger::get_level() ==
+    CHECK(dftracer::utils::common::logger::level() ==
           dftracer::utils::common::logger::Level::Debug);
     dftracer::utils::common::logger::set_level(
         dftracer::utils::common::logger::Level::Error);
-    CHECK(dftracer::utils::common::logger::get_level() ==
+    CHECK(dftracer::utils::common::logger::level() ==
           dftracer::utils::common::logger::Level::Error);
 
     auto out = capture_log(
@@ -131,14 +131,14 @@ TEST_CASE("env DFTRACER_UTILS_LOG_LEVEL overrides the config") {
             .level =
                 dftracer::utils::common::logger::Level::Debug});  // env should
                                                                   // win
-    CHECK(dftracer::utils::common::logger::get_level() ==
+    CHECK(dftracer::utils::common::logger::level() ==
           dftracer::utils::common::logger::Level::Error);
 
     ::unsetenv("DFTRACER_UTILS_LOG_LEVEL");
     dftracer::utils::common::logger::init(
         dftracer::utils::common::logger::Config{
             .level = dftracer::utils::common::logger::Level::Info});
-    CHECK(dftracer::utils::common::logger::get_level() ==
+    CHECK(dftracer::utils::common::logger::level() ==
           dftracer::utils::common::logger::Level::Info);
 }
 

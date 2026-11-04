@@ -173,7 +173,7 @@ void Applier::stage(const duql::PipelineLookup& l) {
     if (inner) {
         if (nest)
             v_ = v_.with_lazy(v_.lazy().filter(
-                dataframe::expr_list_len(col(into->name)) > std::int64_t{0}));
+                dataframe::expr_list_size(col(into->name)) > std::int64_t{0}));
         else
             v_ = v_.with_lazy(v_.lazy().filter(
                 dataframe::expr_not(dataframe::expr_is_null(col(HIT_COLUMN)))));

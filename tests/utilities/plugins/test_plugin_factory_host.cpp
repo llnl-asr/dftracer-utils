@@ -46,7 +46,7 @@ constexpr int EVENTS = 64;
 
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env,
                     const dstd::String& tag) {
-    const dstd::String dir = env.get_dir() + "/" + tag;
+    const dstd::String dir = env.dir() + "/" + tag;
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     const dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;

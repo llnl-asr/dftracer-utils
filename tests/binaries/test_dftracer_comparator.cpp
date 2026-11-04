@@ -32,11 +32,11 @@ dstd::String find_gen_binary() {
 }
 
 dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                           int /* num_events */, int id) {
+                           int /* event_count */, int id) {
     auto gen = find_gen_binary();
     if (gen.empty()) return "";
 
-    dstd::String out_dir = env.get_dir() + "/gen_" + dstd::to_string(id);
+    dstd::String out_dir = env.dir() + "/gen_" + dstd::to_string(id);
     // Generate a tiny trace: 1 rank, 1 epoch, 2 steps
     dstd::String cmd = gen + " -o '" + out_dir +
                        "' --num-processes 1 --num-epochs 1 --steps-per-epoch 2 "
@@ -45,8 +45,7 @@ dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
     if (std::system(cmd.c_str()) != 0) return "";
 
     dstd::String src = out_dir + "/rank_0.pfw.gz";
-    dstd::String dst =
-        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+    dstd::String dst = env.dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
     if (!dstd::fs::exists(src).value()) return "";
     REQUIRE(dstd::fs::rename(src, dst).has_value());
     return dst;
@@ -331,7 +330,7 @@ TEST_SUITE("DFTracerComparator") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        const dstd::String traces = env.get_dir() + "/traces";
+        const dstd::String traces = env.dir() + "/traces";
         REQUIRE(dstd::fs::create_directories(traces).has_value());
         // Durations near 2^50 make a floating point sum depend on the order
         // of its adds, and many files with two threads each spread the
@@ -360,14 +359,13 @@ TEST_SUITE("DFTracerComparator") {
                      traces + "/rank_" + dstd::to_string(f) + ".pfw.gz", text)
                      .empty());
         }
-        const dstd::String out = env.get_dir() + "/self.json";
-        REQUIRE(
-            run_comparator(binary,
-                           {"--baseline", traces, "--variant", traces,
-                            "--baseline-index-dir", env.get_dir() + "/idx_base",
-                            "--variant-index-dir", env.get_dir() + "/idx_var",
-                            "--format", "json", "--executor-threads", "16"},
-                           out) == 0);
+        const dstd::String out = env.dir() + "/self.json";
+        REQUIRE(run_comparator(binary,
+                               {"--baseline", traces, "--variant", traces,
+                                "--baseline-index-dir", env.dir() + "/idx_base",
+                                "--variant-index-dir", env.dir() + "/idx_var",
+                                "--format", "json", "--executor-threads", "16"},
+                               out) == 0);
         const dstd::String content = read_file(out);
         simdjson::dom::parser parser;
         auto doc = parser.parse(simdjson::padded_string(content));
@@ -392,7 +390,7 @@ TEST_SUITE("DFTracerComparator") {
         auto f = create_pfw_gz(env, 100, 0);
         REQUIRE(!f.empty());
 
-        dstd::String output = env.get_dir() + "/cmp_output.txt";
+        dstd::String output = env.dir() + "/cmp_output.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--no-color",
                                  "-q", R"(cat == "POSIX")"},
@@ -422,7 +420,7 @@ TEST_SUITE("DFTracerComparator") {
         REQUIRE(!baseline.empty());
         REQUIRE(!variant.empty());
 
-        dstd::String output = env.get_dir() + "/cmp_diff.txt";
+        dstd::String output = env.dir() + "/cmp_diff.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", baseline, "--variant", variant,
                                  "--no-color", "-q", R"(cat == "POSIX")"},
@@ -446,8 +444,8 @@ TEST_SUITE("DFTracerComparator") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        dstd::String base_dir = env.get_dir() + "/baseline";
-        dstd::String var_dir = env.get_dir() + "/variant";
+        dstd::String base_dir = env.dir() + "/baseline";
+        dstd::String var_dir = env.dir() + "/variant";
         REQUIRE(dstd::fs::create_directories(base_dir).has_value());
         REQUIRE(dstd::fs::create_directories(var_dir).has_value());
 
@@ -466,7 +464,7 @@ TEST_SUITE("DFTracerComparator") {
                 dstd::fs::rename(f, var_dir + "/trace_0.pfw.gz").has_value());
         }
 
-        dstd::String output = env.get_dir() + "/cmp_dir.txt";
+        dstd::String output = env.dir() + "/cmp_dir.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", base_dir, "--variant", var_dir,
                                  "--no-color", "-q", R"(cat == "POSIX")"},
@@ -492,7 +490,7 @@ TEST_SUITE("DFTracerComparator") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        dstd::String output = env.get_dir() + "/cmp_json.txt";
+        dstd::String output = env.dir() + "/cmp_json.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--format",
                                  "json", "-q", R"(cat == "POSIX")"},
@@ -587,7 +585,7 @@ TEST_SUITE("DFTracerComparator") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        dstd::String output = env.get_dir() + "/cmp_json_zero.txt";
+        dstd::String output = env.dir() + "/cmp_json_zero.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--format",
                                  "json", "-q", R"(cat == "POSIX")"},
@@ -627,7 +625,7 @@ TEST_SUITE("DFTracerComparator") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        dstd::String output = env.get_dir() + "/cmp_interval.txt";
+        dstd::String output = env.dir() + "/cmp_interval.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--no-color",
                                  "-t", "1000", "-q", R"(cat == "POSIX")"},

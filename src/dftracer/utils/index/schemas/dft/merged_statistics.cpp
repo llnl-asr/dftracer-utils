@@ -31,11 +31,11 @@ dstd::Result<dstd::Optional<MergedStatisticsResult>> merged_statistics(
     if (rows->empty()) return dstd::Optional<MergedStatisticsResult>{};
     MergedStatisticsResult merged;
     for (auto& row : *rows) {
-        if (merged.num_chunks == 0)
+        if (merged.chunk_count == 0)
             merged.stats = std::move(row.stats);
         else
             merged.stats.merge_from(row.stats);
-        ++merged.num_chunks;
+        ++merged.chunk_count;
     }
     if (extension_current(snapshot, file,
                           index::store::IndexExtension::Counts)) {

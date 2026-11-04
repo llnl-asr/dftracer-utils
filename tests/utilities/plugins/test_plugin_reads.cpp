@@ -36,7 +36,7 @@ constexpr int NUM_EVENTS = 20;
 // more events each add one more distinct arg key (y, z, w, v), so an
 // undeclared plugin's frame has five arg columns, not one.
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
-    const dstd::String pfw = env.get_dir() + "/reads_projection.pfw";
+    const dstd::String pfw = env.dir() + "/reads_projection.pfw";
     dstd::String ofs;
     for (int i = 0; i < NUM_EVENTS; ++i) {
         ofs += common::str_cat(
@@ -126,7 +126,7 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
 
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
-    const dstd::String plain = env.get_dir() + "/generic.jsonl";
+    const dstd::String plain = env.dir() + "/generic.jsonl";
     {
         dstd::String ofs;
         for (int i = 0; i < NUM_EVENTS; ++i)

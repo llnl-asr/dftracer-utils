@@ -114,7 +114,7 @@ struct ChunkDimensionStats {
     void observe_range_only(std::uint64_t value);
 
     /// Serialize value_counts to binary format:
-    /// [u32 LE num_entries] [u16 LE key_len, key bytes, u64 LE count]*
+    /// [u32 LE entry_count] [u16 LE key_size, key bytes, u64 LE count]*
     dstd::Vector<std::uint8_t> serialize_value_counts() const;
 
     /// Compress serialized value_counts with zlib.

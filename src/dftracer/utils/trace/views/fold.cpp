@@ -488,13 +488,13 @@ void FoldPortBus::publish(std::uint64_t key, const void* data,
 }
 
 const void* FoldPortBus::consume(std::uint64_t key,
-                                 std::uint32_t* out_len) const {
+                                 std::uint32_t* out_size) const {
     auto it = index_.find(key);
     if (it == index_.end()) {
-        if (out_len) *out_len = 0;
+        if (out_size) *out_size = 0;
         return nullptr;
     }
-    if (out_len) *out_len = it->second.len;
+    if (out_size) *out_size = it->second.len;
     return arena_.data() + it->second.offset;
 }
 
@@ -1228,8 +1228,8 @@ class OnDemandReader {
     struct Slot {
         const dstd::String* name = nullptr;
         const char* path = nullptr;
-        std::size_t seg_len = 0;
-        std::size_t run_len = 0;
+        std::size_t seg_size = 0;
+        std::size_t run_size = 0;
         bool schema_field = false;
         // The args fallback applies to the name.
         bool eligible = false;
@@ -1335,13 +1335,13 @@ class OnDemandReader {
     // Whether `key` is a longer dotted key that JsonValue::at would try for
     // the name of `slot` when its first segment is missing.
     static bool dotted_candidate(const Slot& slot, dstd::StringView key) {
-        return key.size() > slot.seg_len && key.size() <= slot.run_len &&
+        return key.size() > slot.seg_size && key.size() <= slot.run_size &&
                std::memcmp(slot.path, key.data(), key.size()) == 0 &&
-               (key.size() == slot.run_len || slot.path[key.size()] == '.');
+               (key.size() == slot.run_size || slot.path[key.size()] == '.');
     }
 
     static bool is_seg(const Slot& slot, dstd::StringView key) {
-        return key.size() == slot.seg_len &&
+        return key.size() == slot.seg_size &&
                std::memcmp(slot.path, key.data(), key.size()) == 0;
     }
 
@@ -1381,7 +1381,7 @@ class OnDemandReader {
                     --open;
                     OnDemandValue found;
                     const Step step =
-                        resolve(child, slot.path + slot.seg_len, found);
+                        resolve(child, slot.path + slot.seg_size, found);
                     if (step == Step::Error) return false;
                     if (step == Step::Found &&
                         !emit_chunk(found, slot, slot.args))
@@ -1425,10 +1425,10 @@ class OnDemandReader {
             any_eligible = any_eligible || slot.eligible;
             const char* p = slot.path;
             while (*p && *p != '.' && *p != '[') ++p;
-            slot.seg_len = static_cast<std::size_t>(p - slot.path);
+            slot.seg_size = static_cast<std::size_t>(p - slot.path);
             while (*p && *p != '[') ++p;
-            slot.run_len = static_cast<std::size_t>(p - slot.path);
-            slot.merged = slot.seg_len > 0;
+            slot.run_size = static_cast<std::size_t>(p - slot.path);
+            slot.merged = slot.seg_size > 0;
         }
         std::size_t merged = 0;
         for (std::size_t i = 0; i < n; ++i) {
@@ -1437,12 +1437,12 @@ class OnDemandReader {
             // The args member is read by the args walk, and one value is read
             // once; a name with the same first segment as an earlier one
             // cannot share it either.
-            bool taken = any_eligible && slot.seg_len == 4 &&
+            bool taken = any_eligible && slot.seg_size == 4 &&
                          std::memcmp(slot.path, "args", 4) == 0;
             for (std::size_t j = 0; j < i && !taken; ++j)
                 taken =
-                    slots[j].merged && slots[j].seg_len == slot.seg_len &&
-                    std::memcmp(slots[j].path, slot.path, slot.seg_len) == 0;
+                    slots[j].merged && slots[j].seg_size == slot.seg_size &&
+                    std::memcmp(slots[j].path, slot.path, slot.seg_size) == 0;
             slot.merged = !taken;
             merged += slot.merged ? 1 : 0;
         }
@@ -1466,7 +1466,7 @@ class OnDemandReader {
                         slot.root_done = true;
                         OnDemandValue found;
                         const Step step =
-                            resolve(child, slot.path + slot.seg_len, found);
+                            resolve(child, slot.path + slot.seg_size, found);
                         if (step == Step::Error) return false;
                         if (step == Step::Found) {
                             slot.root_found = true;

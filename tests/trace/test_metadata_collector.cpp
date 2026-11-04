@@ -25,19 +25,19 @@ using namespace dftracer::utils::trace;
 
 // Helper to create a test trace file
 static dstd::String create_test_trace_file(const dstd::String& dir,
-                                           int num_events) {
+                                           int event_count) {
     dstd::String file_path = dir + "/test.trace.gz";
     dftu_utils_test::TextOut ofs;
 
     const char* io_names[] = {"pread", "pwrite", "read",
                               "write", "fread",  "fwrite"};
-    const int num_names = sizeof(io_names) / sizeof(io_names[0]);
+    const int name_count = sizeof(io_names) / sizeof(io_names[0]);
 
-    for (int i = 1; i <= num_events; ++i) {
+    for (int i = 1; i <= event_count; ++i) {
         // Create valid JSON events similar to DFTracer format
         uint64_t timestamp_us =
             1000000000ULL + static_cast<uint64_t>(i * 100000);
-        const char* op_name = io_names[i % num_names];
+        const char* op_name = io_names[i % name_count];
         int size = 1024 * i;
 
         ofs << R"({"id":)" << i << R"(,"pid":)" << (1000 + i) << R"(,"tid":)"
@@ -129,7 +129,7 @@ TEST_SUITE("MetadataCollector") {
             CHECK(output.compressed_size > 0);
             CHECK(output.uncompressed_size > 0);
             CHECK(output.compressed_size < output.uncompressed_size);
-            CHECK(output.num_lines == 100);
+            CHECK(output.line_count == 100);
             CHECK(output.error_message.empty());
         }
 
@@ -176,7 +176,7 @@ TEST_SUITE("MetadataCollector") {
             CHECK(output.uncompressed_size > 0);
             CHECK(output.compressed_size <
                   output.uncompressed_size);  // Should be compressed
-            CHECK(output.num_lines == 50);
+            CHECK(output.line_count == 50);
             CHECK(output.checkpoint_size > 0);
             CHECK(output.error_message.empty());
 
@@ -222,7 +222,7 @@ TEST_SUITE("MetadataCollector") {
                 CHECK(output.has_index == true);
                 CHECK(output.index_valid == true);
                 CHECK(output.format == common::ArchiveFormat::Gzip);
-                CHECK(output.num_lines == 25);
+                CHECK(output.line_count == 25);
             }
         }
 
@@ -264,7 +264,7 @@ TEST_SUITE("MetadataCollector") {
                 .with_force_rebuild(true);
         const auto output = collector(second).get();
         CHECK(output.success);
-        CHECK(output.num_lines == 25);
+        CHECK(output.line_count == 25);
         CHECK(
             dstd::fs::exists(dstd::Path(root) / "rollups" / "marker").value());
         CHECK(dstd::fs::exists(dstd::Path(root) / "views" / "x" / "marker")
@@ -360,7 +360,7 @@ TEST_SUITE("MetadataCollectorRoot") {
                     std::future_status::ready);
             const auto out = future.get();
             CHECK(out.success);
-            CHECK(out.num_lines == static_cast<std::size_t>(20 + i));
+            CHECK(out.line_count == static_cast<std::size_t>(20 + i));
         }
 
         const dstd::String sub = dir + "/new";
@@ -374,7 +374,7 @@ TEST_SUITE("MetadataCollectorRoot") {
                 std::future_status::ready);
         const auto built = build.get();
         CHECK(built.success);
-        CHECK(built.num_lines == 7);
+        CHECK(built.line_count == 7);
 
         (void)dstd::fs::remove_all(dir);
     }

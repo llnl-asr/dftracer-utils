@@ -63,7 +63,7 @@ struct FileResult {
 
 static coro::CoroTask<FileResult> compress_file_parallel(
     const dstd::String& file_path, int compression_level,
-    std::size_t num_workers, std::size_t chunk_size) {
+    std::size_t worker_count, std::size_t chunk_size) {
     FileResult result;
     result.input_path = file_path;
     result.output_path = file_path + ".gz";
@@ -90,7 +90,7 @@ static coro::CoroTask<FileResult> compress_file_parallel(
         utilities::fileio::GzipWriterOptions opts;
         opts.member_size = chunk_size;
         opts.level = compression_level;
-        opts.workers = num_workers;
+        opts.workers = worker_count;
         auto writer =
             common::unwrap(co_await utilities::fileio::GzipLineWriter::open(
                 dstd::String(result.output_path), std::move(opts)));
@@ -207,10 +207,10 @@ static int run_pgzip(const PgzipArgParse& cli) {
                  chunk_size](coro::Scope& scope) -> coro::CoroTask<void> {
                 scope.spawn(
                     [ch = file_chan->producer(),
-                     num_files =
+                     file_count =
                          files_ptr->size()]() mutable -> coro::CoroTask<void> {
                         auto guard = ch.guard();
-                        for (std::size_t i = 0; i < num_files; ++i) {
+                        for (std::size_t i = 0; i < file_count; ++i) {
                             const auto send_ok = co_await ch.send(i);
                             if (!send_ok) co_return;
                         }

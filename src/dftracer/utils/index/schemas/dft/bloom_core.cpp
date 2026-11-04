@@ -97,7 +97,7 @@ void put_bloom(Tier& t, std::uint64_t checkpoint_idx, dstd::StringView path,
     bf.serialize_into(blob);
     t.path_granule(IndexExtension::Bloom, path, checkpoint_idx,
                    index::extensions::kinds::encode_bloom(
-                       blob, static_cast<std::uint64_t>(bf.num_entries())));
+                       blob, static_cast<std::uint64_t>(bf.entry_count())));
 }
 
 void put_file_bloom(Tier& t, dstd::StringView path,
@@ -106,7 +106,7 @@ void put_file_bloom(Tier& t, dstd::StringView path,
     bf.serialize_into(blob);
     t.path_file(IndexExtension::Bloom, path,
                 index::extensions::kinds::encode_bloom(
-                    blob, static_cast<std::uint64_t>(bf.num_entries())));
+                    blob, static_cast<std::uint64_t>(bf.entry_count())));
 }
 
 // One dimension's statistics as a zonemap and, when its value dictionary fit
@@ -556,12 +556,12 @@ BloomCore::EventCache::PidSlot& BloomCore::EventCache::pid_slot(
         slot.pid = pid;
         slot.tid = tid;
         slot.epoch = epoch_;
-        slot.pid_len = static_cast<std::uint8_t>(
+        slot.pid_size = static_cast<std::uint8_t>(
             dstd::to_chars(slot.pid_buf, slot.pid_buf + sizeof(slot.pid_buf),
                            pid)
                 .ptr -
             slot.pid_buf);
-        slot.tid_len = static_cast<std::uint8_t>(
+        slot.tid_size = static_cast<std::uint8_t>(
             dstd::to_chars(slot.tid_buf, slot.tid_buf + sizeof(slot.tid_buf),
                            tid)
                 .ptr -
@@ -604,16 +604,16 @@ void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
     observe_known(BfName, FdName, name, ns.name_in_bloom, ns.name_dim);
     observe_known(BfCat, FdCat, cat, ns.cat_in_bloom, ns.cat_dim);
 
-    const dstd::StringView pid_sv(ps.pid_buf, ps.pid_len);
-    const dstd::StringView tid_sv(ps.tid_buf, ps.tid_len);
+    const dstd::StringView pid_sv(ps.pid_buf, ps.pid_size);
+    const dstd::StringView tid_sv(ps.tid_buf, ps.tid_size);
     observe_known(BfPid, FdPid, pid_sv, ps.pid_in_bloom, ps.pid_dim);
     observe_known(BfTid, FdTid, tid_sv, ps.tid_in_bloom, ps.tid_dim);
 
     char pt_buf[52];
-    std::memcpy(pt_buf, ps.pid_buf, ps.pid_len);
-    pt_buf[ps.pid_len] = ':';
-    std::memcpy(pt_buf + ps.pid_len + 1, ps.tid_buf, ps.tid_len);
-    const dstd::StringView pt_sv(pt_buf, ps.pid_len + 1 + ps.tid_len);
+    std::memcpy(pt_buf, ps.pid_buf, ps.pid_size);
+    pt_buf[ps.pid_size] = ':';
+    std::memcpy(pt_buf + ps.pid_size + 1, ps.tid_buf, ps.tid_size);
+    const dstd::StringView pt_sv(pt_buf, ps.pid_size + 1 + ps.tid_size);
     bool no_bloom = false;
     observe_known(-1, FdPidTid, pt_sv, no_bloom, ps.pid_tid_dim);
 

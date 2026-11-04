@@ -119,18 +119,18 @@ dstd::String Log2Histogram::render_ascii(std::size_t max_width,
         dstd::String count_str = format_count(bins_[i]);
 
         // Scale bar
-        std::size_t bar_len = 0;
+        std::size_t bar_size = 0;
         if (max_count > 0) {
-            bar_len = static_cast<std::size_t>(static_cast<double>(bins_[i]) /
-                                               static_cast<double>(max_count) *
-                                               static_cast<double>(max_width));
-            if (bar_len == 0 && bins_[i] > 0) bar_len = 1;
+            bar_size = static_cast<std::size_t>(static_cast<double>(bins_[i]) /
+                                                static_cast<double>(max_count) *
+                                                static_cast<double>(max_width));
+            if (bar_size == 0 && bins_[i] > 0) bar_size = 1;
         }
 
         char line[256];
         std::snprintf(line, sizeof(line), "    %-24s |%-*s %s\n", range.c_str(),
                       static_cast<int>(max_width),
-                      dstd::String(bar_len, '#').c_str(), count_str.c_str());
+                      dstd::String(bar_size, '#').c_str(), count_str.c_str());
         out += line;
     }
 
@@ -184,10 +184,10 @@ dstd::String Log2Histogram::render_blocks(std::size_t max_width,
         }
 
         // Pad to fixed display width
-        std::size_t display_len = full_blocks + (frac > 0 ? 1 : 0);
+        std::size_t display_size = full_blocks + (frac > 0 ? 1 : 0);
         dstd::String padding;
-        if (display_len < max_width) {
-            padding = dstd::String(max_width - display_len, ' ');
+        if (display_size < max_width) {
+            padding = dstd::String(max_width - display_size, ' ');
         }
 
         char label[128];

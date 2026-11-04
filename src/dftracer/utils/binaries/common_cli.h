@@ -75,7 +75,7 @@ inline void apply_log_level_arg(dstd::StringView name) {
         DFTRACER_UTILS_LOG_WARN(
             "Unknown --log-level '%.*s'; keeping '%s'",
             static_cast<int>(name.size()), name.data(),
-            common::logger::level_name(common::logger::get_level()));
+            common::logger::level_name(common::logger::level()));
     }
 }
 

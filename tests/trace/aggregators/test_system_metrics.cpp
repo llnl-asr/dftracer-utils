@@ -27,7 +27,7 @@ TEST_SUITE("MetricStats double path") {
         CHECK(stats.min() == doctest::Approx(42.5));
         CHECK(stats.max() == doctest::Approx(42.5));
         CHECK(stats.mean() == doctest::Approx(42.5));
-        CHECK(stats.get_stddev() == doctest::Approx(0.0));
+        CHECK(stats.stddev() == doctest::Approx(0.0));
     }
 
     TEST_CASE("multiple values update") {
@@ -41,7 +41,7 @@ TEST_SUITE("MetricStats double path") {
         CHECK(stats.min() == doctest::Approx(10.0));
         CHECK(stats.max() == doctest::Approx(30.0));
         CHECK(stats.mean() == doctest::Approx(20.0));
-        CHECK(stats.get_stddev() == doctest::Approx(10.0));
+        CHECK(stats.stddev() == doctest::Approx(10.0));
     }
 
     TEST_CASE("update with percentiles") {

@@ -923,7 +923,7 @@ void write_agg_run(AggState& state, const dstd::String& path) {
             ("agg spill: cannot open run " + path).c_str());
     const dstd::SharedPtr<common::SpillCharge> charge =
         common::ScopedSpillSubdir::charge_for(dstd::PathView(path));
-    const std::int64_t ng = agg_num_groups(state);
+    const std::int64_t ng = agg_group_count(state);
     for (std::int64_t g = 0; g < ng; ++g) {
         const dstd::String blob =
             agg_serialize(*agg_extract_group(state, g), true);
@@ -956,12 +956,12 @@ AggRunReader::AggRunReader(const dstd::String& path)
 
 void AggRunReader::advance() {
     std::uint32_t len = 0;
-    const std::size_t got_len = std::fread(&len, 1, sizeof(len), is_.get());
-    if (got_len == 0) {
+    const std::size_t got_size = std::fread(&len, 1, sizeof(len), is_.get());
+    if (got_size == 0) {
         valid_ = false;
         return;
     }
-    if (got_len != sizeof(len))
+    if (got_size != sizeof(len))
         throw std::runtime_error("agg spill: truncated run");
     pos_ += sizeof(len);
     if (len > size_ - pos_)

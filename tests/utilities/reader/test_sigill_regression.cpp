@@ -86,7 +86,7 @@ TEST_SUITE("sigill_regression") {
                 .stream_type(reader::internal::StreamType::MultiLinesBytes)
                 .range_type(reader::internal::RangeType::ByteRange)
                 .from(start)
-                .to(reader.get_max_bytes()));
+                .to(reader.max_bytes()));
         dstd::String out;
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<char> buf(1u << 20);

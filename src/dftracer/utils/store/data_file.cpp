@@ -167,12 +167,12 @@ dstd::Expected<HeaderInfo, dstd::Error> read_header(int fd) {
     const std::uint64_t creation_time = dstd::read_u64_le(data + 24);
     const std::uint64_t writer_random = dstd::read_u64_le(data + 32);
     const std::uint32_t pid = dstd::read_u32_le(data + 40);
-    const std::uint16_t host_length = dstd::read_u16_le(data + 44);
-    const std::uint16_t label_length = dstd::read_u16_le(data + 46);
+    const std::uint16_t host_size = dstd::read_u16_le(data + 44);
+    const std::uint16_t label_size = dstd::read_u16_le(data + 46);
 
     const std::uint64_t strings_end =
-        static_cast<std::uint64_t>(48) + host_length + label_length + 16;
-    if (host_length > 255 || label_length > 255 ||
+        static_cast<std::uint64_t>(48) + host_size + label_size + 16;
+    if (host_size > 255 || label_size > 255 ||
         strings_end > FILE_HEADER_BYTES) {
         return info;
     }
@@ -180,11 +180,11 @@ dstd::Expected<HeaderInfo, dstd::Error> read_header(int fd) {
     info.extent_size = extent_size;
     info.writer_random = writer_random;
     info.pid = pid;
-    info.host.assign(reinterpret_cast<const char*>(data + 48), host_length);
-    info.label.assign(reinterpret_cast<const char*>(data + 48 + host_length),
-                      label_length);
+    info.host.assign(reinterpret_cast<const char*>(data + 48), host_size);
+    info.label.assign(reinterpret_cast<const char*>(data + 48 + host_size),
+                      label_size);
     info.creation_time = creation_time;
-    const std::size_t tail_at = 48 + host_length + label_length;
+    const std::size_t tail_at = 48 + host_size + label_size;
     info.tail_offset = dstd::read_u64_le(data + tail_at);
     info.tail_kind = dstd::read_u32_le(data + tail_at + 8);
     info.tail_crc = dstd::read_u32_le(data + tail_at + 12);
@@ -208,7 +208,7 @@ bool tail_layout_is_valid(std::uint64_t file_size, std::uint64_t tail_offset,
            file_size - tail_offset >= RECORD_HEADER_BYTES;
 }
 
-dstd::Expected<std::uint64_t, dstd::Error> read_record_length(
+dstd::Expected<std::uint64_t, dstd::Error> read_record_size(
     int fd, std::uint64_t file_size, std::uint64_t offset) {
     if (offset < FILE_HEADER_BYTES || offset % FILE_HEADER_BYTES != 0 ||
         offset > file_size || file_size - offset < RECORD_HEADER_BYTES) {
@@ -222,8 +222,8 @@ dstd::Expected<std::uint64_t, dstd::Error> read_record_length(
     }
     const std::uint32_t kind = dstd::read_u32_le(data + 8);
     if (kind < 1 || kind > 3) return parse_error();
-    const std::uint32_t body_length = dstd::read_u32_le(data + 12);
-    const std::uint64_t crc_end = RECORD_HEADER_BYTES + body_length + 4;
+    const std::uint32_t body_size = dstd::read_u32_le(data + 12);
+    const std::uint64_t crc_end = RECORD_HEADER_BYTES + body_size + 4;
     const std::uint64_t padded_size =
         dstd::bits::align_up(crc_end, FILE_HEADER_BYTES);
     if (padded_size < crc_end || padded_size > file_size - offset) {
@@ -244,7 +244,7 @@ dstd::Expected<Record, dstd::Error> read_record_at(int fd,
                                                    std::uint64_t file_size,
                                                    std::uint64_t offset,
                                                    std::size_t& records_read) {
-    auto length = read_record_length(fd, file_size, offset);
+    auto length = read_record_size(fd, file_size, offset);
     if (!length) return dstd::Unexpected<dstd::Error>(length.error());
     ++records_read;
     auto bytes = pread_all(fd, offset, *length);
@@ -258,7 +258,7 @@ dstd::Expected<dstd::Vector<Record>, dstd::Error> scan_records(
     for (std::uint64_t offset = FILE_HEADER_BYTES;
          offset <= file_size && file_size - offset >= RECORD_HEADER_BYTES;
          offset += FILE_HEADER_BYTES) {
-        auto length = read_record_length(fd, file_size, offset);
+        auto length = read_record_size(fd, file_size, offset);
         if (!length) {
             if (length.error().is(dstd::Condition::Io)) {
                 return dstd::Unexpected<dstd::Error>(length.error());
@@ -572,14 +572,14 @@ dstd::Expected<dstd::Vector<SummaryEntry>, dstd::Error> read_summary(
             length < 20) {
             break;
         }
-        const std::uint32_t name_length = dstd::read_u32_le(data + body);
-        if (name_length > length - 20) break;
+        const std::uint32_t name_size = dstd::read_u32_le(data + body);
+        if (name_size > length - 20) break;
         SummaryEntry entry;
         entry.name.assign(reinterpret_cast<const char*>(data + body + 4),
-                          name_length);
-        entry.needed_bytes = dstd::read_u64_le(data + body + 4 + name_length);
-        entry.sequence = dstd::read_u64_le(data + body + 12 + name_length);
-        const std::size_t items_at = body + 20 + name_length;
+                          name_size);
+        entry.needed_bytes = dstd::read_u64_le(data + body + 4 + name_size);
+        entry.sequence = dstd::read_u64_le(data + body + 12 + name_size);
+        const std::size_t items_at = body + 20 + name_size;
         auto raw_items = decode_meta(
             dstd::ByteView{reinterpret_cast<const std::byte*>(data + items_at),
                            body + length - items_at});
@@ -1175,11 +1175,11 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_record(
     io_fault::on_write(fd_, fault_kind_of(actual_kind), offset, encoded.data(),
                        encoded.size());
 
-    const std::uint32_t body_length = dstd::read_u32_le(encoded.data() + 12);
+    const std::uint32_t body_size = dstd::read_u32_le(encoded.data() + 12);
     tail_offset_ = offset;
     tail_kind_ = static_cast<std::uint32_t>(actual_kind);
     tail_crc_ =
-        dstd::read_u32_le(encoded.data() + RECORD_HEADER_BYTES + body_length);
+        dstd::read_u32_le(encoded.data() + RECORD_HEADER_BYTES + body_size);
     last_sequence_ = sequence;
     return {};
 }
@@ -1255,12 +1255,12 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
 
     const std::uint64_t trailer_offset =
         reserve_range(FILE_TRAILER_BYTES, 1, io_fault::WriteKind::Trailer);
-    const std::uint32_t footer_length =
+    const std::uint32_t footer_size =
         static_cast<std::uint32_t>(trailer_offset - tail_offset_);
     dstd::Vector<std::uint8_t> trailer(FILE_TRAILER_BYTES, 0);
     std::memcpy(trailer.data(), TRAILER_MAGIC.data(), TRAILER_MAGIC.size());
     dstd::write_u64_le(trailer.data() + 8, tail_offset_);
-    dstd::write_u32_le(trailer.data() + 16, footer_length);
+    dstd::write_u32_le(trailer.data() + 16, footer_size);
     const std::uint32_t trailer_crc = crc32(0, trailer.data(), 20);
     dstd::write_u32_le(trailer.data() + 20, trailer_crc);
     auto written =
@@ -1426,11 +1426,11 @@ dstd::Expected<bool, dstd::Error> DataFileReader::open_light(
         return false;
     }
     const std::uint64_t tail_offset = dstd::read_u64_le(trailer + 8);
-    const std::uint32_t footer_length = dstd::read_u32_le(trailer + 16);
+    const std::uint32_t footer_size = dstd::read_u32_le(trailer + 16);
     if (tail_offset < FILE_HEADER_BYTES ||
         tail_offset % FILE_HEADER_BYTES != 0 ||
         tail_offset > file_size - FILE_TRAILER_BYTES ||
-        footer_length < RECORD_HEADER_BYTES + 4) {
+        footer_size < RECORD_HEADER_BYTES + 4) {
         return false;
     }
 
@@ -1438,7 +1438,7 @@ dstd::Expected<bool, dstd::Error> DataFileReader::open_light(
     if (tail_offset >= start) {
         const std::size_t at = static_cast<std::size_t>(tail_offset - start);
         const std::size_t length = std::min<std::size_t>(
-            footer_length, static_cast<std::size_t>(want) - at);
+            footer_size, static_cast<std::size_t>(want) - at);
         decoded = decode_record_at(bytes.subspan(at, length), tail_offset);
     } else {
         decoded = read_record_at(fd_.load(std::memory_order_relaxed), file_size,
@@ -1773,7 +1773,7 @@ dstd::Expected<dstd::Vector<ExtentRefItem>, dstd::Error>
 DataFileReader::read_commit(const CommitRefItem& ref, BlockReads* reads) const {
     auto fd = descriptor();
     if (!fd) return dstd::Unexpected<dstd::Error>(fd.error());
-    auto length = read_record_length(*fd, file_size_, ref.record_offset);
+    auto length = read_record_size(*fd, file_size_, ref.record_offset);
     if (!length) return dstd::Unexpected<dstd::Error>(length.error());
     auto bytes = pread_all(*fd, ref.record_offset, *length);
     if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
@@ -1884,7 +1884,7 @@ dstd::Expected<void, dstd::Error> space_extents(SpaceScan& scan) {
         auto read = scan.reader->read_range(ref.offset, EXTENT_HEADER_BYTES,
                                             head, nullptr);
         if (!read) return dstd::Unexpected<dstd::Error>(read.error());
-        const std::size_t table = ExtentPages::table_length(bytes_of(head));
+        const std::size_t table = ExtentPages::table_size(bytes_of(head));
         if (table <= EXTENT_HEADER_BYTES || table > ref.length) {
             return parse_error();
         }
@@ -1898,14 +1898,14 @@ dstd::Expected<void, dstd::Error> space_extents(SpaceScan& scan) {
         for (std::size_t page = 0; page < pages->size(); ++page) {
             const PageEntry& entry = pages->entry(page);
             ++scan.report.pages;
-            scan.report.page_bytes += entry.stored_length;
-            scan.report.page_raw_bytes += entry.raw_length;
+            scan.report.page_bytes += entry.stored_size;
+            scan.report.page_raw_bytes += entry.raw_size;
             if (entry.codec == PageCodec::Zstd ||
                 entry.codec == PageCodec::ZstdDict) {
                 ++scan.report.pages_compressed;
             }
             if (entry.codec == PageCodec::ZstdDict) ++scan.report.pages_dict;
-            stored += entry.stored_length;
+            stored += entry.stored_size;
         }
         if (stored > ref.length - table) return parse_error();
         scan.report.extent_padding_bytes += ref.length - table - stored;
@@ -2038,8 +2038,8 @@ dstd::Expected<void, dstd::Error> space_records(SpaceScan& scan) {
             continue;
         }
         const std::uint32_t kind = dstd::read_u32_le(data + 8);
-        const std::uint32_t body_length = dstd::read_u32_le(data + 12);
-        const std::uint64_t crc_end = RECORD_HEADER_BYTES + body_length + 4;
+        const std::uint32_t body_size = dstd::read_u32_le(data + 12);
+        const std::uint64_t crc_end = RECORD_HEADER_BYTES + body_size + 4;
         const std::uint64_t padded =
             dstd::bits::align_up(crc_end, FILE_HEADER_BYTES);
         if (kind < 1 || kind > 3 || padded < crc_end ||
@@ -2095,16 +2095,15 @@ dstd::Expected<SpaceReport, dstd::Error> space_report(dstd::StringView path) {
         return parse_error();
     }
     const std::uint64_t footer_offset = dstd::read_u64_le(trailer.data() + 8);
-    const std::uint32_t footer_length = dstd::read_u32_le(trailer.data() + 16);
+    const std::uint32_t footer_size = dstd::read_u32_le(trailer.data() + 16);
     if (footer_offset < FILE_HEADER_BYTES ||
         footer_offset % FILE_HEADER_BYTES != 0 ||
-        footer_length < RECORD_HEADER_BYTES + 4 ||
-        footer_length > trailer_offset ||
-        footer_offset != trailer_offset - footer_length) {
+        footer_size < RECORD_HEADER_BYTES + 4 || footer_size > trailer_offset ||
+        footer_offset != trailer_offset - footer_size) {
         return parse_error();
     }
-    scan.report.footer_bytes = footer_length + FILE_TRAILER_BYTES;
-    scan.cover(footer_offset, footer_length);
+    scan.report.footer_bytes = footer_size + FILE_TRAILER_BYTES;
+    scan.cover(footer_offset, footer_size);
     scan.cover(trailer_offset, FILE_TRAILER_BYTES);
 
     if (!tail.items.empty()) {

@@ -60,12 +60,12 @@ TEST_SUITE("IndexParserReuse") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i)
-            files.emplace_back(write_small_trace(env.get_dir(), i));
+            files.emplace_back(write_small_trace(env.dir(), i));
         constexpr std::size_t RETAIN =
             index::build::IndexFoldDriver::PARSER_RETAIN_BYTES;
         constexpr std::size_t LONG_LINE = 2 * RETAIN;
         files.emplace(files.begin() + FILES / 2,
-                      write_long_line_trace(env.get_dir(), LONG_LINE));
+                      write_long_line_trace(env.dir(), LONG_LINE));
 
         const auto created_before = index::build::g_parsers_created.load();
         index::build::IndexBuildBatchResult result;
@@ -74,7 +74,7 @@ TEST_SUITE("IndexParserReuse") {
             auto config =
                 dstd::make_shared<index::build::IndexBuildBatchConfig>();
             config->file_paths = files;
-            config->index_dir = env.get_dir() + "/idx";
+            config->index_dir = env.dir() + "/idx";
             config->parallelism = WORKERS;
             result =
                 co_await index::build::BatchBuilder::process(std::move(config));

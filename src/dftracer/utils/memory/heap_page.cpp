@@ -473,7 +473,7 @@ void push_free_heap(Heap* h) noexcept {
 
 void before_map(std::size_t bytes);
 
-Heap* create_heap() {
+Heap* make_heap() {
     before_map(HEAP_PAGE_SIZE);
     void* raw = map_aligned(HEAP_PAGE_SIZE);
     if (raw == nullptr) throw std::bad_alloc();
@@ -607,7 +607,7 @@ void process_init() {
 Heap& attach_heap() {
     ::pthread_once(&g_once, process_init);
     Heap* h = pop_free_heap();
-    if (h == nullptr) h = create_heap();
+    if (h == nullptr) h = make_heap();
     t_heap = h;
     if (active_backend() == Backend::PageHeap) t_page_attrib = &h->attrib;
     if (::pthread_setspecific(g_key, h) != 0) {

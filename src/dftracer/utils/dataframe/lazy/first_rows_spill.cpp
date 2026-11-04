@@ -494,7 +494,7 @@ class UniqueCursor : public Cursor {
                 dstd::Vector<dstd::String> chunk_bytes(nchunks);
                 dstd::Vector<std::uint64_t> hashes(nz);
                 dstd::Vector<std::uint64_t> key_off(nz);
-                dstd::Vector<std::uint32_t> key_len(nz);
+                dstd::Vector<std::uint32_t> key_size(nz);
                 parallel_for(
                     static_cast<std::int64_t>(nchunks), 1,
                     [&](std::int64_t cb, std::int64_t ce) {
@@ -511,7 +511,7 @@ class UniqueCursor : public Cursor {
                                     append_cell(buf, col,
                                                 static_cast<std::int64_t>(at));
                                 key_off[at] = start;
-                                key_len[at] = static_cast<std::uint32_t>(
+                                key_size[at] = static_cast<std::uint32_t>(
                                     buf.size() - start);
                                 hashes[at] = dstd::hash::xxh3_64(
                                     buf.data() + start, buf.size() - start);
@@ -531,16 +531,16 @@ class UniqueCursor : public Cursor {
                         std::size_t key_total = 0;
                         std::size_t key_max = 0;
                         for (std::size_t at = 0; at < nz; ++at) {
-                            key_total += key_len[at];
+                            key_total += key_size[at];
                             key_max =
-                                std::max<std::size_t>(key_max, key_len[at]);
+                                std::max<std::size_t>(key_max, key_size[at]);
                         }
                         refuse =
                             refused(gov_, budget_,
                                     seen_.bytes_after(nz, key_total, key_max));
                     }
                     for (std::size_t at = 0; at < nz; ++at)
-                        if (seen_.insert(hashes[at], key_ptr(at), key_len[at]))
+                        if (seen_.insert(hashes[at], key_ptr(at), key_size[at]))
                             keep_mask[at] = 1;
                 } else {
                     const std::size_t p = seen_p_.size();
@@ -553,9 +553,9 @@ class UniqueCursor : public Cursor {
                             std::size_t key_total = 0;
                             std::size_t key_max = 0;
                             for (std::size_t at : buckets[g]) {
-                                key_total += key_len[at];
-                                key_max =
-                                    std::max<std::size_t>(key_max, key_len[at]);
+                                key_total += key_size[at];
+                                key_max = std::max<std::size_t>(key_max,
+                                                                key_size[at]);
                             }
                             bound += seen_p_[g]->bytes_after(
                                 buckets[g].size(), key_total, key_max);
@@ -570,7 +570,7 @@ class UniqueCursor : public Cursor {
                                      buckets[static_cast<std::size_t>(g)])
                                     if (seen_p_[static_cast<std::size_t>(g)]
                                             ->insert(hashes[at], key_ptr(at),
-                                                     key_len[at]))
+                                                     key_size[at]))
                                         keep_mask[at] = 1;
                         });
                 }
@@ -579,7 +579,7 @@ class UniqueCursor : public Cursor {
                 for (std::int64_t i = 0; i < n; ++i) {
                     if (!keep_mask[static_cast<std::size_t>(i)]) continue;
                     keep.push_back(i);
-                    fast_bytes_ += key_len[static_cast<std::size_t>(i)] +
+                    fast_bytes_ += key_size[static_cast<std::size_t>(i)] +
                                    DEDUP_ENTRY_OVERHEAD;
                 }
                 next_row_id_ += n;

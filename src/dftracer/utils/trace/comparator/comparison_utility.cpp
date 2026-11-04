@@ -55,7 +55,7 @@ CollapsedMetrics merge_collapsed(const CollapsedMap& cm,
         if (entry.xfer_mean > 0.0) xfers.push_back(entry.xfer_mean);
         if (entry.bw_mean > 0.0) bws.push_back(entry.bw_mean);
     }
-    total.num_windows = dur_means.size();
+    total.window_count = dur_means.size();
     total.count_mean = vec_mean(counts);
     total.dur_mean_of_means = vec_mean(dur_means);
     total.size_mean_of_means = vec_mean(size_means);
@@ -205,9 +205,9 @@ NodeResult ComparisonUtility::build_result_tree(
 
         child.summary.label = "";
         child.summary.baseline_present =
-            base_cat.merged.count > 0 || base_cat.num_windows > 0;
+            base_cat.merged.count > 0 || base_cat.window_count > 0;
         child.summary.variant_present =
-            var_cat.merged.count > 0 || var_cat.num_windows > 0;
+            var_cat.merged.count > 0 || var_cat.window_count > 0;
         child.summary.metrics =
             compare_metrics(base_cat, var_cat, metrics, percentiles);
         child.summary.worst_pct_change =

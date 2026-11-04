@@ -47,17 +47,18 @@ class GzipMemberDecompressor {
 
     /// out_cap must be >= the member's uncompressed size. nullopt on failure.
     dstd::Optional<DecompressResult> decompress(const void* comp,
-                                                std::size_t comp_len, void* out,
+                                                std::size_t comp_size,
+                                                void* out,
                                                 std::size_t out_cap) const;
 
     /// Reports the exact status so streaming callers can tell InsufficientSpace
     /// from BadData. `result` is filled on Ok.
-    GzipDecode decompress_status(const void* comp, std::size_t comp_len,
+    GzipDecode decompress_status(const void* comp, std::size_t comp_size,
                                  void* out, std::size_t out_cap,
                                  DecompressResult& result) const;
 
     dstd::Optional<dstd::Vector<std::uint8_t>> decompress_member(
-        const void* comp, std::size_t comp_len,
+        const void* comp, std::size_t comp_size,
         std::size_t uncompressed_size) const;
 
     bool valid() const { return d_ != nullptr; }
@@ -75,7 +76,7 @@ class GzipMemberDecompressor {
 /// invalid rather than short, so corruption is never recovered. The kept bytes
 /// are not checksum-verified.
 dstd::Optional<std::size_t> decode_truncated_member(
-    const void* comp, std::size_t comp_len, dstd::Vector<std::uint8_t>& out);
+    const void* comp, std::size_t comp_size, dstd::Vector<std::uint8_t>& out);
 
 /// Compresses a whole buffer into one gzip member. Reusable, not thread-safe,
 /// move-only.

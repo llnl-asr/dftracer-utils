@@ -177,7 +177,7 @@ void check_quantiles(const schemas::dft::agg::AggPartial& p,
 }
 
 dstd::String index_dir_of(const dftu_utils_test::TestEnvironment& env) {
-    return env.get_dir() + "/idx";
+    return env.dir() + "/idx";
 }
 
 // Every aggregation row of `file`, keyed by text in place of dictionary ids,
@@ -268,7 +268,7 @@ TEST_SUITE("AggPartialsStore") {
         dstd::Vector<dstd::String> files;
         dstd::Map<Key, dstd::Vector<double>> durations;
         for (int i = 0; i < FILES; ++i)
-            files.emplace_back(write_trace(env.get_dir(), i, durations));
+            files.emplace_back(write_trace(env.dir(), i, durations));
         const auto index_dir = index_dir_of(env);
 
         const double seconds = build_seconds(files, index_dir);
@@ -323,7 +323,7 @@ TEST_SUITE("AggPartialsStore") {
         dstd::Vector<dstd::String> files;
         dstd::Map<Key, dstd::Vector<double>> durations;
         for (int i = 0; i < 3; ++i)
-            files.emplace_back(write_trace(env.get_dir(), i, durations));
+            files.emplace_back(write_trace(env.dir(), i, durations));
         const auto index_dir = index_dir_of(env);
         build_seconds(files, index_dir);
 
@@ -404,7 +404,7 @@ TEST_SUITE("AggPartialsStore") {
         dstd::Vector<dstd::String> files;
         dstd::Map<Key, dstd::Vector<double>> durations;
         for (int i = 0; i < 3; ++i)
-            files.emplace_back(write_trace(env.get_dir(), i, durations));
+            files.emplace_back(write_trace(env.dir(), i, durations));
         const auto index_dir = index_dir_of(env);
         build_seconds(files, index_dir);
 
@@ -486,9 +486,9 @@ TEST_SUITE("AggPartialsStore") {
         dstd::Vector<dstd::String> files;
         dstd::Map<Key, dstd::Vector<double>> durations;
         for (int i = 0; i < 3; ++i)
-            files.emplace_back(write_trace(env.get_dir(), i, durations));
-        const dstd::String held = env.get_dir() + "/held";
-        const dstd::String through = env.get_dir() + "/through";
+            files.emplace_back(write_trace(env.dir(), i, durations));
+        const dstd::String held = env.dir() + "/held";
+        const dstd::String through = env.dir() + "/through";
 
         const auto run_bytes =
             schemas::dft::agg::g_agg_run_bytes.exchange(UINT64_MAX);
@@ -506,12 +506,12 @@ TEST_SUITE("AggPartialsStore") {
 
         // A changed file rebuilt through its staged write keeps none of the
         // rows it had.
-        write_trace(env.get_dir(), 0, durations, /*salt=*/37);
+        write_trace(env.dir(), 0, durations, /*salt=*/37);
         const auto rebuilt = schemas::dft::agg::g_agg_runs_staged.load();
         build_seconds(files, through);
         CHECK(schemas::dft::agg::g_agg_runs_staged.load() > rebuilt);
         schemas::dft::agg::g_agg_run_bytes.store(UINT64_MAX);
-        const dstd::String fresh = env.get_dir() + "/fresh";
+        const dstd::String fresh = env.dir() + "/fresh";
         build_seconds(files, fresh);
         schemas::dft::agg::g_agg_run_bytes.store(run_bytes);
         CHECK(agg_rows(files[0], through) != agg_rows(files[0], held));
@@ -526,20 +526,20 @@ TEST_SUITE("AggPartialsStore") {
         dstd::Map<Key, dstd::Vector<double>> durations;
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < CRASH_FILES; ++i)
-            files.emplace_back(write_trace(env.get_dir(), i, durations));
+            files.emplace_back(write_trace(env.dir(), i, durations));
         const auto index_dir = index_dir_of(env);
         build_seconds(files, index_dir);
         dstd::Vector<dstd::Map<dstd::String, dstd::String>> before;
         for (const auto& f : files) before.push_back(agg_rows(f, index_dir));
 
         for (int i = 0; i < CRASH_FILES; ++i)
-            write_trace(env.get_dir(), i, durations, /*salt=*/37);
-        ::setenv(CRASH_DIR_ENV, env.get_dir().c_str(), 1);
+            write_trace(env.dir(), i, durations, /*salt=*/37);
+        ::setenv(CRASH_DIR_ENV, env.dir().c_str(), 1);
         const auto child = fresh_process::run("a build killed after runs");
         ::unsetenv(CRASH_DIR_ENV);
         REQUIRE(child.ok());
 
-        const dstd::String fresh = env.get_dir() + "/fresh";
+        const dstd::String fresh = env.dir() + "/fresh";
         build_seconds(files, fresh);
         std::size_t kept = 0;
         for (int i = 0; i < CRASH_FILES; ++i) {

@@ -79,9 +79,9 @@ dstd::Optional<CountsGranule> decode_counts(dstd::StringView bytes) {
 }
 
 dstd::String encode_bloom(dstd::Span<const unsigned char> bloom,
-                          std::uint64_t num_entries) {
+                          std::uint64_t entry_count) {
     dstd::String out;
-    dstd::append_u64_be(out, num_entries);
+    dstd::append_u64_be(out, entry_count);
     out.append(reinterpret_cast<const char*>(bloom.data()), bloom.size());
     return out;
 }

@@ -42,7 +42,7 @@ dstd::String end_event(std::uint64_t pid, bool with_args) {
 }
 
 dstd::String make_gz(TestEnvironment& env, const dstd::String& body) {
-    dstd::String pfw = env.get_dir() + "/tc.pfw";
+    dstd::String pfw = env.dir() + "/tc.pfw";
     {
         dftu_utils_test::FileOut(pfw) << body;
     }

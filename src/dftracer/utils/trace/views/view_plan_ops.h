@@ -94,7 +94,7 @@ coro::CoroTask<ExportStats> for_each_batch(
     ScanPlan plan,
     dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
         on_batch,
-    std::size_t num_slots, std::uint64_t limit = 0);
+    std::size_t slot_count, std::uint64_t limit = 0);
 bool export_would_bootstrap(const ScanPlan& plan);
 bool collect_would_bootstrap(const ScanPlan& plan);
 coro::CoroTask<ExportStats> export_json(ScanPlan plan, ExportSink& sink);

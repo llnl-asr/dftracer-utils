@@ -313,7 +313,7 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
     dstd::Vector<std::size_t> ckpt_counts(plan.files.size());
     for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
         uc_sizes[fi] = plan.files[fi].uncompressed_size;
-        ckpt_counts[fi] = plan.files[fi].num_checkpoints;
+        ckpt_counts[fi] = plan.files[fi].checkpoint_count;
     }
 
     // Every file's metadata first, then the planners: a planner holds the
@@ -344,7 +344,7 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
                             "gather_units: metadata read failed for " +
                                 f.file_path + ": " + md.error_message);
                     uc_sizes[fi] = md.uncompressed_size;
-                    ckpt_counts[fi] = md.num_checkpoints;
+                    ckpt_counts[fi] = md.checkpoint_count;
                 } catch (...) {
                     errors[fi] = std::current_exception();
                 }
@@ -385,7 +385,7 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
                                 ? index_path
                                 : "")
                         .with_uncompressed_size(uc_sizes[fi])
-                        .with_num_checkpoints(ckpt_counts[fi]);
+                        .with_checkpoint_count(ckpt_counts[fi]);
                     const auto held =
                         snapshots.find(dstd::StringView(index_path));
                     if (held != snapshots.end())
@@ -507,7 +507,7 @@ dstd::UniquePtr<Fold> select_catalog_fold(
 }
 
 coro::CoroTask<ExportStats> for_each_scanned_batch(
-    const ViewPlan& plan, const ViewDefinition& vdef, std::size_t num_slots,
+    const ViewPlan& plan, const ViewDefinition& vdef, std::size_t slot_count,
     std::uint64_t limit,
     const dstd::Function<void(std::size_t,
                               const dstd::Vector<dstd::StringView>&)>& on_batch,
@@ -516,14 +516,14 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     std::uint64_t skipped = 0;
     auto units = co_await gather_units(plan, vdef, skipped);
     // 0 means one worker per unit (max parallelism); otherwise cap the fan-out.
-    if (num_slots == 0) num_slots = std::max<std::size_t>(1, units.size());
+    if (slot_count == 0) slot_count = std::max<std::size_t>(1, units.size());
 
     const std::uint64_t cap =
         limit > 0 ? limit : std::numeric_limits<std::uint64_t>::max();
     std::atomic<std::uint64_t> produced{0};
     std::atomic<std::size_t> next_unit{0};
-    dstd::Vector<ScanCounts> counts_v(num_slots);
-    const std::size_t nworkers = std::min(num_slots, units.size());
+    dstd::Vector<ScanCounts> counts_v(slot_count);
+    const std::size_t nworkers = std::min(slot_count, units.size());
     dstd::Vector<CoverageSet> covered_v(nworkers);
 
     bool any_needs_args = false;

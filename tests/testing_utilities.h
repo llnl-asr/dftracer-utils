@@ -87,11 +87,11 @@ typedef enum { TestFormatGzip = 0 } test_format_t;
 char* test_environment_create_test_gzip_file(test_environment_handle_t env);
 
 /**
- * Create a dftracer trace (.gz) of `num_events` events and return the path
+ * Create a dftracer trace (.gz) of `event_count` events and return the path
  * Returns allocated string - caller must free
  */
 char* test_environment_create_dft_gzip_file(test_environment_handle_t env,
-                                            int num_events);
+                                            int event_count);
 
 /**
  * Create a test file with specified format and return the path
@@ -220,28 +220,28 @@ class TestEnvironment {
     TestEnvironment& operator=(const TestEnvironment&) = delete;
     ~TestEnvironment();
 
-    const dftracer::utils::dstd::String& get_dir() const;
+    const dftracer::utils::dstd::String& dir() const;
     bool is_valid() const;
     dftracer::utils::dstd::String
     create_test_file();  // Format-aware file creation
     dftracer::utils::dstd::String create_test_gzip_file();
     dftracer::utils::dstd::String get_index_path(
         const dftracer::utils::dstd::String& gz_file);
-    Format get_format() const { return format_; }
+    Format format() const { return format_; }
 
     // DFTracer-specific test file creation
-    dftracer::utils::dstd::String create_dft_test_file(int num_events = 100);
+    dftracer::utils::dstd::String create_dft_test_file(int event_count = 100);
     dftracer::utils::dstd::String create_dft_test_gzip_file(
-        int num_events = 100);
+        int event_count = 100);
 
-    // Multi-run trace: `num_runs` app spans (one pid each), separated by
+    // Multi-run trace: `run_count` app spans (one pid each), separated by
     // `gap_us` idle time. Returns the .pfw.gz path.
     dftracer::utils::dstd::String create_dft_multirun_gzip_file(
-        int num_runs, std::uint64_t run_us = 10000,
+        int run_count, std::uint64_t run_us = 10000,
         std::uint64_t gap_us = 5000);
 
    private:
-    std::size_t num_lines_;
+    std::size_t line_count_;
     dftracer::utils::dstd::String test_dir_;
     Format format_;
 

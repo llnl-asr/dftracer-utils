@@ -57,18 +57,18 @@ std::vector<std::vector<T>> partition_all(std::size_t n,
 /**
  * Calculate tree reduction depth for given number of items and split size
  *
- * @param num_items Number of items to reduce
+ * @param item_count Number of items to reduce
  * @param split_size How many items to combine at each level
- * @return Number of reduction levels (0 if num_items <= 1)
+ * @return Number of reduction levels (0 if item_count <= 1)
  */
-inline std::size_t tree_reduction_depth(std::size_t num_items,
+inline std::size_t tree_reduction_depth(std::size_t item_count,
                                         std::size_t split_size) {
-    if (num_items <= 1 || split_size <= 1) {
+    if (item_count <= 1 || split_size <= 1) {
         return 0;
     }
 
     std::size_t depth = 0;
-    std::size_t current = num_items;
+    std::size_t current = item_count;
     while (current > 1) {
         current = (current + split_size - 1) / split_size;
         ++depth;
@@ -85,18 +85,18 @@ inline std::size_t tree_reduction_depth(std::size_t num_items,
  *   Level 2:          2 tasks
  *   Level 3:          1 task (final)
  *
- * @param num_items Starting number of items
+ * @param item_count Starting number of items
  * @param split_size How many items to combine at each level
  * @return Vector of task counts per level (not including input level)
  */
-inline std::vector<std::size_t> tree_reduction_levels(std::size_t num_items,
+inline std::vector<std::size_t> tree_reduction_levels(std::size_t item_count,
                                                       std::size_t split_size) {
     std::vector<std::size_t> levels;
-    if (num_items <= 1 || split_size <= 1) {
+    if (item_count <= 1 || split_size <= 1) {
         return levels;
     }
 
-    std::size_t current = num_items;
+    std::size_t current = item_count;
     while (current > 1) {
         current = (current + split_size - 1) / split_size;
         levels.push_back(current);
@@ -115,22 +115,22 @@ inline std::vector<std::size_t> tree_reduction_levels(std::size_t num_items,
  *   Level 2: [[0,1], [2,3]]                   - 2 groups
  *   Level 3: [[0,1]]                          - 1 group (final)
  *
- * @param num_items Starting number of items
+ * @param item_count Starting number of items
  * @param split_size How many items to combine at each level
  * @return Vector of levels, each containing groups of indices
  */
 inline std::vector<std::vector<std::vector<std::size_t>>> build_tree_indices(
-    std::size_t num_items, std::size_t split_size) {
+    std::size_t item_count, std::size_t split_size) {
     std::vector<std::vector<std::vector<std::size_t>>> levels;
 
-    if (num_items <= 1 || split_size <= 1) {
+    if (item_count <= 1 || split_size <= 1) {
         return levels;
     }
 
     // Create initial indices
     std::vector<std::size_t> current_indices;
-    current_indices.reserve(num_items);
-    for (std::size_t i = 0; i < num_items; ++i) {
+    current_indices.reserve(item_count);
+    for (std::size_t i = 0; i < item_count; ++i) {
         current_indices.push_back(i);
     }
 

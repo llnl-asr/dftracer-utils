@@ -86,9 +86,9 @@ struct MetadataCollectorUtilityOutput {
     bool index_valid = false;
     std::uint64_t compressed_size = 0;
     std::uint64_t uncompressed_size = 0;
-    std::uint64_t num_lines = 0;
+    std::uint64_t line_count = 0;
     std::uint64_t checkpoint_size = 0;
-    std::size_t num_checkpoints = 0;
+    std::size_t checkpoint_count = 0;
     common::ArchiveFormat format = common::ArchiveFormat::Unknown;
     dstd::String error_message;
     std::size_t event_hash = 0;
@@ -105,9 +105,9 @@ struct MetadataCollectorUtilityOutput {
                index_valid == other.index_valid &&
                compressed_size == other.compressed_size &&
                uncompressed_size == other.uncompressed_size &&
-               num_lines == other.num_lines &&
+               line_count == other.line_count &&
                checkpoint_size == other.checkpoint_size &&
-               num_checkpoints == other.num_checkpoints &&
+               checkpoint_count == other.checkpoint_count &&
                format == other.format && event_hash == other.event_hash;
     }
 };

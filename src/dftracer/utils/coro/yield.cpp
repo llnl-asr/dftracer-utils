@@ -36,7 +36,7 @@ void set_timeslice_duration(std::chrono::microseconds duration) noexcept {
     t_timeslice_duration = duration;
 }
 
-std::chrono::microseconds get_timeslice_duration() noexcept {
+std::chrono::microseconds timeslice_duration() noexcept {
     return t_timeslice_duration;
 }
 
@@ -111,7 +111,7 @@ void drive_to_completion(std::coroutine_handle<> h,
         return finished.load(std::memory_order_acquire);
     };
 
-    auto saved = get_timeslice_duration();
+    auto saved = timeslice_duration();
     set_timeslice_duration(std::chrono::microseconds{0});
     struct RestoreTimeslice {
         std::chrono::microseconds saved;

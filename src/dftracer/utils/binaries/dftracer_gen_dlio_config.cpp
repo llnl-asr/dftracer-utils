@@ -47,7 +47,7 @@ class GenDlioConfigArgParse : public binaries::ArgParse {
     double epsilon = 1.0;
     double momentum = 0.9;
     double min_percentile = 50.0;
-    int num_workers = 8;
+    int worker_count = 8;
     int prefetch_factor = 2;
     std::uint64_t seed = 42;
     std::uint64_t max_samples_per_entry = 100;
@@ -102,7 +102,7 @@ class GenDlioConfigArgParse : public binaries::ArgParse {
                         "Floor on max_bound percentile (default: 50)");
 
         parser().option(
-            num_workers, {"--num-workers"},
+            worker_count, {"--num-workers"},
             "DataLoader worker count for the simulator (default: 8)");
 
         parser().option(prefetch_factor, {"--prefetch-factor"},
@@ -253,7 +253,8 @@ int main(int argc, char** argv) {
             std::printf("DLIO Config Generation\n");
             std::printf("==========================================\n");
             std::printf("  Loaded %d rank(s), %d step(s) from index at %s\n",
-                        traces.num_ranks, traces.num_steps, index_path.c_str());
+                        traces.rank_count, traces.step_count,
+                        index_path.c_str());
             std::printf(
                 "  computation_times: %zu samples (min %.6fs, max %.6fs)\n",
                 traces.computation_times.size(), traces.fetch_block_stats.min(),
@@ -285,7 +286,7 @@ int main(int argc, char** argv) {
             // --- Optimize max_bound percentile via simulator
             // -------------------------
             auto ctx = utilities::dlio::make_simulator_context(
-                traces, cli.num_workers, cli.prefetch_factor);
+                traces, cli.worker_count, cli.prefetch_factor);
 
             utilities::dlio::OptimizerOptions opts;
             opts.max_iterations = cli.simulation_iterations;

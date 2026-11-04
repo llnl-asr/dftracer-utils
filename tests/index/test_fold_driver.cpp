@@ -41,7 +41,7 @@ TEST_SUITE("IndexFoldDriver") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < 256; ++i)
-            files.emplace_back(write_trace(env.get_dir(), i, 300));
+            files.emplace_back(write_trace(env.dir(), i, 300));
 
         index::build::IndexBuildBatchResult result;
         Runtime rt(8);
@@ -49,7 +49,7 @@ TEST_SUITE("IndexFoldDriver") {
             auto config =
                 dstd::make_shared<index::build::IndexBuildBatchConfig>();
             config->file_paths = files;
-            config->index_dir = env.get_dir() + "/idx";
+            config->index_dir = env.dir() + "/idx";
             config->parallelism = 8;
             result =
                 co_await index::build::BatchBuilder::process(std::move(config));

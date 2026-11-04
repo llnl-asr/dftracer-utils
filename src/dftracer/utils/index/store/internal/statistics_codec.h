@@ -11,7 +11,7 @@ namespace dftracer::utils::index::store::internal {
 
 dstd::String encode_file_scalar_stats_value(
     const index::schemas::dft::ChunkStatistics& stats,
-    std::uint64_t num_chunks);
+    std::uint64_t chunk_count);
 
 index::schemas::dft::MergedStatisticsResult decode_file_scalar_stats_value(
     dstd::StringView value);

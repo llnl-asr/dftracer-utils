@@ -47,9 +47,9 @@ dstd::Vector<std::uint8_t> random_bytes(std::size_t length) {
 }
 
 dstd::Vector<std::uint32_t> starts_of(
-    dstd::Vector<store::engine::SegmentSpan> spans, std::uint32_t raw_length) {
+    dstd::Vector<store::engine::SegmentSpan> spans, std::uint32_t raw_size) {
     return store::engine::page_starts(
-        dstd::Span<const store::engine::SegmentSpan>(spans), raw_length);
+        dstd::Span<const store::engine::SegmentSpan>(spans), raw_size);
 }
 
 std::size_t entry_at(std::size_t i) {
@@ -149,7 +149,7 @@ TEST_SUITE("store extent codec") {
         REQUIRE(pages->size() == 2);
         for (std::size_t i = 0; i < pages->size(); ++i) {
             CHECK(pages->entry(i).codec == store::PageCodec::None);
-            CHECK(pages->entry(i).stored_length == PAGE);
+            CHECK(pages->entry(i).stored_size == PAGE);
         }
         dstd::Vector<std::uint8_t> decoded = *stored;
         REQUIRE(store::engine::decode_extent(decoded).has_value());
@@ -176,23 +176,23 @@ TEST_SUITE("store extent codec") {
         auto pages = store::engine::ExtentPages::open(view_of(*stored));
         REQUIRE(pages.has_value());
         REQUIRE(pages->size() == 2);
-        CHECK(pages->raw_length() == raw.size());
+        CHECK(pages->raw_size() == raw.size());
         CHECK(pages->entry(0).codec == store::PageCodec::Zstd);
         CHECK(pages->entry(1).codec == store::PageCodec::None);
         CHECK(pages->entry(0).raw_offset == 0);
-        CHECK(pages->entry(0).raw_length == PAGE);
+        CHECK(pages->entry(0).raw_size == PAGE);
         CHECK(pages->entry(1).raw_offset == PAGE);
-        CHECK(pages->entry(1).raw_length == 5000);
-        CHECK(pages->entry(1).stored_length == 5000);
+        CHECK(pages->entry(1).raw_size == 5000);
+        CHECK(pages->entry(1).stored_size == 5000);
         CHECK(pages->entry(0).stored_offset == entry_at(2));
         CHECK(pages->entry(1).stored_offset ==
-              pages->entry(0).stored_offset + pages->entry(0).stored_length);
+              pages->entry(0).stored_offset + pages->entry(0).stored_size);
 
         for (std::size_t i = 0; i < pages->size(); ++i) {
             dstd::Vector<std::uint8_t> page;
             REQUIRE(pages->decode(i, page).has_value());
             const store::engine::PageEntry& entry = pages->entry(i);
-            REQUIRE(page.size() == entry.raw_length);
+            REQUIRE(page.size() == entry.raw_size);
             CHECK(std::equal(page.begin(), page.end(),
                              raw.begin() + entry.raw_offset));
         }
@@ -317,27 +317,27 @@ TEST_SUITE("store extent codec") {
         REQUIRE(encoded.has_value());
         const dstd::Vector<std::uint8_t>& stored = *encoded;
 
-        const std::size_t head = store::engine::ExtentPages::table_length(
+        const std::size_t head = store::engine::ExtentPages::table_size(
             dstd::ByteView{stored.data(), store::engine::EXTENT_HEADER_BYTES});
         CHECK(head == entry_at(3));
-        CHECK(store::engine::ExtentPages::table_length(dstd::ByteView{
+        CHECK(store::engine::ExtentPages::table_size(dstd::ByteView{
                   stored.data(), store::engine::EXTENT_HEADER_BYTES - 1}) == 0);
 
         auto table = store::engine::ExtentPages::open_table(
             dstd::ByteView{stored.data(), head}, stored.size());
         REQUIRE(table.has_value());
         REQUIRE(table->size() == 3);
-        CHECK(table->raw_length() == raw.size());
+        CHECK(table->raw_size() == raw.size());
         dstd::Vector<std::uint8_t> out;
         CHECK_FALSE(table->decode(0, out).has_value());
 
         for (std::size_t i = 0; i < table->size(); ++i) {
             const store::engine::PageEntry& entry = table->entry(i);
-            dstd::Vector<std::uint8_t> page(entry.raw_length);
+            dstd::Vector<std::uint8_t> page(entry.raw_size);
             REQUIRE(store::engine::ExtentPages::decode_page(
                         entry,
                         dstd::ByteView{stored.data() + entry.stored_offset,
-                                       entry.stored_length},
+                                       entry.stored_size},
                         page.data())
                         .has_value());
             CHECK(std::equal(page.begin(), page.end(),
@@ -345,7 +345,7 @@ TEST_SUITE("store extent codec") {
             CHECK_FALSE(store::engine::ExtentPages::decode_page(
                             entry,
                             dstd::ByteView{stored.data() + entry.stored_offset,
-                                           entry.stored_length - 1U},
+                                           entry.stored_size - 1U},
                             page.data())
                             .has_value());
         }
@@ -353,7 +353,7 @@ TEST_SUITE("store extent codec") {
         const store::engine::PageEntry& last = table->entry(2);
         CHECK_FALSE(store::engine::ExtentPages::open_table(
                         dstd::ByteView{stored.data(), head},
-                        last.stored_offset + last.stored_length - 1U)
+                        last.stored_offset + last.stored_size - 1U)
                         .has_value());
     }
 
@@ -534,14 +534,14 @@ TEST_SUITE("store extent codec") {
         std::size_t page_bytes = 0;
         for (std::size_t i = 0; i < pages->size(); ++i) {
             CHECK(pages->entry(i).codec == store::PageCodec::ZstdDict);
-            page_bytes += pages->entry(i).stored_length;
+            page_bytes += pages->entry(i).stored_size;
         }
         auto plain_pages = store::engine::ExtentPages::open(view_of(*plain));
         REQUIRE(plain_pages.has_value());
         CHECK(plain_pages->dict().empty());
         std::size_t plain_bytes = 0;
         for (std::size_t i = 0; i < plain_pages->size(); ++i) {
-            plain_bytes += plain_pages->entry(i).stored_length;
+            plain_bytes += plain_pages->entry(i).stored_size;
         }
         CHECK(page_bytes < plain_bytes);
 
@@ -584,10 +584,10 @@ TEST_SUITE("store extent codec") {
         CHECK_FALSE(
             store::engine::PageDict::for_decode(view_of(*trained), bad_crc)
                 .has_value());
-        store::engine::DictRef bad_length = ref;
-        bad_length.length -= 1U;
+        store::engine::DictRef bad_size = ref;
+        bad_size.length -= 1U;
         CHECK_FALSE(
-            store::engine::PageDict::for_decode(view_of(*trained), bad_length)
+            store::engine::PageDict::for_decode(view_of(*trained), bad_size)
                 .has_value());
         CHECK_FALSE(store::engine::PageDict::for_decode(
                         view_of(*trained), store::engine::DictRef{})

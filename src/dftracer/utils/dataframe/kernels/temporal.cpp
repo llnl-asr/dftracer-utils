@@ -76,9 +76,9 @@ dftu_series* alloc_i64_like(const dftu_series* v) {
 
 std::int64_t part_of(std::int64_t t, std::int64_t per_second, bool days,
                      dftu_dt_part part) {
-    const std::int64_t day_len = days ? 1 : per_second * 86400;
-    const std::int64_t day = common::floor_div(t, day_len);
-    const std::int64_t in_day = days ? 0 : common::floor_mod(t, day_len);
+    const std::int64_t day_size = days ? 1 : per_second * 86400;
+    const std::int64_t day = common::floor_div(t, day_size);
+    const std::int64_t in_day = days ? 0 : common::floor_mod(t, day_size);
     const std::int64_t secs = days ? 0 : in_day / per_second;
     const std::int64_t frac = days ? 0 : in_day % per_second;
     const common::CivilDate c = common::civil_from_days(day);
@@ -163,17 +163,17 @@ dftu_series* dftu_series_dt_part(const dftu_series* in, int32_t part,
 }
 
 dftu_series* dftu_series_dt_format(const dftu_series* in, const char* fmt,
-                                   int32_t fmt_len, int32_t unit) {
+                                   int32_t fmt_size, int32_t unit) {
     DFTU_FLAT_OPERAND(in, flat_in,
-                      dftu_series_dt_format(flat_in, fmt, fmt_len, unit));
+                      dftu_series_dt_format(flat_in, fmt, fmt_size, unit));
 
     using namespace dftracer::utils;
     using namespace dftracer::utils::dataframe;
-    if (!in || fmt_len < 0 || (fmt_len > 0 && !fmt)) return nullptr;
+    if (!in || fmt_size < 0 || (fmt_size > 0 && !fmt)) return nullptr;
     if (unit < DFTU_TIME_UNIT_SECOND || unit > DFTU_TIME_UNIT_NANO)
         return nullptr;
     const dftracer::utils::dstd::StringView f(
-        fmt ? fmt : "", static_cast<std::size_t>(fmt_len));
+        fmt ? fmt : "", static_cast<std::size_t>(fmt_size));
     if (!common::invalid_time_format(f).empty()) return nullptr;
     dftu_series* v = dftu_series_materialize(in);
     if (!v) return nullptr;
@@ -255,15 +255,17 @@ dftu_series* dftu_series_dt_round(const dftu_series* in, int64_t every,
 }
 
 dftu_series* dftu_series_with_timezone(const dftu_series* v, const char* tz,
-                                       int32_t tz_len) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_with_timezone(flat_v, tz, tz_len));
+                                       int32_t tz_size) {
+    DFTU_FLAT_OPERAND(v, flat_v,
+                      dftu_series_with_timezone(flat_v, tz, tz_size));
 
     using namespace dftracer::utils::dataframe;
-    if (!v || v->type != TypeId::Timestamp || tz_len < 0 || (tz_len > 0 && !tz))
+    if (!v || v->type != TypeId::Timestamp || tz_size < 0 ||
+        (tz_size > 0 && !tz))
         return nullptr;
     auto* out = new dftu_series(*v);
     out->set_timezone(dftracer::utils::dstd::StringView(
-        tz, static_cast<std::size_t>(tz_len)));
+        tz, static_cast<std::size_t>(tz_size)));
     return out;
 }
 

@@ -55,7 +55,7 @@ dstd::String name_of(std::size_t length, std::size_t index) {
     return dstd::String(length - 1, 'n') + static_cast<char>('a' + index);
 }
 
-DataFrame frame_with_name_length(std::size_t length) {
+DataFrame frame_with_name_size(std::size_t length) {
     DataFrame f;
     f.columns.push_back(Series::strings(TEXT));
     f.columns.push_back(large_strings(TEXT));
@@ -90,7 +90,7 @@ TEST_SUITE("native frame alignment") {
     TEST_CASE("columns decode alike for name lengths 1, 2 and 3") {
         for (std::size_t length = 1; length <= 3; ++length) {
             CAPTURE(length);
-            const DataFrame f = frame_with_name_length(length);
+            const DataFrame f = frame_with_name_size(length);
             for (const Series& c : f.columns) REQUIRE(c.valid());
             const dstd::String bytes = frame_to_native(f);
             const auto back = frame_from_native(bytes);

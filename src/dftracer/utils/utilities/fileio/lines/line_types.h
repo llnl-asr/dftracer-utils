@@ -86,7 +86,7 @@ struct LineReadInput {
         return !(*this == other);
     }
 
-    std::size_t num_lines() const {
+    std::size_t line_count() const {
         return (end_line >= start_line) ? (end_line - start_line + 1) : 0;
     }
 };
@@ -144,8 +144,7 @@ struct Hash<dftracer::utils::utilities::fileio::lines::Line> {
         ::dftracer::utils::utilities::hash::HasherUtility hasher;
         hasher.update(line.content);
         hasher.update(line.line_number);
-        return static_cast<std::size_t>(
-            hash::splitmix64(hasher.get_hash().value));
+        return static_cast<std::size_t>(hash::splitmix64(hasher.hash().value));
     }
 };
 
@@ -161,8 +160,7 @@ struct Hash<dftracer::utils::utilities::fileio::lines::LineReadInput> {
         hasher.update(req.index_path);
         hasher.update(req.start_line);
         hasher.update(req.end_line);
-        return static_cast<std::size_t>(
-            hash::splitmix64(hasher.get_hash().value));
+        return static_cast<std::size_t>(hash::splitmix64(hasher.hash().value));
     }
 };
 
@@ -179,8 +177,7 @@ struct Hash<dftracer::utils::utilities::fileio::lines::Lines> {
                 Hash<::dftracer::utils::utilities::fileio::lines::Line>{}(
                     line));
         }
-        return static_cast<std::size_t>(
-            hash::splitmix64(hasher.get_hash().value));
+        return static_cast<std::size_t>(hash::splitmix64(hasher.hash().value));
     }
 };
 

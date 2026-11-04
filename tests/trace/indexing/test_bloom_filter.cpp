@@ -17,7 +17,7 @@ TEST_SUITE("BloomFilter") {
         SUBCASE("Empty filter contains nothing") {
             CHECK_FALSE(bf.possibly_contains("hello"));
             CHECK_FALSE(bf.possibly_contains("world"));
-            CHECK(bf.num_entries() == 0);
+            CHECK(bf.entry_count() == 0);
         }
 
         SUBCASE("Added elements are found (no false negatives)") {
@@ -30,13 +30,13 @@ TEST_SUITE("BloomFilter") {
             CHECK(bf.possibly_contains("world"));
             CHECK(bf.possibly_contains("foo"));
             CHECK(bf.possibly_contains("bar"));
-            CHECK(bf.num_entries() == 4);
+            CHECK(bf.entry_count() == 4);
         }
 
         SUBCASE("Single entry") {
             bf.add("only_one");
             CHECK(bf.possibly_contains("only_one"));
-            CHECK(bf.num_entries() == 1);
+            CHECK(bf.entry_count() == 1);
         }
     }
 
@@ -84,9 +84,9 @@ TEST_SUITE("BloomFilter") {
         CHECK(bf2.possibly_contains("alpha"));
         CHECK(bf2.possibly_contains("beta"));
         CHECK(bf2.possibly_contains("gamma"));
-        CHECK(bf2.num_entries() == 3);
-        CHECK(bf2.num_hash_functions() == bf.num_hash_functions());
-        CHECK(bf2.num_bits() == bf.num_bits());
+        CHECK(bf2.entry_count() == 3);
+        CHECK(bf2.hash_function_count() == bf.hash_function_count());
+        CHECK(bf2.bit_count() == bf.bit_count());
     }
 
     TEST_CASE("BloomFilter - Merge correctness") {
@@ -108,21 +108,21 @@ TEST_SUITE("BloomFilter") {
         CHECK(a.possibly_contains("x3"));
         CHECK(a.possibly_contains("y1"));
         CHECK(a.possibly_contains("y2"));
-        CHECK(a.num_entries() == 5);
+        CHECK(a.entry_count() == 5);
     }
 
     TEST_CASE("BloomFilter - Size parameters") {
         SUBCASE("Default parameters") {
             BloomFilter bf;
-            CHECK(bf.num_bits() > 0);
+            CHECK(bf.bit_count() > 0);
             CHECK(bf.size_bytes() > 0);
-            CHECK(bf.num_hash_functions() > 0);
+            CHECK(bf.hash_function_count() > 0);
         }
 
         SUBCASE("Custom parameters") {
             BloomFilter bf(2048, 0.001);
-            CHECK(bf.num_bits() > 0);
-            CHECK(bf.num_hash_functions() > 0);
+            CHECK(bf.bit_count() > 0);
+            CHECK(bf.hash_function_count() > 0);
         }
     }
 

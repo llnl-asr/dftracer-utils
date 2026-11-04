@@ -219,9 +219,9 @@ struct Corpus {
     dstd::Vector<dstd::String> traces;
 
     Corpus() {
-        index_dir = env.get_dir() + "/idx";
+        index_dir = env.dir() + "/idx";
         for (int seed : {1, 2, 3})
-            traces.push_back(write_trace(env.get_dir(), seed, 6000));
+            traces.push_back(write_trace(env.dir(), seed, 6000));
         index::IndexerOptions opts;
         opts.index_dir = index_dir;
         index::Indexer::open(dftu_utils_test::dstd_paths(traces), opts).build();
@@ -574,7 +574,7 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
 TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     Corpus corpus;
     auto spill = corpus_options(corpus);
-    spill.index_dir = dstd::String(corpus.env.get_dir()) + "/idx_spill";
+    spill.index_dir = dstd::String(corpus.env.dir()) + "/idx_spill";
     spill.memory_budget = 64 * 1024;
     index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces), spill)
         .build();
@@ -649,7 +649,7 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
 
 TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
     dftu_utils_test::TestEnvironment env{10};
-    const auto index_dir = env.get_dir() + "/idx";
+    const auto index_dir = env.dir() + "/idx";
     dstd::Vector<dstd::String> traces;
     for (const char* hash : {"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"}) {
         dstd::String out;
@@ -662,7 +662,7 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
                 R"("tid":1,"ph":"X","ts":)", 1000 + i,
                 R"(,"dur":5,"args":{"fhash":")", hash, "\"}}\n");
         const auto plain =
-            env.get_dir() + "/t" + dstd::to_string(traces.size()) + ".pfw";
+            env.dir() + "/t" + dstd::to_string(traces.size()) + ".pfw";
         (void)dstd::fs::write_file(dstd::PathView(plain), out);
         const auto gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,

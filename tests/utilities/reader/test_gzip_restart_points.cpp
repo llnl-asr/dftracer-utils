@@ -79,7 +79,7 @@ struct Fixture {
                 .stream_type(reader::internal::StreamType::Bytes)
                 .range_type(reader::internal::RangeType::ByteRange)
                 .from(start)
-                .to(reader.get_max_bytes()));
+                .to(reader.max_bytes()));
         dstd::String out;
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<char> buf(1u << 20);
@@ -115,7 +115,7 @@ void check_pieces_cover(
 }
 
 void check_reads_from_every_piece(Fixture& fx, const dstd::String& text) {
-    for (const auto& p : fx.indexer->get_members()) {
+    for (const auto& p : fx.indexer->members()) {
         CAPTURE(p.member_idx);
         CHECK(fx.read_from(p.uc_offset) == text.substr(p.uc_offset));
     }
@@ -127,7 +127,7 @@ TEST_SUITE("gzip_restart_points") {
     TEST_CASE("a one-member file splits into a head and restart pieces") {
         const auto text = hex_lines(12u << 20, 1);
         Fixture fx(gzip(text));
-        const auto pieces = fx.indexer->get_members();
+        const auto pieces = fx.indexer->members();
         REQUIRE(pieces.size() >= 6);
         CHECK(pieces[0].kind == index::gzip::GzipRecordKind::Head);
         CHECK(pieces[0].c_offset == 0);
@@ -152,7 +152,7 @@ TEST_SUITE("gzip_restart_points") {
             comp.insert(comp.end(), m.begin(), m.end());
         }
         Fixture fx(comp);
-        const auto pieces = fx.indexer->get_members();
+        const auto pieces = fx.indexer->members();
         CHECK(pieces[0].kind == index::gzip::GzipRecordKind::Head);
         CHECK(pieces[pieces.size() - 1].kind ==
               index::gzip::GzipRecordKind::Member);
@@ -172,7 +172,7 @@ TEST_SUITE("gzip_restart_points") {
             all += t;
         }
         Fixture fx(comp);
-        const auto members = fx.indexer->get_members();
+        const auto members = fx.indexer->members();
         REQUIRE(members.size() == sizes.size());
         for (std::size_t i = 0; i < members.size(); ++i) {
             CHECK(members[i].kind == index::gzip::GzipRecordKind::Member);
@@ -187,9 +187,9 @@ TEST_SUITE("gzip_restart_points") {
         auto comp = gzip(text);
         comp.resize(comp.size() * 7 / 10);
         Fixture fx(comp);
-        const auto pieces = fx.indexer->get_members();
+        const auto pieces = fx.indexer->members();
         REQUIRE(pieces.size() >= 3);
-        const std::size_t total = fx.indexer->get_max_bytes();
+        const std::size_t total = fx.indexer->max_bytes();
         REQUIRE(total > text.size() / 2);
         CHECK(text[total - 1] == '\n');
         check_pieces_cover(pieces, total);
@@ -207,8 +207,8 @@ TEST_SUITE("gzip_restart_points") {
         comp.resize(comp.size() * (head.size() + long_line.size() * 3 / 4) /
                     text.size());
         Fixture fx(comp);
-        const auto pieces = fx.indexer->get_members();
-        const std::size_t total = fx.indexer->get_max_bytes();
+        const auto pieces = fx.indexer->members();
+        const std::size_t total = fx.indexer->max_bytes();
         CHECK(total == head.size());
         check_pieces_cover(pieces, total);
         check_reads_from_every_piece(fx, head);

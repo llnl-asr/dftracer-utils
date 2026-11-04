@@ -11,8 +11,9 @@
 
 namespace dftracer::utils::trace {
 
-/// One process's self-description from its "end" event. `args` holds num_events
-/// plus dotted cfg.*/build.*/used.*/app.*; empty if the end carried no args.
+/// One process's self-description from its "end" event. `args` holds
+/// num_events plus dotted cfg.*/build.*/used.*/app.*; empty if the end carried
+/// no args.
 struct TraceConfig {
     std::uint64_t pid = 0;
     ArgsMap args;

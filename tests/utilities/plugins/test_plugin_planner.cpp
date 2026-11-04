@@ -95,7 +95,7 @@ dstd::String make_homog_trace(dftu_utils_test::TestEnvironment& env,
                               const char* cat, int n) {
     // Own subdir per trace: the index root is keyed off the parent directory,
     // so same-dir traces would share (and clobber) one index.
-    dstd::String dir = env.get_dir() + "/" + tag;
+    dstd::String dir = env.dir() + "/" + tag;
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;

@@ -80,7 +80,7 @@ const dstd::Vector<Case>& cases() {
 }
 
 dstd::String write_trace(TestEnvironment& env) {
-    const dstd::String plain = env.get_dir() + "/paths.pfw";
+    const dstd::String plain = env.dir() + "/paths.pfw";
     {
         dftu_utils_test::FileOut out(plain);
         int ts = 1000;
@@ -178,7 +178,7 @@ TEST_SUITE("duql paths") {
         const dstd::String gz = write_trace(env);
         utilities::reader::TraceReader tr(
             {.file_path = dstd::String(gz),
-             .index_dir = dstd::String(env.get_dir())});
+             .index_dir = dstd::String(env.dir())});
         REQUIRE(tr.has_index());
 
         for (const auto& c : cases()) {
@@ -259,7 +259,7 @@ TEST_SUITE("duql paths") {
         };
 
         TestEnvironment env(10);
-        const dstd::String plain = env.get_dir() + "/exprs.pfw";
+        const dstd::String plain = env.dir() + "/exprs.pfw";
         {
             dftu_utils_test::FileOut out(plain);
             int ts = 1000;
@@ -279,7 +279,7 @@ TEST_SUITE("duql paths") {
             .build();
         utilities::reader::TraceReader tr(
             {.file_path = dstd::String(gz),
-             .index_dir = dstd::String(env.get_dir())});
+             .index_dir = dstd::String(env.dir())});
         REQUIRE(tr.has_index());
 
         dataframe::DataFrame frame;
@@ -319,7 +319,7 @@ TEST_SUITE("duql paths") {
 
     TEST_CASE("exists() keeps a file whose only value is an empty array") {
         TestEnvironment env(10);
-        const dstd::String plain = env.get_dir() + "/empty.pfw";
+        const dstd::String plain = env.dir() + "/empty.pfw";
         {
             dftu_utils_test::FileOut out(plain);
             out << R"({"ph":"X","pid":1,"tid":1,"ts":1,"dur":1,"name":"e","args":{"tags":[]}})"

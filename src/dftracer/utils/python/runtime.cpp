@@ -152,7 +152,7 @@ static PyObject *Runtime_get_progress(RuntimeObject *self,
     }
 
     dftracer::utils::ExecutorProgress prog;
-    Py_BEGIN_ALLOW_THREADS prog = self->runtime->get_progress();
+    Py_BEGIN_ALLOW_THREADS prog = self->runtime->progress();
     Py_END_ALLOW_THREADS
 
         PyObject *d = PyDict_New();

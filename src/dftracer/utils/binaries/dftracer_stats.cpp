@@ -267,7 +267,7 @@ static void append_empty_indexed_stats_result(
     stats.file_path.assign(file_path.data(), file_path.size());
     stats.index_path.assign(index_path.data(), index_path.size());
     stats.success = true;
-    stats.num_chunks = 0;
+    stats.chunk_count = 0;
     results.emplace_back(file_index, std::move(stats));
 }
 
@@ -321,7 +321,7 @@ static DetailedStatistics to_detailed(const TraceStatistics& stats) {
     for (const auto& [name, category] : m.name_category)
         d.group_key_category[name] = category;
     d.events_scanned = m.total_events;
-    d.chunks_scanned = stats.num_chunks;
+    d.chunks_scanned = stats.chunk_count;
     d.chunks_skipped = 0;
 
     return d;
@@ -792,7 +792,7 @@ static void print_text_query_output(const TraceStatistics& stats,
     std::printf("========================================\n");
     std::printf("File: %s\n", stats.file_path.c_str());
     std::printf("========================================\n");
-    std::printf("  Chunks: %llu\n", (unsigned long long)stats.num_chunks);
+    std::printf("  Chunks: %llu\n", (unsigned long long)stats.chunk_count);
     std::printf("  Events Scanned: %llu\n",
                 (unsigned long long)output.total_events);
 
@@ -1151,7 +1151,7 @@ static dstd::Optional<ChunkStatistics> file_rows_to_statistics(
     const dftracer::utils::index::FileRef& file,
     const MergedStatisticsResult* scalar,
     dstd::StringViewMap<std::uint64_t>* pid_tids, bool cats, bool names) {
-    if (!scalar || scalar->num_chunks == 0) return dstd::nullopt;
+    if (!scalar || scalar->chunk_count == 0) return dstd::nullopt;
     if ((cats || names) && !dftracer::utils::index::extension_current(
                                snapshot, file, IndexExtension::Counts))
         return dstd::nullopt;
@@ -1215,7 +1215,7 @@ static coro::CoroTask<void> process_index_group(
         // fold and no write. The rest go through the View path below.
         // Release the ReadOnly index handle before materialize(), which opens
         // the same index ReadWrite to persist.
-        dstd::HashMap<std::size_t, std::uint64_t> num_chunks_map;
+        dstd::HashMap<std::size_t, std::uint64_t> chunk_count_map;
         ChunkStatistics fast_total;
         std::uint64_t fast_chunks = 0;
         std::size_t fast_files = 0;
@@ -1233,7 +1233,8 @@ static coro::CoroTask<void> process_index_group(
                 }
                 auto scalar = common::unwrap(
                     dftracer::utils::index::scalar_stats(snapshot, *file));
-                if (scalar) num_chunks_map[rf.file_index] = scalar->num_chunks;
+                if (scalar)
+                    chunk_count_map[rf.file_index] = scalar->chunk_count;
                 dstd::Optional<dstd::StringViewMap<std::uint64_t>> pid_tids;
                 if (needs.pid_tids) {
                     auto counts =
@@ -1257,7 +1258,7 @@ static coro::CoroTask<void> process_index_group(
                     stats.file_path = rf.file_path;
                     stats.index_path.assign(index_path_ptr->data(),
                                             index_path_ptr->size());
-                    stats.num_chunks = scalar->num_chunks;
+                    stats.chunk_count = scalar->chunk_count;
                     stats.merged = std::move(*cs);
                     stats.success = true;
                     std::lock_guard<std::mutex> lock(*stats_mutex_ptr);
@@ -1265,20 +1266,20 @@ static coro::CoroTask<void> process_index_group(
                                                     std::move(stats));
                 } else {
                     fast_total.merge_from(*cs);
-                    fast_chunks += scalar->num_chunks;
+                    fast_chunks += scalar->chunk_count;
                 }
                 ++fast_files;
             }
         }
-        auto num_chunks_of = [&](std::size_t file_index) -> std::uint64_t {
-            auto it = num_chunks_map.find(file_index);
-            return (it != num_chunks_map.end()) ? it->second : 0;
+        auto chunk_count_of = [&](std::size_t file_index) -> std::uint64_t {
+            auto it = chunk_count_map.find(file_index);
+            return (it != chunk_count_map.end()) ? it->second : 0;
         };
 
         if (!needs_per_file_results && fast_files > 0) {
             std::lock_guard<std::mutex> lock(*total_mutex_ptr);
             total_ptr->merged.merge_from(fast_total);
-            total_ptr->num_chunks += fast_chunks;
+            total_ptr->chunk_count += fast_chunks;
             successful_ptr->fetch_add(fast_files, std::memory_order_relaxed);
         }
         if (slow_files.empty()) co_return;
@@ -1290,7 +1291,7 @@ static coro::CoroTask<void> process_index_group(
             std::uint64_t total_chunks = 0;
             for (const auto* rf : slow_files) {
                 view_files.push_back(view_file(rf->file_path, *index_path_ptr));
-                total_chunks += num_chunks_of(rf->file_index);
+                total_chunks += chunk_count_of(rf->file_index);
             }
             auto sv =
                 trace::statistics::StatsView::from_files(std::move(view_files));
@@ -1301,11 +1302,11 @@ static coro::CoroTask<void> process_index_group(
             TraceStatistics stats;
             stats.index_path.assign(index_path_ptr->data(),
                                     index_path_ptr->size());
-            stats.num_chunks = total_chunks;
+            stats.chunk_count = total_chunks;
             trace::statistics::fill_chunk_statistics(stats.merged, vs);
             std::lock_guard<std::mutex> lock(*total_mutex_ptr);
             total_ptr->merged.merge_from(stats.merged);
-            total_ptr->num_chunks += stats.num_chunks;
+            total_ptr->chunk_count += stats.chunk_count;
             successful_ptr->fetch_add(slow_files.size(),
                                       std::memory_order_relaxed);
             co_return;
@@ -1316,7 +1317,7 @@ static coro::CoroTask<void> process_index_group(
             stats.file_path.assign(rf->file_path.data(), rf->file_path.size());
             stats.index_path.assign(index_path_ptr->data(),
                                     index_path_ptr->size());
-            stats.num_chunks = num_chunks_of(rf->file_index);
+            stats.chunk_count = chunk_count_of(rf->file_index);
             auto sv = trace::statistics::StatsView::from_file(
                 dstd::String(rf->file_path), dstd::String(*index_path_ptr));
             co_await sv.materialize(needs);
@@ -1455,7 +1456,7 @@ static coro::CoroTask<int> output_aggregate_stats(
             auto detailed = to_detailed(agg->total);
             dstd::HashMap<dstd::String, dstd::String> no_resolutions;
             print_text_detailed(agg->total.file_path, detailed,
-                                agg->total.num_chunks, config_ptr->top_n,
+                                agg->total.chunk_count, config_ptr->top_n,
                                 no_resolutions, &agg->total,
                                 config_ptr->top_n_pid_tid);
         } else {

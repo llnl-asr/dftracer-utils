@@ -15,7 +15,7 @@ using namespace dftracer::utils::index::build;
 // Helper to create a test trace file (plain text), then compress to gzip.
 // Returns the .gz path and the uncompressed size.
 static dstd::Pair<dstd::String, std::size_t> create_test_trace_gz(
-    const dstd::String& dir, int num_events) {
+    const dstd::String& dir, int event_count) {
     dstd::String plain_path = dir + "/test_index.trace";
     {
         dftu_utils_test::FileOut ofs(plain_path);
@@ -29,7 +29,7 @@ static dstd::Pair<dstd::String, std::size_t> create_test_trace_gz(
             << "\n";
 
         // Regular events
-        for (int i = 0; i < num_events; ++i) {
+        for (int i = 0; i < event_count; ++i) {
             std::uint64_t ts = 1000000 + static_cast<std::uint64_t>(i * 1000);
             int dur = 100 + i * 10;
             const char* names[] = {"read", "write", "open", "close"};

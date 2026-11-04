@@ -31,7 +31,7 @@ T run(dftracer::utils::coro::CoroTask<T> task) {
 // A trace mixing POSIX and STDIO events so filters have something to cut.
 inline dftracer::utils::dstd::String create_mixed_trace(
     dftu_utils_test::TestEnvironment& env, int posix_n, int stdio_n) {
-    dftracer::utils::dstd::String pfw = env.get_dir() + "/mixed.pfw";
+    dftracer::utils::dstd::String pfw = env.dir() + "/mixed.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < posix_n; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
@@ -56,7 +56,7 @@ inline dftracer::utils::dstd::String create_mixed_trace(
 // there), which is exactly the case that must not drop events.
 inline dftracer::utils::dstd::String create_multimember_trace(
     dftu_utils_test::TestEnvironment& env, int n, std::size_t member_bytes) {
-    dftracer::utils::dstd::String pfw = env.get_dir() + "/mm.pfw";
+    dftracer::utils::dstd::String pfw = env.dir() + "/mm.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
@@ -73,7 +73,7 @@ inline dftracer::utils::dstd::String create_multimember_trace(
 // A trace with ph="X" events plus ph="C" counter events (aggregator style).
 inline dftracer::utils::dstd::String create_trace_with_counters(
     dftu_utils_test::TestEnvironment& env) {
-    dftracer::utils::dstd::String pfw = env.get_dir() + "/ctr.pfw";
+    dftracer::utils::dstd::String pfw = env.dir() + "/ctr.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 10; ++i)
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
@@ -94,7 +94,7 @@ inline dftracer::utils::dstd::String create_trace_with_counters(
 // scan batches so a tiny memory budget forces multiple spills of each group.
 inline dftracer::utils::dstd::String create_bulk_counters(
     dftu_utils_test::TestEnvironment& env, int n) {
-    dftracer::utils::dstd::String pfw = env.get_dir() + "/bulk.pfw";
+    dftracer::utils::dstd::String pfw = env.dir() + "/bulk.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i) {
         const char* nm = (i % 2 == 0) ? "cpu" : "gpu";
@@ -117,7 +117,7 @@ inline dftracer::utils::dstd::String create_counter_file(
     const dftracer::utils::dstd::Vector<int>& user_pcts) {
     // Each shard gets its own dir so its index (keyed off the parent dir) does
     // not collide with the other shard's.
-    dftracer::utils::dstd::String dir = env.get_dir() + "/" + tag;
+    dftracer::utils::dstd::String dir = env.dir() + "/" + tag;
     REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
     dftracer::utils::dstd::String pfw = dir + "/ctr.pfw";
     dftu_utils_test::FileOut ofs(pfw);

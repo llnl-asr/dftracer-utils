@@ -221,11 +221,11 @@ TEST_SUITE("View") {
         dstd::String gz = create_multimember_trace(env, n, 512);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        dstd::String out = env.get_dir() + "/merged.pfw.gz";
+        dstd::String out = env.dir() + "/merged.pfw.gz";
         TraceWriteOptions opts;
         opts.output_path = out;
         opts.member_size = 4096;  // small members -> many boundaries
-        opts.num_workers = 4;
+        opts.worker_count = 4;
         opts.compress = true;
         auto stats = View::from_file(dstd::String(gz), dstd::String(idx))
                          .sink_trace(opts)
@@ -249,9 +249,9 @@ TEST_SUITE("View") {
         dstd::String gz = create_multimember_trace(env, 300, 512);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         TraceWriteOptions opts;
-        opts.output_path = env.get_dir() + "/no_such_dir/out.pfw.gz";
+        opts.output_path = env.dir() + "/no_such_dir/out.pfw.gz";
         opts.member_size = 4096;
-        opts.num_workers = 4;
+        opts.worker_count = 4;
         opts.build_index = true;
         CHECK_THROWS_AS(View::from_file(dstd::String(gz), dstd::String(idx))
                             .sink_trace(opts)
@@ -270,13 +270,13 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // A: write the output with the index fused into the write.
-        dstd::String dir_a = env.get_dir() + "/a";
+        dstd::String dir_a = env.dir() + "/a";
         REQUIRE(dstd::fs::create_directories(dir_a).has_value());
         const dstd::String out_agz = dir_a + "/out.pfw.gz";
         TraceWriteOptions opts;
         opts.output_path = out_agz;
         opts.member_size = 512;  // small members -> several to key per-member
-        opts.num_workers = 4;
+        opts.worker_count = 4;
         opts.compress = true;
         opts.build_index = true;
         auto st = View::from_file(dstd::String(gz), dstd::String(idx))
@@ -290,7 +290,7 @@ TEST_SUITE("View") {
 
         // B: identical output bytes in a fresh dir; View auto-indexes it lazily
         // via the standard indexer (the ground truth).
-        dstd::String dir_b = env.get_dir() + "/b";
+        dstd::String dir_b = env.dir() + "/b";
         REQUIRE(dstd::fs::create_directories(dir_b).has_value());
         const dstd::String out_bgz = dir_b + "/out.pfw.gz";
         REQUIRE(dstd::fs::copy_file(out_agz, out_bgz,
@@ -333,15 +333,15 @@ TEST_SUITE("View") {
         dstd::String gz = create_mixed_trace(env, 400, 400);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        dstd::String dir_a = env.get_dir() + "/a";
-        dstd::String dir_b = env.get_dir() + "/b";
+        dstd::String dir_a = env.dir() + "/a";
+        dstd::String dir_b = env.dir() + "/b";
         REQUIRE(dstd::fs::create_directories(dir_a).has_value());
         REQUIRE(dstd::fs::create_directories(dir_b).has_value());
         TraceWriteOptions opts;
         opts.output_path = dir_a + "/out.pfw.gz";
         opts.member_size = 512;
         opts.part_size = 8192;
-        opts.num_workers = 4;
+        opts.worker_count = 4;
         opts.build_index = true;
         View::from_file(dstd::String(gz), dstd::String(idx))
             .sink_trace(opts)
@@ -471,7 +471,7 @@ TEST_SUITE("View") {
         // Each event's top-level "name" is "read"/"write"; its arg "name" is a
         // different string, so the row frame must carry both "name" (top-level)
         // and "args.name" (the arg) without a schema collision.
-        dstd::String pfw = env.get_dir() + "/collide.pfw";
+        dstd::String pfw = env.dir() + "/collide.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
@@ -524,7 +524,7 @@ TEST_SUITE("View") {
         "View - nested args are columns and short names resolve to args") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/nested.pfw";
+        dstd::String pfw = env.dir() + "/nested.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"X","name":"hot","cat":"APP","pid":1,"tid":1,)"
@@ -618,7 +618,7 @@ TEST_SUITE("View") {
         "View - a batched call tree on a nested arg keeps refused lines") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/refused.pfw";
+        dstd::String pfw = env.dir() + "/refused.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 20; ++i)
@@ -732,7 +732,7 @@ TEST_SUITE("View") {
         // two-step .group_by(k).agg("count:cycles"/"sum:cycles") lowers to
         // group_agg_expr, which used to feed an invalid (non-numeric) evaluated
         // column into the aggregator and segfault.
-        dstd::String pfw = env.get_dir() + "/cyc.pfw";
+        dstd::String pfw = env.dir() + "/cyc.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 4; ++i)
@@ -849,7 +849,7 @@ TEST_SUITE("View") {
 
     TEST_CASE("View - from_directory scans a tree of traces") {
         TestEnvironment env{200};
-        dstd::String dir = env.get_dir() + "/tree";
+        dstd::String dir = env.dir() + "/tree";
         REQUIRE(dstd::fs::create_directories(dir + "/sub").has_value());
 
         // Distinct cat + pid per file so the grouped counts unambiguously
@@ -895,7 +895,7 @@ constexpr int DICT_ROWS = 1000;
 // Row i: cat c<i%3>, name n<i%2>, args.path p<i%900>, and args.metric
 // m<i%3> on even i only.
 View dict_trace(TestEnvironment& env) {
-    const dstd::String pfw = env.get_dir() + "/dict.pfw";
+    const dstd::String pfw = env.dir() + "/dict.pfw";
     {
         dftu_utils_test::FileOut o(pfw);
         for (int i = 0; i < DICT_ROWS; ++i) {

@@ -34,7 +34,7 @@ TEST_SUITE("ScalableBloomFilter") {
         for (std::size_t i = 0; i < n; ++i) {
             REQUIRE(bf.possibly_contains("value-" + dstd::to_string(i)));
         }
-        CHECK(bf.num_levels() > 1);
+        CHECK(bf.level_count() > 1);
     }
 
     TEST_CASE("Stays selective where a fixed filter saturates") {
@@ -67,7 +67,7 @@ TEST_SUITE("ScalableBloomFilter") {
                 bf.add("value-" + dstd::to_string(i));
             }
         }
-        CHECK(bf.num_entries() == 500);
+        CHECK(bf.entry_count() == 500);
     }
 
     TEST_CASE("Round-trips through serialization") {
@@ -81,8 +81,8 @@ TEST_SUITE("ScalableBloomFilter") {
         auto restored =
             ScalableBloomFilter::from_blob(blob.data(), blob.size());
 
-        CHECK(restored.num_levels() == bf.num_levels());
-        CHECK(restored.num_entries() == bf.num_entries());
+        CHECK(restored.level_count() == bf.level_count());
+        CHECK(restored.entry_count() == bf.entry_count());
         for (std::size_t i = 0; i < n; ++i) {
             REQUIRE(restored.possibly_contains("value-" + dstd::to_string(i)));
         }
@@ -96,7 +96,7 @@ TEST_SUITE("ScalableBloomFilter") {
 
         auto restored =
             ScalableBloomFilter::from_blob(blob.data(), blob.size());
-        CHECK(restored.num_levels() == 1);
+        CHECK(restored.level_count() == 1);
         CHECK(restored.possibly_contains("alpha"));
         CHECK(restored.possibly_contains("beta"));
         CHECK_FALSE(restored.possibly_contains("gamma"));
@@ -128,6 +128,6 @@ TEST_SUITE("ScalableBloomFilter") {
         }
         // Levels are keyed by capacity, so merging 32 slices must not grow
         // the chain 32-fold.
-        CHECK(parent.num_levels() <= 8);
+        CHECK(parent.level_count() <= 8);
     }
 }

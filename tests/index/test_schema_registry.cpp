@@ -404,7 +404,7 @@ TEST_SUITE("SchemaRegistry") {
 
     TEST_CASE("a directory of specs loads once") {
         dftu_utils_test::TestEnvironment env(1);
-        const auto dir = env.get_dir() + "/specs";
+        const auto dir = env.dir() + "/specs";
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         (void)dstd::fs::write_file(dstd::PathView(dir + "/a.yaml"),
                                    "id: dir_a\n");
@@ -416,7 +416,7 @@ TEST_SUITE("SchemaRegistry") {
         REQUIRE(index::find_schema("dir_b") != nullptr);
         index::load_schemas(dir);
 
-        const auto bad = env.get_dir() + "/broken";
+        const auto bad = env.dir() + "/broken";
         REQUIRE(dstd::fs::create_directories(bad).has_value());
         (void)dstd::fs::write_file(dstd::PathView(bad + "/c.yaml"),
                                    "id: dir_c\nbogus: 1\n");
@@ -462,8 +462,8 @@ TEST_SUITE("SchemaRegistry") {
 
     TEST_CASE("a user schema from the index directory is detected and used") {
         dftu_utils_test::TestEnvironment env(1);
-        const auto gz = write_nginx(env.get_dir(), 3000);
-        const auto index_dir = env.get_dir() + "/idx";
+        const auto gz = write_nginx(env.dir(), 3000);
+        const auto index_dir = env.dir() + "/idx";
         REQUIRE(
             dstd::fs::create_directories(index_dir + "/schemas").has_value());
         // path_budget 1: the always-indexed field and the first other path.
@@ -532,7 +532,7 @@ TEST_SUITE("SchemaDetection") {
     static dstd::String write_file(dftu_utils_test::TestEnvironment & env,
                                    const dstd::String& name,
                                    const dstd::String& text, bool gz) {
-        dstd::String plain(dstd::StringView(env.get_dir()));
+        dstd::String plain(dstd::StringView(env.dir()));
         plain += "/";
         plain += name;
         (void)dstd::fs::write_file(dstd::PathView(plain), text);
@@ -719,7 +719,7 @@ TEST_SUITE("SchemaDetection") {
 
     TEST_CASE("file detection is cached until the file changes") {
         dftu_utils_test::TestEnvironment env(1);
-        const auto path = env.get_dir() + "/c.ndjson";
+        const auto path = env.dir() + "/c.ndjson";
         (void)dstd::fs::write_file(dstd::PathView(path),
                                    common::str_cat(R"({"k":1})", "\n"));
         CHECK(index::detect_file_schema(path).id == "generic");

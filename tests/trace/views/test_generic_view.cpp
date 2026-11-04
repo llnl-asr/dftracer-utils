@@ -29,7 +29,7 @@ const char* op_of(int i) {
 // NDJSON records of no trace format: `op` cycles read/write/close, `lat` is
 // i % 50, `io.off` is i * 4096 and `name` cycles x0..x4.
 dstd::String write_ndjson(TestEnvironment& env, const dstd::String& name) {
-    const dstd::String plain = env.get_dir() + "/" + name + ".ndjson";
+    const dstd::String plain = env.dir() + "/" + name + ".ndjson";
     {
         dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i)
@@ -191,7 +191,7 @@ TEST_SUITE("GenericView") {
     TEST_CASE("from_directory finds JSON lines files") {
         TestEnvironment env(10);
         write_ndjson(env, "d");
-        View v = run(View::from_directory(dstd::String(env.get_dir())));
+        View v = run(View::from_directory(dstd::String(env.dir())));
         CHECK(v.collect().get().num_rows() == RECORDS);
     }
 
@@ -224,21 +224,18 @@ TEST_SUITE("GenericView") {
         CHECK(rows() == 10);
 
         TestEnvironment empty_env(10);
-        dftu_utils_test::FileOut(empty_env.get_dir() + "/a.pfw.gz");
-        dftu_utils_test::FileOut(empty_env.get_dir() + "/b.pfw.gz");
-        View empty =
-            run(View::from_directory(dstd::String(empty_env.get_dir())));
+        dftu_utils_test::FileOut(empty_env.dir() + "/a.pfw.gz");
+        dftu_utils_test::FileOut(empty_env.dir() + "/b.pfw.gz");
+        View empty = run(View::from_directory(dstd::String(empty_env.dir())));
         CHECK(empty.collect().get().num_rows() == 0);
     }
 
     TEST_CASE("from_directory reads plain files as an error, not as empty") {
         TestEnvironment env(10);
-        dftu_utils_test::FileOut(env.get_dir() + "/plain.jsonl")
+        dftu_utils_test::FileOut(env.dir() + "/plain.jsonl")
             << R"({"k":1})" << "\n";
         try {
-            run(View::from_directory(dstd::String(env.get_dir())))
-                .collect()
-                .get();
+            run(View::from_directory(dstd::String(env.dir()))).collect().get();
             FAIL("no error");
         } catch (const std::exception& e) {
             CAPTURE(e.what());

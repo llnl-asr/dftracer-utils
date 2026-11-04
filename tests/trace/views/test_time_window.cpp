@@ -44,7 +44,7 @@ dstd::String write_trace(TestEnvironment& env, const dstd::String& name,
             << R"("pid":1,"tid":1,"ph":"X","ts":)" << e.ts << R"(,"dur":)"
             << e.dur << R"(,"args":{"bytes":1}})" << "\n";
     out << "]\n";
-    const auto plain = env.get_dir() + "/" + name + ".pfw";
+    const auto plain = env.dir() + "/" + name + ".pfw";
     {
         dftu_utils_test::FileOut(plain) << out.str();
     }

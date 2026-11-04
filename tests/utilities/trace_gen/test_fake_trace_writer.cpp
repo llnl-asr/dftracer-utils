@@ -33,7 +33,7 @@ CoroTask<dstd::Vector<dstd::String>> collect_lines(
 TEST_SUITE("trace_gen::TraceWriter") {
     TEST_CASE("writes a gzip trace that TraceReader can read back") {
         TestEnvironment env(0);
-        const dstd::String gz_path = env.get_dir() + "/fake.pfw.gz";
+        const dstd::String gz_path = env.dir() + "/fake.pfw.gz";
 
         constexpr int NUM_EVENTS = 8;
         {
@@ -76,7 +76,7 @@ TEST_SUITE("trace_gen::TraceWriter") {
 
     TEST_CASE("escapes control characters in string fields") {
         TestEnvironment env(0);
-        const dstd::String gz_path = env.get_dir() + "/escaped.pfw.gz";
+        const dstd::String gz_path = env.dir() + "/escaped.pfw.gz";
         {
             TraceWriter writer(gz_path);
             EventArgs a;

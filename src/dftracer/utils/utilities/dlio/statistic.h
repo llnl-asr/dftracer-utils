@@ -55,7 +55,7 @@ class Statistic {
 struct ComponentTimeMetrics {
     double union_time = 0.0;
     double accumulated_time = 0.0;
-    std::uint64_t num_samples = 0;
+    std::uint64_t sample_count = 0;
     Statistic stats;
 
     double concurrency() const {

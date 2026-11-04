@@ -22,7 +22,7 @@ TEST_SUITE("View") {
         // Overlapping intervals per name group: same-name events are 150 us
         // apart but each lasts 200 us, so pairs overlap (busy < sum(dur), peak
         // depth 2) while a third never joins them.
-        dstd::String pfw = env.get_dir() + "/occ_engine.pfw";
+        dstd::String pfw = env.dir() + "/occ_engine.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             const char* names[] = {"read", "write", "open"};
@@ -153,7 +153,7 @@ TEST_SUITE("View") {
     TEST_CASE("View - global aggregation (no group_by) matches GroupMap") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/agg_global.pfw";
+        dstd::String pfw = env.dir() + "/agg_global.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             const char* names[] = {"read", "write", "open"};
@@ -317,7 +317,7 @@ TEST_SUITE("View") {
     TEST_CASE("View - rank harvest resolves identically to the GroupMap path") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/agg_rank.pfw";
+        dstd::String pfw = env.dir() + "/agg_rank.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int pid : {1, 2, 3})

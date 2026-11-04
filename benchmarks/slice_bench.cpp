@@ -87,7 +87,7 @@ struct Scale {
     std::int64_t big_rows;
     std::int64_t string_rows;
     std::int64_t op_rows;
-    std::int64_t slice_len;
+    std::int64_t slice_size;
     std::size_t slice_ops;
     std::size_t nested_ops;
     std::size_t string_ops;
@@ -105,7 +105,7 @@ struct Scale {
 constexpr Scale SMOKE_SCALE{.big_rows = 20000,
                             .string_rows = 5000,
                             .op_rows = 5000,
-                            .slice_len = 100,
+                            .slice_size = 100,
                             .slice_ops = 200,
                             .nested_ops = 200,
                             .string_ops = 200,
@@ -121,7 +121,7 @@ constexpr Scale SMOKE_SCALE{.big_rows = 20000,
 constexpr Scale FULL_SCALE{.big_rows = 10000000,
                            .string_rows = 1000000,
                            .op_rows = 1000000,
-                           .slice_len = 1000,
+                           .slice_size = 1000,
                            .slice_ops = 16000000,
                            .nested_ops = 4000000,
                            .string_ops = 5000000,
@@ -223,8 +223,8 @@ double slice_loop(const Series& col,
 
 double slice_int64(const Scale& s) {
     Series col = int_column(s.big_rows);
-    auto at = offsets(s.big_rows, s.slice_len, 1, 0);
-    return slice_loop(col, at, s.slice_len, s.slice_ops);
+    auto at = offsets(s.big_rows, s.slice_size, 1, 0);
+    return slice_loop(col, at, s.slice_size, s.slice_ops);
 }
 
 double slice_depth4(const Scale& s) {
@@ -232,7 +232,7 @@ double slice_depth4(const Scale& s) {
     std::int64_t len1 = s.big_rows / 10;
     std::int64_t len2 = len1 / 10;
     std::int64_t len3 = len2 / 10;
-    std::int64_t len4 = std::min(s.slice_len, len3);
+    std::int64_t len4 = std::min(s.slice_size, len3);
     auto at = offsets(s.big_rows, len1, 1, 0);
     std::int64_t sum = 0;
     std::int64_t expect = 0;
@@ -262,8 +262,8 @@ double slice_depth4(const Scale& s) {
 
 double slice_string(const Scale& s) {
     Series col = string_column(s.string_rows);
-    auto at = offsets(s.string_rows, s.slice_len, 1, 0);
-    return slice_loop(col, at, s.slice_len, s.string_ops);
+    auto at = offsets(s.string_rows, s.slice_size, 1, 0);
+    return slice_loop(col, at, s.slice_size, s.string_ops);
 }
 
 double slice_nullable(const Scale& s, std::int64_t shift) {
@@ -273,8 +273,8 @@ double slice_nullable(const Scale& s, std::int64_t shift) {
         sparse_validity(s.big_rows);
     Series col = Series::flat_i64(values.data(), s.big_rows, validity.data());
     values = {};
-    auto at = offsets(s.big_rows, s.slice_len, 8, shift);
-    return slice_loop(col, at, s.slice_len, s.nested_ops);
+    auto at = offsets(s.big_rows, s.slice_size, 8, shift);
+    return slice_loop(col, at, s.slice_size, s.nested_ops);
 }
 
 DataFrame wide_frame(std::int64_t rows, bool nullable) {
@@ -297,11 +297,11 @@ double head_tail(const Scale& s) {
     auto start = Clock::now();
     for (std::size_t i = 0; i < s.head_ops; ++i) {
         DataFrame part =
-            (i & 1) != 0 ? frame.tail(s.slice_len) : frame.head(s.slice_len);
+            (i & 1) != 0 ? frame.tail(s.slice_size) : frame.head(s.slice_size);
         rows += part.num_rows();
     }
     auto end = Clock::now();
-    check(rows == s.slice_len * static_cast<std::int64_t>(s.head_ops),
+    check(rows == s.slice_size * static_cast<std::int64_t>(s.head_ops),
           "head tail rows");
     return elapsed_ns(start, end) / static_cast<double>(s.head_ops);
 }

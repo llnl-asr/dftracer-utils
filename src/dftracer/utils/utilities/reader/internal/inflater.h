@@ -143,17 +143,17 @@ class ReaderInflater {
                               std::size_t len, std::size_t& bytes_out) {
         bytes_out = 0;
         while (bytes_out < len) {
-            if (member_pos_ >= member_len_) {
+            if (member_pos_ >= member_size_) {
                 if (exhausted_) break;
                 const auto decode_next_member_ok =
                     co_await decode_next_member(fd, offset);
                 if (!decode_next_member_ok) co_return false;
-                if (member_len_ == 0) {
+                if (member_size_ == 0) {
                     exhausted_ = true;
                     break;
                 }
             }
-            const std::size_t avail = member_len_ - member_pos_;
+            const std::size_t avail = member_size_ - member_pos_;
             const std::size_t take = std::min(len - bytes_out, avail);
             std::memcpy(buf + bytes_out, member_data_ + member_pos_, take);
             member_pos_ += take;
@@ -166,17 +166,17 @@ class ReaderInflater {
     coro::CoroTask<bool> skip_bytes(int fd, off_t& offset,
                                     std::size_t bytes_to_skip) {
         while (bytes_to_skip > 0) {
-            if (member_pos_ >= member_len_) {
+            if (member_pos_ >= member_size_) {
                 if (exhausted_) break;
                 const auto decode_next_member_ok =
                     co_await decode_next_member(fd, offset);
                 if (!decode_next_member_ok) co_return false;
-                if (member_len_ == 0) {
+                if (member_size_ == 0) {
                     exhausted_ = true;
                     break;
                 }
             }
-            const std::size_t avail = member_len_ - member_pos_;
+            const std::size_t avail = member_size_ - member_pos_;
             const std::size_t take = std::min(bytes_to_skip, avail);
             member_pos_ += take;
             bytes_to_skip -= take;
@@ -190,7 +190,7 @@ class ReaderInflater {
         comp_.clear();
         member_shared_.reset();
         member_data_ = nullptr;
-        member_len_ = 0;
+        member_size_ = 0;
         member_pos_ = 0;
         comp_off_ = 0;
         next_read_ = 0;
@@ -198,7 +198,7 @@ class ReaderInflater {
         exhausted_ = false;
     }
 
-    bool is_at_end() const { return exhausted_ && member_pos_ >= member_len_; }
+    bool is_at_end() const { return exhausted_ && member_pos_ >= member_size_; }
 
    private:
     static constexpr std::size_t READ_CHUNK = 1u << 20;
@@ -242,7 +242,7 @@ class ReaderInflater {
     /// output or the end of the stream arrives, so a cut file yields only
     /// complete lines.
     coro::CoroTask<bool> decode_next_stream(int fd, off_t& offset) {
-        member_len_ = 0;
+        member_size_ = 0;
         member_pos_ = 0;
         member_data_ = nullptr;
         member_shared_.reset();
@@ -313,7 +313,7 @@ class ReaderInflater {
         }
         offset = static_cast<off_t>(comp_off_);
         member_data_ = member_owned_.data();
-        member_len_ = filled;
+        member_size_ = filled;
         if (filled == 0 && ended && comp_off_ < file_size_) {
             co_return co_await decode_next_member(fd, offset);
         }
@@ -351,7 +351,7 @@ class ReaderInflater {
     /// Fetch the member at comp_off_ through the cache (one decode shared
     /// across concurrent readers) and point the read window at it.
     coro::CoroTask<bool> decode_next_member_cached(int fd, off_t& offset) {
-        member_len_ = 0;
+        member_size_ = 0;
         member_pos_ = 0;
         member_data_ = nullptr;
         member_shared_.reset();
@@ -387,16 +387,16 @@ class ReaderInflater {
         }
 
         member_data_ = member_shared_->data.data();
-        member_len_ = member_shared_->data.size();
+        member_size_ = member_shared_->data.size();
         comp_off_ += member_shared_->compressed_size;
         offset = static_cast<off_t>(comp_off_);
         co_return true;
     }
 
     /// Decode the member at comp_off_ into the reused local buffer, or leave
-    /// member_len_ == 0 at a clean end of file.
+    /// member_size_ == 0 at a clean end of file.
     coro::CoroTask<bool> decode_next_member_local(int fd, off_t& offset) {
-        member_len_ = 0;
+        member_size_ = 0;
         member_pos_ = 0;
         member_data_ = nullptr;
         if (comp_off_ >= file_size_) co_return true;  // clean EOF
@@ -433,7 +433,7 @@ class ReaderInflater {
                 member_owned_.resize(*keep);
                 std::memcpy(member_owned_.data(), kept.data(), *keep);
                 member_data_ = member_owned_.data();
-                member_len_ = *keep;
+                member_size_ = *keep;
                 comp_off_ = file_size_;
                 comp_.clear();
                 offset = static_cast<off_t>(comp_off_);
@@ -454,7 +454,7 @@ class ReaderInflater {
         }
 
         member_data_ = member_owned_.data();
-        member_len_ = res.out_bytes;
+        member_size_ = res.out_bytes;
         comp_off_ += res.in_bytes;
         const std::size_t rest = comp_.size() - res.in_bytes;
         std::memmove(comp_.data(), comp_.data() + res.in_bytes, rest);
@@ -525,7 +525,7 @@ class ReaderInflater {
     dstd::RawBuffer<unsigned char> member_owned_;
     MemberDecodeCache::Bytes member_shared_;
     const unsigned char* member_data_ = nullptr;
-    std::size_t member_len_ = 0;
+    std::size_t member_size_ = 0;
     std::size_t member_pos_ = 0;
     std::uint64_t comp_off_ = 0;
     std::uint64_t next_read_ = 0;

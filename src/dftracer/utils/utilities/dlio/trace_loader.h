@@ -69,8 +69,8 @@ struct AggregatedTraces {
     /// Discovered PIDs (sorted) - index in this list defines rank ID.
     dstd::Vector<std::uint64_t> rank_pids;
 
-    int num_ranks = 0;
-    int num_steps = 0;  ///< min length across ranks of fetch_block_trace
+    int rank_count = 0;
+    int step_count = 0;  ///< min length across ranks of fetch_block_trace
 
     /// True if any AGGREGATION entry was found.
     bool any_data = false;
@@ -126,7 +126,7 @@ void load_event_map(dstd::StringView path, TraceLoaderOptions& options);
 
 /// Convenience: build a @ref BarrierSimulatorContext from loaded traces.
 BarrierSimulatorContext make_simulator_context(const AggregatedTraces& traces,
-                                               int num_workers = 8,
+                                               int worker_count = 8,
                                                int prefetch_factor = 2);
 
 }  // namespace dftracer::utils::utilities::dlio

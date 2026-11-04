@@ -125,12 +125,12 @@ dstd::Vector<std::uint8_t> ChunkDimensionStats::serialize_value_counts() const {
     dstd::append_u32_le(buf, num);
 
     for (const auto& [key, count] : *value_counts) {
-        auto key_len = static_cast<std::uint16_t>(
+        auto key_size = static_cast<std::uint16_t>(
             std::min<std::size_t>(key.size(), 0xFFFF));
 
-        dstd::append_u16_le(buf, key_len);
+        dstd::append_u16_le(buf, key_size);
 
-        buf.insert(buf.end(), key.data(), key.data() + key_len);
+        buf.insert(buf.end(), key.data(), key.data() + key_size);
 
         dstd::append_u64_le(buf, static_cast<std::uint64_t>(count));
     }
@@ -171,13 +171,13 @@ ChunkDimensionStats::deserialize_value_counts(const std::uint8_t* data,
     pos += 4;
 
     for (std::uint32_t i = 0; i < num && pos + 2 <= len; ++i) {
-        std::uint16_t key_len = dstd::read_u16_le(data + pos);
+        std::uint16_t key_size = dstd::read_u16_le(data + pos);
         pos += 2;
 
-        if (pos + key_len + 8 > len) break;
+        if (pos + key_size + 8 > len) break;
 
-        dstd::String key(reinterpret_cast<const char*>(data + pos), key_len);
-        pos += key_len;
+        dstd::String key(reinterpret_cast<const char*>(data + pos), key_size);
+        pos += key_size;
 
         std::uint64_t count = dstd::read_u64_le(data + pos);
         pos += 8;
@@ -193,15 +193,15 @@ ChunkDimensionStats::decompress_value_counts(const std::uint8_t* data,
                                              std::size_t len) {
     if (!data || len < 4) return {};
 
-    std::uint32_t decoded_len = dstd::read_u32_le(data);
+    std::uint32_t decoded_size = dstd::read_u32_le(data);
 
     utilities::fileio::compress::GzipMemberDecompressor decompressor;
     if (!decompressor.valid()) return {};
 
-    dstd::Vector<std::uint8_t> decompressed(decoded_len);
+    dstd::Vector<std::uint8_t> decompressed(decoded_size);
     auto res = decompressor.decompress(data + 4, len - 4, decompressed.data(),
                                        decompressed.size());
-    if (!res || res->out_bytes != decoded_len) return {};
+    if (!res || res->out_bytes != decoded_size) return {};
 
     return deserialize_value_counts(decompressed.data(), res->out_bytes);
 }

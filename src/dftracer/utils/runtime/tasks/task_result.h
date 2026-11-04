@@ -72,7 +72,7 @@ class TaskResult {
     std::any get_ready() const;
 
     /// Return exception without blocking. nullptr if no exception.
-    std::exception_ptr get_exception() const;
+    std::exception_ptr exception() const;
 
     // === State queries ===
 

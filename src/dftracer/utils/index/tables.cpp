@@ -868,11 +868,11 @@ void put_chunk_metadata(FileBuild& build, std::uint64_t checkpoint_idx,
 
 void put_file_scalar_stats(FileBuild& build,
                            const schemas::dft::ChunkStatistics& stats,
-                           std::uint64_t num_chunks) {
+                           std::uint64_t chunk_count) {
     put_value(
         build, Ext::Stats,
         file_key(store::layout::stats_kind::FILE_SCALAR_STATS),
-        store::internal::encode_file_scalar_stats_value(stats, num_chunks));
+        store::internal::encode_file_scalar_stats_value(stats, chunk_count));
 }
 
 void put_file_pid_tid_counts(FileBuild& build,

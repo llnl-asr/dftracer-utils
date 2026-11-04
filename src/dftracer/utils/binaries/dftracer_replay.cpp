@@ -446,8 +446,8 @@ int run(int argc, char** argv) {
     ctx.cli = &cli;
 
 #ifdef DFTRACER_UTILS_MPI_ENABLED
-    ctx.mpi_rank = mpi::MPIUtils::instance().get_rank();
-    ctx.mpi_size = mpi::MPIUtils::instance().get_world_size();
+    ctx.mpi_rank = mpi::MPIUtils::instance().rank();
+    ctx.mpi_size = mpi::MPIUtils::instance().world_size();
     ctx.is_root = mpi::MPIUtils::instance().is_root();
 #endif
 

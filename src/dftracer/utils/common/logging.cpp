@@ -132,7 +132,7 @@ void set_level(Level level) {
     detail::g_level.store(static_cast<int>(level), std::memory_order_relaxed);
 }
 
-Level get_level() {
+Level level() {
     return static_cast<Level>(detail::g_level.load(std::memory_order_relaxed));
 }
 

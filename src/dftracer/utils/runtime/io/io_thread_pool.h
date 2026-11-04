@@ -35,7 +35,7 @@ struct IoPoolOptions {
 /// The thread count given to the constructor is the cap.
 class IoThreadPool {
    public:
-    explicit IoThreadPool(std::size_t num_threads = 4,
+    explicit IoThreadPool(std::size_t thread_count = 4,
                           unsigned batch_threshold = 0,
                           IoPoolOptions options = {});
     ~IoThreadPool();
@@ -100,7 +100,7 @@ class IoThreadPool {
     bool spawn_locked();
     void reap_locked();
 
-    std::atomic<std::size_t> num_threads_;
+    std::atomic<std::size_t> thread_count_;
     unsigned batch_threshold_;
     std::chrono::milliseconds keepalive_;
     // eager_, idle_, retired_ and threads_ change under mutex_.

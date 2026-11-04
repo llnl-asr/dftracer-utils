@@ -183,7 +183,7 @@ class Scheduler final : public TaskOwner {
     /**
      * Get watchdog (for configuration)
      */
-    Watchdog* get_watchdog() { return watchdog_; }
+    Watchdog* watchdog() { return watchdog_; }
 
     /**
      * Reset scheduler state
@@ -198,7 +198,7 @@ class Scheduler final : public TaskOwner {
     /**
      * Get executor reference (for TaskFuture async suspension)
      */
-    TaskExecutor* get_executor() const { return executor_; }
+    TaskExecutor* executor() const { return executor_; }
 
     // ========================================================================
     // Coroutine Support - Completion Callbacks

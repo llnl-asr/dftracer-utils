@@ -46,7 +46,7 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
                            std::size_t member_bytes = 0,
                            std::size_t checkpoint_size = 0,
                            dstd::Vector<dstd::String> extensions = {}) {
-    const dstd::String plain = env.get_dir() + "/" + name + ".ndjson";
+    const dstd::String plain = env.dir() + "/" + name + ".ndjson";
     {
         dftu_utils_test::FileOut o(plain);
         for (const auto& l : lines) o << l << "\n";
@@ -147,7 +147,7 @@ dstd::Vector<dstd::String> runs_and_events() {
 TEST_SUITE("View duql joins") {
     TEST_CASE("a let reads data unless it says from all") {
         TestEnvironment env(10);
-        const dstd::String pfw = env.get_dir() + "/meta.pfw";
+        const dstd::String pfw = env.dir() + "/meta.pfw";
         {
             dftu_utils_test::FileOut o(pfw);
             for (int i = 0; i < 3; ++i)
@@ -178,7 +178,7 @@ TEST_SUITE("View duql joins") {
         for (const auto& outer : outers) {
             CAPTURE(outer);
             TestEnvironment env(10);
-            const dstd::String pfw = env.get_dir() + "/fresh.pfw";
+            const dstd::String pfw = env.dir() + "/fresh.pfw";
             double sum[2] = {0, 0};
             int cnt[2] = {0, 0};
             dstd::Vector<int> name_of;

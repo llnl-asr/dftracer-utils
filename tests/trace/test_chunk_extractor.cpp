@@ -72,7 +72,7 @@ TEST_SUITE("ChunkExtractor") {
 
         auto input =
             ChunkExtractorUtilityInput::from_files(0, {dstd::String(test_file)})
-                .with_output_dir(dstd::String(env.get_dir()))
+                .with_output_dir(dstd::String(env.dir()))
                 .with_app_name("test");
 
         ChunkExtractorUtility extractor;
@@ -93,7 +93,7 @@ TEST_SUITE("ChunkExtractor") {
         // members give several chunks.
         auto input =
             ChunkExtractorUtilityInput::from_files(1, {dstd::String(test_file)})
-                .with_output_dir(dstd::String(env.get_dir()))
+                .with_output_dir(dstd::String(env.dir()))
                 .with_app_name("test")
                 .with_compression(true)
                 .with_member_size(64 * 1024)
@@ -121,18 +121,18 @@ TEST_SUITE("ChunkExtractor") {
         ChunkExtractorUtility extractor;
         auto one = extractor(ChunkExtractorUtilityInput::from_files(
                                  0, {dstd::String(first)})
-                                 .with_output_dir(dstd::String(env.get_dir()))
+                                 .with_output_dir(dstd::String(env.dir()))
                                  .with_app_name("one"))
                        .get();
         auto two = extractor(ChunkExtractorUtilityInput::from_files(
                                  0, {dstd::String(second)})
-                                 .with_output_dir(dstd::String(env.get_dir()))
+                                 .with_output_dir(dstd::String(env.dir()))
                                  .with_app_name("two"))
                        .get();
         auto both =
             extractor(ChunkExtractorUtilityInput::from_files(
                           0, {dstd::String(first), dstd::String(second)})
-                          .with_output_dir(dstd::String(env.get_dir()))
+                          .with_output_dir(dstd::String(env.dir()))
                           .with_app_name("both"))
                 .get();
 
@@ -146,8 +146,8 @@ TEST_SUITE("ChunkExtractor") {
         TestEnvironment env(100);
 
         auto input = ChunkExtractorUtilityInput::from_files(
-                         0, {dstd::String(env.get_dir() + "/no")})
-                         .with_output_dir(dstd::String(env.get_dir()))
+                         0, {dstd::String(env.dir() + "/no")})
+                         .with_output_dir(dstd::String(env.dir()))
                          .with_app_name("test");
 
         ChunkExtractorUtility extractor;
@@ -160,7 +160,7 @@ TEST_SUITE("ChunkExtractor") {
     TEST_CASE("ChunkExtractor - A file that is not gzip fails the group") {
         TestEnvironment env(100);
 
-        const dstd::String plain = env.get_dir() + "/plain.pfw.gz";
+        const dstd::String plain = env.dir() + "/plain.pfw.gz";
         {
             dftu_utils_test::FileOut out(plain);
             out << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
@@ -168,7 +168,7 @@ TEST_SUITE("ChunkExtractor") {
 
         auto input =
             ChunkExtractorUtilityInput::from_files(0, {dstd::String(plain)})
-                .with_output_dir(dstd::String(env.get_dir()))
+                .with_output_dir(dstd::String(env.dir()))
                 .with_app_name("test");
 
         ChunkExtractorUtility extractor;
@@ -208,14 +208,14 @@ TEST_SUITE("ChunkExtractor") {
         constexpr std::size_t GROUPS = 6;
         constexpr std::uint64_t RESERVE = 8 * 1024 * 1024;
 
-        const dstd::String loose_dir = env.get_dir() + "/loose";
-        const dstd::String tight_dir = env.get_dir() + "/tight";
+        const dstd::String loose_dir = env.dir() + "/loose";
+        const dstd::String tight_dir = env.dir() + "/tight";
         const auto loose =
             run_admitted(file, loose_dir, GROUPS, RESERVE * GROUPS, RESERVE);
         const auto tight =
             run_admitted(file, tight_dir, GROUPS, RESERVE * 2, RESERVE);
-        const auto single = run_admitted(file, env.get_dir() + "/single",
-                                         GROUPS, RESERVE / 2, RESERVE);
+        const auto single = run_admitted(file, env.dir() + "/single", GROUPS,
+                                         RESERVE / 2, RESERVE);
 
         CHECK(loose.peak_in_flight <= GROUPS);
         CHECK(tight.peak_in_flight <= 2);

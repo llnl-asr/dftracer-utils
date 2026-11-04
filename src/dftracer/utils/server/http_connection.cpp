@@ -100,12 +100,12 @@ coro::CoroTask<void> handle_connection(int client_fd,
                         payload_size += sv.size() + 1;
                     }
 
-                    int hex_len = std::snprintf(hex, sizeof(hex), "%zx\r\n",
-                                                payload_size);
+                    int hex_size = std::snprintf(hex, sizeof(hex), "%zx\r\n",
+                                                 payload_size);
 
                     iovs.clear();
                     iovs.reserve(chunk->views.size() * 2 + 2);
-                    iovs.push_back({hex, static_cast<std::size_t>(hex_len)});
+                    iovs.push_back({hex, static_cast<std::size_t>(hex_size)});
                     for (const auto& sv : chunk->views) {
                         iovs.push_back(
                             {const_cast<char*>(sv.data()), sv.size()});

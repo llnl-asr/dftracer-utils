@@ -351,7 +351,7 @@ dstd::StringView raw_key(const char* begin) {
 namespace {
 
 // The length of the valid UTF-8 sequence that starts at `p`, or 0.
-std::size_t utf8_length(const unsigned char* p, std::size_t left) {
+std::size_t utf8_size(const unsigned char* p, std::size_t left) {
     const unsigned char c = p[0];
     std::size_t need;
     unsigned char low = 0x80;
@@ -402,7 +402,7 @@ void repair_line(char* data, std::size_t size) {
             data[i] = '?';
             if (after_backslash) data[i - 1] = '?';
         } else if (c >= 0x80) {
-            const std::size_t length = utf8_length(
+            const std::size_t length = utf8_size(
                 reinterpret_cast<const unsigned char*>(data) + i, size - i);
             if (length == 0) {
                 data[i] = '?';

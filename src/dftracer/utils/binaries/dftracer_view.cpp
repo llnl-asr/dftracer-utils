@@ -734,7 +734,7 @@ struct ViewRun {
     bool write_trace = false;
     bool duql_rows = false;
     bool has_window = false;
-    std::int64_t window_len = 0;
+    std::int64_t window_size = 0;
     std::uint64_t member_size = 0;
     std::uint64_t checkpoint_size = 0;
     dstd::StringView index_dir;
@@ -784,8 +784,8 @@ ViewRun::ViewRun(const ViewArgParse* c)
       no_auto_index(c->no_auto_index),
       verify(c->verify),
       has_window(c->offset > 0 || c->limit > 0),
-      window_len(c->limit > 0 ? static_cast<std::int64_t>(c->limit)
-                              : std::numeric_limits<std::int64_t>::max()),
+      window_size(c->limit > 0 ? static_cast<std::int64_t>(c->limit)
+                               : std::numeric_limits<std::int64_t>::max()),
       // One knob: gzip member size == checkpoint size (a checkpoint is a
       // member).
       member_size(c->indexing.checkpoint_size),
@@ -825,7 +825,7 @@ View ViewRun::configure(View v) const {
 View ViewRun::windowed(View v) const {
     if (!cli->select.empty()) v = v.select(select_columns(cli->select));
     if (has_window)
-        v = v.slice(static_cast<std::int64_t>(cli->offset), window_len);
+        v = v.slice(static_cast<std::int64_t>(cli->offset), window_size);
     return v;
 }
 
@@ -836,7 +836,7 @@ coro::CoroTask<dataframe::DataFrame> ViewRun::windowed_table(
     dataframe::LazyFrame rows = dataframe::lazy(std::move(table));
     if (!cli->select.empty()) rows = rows.select(select_columns(cli->select));
     if (has_window)
-        rows = rows.slice(static_cast<std::int64_t>(cli->offset), window_len);
+        rows = rows.slice(static_cast<std::int64_t>(cli->offset), window_size);
     co_return co_await rows.collect();
 }
 
@@ -980,7 +980,7 @@ coro::CoroTask<void> ViewRun::run_distributed_write(
     TraceWriteOptions topts;
     topts.output_path = rank_out;
     topts.member_size = member_size;
-    topts.num_workers = cli->pipeline.executor_threads;
+    topts.worker_count = cli->pipeline.executor_threads;
     topts.compress = true;
     View shard_view =
         windowed(configure(View::from_files(std::move(shard_vf))));
@@ -1069,7 +1069,7 @@ coro::CoroTask<void> ViewRun::run_local() {
         TraceWriteOptions topts;
         topts.output_path = final_output;
         topts.member_size = member_size;
-        topts.num_workers = cli->pipeline.executor_threads;
+        topts.worker_count = cli->pipeline.executor_threads;
         topts.compress = true;
         topts.build_index = !no_index;
         topts.index_path = index_dir;

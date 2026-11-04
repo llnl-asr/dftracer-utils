@@ -37,8 +37,8 @@ ViewPlannerInput& ViewPlannerInput::with_uncompressed_size(std::size_t s) {
     return *this;
 }
 
-ViewPlannerInput& ViewPlannerInput::with_num_checkpoints(std::size_t n) {
-    num_checkpoints = n;
+ViewPlannerInput& ViewPlannerInput::with_checkpoint_count(std::size_t n) {
+    checkpoint_count = n;
     return *this;
 }
 
@@ -63,7 +63,7 @@ coro::CoroTask<dstd::Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
     ViewPlannerOutput output;
 
     std::uint64_t total_checkpoints =
-        (input.num_checkpoints == 0) ? 1 : input.num_checkpoints;
+        (input.checkpoint_count == 0) ? 1 : input.checkpoint_count;
     output.total_checkpoints = total_checkpoints;
 
     // Real per-chunk offsets are required: gzip members are non-uniformly

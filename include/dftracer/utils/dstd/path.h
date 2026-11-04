@@ -46,7 +46,7 @@ constexpr bool is_drive_letter(char c) noexcept {
 
 /// The length of the root, such as `/` on POSIX, or `C:`, `C:\` or
 /// `\\server\share` on Windows. Zero for a relative path.
-constexpr std::size_t root_length(StringView path, PathStyle style) noexcept {
+constexpr std::size_t root_size(StringView path, PathStyle style) noexcept {
     const std::size_t size = path.size();
     if (size == 0) return 0;
     if (style == PathStyle::Posix) return path[0] == '/' ? 1 : 0;
@@ -67,7 +67,7 @@ constexpr std::size_t root_length(StringView path, PathStyle style) noexcept {
 }
 
 constexpr bool is_absolute(StringView path, PathStyle style) noexcept {
-    const std::size_t root = root_length(path, style);
+    const std::size_t root = root_size(path, style);
     if (root == 0) return false;
     if (style == PathStyle::Posix) return true;
     if (is_separator(path[0], style)) return true;
@@ -75,7 +75,7 @@ constexpr bool is_absolute(StringView path, PathStyle style) noexcept {
 }
 
 constexpr StringView root(StringView path, PathStyle style) noexcept {
-    return path.substr(0, root_length(path, style));
+    return path.substr(0, root_size(path, style));
 }
 
 struct ComponentRange {
@@ -85,7 +85,7 @@ struct ComponentRange {
 
 constexpr ComponentRange filename_range(StringView path,
                                         PathStyle style) noexcept {
-    const std::size_t root = root_length(path, style);
+    const std::size_t root = root_size(path, style);
     std::size_t end = path.size();
     while (end > root && is_separator(path[end - 1], style)) --end;
     std::size_t begin = end;
@@ -101,7 +101,7 @@ constexpr StringView filename(StringView path, PathStyle style) noexcept {
 /// Everything before the last component, with the separators that followed it
 /// dropped. A path with no component keeps its root, so parent("/") is "/".
 constexpr StringView parent(StringView path, PathStyle style) noexcept {
-    const std::size_t root = root_length(path, style);
+    const std::size_t root = root_size(path, style);
     std::size_t end = filename_range(path, style).begin;
     while (end > root && is_separator(path[end - 1], style)) --end;
     return path.substr(0, end);

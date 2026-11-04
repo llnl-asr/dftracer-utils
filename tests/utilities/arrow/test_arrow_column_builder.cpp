@@ -16,15 +16,15 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::arrow;
 
 static dstd::String child_schema_name(const ArrowExportResult& r, int64_t i) {
-    return r.get_schema()->children[i]->name;
+    return r.schema()->children[i]->name;
 }
 
 static dstd::String child_schema_format(const ArrowExportResult& r, int64_t i) {
-    return r.get_schema()->children[i]->format;
+    return r.schema()->children[i]->format;
 }
 
 static int64_t child_null_count(const ArrowExportResult& r, int64_t i) {
-    return r.get_array()->children[i]->null_count;
+    return r.array()->children[i]->null_count;
 }
 
 TEST_CASE("RecordBatchBuilder - Static schema mode") {
@@ -238,7 +238,7 @@ TEST_CASE("RecordBatchBuilder - HIST list<struct> column") {
     CHECK(result.num_columns() == 2);
     // list<item: struct<lo,hi,count>>: format "+l" with a struct child.
     CHECK(child_schema_format(result, 1) == dstd::String("+l"));
-    CHECK(dstd::String(result.get_schema()->children[1]->children[0]->format) ==
+    CHECK(dstd::String(result.schema()->children[1]->children[0]->format) ==
           dstd::String("+s"));
 }
 
@@ -248,8 +248,7 @@ namespace {
 struct Cells {
     ArrowArrayView view;
     explicit Cells(ArrowExportResult& r) {
-        REQUIRE(init_array_view(view, r.get_schema(), r.get_array()) ==
-                NANOARROW_OK);
+        REQUIRE(init_array_view(view, r.schema(), r.array()) == NANOARROW_OK);
     }
     ~Cells() { ArrowArrayViewReset(&view); }
     Cells(const Cells&) = delete;

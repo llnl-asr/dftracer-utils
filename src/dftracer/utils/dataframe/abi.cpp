@@ -171,12 +171,12 @@ dftu_series* dftu_series_new_string(dftu_dtype type, const int32_t* offsets,
     col->offsets = new_buffer(off_bytes);
     if (offsets != nullptr)
         std::memcpy(writable(col->offsets), offsets, off_bytes);
-    std::int32_t data_len = offsets != nullptr ? offsets[n] : 0;
+    std::int32_t data_size = offsets != nullptr ? offsets[n] : 0;
 
-    col->data = new_buffer(static_cast<std::size_t>(data_len));
-    if (data != nullptr && data_len > 0)
+    col->data = new_buffer(static_cast<std::size_t>(data_size));
+    if (data != nullptr && data_size > 0)
         std::memcpy(writable(col->data), data,
-                    static_cast<std::size_t>(data_len));
+                    static_cast<std::size_t>(data_size));
 
     if (validity != nullptr) {
         std::size_t vbytes = static_cast<std::size_t>(validity_bytes(n));

@@ -303,7 +303,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
             case AstStrLen: {
                 dataframe::Expr a = pop();
                 stack.push_back(
-                    dataframe::expr_str_len(a, PyLong_AsLong(arg(1)) != 0));
+                    dataframe::expr_str_size(a, PyLong_AsLong(arg(1)) != 0));
                 break;
             }
             case AstStrFind: {

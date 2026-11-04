@@ -313,7 +313,7 @@ TEST_CASE("DFTracer Replay - Trace structure") {
         CHECK(trace.has_size() == true);
         CHECK(trace.has_offset() == false);
         CHECK(trace.has_valid_timing() == true);
-        CHECK(trace.get_end_time() == 1000500);
+        CHECK(trace.end_time() == 1000500);
     }
 }
 

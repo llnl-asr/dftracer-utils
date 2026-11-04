@@ -466,10 +466,10 @@ dstd::UniquePtr<Fixture> build(std::uint64_t interval_us,
         auto events = make_events(1000 + static_cast<std::uint64_t>(i));
         if (reversed) std::reverse(events.begin(), events.end());
         fx->files.push_back(
-            write_trace(fx->env.get_dir(), i, events, cut_mid_line));
+            write_trace(fx->env.dir(), i, events, cut_mid_line));
         fx->events.insert(fx->events.end(), events.begin(), events.end());
     }
-    fx->index_dir = fx->env.get_dir() + "/idx_" + tag;
+    fx->index_dir = fx->env.dir() + "/idx_" + tag;
     index::IndexerOptions o;
     o.index_dir = fx->index_dir;
     o.checkpoint_size = CHECKPOINT_SIZE;
@@ -736,9 +736,9 @@ TEST_SUITE("AggQuery") {
                 e.args.emplace_back("ret", 4096);
                 events.push_back(std::move(e));
             }
-            files.push_back(write_trace(env.get_dir(), f, events, false));
+            files.push_back(write_trace(env.dir(), f, events, false));
         }
-        const dstd::String index_dir = env.get_dir() + "/idx_cmp";
+        const dstd::String index_dir = env.dir() + "/idx_cmp";
         index::IndexerOptions o;
         o.index_dir = index_dir;
         o.checkpoint_size = CHECKPOINT_SIZE;
@@ -942,7 +942,7 @@ TEST_SUITE("AggQuery") {
 
     TEST_CASE("a re-read answers from the chunk column blocks") {
         auto fx = dstd::make_unique<Fixture>();
-        const dstd::String pfw = fx->env.get_dir() + "/mixed.pfw";
+        const dstd::String pfw = fx->env.dir() + "/mixed.pfw";
         {
             dftu_utils_test::FileOut file(pfw);
             file << mixed_trace();
@@ -952,7 +952,7 @@ TEST_SUITE("AggQuery") {
             pfw, gz, CHECKPOINT_SIZE));
         (void)dstd::fs::remove(pfw);
         fx->files.push_back(gz);
-        fx->index_dir = fx->env.get_dir() + "/idx_mixed";
+        fx->index_dir = fx->env.dir() + "/idx_mixed";
         index::IndexerOptions o;
         o.index_dir = fx->index_dir;
         o.checkpoint_size = CHECKPOINT_SIZE;
@@ -1102,8 +1102,8 @@ TEST_SUITE("AggQuery") {
                  << "\n";
         text << "]\n";
         fx->files.push_back(dftu_utils_test::write_gz_trace(
-            fx->env.get_dir() + "/one.pfw.gz", text.str()));
-        fx->index_dir = fx->env.get_dir() + "/idx_one";
+            fx->env.dir() + "/one.pfw.gz", text.str()));
+        fx->index_dir = fx->env.dir() + "/idx_one";
         index::IndexerOptions o;
         o.index_dir = fx->index_dir;
         o.checkpoint_size = std::size_t{64} << 10;
@@ -1142,8 +1142,8 @@ TEST_SUITE("AggQuery") {
                  << R"(,"dur":1,"args":{}})" << "\n";
         text << "]\n";
         fx->files.push_back(dftu_utils_test::write_gz_trace(
-            fx->env.get_dir() + "/tiny.pfw.gz", text.str()));
-        fx->index_dir = fx->env.get_dir() + "/idx_tiny";
+            fx->env.dir() + "/tiny.pfw.gz", text.str()));
+        fx->index_dir = fx->env.dir() + "/idx_tiny";
         index::IndexerOptions o;
         o.index_dir = fx->index_dir;
         o.checkpoint_size = ONE_CHUNK;
@@ -1196,8 +1196,8 @@ TEST_SUITE("AggQuery") {
             line(1 + i % 3, "good", R"({"n":)" + dstd::to_string(i) + "}", 10);
         text << "]\n";
         fx->files.push_back(dftu_utils_test::write_gz_trace(
-            fx->env.get_dir() + "/odd.pfw.gz", text.str()));
-        fx->index_dir = fx->env.get_dir() + "/idx_odd";
+            fx->env.dir() + "/odd.pfw.gz", text.str()));
+        fx->index_dir = fx->env.dir() + "/idx_odd";
         index::IndexerOptions o;
         o.index_dir = fx->index_dir;
         o.checkpoint_size = std::size_t{64} << 20;

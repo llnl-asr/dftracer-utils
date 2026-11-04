@@ -103,9 +103,10 @@ void build_port_publish(void* h, std::uint64_t, const void*, std::uint32_t) {
     self_of(h).deny(DFTU_SVC_PORTS "::publish");
 }
 
-const void* build_port_consume(void* h, std::uint64_t, std::uint32_t* out_len) {
+const void* build_port_consume(void* h, std::uint64_t,
+                               std::uint32_t* out_size) {
     self_of(h).deny(DFTU_SVC_PORTS "::consume");
-    if (out_len) *out_len = 0;
+    if (out_size) *out_size = 0;
     return nullptr;
 }
 
@@ -155,8 +156,8 @@ const void* build_get_service(void* h, const char* ext_id) {
     return nullptr;
 }
 
-const char* build_resolve(void* h, dftu_str, std::uint32_t* out_len) {
-    if (out_len) *out_len = 0;
+const char* build_resolve(void* h, dftu_str, std::uint32_t* out_size) {
+    if (out_size) *out_size = 0;
     self_of(h).deny("resolve");
     return nullptr;
 }

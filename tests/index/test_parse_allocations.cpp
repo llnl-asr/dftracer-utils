@@ -43,7 +43,7 @@ TEST_SUITE("IndexParseAllocations") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i)
-            files.emplace_back(write_trace(env.get_dir(), i));
+            files.emplace_back(write_trace(env.dir(), i));
 
         Runtime rt(4);
         index::build::IndexBuildBatchResult result;
@@ -52,7 +52,7 @@ TEST_SUITE("IndexParseAllocations") {
             auto config =
                 dstd::make_shared<index::build::IndexBuildBatchConfig>();
             config->file_paths = files;
-            config->index_dir = env.get_dir() + "/idx";
+            config->index_dir = env.dir() + "/idx";
             config->parallelism = 4;
             result =
                 co_await index::build::BatchBuilder::process(std::move(config));
@@ -79,7 +79,7 @@ TEST_SUITE("IndexParseAllocations") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < SMALL_FILES; ++i)
-            files.emplace_back(write_trace(env.get_dir(), i, SMALL_EVENTS));
+            files.emplace_back(write_trace(env.dir(), i, SMALL_EVENTS));
 
         Runtime rt(4);
         index::build::IndexBuildBatchResult result;
@@ -88,7 +88,7 @@ TEST_SUITE("IndexParseAllocations") {
             auto config =
                 dstd::make_shared<index::build::IndexBuildBatchConfig>();
             config->file_paths = files;
-            config->index_dir = env.get_dir() + "/idx";
+            config->index_dir = env.dir() + "/idx";
             config->parallelism = 4;
             result =
                 co_await index::build::BatchBuilder::process(std::move(config));

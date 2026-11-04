@@ -784,10 +784,10 @@ TEST_SUITE("ChunkColumns") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
         dstd::String text;
-        const dstd::String gz = write_trace(env.get_dir(), "trace", text);
+        const dstd::String gz = write_trace(env.dir(), "trace", text);
         const auto rows = parse_trace(text);
         REQUIRE(rows.size() > 0);
-        const dstd::String index_dir = env.get_dir() + "/idx";
+        const dstd::String index_dir = env.dir() + "/idx";
         build({gz}, index_dir);
 
         const auto index_path =
@@ -817,8 +817,8 @@ TEST_SUITE("ChunkColumns") {
         }
         text += "]\n";
         const dstd::String body = text;
-        const dstd::String gz = write_gzip(env.get_dir(), "file_column", body);
-        const dstd::String index_dir = env.get_dir() + "/idx";
+        const dstd::String gz = write_gzip(env.dir(), "file_column", body);
+        const dstd::String index_dir = env.dir() + "/idx";
         build({gz}, index_dir);
 
         const auto index_path =
@@ -878,8 +878,8 @@ TEST_SUITE("ChunkColumns") {
         REQUIRE(env.is_valid());
         dstd::String text_a;
         dstd::String text_b;
-        const dstd::String a = write_trace(env.get_dir(), "alpha", text_a);
-        const dstd::String b = write_trace(env.get_dir(), "beta", text_b);
+        const dstd::String a = write_trace(env.dir(), "alpha", text_a);
+        const dstd::String b = write_trace(env.dir(), "beta", text_b);
         const auto rows_a = parse_trace(text_a);
         const auto rows_b = parse_trace(text_b);
         const dstd::String ia =
@@ -902,10 +902,10 @@ TEST_SUITE("ChunkColumns") {
         for (const auto& [chunk, columns] : before_a)
             CHECK_FALSE(columns.empty());
 
-        const dstd::String root = env.get_dir() + "/set";
+        const dstd::String root = env.dir() + "/set";
         trace::views::write_shard_set(dstd::String(root),
                                       {dstd::String(ia), dstd::String(ib)});
-        const dstd::String out = env.get_dir() + "/merged";
+        const dstd::String out = env.dir() + "/merged";
         CHECK(trace::views::merge_shard_set(dstd::String(root),
                                             dstd::String(out)) == 2);
 
@@ -926,8 +926,8 @@ TEST_SUITE("ChunkColumns") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
         const dstd::String text = repeated_key_trace();
-        const dstd::String gz = write_gzip(env.get_dir(), "repeat", text);
-        const dstd::String index_dir = env.get_dir() + "/idx";
+        const dstd::String gz = write_gzip(env.dir(), "repeat", text);
+        const dstd::String index_dir = env.dir() + "/idx";
         build({gz}, index_dir);
 
         const auto index_path =
@@ -962,8 +962,8 @@ TEST_SUITE("ChunkColumns") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
         dstd::String text;
-        const dstd::String gz = write_trace(env.get_dir(), "trace", text);
-        const dstd::String index_dir = env.get_dir() + "/idx";
+        const dstd::String gz = write_trace(env.dir(), "trace", text);
+        const dstd::String index_dir = env.dir() + "/idx";
         build({gz}, index_dir);
 
         const auto index_path =

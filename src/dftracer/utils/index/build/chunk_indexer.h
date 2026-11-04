@@ -105,7 +105,7 @@ struct ChunkIndexerConfig {
             case store::IndexExtension::Agg:
                 return 0;
         }
-        return hasher.get_hash().value;
+        return hasher.hash().value;
     }
 
     /// Throws INVALID_ARGUMENT naming the setting when stats_share is not in

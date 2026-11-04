@@ -75,14 +75,14 @@ static void add_events(CollapsedMetrics& cm, uint64_t count, uint64_t dur) {
 
 static CollapsedMetrics make_collapsed(double count_mean, double dur_mean,
                                        double size_mean, double xfer_mean,
-                                       double bw_mean, size_t num_windows) {
+                                       double bw_mean, size_t window_count) {
     CollapsedMetrics cm;
     cm.count_mean = count_mean;
     cm.dur_mean_of_means = dur_mean;
     cm.size_mean_of_means = size_mean;
     cm.xfer_mean = xfer_mean;
     cm.bw_mean = bw_mean;
-    cm.num_windows = num_windows;
+    cm.window_count = window_count;
     add_events(cm, static_cast<size_t>(count_mean),
                static_cast<uint64_t>(dur_mean));
     return cm;
@@ -156,7 +156,7 @@ TEST_SUITE("CollapseByGroup") {
         auto result = collapse(agg);
         CHECK(result.size() == 1);
         auto it = result.begin();
-        CHECK(it->second.num_windows == 1);
+        CHECK(it->second.window_count == 1);
         CHECK(it->second.count_mean == doctest::Approx(5.0));
     }
 
@@ -170,7 +170,7 @@ TEST_SUITE("CollapseByGroup") {
         auto result = collapse(agg);
         REQUIRE(result.size() == 1);
         const auto& cm = result.begin()->second;
-        CHECK(cm.num_windows == 3);
+        CHECK(cm.window_count == 3);
         // mean of per-window max counts: (10+20+30)/3 = 20
         CHECK(cm.count_mean == doctest::Approx(20.0).epsilon(0.01));
     }
@@ -186,7 +186,7 @@ TEST_SUITE("CollapseByGroup") {
         REQUIRE(result.size() == 1);
         const auto& cm = result.begin()->second;
         // One window (time_bucket=0), max count across pids = 15
-        CHECK(cm.num_windows == 1);
+        CHECK(cm.window_count == 1);
         CHECK(cm.count_mean == doctest::Approx(15.0).epsilon(0.01));
     }
 
@@ -433,11 +433,11 @@ TEST_SUITE("CompareMetrics") {
         // baseline count = 0 (merged has no updates), variant count = 100
         CollapsedMetrics base;
         base.count_mean = 0.0;
-        base.num_windows = 1;
+        base.window_count = 1;
 
         CollapsedMetrics var;
         var.count_mean = 100.0;
-        var.num_windows = 1;
+        var.window_count = 1;
         add_events(var, 100, 10);
 
         auto results = compare_metrics(base, var, {"count"}, {});

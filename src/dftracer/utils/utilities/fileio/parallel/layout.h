@@ -27,7 +27,7 @@ struct LayoutInfo {
 LayoutInfo detect_layout(dstd::CStringView path) noexcept;
 
 struct WriterSizing {
-    std::size_t num_workers;
+    std::size_t worker_count;
     std::size_t flush_threshold;
     std::size_t buffer_capacity;
 };

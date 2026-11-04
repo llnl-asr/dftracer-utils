@@ -125,9 +125,9 @@ static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
 
 static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
     PyObject *entries_obj;
-    Py_ssize_t num_workers;
-    if (!PyArg_ParseTuple(args, "On", &entries_obj, &num_workers)) return NULL;
-    if (num_workers <= 0) num_workers = 1;
+    Py_ssize_t worker_count;
+    if (!PyArg_ParseTuple(args, "On", &entries_obj, &worker_count)) return NULL;
+    if (worker_count <= 0) worker_count = 1;
 
     dftracer::utils::dstd::Vector<FileEntry> entries;
     PyObject *seq = PySequence_Fast(entries_obj,
@@ -154,7 +154,7 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
     Py_DECREF(seq);
 
     auto buckets = plan_lpt_partition(std::move(entries),
-                                      static_cast<std::size_t>(num_workers));
+                                      static_cast<std::size_t>(worker_count));
 
     PyObject *out = PyList_New(static_cast<Py_ssize_t>(buckets.size()));
     if (!out) return NULL;

@@ -116,7 +116,7 @@ int Thread::create(void (*run)(void*), void* arg,
     return 0;
 }
 
-Error Thread::create_error(int rc) {
+Error Thread::make_error(int rc) {
     String message("cannot create a thread: ");
     message.append(std::strerror(rc));
     return Error(Condition::Internal, message);

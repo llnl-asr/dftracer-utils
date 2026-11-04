@@ -71,7 +71,7 @@ Path& Path::replace_extension(StringView replacement) {
 
 Path normalize(PathView path, PathStyle style) {
     const StringView bytes = path.str();
-    const std::size_t root = path_detail::root_length(bytes, style);
+    const std::size_t root = path_detail::root_size(bytes, style);
     String out(bytes.substr(0, root));
     for (const StringView component : components(bytes, root, style)) {
         if (component == ".") continue;

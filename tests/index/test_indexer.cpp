@@ -72,7 +72,7 @@ TEST_SUITE("Indexer") {
     TEST_CASE("open expands a directory to its trace files") {
         Runtime rt(2);
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::Path dir = dstd::Path(env.get_dir()) / "traces";
+        const dstd::Path dir = dstd::Path(env.dir()) / "traces";
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         (void)dstd::fs::write_file(dstd::PathView(dir / "a.pfw.gz"), "x");
         (void)dstd::fs::write_file(dstd::PathView(dir / "b.pfw"), "x");
@@ -271,8 +271,7 @@ TEST_SUITE("Indexer") {
         dftu_utils_test::TestEnvironment env_a(10);
         dftu_utils_test::TestEnvironment env_b(10);
         const auto a = env_a.create_dft_test_gzip_file(25);
-        const auto b =
-            dstd::Path(env_b.get_dir()) / dstd::PathView(a).filename();
+        const auto b = dstd::Path(env_b.dir()) / dstd::PathView(a).filename();
         REQUIRE(dstd::fs::copy_file(a, b, dstd::fs::CopyMode::FailIfExists)
                     .has_value());
         REQUIRE(dstd::fs::set_mtime_ns(b, dstd::fs::mtime_ns(a).value())
@@ -424,7 +423,7 @@ Indexed indexed(const dstd::String& trace) {
     const auto meta = dftu_utils_test::index_take(
         dftracer::utils::index::file_metadata(snapshot, file));
     REQUIRE(meta.has_value());
-    r.lines = meta->num_lines;
+    r.lines = meta->line_count;
     r.truncated = meta->truncated;
     auto members = dftu_utils_test::index_take(
         dftracer::utils::index::members(snapshot, file));
@@ -437,7 +436,7 @@ Indexed indexed(const dstd::String& trace) {
 dstd::String multimember_trace(dftu_utils_test::TestEnvironment& env,
                                int events, const dstd::String& name) {
     const auto plain = env.create_dft_test_file(events);
-    const dstd::String gz((dstd::Path(env.get_dir()) / name).str());
+    const dstd::String gz((dstd::Path(env.dir()) / name).str());
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     (void)dstd::fs::remove(plain);
@@ -456,7 +455,7 @@ TEST_SUITE("Truncated") {
             const auto cut = write_prefix(
                 full,
                 dstd::String(
-                    (dstd::Path(env.get_dir()) /
+                    (dstd::Path(env.dir()) /
                      ("cut" + dstd::to_string(static_cast<int>(frac * 100)) +
                       ".pfw.gz"))
                         .str()),
@@ -479,8 +478,7 @@ TEST_SUITE("Truncated") {
         dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
-            full,
-            dstd::String((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
+            full, dstd::String((dstd::Path(env.dir()) / "cut.pfw.gz").str()),
             0.5);
         {
             auto f = dstd::File::open(cut, WRITE_EXISTING);
@@ -509,8 +507,7 @@ TEST_SUITE("Truncated") {
         dftu_utils_test::TestEnvironment env(10);
         const auto full = env.create_dft_test_gzip_file(3000);
         const auto cut = write_prefix(
-            full,
-            dstd::String((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
+            full, dstd::String((dstd::Path(env.dir()) / "cut.pfw.gz").str()),
             0.5);
         Indexer::open({dstd::String(dstd::StringView(cut))}, with_runtime(rt))
             .build();
@@ -563,8 +560,7 @@ TEST_SUITE("Truncated") {
         Runtime rt(4);
         dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
-        const dstd::String path(
-            (dstd::Path(env.get_dir()) / "live.pfw.gz").str());
+        const dstd::String path((dstd::Path(env.dir()) / "live.pfw.gz").str());
         write_prefix(full, path, 0.6);
         auto ix = Indexer::open({dstd::String(dstd::StringView(path))},
                                 with_runtime(rt));
@@ -585,8 +581,7 @@ TEST_SUITE("Truncated") {
         dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
-            full,
-            dstd::String((dstd::Path(env.get_dir()) / "cut90.pfw.gz").str()),
+            full, dstd::String((dstd::Path(env.dir()) / "cut90.pfw.gz").str()),
             0.9);
         const auto ref = zlib_prefix(cut);
         REQUIRE(ref.events > 0);
@@ -619,8 +614,7 @@ TEST_SUITE("Truncated") {
         dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
-            full,
-            dstd::String((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
+            full, dstd::String((dstd::Path(env.dir()) / "cut.pfw.gz").str()),
             0.7);
         auto ix = Indexer::open({dstd::String(dstd::StringView(full)),
                                  dstd::String(dstd::StringView(cut))},

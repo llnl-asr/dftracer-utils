@@ -118,19 +118,19 @@ TEST_SUITE("BootstrapPeak") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < PEAK_FILES; ++i)
-            files.push_back(write_big_trace(env.get_dir(), i));
+            files.push_back(write_big_trace(env.dir(), i));
 
         const auto limit = index::build::g_max_sink_bytes.exchange(SINK_LIMIT);
         dataframe::DataFrame few_df, many_df;
         configure_default_runtime({.threads = FEW_WORKERS, .eager = true});
         const auto few_peak = peak_live([&] {
-            few_df = bootstrap_test::count_by_name(files,
-                                                   env.get_dir() + "/idx_few");
+            few_df =
+                bootstrap_test::count_by_name(files, env.dir() + "/idx_few");
         });
         configure_default_runtime({.threads = PEAK_WORKERS, .eager = true});
         const auto many_peak = peak_live([&] {
-            many_df = bootstrap_test::count_by_name(
-                files, env.get_dir() + "/idx_many");
+            many_df =
+                bootstrap_test::count_by_name(files, env.dir() + "/idx_many");
         });
         index::build::g_max_sink_bytes.store(limit);
         MESSAGE("peak live bytes: " << FEW_WORKERS << " workers " << few_peak
@@ -155,14 +155,14 @@ TEST_SUITE("BootstrapPeak") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < *n; ++i)
-            files.push_back(write_big_trace(env.get_dir(), i));
+            files.push_back(write_big_trace(env.dir(), i));
         index::build::g_max_sink_bytes.store(SINK_LIMIT);
         dftracer::utils::store::engine::g_dict_sample_bytes.store(
             DICT_SAMPLE_LIMIT);
         configure_default_runtime({.threads = PEAK_WORKERS, .eager = true});
         dataframe::DataFrame df;
         const auto peak = peak_live([&] {
-            df = bootstrap_test::count_by_name(files, env.get_dir() + "/idx");
+            df = bootstrap_test::count_by_name(files, env.dir() + "/idx");
         });
         std::fprintf(stderr, "PEAK %zu EVENTS %lld\n", peak,
                      static_cast<long long>(total_of(df)));

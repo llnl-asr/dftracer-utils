@@ -231,7 +231,7 @@ Custom folds: map_batches
 computation needs its own shape - a custom split, a representative value, a
 side output - ``map_batches`` runs your fold over the view's index-pruned
 parallel scan without forcing it into that vocabulary. It is C++-only (no
-Python binding): ``fold`` mutates one of ``num_slots`` per-worker partials
+Python binding): ``fold`` mutates one of ``slot_count`` per-worker partials
 from each decoded batch of raw event lines, and ``combine`` reduces the
 partials into one:
 
@@ -259,7 +259,7 @@ partials into one:
                    for (auto& b : y.big) x.big.emplace_back(std::move(b));
                    return std::move(x);
                },
-               /*num_slots=*/4)
+               /*slot_count=*/4)
            .get();          // BatchResult<Acc>: .value and .stats (ExportStats)
 
 ``P`` (here ``Acc``) must be default-constructible, and a default ``P`` must

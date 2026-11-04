@@ -219,11 +219,11 @@ class Host {
     /// host lacks the trace group.
     class TraceWriter trace_writer(const char* path) const;
 
-    /// Get a host-owned parallel Writer for `path` with `num_workers` lanes
+    /// Get a host-owned parallel Writer for `path` with `worker_count` lanes
     /// (`gzip` != 0 compresses). The Writer is host-owned and scan-lifetime;
     /// open it, write chunks per worker, then close it - all co_await forms. An
     /// empty result (`!writer`) means the host lacks the writer group.
-    Writer writer(const char* path, std::uint32_t num_workers,
+    Writer writer(const char* path, std::uint32_t worker_count,
                   bool gzip = false) const;
     /// Merge worker shard files into `target`; co_await the returned @ref
     /// AsyncOp.
@@ -249,9 +249,9 @@ class Host {
         const dftu_svc_ports* e = ext(DFTU_SVC_PORTS, ports_ext_);
         if (e && e->publish) e->publish(h_->h, key, data, len);
     }
-    const void* consume(std::uint64_t key, std::uint32_t* out_len) const {
+    const void* consume(std::uint64_t key, std::uint32_t* out_size) const {
         const dftu_svc_ports* e = ext(DFTU_SVC_PORTS, ports_ext_);
-        return e && e->consume ? e->consume(h_->h, key, out_len) : nullptr;
+        return e && e->consume ? e->consume(h_->h, key, out_size) : nullptr;
     }
     dftu_agg* agg_new(const char* name, const char* const* key_names,
                       std::uint32_t key_n, const dftu_agg_col* specs,
@@ -559,12 +559,12 @@ class Writer {
     dftu_writer* w_ = nullptr;
 };
 
-inline Writer Host::writer(const char* path, std::uint32_t num_workers,
+inline Writer Host::writer(const char* path, std::uint32_t worker_count,
                            bool gzip) const {
     const dftu_svc_writer* e = ext(DFTU_SVC_WRITER, writer_ext_);
     dftu_writer* w =
         e && e->writer_create
-            ? e->writer_create(h_->h, path, num_workers, gzip ? 1 : 0)
+            ? e->writer_create(h_->h, path, worker_count, gzip ? 1 : 0)
             : nullptr;
     return Writer{*this, e, w};
 }

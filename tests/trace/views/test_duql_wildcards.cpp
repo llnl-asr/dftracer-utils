@@ -28,10 +28,9 @@ constexpr int RECORDS = 3000;
 dstd::String write_counters(TestEnvironment& env, const dstd::String& dir = "",
                             bool build = true) {
     if (!dir.empty())
-        dstd::fs::create_directories(env.get_dir() + "/" + dir).has_value();
-    const dstd::String plain = env.get_dir() + "/" +
-                               (dir.empty() ? "" : dir + "/") +
-                               "counters.ndjson";
+        dstd::fs::create_directories(env.dir() + "/" + dir).has_value();
+    const dstd::String plain =
+        env.dir() + "/" + (dir.empty() ? "" : dir + "/") + "counters.ndjson";
     {
         dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i) {
@@ -193,7 +192,7 @@ TEST_SUITE("DuqlWildcards") {
 
     TEST_CASE("a wildcard on a trace with no catalog builds it first") {
         TestEnvironment env(10);
-        const dstd::String plain = env.get_dir() + "/first.ndjson";
+        const dstd::String plain = env.dir() + "/first.ndjson";
         {
             dftu_utils_test::FileOut out(plain);
             for (int i = 0; i < 300; ++i)
@@ -258,9 +257,9 @@ TEST_SUITE("DuqlWildcards") {
     TEST_CASE("a pattern on a fresh genesis trace builds the catalog") {
         TestEnvironment env(10);
         const auto mk = [&](const dstd::String& dir, bool build) {
-            REQUIRE(dstd::fs::create_directories(env.get_dir() + "/" + dir)
+            REQUIRE(dstd::fs::create_directories(env.dir() + "/" + dir)
                         .has_value());
-            const dstd::String plain = env.get_dir() + "/" + dir + "/g.ndjson";
+            const dstd::String plain = env.dir() + "/" + dir + "/g.ndjson";
             {
                 dftu_utils_test::FileOut out(plain);
                 for (int i = 0; i < 600; ++i)

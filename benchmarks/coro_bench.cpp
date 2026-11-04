@@ -122,7 +122,7 @@ void finish_meter(const Meter &start, Result &r) {
 // Runs `body` as the only top-level coroutine and returns what it stored.
 template <class Body>
 Result run_on_executor(Body body) {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = THREADS});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = THREADS});
     Scheduler scheduler(&executor);
     Result result;
     auto task = make_task(

@@ -367,10 +367,10 @@ TEST_SUITE("dataframe_arrow_public") {
         REQUIRE(a.array()->dictionary != nullptr);
         const auto* idx =
             static_cast<const std::int64_t*>(a.array()->buffers[1]);
-        const std::int64_t dict_len = a.array()->dictionary->length;
+        const std::int64_t dict_size = a.array()->dictionary->length;
         for (int i = 0; i < 2; ++i) {
             CHECK(idx[i] >= 0);
-            CHECK(idx[i] < dict_len);
+            CHECK(idx[i] < dict_size);
         }
         CHECK(a.array()->null_count == 1);
         Series back = Series::from_arrow(a.schema(), a.array());

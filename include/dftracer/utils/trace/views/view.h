@@ -185,7 +185,7 @@ struct ViewFile {
     dstd::String file_path;
     dstd::String index_path;
     std::uint64_t uncompressed_size = 0;
-    std::size_t num_checkpoints = 0;
+    std::size_t checkpoint_count = 0;
     std::size_t checkpoint_size = 0;  ///< 0 = indexer default
     /// An open read-only descriptor of the file, if the caller holds one. The
     /// first build or schema probe reads through it instead of opening the
@@ -235,13 +235,13 @@ struct ScanCounter {
 /// Options for sink_trace(): write the view's events as a new
 /// re-indexable multi-member trace through the parallel (PFS-aware) writer.
 /// `member_size` is the target uncompressed bytes per gzip member (0 =
-/// default); `num_workers` caps the writer fan-out. The writer layout
+/// default); `worker_count` caps the writer fan-out. The writer layout
 /// (striped/sharded/padded) and the exact worker count are chosen from the
 /// target filesystem.
 struct TraceWriteOptions {
     dstd::String output_path;
     std::size_t member_size = 0;
-    std::size_t num_workers = 1;
+    std::size_t worker_count = 1;
     bool compress = true;
     int level = 6;
     /// Build the member+bloom+stats index during the write (no re-inflate of
@@ -862,7 +862,7 @@ class View : public dataframe::LazyOps<View> {
 
     /// Low-level scans of this view's events, for callers whose work does not
     /// fit a plan. for_each_batch calls `on_batch(slot, events)` with raw
-    /// event lines on worker slots [0, num_slots). `limit` (0 = all), or a
+    /// event lines on worker slots [0, slot_count). `limit` (0 = all), or a
     /// trailing head on this view, stops the scan between batches once that
     /// many events were delivered, so a batch may carry more.
     /// map_batches folds each batch into a per-slot partial and reduces them
@@ -870,14 +870,14 @@ class View : public dataframe::LazyOps<View> {
     coro::CoroTask<ExportStats> for_each_batch(
         dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
             on_batch,
-        std::size_t num_slots, std::uint64_t limit = 0) const;
+        std::size_t slot_count, std::uint64_t limit = 0) const;
     template <class P>
     coro::CoroTask<BatchResult<P>> map_batches(
         dstd::Function<void(P&, const dstd::Vector<dstd::StringView>&)> fold,
-        dstd::Function<P(P&&, P&&)> combine, std::size_t num_slots,
+        dstd::Function<P(P&&, P&&)> combine, std::size_t slot_count,
         std::uint64_t limit = 0) const {
-        if (num_slots == 0) num_slots = 1;
-        dstd::Vector<P> partials(num_slots);
+        if (slot_count == 0) slot_count = 1;
+        dstd::Vector<P> partials(slot_count);
         // A named callback, not a temporary in the co_await: GCC 11-12 destroy
         // such temporaries twice.
         dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
@@ -887,7 +887,7 @@ class View : public dataframe::LazyOps<View> {
                 fold(partials[slot], events);
             };
         ExportStats stats =
-            co_await for_each_batch(std::move(on_batch), num_slots, limit);
+            co_await for_each_batch(std::move(on_batch), slot_count, limit);
         P acc = std::move(partials[0]);
         for (std::size_t i = 1; i < partials.size(); ++i)
             acc = combine(std::move(acc), std::move(partials[i]));

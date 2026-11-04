@@ -436,7 +436,7 @@ bool is_sync(const engine::io_fault::Event& event) {
     return event.type == engine::io_fault::Event::Type::Sync;
 }
 
-std::uint64_t whole_length(const engine::io_fault::Event& event) {
+std::uint64_t whole_size(const engine::io_fault::Event& event) {
     return is_sync(event) ? 0 : event.length;
 }
 
@@ -501,7 +501,7 @@ std::uint64_t torn_prefix(const engine::io_fault::Event& event,
         const std::uint64_t end = header_tail_end(event);
         return end == 0 ? 0 : rng() % end;
     }
-    const std::uint64_t units = whole_length(event) / TEAR_UNIT;
+    const std::uint64_t units = whole_size(event) / TEAR_UNIT;
     return units == 0 ? 0 : TEAR_UNIT * (rng() % units);
 }
 
@@ -906,10 +906,10 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
         dstd::Vector<dstd::Pair<std::size_t, std::uint64_t>> applied;
         if (m >= 1) {
             const std::size_t at = header_at[m - 1];
-            applied.emplace_back(at, whole_length(log[at]));
+            applied.emplace_back(at, whole_size(log[at]));
         }
         for (std::size_t c = 0; c < m; ++c) {
-            applied.emplace_back(record_at[c], whole_length(log[record_at[c]]));
+            applied.emplace_back(record_at[c], whole_size(log[record_at[c]]));
         }
         for (std::size_t i = 0; i < log.size(); ++i) {
             // Every extent of the log and every big value of it: a write no
@@ -917,7 +917,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             // once and never rewritten.
             if (log[i].kind == engine::io_fault::WriteKind::Extent ||
                 log[i].kind == engine::io_fault::WriteKind::Big) {
-                applied.emplace_back(i, whole_length(log[i]));
+                applied.emplace_back(i, whole_size(log[i]));
             }
         }
         Dumped dumped = dump_of(render_image(applied, log, final_bytes));
@@ -1069,7 +1069,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
         dstd::Vector<dstd::Pair<std::size_t, std::uint64_t>> applied;
         applied.reserve(k);
         for (std::size_t i = 0; i < k; ++i) {
-            applied.emplace_back(i, whole_length(log[i]));
+            applied.emplace_back(i, whole_size(log[i]));
         }
         // Every write is whole, so the reader reaches the newest record, or the
         // one before it when the header of the newest is not written yet.
@@ -1088,8 +1088,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             const std::uint64_t keep = torn_prefix(log[tear], rng);
             applied.clear();
             for (std::size_t i = 0; i < k; ++i) {
-                applied.emplace_back(i,
-                                     i == tear ? keep : whole_length(log[i]));
+                applied.emplace_back(i, i == tear ? keep : whole_size(log[i]));
             }
             const bool torn_header =
                 log[tear].kind == engine::io_fault::WriteKind::Header;
@@ -1125,7 +1124,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
                         ++big_dropped;
                     continue;
                 }
-                kept.emplace_back(i, whole_length(event));
+                kept.emplace_back(i, whole_size(event));
             }
             const LostOracle oracle =
                 lost_oracle(model, refs, dropped, record_at, m_lo, m_hi);
@@ -1170,7 +1169,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
                     if (highest_header > i) inverted = true;
                     highest_header = std::max(highest_header, i);
                 }
-                reordered.emplace_back(i, whole_length(log[i]));
+                reordered.emplace_back(i, whole_size(log[i]));
             }
             if (inverted) ++header_inversions;
             verify(3, k, m_lo, range_texts(m_lo, m_hi),

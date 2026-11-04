@@ -522,7 +522,7 @@ class CoroScope {
     // Accessor / Utility
     // ====================================================================
 
-    coro::Executor* get_executor() const { return executor_; }
+    coro::Executor* executor() const { return executor_; }
 
     /// Create a child scope, run the lambda, and auto-join.
     /// Compatibility bridge for code using ctx.coro_scope(...).
@@ -571,7 +571,7 @@ class CoroScope {
 
     /// This scope's own token. Setting it cancels this scope and the scopes
     /// spawned from it, not its parent or siblings.
-    dstd::SharedPtr<std::atomic<bool>> get_cancellation_token() const {
+    dstd::SharedPtr<std::atomic<bool>> cancellation_token() const {
         return dstd::SharedPtr<std::atomic<bool>>(cancel_chain_,
                                                   &cancel_chain_->flag);
     }

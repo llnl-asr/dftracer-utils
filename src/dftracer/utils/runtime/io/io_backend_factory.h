@@ -22,7 +22,7 @@ namespace dftracer::utils::io {
 /// @param batch_threshold   SQE batch threshold (io_uring), 16 default.
 /// @param pool_options      Whether the pool starts full and how long an idle
 ///                          thread lives, for the thread-pool backends.
-dstd::UniquePtr<IoBackend> create_io_backend(
+dstd::UniquePtr<IoBackend> make_io_backend(
     coro::Executor& executor, std::size_t pool_size = 4,
     IoBackendType backend_type = IoBackendType::Auto,
     unsigned batch_threshold = 16, IoPoolOptions pool_options = {});

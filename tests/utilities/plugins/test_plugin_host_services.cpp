@@ -108,7 +108,7 @@ TEST_CASE("plugin host: arrow_write_ipc writes a non-empty IPC file") {
         host.get_service(host.h, DFTU_SVC_ARROW));
     REQUIRE(arrow != nullptr);
 
-    dstd::String ipc = env.get_dir() + "/x.arrow";
+    dstd::String ipc = env.dir() + "/x.arrow";
     int wr = arrow->arrow_write_ipc(host.h, owned.array(), owned.schema(),
                                     ipc.c_str());
     CHECK(wr == 0);
@@ -183,7 +183,7 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
         host.get_service(host.h, DFTU_SVC_TRACE));
     REQUIRE(tr != nullptr);
 
-    dstd::String trace = env.get_dir() + "/out.pfw.gz";
+    dstd::String trace = env.dir() + "/out.pfw.gz";
     dftu_trace_writer* w = tr->trace_open_write(host.h, trace.c_str());
     REQUIRE(w != nullptr);
 
@@ -272,7 +272,7 @@ TEST_CASE(
         host.get_service(host.h, DFTU_SVC_TRACE));
     REQUIRE(tr != nullptr);
 
-    const dstd::String pfw = env.get_dir() + "/refused.pfw";
+    const dstd::String pfw = env.dir() + "/refused.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
         ofs << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
@@ -323,7 +323,7 @@ TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
         host.get_service(host.h, DFTU_SVC_TRACE));
     REQUIRE(tr != nullptr);
 
-    const dstd::String dir = env.get_dir() + "/tw";
+    const dstd::String dir = env.dir() + "/tw";
     ::mkdir(dir.c_str(), 0755);
     const dstd::String trace = dir + "/big.pfw.gz";
     dftu_trace_writer* w = tr->trace_open_write(host.h, trace.c_str());

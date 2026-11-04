@@ -21,7 +21,7 @@ struct MemoryViewBatchData {
     dstd::Vector<Py_ssize_t> offsets;
     dstd::Vector<Py_ssize_t> lengths;
 
-    std::size_t num_entries() const { return offsets.size(); }
+    std::size_t entry_count() const { return offsets.size(); }
 };
 
 struct MemoryViewBatchObject {

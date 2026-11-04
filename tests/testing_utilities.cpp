@@ -204,7 +204,7 @@ bool compress_file_to_gzip_multimember(const dstd::String& input_file,
 }
 
 TestEnvironment::TestEnvironment(std::size_t lines, Format format)
-    : num_lines_(lines), format_(format) {
+    : line_count_(lines), format_(format) {
     // @note: enable this for debugging
     // dftracer::utils::logger::init();
     const dstd::Path test_path = make_unique_test_path("dftracer_test");
@@ -222,7 +222,7 @@ TestEnvironment::~TestEnvironment() {
     }
 }
 
-const dstd::String& TestEnvironment::get_dir() const { return test_dir_; }
+const dstd::String& TestEnvironment::dir() const { return test_dir_; }
 bool TestEnvironment::is_valid() const { return !test_dir_.empty(); }
 
 dstd::String TestEnvironment::create_test_file() {
@@ -253,7 +253,7 @@ dstd::String TestEnvironment::create_test_gzip_file_impl() {
         return "";
     }
 
-    for (std::size_t i = 1; i <= num_lines_; ++i) {
+    for (std::size_t i = 1; i <= line_count_; ++i) {
         f << "{\"id\": " << i << ", \"message\": \"Test message " << i
           << "\"}\n";
     }
@@ -275,7 +275,7 @@ dstd::String TestEnvironment::get_index_path(const dstd::String& gz_file) {
         dftracer::utils::trace::internal::determine_index_path(gz_file, ""));
 }
 
-dstd::String TestEnvironment::create_dft_test_file(int num_events) {
+dstd::String TestEnvironment::create_dft_test_file(int event_count) {
     static std::size_t file_counter = 0;
     dstd::String file_path =
         test_dir_ + "/dftu_trace_" + dstd::to_string(file_counter++) + ".trace";
@@ -289,15 +289,15 @@ dstd::String TestEnvironment::create_dft_test_file(int num_events) {
                               "fread", "fwrite", "open", "close"};
     const char* io_cats[] = {"POSIX", "POSIX", "POSIX", "POSIX",
                              "STDIO", "STDIO", "POSIX", "POSIX"};
-    const int num_names = sizeof(io_names) / sizeof(io_names[0]);
+    const int name_count = sizeof(io_names) / sizeof(io_names[0]);
 
     ofs << "[\n";
-    for (int i = 1; i <= num_events; ++i) {
+    for (int i = 1; i <= event_count; ++i) {
         uint64_t timestamp_us =
             1000000000ULL + static_cast<uint64_t>(i * 100000);
         int size = 1024 * i;
-        const char* op_name = io_names[i % num_names];
-        const char* op_cat = io_cats[i % num_names];
+        const char* op_name = io_names[i % name_count];
+        const char* op_cat = io_cats[i % name_count];
 
         ofs << R"({"id":)" << i << R"(,"pid":)" << (1000 + i) << R"(,"tid":)"
             << (2000 + i) << R"(,"name":")" << op_name << R"(")"
@@ -314,7 +314,7 @@ dstd::String TestEnvironment::create_dft_test_file(int num_events) {
 }
 
 dstd::String TestEnvironment::create_dft_multirun_gzip_file(
-    int num_runs, std::uint64_t run_us, std::uint64_t gap_us) {
+    int run_count, std::uint64_t run_us, std::uint64_t gap_us) {
     static std::size_t multirun_counter = 0;
     dstd::String plain_file = test_dir_ + "/dftu_multirun_" +
                               dstd::to_string(multirun_counter++) + ".trace";
@@ -323,7 +323,7 @@ dstd::String TestEnvironment::create_dft_multirun_gzip_file(
 
     const std::uint64_t base = 1000000000ULL;
     ofs << "[\n";
-    for (int r = 0; r < num_runs; ++r) {
+    for (int r = 0; r < run_count; ++r) {
         const std::int64_t pid = 100 + r;
         const std::uint64_t start =
             base + static_cast<std::uint64_t>(r) * (run_us + gap_us);
@@ -357,9 +357,9 @@ dstd::String TestEnvironment::create_dft_multirun_gzip_file(
     return gz_file;
 }
 
-dstd::String TestEnvironment::create_dft_test_gzip_file(int num_events) {
+dstd::String TestEnvironment::create_dft_test_gzip_file(int event_count) {
     // First create a plain DFTracer trace file
-    dstd::String plain_file = create_dft_test_file(num_events);
+    dstd::String plain_file = create_dft_test_file(event_count);
     if (plain_file.empty()) {
         return "";
     }
@@ -487,7 +487,7 @@ int test_environment_is_valid(test_environment_handle_t env) {
 const char* test_environment_get_dir(test_environment_handle_t env) {
     if (!env) return nullptr;
     auto* cpp_env = reinterpret_cast<dftu_utils_test::TestEnvironment*>(env);
-    return cpp_env->get_dir().c_str();
+    return cpp_env->dir().c_str();
 }
 
 char* test_make_unique_test_path(const char* name) {
@@ -502,10 +502,10 @@ char* test_make_unique_test_path(const char* name) {
 }
 
 char* test_environment_create_dft_gzip_file(test_environment_handle_t env,
-                                            int num_events) {
+                                            int event_count) {
     if (!env) return nullptr;
     auto* cpp_env = reinterpret_cast<dftu_utils_test::TestEnvironment*>(env);
-    dstd::String gz_file = cpp_env->create_dft_test_gzip_file(num_events);
+    dstd::String gz_file = cpp_env->create_dft_test_gzip_file(event_count);
     if (gz_file.empty()) return nullptr;
     char* result = static_cast<char*>(malloc(gz_file.length() + 1));
     if (result) strcpy(result, gz_file.c_str());
@@ -547,7 +547,7 @@ char* test_environment_create_test_file_with_format(
 
     try {
         dftu_utils_test::TestEnvironment temp_env(
-            cpp_env->get_dir().empty() ? 100 : 100, cpp_format);
+            cpp_env->dir().empty() ? 100 : 100, cpp_format);
         dstd::String file_path;
 
         file_path = cpp_env->create_test_gzip_file();

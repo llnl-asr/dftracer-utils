@@ -144,7 +144,7 @@ void build_tier_index(const dstd::String& gz) {
 // exercises numeric reductions, per-arg dyn, sketches (Pct/Hist), SetUnion, and
 // occupancy at once. Two names per cat make SetUnion(name) non-trivial.
 dstd::String write_agg_trace(TestEnvironment& env) {
-    dstd::String pfw = env.get_dir() + "/agg_parity.pfw";
+    dstd::String pfw = env.dir() + "/agg_parity.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
         for (int i = 0; i < 30; ++i)
@@ -419,7 +419,7 @@ TEST_SUITE("View") {
     TEST_CASE("View - an integer sum that overflows is null") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        const dstd::String pfw = env.get_dir() + "/overflow.pfw";
+        const dstd::String pfw = env.dir() + "/overflow.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             auto event = [&](const char* name, int ts, std::uint64_t dur) {
@@ -461,7 +461,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // Two cats, each with a numeric arg "level"; mean over the wildcard
         // path must match the mean the AggSpec form computes for that field.
-        dstd::String pfw = env.get_dir() + "/args.pfw";
+        dstd::String pfw = env.dir() + "/args.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 10; ++i)
@@ -858,7 +858,7 @@ TEST_SUITE("View") {
             .get();
         views::detail::scan::ScanPlan base = views::detail::scan::rollup_root(
             views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
-            dstd::String(env.get_dir() + "/rollups"));
+            dstd::String(env.dir() + "/rollups"));
 
         GroupKey bucketed = GroupKey::name();
         bucketed.transform = GroupKey::Transform::Bucket;
@@ -1123,7 +1123,7 @@ TEST_SUITE("View") {
         // the cross-shard rollup has a single anchor.
         dstd::String a = create_mixed_trace(env, 100, 30);
         dstd::String b = create_mixed_trace(env, 100, 30);
-        dstd::String shared = env.get_dir() + "/shared_idx";
+        dstd::String shared = env.dir() + "/shared_idx";
 
         auto canon = [](const dataframe::DataFrame& df) {
             dstd::Vector<dstd::String> rows;
@@ -1467,7 +1467,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // POSIX: read(10), write(99), read(20). The longest is "write".
-        dstd::String pfw = env.get_dir() + "/am.pfw";
+        dstd::String pfw = env.dir() + "/am.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
@@ -1501,7 +1501,7 @@ TEST_SUITE("View") {
         // Two processes, each declared once by a PR metadata record mapping
         // pid -> rank. Grouping by rank harvests that map during the scan and
         // relabels the pid groups to "0"/"1" at the resolver, like host_name.
-        dstd::String pfw = env.get_dir() + "/rank.pfw";
+        dstd::String pfw = env.dir() + "/rank.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"M","name":"PR","cat":"dftracer","pid":100,"tid":0,"args":{"name":"rank","value":"0"}})"
@@ -1577,7 +1577,7 @@ TEST_SUITE("View") {
                         for (auto& b : y.big) x.big.emplace_back(std::move(b));
                         return std::move(x);
                     },
-                    /*num_slots=*/4)
+                    /*slot_count=*/4)
                 .get();
 
         // small: POSIX 10..24 (15) + STDIO 20..24 (5) = 20; sum 255 + 110.
@@ -1608,7 +1608,7 @@ TEST_SUITE("View") {
                                a.n += b.n;
                                return std::move(a);
                            },
-                           /*num_slots=*/2, /*limit=*/10)
+                           /*slot_count=*/2, /*limit=*/10)
                        .get();
 
         CHECK(res.stats.truncated == true);
@@ -1741,7 +1741,7 @@ TEST_SUITE("View") {
 
         // Re-read the emitted counter trace as a View: phase(Counters) sees
         // them.
-        dstd::String out = env.get_dir() + "/agg.pfw.gz";
+        dstd::String out = env.dir() + "/agg.pfw.gz";
         dftu_utils_test::write_gz_trace(out, sink.buffer);
         dstd::String out_idx = dstd::String(determine_index_path(out, ""));
         StringSink reread;
@@ -1758,7 +1758,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // "overlap" has two overlapping intervals (exact union 150 < sum
         // 200); "serial" has two disjoint ones (union == sum(dur)).
-        dstd::String pfw = env.get_dir() + "/occ.pfw";
+        dstd::String pfw = env.dir() + "/occ.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             auto ev = [&](const char* name, long ts, long dur) {
@@ -1868,7 +1868,7 @@ TEST_SUITE("View") {
         for (const auto& [s, d] : iv) sum_dur += static_cast<std::uint64_t>(d);
         REQUIRE(expect_union < sum_dur);
 
-        dstd::String pfw = env.get_dir() + "/occ_dense.pfw";
+        dstd::String pfw = env.dir() + "/occ_dense.pfw";
         write_occ_trace(pfw, iv);
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
@@ -1896,7 +1896,7 @@ TEST_SUITE("View") {
             {1000, 300}, {1050, 300}, {1100, 300}, {1149, 300}};
         const std::uint64_t expect_union = exact_union(iv);
 
-        dstd::String pfw = env.get_dir() + "/occ_peak.pfw";
+        dstd::String pfw = env.dir() + "/occ_peak.pfw";
         write_occ_trace(pfw, iv);
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
@@ -1922,7 +1922,7 @@ TEST_SUITE("View") {
             {1000, 100}, {2000, 100}, {3000, 100}};
         std::uint64_t sum_dur = 300;
 
-        dstd::String pfw = env.get_dir() + "/occ_serial.pfw";
+        dstd::String pfw = env.dir() + "/occ_serial.pfw";
         write_occ_trace(pfw, iv);
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
@@ -1951,7 +1951,7 @@ TEST_SUITE("View") {
         dstd::Vector<dstd::Pair<long, long>> iv = {{1000, 90}, {1100, 90}};
         const std::uint64_t expect_exact = exact_union(iv);
 
-        dstd::String pfw = env.get_dir() + "/occ_tol.pfw";
+        dstd::String pfw = env.dir() + "/occ_tol.pfw";
         write_occ_trace(pfw, iv);
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
@@ -2083,7 +2083,7 @@ TEST_SUITE("View") {
     TEST_CASE("View - group_by resolves any field, top-level and nested") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/schemaless.pfw";
+        dstd::String pfw = env.dir() + "/schemaless.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             auto ev = [&](const char* type, const char* host, const char* tag0,
@@ -2150,7 +2150,7 @@ TEST_SUITE("View") {
         "View - a same-named arg never shadows a top-level schema field") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/shadow.pfw";
+        dstd::String pfw = env.dir() + "/shadow.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             // Top-level type "mpi" on every record; four also carry an
@@ -2197,7 +2197,7 @@ TEST_SUITE("View") {
     TEST_CASE("View - time_metric reads the CM record, no scan") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/time_metric.pfw";
+        dstd::String pfw = env.dir() + "/time_metric.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"name":"CM","ph":"M","cat":"dftracer","pid":0,"tid":0,)"

@@ -405,7 +405,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         co_return;
     }
 
-    auto reader = create_indexed_reader();
+    auto reader = make_indexed_reader();
     auto chunk_gen = read_chunks_indexed(
         reader, index_path_, config_.file_path, config, query,
         /*extend_to_line_boundary=*/config.end_at_checkpoint);

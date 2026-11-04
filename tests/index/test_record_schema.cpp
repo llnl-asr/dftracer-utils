@@ -117,14 +117,14 @@ TEST_SUITE("Schemas") {
         dftu_utils_test::TestEnvironment env(10);
         CHECK(index::detect_file_schema(env.create_dft_test_gzip_file(50)).id ==
               "dftracer");
-        CHECK(index::detect_file_schema(write_ndjson(env.get_dir(), 50)).id ==
+        CHECK(index::detect_file_schema(write_ndjson(env.dir(), 50)).id ==
               "generic");
     }
 
     TEST_CASE("generic NDJSON is indexed and pruned by path") {
         dftu_utils_test::TestEnvironment env(10);
-        const auto trace = write_ndjson(env.get_dir(), 4000);
-        const auto dir = env.get_dir() + "/idx";
+        const auto trace = write_ndjson(env.dir(), 4000);
+        const auto dir = env.dir() + "/idx";
         auto ix = index::Indexer::open({dstd::String(dstd::StringView(trace))},
                                        options(dir));
         CHECK(ix.build().indexed == 1);
@@ -180,7 +180,7 @@ TEST_SUITE("Schemas") {
     TEST_CASE("a forced schema rebuilds a file indexed under another") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(200);
-        const auto dir = env.get_dir() + "/idx";
+        const auto dir = env.dir() + "/idx";
         index::Indexer::open({dstd::String(dstd::StringView(trace))},
                              options(dir))
             .build();

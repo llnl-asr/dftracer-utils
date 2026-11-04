@@ -73,7 +73,7 @@ dstd::Vector<dstd::String> trace_lines() {
 dstd::String write_trace(TestEnvironment& env,
                          const dstd::Vector<dstd::String>& lines,
                          bool build = true) {
-    const dstd::String pfw = env.get_dir() + "/rows.pfw";
+    const dstd::String pfw = env.dir() + "/rows.pfw";
     {
         dftu_utils_test::FileOut o(pfw);
         for (const auto& l : lines) o << l << "\n";

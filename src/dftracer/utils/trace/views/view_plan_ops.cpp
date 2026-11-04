@@ -1075,8 +1075,8 @@ coro::CoroTask<ExportStats> for_each_batch(
     ScanPlan plan,
     dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
         on_batch,
-    std::size_t num_slots, std::uint64_t limit) {
-    co_return co_await detail::run_scan_batches(plan, num_slots, limit,
+    std::size_t slot_count, std::uint64_t limit) {
+    co_return co_await detail::run_scan_batches(plan, slot_count, limit,
                                                 on_batch);
 }
 

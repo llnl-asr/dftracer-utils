@@ -43,7 +43,7 @@ std::size_t extract_id_from_json(const dstd::String& line);
 class LargeTestEnvironment {
    private:
     dstd::String temp_dir_;
-    std::size_t num_lines_;
+    std::size_t line_count_;
     std::size_t bytes_per_line_;
 
    public:
@@ -51,7 +51,7 @@ class LargeTestEnvironment {
                          std::size_t bytes_per_line = 1024)
         : bytes_per_line_(bytes_per_line) {
         // Calculate number of lines needed for target size
-        num_lines_ = (target_size_mb * 1024 * 1024) / bytes_per_line;
+        line_count_ = (target_size_mb * 1024 * 1024) / bytes_per_line;
         temp_dir_ = make_unique_test_path("dftu_robustness_test").str();
         REQUIRE(dstd::fs::create_directories(temp_dir_).has_value());
     }
@@ -74,9 +74,9 @@ class LargeTestEnvironment {
         dftu_utils_test::FileOut f(txt_file);
         if (!f) return "";
 
-        constexpr std::size_t closing_len = 3;  // "\"}\n"
+        constexpr std::size_t closing_size = 3;  // "\"}\n"
 
-        for (std::size_t i = 1; i <= num_lines_; ++i) {
+        for (std::size_t i = 1; i <= line_count_; ++i) {
             dftu_utils_test::TextOut line;
             line << "{\"name\":\"name_" << i << "\",\"cat\":\"cat_" << i
                  << "\",\"dur\":" << (i * 123 % 10000) << ",\"data\":\"";
@@ -85,8 +85,8 @@ class LargeTestEnvironment {
             const std::size_t current_size = line.str().size();
 
             std::size_t needed_padding = 0;
-            if (bytes_per_line_ > current_size + closing_len) {
-                needed_padding = bytes_per_line_ - current_size - closing_len;
+            if (bytes_per_line_ > current_size + closing_size) {
+                needed_padding = bytes_per_line_ - current_size - closing_size;
             }
             // Append padding safely
             if (needed_padding) {
@@ -116,9 +116,9 @@ class LargeTestEnvironment {
         return gz_file + ".idx";
     }
 
-    dstd::String get_dir() const { return temp_dir_; }
-    std::size_t get_num_lines() const { return num_lines_; }
-    std::size_t get_bytes_per_line() const { return bytes_per_line_; }
+    dstd::String dir() const { return temp_dir_; }
+    std::size_t line_count() const { return line_count_; }
+    std::size_t bytes_per_line() const { return bytes_per_line_; }
     bool is_valid() const { return dstd::fs::exists(temp_dir_).value(); }
 };
 
@@ -222,7 +222,7 @@ struct Prepared {
                              gz_file, idx_file, mb_to_b(checkpoint_mb));
         REQUIRE(indexer != nullptr);
         indexer->build();
-        if (with_lines) total_lines = indexer->get_num_lines();
+        if (with_lines) total_lines = indexer->line_count();
     }
 };
 
@@ -245,7 +245,7 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
-    std::size_t max_bytes = reader->get_max_bytes();
+    std::size_t max_bytes = reader->max_bytes();
     REQUIRE(max_bytes > 0);
 
     SUBCASE("Continuous stride reading with no data loss") {
@@ -472,7 +472,7 @@ TEST_CASE("Robustness - Boundary edge cases") {
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
-    std::size_t max_bytes = reader->get_max_bytes();
+    std::size_t max_bytes = reader->max_bytes();
 
     SUBCASE("Range less than bytes_per_line") {
         // Test very small ranges at various positions
@@ -537,7 +537,7 @@ TEST_CASE("Robustness - Boundary edge cases") {
                 dstd::String content;
 
                 // Read 100 bytes starting at position
-                std::size_t end_pos = pos + env.get_bytes_per_line();
+                std::size_t end_pos = pos + env.bytes_per_line();
                 std::size_t offset = pos;
                 while (offset < end_pos &&
                        (bytes_written = reader->read_line_bytes(
@@ -547,9 +547,9 @@ TEST_CASE("Robustness - Boundary edge cases") {
                     offset += bytes_written;
                 }
 
-                // Should get at least env.get_bytes_per_line() bytes due to
+                // Should get at least env.bytes_per_line() bytes due to
                 // JSON boundary extension
-                CHECK(content.size() == env.get_bytes_per_line());
+                CHECK(content.size() == env.bytes_per_line());
 
                 // Should end with complete JSON line
                 if (!content.empty()) {
@@ -626,7 +626,7 @@ TEST_CASE("Robustness - Complete file sequential read") {
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
-    std::size_t max_bytes = reader->get_max_bytes();
+    std::size_t max_bytes = reader->max_bytes();
 
     SUBCASE("Complete file read in chunks matches expected line count") {
         const std::size_t chunk_size = 1024 * 1024;  // 1MB chunks
@@ -673,7 +673,7 @@ TEST_CASE("Robustness - Complete file sequential read") {
 
         // Should have read substantial number of lines
         CHECK(total_lines >
-              env.get_num_lines() /
+              env.line_count() /
                   2);  // At least half due to potential duplication
 
         // IDs should generally be in ascending order (allowing for some
@@ -772,7 +772,7 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
-    std::size_t max_bytes = reader->get_max_bytes();
+    std::size_t max_bytes = reader->max_bytes();
 
     SUBCASE("All JSON lines are valid and complete") {
         // Test various read ranges with different buffer sizes
@@ -971,7 +971,7 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
 
     auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
     REQUIRE(reader != nullptr);
-    std::size_t max_bytes = reader->get_max_bytes();
+    std::size_t max_bytes = reader->max_bytes();
     const std::size_t buffer_size = 4 * 1024 * 1024;
 
     SUBCASE("Single read (0, max_bytes) vs stride reading entire file") {
@@ -1139,7 +1139,7 @@ TEST_CASE("Robustness - Memory and performance stress") {
             auto reader =
                 ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
             REQUIRE(reader != nullptr);
-            std::size_t max_bytes = reader->get_max_bytes();
+            std::size_t max_bytes = reader->max_bytes();
 
             dstd::Vector<char> buffer(buf_size);
             std::size_t total_bytes_read = 0;
@@ -1213,16 +1213,16 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
     SUBCASE("Threading Concurrent reader instances") {
         // Create multiple threads reading the same file
-        const std::size_t num_threads = 4;
+        const std::size_t thread_count = 4;
         dstd::Vector<dstd::Thread> threads;
         std::atomic<std::size_t> total_lines(0);
 
-        for (std::size_t i = 0; i < num_threads; ++i) {
+        for (std::size_t i = 0; i < thread_count; ++i) {
             threads.emplace_back([&gz_file, &idx_file, &total_lines]() {
                 auto thread_reader =
                     ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
                 REQUIRE(thread_reader != nullptr);
-                std::size_t max_bytes = thread_reader->get_max_bytes();
+                std::size_t max_bytes = thread_reader->max_bytes();
 
                 const std::size_t buffer_size = 4 * 1024 * 1024;
                 dstd::Vector<char> buffer(buffer_size);
@@ -1241,9 +1241,9 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
                 // Validate JSON completeness
                 if (validate_json_lines(content)) {
-                    auto num_lines = count_json_lines(content);
-                    CHECK(num_lines > 0);
-                    total_lines += num_lines;
+                    auto line_count = count_json_lines(content);
+                    CHECK(line_count > 0);
+                    total_lines += line_count;
                 }
             });
         }
@@ -1258,16 +1258,16 @@ TEST_CASE("Robustness - Memory and performance stress") {
     }
 
     SUBCASE("Future-Async Concurrent reader instances") {
-        const std::size_t num_futures = 4;
+        const std::size_t future_count = 4;
         dstd::Vector<dstd::Future<std::size_t>> futures;
 
-        for (std::size_t i = 0; i < num_futures; ++i) {
+        for (std::size_t i = 0; i < future_count; ++i) {
             futures.push_back(std::async(std::launch::async, [&gz_file,
                                                               &idx_file]() {
                 auto async_reader =
                     ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
                 REQUIRE(async_reader != nullptr);
-                std::size_t max_bytes = async_reader->get_max_bytes();
+                std::size_t max_bytes = async_reader->max_bytes();
 
                 const std::size_t buffer_size = 4 * 1024 * 1024;
                 dstd::Vector<char> buffer(buffer_size);
@@ -1293,18 +1293,18 @@ TEST_CASE("Robustness - Memory and performance stress") {
         }
 
         std::size_t total_lines = 0;
-        std::size_t last_num_lines = 0;
+        std::size_t last_line_count = 0;
 
         // Wait for all futures to complete
-        for (std::size_t i = 0; i < num_futures; ++i) {
+        for (std::size_t i = 0; i < future_count; ++i) {
             auto& fut = futures[i];
-            auto num_lines = fut.get();
-            CHECK(num_lines > 0);
+            auto line_count = fut.get();
+            CHECK(line_count > 0);
             if (i > 0) {
-                CHECK(num_lines == last_num_lines);
+                CHECK(line_count == last_line_count);
             }
-            last_num_lines = num_lines;
-            total_lines += num_lines;
+            last_line_count = line_count;
+            total_lines += line_count;
         }
 
         // Should have read substantial number of lines across all futures
@@ -1322,7 +1322,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
     LargeTestEnvironment& env = fx.env;
 
     printf("Expected lines: %zu, bytes per line: %zu, indexed lines: %zu\n",
-           env.get_num_lines(), env.get_bytes_per_line(), fx.total_lines);
+           env.line_count(), env.bytes_per_line(), fx.total_lines);
 
     // Skip the tests if the indexer holds no line data.
     if (fx.total_lines == 0) {
@@ -1342,7 +1342,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
                                                             mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
-            total_lines = indexer->get_num_lines();
+            total_lines = indexer->line_count();
         }
 
         CHECK(total_lines > 0);
@@ -1414,7 +1414,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
                                                             mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
-            total_lines = indexer->get_num_lines();
+            total_lines = indexer->line_count();
         }
 
         if (total_lines == 0) {
@@ -1482,7 +1482,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
                                                             mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
-            total_lines = indexer->get_num_lines();
+            total_lines = indexer->line_count();
         }
 
         if (total_lines == 0) {
@@ -1539,7 +1539,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
                                                             mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
-            total_lines = indexer->get_num_lines();
+            total_lines = indexer->line_count();
         }
 
         if (total_lines == 0) {
@@ -1596,7 +1596,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
                                                             mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
-            total_lines = indexer->get_num_lines();
+            total_lines = indexer->line_count();
         }
 
         // Test error conditions
@@ -1683,12 +1683,12 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
     }
 
     SUBCASE("Concurrent line reading threads") {
-        const std::size_t num_threads = 4;
+        const std::size_t thread_count = 4;
         dstd::Vector<dstd::Thread> threads;
         std::atomic<std::size_t> successful_reads(0);
         std::atomic<std::size_t> failed_reads(0);
 
-        for (std::size_t i = 0; i < num_threads; ++i) {
+        for (std::size_t i = 0; i < thread_count; ++i) {
             threads.emplace_back([&gz_file, &idx_file, &total_lines,
                                   &successful_reads, &failed_reads, i]() {
                 auto thread_reader =
@@ -1697,7 +1697,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
 
                 // Each thread reads different ranges - smaller ranges for JSON
                 // data
-                std::size_t thread_start = (i * total_lines / num_threads) + 1;
+                std::size_t thread_start = (i * total_lines / thread_count) + 1;
                 std::size_t thread_end = std::min(
                     total_lines,
                     thread_start + 5);  // Much smaller range for JSON lines

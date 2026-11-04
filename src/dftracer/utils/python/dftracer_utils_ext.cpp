@@ -52,7 +52,7 @@ PyObject* py_set_log_level(PyObject*, PyObject* args) {
 
 PyObject* py_get_log_level(PyObject*, PyObject*) {
     return PyUnicode_FromString(dftracer::utils::common::logger::level_name(
-        dftracer::utils::common::logger::get_level()));
+        dftracer::utils::common::logger::level()));
 }
 
 PyObject* py_set_log_color(PyObject*, PyObject* args) {

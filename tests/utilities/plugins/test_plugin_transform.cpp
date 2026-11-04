@@ -192,7 +192,7 @@ dftu_plugin make_after_query() {
 }
 
 dstd::String make_trace(dftu_utils_test::TestEnvironment& env) {
-    dstd::String dir = env.get_dir() + "/t";
+    dstd::String dir = env.dir() + "/t";
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;

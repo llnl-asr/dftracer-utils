@@ -39,7 +39,7 @@ struct Config {
 void init(Config cfg = {});
 
 void set_level(Level level);
-Level get_level();
+Level level();
 void set_color(ColorMode mode);
 
 /// Name <-> Level. level_from_name accepts trace|debug|info|warn|warning|error|

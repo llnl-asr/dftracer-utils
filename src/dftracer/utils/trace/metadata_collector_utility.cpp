@@ -89,7 +89,7 @@ dstd::Optional<internal::IndexedFile> fresh_index_record(
         if (!meta || meta->checkpoint_size == 0) return dstd::nullopt;
         return internal::IndexedFile{
             {st.mtime, st.size},
-            meta->num_lines,
+            meta->line_count,
             meta->max_bytes,
             meta->checkpoint_size,
             dftracer::utils::common::unwrap(index::members(snapshot, *ref))
@@ -130,8 +130,8 @@ MetadataCollectorUtility::process_compressed(
         auto take = [&](const CheckpointIndexer& indexer) {
             meta.has_index = true;
             const internal::IndexedFile seen{
-                stamp, indexer.get_num_lines(), indexer.get_max_bytes(),
-                indexer.get_checkpoint_size(), indexer.get_members().size()};
+                stamp, indexer.line_count(), indexer.max_bytes(),
+                indexer.checkpoint_size(), indexer.members().size()};
             std::lock_guard<std::mutex> lock(root->current_mutex);
             root->current[file_key] = seen;
             return seen;
@@ -202,12 +202,12 @@ MetadataCollectorUtility::process_compressed(
                 seen = take(*indexer);
             }
         }
-        const std::size_t total_lines = seen->num_lines;
+        const std::size_t total_lines = seen->line_count;
         meta.uncompressed_size = seen->max_bytes;
         meta.checkpoint_size = seen->checkpoint_size;
-        meta.num_checkpoints = seen->num_checkpoints;
+        meta.checkpoint_count = seen->checkpoint_count;
         meta.index_valid = true;
-        meta.num_lines = total_lines;
+        meta.line_count = total_lines;
 
         if (total_lines == 0) {
             DFTRACER_UTILS_LOG_DEBUG("File %s has no lines",
@@ -238,15 +238,14 @@ MetadataCollectorUtility::process_compressed(
                     if (!line_opt) break;
                     const auto& line = *line_opt;
                     const char* trimmed;
-                    std::size_t trimmed_length;
+                    std::size_t trimmed_size;
                     if (json::trim_and_validate(line.content.data(),
                                                 line.content.length(), trimmed,
-                                                trimmed_length) &&
-                        trimmed_length > 8) {
+                                                trimmed_size) &&
+                        trimmed_size > 8) {
                         hasher.reset();
-                        hasher.update(
-                            dstd::StringView(trimmed, trimmed_length));
-                        content_hash += hasher.get_hash().value;
+                        hasher.update(dstd::StringView(trimmed, trimmed_size));
+                        content_hash += hasher.hash().value;
                         actual_valid_events++;
                     }
                 }

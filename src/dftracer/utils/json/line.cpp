@@ -8,7 +8,7 @@ inline bool is_json_ws(char c) {
 }
 
 bool json_trim_impl(const char* data, std::size_t length, const char*& start,
-                    std::size_t& trimmed_length, bool trim_trailing_comma) {
+                    std::size_t& trimmed_size, bool trim_trailing_comma) {
     start = data;
     const char* end = data + length - 1;
 
@@ -24,12 +24,12 @@ bool json_trim_impl(const char* data, std::size_t length, const char*& start,
         end--;
     }
 
-    trimmed_length = (end >= start) ? (end - start + 1) : 0;
+    trimmed_size = (end >= start) ? (end - start + 1) : 0;
 
-    if (trimmed_length == 0 ||
-        (trimmed_length == 1 &&
+    if (trimmed_size == 0 ||
+        (trimmed_size == 1 &&
          (*start == '[' || *start == '{' || *start == ']' || *start == '}')) ||
-        (trimmed_length == 2 && start[0] == ']' && start[1] == '[')) {
+        (trimmed_size == 2 && start[0] == ']' && start[1] == '[')) {
         // Invalid/incomplete JSON or file boundary artifact
         return false;
     }
@@ -39,13 +39,13 @@ bool json_trim_impl(const char* data, std::size_t length, const char*& start,
 }  // namespace
 
 bool trim_and_validate(const char* data, std::size_t length, const char*& start,
-                       std::size_t& trimmed_length) {
-    return json_trim_impl(data, length, start, trimmed_length, false);
+                       std::size_t& trimmed_size) {
+    return json_trim_impl(data, length, start, trimmed_size, false);
 }
 
 bool trim_and_validate_with_comma(const char* data, std::size_t length,
                                   const char*& start,
-                                  std::size_t& trimmed_length) {
-    return json_trim_impl(data, length, start, trimmed_length, true);
+                                  std::size_t& trimmed_size) {
+    return json_trim_impl(data, length, start, trimmed_size, true);
 }
 }  // namespace dftracer::utils::json

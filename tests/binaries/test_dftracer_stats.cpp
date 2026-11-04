@@ -29,12 +29,12 @@ using namespace dftracer::utils;
 namespace {
 
 dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                           int num_events, int id) {
-    auto trace_gz = env.create_dft_test_gzip_file(num_events);
+                           int event_count, int id) {
+    auto trace_gz = env.create_dft_test_gzip_file(event_count);
     if (trace_gz.empty()) return "";
 
     dstd::String pfw_path =
-        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+        env.dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
     REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
@@ -174,7 +174,7 @@ TEST_SUITE("DFTracerStats") {
 
         // dftracer_stats auto-builds the .bidx when missing.
         int rc = 0;
-        auto output = run_stats_capture(binary, {env.get_dir()}, &rc);
+        auto output = run_stats_capture(binary, {env.dir()}, &rc);
         CHECK(rc == 0);
         // Text summary always prints "Events Scanned:".
         CHECK(output.find("Events Scanned") != dstd::String::npos);
@@ -194,7 +194,7 @@ TEST_SUITE("DFTracerStats") {
         REQUIRE(!f.empty());
 
         int rc = 0;
-        auto output = run_stats_capture(binary, {env.get_dir(), "--json"}, &rc);
+        auto output = run_stats_capture(binary, {env.dir(), "--json"}, &rc);
         CHECK(rc == 0);
         // JSON output is a JSON array; each element is an object.
         CHECK(output.find('{') != dstd::String::npos);
@@ -217,7 +217,7 @@ TEST_SUITE("DFTracerStats") {
             REQUIRE(!f.empty());
         }
 
-        int rc = run_stats(binary, {env.get_dir()});
+        int rc = run_stats(binary, {env.dir()});
         CHECK(rc == 0);
     }
 
@@ -241,8 +241,8 @@ TEST_SUITE("DFTracerStats") {
         REQUIRE(!f.empty());
 
         int rc = 0;
-        long n1 = total_events(
-            run_stats_capture(binary, {env.get_dir(), "--json"}, &rc));
+        long n1 =
+            total_events(run_stats_capture(binary, {env.dir(), "--json"}, &rc));
         CHECK(rc == 0);
         CHECK(n1 > 0);
 
@@ -252,8 +252,8 @@ TEST_SUITE("DFTracerStats") {
         (void)dstd::fs::remove(f);
         REQUIRE(dstd::fs::rename(raw, f).has_value());
 
-        long n2 = total_events(
-            run_stats_capture(binary, {env.get_dir(), "--json"}, &rc));
+        long n2 =
+            total_events(run_stats_capture(binary, {env.dir(), "--json"}, &rc));
         CHECK(rc == 0);
         CHECK(n2 > n1);
     }
@@ -267,16 +267,16 @@ TEST_SUITE("DFTracerStats") {
 
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        const Fixture fx = write_fixture(env.get_dir());
+        const Fixture fx = write_fixture(env.dir());
 
         int rc = 0;
-        run_stats_capture(binary, {env.get_dir()}, &rc);
+        run_stats_capture(binary, {env.dir()}, &rc);
         REQUIRE(rc == 0);
-        const auto before = snapshot(env.get_dir());
+        const auto before = snapshot(env.dir());
 
         auto report = [&](const dstd::String& name,
                           dstd::Vector<dstd::String> extra = {}) {
-            dstd::Vector<dstd::String> args{env.get_dir(), "--report", name};
+            dstd::Vector<dstd::String> args{env.dir(), "--report", name};
             args.insert(args.end(), extra.begin(), extra.end());
             auto out = run_stats_capture(binary, args, &rc);
             CHECK(rc == 0);
@@ -319,7 +319,7 @@ TEST_SUITE("DFTracerStats") {
 
         // A warm unfiltered run neither folds nor writes: the index and the
         // rollup cache beside it keep the same files and sizes.
-        CHECK(snapshot(env.get_dir()) == before);
+        CHECK(snapshot(env.dir()) == before);
         for (const auto& [path, size] : before)
             CHECK(path.find("-cache") == dstd::String::npos);
     }
@@ -333,11 +333,11 @@ TEST_SUITE("DFTracerStats") {
 
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        write_fixture(env.get_dir());
+        write_fixture(env.dir());
 
         int rc = 0;
         auto out = run_stats_capture(
-            binary, {env.get_dir(), "--json", "--report", "categories"}, &rc);
+            binary, {env.dir(), "--json", "--report", "categories"}, &rc);
         CHECK(rc == 0);
         for (const char* total :
              {"\"total_events\":60,", "\"total_events\":120,",

@@ -121,7 +121,7 @@ coro::CoroTask<void> stuck_child(Gate* gate) {
 }  // namespace
 
 TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
-    Runtime rt(ExecutorConfig{.num_threads = 2}, false);
+    Runtime rt(ExecutorConfig{.thread_count = 2}, false);
     Probe probe;
 
     SUBCASE("semaphore") {
@@ -371,7 +371,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
 }
 
 TEST_CASE("a generator dropped after a scope fan-out does not terminate") {
-    Runtime rt(ExecutorConfig{.num_threads = 4}, false);
+    Runtime rt(ExecutorConfig{.thread_count = 4}, false);
 
     struct Source {
         static coro::AsyncGenerator<int> numbers(std::atomic<int>* fanned) {
@@ -415,7 +415,7 @@ TEST_CASE("a generator dropped after a scope fan-out does not terminate") {
 }
 
 TEST_CASE("when_any cancels a CoroTask loser that never ends") {
-    Runtime rt(ExecutorConfig{.num_threads = 4}, false);
+    Runtime rt(ExecutorConfig{.thread_count = 4}, false);
 
     std::atomic<std::size_t> winner_index{99};
     std::atomic<bool> loser_started{false};
@@ -477,8 +477,8 @@ TEST_CASE("a runtime can end as soon as a foreign thread resumes its frame") {
     constexpr int ROUNDS = 50;
     int ended = 0;
     for (int round = 0; round < ROUNDS; ++round) {
-        auto rt =
-            dstd::make_unique<Runtime>(ExecutorConfig{.num_threads = 2}, false);
+        auto rt = dstd::make_unique<Runtime>(ExecutorConfig{.thread_count = 2},
+                                             false);
         ForeignHandoff handoff;
         std::atomic<bool> finished{false};
         std::atomic<bool> released{false};
@@ -519,8 +519,8 @@ TEST_CASE("a foreign thread can exit while the runtime it resumed ends") {
     constexpr int ROUNDS = 50;
     int ended = 0;
     for (int round = 0; round < ROUNDS; ++round) {
-        auto rt =
-            dstd::make_unique<Runtime>(ExecutorConfig{.num_threads = 2}, false);
+        auto rt = dstd::make_unique<Runtime>(ExecutorConfig{.thread_count = 2},
+                                             false);
         ForeignHandoff handoff;
         std::atomic<bool> finished{false};
         auto frame = [&]() -> coro::CoroTask<void> {

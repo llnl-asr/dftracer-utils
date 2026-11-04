@@ -44,11 +44,11 @@ auto plan_of(const dstd::String& gz) {
 
 dstd::SharedPtr<index::cache::CacheStore> store_in(TestEnvironment& env) {
     return index::cache::open_lookup_db(
-        env.get_dir() + "/lookups", index::cache::CacheStore::Mode::ReadWrite);
+        env.dir() + "/lookups", index::cache::CacheStore::Mode::ReadWrite);
 }
 
 dstd::String lookup_trace(TestEnvironment& env) {
-    const dstd::String plain = env.get_dir() + "/side.ndjson";
+    const dstd::String plain = env.dir() + "/side.ndjson";
     {
         dftu_utils_test::FileOut o(plain);
         o << R"({"type":"run","run":1,"app":"laghos"})" << "\n";
@@ -219,7 +219,7 @@ TEST_SUITE("LookupStore") {
 
     TEST_CASE("a store written after reads is seen by the next read") {
         TestEnvironment env(200);
-        const dstd::String path = env.get_dir() + "/lookups";
+        const dstd::String path = env.dir() + "/lookups";
         {
             auto db = index::cache::open_lookup_db(
                 path, index::cache::CacheStore::Mode::ReadWrite);
@@ -247,7 +247,7 @@ TEST_SUITE("LookupStore") {
 
     TEST_CASE("a store that cannot be opened is null") {
         TestEnvironment env(200);
-        const dstd::String blocker = env.get_dir() + "/blocker";
+        const dstd::String blocker = env.dir() + "/blocker";
         dftu_utils_test::FileOut(blocker) << "x";
         CHECK_FALSE(index::cache::open_lookup_db(
             blocker + "/lookups", index::cache::CacheStore::Mode::ReadWrite));

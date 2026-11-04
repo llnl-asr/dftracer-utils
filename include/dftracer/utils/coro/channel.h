@@ -525,7 +525,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     mutable std::mutex state_mutex_;
     std::condition_variable cv_readable_;
     std::condition_variable cv_writable_;
-    std::atomic<std::size_t> num_producers_{0};
+    std::atomic<std::size_t> producer_count_{0};
     std::atomic<bool> had_producers_{false};
     std::atomic<std::size_t> active_sends_{0};
     std::atomic<std::size_t> pending_items_{0};
@@ -538,7 +538,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
     bool is_terminal_locked() const {
         const bool no_producers =
-            num_producers_.load(std::memory_order_acquire) == 0;
+            producer_count_.load(std::memory_order_acquire) == 0;
         const bool had_producers =
             had_producers_.load(std::memory_order_acquire);
         const bool no_active_sends =
@@ -792,7 +792,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             const bool had_producers =
                 had_producers_.load(std::memory_order_acquire);
             const bool no_producers =
-                num_producers_.load(std::memory_order_acquire) == 0;
+                producer_count_.load(std::memory_order_acquire) == 0;
             closed_for_receive = user_closed || (had_producers && no_producers);
         }
 
@@ -806,7 +806,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     }
 
     void maybe_notify_terminal() {
-        if (num_producers_.load(std::memory_order_acquire) == 0 &&
+        if (producer_count_.load(std::memory_order_acquire) == 0 &&
             active_sends_.load(std::memory_order_acquire) == 0 &&
             pending_items_.load(std::memory_order_acquire) == 0) {
             cv_readable_.notify_all();
@@ -897,13 +897,13 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
     void register_producer() {
         // Under state_mutex_ so a consumer's is_terminal_locked (also holding
-        // it) never observes the had_producers_=true / num_producers_=0 window
+        // it) never observes the had_producers_=true / producer_count_=0 window
         // a separate-store registration would expose - that combination reads
         // as "all producers finished" and ends the stream before the first
         // send.
         std::lock_guard<std::mutex> lock(state_mutex_);
         had_producers_.store(true, std::memory_order_release);
-        num_producers_.fetch_add(1, std::memory_order_release);
+        producer_count_.fetch_add(1, std::memory_order_release);
     }
 
     void release_producer() {
@@ -913,7 +913,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             std::size_t prev =
-                num_producers_.fetch_sub(1, std::memory_order_acq_rel);
+                producer_count_.fetch_sub(1, std::memory_order_acq_rel);
             if (prev == 1) {
                 was_last = true;
                 if (!user_closed_.load(std::memory_order_acquire)) {
@@ -1078,15 +1078,15 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      */
     bool is_closed_and_done() const {
         return is_closed() &&
-               num_producers_.load(std::memory_order_acquire) == 0 &&
+               producer_count_.load(std::memory_order_acquire) == 0 &&
                pending_items_.load(std::memory_order_acquire) == 0;
     }
 
     /**
      * Get number of active producers
      */
-    std::size_t num_producers() const {
-        return num_producers_.load(std::memory_order_acquire);
+    std::size_t producer_count() const {
+        return producer_count_.load(std::memory_order_acquire);
     }
 
     /**

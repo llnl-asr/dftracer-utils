@@ -59,7 +59,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             auto gen = async_indexed_file_bytes(reader, 0, file_size);
             auto task = collect_lines(std::move(gen));
@@ -126,7 +126,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             auto gen = async_indexed_file_bytes(reader, 0, file_size);
             auto task = collect_line_copies(std::move(gen));
@@ -152,7 +152,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             auto gen = async_indexed_file_bytes(reader, 0, file_size, 256);
             auto task = collect_lines(std::move(gen));
@@ -173,7 +173,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             auto gen =
                 async_indexed_file_bytes(reader, 0, file_size, 1024 * 1024);
@@ -231,7 +231,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             auto gen = async_indexed_file_bytes(reader, 0, file_size * 2);
             auto task = collect_lines(std::move(gen));
@@ -277,7 +277,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             // Sync path
             IndexedFileBytesIterator sync_iter(reader, 0, file_size);
@@ -316,7 +316,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             auto gen = async_indexed_file_bytes(reader, 0, file_size);
 
@@ -354,7 +354,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             auto gen1 = async_indexed_file_bytes(reader, 0, file_size);
             auto gen2 = std::move(gen1);  // Move construct
@@ -400,7 +400,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             // Start at byte 50 (likely mid-line)
             auto gen = async_indexed_file_bytes(reader, 50, file_size);

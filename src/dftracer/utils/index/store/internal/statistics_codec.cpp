@@ -11,7 +11,7 @@ namespace dftracer::utils::index::store::internal {
 
 dstd::String encode_file_scalar_stats_value(
     const index::schemas::dft::ChunkStatistics& stats,
-    std::uint64_t num_chunks) {
+    std::uint64_t chunk_count) {
     dstd::String value;
     dstd::append_u64_be(value, stats.total_events);
     dstd::append_u64_be(value, stats.min_timestamp_us);
@@ -29,7 +29,7 @@ dstd::String encode_file_scalar_stats_value(
     auto duration_histogram = stats.duration_histogram.to_json();
     append_string(value, duration_histogram);
 
-    dstd::append_u64_be(value, num_chunks);
+    dstd::append_u64_be(value, chunk_count);
     dstd::append_u64_be(value, stats.min_nonzero_timestamp_us);
 
     return value;
@@ -66,7 +66,7 @@ index::schemas::dft::MergedStatisticsResult decode_file_scalar_stats_value(
             dstd::String(duration_histogram));
     }
 
-    result.num_chunks = cursor.u64();
+    result.chunk_count = cursor.u64();
     stats.min_nonzero_timestamp_us = cursor.u64();
 
     return result;

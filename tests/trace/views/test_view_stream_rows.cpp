@@ -35,7 +35,7 @@ namespace {
 // first half, y on the second), so a per-batch morsel's columns differ and
 // the streaming path must exercise name-based reconciliation.
 dstd::String create_mixed_arg_trace(TestEnvironment& env) {
-    dstd::String pfw = env.get_dir() + "/mixed_args.pfw";
+    dstd::String pfw = env.dir() + "/mixed_args.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 25; ++i)
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
@@ -81,7 +81,7 @@ dstd::Vector<dstd::Tuple<dstd::String, double, double>> row_key_set(
 // 40 events whose args carry exactly `keys`, in a trace named `name`.
 dstd::String create_args_trace(TestEnvironment& env, const dstd::String& name,
                                const dstd::Vector<dstd::String>& keys) {
-    const dstd::String pfw = env.get_dir() + "/" + name + ".pfw";
+    const dstd::String pfw = env.dir() + "/" + name + ".pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 40; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
@@ -125,7 +125,7 @@ dstd::String distinct_metric(int i) {
 // scan has many units and first occurrences land in different ones.
 dstd::String create_distinct_trace(TestEnvironment& env,
                                    const dstd::String& idx_dir) {
-    dstd::String pfw = env.get_dir() + "/distinct.pfw";
+    dstd::String pfw = env.dir() + "/distinct.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < DISTINCT_EVENTS; ++i) {
         static const char* const NAMES[] = {"read", "write", "open", "lseek"};
@@ -188,7 +188,7 @@ TEST_SUITE("trace scan - streaming row query") {
         TestEnvironment env(200);
         const dstd::String gz_a = create_args_trace(env, "trace_a", {"a", "b"});
         const dstd::String gz_b = create_args_trace(env, "trace_b", {"c"});
-        const dstd::String idx_dir = env.get_dir() + "/shared.dftindex";
+        const dstd::String idx_dir = env.dir() + "/shared.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz_a, idx_dir, 256));
         REQUIRE(dftu_utils_test::build_index(gz_b, idx_dir, 256));
 
@@ -821,7 +821,7 @@ TEST_SUITE("trace scan - streaming row query") {
 
     TEST_CASE("ViewSource distinct pushdown is absorbed and matches the host") {
         TestEnvironment env(200);
-        const dstd::String idx_dir = env.get_dir() + "/distinct.dftindex";
+        const dstd::String idx_dir = env.dir() + "/distinct.dftindex";
         dstd::String gz = create_distinct_trace(env, idx_dir);
         dstd::String idx = dstd::String(determine_index_path(gz, idx_dir));
 
@@ -892,7 +892,7 @@ TEST_SUITE("trace scan - streaming row query") {
 
     TEST_CASE("ViewSource refuses a distinct over a computed column") {
         TestEnvironment env(200);
-        const dstd::String idx_dir = env.get_dir() + "/distinct.dftindex";
+        const dstd::String idx_dir = env.dir() + "/distinct.dftindex";
         dstd::String gz = create_distinct_trace(env, idx_dir);
         dstd::String idx = dstd::String(determine_index_path(gz, idx_dir));
         views::detail::scan::ScanPlan v = views::detail::scan::select(

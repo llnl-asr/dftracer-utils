@@ -31,8 +31,8 @@ namespace dftracer::utils::mpi {
  * @endcode
  *
  *   // Use throughout application
- *   int rank = MPIUtils::instance().get_rank();
- *   int size = MPIUtils::instance().get_world_size();
+ *   int rank = MPIUtils::instance().rank();
+ *   int size = MPIUtils::instance().world_size();
  *
  *   // Cleanup (call before MPI_Finalize if needed)
  *   MPIUtils::instance().finalize();
@@ -69,12 +69,12 @@ class MPIUtils {
     /**
      * Get MPI rank (0 if MPI not initialized)
      */
-    int get_rank() const { return rank_; }
+    int rank() const { return rank_; }
 
     /**
      * Get MPI world size (1 if MPI not initialized)
      */
-    int get_world_size() const { return world_size_; }
+    int world_size() const { return world_size_; }
 
     /**
      * Check if this is the root rank (rank 0)

@@ -16,9 +16,9 @@ namespace {
 constexpr std::chrono::milliseconds IDLE_TRIM_AFTER{50};
 }  // namespace
 
-IoThreadPool::IoThreadPool(std::size_t num_threads, unsigned batch_threshold,
+IoThreadPool::IoThreadPool(std::size_t thread_count, unsigned batch_threshold,
                            IoPoolOptions options)
-    : num_threads_(num_threads == 0 ? 4 : num_threads),
+    : thread_count_(thread_count == 0 ? 4 : thread_count),
       batch_threshold_(batch_threshold),
       keepalive_(options.keepalive),
       eager_(options.eager) {}
@@ -31,7 +31,7 @@ void IoThreadPool::start() {
     cancelling_.store(false, std::memory_order_release);
     running_ = true;
     const std::size_t count =
-        eager_ ? num_threads_.load(std::memory_order_acquire) : 1;
+        eager_ ? thread_count_.load(std::memory_order_acquire) : 1;
     threads_.reserve(count);
     for (std::size_t i = 0; i < count; ++i)
         if (!spawn_locked()) break;
@@ -42,10 +42,10 @@ void IoThreadPool::grow(std::size_t threads, bool eager) {
     // either joins the new threads or never gets them.
     std::lock_guard<std::mutex> lock(mutex_);
     eager_ = eager;
-    if (threads > num_threads_.load(std::memory_order_acquire))
-        num_threads_.store(threads, std::memory_order_release);
+    if (threads > thread_count_.load(std::memory_order_acquire))
+        thread_count_.store(threads, std::memory_order_release);
     if (!eager_ || !running_.load()) return;
-    const std::size_t cap = num_threads_.load(std::memory_order_acquire);
+    const std::size_t cap = thread_count_.load(std::memory_order_acquire);
     while (live_.load(std::memory_order_relaxed) < cap)
         if (!spawn_locked()) break;
 }
@@ -109,7 +109,7 @@ void IoThreadPool::submit(dstd::Function<void()> fn) {
         if (!eager_ && running_.load(std::memory_order_relaxed) &&
             queue_.size() > idle_ &&
             live_.load(std::memory_order_relaxed) <
-                num_threads_.load(std::memory_order_relaxed))
+                thread_count_.load(std::memory_order_relaxed))
             spawn_locked();
         const unsigned unflushed =
             unflushed_count_.load(std::memory_order_relaxed) + 1;
@@ -138,7 +138,7 @@ std::size_t IoThreadPool::flush() {
 void IoThreadPool::wake(std::size_t items) {
     // A woken worker drains the queue, so waking the whole pool per flush just
     // thunders it; wake only as many workers as pending items.
-    const std::size_t pool = num_threads_.load(std::memory_order_relaxed);
+    const std::size_t pool = thread_count_.load(std::memory_order_relaxed);
     const std::size_t n = items < pool ? items : pool;
     for (std::size_t i = 0; i < n; ++i) {
         cv_.notify_one();
@@ -166,7 +166,7 @@ void IoThreadPool::worker_loop() {
             }
             const auto above_floor = [this] {
                 return live_.load(std::memory_order_relaxed) >
-                       (eager_ ? num_threads_.load(std::memory_order_relaxed)
+                       (eager_ ? thread_count_.load(std::memory_order_relaxed)
                                : std::size_t{1});
             };
             while (!ready()) {

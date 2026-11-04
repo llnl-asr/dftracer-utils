@@ -64,8 +64,8 @@ class ScalableBloomFilter {
     /// Approximate count of distinct values added. Exact up to the
     /// false-positive rate of the levels, since `add` skips values that
     /// already probe as present.
-    std::size_t num_entries() const { return distinct_; }
-    std::size_t num_levels() const { return levels_.size(); }
+    std::size_t entry_count() const { return distinct_; }
+    std::size_t level_count() const { return levels_.size(); }
     std::size_t size_bytes() const;
 
    private:

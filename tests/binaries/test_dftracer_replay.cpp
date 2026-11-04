@@ -132,10 +132,10 @@ dstd::String run_replay_capture(const dstd::String& binary,
 
 // Create a plain .pfw trace file with sample events.
 // The replay binary handles uncompressed .pfw without needing an index.
-void create_sample_trace(const dstd::String& path, int num_events = 10) {
+void create_sample_trace(const dstd::String& path, int event_count = 10) {
     GzTraceWriter file(path);
     file << "[\n";
-    for (int i = 0; i < num_events; i++) {
+    for (int i = 0; i < event_count; i++) {
         file << R"({"id":)" << i
              << R"(,"name":"read","cat":"POSIX","pid":12345,"tid":12345,)";
         file << R"("ts":)" << (1000000 + i * 1000) << R"(,"dur":)"
@@ -143,7 +143,7 @@ void create_sample_trace(const dstd::String& path, int num_events = 10) {
         file << R"(,"ph":"X","args":{"fhash":"hash)" << i << R"(","size":)"
              << (1024 * (i + 1));
         file << R"(,"level":1}})";
-        if (i < num_events - 1) file << ",";
+        if (i < event_count - 1) file << ",";
         file << "\n";
     }
     file << "]";

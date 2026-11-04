@@ -83,9 +83,9 @@ struct MetricStats {
     void update(double value, bool compute_percentiles = false);
     void update(std::uint64_t value, bool compute_percentiles = false);
     void merge_from(const MetricStats& other);
-    double get_stddev() const;
-    double get_skewness() const;
-    double get_kurtosis() const;
+    double stddev() const;
+    double skewness() const;
+    double kurtosis() const;
 };
 
 /// Return the entry for `name`, inserting a value constructed from `accuracy`

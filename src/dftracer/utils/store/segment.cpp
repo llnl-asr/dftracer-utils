@@ -72,23 +72,23 @@ bool SegmentView::parse_entry(dstd::ByteView bytes, std::size_t& at,
                               std::size_t end, Entry& out) {
     const auto* data = byte_data(bytes);
 
-    const auto key_length = decode_varint(bytes, at);
-    if (!key_length || at > end) return false;
+    const auto key_size = decode_varint(bytes, at);
+    if (!key_size || at > end) return false;
 
     const auto value_code = decode_varint(bytes, at);
     if (!value_code || at > end) return false;
     const bool big = (*value_code & 1U) != 0;
-    const std::uint64_t value_length = *value_code >> 1U;
+    const std::uint64_t value_size = *value_code >> 1U;
 
-    if (*key_length > static_cast<std::uint64_t>(end - at)) return false;
+    if (*key_size > static_cast<std::uint64_t>(end - at)) return false;
     const std::size_t key_at = at;
-    at += static_cast<std::size_t>(*key_length);
-    out.key_ = {data + key_at, static_cast<std::size_t>(*key_length)};
+    at += static_cast<std::size_t>(*key_size);
+    out.key_ = {data + key_at, static_cast<std::size_t>(*key_size)};
 
-    if (value_length > static_cast<std::uint64_t>(end - at)) return false;
+    if (value_size > static_cast<std::uint64_t>(end - at)) return false;
 
     if (big) {
-        if (value_length != 20U) return false;
+        if (value_size != 20U) return false;
         out.is_big_ = true;
         out.big_ref_.offset = dftracer::utils::dstd::read_u64_le(data + at);
         out.big_ref_.length =
@@ -100,9 +100,9 @@ bool SegmentView::parse_entry(dstd::ByteView bytes, std::size_t& at,
     }
 
     out.is_big_ = false;
-    out.value_ = {data + at, static_cast<std::size_t>(value_length)};
+    out.value_ = {data + at, static_cast<std::size_t>(value_size)};
     out.big_ref_ = {};
-    at += static_cast<std::size_t>(value_length);
+    at += static_cast<std::size_t>(value_size);
     return true;
 }
 
@@ -179,7 +179,7 @@ dstd::Expected<std::size_t, dstd::Error> SegmentBuilder::plan(
             }
 
             entry.value_offset = folded_offset;
-            entry.value_length = folded_values_.size() - folded_offset;
+            entry.value_size = folded_values_.size() - folded_offset;
             entry.folded = true;
         } else if (fold == nullptr && end - begin > 1U) {
             entry.value = records_[end - 1U].value;
@@ -247,7 +247,7 @@ dstd::Expected<std::size_t, dstd::Error> SegmentBuilder::plan(
 dstd::ByteView SegmentBuilder::value_of(const PlannedEntry& entry) const {
     if (entry.folded) {
         return vector_view(folded_values_, entry.value_offset,
-                           entry.value_length);
+                           entry.value_size);
     }
     return entry.value;
 }
@@ -330,10 +330,9 @@ dstd::Expected<SegmentView, dstd::Error> SegmentView::open_index(
         return parse_error();
     }
 
-    const std::uint32_t segment_length =
+    const std::uint32_t segment_size =
         dftracer::utils::dstd::read_u32_le(data + 4U);
-    if (segment_length != bytes.size() ||
-        (segment_length % SEGMENT_ALIGN) != 0) {
+    if (segment_size != bytes.size() || (segment_size % SEGMENT_ALIGN) != 0) {
         return parse_error();
     }
     const std::uint32_t entry_count =
@@ -361,12 +360,12 @@ dstd::Expected<SegmentView, dstd::Error> SegmentView::open_index(
             dftracer::utils::dstd::read_u32_le(data + at);
         at += 4U;
 
-        const auto key_length = decode_varint(bytes, at);
-        if (!key_length || at > bytes.size()) return parse_error();
-        if (*key_length > bytes.size() - at) return parse_error();
-        const dstd::ByteView first_key = {
-            data + at, static_cast<std::size_t>(*key_length)};
-        at += static_cast<std::size_t>(*key_length);
+        const auto key_size = decode_varint(bytes, at);
+        if (!key_size || at > bytes.size()) return parse_error();
+        if (*key_size > bytes.size() - at) return parse_error();
+        const dstd::ByteView first_key = {data + at,
+                                          static_cast<std::size_t>(*key_size)};
+        at += static_cast<std::size_t>(*key_size);
 
         if (offset > bytes.size() || length > bytes.size() - offset) {
             return parse_error();
@@ -456,7 +455,7 @@ SegmentView::GranuleSpan SegmentView::granule(std::size_t i) const {
             static_cast<std::uint32_t>(held.length)};
 }
 
-std::uint32_t SegmentView::head_length(dstd::ByteView prefix) {
+std::uint32_t SegmentView::head_size(dstd::ByteView prefix) {
     if (prefix.size() < HEADER_BYTES) return 0;
     const auto* data = byte_data(prefix);
     if (std::memcmp(data, SEGMENT_MAGIC.data(), SEGMENT_MAGIC.size()) != 0) {
@@ -471,23 +470,23 @@ std::uint32_t SegmentView::head_length(dstd::ByteView prefix) {
     for (std::uint32_t i = 0; i < granule_count; ++i) {
         if (prefix.size() - at < 8U) return 0;
         at += 8U;
-        const auto key_length = decode_varint(prefix, at);
-        if (!key_length || at > prefix.size()) return 0;
-        if (*key_length > prefix.size() - at) return 0;
-        at += static_cast<std::size_t>(*key_length);
+        const auto key_size = decode_varint(prefix, at);
+        if (!key_size || at > prefix.size()) return 0;
+        if (*key_size > prefix.size() - at) return 0;
+        at += static_cast<std::size_t>(*key_size);
     }
     return static_cast<std::uint32_t>(at);
 }
 
 dstd::Expected<dstd::Optional<SegmentView::GranuleSpan>, dstd::Error>
-SegmentView::find_granule(dstd::ByteView head, std::uint32_t segment_length,
+SegmentView::find_granule(dstd::ByteView head, std::uint32_t segment_size,
                           dstd::ByteView key) {
     if (head.size() < HEADER_BYTES) return parse_error();
     const auto* data = byte_data(head);
     if (std::memcmp(data, SEGMENT_MAGIC.data(), SEGMENT_MAGIC.size()) != 0) {
         return parse_error();
     }
-    if (dftracer::utils::dstd::read_u32_le(data + 4U) != segment_length) {
+    if (dftracer::utils::dstd::read_u32_le(data + 4U) != segment_size) {
         return parse_error();
     }
     if (data[16] != 0 || data[17] != 0 || data[18] != 0 || data[19] != 0) {
@@ -509,16 +508,16 @@ SegmentView::find_granule(dstd::ByteView head, std::uint32_t segment_length,
         const std::uint32_t length =
             dftracer::utils::dstd::read_u32_le(data + at + 4U);
         at += 8U;
-        const auto key_length = decode_varint(head, at);
-        if (!key_length || at > head.size()) return parse_error();
-        if (*key_length > head.size() - at) return parse_error();
-        const dstd::ByteView first_key = {
-            data + at, static_cast<std::size_t>(*key_length)};
-        at += static_cast<std::size_t>(*key_length);
+        const auto key_size = decode_varint(head, at);
+        if (!key_size || at > head.size()) return parse_error();
+        if (*key_size > head.size() - at) return parse_error();
+        const dstd::ByteView first_key = {data + at,
+                                          static_cast<std::size_t>(*key_size)};
+        at += static_cast<std::size_t>(*key_size);
 
         if (i == 0) first_offset = offset;
-        if (length == 0 || offset > segment_length ||
-            length > segment_length - offset) {
+        if (length == 0 || offset > segment_size ||
+            length > segment_size - offset) {
             return parse_error();
         }
         if (i != 0 && offset != expected_offset) return parse_error();
@@ -538,14 +537,14 @@ SegmentView::find_granule(dstd::ByteView head, std::uint32_t segment_length,
 }
 
 dstd::Expected<SegmentView, dstd::Error> SegmentView::open_head(
-    dstd::ByteView head, std::uint32_t segment_length) {
+    dstd::ByteView head, std::uint32_t segment_size) {
     if (head.size() < HEADER_BYTES) return parse_error();
     const auto* data = byte_data(head);
     if (std::memcmp(data, SEGMENT_MAGIC.data(), SEGMENT_MAGIC.size()) != 0) {
         return parse_error();
     }
-    if (dftracer::utils::dstd::read_u32_le(data + 4U) != segment_length ||
-        (segment_length % SEGMENT_ALIGN) != 0) {
+    if (dftracer::utils::dstd::read_u32_le(data + 4U) != segment_size ||
+        (segment_size % SEGMENT_ALIGN) != 0) {
         return parse_error();
     }
     if (data[16] != 0 || data[17] != 0 || data[18] != 0 || data[19] != 0) {
@@ -572,15 +571,15 @@ dstd::Expected<SegmentView, dstd::Error> SegmentView::open_head(
         const std::uint32_t length =
             dftracer::utils::dstd::read_u32_le(data + at + 4U);
         at += 8U;
-        const auto key_length = decode_varint(head, at);
-        if (!key_length || at > head.size()) return parse_error();
-        if (*key_length > head.size() - at) return parse_error();
-        const dstd::ByteView first_key = {
-            data + at, static_cast<std::size_t>(*key_length)};
-        at += static_cast<std::size_t>(*key_length);
+        const auto key_size = decode_varint(head, at);
+        if (!key_size || at > head.size()) return parse_error();
+        if (*key_size > head.size() - at) return parse_error();
+        const dstd::ByteView first_key = {data + at,
+                                          static_cast<std::size_t>(*key_size)};
+        at += static_cast<std::size_t>(*key_size);
 
-        if (length == 0 || offset > segment_length ||
-            length > segment_length - offset) {
+        if (length == 0 || offset > segment_size ||
+            length > segment_size - offset) {
             return parse_error();
         }
         if (i != 0 && offset != expected_offset) return parse_error();
@@ -680,9 +679,9 @@ bool append_segment_spans(dstd::ByteView segment, std::uint32_t offset,
     out.push_back({offset, view.granule(0).offset, true});
     for (std::size_t i = 0; i < view.granule_count(); ++i) {
         const SegmentView::GranuleSpan held = view.granule(i);
-        const std::uint32_t granule_length =
+        const std::uint32_t granule_size =
             i + 1U < view.granule_count() ? held.length : length - held.offset;
-        out.push_back({offset + held.offset, granule_length});
+        out.push_back({offset + held.offset, granule_size});
     }
     return true;
 }

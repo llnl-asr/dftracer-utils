@@ -155,7 +155,7 @@ struct CollapsedMetrics {
     double bw_mean = 0.0;
     /// Stdev of per-window max bandwidths.
     double bw_stdev = 0.0;
-    std::size_t num_windows = 0;
+    std::size_t window_count = 0;
 };
 
 /// A (category, operation) group. The ids are in the table the comparison

@@ -47,7 +47,7 @@ IpcReader::IpcReader(IpcReader&& other) noexcept
       decoder_(other.decoder_),
       shared_schema_(std::move(other.shared_schema_)),
       blocks_(std::move(other.blocks_)),
-      num_batches_(other.num_batches_),
+      batch_count_(other.batch_count_),
       total_rows_(other.total_rows_) {
     other.reset_state();
 }
@@ -61,7 +61,7 @@ IpcReader& IpcReader::operator=(IpcReader&& other) noexcept {
         decoder_ = other.decoder_;
         shared_schema_ = std::move(other.shared_schema_);
         blocks_ = std::move(other.blocks_);
-        num_batches_ = other.num_batches_;
+        batch_count_ = other.batch_count_;
         total_rows_ = other.total_rows_;
         other.reset_state();
     }
@@ -75,7 +75,7 @@ void IpcReader::reset_state() noexcept {
     decoder_ = nullptr;
     shared_schema_.reset();
     blocks_.clear();
-    num_batches_ = 0;
+    batch_count_ = 0;
     total_rows_ = 0;
 }
 
@@ -238,12 +238,12 @@ int IpcReader::read_footer() {
     ArrowIpcFooter* footer = decoder->footer;
 
     // Copy block info - decoder state may be modified by subsequent operations
-    num_batches_ =
+    batch_count_ =
         footer->record_batch_blocks.size_bytes / sizeof(ArrowIpcFileBlock);
-    blocks_.resize(num_batches_);
+    blocks_.resize(batch_count_);
     auto* src_blocks = reinterpret_cast<const ArrowIpcFileBlock*>(
         footer->record_batch_blocks.data);
-    for (std::size_t i = 0; i < num_batches_; ++i) {
+    for (std::size_t i = 0; i < batch_count_; ++i) {
         blocks_[i].offset = src_blocks[i].offset;
         blocks_[i].metadata_length = src_blocks[i].metadata_length;
         blocks_[i].body_length = src_blocks[i].body_length;
@@ -281,7 +281,7 @@ int IpcReader::read_footer() {
 // ---------------------------------------------------------------------------
 
 ArrowExportResult IpcReader::read_batch(std::size_t index) {
-    if (!is_open() || index >= num_batches_) {
+    if (!is_open() || index >= batch_count_) {
         return ArrowExportResult();
     }
 
@@ -331,9 +331,9 @@ ArrowExportResult IpcReader::read_batch(std::size_t index) {
 
 dstd::Vector<ArrowExportResult> IpcReader::read_all() {
     dstd::Vector<ArrowExportResult> results;
-    results.reserve(num_batches_);
+    results.reserve(batch_count_);
 
-    for (std::size_t i = 0; i < num_batches_; ++i) {
+    for (std::size_t i = 0; i < batch_count_; ++i) {
         auto batch = read_batch(i);
         if (batch.valid()) {
             results.push_back(std::move(batch));
@@ -345,7 +345,7 @@ dstd::Vector<ArrowExportResult> IpcReader::read_all() {
 
 int IpcReader::for_each_batch(
     dstd::Function<int(ArrowExportResult&)> callback) {
-    for (std::size_t i = 0; i < num_batches_; ++i) {
+    for (std::size_t i = 0; i < batch_count_; ++i) {
         auto batch = read_batch(i);
         if (!batch.valid()) {
             return -1;

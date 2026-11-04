@@ -89,7 +89,7 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
     }
 
     SUBCASE("BYTES + LINE_RANGE - Raw bytes covering line range") {
-        if (reader->get_num_lines() == 0) {
+        if (reader->line_count() == 0) {
             MESSAGE("Skipping LINE_RANGE test - no line data available");
             return;
         }
@@ -178,7 +178,7 @@ TEST_CASE("C++ Reader Streaming API - LINE_BYTES stream") {
     auto reader = ReaderFactory::create(gz_file, idx_file);
     REQUIRE(reader != nullptr);
 
-    if (reader->get_num_lines() == 0) {
+    if (reader->line_count() == 0) {
         MESSAGE("Skipping LINE_BYTES tests - no line data available");
         return;
     }
@@ -257,7 +257,7 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream" *
     auto reader = ReaderFactory::create(gz_file, idx_file);
     REQUIRE(reader != nullptr);
 
-    if (reader->get_num_lines() == 0) {
+    if (reader->line_count() == 0) {
         MESSAGE("Skipping MULTI_LINES_BYTES tests - no line data available");
         return;
     }
@@ -345,7 +345,7 @@ TEST_CASE("C++ Reader Streaming API - LINE stream") {
     auto reader = ReaderFactory::create(gz_file, idx_file);
     REQUIRE(reader != nullptr);
 
-    if (reader->get_num_lines() == 0) {
+    if (reader->line_count() == 0) {
         MESSAGE("Skipping LINE tests - no line data available");
         return;
     }
@@ -428,7 +428,7 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream" *
     auto reader = ReaderFactory::create(gz_file, idx_file);
     REQUIRE(reader != nullptr);
 
-    if (reader->get_num_lines() == 0) {
+    if (reader->line_count() == 0) {
         MESSAGE("Skipping MULTI_LINES tests - no line data available");
         return;
     }
@@ -533,7 +533,7 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
     }
 
     SUBCASE("Range beyond file size") {
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         auto stream = reader->stream(StreamConfig()
                                          .stream_type(StreamType::Bytes)
                                          .range_type(RangeType::ByteRange)
@@ -625,15 +625,15 @@ TEST_CASE("C++ Reader Streaming API - Format identification") {
     REQUIRE(reader != nullptr);
 
     SUBCASE("Check format name") {
-        dstd::String format = reader->get_format_name();
+        dstd::String format = reader->format_name();
         CHECK(!format.empty());
         MESSAGE("Format: ", format);
     }
 
     SUBCASE("Verify metadata access") {
-        CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
-        CHECK(dstd::StringView(reader->get_index_path()) == idx_file);
-        CHECK(reader->get_max_bytes() > 0);
+        CHECK(dstd::StringView(reader->archive_path()) == gz_file);
+        CHECK(dstd::StringView(reader->index_path()) == idx_file);
+        CHECK(reader->max_bytes() > 0);
     }
 }
 
@@ -656,7 +656,7 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
 
     auto reader = ReaderFactory::create(gz_file, idx_file);
     REQUIRE(reader != nullptr);
-    std::size_t max_bytes = reader->get_max_bytes();
+    std::size_t max_bytes = reader->max_bytes();
 
     dstd::Vector<std::size_t> buffer_sizes = {
         32 * 1024,        // 32KB

@@ -81,7 +81,7 @@ FileStat make_file_stat(const struct stat& info) noexcept {
 /// The path without trailing separators, so lstat names a symlink itself and
 /// not its target. A bare root keeps its separator.
 StringView strip_trailing_separators(StringView path) noexcept {
-    const std::size_t root = path_detail::root_length(path, HOST_PATH_STYLE);
+    const std::size_t root = path_detail::root_size(path, HOST_PATH_STYLE);
     std::size_t end = path.size();
     while (end > root && end > 1 &&
            path_detail::is_separator(path[end - 1], HOST_PATH_STYLE)) {
@@ -321,7 +321,7 @@ Expected<bool, Error> create_directories(PathView path) {
     if (bytes.empty()) {
         return Unexpected(invalid_error("empty path, no directory to create"));
     }
-    const std::size_t root = path_detail::root_length(bytes, HOST_PATH_STYLE);
+    const std::size_t root = path_detail::root_size(bytes, HOST_PATH_STYLE);
     std::size_t end = bytes.size();
     while (end > root &&
            path_detail::is_separator(bytes[end - 1], HOST_PATH_STYLE)) {

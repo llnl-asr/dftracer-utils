@@ -24,7 +24,7 @@ constexpr int RECORDS = 3000;
 // records, and so each chunk, holds its own tag; `sizes` holds [i % 7, i].
 // Record 2999 also carries "rare" at position 5.
 dstd::String write_tagged(TestEnvironment& env, std::size_t path_budget) {
-    const dstd::String plain = env.get_dir() + "/tagged.ndjson";
+    const dstd::String plain = env.dir() + "/tagged.ndjson";
     {
         dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i) {

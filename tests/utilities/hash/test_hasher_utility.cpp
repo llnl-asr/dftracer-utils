@@ -12,7 +12,7 @@ TEST_CASE("HasherUtility - Basic hashing") {
     HasherUtility hasher;
     hasher.reset();
     hasher.update("test data");
-    CHECK(hasher.get_hash().value != 0);
+    CHECK(hasher.hash().value != 0);
 }
 
 TEST_CASE("HasherUtility - Streaming") {
@@ -20,27 +20,27 @@ TEST_CASE("HasherUtility - Streaming") {
         HasherUtility h1;
         h1.update("Hello");
         h1.update("World");
-        Hash incremental = h1.get_hash();
+        Hash incremental = h1.hash();
 
         HasherUtility h2;
         h2.update("HelloWorld");
-        CHECK(incremental == h2.get_hash());
+        CHECK(incremental == h2.hash());
 
         HasherUtility h3;
         h3.update("Hello");
         h3.update("World");
-        CHECK(h3.get_hash() == incremental);
+        CHECK(h3.hash() == incremental);
     }
 
     SUBCASE("Reset between operations") {
         HasherUtility hasher;
         hasher.reset();
         hasher.update("First");
-        Hash first = hasher.get_hash();
+        Hash first = hasher.hash();
 
         hasher.reset();
         hasher.update("First");
-        CHECK(hasher.get_hash() == first);
+        CHECK(hasher.hash() == first);
     }
 }
 
@@ -51,7 +51,7 @@ TEST_CASE("HasherUtility - process() interface") {
         hasher.reset();
         Hash result = hasher.process(dstd::String("test"));
         CHECK(result.value != 0);
-        CHECK(result == hasher.get_hash());
+        CHECK(result == hasher.hash());
     }
 
     SUBCASE("process() with POD types") {
@@ -72,11 +72,11 @@ TEST_CASE("HasherUtility - Consistency") {
 
     hasher.reset();
     hasher.update(test_data);
-    Hash hash1 = hasher.get_hash();
+    Hash hash1 = hasher.hash();
 
     hasher.reset();
     hasher.update(test_data);
-    CHECK(hash1 == hasher.get_hash());
+    CHECK(hash1 == hasher.hash());
 }
 
 TEST_CASE("HasherUtility - Edge cases") {
@@ -85,20 +85,20 @@ TEST_CASE("HasherUtility - Edge cases") {
     SUBCASE("Empty string") {
         hasher.reset();
         hasher.update("");
-        CHECK(hasher.get_hash().value != 0);
+        CHECK(hasher.hash().value != 0);
     }
 
     SUBCASE("Large data") {
         dstd::String large_data(1024 * 1024, 'X');
         hasher.reset();
         hasher.update(large_data);
-        CHECK(hasher.get_hash().value != 0);
+        CHECK(hasher.hash().value != 0);
     }
 
     SUBCASE("Binary data with null bytes") {
         dstd::String binary("\x00\x01\x02\x03", 4);
         hasher.reset();
         hasher.update(binary);
-        CHECK(hasher.get_hash().value != 0);
+        CHECK(hasher.hash().value != 0);
     }
 }

@@ -78,13 +78,13 @@ GzipMemberDecompressor& GzipMemberDecompressor::operator=(
 }
 
 GzipDecode GzipMemberDecompressor::decompress_status(
-    const void* comp, std::size_t comp_len, void* out, std::size_t out_cap,
+    const void* comp, std::size_t comp_size, void* out, std::size_t out_cap,
     DecompressResult& result) const {
     if (!d_) return GzipDecode::BadData;
     std::size_t actual_in = 0;
     std::size_t actual_out = 0;
     const libdeflate_result r = libdeflate_gzip_decompress_ex(
-        d_, comp, comp_len, out, out_cap, &actual_in, &actual_out);
+        d_, comp, comp_size, out, out_cap, &actual_in, &actual_out);
     switch (r) {
         case LIBDEFLATE_SUCCESS:
             result = DecompressResult{actual_out, actual_in};
@@ -99,10 +99,10 @@ GzipDecode GzipMemberDecompressor::decompress_status(
 }
 
 dstd::Optional<DecompressResult> GzipMemberDecompressor::decompress(
-    const void* comp, std::size_t comp_len, void* out,
+    const void* comp, std::size_t comp_size, void* out,
     std::size_t out_cap) const {
     DecompressResult result{};
-    if (decompress_status(comp, comp_len, out, out_cap, result) ==
+    if (decompress_status(comp, comp_size, out, out_cap, result) ==
         GzipDecode::Ok) {
         return result;
     }
@@ -111,10 +111,10 @@ dstd::Optional<DecompressResult> GzipMemberDecompressor::decompress(
 
 dstd::Optional<dstd::Vector<std::uint8_t>>
 GzipMemberDecompressor::decompress_member(const void* comp,
-                                          std::size_t comp_len,
+                                          std::size_t comp_size,
                                           std::size_t uncompressed_size) const {
     dstd::Vector<std::uint8_t> out(uncompressed_size);
-    auto res = decompress(comp, comp_len, out.data(), out.size());
+    auto res = decompress(comp, comp_size, out.data(), out.size());
     if (!res) return dstd::nullopt;
     out.resize(res->out_bytes);
     return out;
@@ -190,12 +190,12 @@ GzipMemberCompressor::compress_member(const void* data, std::size_t len) {
 }
 
 dstd::Optional<std::size_t> decode_truncated_member(
-    const void* comp, std::size_t comp_len, dstd::Vector<std::uint8_t>& out) {
+    const void* comp, std::size_t comp_size, dstd::Vector<std::uint8_t>& out) {
     GzipStreamInflater gz;
     if (!gz.init(common::constants::indexer::ZLIB_GZIP_WINDOW_BITS))
         return dstd::nullopt;
     const auto* in = static_cast<const unsigned char*>(comp);
-    std::size_t in_left = comp_len;
+    std::size_t in_left = comp_size;
     std::size_t produced = 0;
     if (out.size() < (1u << 20)) out.resize(1u << 20);
     bool complete = false;

@@ -36,7 +36,7 @@ struct PartitionConfig {
 
     Mode mode = Mode::None;
     dstd::Vector<dstd::String> partition_columns;
-    int num_buckets = 0;
+    int bucket_count = 0;
     dstd::Vector<dstd::Pair<dstd::String, dstd::Optional<dstd::String>>> views;
 };
 

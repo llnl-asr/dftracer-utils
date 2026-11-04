@@ -220,10 +220,10 @@ inline void put_chunk_bloom(
     dftracer::utils::index::FileBuild& build, std::uint64_t chunk,
     dftracer::utils::dstd::StringView path,
     dftracer::utils::dstd::Span<const unsigned char> bloom,
-    std::uint64_t num_entries) {
+    std::uint64_t entry_count) {
     const dftracer::utils::dstd::String payload =
         dftracer::utils::index::extensions::kinds::encode_bloom(bloom,
-                                                                num_entries);
+                                                                entry_count);
     dftracer::utils::index::put_path_granule(
         build, dftracer::utils::index::store::IndexExtension::Bloom,
         dftracer::utils::dstd::StringView(path.data(), path.size()), chunk,
@@ -234,10 +234,10 @@ inline void put_file_bloom(
     dftracer::utils::index::FileBuild& build,
     dftracer::utils::dstd::StringView path,
     dftracer::utils::dstd::Span<const unsigned char> bloom,
-    std::uint64_t num_entries) {
+    std::uint64_t entry_count) {
     const dftracer::utils::dstd::String payload =
         dftracer::utils::index::extensions::kinds::encode_bloom(bloom,
-                                                                num_entries);
+                                                                entry_count);
     dftracer::utils::index::put_path_file(
         build, dftracer::utils::index::store::IndexExtension::Bloom,
         dftracer::utils::dstd::StringView(path.data(), path.size()), payload);

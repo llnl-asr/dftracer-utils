@@ -41,7 +41,7 @@ inline std::size_t arrow_array_byte_size(const ArrowArray *arr) {
 
 inline std::size_t byte_size(
     const dftracer::utils::utilities::arrow::ArrowExportResult &b) {
-    return arrow_array_byte_size(b.get_array());
+    return arrow_array_byte_size(b.array());
 }
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW

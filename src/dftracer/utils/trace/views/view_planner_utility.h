@@ -26,7 +26,7 @@ struct ViewPlannerInput {
     dstd::String file_path;
     dstd::String index_path;  // `.dftindex` store path
     std::size_t uncompressed_size = 0;
-    std::size_t num_checkpoints = 0;
+    std::size_t checkpoint_count = 0;
     dstd::Optional<dstd::Pair<double, double>> time_range;  // {begin, end}
     // Emit every checkpoint (real byte offsets, still parallel) and skip
     // time-based pruning. For when chunk timestamp stats can't be trusted (e.g.
@@ -40,7 +40,7 @@ struct ViewPlannerInput {
     ViewPlannerInput& with_file_path(const dstd::String& path);
     ViewPlannerInput& with_index_path(const dstd::String& path);
     ViewPlannerInput& with_uncompressed_size(std::size_t s);
-    ViewPlannerInput& with_num_checkpoints(std::size_t n);
+    ViewPlannerInput& with_checkpoint_count(std::size_t n);
     ViewPlannerInput& with_time_range(double begin, double end);
     ViewPlannerInput& with_scan_all_chunks(bool v);
     ViewPlannerInput& with_snapshot(const index::Snapshot* s);

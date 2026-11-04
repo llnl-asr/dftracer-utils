@@ -77,7 +77,7 @@ dstd::String abi_str(dftu_dataframe* df, std::int64_t row, const char* name) {
 // coverage: pid 1 has two "read" events at dur=10, pid 2 has two "write"
 // events at dur=20.
 dstd::String write_group_trace(TestEnvironment& env) {
-    dstd::String pfw = env.get_dir() + "/grp.pfw";
+    dstd::String pfw = env.dir() + "/grp.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
         << "\n";
@@ -102,7 +102,7 @@ dstd::String write_group_trace(TestEnvironment& env) {
 // pid 1: "read" dur=10, "readv" dur=50, "pread" dur=20 (total 80).
 // pid 2: "write" dur=5, "writev" dur=30, "pwrite" dur=15 (total 50).
 dstd::String write_argmax_trace(TestEnvironment& env) {
-    dstd::String pfw = env.get_dir() + "/argmax.pfw";
+    dstd::String pfw = env.dir() + "/argmax.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
         << "\n";
@@ -356,7 +356,7 @@ TEST_SUITE("View C ABI") {
         dftu_view_free(v);
 
         TestEnvironment env;
-        const dstd::String pfw = env.get_dir() + "/hosts.pfw";
+        const dstd::String pfw = env.dir() + "/hosts.pfw";
         {
             dftu_utils_test::FileOut o(pfw);
             o << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,"ts":1,)"
@@ -640,7 +640,7 @@ TEST_SUITE("View C ABI") {
 
     TEST_CASE("phase any reads metadata records, the default does not") {
         TestEnvironment env(50);
-        dstd::String pfw = env.get_dir() + "/meta.pfw";
+        dstd::String pfw = env.dir() + "/meta.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"name":"EH","cat":"dftracer","type":1,"pid":1,"tid":1,"ph":4,"args":{"hhash":"ab"}})"
@@ -808,7 +808,7 @@ TEST_SUITE("View C ABI") {
         "from_directory scans recursively, matching an explicit "
         "from_files listing") {
         TestEnvironment env(10);
-        dstd::String root = env.get_dir() + "/root";
+        dstd::String root = env.dir() + "/root";
         dstd::String gz_a = write_and_index(root + "/a", "eva", 3, 1);
         dstd::String gz_b = write_and_index(root + "/b", "evb", 4, 2);
 

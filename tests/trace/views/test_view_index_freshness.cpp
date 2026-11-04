@@ -125,31 +125,29 @@ TEST_SUITE("ViewIndexFreshness") {
     TEST_CASE("a rewritten trace gives the rows of its new content") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
-        const dstd::String gz = env.get_dir() + "/t.pfw.gz";
+        const dstd::String gz = env.dir() + "/t.pfw.gz";
         write_events(gz, "A", OLD_EVENTS, 0);
-        (void)run(
-            dir_view(env.get_dir()).agg({{AggOp::Count, "", "n"}}).collect());
-        CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == OLD_EVENTS);
-        CHECK(rows(dir_view(env.get_dir()), R"(cat == "B")") == 0);
+        (void)run(dir_view(env.dir()).agg({{AggOp::Count, "", "n"}}).collect());
+        CHECK(rows(dir_view(env.dir()), R"(cat == "A")") == OLD_EVENTS);
+        CHECK(rows(dir_view(env.dir()), R"(cat == "B")") == 0);
 
         rewrite_events(gz, "B", NEW_EVENTS);
-        (void)run(
-            dir_view(env.get_dir()).agg({{AggOp::Count, "", "n"}}).collect());
-        CHECK(rows(dir_view(env.get_dir()), R"(cat == "B")") == NEW_EVENTS);
-        CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == 0);
+        (void)run(dir_view(env.dir()).agg({{AggOp::Count, "", "n"}}).collect());
+        CHECK(rows(dir_view(env.dir()), R"(cat == "B")") == NEW_EVENTS);
+        CHECK(rows(dir_view(env.dir()), R"(cat == "A")") == 0);
     }
 
     TEST_CASE("an aggregation after a rewrite counts the new content") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
-        const dstd::String gz = env.get_dir() + "/t.pfw.gz";
+        const dstd::String gz = env.dir() + "/t.pfw.gz";
         write_events(gz, "A", OLD_EVENTS, 0);
         run(build_tier(gz));
-        const auto first = by_cat(dir_view(env.get_dir()));
+        const auto first = by_cat(dir_view(env.dir()));
         CHECK(count_by(first, "a") == OLD_EVENTS);
 
         rewrite_events(gz, "B", NEW_EVENTS);
-        const auto second = by_cat(dir_view(env.get_dir()));
+        const auto second = by_cat(dir_view(env.dir()));
         CHECK(count_by(second, "b") == NEW_EVENTS);
         CHECK(count_by(second, "a") == 0);
     }
@@ -158,9 +156,9 @@ TEST_SUITE("ViewIndexFreshness") {
         "an identical rewrite is rebuilt and then served from the index") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
-        const dstd::String gz = env.get_dir() + "/t.pfw.gz";
+        const dstd::String gz = env.dir() + "/t.pfw.gz";
         write_events(gz, "A", MEMBER_EVENTS, MEMBER_BYTES);
-        CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == MEMBER_EVENTS);
+        CHECK(rows(dir_view(env.dir()), R"(cat == "A")") == MEMBER_EVENTS);
 
         const auto before = dstd::fs::mtime_ns(gz).value();
         REQUIRE(
@@ -168,20 +166,20 @@ TEST_SUITE("ViewIndexFreshness") {
         const auto want = static_cast<std::uint64_t>(
             index::store::internal::get_file_modification_time(gz));
 
-        CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == MEMBER_EVENTS);
+        CHECK(rows(dir_view(env.dir()), R"(cat == "A")") == MEMBER_EVENTS);
         const auto snapshot = dftu_utils_test::index_snapshot(
             dstd::String(determine_index_path(gz, "")));
         const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
         CHECK(file.stat().mtime == want);
-        CHECK(rows(dir_view(env.get_dir()), R"(cat == "B")") == 0);
+        CHECK(rows(dir_view(env.dir()), R"(cat == "B")") == 0);
     }
 
     TEST_CASE("a rebuild leaves the other directories of a shared root alone") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
-        const dstd::String d1 = env.get_dir() + "/d1";
-        const dstd::String d2 = env.get_dir() + "/d2";
-        const dstd::String root = env.get_dir() + "/shared";
+        const dstd::String d1 = env.dir() + "/d1";
+        const dstd::String d2 = env.dir() + "/d2";
+        const dstd::String root = env.dir() + "/shared";
         REQUIRE(dstd::fs::create_directories(d1).has_value());
         REQUIRE(dstd::fs::create_directories(d2).has_value());
         const dstd::String f1 = d1 + "/a.pfw.gz";
@@ -214,7 +212,7 @@ TEST_SUITE("ViewIndexFreshness") {
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i) {
             const dstd::String gz =
-                env.get_dir() + "/t" + dstd::to_string(100 + i) + ".pfw.gz";
+                env.dir() + "/t" + dstd::to_string(100 + i) + ".pfw.gz";
             write_events(gz, "A", 50, 0);
             files.push_back(gz);
         }
@@ -223,7 +221,7 @@ TEST_SUITE("ViewIndexFreshness") {
         for (const int i : rewritten) rewrite_events(files[i], "B", 60);
         for (int i = FILES; i < FILES + 2; ++i) {
             const dstd::String gz =
-                env.get_dir() + "/t" + dstd::to_string(100 + i) + ".pfw.gz";
+                env.dir() + "/t" + dstd::to_string(100 + i) + ".pfw.gz";
             write_events(gz, "A", 50, 0);
             files.push_back(gz);
         }
@@ -250,7 +248,7 @@ TEST_SUITE("ViewIndexFreshness") {
     TEST_CASE("from_file without an index path prunes with the default index") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
-        const dstd::String gz = env.get_dir() + "/t.pfw.gz";
+        const dstd::String gz = env.dir() + "/t.pfw.gz";
         write_events(gz, "A", MEMBER_EVENTS, MEMBER_BYTES, "RARE");
         REQUIRE(dftu_utils_test::build_index(gz));
 

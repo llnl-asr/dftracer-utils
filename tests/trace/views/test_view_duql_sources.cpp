@@ -25,7 +25,7 @@ namespace {
 
 dstd::String write_records(TestEnvironment& env, const dstd::String& name,
                            const dstd::Vector<dstd::String>& lines) {
-    const dstd::String plain = env.get_dir() + "/" + name + ".ndjson";
+    const dstd::String plain = env.dir() + "/" + name + ".ndjson";
     {
         dftu_utils_test::FileOut o(plain);
         for (const auto& l : lines) o << l << "\n";
@@ -130,12 +130,12 @@ TEST_SUITE("View duql sources") {
         TestEnvironment env(10);
         dstd::Vector<dstd::String> gzs;
         for (const char* n : {"a", "b"}) {
-            const dstd::String plain = env.get_dir() + "/" + n + ".pfw";
+            const dstd::String plain = env.dir() + "/" + n + ".pfw";
             dftu_utils_test::FileOut(plain) << event(10, R"("x":1)") << "\n";
             gzs.push_back(plain + ".gz");
             dftu_utils_test::compress_file_to_gzip(plain, gzs.back());
         }
-        const dstd::String idx = env.get_dir() + "/none/.dftindex";
+        const dstd::String idx = env.dir() + "/none/.dftindex";
         const View v =
             View::from_files({{dstd::String(gzs[0]), dstd::String(idx)},
                               {dstd::String(gzs[1]), dstd::String(idx)}});
@@ -216,7 +216,7 @@ TEST_SUITE("View duql sources") {
 
     TEST_CASE("macros from a file") {
         TestEnvironment env(10);
-        const dstd::String path = env.get_dir() + "/ms.duql";
+        const dstd::String path = env.dir() + "/ms.duql";
         {
             dftu_utils_test::FileOut o(path);
             o << "def ms(x) = x / 1000;\ndef long_io(t) = ms(dur) > t;\n";
@@ -289,7 +289,7 @@ source: |
                                   "status")),
                      "status") == dstd::Vector<dstd::String>{"503", "404"});
 
-        const dstd::String path = env.get_dir() + "/pm.duql";
+        const dstd::String path = env.dir() + "/pm.duql";
         {
             dftu_utils_test::FileOut o(path);
             o << "def posix_rate(d) = where cat == \"POSIX\" | bucket d | agg "

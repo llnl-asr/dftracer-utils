@@ -172,7 +172,7 @@ dstd::Expected<ByteView, dstd::Error> decode_covering(
     const ExtentPages& pages, std::uint32_t offset, std::uint32_t length,
     ByteView run, std::uint64_t run_begin, dstd::Vector<std::uint8_t>& owned,
     const PageDict* dict) {
-    if (offset > pages.raw_length() || length > pages.raw_length() - offset) {
+    if (offset > pages.raw_size() || length > pages.raw_size() - offset) {
         return bad_extent_error();
     }
     const auto covered = pages.covering(offset, length);
@@ -180,18 +180,18 @@ dstd::Expected<ByteView, dstd::Error> decode_covering(
     const PageEntry& first = pages.entry(covered.first);
     const PageEntry& last = pages.entry(covered.second - 1);
     const std::uint32_t base = first.raw_offset;
-    owned.resize(static_cast<std::size_t>(last.raw_offset) + last.raw_length -
+    owned.resize(static_cast<std::size_t>(last.raw_offset) + last.raw_size -
                  base);
     for (std::size_t page = covered.first; page < covered.second; ++page) {
         const PageEntry& entry = pages.entry(page);
         if (entry.stored_offset < run_begin ||
             entry.stored_offset - run_begin > run.size() ||
-            entry.stored_length >
+            entry.stored_size >
                 run.size() - (entry.stored_offset - run_begin)) {
             return bad_extent_error();
         }
         const ByteView stored{run.data() + (entry.stored_offset - run_begin),
-                              entry.stored_length};
+                              entry.stored_size};
         auto decoded = ExtentPages::decode_page(
             entry, stored, owned.data() + (entry.raw_offset - base), dict);
         if (!decoded) return bad_extent_error();
@@ -215,7 +215,7 @@ detail::LoadState read_table(const DataFileReader& reader, const ExtentRef& ref,
         ref.offset, std::min<std::size_t>(ref.length, READ_RUN_BYTES), head,
         &reads);
     if (!read) return state_of(read.error());
-    const std::size_t table = ExtentPages::table_length(bytes_of(head));
+    const std::size_t table = ExtentPages::table_size(bytes_of(head));
     if (table == 0 || table > ref.length) return detail::LoadState::Bad;
     if (table > head.size()) {
         read = reader.read_range(ref.offset, table, head, &reads);
@@ -1659,9 +1659,9 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                     std::uint64_t entry_count = 0;
                     std::uint64_t ordinal = 0;
                     std::size_t first_at = 0;
-                    std::size_t first_length = 0;
+                    std::size_t first_size = 0;
                     std::size_t last_at = 0;
-                    std::size_t last_length = 0;
+                    std::size_t last_size = 0;
                 };
                 if (body.size() < 4) {
                     state = detail::LoadState::Bad;
@@ -1702,11 +1702,10 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                         }
                         if (k == 0) {
                             raw.first_at = at;
-                            raw.first_length =
-                                static_cast<std::size_t>(*length);
+                            raw.first_size = static_cast<std::size_t>(*length);
                         } else {
                             raw.last_at = at;
-                            raw.last_length = static_cast<std::size_t>(*length);
+                            raw.last_size = static_cast<std::size_t>(*length);
                         }
                         at += static_cast<std::size_t>(*length);
                     }
@@ -1735,9 +1734,9 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                     slot.entry_count = raws[i].entry_count;
                     slot.ordinal = raws[i].ordinal;
                     slot.first_key =
-                        body.subspan(raws[i].first_at, raws[i].first_length);
+                        body.subspan(raws[i].first_at, raws[i].first_size);
                     slot.last_key =
-                        body.subspan(raws[i].last_at, raws[i].last_length);
+                        body.subspan(raws[i].last_at, raws[i].last_size);
                 }
                 break;
             }
@@ -1855,8 +1854,8 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(
     hold.joined.clear();
     if (!extent.pages.has_value()) return bad_extent_error();
     const ExtentPages& pages = *extent.pages;
-    if (offset_in_extent > pages.raw_length() ||
-        length > pages.raw_length() - offset_in_extent) {
+    if (offset_in_extent > pages.raw_size() ||
+        length > pages.raw_size() - offset_in_extent) {
         return bad_extent_error();
     }
     const auto covered = pages.covering(offset_in_extent, length);
@@ -1890,7 +1889,7 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(
         const PageEntry& last = pages.entry(last_missing);
         const std::uint64_t run_begin = first.stored_offset;
         const std::uint64_t run_end =
-            static_cast<std::uint64_t>(last.stored_offset) + last.stored_length;
+            static_cast<std::uint64_t>(last.stored_offset) + last.stored_size;
         if (run_end < run_begin) return bad_extent_error();
         dstd::RawBuffer<std::uint8_t> run;
         auto read = file.reader.read_range(
@@ -1908,19 +1907,19 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(
             if (slot != nullptr) continue;
             const PageEntry& entry = pages.entry(page);
             if (entry.stored_offset < run_begin ||
-                entry.stored_length > run.size() ||
+                entry.stored_size > run.size() ||
                 entry.stored_offset - run_begin >
-                    run.size() - entry.stored_length) {
+                    run.size() - entry.stored_size) {
                 reads_->add_pages(decoded, 0, reads);
                 return bad_extent_error();
             }
             // Uninitialized: the decode writes every byte.
             auto fresh = dstd::make_shared<dstd::RawBuffer<std::uint8_t>>(
-                entry.raw_length);
+                entry.raw_size);
             auto ok = ExtentPages::decode_page(
                 entry,
                 ByteView{run.data() + (entry.stored_offset - run_begin),
-                         entry.stored_length},
+                         entry.stored_size},
                 fresh->data(), dict->get());
             if (!ok) {
                 reads_->add_pages(decoded, 0, reads);
@@ -1939,7 +1938,7 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(
     }
     const PageEntry& last = pages.entry(covered.second - 1);
     hold.joined.resize(static_cast<std::size_t>(last.raw_offset) +
-                       last.raw_length - base);
+                       last.raw_size - base);
     for (std::size_t page = covered.first; page < covered.second; ++page) {
         const dstd::RawBuffer<std::uint8_t>& bytes =
             *held[page - covered.first];
@@ -1986,12 +1985,12 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_head(
     for (std::size_t page = first_page; page < end_page; ++page) {
         const PageEntry& entry = pages.entry(page);
         const std::uint32_t upto = std::min<std::uint32_t>(
-            entry.raw_offset + entry.raw_length - slot.offset_in_extent,
+            entry.raw_offset + entry.raw_size - slot.offset_in_extent,
             slot.length);
         auto bytes = read_raw(file, extent, slot.offset_in_extent, upto, hold);
         if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
-        const std::uint32_t head_length = SegmentView::head_length(*bytes);
-        if (head_length != 0) return ByteView{bytes->data(), head_length};
+        const std::uint32_t head_size = SegmentView::head_size(*bytes);
+        if (head_size != 0) return ByteView{bytes->data(), head_size};
     }
     return ByteView{};
 }
@@ -2006,8 +2005,8 @@ Snapshot::open_segment(const detail::FileData& file, detail::LazyBlock& block,
     const detail::ExtentSlot& extent = **loaded;
     if (!extent.pages.has_value()) return bad_extent_error();
     const ExtentPages& pages = *extent.pages;
-    if (slot.offset_in_extent > pages.raw_length() ||
-        slot.length > pages.raw_length() - slot.offset_in_extent) {
+    if (slot.offset_in_extent > pages.raw_size() ||
+        slot.length > pages.raw_size() - slot.offset_in_extent) {
         return bad_extent_error();
     }
     const auto whole = [&]()
@@ -2057,8 +2056,8 @@ Snapshot::find_in_segment(const detail::FileData& file,
     const detail::ExtentSlot& extent = **loaded;
     if (!extent.pages.has_value()) return bad_extent_error();
     const ExtentPages& pages = *extent.pages;
-    if (slot.offset_in_extent > pages.raw_length() ||
-        slot.length > pages.raw_length() - slot.offset_in_extent) {
+    if (slot.offset_in_extent > pages.raw_size() ||
+        slot.length > pages.raw_size() - slot.offset_in_extent) {
         return bad_extent_error();
     }
     const auto whole = [&]()

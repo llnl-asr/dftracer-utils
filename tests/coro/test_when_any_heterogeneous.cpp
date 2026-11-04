@@ -16,7 +16,7 @@
 using namespace dftracer::utils;
 
 TEST_CASE("when_any - Two heterogeneous types (int, string)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> index_valid{false};
@@ -62,7 +62,7 @@ TEST_CASE("when_any - Two heterogeneous types (int, string)") {
 }
 
 TEST_CASE("when_any - Three heterogeneous types") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> index_valid{false};
@@ -119,7 +119,7 @@ TEST_CASE("when_any - Three heterogeneous types") {
 }
 
 TEST_CASE("when_any - Mixed void and non-void") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> index_valid{false};
@@ -164,7 +164,7 @@ TEST_CASE("when_any - Mixed void and non-void") {
 }
 
 TEST_CASE("when_any - Exception propagation") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> handled{false};
@@ -213,7 +213,7 @@ TEST_CASE("when_any - Exception propagation") {
 }
 
 TEST_CASE("when_any - Index-based get<N>() access") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> accessed{false};
@@ -259,7 +259,7 @@ TEST_CASE("when_any - Index-based get<N>() access") {
 }
 
 TEST_CASE("when_any - Overload resolution (homogeneous uses vector version)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> index_valid{false};

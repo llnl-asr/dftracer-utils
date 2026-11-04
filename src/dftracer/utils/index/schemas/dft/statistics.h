@@ -16,7 +16,7 @@ using ChunkStatisticsResult = index::store::queries::ChunkStatisticsResult;
 
 struct MergedStatisticsResult {
     ChunkStatistics stats;
-    std::uint64_t num_chunks = 0;
+    std::uint64_t chunk_count = 0;
 };
 
 }  // namespace dftracer::utils::index::schemas::dft

@@ -138,7 +138,7 @@ dstd::Vector<const Series*> ptrs(const dstd::Vector<Series>& v) {
 dstd::Vector<Expr> roots() {
     return {col(0) + col(1), col(0) > std::int64_t{100},
             expr_str_pred(StrPredOp::Contains, col(2), "name"),
-            expr_str_len(col(2), true)};
+            expr_str_size(col(2), true)};
 }
 
 void compare(const dstd::Vector<Series>& in, const dstd::Vector<Series>& flat,

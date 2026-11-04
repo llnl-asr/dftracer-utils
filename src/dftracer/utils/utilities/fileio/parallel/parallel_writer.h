@@ -30,7 +30,8 @@ class ParallelWriter {
     /// Create/truncate backing storage. `scope` may be null for layouts that
     /// don't spawn internal coroutines; padded-striped requires a non-null
     /// scope that outlives close().
-    virtual coro::CoroTask<int> open(dstd::String path, std::size_t num_workers,
+    virtual coro::CoroTask<int> open(dstd::String path,
+                                     std::size_t worker_count,
                                      bool gzip_extension,
                                      coro::Scope* scope) = 0;
 
@@ -106,7 +107,7 @@ struct WriterRequest {
 struct ConfiguredWriter {
     dstd::UniquePtr<ParallelWriter> writer;
     LayoutInfo layout;  ///< resolved layout (striped-with-no-stripe -> sharded)
-    WriterSizing sizing;  ///< num_workers / flush_threshold / buffer_capacity
+    WriterSizing sizing;  ///< worker_count / flush_threshold / buffer_capacity
 };
 
 /// Detect the target filesystem's layout, apply the padded-vs-atomic gate and

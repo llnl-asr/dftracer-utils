@@ -18,7 +18,7 @@ namespace dftracer::utils::utilities::reader::internal {
  *
  * Usage:
  * @code
- * auto stream = reader->create_stream(StreamType::MULTI_LINES,
+ * auto stream = reader->stream(StreamType::MULTI_LINES,
  * RangeType::LINE_RANGE, 1, 100); char buffer[4096]; while (!stream->done()) {
  * size_t bytes = stream->read(buffer, sizeof(buffer));
  *     // Process buffer...

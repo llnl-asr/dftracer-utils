@@ -115,7 +115,7 @@ class StringIntern {
     StringView intern(StringView sv);
 
     std::size_t size() const {
-        return num_strings_.load(std::memory_order_acquire);
+        return string_count_.load(std::memory_order_acquire);
     }
 
     /// Derive ids from string content instead of a counter, so ids match across
@@ -210,7 +210,7 @@ class StringIntern {
     std::uint32_t lookup(std::size_t h, StringView sv) const;
     void index_insert(Shard& sh, std::size_t h, std::uint32_t id);
     Index* grow_index(Shard& sh);
-    void advance_num_strings(std::uint32_t id);
+    void advance_string_count(std::uint32_t id);
     void log_entry(std::uint32_t id);
     bool bind_slot(std::uint32_t id, const char* str, bool cas);
     std::size_t hash(StringView sv) const;
@@ -233,10 +233,10 @@ class StringIntern {
     Directory<LogSlot, DIRECTORY_SIZE> log_;
     Directory<ChunkRef, CHUNK_DIRECTORY_SIZE> chunk_dir_;
     Array<Shard> shards_;
-    std::atomic<std::size_t> num_chunks_{0};
+    std::atomic<std::size_t> chunk_count_{0};
     std::atomic<std::size_t> log_next_{0};
     mutable std::atomic<std::size_t> entry_count_{0};
-    std::atomic<std::size_t> num_strings_{0};
+    std::atomic<std::size_t> string_count_{0};
     std::atomic<bool> deterministic_ids_{false};
 };
 

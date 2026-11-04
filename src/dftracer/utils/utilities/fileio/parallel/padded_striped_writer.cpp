@@ -274,7 +274,7 @@ class PaddedStripedWriter : public ParallelWriter {
     }
     ~PaddedStripedWriter() override { release(); }
 
-    coro::CoroTask<int> open(dstd::String path, std::size_t num_workers,
+    coro::CoroTask<int> open(dstd::String path, std::size_t worker_count,
                              bool /*gzip_extension*/,
                              coro::Scope* /*scope*/) override {
         PaddedStripedImpl& s = *impl_;
@@ -288,7 +288,7 @@ class PaddedStripedWriter : public ParallelWriter {
         }
         s.fd = static_cast<int>(fd);
         s.next_stripe_idx.store(0, std::memory_order_relaxed);
-        per_worker_last_.assign(num_workers, dstd::nullopt);
+        per_worker_last_.assign(worker_count, dstd::nullopt);
 
         // Valid-gzip placeholder so callers that skip write_header still
         // produce a file gunzip can walk.
@@ -304,8 +304,8 @@ class PaddedStripedWriter : public ParallelWriter {
         // Set up the chunk channel + N pre-registered producers (one per
         // worker). The packer exits once all producers are released.
         s.channel = coro::make_channel<Chunk>(CHUNK_CHANNEL_CAPACITY);
-        s.producers.reserve(num_workers);
-        for (std::size_t i = 0; i < num_workers; ++i) {
+        s.producers.reserve(worker_count);
+        for (std::size_t i = 0; i < worker_count; ++i) {
             s.producers.emplace_back(s.channel->producer());
         }
 

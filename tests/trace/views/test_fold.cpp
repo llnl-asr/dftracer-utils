@@ -84,8 +84,8 @@ TEST_SUITE("Fold") {
 
         dstd::String a = padded(
             R"({"ph":"X","name":"read","cat":"POSIX","pid":7,"tid":9,"ts":100,"dur":5,"args":{"fhash":"fhA"}})");
-        std::size_t a_len = a.size() - simdjson::SIMDJSON_PADDING;
-        auto ra = parser.parse(a.data(), a_len, false);
+        std::size_t a_size = a.size() - simdjson::SIMDJSON_PADDING;
+        auto ra = parser.parse(a.data(), a_size, false);
         REQUIRE_FALSE(ra.error());
         FoldEvent ea = extract_fold_event(ra.value_unsafe(), intern, false);
 
@@ -215,7 +215,7 @@ TEST_SUITE("Fold") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // One FH and one HH metadata record, then data events.
-        dstd::String pfw = env.get_dir() + "/meta.pfw";
+        dstd::String pfw = env.dir() + "/meta.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"node0","value":"hh1"}})"

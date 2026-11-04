@@ -104,9 +104,9 @@ Indexed make_indexed(TestEnvironment& env, const Trace& t,
         if (!cur.empty()) append_member(bytes, cur);
     }
     Indexed r;
-    r.gz = env.get_dir() + "/" + name + ".pfw.gz";
+    r.gz = env.dir() + "/" + name + ".pfw.gz";
     write_file(r.gz, bytes);
-    const dstd::String dir = env.get_dir() + "/" + name + ".dftindex";
+    const dstd::String dir = env.dir() + "/" + name + ".dftindex";
     REQUIRE(dftu_utils_test::build_index(r.gz, dir, CKPT));
     r.idx = determine_index_path(r.gz, dir);
     return r;

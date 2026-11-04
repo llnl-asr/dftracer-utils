@@ -348,19 +348,19 @@ Series Series::str_regex_replace(dstd::StringView pattern,
         handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()),
         to.data(), static_cast<std::int32_t>(to.size()))};
 }
-Series Series::list_len() const {
+Series Series::list_size() const {
     return Series{dftu_series_list_len(handle_)};
 }
 Series Series::list_get(std::int64_t index) const {
     return Series{dftu_series_list_get(handle_, index)};
 }
 namespace {
-std::int32_t sv_len(dstd::StringView s) {
+std::int32_t sv_size(dstd::StringView s) {
     return static_cast<std::int32_t>(s.size());
 }
 }  // namespace
 Series Series::list_join(dstd::StringView sep) const {
-    return Series{dftu_series_list_join(handle_, sep.data(), sv_len(sep))};
+    return Series{dftu_series_list_join(handle_, sep.data(), sv_size(sep))};
 }
 Series Series::str_case(std::int32_t op) const {
     return Series{dftu_series_str_case(handle_, op)};
@@ -369,19 +369,19 @@ Series Series::str_is(std::int32_t cls) const {
     return Series{dftu_series_str_is(handle_, cls)};
 }
 Series Series::str_count(dstd::StringView pat) const {
-    return Series{dftu_series_str_count(handle_, pat.data(), sv_len(pat))};
+    return Series{dftu_series_str_count(handle_, pat.data(), sv_size(pat))};
 }
 Series Series::str_rfind(dstd::StringView needle) const {
     return Series{
-        dftu_series_str_rfind(handle_, needle.data(), sv_len(needle))};
+        dftu_series_str_rfind(handle_, needle.data(), sv_size(needle))};
 }
 Series Series::str_remove_prefix(dstd::StringView prefix) const {
     return Series{
-        dftu_series_str_remove_prefix(handle_, prefix.data(), sv_len(prefix))};
+        dftu_series_str_remove_prefix(handle_, prefix.data(), sv_size(prefix))};
 }
 Series Series::str_remove_suffix(dstd::StringView suffix) const {
     return Series{
-        dftu_series_str_remove_suffix(handle_, suffix.data(), sv_len(suffix))};
+        dftu_series_str_remove_suffix(handle_, suffix.data(), sv_size(suffix))};
 }
 Series Series::str_repeat(std::int64_t n) const {
     return Series{dftu_series_str_repeat(handle_, n)};
@@ -394,10 +394,10 @@ Series Series::str_cat(const Series& other) const {
 }
 Series Series::str_findall(dstd::StringView pattern) const {
     return Series{
-        dftu_series_str_findall(handle_, pattern.data(), sv_len(pattern))};
+        dftu_series_str_findall(handle_, pattern.data(), sv_size(pattern))};
 }
 Series Series::str_partition(dstd::StringView sep, bool from_right) const {
-    return Series{dftu_series_str_partition(handle_, sep.data(), sv_len(sep),
+    return Series{dftu_series_str_partition(handle_, sep.data(), sv_size(sep),
                                             from_right ? 1 : 0)};
 }
 Series Series::str_normalize(std::int32_t form) const {
@@ -416,7 +416,7 @@ Series Series::dt_round(std::int64_t every, std::int32_t mode) const {
     return Series{dftu_series_dt_round(handle_, every, mode)};
 }
 Series Series::dt_format(dstd::StringView fmt, TimeUnit unit) const {
-    return Series{dftu_series_dt_format(handle_, fmt.data(), sv_len(fmt),
+    return Series{dftu_series_dt_format(handle_, fmt.data(), sv_size(fmt),
                                         static_cast<std::int32_t>(unit))};
 }
 Series Series::with_timezone(dstd::StringView tz) const {

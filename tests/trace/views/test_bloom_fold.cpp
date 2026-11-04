@@ -58,7 +58,7 @@ FoldEvent extract_fold_event(simdjson::dom::element root,
 
 dstd::String create_bloom_trace(TestEnvironment& env, int n,
                                 std::size_t member_bytes) {
-    dstd::String pfw = env.get_dir() + "/bloom.pfw";
+    dstd::String pfw = env.dir() + "/bloom.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
         for (int i = 0; i < n; ++i) {
@@ -181,12 +181,12 @@ TEST_SUITE("BloomFold") {
             for (std::uint64_t cp = 0; cp < CHUNKS; ++cp) {
                 ScanUnit unit;
                 unit.file_path = "f.pfw.gz";
-                unit.index_path = env.get_dir() + "/.dftindex";
+                unit.index_path = env.dir() + "/.dftindex";
                 unit.checkpoint_idx = cp;
                 fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
             }
         };
-        const dstd::String dropped = env.get_dir() + "/dropped";
+        const dstd::String dropped = env.dir() + "/dropped";
         {
             auto build = start_build(dropped);
             BloomFold fold(intern);
@@ -208,7 +208,7 @@ TEST_SUITE("BloomFold") {
                       .empty());
         }
 
-        const dstd::String kept = env.get_dir() + "/kept";
+        const dstd::String kept = env.dir() + "/kept";
         {
             auto build = start_build(kept);
             BloomFold fold(intern);
@@ -223,7 +223,7 @@ TEST_SUITE("BloomFold") {
         }
         // The staged tier holds every chunk the fold saw, as the tier a fold
         // that fit in memory writes does.
-        const dstd::String memory = env.get_dir() + "/memory";
+        const dstd::String memory = env.dir() + "/memory";
         {
             auto build = start_build(memory);
             BloomFold fold(intern);
@@ -289,7 +289,7 @@ TEST_SUITE("BloomFold") {
                 dftracer::utils::index::extensions::kinds::decode_bloom(
                     dstd::StringView(bytes.data(), bytes.size()));
             REQUIRE(bloom.has_value());
-            CHECK(bloom->num_entries() <= 2);
+            CHECK(bloom->entry_count() <= 2);
         }
     }
 
@@ -473,7 +473,7 @@ TEST_SUITE("BloomFold") {
     TEST_CASE("schemaless columns and schema over nested args") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        dstd::String pfw = env.get_dir() + "/schema.pfw";
+        dstd::String pfw = env.dir() + "/schema.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             // hostname/size/rate are flat; pos is a nested object; tags is an
@@ -617,7 +617,7 @@ TEST_SUITE("BloomFold - auto fields") {
     // Four members; member m holds size m*100+{0,1,2}, mode "m<m>", and
     // fname unique per event.
     static dstd::String create_auto_trace(TestEnvironment & env) {
-        dstd::String pfw = env.get_dir() + "/auto.pfw";
+        dstd::String pfw = env.dir() + "/auto.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int m = 0; m < 4; ++m)

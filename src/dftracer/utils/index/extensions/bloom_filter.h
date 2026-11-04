@@ -29,13 +29,13 @@ namespace dftracer::utils::index::extensions {
  *
  * Differs from canonical Parquet:
  *  - Underlying hash is XXH3-64 + SplitMix64 finisher (not xxhash64).
- *  - Custom 12-byte LE header (num_hashes, num_entries, num_bits) instead
- *    of Thrift; num_hashes is unused at insert/test (vestigial).
+ *  - Custom 12-byte LE header (hash_count, entry_count, bit_count) instead
+ *    of Thrift; hash_count is unused at insert/test (vestigial).
  *
  * Serialization format (self-describing):
- *   [4 bytes: num_hashes (uint32_t LE)]
- *   [4 bytes: num_entries (uint32_t LE)]
- *   [4 bytes: num_bits   (uint32_t LE)]
+ *   [4 bytes: hash_count (uint32_t LE)]
+ *   [4 bytes: entry_count (uint32_t LE)]
+ *   [4 bytes: bit_count   (uint32_t LE)]
  *   [remaining: bit array bytes]
  */
 class BloomFilter {
@@ -63,25 +63,25 @@ class BloomFilter {
 
     dstd::Vector<unsigned char> serialize() const;
     void serialize_into(dstd::Vector<unsigned char>& result) const;
-    std::size_t num_entries() const { return num_entries_; }
+    std::size_t entry_count() const { return entry_count_; }
     std::size_t size_bytes() const { return bits_.size(); }
-    std::size_t num_hash_functions() const { return num_hashes_; }
-    std::size_t num_bits() const { return num_bits_; }
+    std::size_t hash_function_count() const { return hash_count_; }
+    std::size_t bit_count() const { return bit_count_; }
 
     /// Bits a filter for `n` entries at rate `p` holds: a whole number of
     /// 512-bit blocks, at least one.
-    static std::size_t optimal_num_bits(std::size_t n, double p);
+    static std::size_t optimal_bit_count(std::size_t n, double p);
 
    private:
-    BloomFilter(dstd::Vector<unsigned char> bits, std::size_t num_bits,
-                std::size_t num_hashes, std::size_t num_entries);
+    BloomFilter(dstd::Vector<unsigned char> bits, std::size_t bit_count,
+                std::size_t hash_count, std::size_t entry_count);
 
-    static std::size_t optimal_num_hashes(std::size_t m, std::size_t n);
+    static std::size_t optimal_hash_count(std::size_t m, std::size_t n);
 
     dstd::Vector<unsigned char> bits_;
-    std::size_t num_bits_;
-    std::size_t num_hashes_;
-    std::size_t num_entries_;
+    std::size_t bit_count_;
+    std::size_t hash_count_;
+    std::size_t entry_count_;
 };
 
 }  // namespace dftracer::utils::index::extensions

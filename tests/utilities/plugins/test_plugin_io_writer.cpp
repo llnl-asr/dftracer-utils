@@ -223,7 +223,7 @@ dftracer::utils::plugins::Task write_via_writer(
 
 TEST_CASE("plugin cxx: vectored io writev/preadv and lseek round-trip") {
     dftu_utils_test::TestEnvironment env(0);
-    dstd::String path = env.get_dir() + "/vec.bin";
+    dstd::String path = env.dir() + "/vec.bin";
 
     HostFixture fx;
     std::int64_t wrote = 0, off = 0;
@@ -240,7 +240,7 @@ TEST_CASE("plugin cxx: vectored io writev/preadv and lseek round-trip") {
 
 TEST_CASE("plugin cxx: positional vectored pwritev/pwrite round-trip") {
     dftu_utils_test::TestEnvironment env(0);
-    dstd::String path = env.get_dir() + "/posvec.bin";
+    dstd::String path = env.dir() + "/posvec.bin";
     HostFixture fx;
     dstd::String got;
     drive_task(fx.host(), 1, [&] {
@@ -252,7 +252,7 @@ TEST_CASE("plugin cxx: positional vectored pwritev/pwrite round-trip") {
 
 TEST_CASE("plugin cxx: sendfile transfers a file into a socket") {
     dftu_utils_test::TestEnvironment env(0);
-    dstd::String src = env.get_dir() + "/src.bin";
+    dstd::String src = env.dir() + "/src.bin";
     const dstd::String body = "zero-copy transfer payload\n";
     {
         (void)dstd::fs::write_file(dstd::PathView(src), body);
@@ -288,7 +288,7 @@ TEST_CASE("plugin cxx: spawn joined with all() and then() sequences work") {
 
 TEST_CASE("plugin cxx: Writer open/chunk/close writes a non-empty file") {
     dftu_utils_test::TestEnvironment env(0);
-    dstd::String path = env.get_dir() + "/writer_out.dat";
+    dstd::String path = env.dir() + "/writer_out.dat";
 
     HostFixture fx;
     drive_task(fx.host(), 1, [&] {
@@ -324,9 +324,9 @@ TEST_CASE("plugin cxx: typed compose pipe/when_all/when_any run") {
 
 TEST_CASE("plugin cxx: merge_shards concatenates shard files into a target") {
     dftu_utils_test::TestEnvironment env(0);
-    dstd::String a = env.get_dir() + "/a.shard";
-    dstd::String b = env.get_dir() + "/b.shard";
-    dstd::String target = env.get_dir() + "/merged.out";
+    dstd::String a = env.dir() + "/a.shard";
+    dstd::String b = env.dir() + "/b.shard";
+    dstd::String target = env.dir() + "/merged.out";
     {
         dstd::String fa;
         fa += "AAAA";

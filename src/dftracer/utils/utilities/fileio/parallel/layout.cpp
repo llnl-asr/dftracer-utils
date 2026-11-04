@@ -33,9 +33,9 @@ WriterSizing compute_writer_sizing(const LayoutInfo& info,
                                    std::size_t buffer_headroom_bytes,
                                    bool padded_layout) noexcept {
     WriterSizing s{};
-    s.num_workers = baseline_workers == 0 ? 1 : baseline_workers;
+    s.worker_count = baseline_workers == 0 ? 1 : baseline_workers;
     if (!padded_layout && info.stripe_count > 0) {
-        s.num_workers = std::min(s.num_workers, info.stripe_count);
+        s.worker_count = std::min(s.worker_count, info.stripe_count);
     }
     if (padded_layout && info.stripe_size > 0) {
         // Uncompressed flush sized to one stripe; compressed fits easily.

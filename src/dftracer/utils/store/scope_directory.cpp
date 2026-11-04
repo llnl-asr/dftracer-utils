@@ -405,12 +405,12 @@ dstd::Expected<ScopeDirectory, dstd::Error> ScopeDirectory::open(
         const std::uint8_t* slot =
             data_of(bytes) + COUNT_BYTES + i * SLOT_BYTES;
         const std::uint64_t key_at = dstd::read_u32_le(slot);
-        const std::uint64_t key_length = dstd::read_u32_le(slot + 4);
+        const std::uint64_t key_size = dstd::read_u32_le(slot + 4);
         const std::uint64_t payload_at = dstd::read_u32_le(slot + 8);
-        const std::uint64_t payload_length = dstd::read_u32_le(slot + 12);
-        if (key_at > bytes.size() || key_length > bytes.size() - key_at ||
+        const std::uint64_t payload_size = dstd::read_u32_le(slot + 12);
+        if (key_at > bytes.size() || key_size > bytes.size() - key_at ||
             payload_at > bytes.size() ||
-            payload_length > bytes.size() - payload_at) {
+            payload_size > bytes.size() - payload_at) {
             return parse_error();
         }
     }
@@ -713,12 +713,12 @@ dstd::Expected<SlotTable, dstd::Error> SlotTable::open(dstd::ByteView bytes) {
         const std::uint8_t* slot =
             data_of(bytes) + COUNT_BYTES + i * SLOT_BYTES;
         const std::uint64_t key_at = dstd::read_u32_le(slot);
-        const std::uint64_t key_length = dstd::read_u32_le(slot + 4);
+        const std::uint64_t key_size = dstd::read_u32_le(slot + 4);
         const std::uint64_t payload_at = dstd::read_u32_le(slot + 8);
-        const std::uint64_t payload_length = dstd::read_u32_le(slot + 12);
-        if (key_at > bytes.size() || key_length > bytes.size() - key_at ||
+        const std::uint64_t payload_size = dstd::read_u32_le(slot + 12);
+        if (key_at > bytes.size() || key_size > bytes.size() - key_at ||
             payload_at > bytes.size() ||
-            payload_length > bytes.size() - payload_at) {
+            payload_size > bytes.size() - payload_at) {
             return parse_error();
         }
     }

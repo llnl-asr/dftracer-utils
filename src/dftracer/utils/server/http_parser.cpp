@@ -181,15 +181,15 @@ int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
 
     // Method
     const char* method_start = nullptr;
-    std::size_t method_len = 0;
-    if (!read_token(c, method_start, method_len, ' ')) return -1;
+    std::size_t method_size = 0;
+    if (!read_token(c, method_start, method_size, ' ')) return -1;
     c.advance();  // consume space
     c.skip_spaces();
 
     // Request-target (path)
     const char* path_start = nullptr;
-    std::size_t path_len = 0;
-    if (!read_request_target(c, path_start, path_len)) return -1;
+    std::size_t path_size = 0;
+    if (!read_request_target(c, path_start, path_size)) return -1;
     c.advance();  // consume space
     c.skip_spaces();
 
@@ -207,8 +207,8 @@ int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
     if (!consume_eol(c)) return -1;
 
     // Headers
-    out.method = dstd::StringView(method_start, method_len);
-    out.path = dstd::StringView(path_start, path_len);
+    out.method = dstd::StringView(method_start, method_size);
+    out.path = dstd::StringView(path_start, path_size);
     out.minor_version = minor_ver;
     out.headers.clear();
 
@@ -225,8 +225,8 @@ int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
 
         // Header name
         const char* name_start = nullptr;
-        std::size_t name_len = 0;
-        if (!read_token(c, name_start, name_len, ':')) return -1;
+        std::size_t name_size = 0;
+        if (!read_token(c, name_start, name_size, ':')) return -1;
         c.advance();  // consume ':'
 
         // Skip OWS after colon
@@ -234,11 +234,11 @@ int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
 
         // Header value
         const char* val_start = nullptr;
-        std::size_t val_len = 0;
-        if (!read_header_value(c, val_start, val_len)) return -1;
+        std::size_t val_size = 0;
+        if (!read_header_value(c, val_start, val_size)) return -1;
 
-        out.headers.push_back({dstd::StringView(name_start, name_len),
-                               dstd::StringView(val_start, val_len)});
+        out.headers.push_back({dstd::StringView(name_start, name_size),
+                               dstd::StringView(val_start, val_size)});
     }
 
     return static_cast<int>(c.buf - buf);

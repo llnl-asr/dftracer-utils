@@ -771,13 +771,13 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                     if (metadata.success) {
                                         info->uncompressed_size =
                                             metadata.uncompressed_size;
-                                        info->num_checkpoints =
-                                            metadata.num_checkpoints;
+                                        info->checkpoint_count =
+                                            metadata.checkpoint_count;
                                         info->checkpoint_size =
                                             metadata.checkpoint_size;
                                         info->compressed_size =
                                             metadata.compressed_size;
-                                        info->num_lines = metadata.num_lines;
+                                        info->line_count = metadata.line_count;
                                         info->size_mb = metadata.size_mb;
                                     }
                                 }
@@ -922,7 +922,7 @@ dstd::String TraceIndex::viz_summary_fingerprint() const {
     for (const auto& f : files_) {
         mix(f.path.data(), f.path.size());
         mix(&f.uncompressed_size, sizeof f.uncompressed_size);
-        mix(&f.num_checkpoints, sizeof f.num_checkpoints);
+        mix(&f.checkpoint_count, sizeof f.checkpoint_count);
         mix(&f.min_timestamp_us, sizeof f.min_timestamp_us);
         mix(&f.max_timestamp_us, sizeof f.max_timestamp_us);
     }

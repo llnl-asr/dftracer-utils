@@ -60,7 +60,7 @@ dftu_series* flat_from(const dftracer::utils::dstd::Vector<X>& vals) {
 
 struct Groups {
     dftracer::utils::dstd::Vector<std::int32_t> group_of;
-    std::int32_t num_groups = 0;
+    std::int32_t group_count = 0;
     dftu_series* keys = nullptr;
 };
 
@@ -127,7 +127,7 @@ Groups build_groups(const dftu_series* keys_in) {
             g.group_of[static_cast<std::size_t>(i)] = it->second;
         }
     }
-    g.num_groups = static_cast<std::int32_t>(distinct.size());
+    g.group_count = static_cast<std::int32_t>(distinct.size());
 
     if (str) {
         dftracer::utils::dstd::Vector<std::int32_t> off{0};
@@ -141,7 +141,7 @@ Groups build_groups(const dftu_series* keys_in) {
             off.push_back(static_cast<std::int32_t>(bytes.size()));
         }
         g.keys = dftu_series_new_string(static_cast<dftu_dtype>(key_kind),
-                                        off.data(), bytes.data(), g.num_groups,
+                                        off.data(), bytes.data(), g.group_count,
                                         nullptr);
     } else if (k->type == TypeId::FixedSizeBinary) {
         // dftu_series_new_flat validates via byte_width(type), which is 0 for
@@ -150,7 +150,7 @@ Groups build_groups(const dftu_series* keys_in) {
         auto* out = new dftu_series();
         out->type = TypeId::FixedSizeBinary;
         out->encoding = Encoding::Flat;
-        out->length = g.num_groups;
+        out->length = g.group_count;
         out->set_fixed_size(k->fixed_size());
         dftracer::utils::dstd::String bytes;
         for (const dftracer::utils::dstd::String& s : distinct) bytes += s;
@@ -163,7 +163,7 @@ Groups build_groups(const dftu_series* keys_in) {
         auto* out = new dftu_series();
         dftracer::utils::dataframe::adopt_type_from(*out, *k);
         out->encoding = Encoding::Flat;
-        out->length = g.num_groups;
+        out->length = g.group_count;
         out->data = dftracer::utils::dataframe::new_buffer(bytes.size());
         if (!bytes.empty())
             std::memcpy(writable(out->data), bytes.data(), bytes.size());
@@ -251,7 +251,7 @@ int32_t dftu_series_group_by(const dftu_series* keys, const dftu_series* values,
     *out_keys = g.keys;
     std::int32_t n = 0;
     DFTRACER_UTILS_NUMERIC_DISPATCH(values->type, aggregate, *values,
-                                    g.group_of, g.num_groups, op_mask,
+                                    g.group_of, g.group_count, op_mask,
                                     out_values, max_values, n)
     return n;
 }

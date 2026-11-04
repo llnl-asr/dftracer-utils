@@ -16,7 +16,7 @@ class IndexVisitor {
    public:
     virtual ~IndexVisitor() = default;
 
-    virtual void begin(std::size_t num_checkpoints) = 0;
+    virtual void begin(std::size_t checkpoint_count) = 0;
 
     /// The scope the indexer runs this file in, called after begin(). A
     /// visitor may spawn work there that it awaits by flush(); the scope

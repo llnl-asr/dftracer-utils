@@ -200,8 +200,7 @@ struct Hash<dftracer::utils::utilities::fileio::DirectoryProcessInput> {
         for (const auto& ext : input.extensions) {
             hasher.update(ext);
         }
-        return static_cast<std::size_t>(
-            hash::splitmix64(hasher.get_hash().value));
+        return static_cast<std::size_t>(hash::splitmix64(hasher.hash().value));
     }
 };
 

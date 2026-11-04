@@ -130,7 +130,7 @@ void cold_count(const dstd::Vector<dstd::String>& files,
 // Written once and shared by the cases that read it.
 struct ViewRun {
     ViewRun() : env(10) {
-        files = write_view_traces(env.get_dir(), VIEW_FILES);
+        files = write_view_traces(env.dir(), VIEW_FILES);
         configure_default_runtime({.threads = VIEW_WORKERS, .eager = true});
     }
 
@@ -148,7 +148,7 @@ ViewRun& view_run() {
 TEST_SUITE("SerialStages") {
     TEST_CASE("a directory scan stats its files in parallel batches") {
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::String dir = env.get_dir() + "/scan";
+        const dstd::String dir = env.dir() + "/scan";
         REQUIRE(dstd::fs::create_directories(dir + "/sub").has_value());
         for (int i = 0; i < SCAN_FILES; ++i)
             write_sized_file(dir + "/f" + dstd::to_string(i) + ".pfw",
@@ -185,7 +185,7 @@ TEST_SUITE("SerialStages") {
 
     TEST_CASE("a CLI scan stats its files on the pool, not the main thread") {
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::String dir = env.get_dir() + "/cli_scan";
+        const dstd::String dir = env.dir() + "/cli_scan";
         REQUIRE(dstd::fs::create_directories(dir + "/a").has_value());
         REQUIRE(dstd::fs::create_directories(dir + "/b").has_value());
         for (int i = 0; i < SCAN_FILES; ++i)
@@ -207,8 +207,8 @@ TEST_SUITE("SerialStages") {
     TEST_CASE("a bootstrap that fails midway marks only complete files") {
         const auto& run = view_run();
         auto files = run.files;
-        files.push_back(write_corrupt_trace(run.env.get_dir(), VIEW_FILES));
-        const auto index_dir = run.env.get_dir() + "/failed";
+        files.push_back(write_corrupt_trace(run.env.dir(), VIEW_FILES));
+        const auto index_dir = run.env.dir() + "/failed";
         configure_default_runtime({.threads = 2, .eager = true});
         try {
             cold_count(files, index_dir);
@@ -228,7 +228,7 @@ TEST_SUITE("SerialStages") {
             const auto meta = dftu_utils_test::index_take(
                 dftracer::utils::index::file_metadata(snapshot, *file));
             REQUIRE(meta.has_value());
-            CHECK(meta->num_lines > 0);
+            CHECK(meta->line_count > 0);
             CHECK_FALSE(dftu_utils_test::index_take(
                             dftracer::utils::index::members(snapshot, *file))
                             .empty());

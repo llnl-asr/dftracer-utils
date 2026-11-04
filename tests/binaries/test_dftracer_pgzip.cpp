@@ -23,12 +23,12 @@ namespace {
 
 // Create a plain (uncompressed) .pfw file with DFTracer events.
 dstd::String create_plain_pfw(dftu_utils_test::TestEnvironment& env,
-                              int num_events, int id) {
-    auto trace = env.create_dft_test_file(num_events);
+                              int event_count, int id) {
+    auto trace = env.create_dft_test_file(event_count);
     if (trace.empty()) return "";
 
     dstd::String pfw_path =
-        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw";
+        env.dir() + "/trace_" + dstd::to_string(id) + ".pfw";
     REQUIRE(dstd::fs::rename(trace, pfw_path).has_value());
     return pfw_path;
 }
@@ -85,7 +85,7 @@ TEST_SUITE("DFTracerPgzip") {
         auto pfw = create_plain_pfw(env, 50, 0);
         REQUIRE(!pfw.empty());
 
-        int rc = run_pgzip(binary, {env.get_dir(), "--disable-watchdog"});
+        int rc = run_pgzip(binary, {env.dir(), "--disable-watchdog"});
         CHECK(rc == 0);
 
         dstd::String gz_path = pfw + ".gz";
@@ -107,7 +107,7 @@ TEST_SUITE("DFTracerPgzip") {
         auto pfw = create_plain_pfw(env, 10, 0);
         REQUIRE(!pfw.empty());
 
-        int rc = run_pgzip(binary, {env.get_dir(), "--disable-watchdog"});
+        int rc = run_pgzip(binary, {env.dir(), "--disable-watchdog"});
         CHECK(rc == 0);
 
         dstd::String gz_path = pfw + ".gz";
@@ -131,7 +131,7 @@ TEST_SUITE("DFTracerPgzip") {
         auto pfw = create_plain_pfw(env, 20, 0);
         REQUIRE(!pfw.empty());
 
-        int rc = run_pgzip(binary, {env.get_dir(), "--compression-level", "1",
+        int rc = run_pgzip(binary, {env.dir(), "--compression-level", "1",
                                     "--disable-watchdog"});
         CHECK(rc == 0);
         CHECK(dstd::fs::exists(pfw + ".gz").value());
@@ -150,7 +150,7 @@ TEST_SUITE("DFTracerPgzip") {
         auto pfw = create_plain_pfw(env, 20, 0);
         REQUIRE(!pfw.empty());
 
-        int rc = run_pgzip(binary, {env.get_dir(), "--compression-level", "9",
+        int rc = run_pgzip(binary, {env.dir(), "--compression-level", "9",
                                     "--disable-watchdog"});
         CHECK(rc == 0);
         CHECK(dstd::fs::exists(pfw + ".gz").value());
@@ -171,7 +171,7 @@ TEST_SUITE("DFTracerPgzip") {
         REQUIRE(!pfw0.empty());
         REQUIRE(!pfw1.empty());
 
-        int rc = run_pgzip(binary, {env.get_dir(), "--disable-watchdog"});
+        int rc = run_pgzip(binary, {env.dir(), "--disable-watchdog"});
         CHECK(rc == 0);
         CHECK(dstd::fs::exists(pfw0 + ".gz").value());
         CHECK(dstd::fs::exists(pfw1 + ".gz").value());
@@ -190,7 +190,7 @@ TEST_SUITE("DFTracerPgzip") {
         REQUIRE(env.is_valid());
 
         // No .pfw files -- binary treats this as success (nothing to do).
-        int rc = run_pgzip(binary, {env.get_dir(), "--disable-watchdog"});
+        int rc = run_pgzip(binary, {env.dir(), "--disable-watchdog"});
         CHECK(rc == 0);
     }
 
@@ -204,7 +204,7 @@ TEST_SUITE("DFTracerPgzip") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        dstd::String pfw = env.get_dir() + "/tail.pfw";
+        dstd::String pfw = env.dir() + "/tail.pfw";
         dstd::String content;
         for (int i = 0; i < 2000; ++i)
             content += "{\"id\":" + dstd::to_string(i) + ",\"name\":\"e\"}\n";
@@ -214,8 +214,8 @@ TEST_SUITE("DFTracerPgzip") {
             f << content;
         }
 
-        int rc = run_pgzip(binary, {env.get_dir(), "--chunk-size", "4KB",
-                                    "--disable-watchdog"});
+        int rc = run_pgzip(
+            binary, {env.dir(), "--chunk-size", "4KB", "--disable-watchdog"});
         CHECK(rc == 0);
         CHECK(gunzip_all(pfw + ".gz") == content);
         CHECK(!dstd::fs::exists(pfw).value());
@@ -231,12 +231,12 @@ TEST_SUITE("DFTracerPgzip") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        dstd::String pfw = env.get_dir() + "/empty.pfw";
+        dstd::String pfw = env.dir() + "/empty.pfw";
         {
             dftu_utils_test::FileOut f(pfw);
         }
 
-        int rc = run_pgzip(binary, {env.get_dir(), "--disable-watchdog"});
+        int rc = run_pgzip(binary, {env.dir(), "--disable-watchdog"});
         CHECK(rc != 0);
         CHECK(dstd::fs::exists(pfw).value());
         CHECK(!dstd::fs::exists(pfw + ".gz").value());

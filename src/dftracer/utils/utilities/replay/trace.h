@@ -99,7 +99,7 @@ struct Trace {
     /**
      * Get end time, calculating from start + duration if needed
      */
-    std::uint64_t get_end_time() const {
+    std::uint64_t end_time() const {
         if (time_end > 0) {
             return time_end;
         }

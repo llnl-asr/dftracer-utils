@@ -350,8 +350,7 @@ struct Hash<
         ::dftracer::utils::utilities::hash::HasherUtility hasher;
         hasher.update(dir.path.str());
         hasher.update(dir.recursive);
-        return static_cast<std::size_t>(
-            hash::splitmix64(hasher.get_hash().value));
+        return static_cast<std::size_t>(hash::splitmix64(hasher.hash().value));
     }
 };
 }  // namespace dftracer::utils::dstd

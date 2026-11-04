@@ -139,23 +139,23 @@ TEST_CASE("Channel - Close channel") {
 TEST_CASE("Channel - Producer guard") {
     Channel<int> channel(10);
 
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
 
     {
         auto p1 = channel.producer();
         auto guard1 = p1.guard();
-        CHECK(channel.num_producers() == 1);
+        CHECK(channel.producer_count() == 1);
 
         {
             auto p2 = channel.producer();
             auto guard2 = p2.guard();
-            CHECK(channel.num_producers() == 2);
+            CHECK(channel.producer_count() == 2);
         }
 
-        CHECK(channel.num_producers() == 1);
+        CHECK(channel.producer_count() == 1);
     }
 
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
     CHECK(channel.is_closed() == true);
 }
 
@@ -218,7 +218,7 @@ TEST_CASE("Channel - receive waits before first producer registration") {
 
     dstd::Thread producer([&, p = channel.producer()]() mutable {
         auto guard = p.guard();
-        CHECK(channel.num_producers() >= 1);
+        CHECK(channel.producer_count() >= 1);
         CHECK(blocking_send(channel, 123));
     });
 
@@ -681,7 +681,7 @@ TEST_CASE("Channel - last producer release wakes blocked receive") {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-    CHECK(channel.num_producers() == 1);
+    CHECK(channel.producer_count() == 1);
 
     auto t0 = std::chrono::steady_clock::now();
     guard.reset();
@@ -690,7 +690,7 @@ TEST_CASE("Channel - last producer release wakes blocked receive") {
         std::chrono::steady_clock::now() - t0);
 
     CHECK(receive_result == false);
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
     CHECK(channel.is_closed() == true);
     CHECK(elapsed.count() < 200);
 }
@@ -793,7 +793,7 @@ TEST_CASE("Channel - send_async resumes false when closed") {
 TEST_CASE("Channel - async bounded handoff on single compute thread") {
     Channel<int> channel(1);
 
-    const int num_items = TSAN_BUILD ? 1000 : 5000;
+    const int item_count = TSAN_BUILD ? 1000 : 5000;
     std::atomic<int> produced{0};
     std::atomic<int> consumed{0};
 
@@ -801,7 +801,7 @@ TEST_CASE("Channel - async bounded handoff on single compute thread") {
         [&, p = channel.producer()](
             CoroScope& /*ctx*/) mutable -> coro::CoroTask<void> {
             auto guard = p.guard();
-            for (int i = 1; i <= num_items; ++i) {
+            for (int i = 1; i <= item_count; ++i) {
                 CHECK(co_await channel.send(i));
                 produced.fetch_add(i, std::memory_order_relaxed);
             }
@@ -829,7 +829,7 @@ TEST_CASE("Channel - async bounded handoff on single compute thread") {
     CHECK(produced.load(std::memory_order_relaxed) ==
           consumed.load(std::memory_order_relaxed));
     CHECK(consumed.load(std::memory_order_relaxed) ==
-          (num_items * (num_items + 1)) / 2);
+          (item_count * (item_count + 1)) / 2);
 }
 
 // ============================================================================
@@ -1283,55 +1283,55 @@ TEST_CASE(
 TEST_CASE("Channel - producer() basic") {
     Channel<int> channel(10);
 
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
 
     {
         auto p1 = channel.producer();
         auto guard1 = p1.guard();
-        CHECK(channel.num_producers() == 1);
+        CHECK(channel.producer_count() == 1);
 
         {
             auto p2 = channel.producer();
             auto guard2 = p2.guard();
-            CHECK(channel.num_producers() == 2);
+            CHECK(channel.producer_count() == 2);
         }
 
-        CHECK(channel.num_producers() == 1);
+        CHECK(channel.producer_count() == 1);
     }
     // guard destroyed -> released
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
     CHECK(channel.is_closed() == true);
 }
 
 TEST_CASE("Channel - producer() bulk") {
     Channel<int> channel(10);
 
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
 
     // Create and release multiple producers
     {
         auto p1 = channel.producer();
         auto guard1 = p1.guard();
-        CHECK(channel.num_producers() == 1);
+        CHECK(channel.producer_count() == 1);
 
         auto p2 = channel.producer();
         auto guard2 = p2.guard();
-        CHECK(channel.num_producers() == 2);
+        CHECK(channel.producer_count() == 2);
 
         auto p3 = channel.producer();
         auto guard3 = p3.guard();
-        CHECK(channel.num_producers() == 3);
+        CHECK(channel.producer_count() == 3);
 
         auto p4 = channel.producer();
         auto guard4 = p4.guard();
-        CHECK(channel.num_producers() == 4);
+        CHECK(channel.producer_count() == 4);
 
         auto p5 = channel.producer();
         auto guard5 = p5.guard();
-        CHECK(channel.num_producers() == 5);
+        CHECK(channel.producer_count() == 5);
     }
     // All released
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
     CHECK(channel.is_closed() == true);
 }
 

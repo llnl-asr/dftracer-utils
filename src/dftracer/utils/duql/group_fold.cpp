@@ -218,7 +218,7 @@ void GroupFold::add(dataframe::DataFrame batch) {
             std::int64_t id = -1;
             if (c.is_null(r)) {
                 if (null_group_ < 0) {
-                    null_group_ = num_groups_++;
+                    null_group_ = group_count_++;
                     fresh.push_back(r);
                 }
                 id = null_group_;
@@ -238,9 +238,9 @@ void GroupFold::add(dataframe::DataFrame batch) {
                         sv = *text;
                     } else {
                         auto [it, added] =
-                            groups_.try_emplace(key, num_groups_);
+                            groups_.try_emplace(key, group_count_);
                         if (added) {
-                            ++num_groups_;
+                            ++group_count_;
                             fresh.push_back(r);
                         }
                         id = it->second;
@@ -249,9 +249,9 @@ void GroupFold::add(dataframe::DataFrame batch) {
                 if (id < 0) {
                     auto it = str_groups_.find(sv);
                     if (it == str_groups_.end()) {
-                        it =
-                            str_groups_.emplace(dstd::String(sv), num_groups_++)
-                                .first;
+                        it = str_groups_
+                                 .emplace(dstd::String(sv), group_count_++)
+                                 .first;
                         fresh.push_back(r);
                     }
                     id = it->second;
@@ -275,9 +275,9 @@ void GroupFold::add(dataframe::DataFrame batch) {
                         .c_str());
             }
         }
-        auto [it, added] = groups_.try_emplace(key, num_groups_);
+        auto [it, added] = groups_.try_emplace(key, group_count_);
         if (added) {
-            ++num_groups_;
+            ++group_count_;
             fresh.push_back(r);
         }
         gid[static_cast<std::size_t>(r)] = it->second;
@@ -285,7 +285,7 @@ void GroupFold::add(dataframe::DataFrame batch) {
     for (std::size_t k = 0; k < n_keys && !fresh.empty(); ++k)
         key_parts_[k].push_back(
             as_type(batch.columns[k], key_types_[k]).take(fresh));
-    const auto groups = static_cast<std::size_t>(num_groups_);
+    const auto groups = static_cast<std::size_t>(group_count_);
     if (engine_) {
         const dataframe::Series g = dataframe::Series::flat_i64(gid.data(), n);
         dstd::Vector<const dataframe::Series*> values;
@@ -385,7 +385,7 @@ void GroupFold::arg(std::size_t a, const dataframe::Series& in,
                     const dataframe::Series& by,
                     const dstd::Vector<std::int64_t>& gid) {
     auto& state = args_[a];
-    state.resize(static_cast<std::size_t>(num_groups_));
+    state.resize(static_cast<std::size_t>(group_count_));
     const auto b = normal(by);
     if (!b) return;
     const bool boolean = by.type() == TypeId::Bool;
@@ -418,7 +418,7 @@ void GroupFold::arg(std::size_t a, const dataframe::Series& in,
 void GroupFold::sketches(std::size_t a, const dataframe::Series& in,
                          const dstd::Vector<std::int64_t>& gid) {
     auto& state = sketches_[a];
-    state.resize(static_cast<std::size_t>(num_groups_));
+    state.resize(static_cast<std::size_t>(group_count_));
     const std::int64_t n = in.length();
     if (aggs_[a].op == FoldOp::Sketch) {
         const TypeId t = in.type();
@@ -452,7 +452,7 @@ void GroupFold::sketches(std::size_t a, const dataframe::Series& in,
 }
 
 dataframe::DataFrame GroupFold::finish(dstd::Vector<dstd::String> names) {
-    const auto groups = num_groups_;
+    const auto groups = group_count_;
     const auto count = static_cast<std::size_t>(groups);
     dataframe::DataFrame out;
     out.names = std::move(names);

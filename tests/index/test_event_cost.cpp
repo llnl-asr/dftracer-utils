@@ -94,9 +94,9 @@ TEST_SUITE("IndexEventCost") {
     TEST_CASE(
         "schema leaf paths are interned per record shape, not per event") {
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::String file = write_trace(env.get_dir());
+        const dstd::String file = write_trace(env.dir());
         const auto before = event_cost::g_leaf_path_interns.load();
-        build_one(file, env.get_dir() + "/idx");
+        build_one(file, env.dir() + "/idx");
         const auto interns = event_cost::g_leaf_path_interns.load() - before;
         MESSAGE("leaf path interns: " << interns << " for " << EVENTS
                                       << " events");
@@ -107,9 +107,9 @@ TEST_SUITE("IndexEventCost") {
 
     TEST_CASE("chunk statistics find known keys by interned id") {
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::String file = write_trace(env.get_dir());
+        const dstd::String file = write_trace(env.dir());
         const auto before = event_cost::g_stats_string_lookups.load();
-        build_one(file, env.get_dir() + "/idx");
+        build_one(file, env.dir() + "/idx");
         const auto lookups = event_cost::g_stats_string_lookups.load() - before;
         MESSAGE("statistics string lookups: " << lookups << " for " << EVENTS
                                               << " events");

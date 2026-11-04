@@ -85,7 +85,7 @@ class Racer {
 
     int await_resume() { return task_.await_resume(); }
 
-    TokenPtr get_cancellation_token() const { return token_; }
+    TokenPtr cancellation_token() const { return token_; }
 
     void cancel() {
         race_->channels[slot_]->close();
@@ -133,7 +133,7 @@ dstd::Thread feed_winner_later(const dstd::SharedPtr<Race>& race,
 }  // namespace
 
 TEST_CASE("when_any - no loser runs after when_any returns") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     auto race = dstd::make_shared<Race>();
@@ -173,7 +173,7 @@ TEST_CASE("when_any - no loser runs after when_any returns") {
 }
 
 TEST_CASE("when_any - no loser runs after when_any returns (heterogeneous)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     auto race = dstd::make_shared<Race>();
@@ -206,7 +206,7 @@ TEST_CASE("when_any - no loser runs after when_any returns (heterogeneous)") {
 }
 
 TEST_CASE("when_any - a spawned loser stops when cancelled") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> loser_saw_cancel{false};
@@ -270,7 +270,7 @@ TEST_CASE("when_any - a spawned loser stops when cancelled") {
 }
 
 TEST_CASE("when_any - a winner that throws after it won delivers its error") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     auto race = dstd::make_shared<Race>();
@@ -310,7 +310,7 @@ TEST_CASE("when_any - a winner that throws after it won delivers its error") {
 }
 
 TEST_CASE("when_any - a loser with no token and no cancel() runs to its end") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> loser_ended{false};
@@ -340,7 +340,7 @@ TEST_CASE("when_any - a loser with no token and no cancel() runs to its end") {
 }
 
 TEST_CASE("when_any with a timeout loser returns when the winner does") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     constexpr auto TIMEOUT = std::chrono::seconds(5);
@@ -421,7 +421,7 @@ coro::CoroTask<int> finishes_after(std::chrono::milliseconds time) {
 }  // namespace
 
 TEST_CASE("when_any - a cancelled CoroTask loser stops without throwing") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     auto seen = dstd::make_shared<Seen>();
@@ -467,7 +467,7 @@ TEST_CASE("when_any - a cancelled CoroTask loser stops without throwing") {
 }
 
 TEST_CASE("when_any - a CoroTask loser that never started is dropped") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> loser_ran{false};

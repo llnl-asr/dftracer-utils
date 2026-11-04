@@ -76,7 +76,7 @@ bool in_window(simdjson::dom::element root, const ViewDefinition& view) {
 
 // The length of the record on a line: without trailing blanks and the comma
 // a JSON-array trace ends records with; 0 for the array's "[" and "]" lines.
-std::size_t record_length(const char* line, std::size_t len) {
+std::size_t record_size(const char* line, std::size_t len) {
     while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t' ||
                        line[len - 1] == '\r'))
         --len;
@@ -205,16 +205,16 @@ struct LineScan {
     dftracer::utils::json::RecordParser& parser;
 };
 
-void emit_event(LineScan& ls, const char* line_start, std::size_t json_len) {
-    ls.batch.events.emplace_back(line_start, json_len);
+void emit_event(LineScan& ls, const char* line_start, std::size_t json_size) {
+    ls.batch.events.emplace_back(line_start, json_size);
 }
 
 // One line read on demand: the window, the query and the fold decode all
 // read the same parse, which a syntax error in a part they reach drops.
-void scan_line(LineScan& ls, const char* line_start, std::size_t json_len) {
+void scan_line(LineScan& ls, const char* line_start, std::size_t json_size) {
     const ViewScannerInput& input = ls.input;
     ViewScannerBatch& batch = ls.batch;
-    auto parsed = ls.document.parse(dstd::StringView(line_start, json_len));
+    auto parsed = ls.document.parse(dstd::StringView(line_start, json_size));
     if (!parsed || parsed->type() != json::Value::Type::Object) {
         ++batch.lines_invalid;
         return;
@@ -250,22 +250,23 @@ void scan_line(LineScan& ls, const char* line_start, std::size_t json_len) {
             return;
         }
         batch.values_unconverted += ls.pool.back().unconverted;
-        if (input.fold_keep_raw) emit_event(ls, line_start, json_len);
+        if (input.fold_keep_raw) emit_event(ls, line_start, json_size);
     } else {
-        emit_event(ls, line_start, json_len);
+        emit_event(ls, line_start, json_size);
     }
     batch.events_matched++;
 }
 
 // One line read through the DOM, for a dftracer fold that captures schema. A
 // line the DOM parser refuses goes to scan_line.
-void scan_dom_line(LineScan& ls, const char* line_start, std::size_t json_len) {
+void scan_dom_line(LineScan& ls, const char* line_start,
+                   std::size_t json_size) {
     const ViewScannerInput& input = ls.input;
     ViewScannerBatch& batch = ls.batch;
-    auto result = ls.parser.parse(line_start, json_len);
+    auto result = ls.parser.parse(line_start, json_size);
     if (result.error()) {
         // A line the DOM parser refuses is read on demand.
-        scan_line(ls, line_start, json_len);
+        scan_line(ls, line_start, json_size);
         return;
     }
     if (!result.value_unsafe().is_object()) {
@@ -296,7 +297,7 @@ void scan_dom_line(LineScan& ls, const char* line_start, std::size_t json_len) {
     decode_into(ls.pool.append(), root, input,
                 !metadata && input.fold_capture_schema, ls.hints);
     batch.values_unconverted += ls.pool.back().unconverted;
-    if (input.fold_keep_raw) emit_event(ls, line_start, json_len);
+    if (input.fold_keep_raw) emit_event(ls, line_start, json_size);
     batch.events_matched++;
 }
 
@@ -474,26 +475,25 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
             // Chunks end on a line boundary; bytes after the last newline
             // are the file's last line, which has none.
             if (!newline) newline = data + bytes_read;
-            std::size_t line_len = newline - line_start;
+            std::size_t line_size = newline - line_start;
 
             // Fast path: with no query and no metadata records, the only
             // decision is to drop "ph":"M" records and emit the rest, so a
             // targeted phase probe replaces the full DOM parse. Fold mode needs
             // the full parse to build the FoldEvent, so it skips this.
-            if (line_len > 0 && probe_lines) {
+            if (line_size > 0 && probe_lines) {
                 const char* s = line_start;
-                const char* e = line_start + line_len;
+                const char* e = line_start + line_size;
                 while (s < e && (*s == ' ' || *s == '\t')) ++s;
                 if (s < e && *s == '{') {
                     const EventProbe p =
-                        probe_event(line_start, line_len, input.view);
+                        probe_event(line_start, line_size, input.view);
                     if (input.view.by_path ||
                         p.phase != RecordPhase::Metadata) {
                         batch.events_scanned++;
                         if (in_window(p.has_ts, p.ts, p.dur, input.view)) {
                             batch.events.emplace_back(
-                                line_start,
-                                record_length(line_start, line_len));
+                                line_start, record_size(line_start, line_size));
                             batch.events_matched++;
                         }
                     }
@@ -502,19 +502,19 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                 continue;
             }
 
-            if (line_len > 0 && gate &&
-                !gate->may_match(dstd::StringView(line_start, line_len))) {
+            if (line_size > 0 && gate &&
+                !gate->may_match(dstd::StringView(line_start, line_size))) {
                 batch.events_scanned++;
                 pos = (newline - data) + 1;
                 continue;
             }
 
-            const std::size_t json_len = record_length(line_start, line_len);
-            if (json_len > 0) {
+            const std::size_t json_size = record_size(line_start, line_size);
+            if (json_size > 0) {
                 if (dom_decode)
-                    scan_dom_line(scan, line_start, json_len);
+                    scan_dom_line(scan, line_start, json_size);
                 else
-                    scan_line(scan, line_start, json_len);
+                    scan_line(scan, line_start, json_size);
             }
 
             pos = (newline - data) + 1;

@@ -442,14 +442,14 @@ Custom metrics (C++)
 When the built-in aggregate vocabulary cannot express a metric (custom
 bucketing, a representative value, a side output), fold over the raw scanned
 batches with ``map_batches``: your ``fold`` runs over each batch on one of
-``num_slots`` worker slots, and ``combine`` reduces the per-slot partials into
+``slot_count`` worker slots, and ``combine`` reduces the per-slot partials into
 one. This runs over the same index-pruned parallel scan the built-in aggregates
 use.
 
 .. code-block:: cpp
 
    auto result = View::from_file("trace.pfw.gz")
-                     .map_batches<MyPartial>(fold, combine, /*num_slots=*/8)
+                     .map_batches<MyPartial>(fold, combine, /*slot_count=*/8)
                      .get();
 
 This is a C++ / native surface; there is no Python equivalent. From Python, use

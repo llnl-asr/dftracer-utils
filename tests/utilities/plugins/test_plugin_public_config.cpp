@@ -35,7 +35,7 @@ namespace {
 constexpr int NUM_EVENTS = 5;
 
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
-    const dstd::String pfw = env.get_dir() + "/public_config.pfw";
+    const dstd::String pfw = env.dir() + "/public_config.pfw";
     dstd::String ofs;
     for (int i = 0; i < NUM_EVENTS; ++i) {
         ofs += common::str_cat(

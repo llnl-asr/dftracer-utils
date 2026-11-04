@@ -171,7 +171,7 @@ class GzipStream : public StreamBase {
         start_bytes_ = start_bytes;
         target_end_bytes_ = end_bytes;
         indexer_ = &indexer;
-        max_file_bytes_ = indexer.get_max_bytes();
+        max_file_bytes_ = indexer.max_bytes();
         is_active_ = true;
         is_finished_ = false;
     }
@@ -192,7 +192,7 @@ class GzipStream : public StreamBase {
 
         if (indexer_) {
             inflater_.set_member_bound(static_cast<std::size_t>(
-                std::max<std::uint64_t>(indexer_->get_checkpoint_size(), 1)));
+                std::max<std::uint64_t>(indexer_->checkpoint_size(), 1)));
             inflater_.set_index_hint(indexer_->piece_heads());
         }
 

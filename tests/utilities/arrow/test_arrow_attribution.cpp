@@ -20,8 +20,7 @@ namespace {
 struct Reader {
     ArrowArrayView av;
     explicit Reader(ArrowExportResult& r) {
-        REQUIRE(init_array_view(av, r.get_schema(), r.get_array()) ==
-                NANOARROW_OK);
+        REQUIRE(init_array_view(av, r.schema(), r.array()) == NANOARROW_OK);
     }
     ~Reader() { ArrowArrayViewReset(&av); }
     std::int64_t rows() const { return av.length; }
@@ -68,12 +67,12 @@ ArrowExportResult make_batch(const dstd::Vector<OptB>& sel,
 
 ArrowExportResult attr(ArrowExportResult& in, dstd::Vector<std::uint32_t> dims,
                        std::uint32_t top_k) {
-    return attribute(in.get_schema(), in.get_array(), 0, dims.data(),
+    return attribute(in.schema(), in.array(), 0, dims.data(),
                      static_cast<std::uint32_t>(dims.size()), top_k);
 }
 
 dstd::String name_of(ArrowExportResult& r, int c) {
-    return r.get_schema()->children[c]->name;
+    return r.schema()->children[c]->name;
 }
 
 }  // namespace

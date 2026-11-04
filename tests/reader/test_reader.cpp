@@ -58,14 +58,14 @@ TEST_CASE("C++ Indexer - Basic functionality") {
         REQUIRE(indexer != nullptr);
 
         // Test getter methods
-        CHECK(dstd::StringView(indexer->get_archive_path()) == gz_file);
-        CHECK(dstd::StringView(indexer->get_index_path()) == idx_file);
+        CHECK(dstd::StringView(indexer->archive_path()) == gz_file);
+        CHECK(dstd::StringView(indexer->index_path()) == idx_file);
 
         // Build index first before accessing metadata
         indexer->build();
 
         // size will be adjusted
-        CHECK(indexer->get_checkpoint_size() <= ckpt_size);
+        CHECK(indexer->checkpoint_size() <= ckpt_size);
     }
 
     SUBCASE("Move semantics") {
@@ -105,7 +105,7 @@ TEST_CASE("C++ Reader - Basic functionality") {
             auto reader = ReaderFactory::create(gz_file, idx_file);
             REQUIRE(reader != nullptr);
             CHECK(reader->is_valid());
-            CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
+            CHECK(dstd::StringView(reader->archive_path()) == gz_file);
         }
 
         // Should be able to create another one
@@ -117,7 +117,7 @@ TEST_CASE("C++ Reader - Basic functionality") {
     SUBCASE("Get max bytes") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         CHECK(max_bytes > 0);
     }
 
@@ -126,8 +126,8 @@ TEST_CASE("C++ Reader - Basic functionality") {
         REQUIRE(reader != nullptr);
 
         // Test getter methods
-        CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
-        CHECK(dstd::StringView(reader->get_index_path()) == idx_file);
+        CHECK(dstd::StringView(reader->archive_path()) == gz_file);
+        CHECK(dstd::StringView(reader->index_path()) == idx_file);
     }
 
     SUBCASE("Read byte range using streaming API") {
@@ -278,7 +278,7 @@ TEST_CASE("C++ API - Integration test") {
         // Read data
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         CHECK(max_bytes > 0);
 
         // Read multiple ranges using streaming API
@@ -344,7 +344,7 @@ TEST_CASE("C++ API - Memory safety stress test" * doctest::test_suite("vg")) {
         std::size_t bytes_read;
         std::size_t offset = 0;
         std::size_t end =
-            std::min<std::size_t>(4 * 1024 * 1024, reader->get_max_bytes());
+            std::min<std::size_t>(4 * 1024 * 1024, reader->max_bytes());
 
         while (offset < end && (bytes_read = reader->read(
                                     offset, end, buffer, sizeof(buffer))) > 0) {
@@ -397,7 +397,7 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
         CHECK(moved_reader->is_valid());
 
         // Operations on valid moved reader should work
-        CHECK_NOTHROW(moved_reader->get_max_bytes());
+        CHECK_NOTHROW(moved_reader->max_bytes());
         char buffer[1024];
         CHECK_NOTHROW(moved_reader->read(0, 100, buffer, sizeof(buffer)));
     }
@@ -542,21 +542,21 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         REQUIRE(reader != nullptr);
 
         CHECK(reader->is_valid());
-        CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
+        CHECK(dstd::StringView(reader->archive_path()) == gz_file);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         CHECK(max_bytes > 0);
 
         // Multiple calls should return same value
-        CHECK(reader->get_max_bytes() == max_bytes);
-        CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
+        CHECK(reader->max_bytes() == max_bytes);
+        CHECK(dstd::StringView(reader->archive_path()) == gz_file);
         CHECK(reader->is_valid());
     }
 
     SUBCASE("Various read patterns") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
 
         char buffer[2048];
         dstd::String result;
@@ -606,7 +606,7 @@ TEST_CASE("C++ API - Advanced reader functionality" *
     SUBCASE("Boundary conditions") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
 
         char buffer[1024];
         dstd::String result;
@@ -798,7 +798,7 @@ TEST_CASE("C++ API - Regression and stress tests") {
         // Test large reads
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         CHECK(max_bytes > 10000);  // Should be a large file
 
         // Read large chunks [1000, 50000)
@@ -844,7 +844,7 @@ TEST_CASE("C++ API - Regression and stress tests") {
         REQUIRE(env.is_valid());
 
         // Create test data with specific pattern that might trigger the bug
-        dstd::String test_dir = env.get_dir();
+        dstd::String test_dir = env.dir();
         dstd::String gz_file = test_dir + "/regression_test.gz";
         dstd::String idx_file = test_dir + "/regression_test.gz.idx";
         dstd::String txt_file = test_dir + "/regression_test.txt";
@@ -1072,7 +1072,7 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     SUBCASE("Raw read edge cases") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
 
         char buffer[1024];
         dstd::String result;
@@ -1139,7 +1139,7 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     SUBCASE("Raw read multiple ranges") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
 
         char buffer[1024];
 
@@ -1178,7 +1178,7 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         auto reader2 = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader2 != nullptr);
 
-        std::size_t max_bytes = reader1->get_max_bytes();
+        std::size_t max_bytes = reader1->max_bytes();
         char buffer[4096];
 
         // Read entire file with raw API [0, max_bytes)
@@ -1261,8 +1261,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         indexer->build();
 
         // Verify the indexer has line counts and members
-        std::size_t total_lines = indexer->get_num_lines();
-        auto members = indexer->get_members();
+        std::size_t total_lines = indexer->line_count();
+        auto members = indexer->members();
 
         // Skip line reading tests if indexer doesn't have proper line support
         // This can happen with very small test files
@@ -1380,9 +1380,9 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         // Get number of lines from indexer
         auto indexer =
             CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
-        std::size_t num_lines = indexer->get_num_lines();
+        std::size_t total_line_count = indexer->line_count();
 
-        if (num_lines > 100) {
+        if (total_line_count > 100) {
             // Read a large range
             dstd::String result = reader->read_lines(1, 100);
             CHECK(!result.empty());
@@ -1407,7 +1407,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         // Get number of lines from indexer
         auto indexer =
             CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
-        std::size_t total_lines = indexer->get_num_lines();
+        std::size_t total_lines = indexer->line_count();
 
         if (total_lines > 10) {
             // Read last few lines
@@ -1432,7 +1432,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         // Get number of lines from indexer
         auto indexer =
             CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
-        std::size_t total_lines = indexer->get_num_lines();
+        std::size_t total_lines = indexer->line_count();
 
         // Test single line reads at different positions
         dstd::Vector<std::size_t> test_lines = {
@@ -1474,7 +1474,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             auto indexer = CheckpointIndexerFactory::create(
                 gz_file, idx_file + dstd::to_string(ckpt_size_mb), ckpt_size);
             CHECK_NOTHROW(indexer->build());
-            CHECK(indexer->get_checkpoint_size() <= ckpt_size);
+            CHECK(indexer->checkpoint_size() <= ckpt_size);
             (void)dstd::fs::remove(idx_file + dstd::to_string(ckpt_size_mb));
         }
     }
@@ -1489,7 +1489,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
 
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
 
         // Test various range sizes to trigger different internal paths
         dstd::Vector<dstd::Pair<std::size_t, std::size_t>> ranges = {
@@ -1586,7 +1586,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
 
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
 
         if (max_bytes > 10) {
             char buffer[1024];
@@ -1635,7 +1635,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
         }
 
         auto reader = ReaderFactory::create(large_gz, large_idx);
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
 
         // Read various large ranges
         if (max_bytes > 1000) {

@@ -49,7 +49,7 @@ TEST_SUITE("EventCollector") {
 
     TEST_CASE("EventCollector - a line the DOM parser refuses gives its id") {
         TestEnvironment env(100);
-        const dstd::String pfw = env.get_dir() + "/refused.pfw";
+        const dstd::String pfw = env.dir() + "/refused.pfw";
         {
             FileOut ofs(pfw);
             for (int i = 0; i < 5; ++i)

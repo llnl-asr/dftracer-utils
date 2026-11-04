@@ -35,7 +35,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(reader != nullptr);
 
             // Get file size to determine byte range
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             IndexedFileBytesIterator iter(reader, 0, file_size);
 
@@ -139,7 +139,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             // Use small buffer (256 bytes)
             IndexedFileBytesIterator iter(reader, 0, file_size, 256);
@@ -165,7 +165,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             // Use large buffer (1MB)
             IndexedFileBytesIterator iter(reader, 0, file_size, 1024 * 1024);
@@ -193,7 +193,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             IndexedFileBytesIterator iter(reader, 0, file_size);
 
@@ -219,7 +219,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             IndexedFileBytesIterator iter(reader, 0, file_size);
 
@@ -276,7 +276,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             IndexedFileBytesIterator iter(reader, 0, file_size);
 
@@ -378,7 +378,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             // Try to read beyond file size (should handle gracefully)
             IndexedFileBytesIterator iter(reader, 0, file_size * 2);
@@ -465,7 +465,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             IndexedFileBytesIterator iter(reader, 0, file_size);
 
@@ -499,12 +499,12 @@ TEST_SUITE("IndexedFileBytesIterator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             IndexedFileBytesIterator iter(reader, 0, file_size);
 
-            CHECK(iter.get_reader() == reader);
-            CHECK(iter.get_reader() != nullptr);
+            CHECK(iter.reader() == reader);
+            CHECK(iter.reader() != nullptr);
         }
     }
 
@@ -568,7 +568,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
             REQUIRE(reader != nullptr);
 
-            std::size_t file_size = reader->get_max_bytes();
+            std::size_t file_size = reader->max_bytes();
 
             // Start at byte 50 (likely mid-line)
             IndexedFileBytesIterator iter(reader, 50, file_size);
@@ -601,7 +601,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(reader1 != nullptr);
             REQUIRE(reader2 != nullptr);
 
-            std::size_t file_size = reader1->get_max_bytes();
+            std::size_t file_size = reader1->max_bytes();
 
             // Read with small buffer
             IndexedFileBytesIterator iter1(reader1, 0, file_size, 256);

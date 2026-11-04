@@ -83,11 +83,11 @@ IoBackendType backend_from_env(bool& forced) {
 
 }  // namespace
 
-dstd::UniquePtr<IoBackend> create_io_backend(coro::Executor& executor,
-                                             std::size_t pool_size,
-                                             IoBackendType backend_type,
-                                             unsigned batch_threshold,
-                                             IoPoolOptions pool_options) {
+dstd::UniquePtr<IoBackend> make_io_backend(coro::Executor& executor,
+                                           std::size_t pool_size,
+                                           IoBackendType backend_type,
+                                           unsigned batch_threshold,
+                                           IoPoolOptions pool_options) {
     bool forced = false;
     if (backend_type == IoBackendType::Auto) {
         backend_type = backend_from_env(forced);

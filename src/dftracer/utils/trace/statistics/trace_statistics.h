@@ -15,7 +15,7 @@ struct TraceStatistics {
     dstd::String file_path;
     dstd::String index_path;
     ChunkStatistics merged;
-    std::uint64_t num_chunks = 0;
+    std::uint64_t chunk_count = 0;
     bool success = false;
     dstd::String error_message;
 
@@ -23,9 +23,9 @@ struct TraceStatistics {
     double time_span_seconds() const;
     double duration_mean_us() const;
     double duration_stddev_us() const;
-    std::size_t num_categories() const;
-    std::size_t num_unique_names() const;
-    std::size_t num_pid_tids() const;
+    std::size_t category_count() const;
+    std::size_t unique_name_count() const;
+    std::size_t pid_tid_count() const;
 
     dstd::String to_json() const;
 };

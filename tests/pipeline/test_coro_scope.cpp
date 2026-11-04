@@ -13,7 +13,7 @@
 using namespace dftracer::utils;
 
 TEST_CASE("CoroScope - Simple spawn") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<int> counter{0};
@@ -42,7 +42,7 @@ TEST_CASE("CoroScope - Simple spawn") {
 }
 
 TEST_CASE("CoroScope - Many spawns") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     constexpr int N = 100;
@@ -73,7 +73,7 @@ TEST_CASE("CoroScope - Many spawns") {
 }
 
 TEST_CASE("CoroScope - Producer-consumer with channel (reference)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -115,7 +115,7 @@ TEST_CASE("CoroScope - Producer-consumer with channel (reference)") {
 }
 
 TEST_CASE("CoroScope - Producer-consumer with channel (shared_ptr)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -155,7 +155,7 @@ TEST_CASE("CoroScope - Producer-consumer with channel (shared_ptr)") {
 }
 
 TEST_CASE("CoroScope - Transform pipeline") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -207,14 +207,14 @@ TEST_CASE("CoroScope - Transform pipeline") {
 }
 
 TEST_CASE("CoroScope - Manual join") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<int> counter{0};
 
     auto task = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            auto scope = CoroScope::long_lived(ctx.get_executor());
+            auto scope = CoroScope::long_lived(ctx.executor());
             for (int i = 0; i < 5; ++i) {
                 scope->spawn([&counter](CoroScope&) -> coro::CoroTask<void> {
                     ++counter;
@@ -234,7 +234,7 @@ TEST_CASE("CoroScope - Manual join") {
 }
 
 TEST_CASE("CoroScope - spawn_producers (N producers, shared_ptr)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -279,7 +279,7 @@ TEST_CASE("CoroScope - spawn_producers (N producers, shared_ptr)") {
 }
 
 TEST_CASE("CoroScope - spawn works for compute and I/O tasks") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<int> result{0};
@@ -309,7 +309,7 @@ TEST_CASE("CoroScope - spawn works for compute and I/O tasks") {
 }
 
 TEST_CASE("CoroScope - Empty scope (no spawns)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
     Scheduler scheduler(&executor);
 
     bool completed = false;
@@ -332,7 +332,7 @@ TEST_CASE("CoroScope - Empty scope (no spawns)") {
 }
 
 TEST_CASE("CoroScope - Typed spawn with SpawnFuture") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> result{0};
@@ -360,7 +360,7 @@ TEST_CASE("CoroScope - Typed spawn with SpawnFuture") {
 }
 
 TEST_CASE("CoroScope - Multiple typed spawns") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> result{0};

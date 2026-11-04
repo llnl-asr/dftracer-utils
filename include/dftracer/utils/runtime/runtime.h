@@ -194,7 +194,7 @@ class Runtime {
     /// Wait for all outstanding tasks to complete.
     void wait_all();
 
-    ExecutorProgress get_progress() const;
+    ExecutorProgress progress() const;
     bool is_responsive() const;
 
     void set_global_timeout(std::chrono::milliseconds timeout);

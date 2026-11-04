@@ -66,8 +66,7 @@ struct Hash<dftracer::utils::utilities::fileio::StreamReadInput> {
         ::dftracer::utils::utilities::hash::HasherUtility hasher;
         hasher.update(req.path.str());
         hasher.update(req.chunk_size);
-        return static_cast<std::size_t>(
-            hash::splitmix64(hasher.get_hash().value));
+        return static_cast<std::size_t>(hash::splitmix64(hasher.hash().value));
     }
 };
 }  // namespace dftracer::utils::dstd

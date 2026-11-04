@@ -185,8 +185,8 @@ TEST_CASE("relative is lexical") {
 }
 
 TEST_CASE("the Windows style rules run on any platform") {
-    CHECK(dstd::path_detail::root_length("C:\\a\\b.txt",
-                                         dstd::PathStyle::Windows) == 3);
+    CHECK(dstd::path_detail::root_size("C:\\a\\b.txt",
+                                       dstd::PathStyle::Windows) == 3);
     CHECK(dstd::path_detail::root("C:\\a\\b.txt", dstd::PathStyle::Windows) ==
           "C:\\");
     CHECK(dstd::path_detail::root("C:", dstd::PathStyle::Windows) == "C:");

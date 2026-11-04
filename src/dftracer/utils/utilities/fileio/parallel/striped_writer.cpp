@@ -21,7 +21,7 @@ namespace {
 
 class StripedWriter final : public ParallelWriter {
    public:
-    coro::CoroTask<int> open(dstd::String path, std::size_t num_workers,
+    coro::CoroTask<int> open(dstd::String path, std::size_t worker_count,
                              bool /*gzip_extension*/,
                              coro::Scope* /*scope*/) override {
         path_ = std::move(path);
@@ -34,7 +34,7 @@ class StripedWriter final : public ParallelWriter {
         }
         fd_ = static_cast<int>(fd);
         offset_.store(0, std::memory_order_relaxed);
-        per_worker_layout_.assign(std::max<std::size_t>(num_workers, 1),
+        per_worker_layout_.assign(std::max<std::size_t>(worker_count, 1),
                                   dstd::Vector<MemberSpan>{});
         merged_layout_.clear();
         merged_layout_built_ = false;

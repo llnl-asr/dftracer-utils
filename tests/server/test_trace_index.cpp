@@ -21,13 +21,13 @@ using namespace dftracer::utils::server;
 /// Helper: create a DFTracer gzip file with .pfw.gz extension
 /// (TraceIndex scans for .pfw and .pfw.gz patterns).
 static dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                                  int num_events, int id) {
-    auto trace_gz = env.create_dft_test_gzip_file(num_events);
+                                  int event_count, int id) {
+    auto trace_gz = env.create_dft_test_gzip_file(event_count);
     if (trace_gz.empty()) return "";
 
     // Rename to .pfw.gz so TraceIndex discovers it
     dstd::String pfw_path =
-        env.get_dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+        env.dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
     REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
@@ -45,7 +45,7 @@ TEST_CASE("TraceIndex - discovers .pfw.gz files") {
     REQUIRE(!file1.empty());
     REQUIRE(!file2.empty());
 
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> success{false};
@@ -53,8 +53,7 @@ TEST_CASE("TraceIndex - discovers .pfw.gz files") {
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dstd::String(env.get_dir()),
-                             dstd::String(env.get_dir()));
+            TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
             co_await index.initialize();
 
             file_count = index.file_count();
@@ -80,7 +79,7 @@ TEST_CASE("TraceIndex - find_file by path") {
     auto file = create_pfw_gz(env, 50, 1);
     REQUIRE(!file.empty());
 
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> found{false};
@@ -88,8 +87,7 @@ TEST_CASE("TraceIndex - find_file by path") {
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dstd::String(env.get_dir()),
-                             dstd::String(env.get_dir()));
+            TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
             co_await index.initialize();
 
             auto* info = index.find_file(dstd::String(file));
@@ -116,15 +114,14 @@ TEST_CASE("TraceIndex - find_file returns nullptr for missing file") {
     auto file = create_pfw_gz(env, 50, 1);
     REQUIRE(!file.empty());
 
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> is_null{false};
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dstd::String(env.get_dir()),
-                             dstd::String(env.get_dir()));
+            TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
             co_await index.initialize();
 
             auto* info = index.find_file("/nonexistent/path.pfw.gz");
@@ -149,15 +146,14 @@ TEST_CASE("TraceIndex - file_at by index") {
     auto file = create_pfw_gz(env, 50, 1);
     REQUIRE(!file.empty());
 
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> success{false};
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dstd::String(env.get_dir()),
-                             dstd::String(env.get_dir()));
+            TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
             co_await index.initialize();
 
             REQUIRE(index.file_count() >= 1);
@@ -184,7 +180,7 @@ TEST_CASE("TraceIndex - empty directory") {
     auto dir = dftu_utils_test::make_unique_test_path("trace_index_empty");
     REQUIRE(dstd::fs::create_directories(dir).has_value());
 
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<std::size_t> count{999};
@@ -224,21 +220,20 @@ TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
     for (int i = 0; i < 20; ++i)
         text += R"({"gtype":"func","run":"ab","ts":1,"path":"main;f)" +
                 dstd::to_string(i) + R"(","depth":1,"count":2})" + "\n";
-    const dstd::String gz = env.get_dir() + "/genesis.pfw.gz";
+    const dstd::String gz = env.dir() + "/genesis.pfw.gz";
     dftu_utils_test::write_gz_trace(gz, text);
     dftracer::utils::index::IndexerOptions o;
-    o.index_dir = env.get_dir();
+    o.index_dir = env.dir();
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
                                           o)
         .build();
 
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
     Scheduler scheduler(&executor);
     dstd::String schema, app, nodes;
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dstd::String(env.get_dir()),
-                             dstd::String(env.get_dir()));
+            TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
             co_await index.initialize();
             schema = index.record_schema().id;
             app = index.resolve("runs", "run", "app", "ab");

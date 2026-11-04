@@ -44,7 +44,7 @@ static void central_moments(const dftracer::utils::dataframe::FieldStat& s,
     if (M4 < 0.0) M4 = 0.0;
 }
 
-double MetricStats::get_stddev() const {
+double MetricStats::stddev() const {
     if (stat.n < 2) return 0.0;
     double M2, M3, M4, n, mu;
     central_moments(stat, M2, M3, M4, n, mu);
@@ -52,7 +52,7 @@ double MetricStats::get_stddev() const {
     return var > 0.0 ? std::sqrt(var) : 0.0;
 }
 
-double MetricStats::get_skewness() const {
+double MetricStats::skewness() const {
     if (stat.n < 3) return 0.0;
     double M2, M3, M4, n, mu;
     central_moments(stat, M2, M3, M4, n, mu);
@@ -60,7 +60,7 @@ double MetricStats::get_skewness() const {
     return std::sqrt(n) * M3 / std::pow(M2, 1.5);
 }
 
-double MetricStats::get_kurtosis() const {
+double MetricStats::kurtosis() const {
     if (stat.n < 4) return 0.0;
     double M2, M3, M4, n, mu;
     central_moments(stat, M2, M3, M4, n, mu);

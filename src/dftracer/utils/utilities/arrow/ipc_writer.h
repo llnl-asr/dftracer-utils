@@ -40,7 +40,7 @@ class BufferPool {
         std::atomic<bool> in_use{false};
     };
 
-    explicit BufferPool(std::size_t num_slots = 4,
+    explicit BufferPool(std::size_t slot_count = 4,
                         std::size_t initial_capacity = DEFAULT_BUFFER_CAPACITY);
     ~BufferPool() = default;
 

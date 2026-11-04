@@ -170,13 +170,12 @@ TEST_SUITE("DesignA") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < SMALL_FILES; ++i)
-            files.push_back(small_trace(env.get_dir(), i));
+            files.push_back(small_trace(env.dir(), i));
 
         const auto limit = index::build::g_max_sink_bytes.exchange(SINK_LIMIT);
-        const auto few =
-            peak_of_build(files, env.get_dir() + "/idx2", 2, BUDGET);
+        const auto few = peak_of_build(files, env.dir() + "/idx2", 2, BUDGET);
         const auto many =
-            peak_of_build(files, env.get_dir() + "/idx16", 16, BUDGET);
+            peak_of_build(files, env.dir() + "/idx16", 16, BUDGET);
         index::build::g_max_sink_bytes.store(limit);
         MESSAGE("peak live bytes: 2 workers "
                 << few.bytes << " (" << few.in_flight
@@ -224,16 +223,16 @@ TEST_SUITE("DesignA") {
         constexpr int BIG_LINES = SEGMENT_LINES * 8;
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
-        files.push_back(big_trace(env.get_dir(), "big", BIG_LINES, 0));
+        files.push_back(big_trace(env.dir(), "big", BIG_LINES, 0));
 
         index::build::g_probe_parse.store(false);
         index::build::g_max_parse_in_flight.store(0);
-        const auto off = build_with(files, env.get_dir() + "/off", 4, 0);
+        const auto off = build_with(files, env.dir() + "/off", 4, 0);
         REQUIRE(off.indexed == 1);
         CHECK(index::build::g_max_parse_in_flight.load() == 0);
 
         index::build::g_probe_parse.store(true);
-        const auto on = build_with(files, env.get_dir() + "/on", 4, 0);
+        const auto on = build_with(files, env.dir() + "/on", 4, 0);
         index::build::g_probe_parse.store(false);
         REQUIRE(on.indexed == 1);
         CHECK(index::build::g_max_parse_in_flight.load() >= 1);
@@ -245,17 +244,17 @@ TEST_SUITE("DesignA") {
         constexpr int LINES = SEGMENT_LINES * 12;
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
-        files.push_back(big_trace(env.get_dir(), "a", LINES, 1));
-        files.push_back(small_trace(env.get_dir(), 0));
+        files.push_back(big_trace(env.dir(), "a", LINES, 1));
+        files.push_back(small_trace(env.dir(), 0));
 
         index::build::g_probe_intern_order.store(true);
         index::build::g_intern_order_digest.store(0);
-        const auto one = build_with(files, env.get_dir() + "/idx1", 1, 0);
+        const auto one = build_with(files, env.dir() + "/idx1", 1, 0);
         REQUIRE(one.indexed == files.size());
         const auto order = index::build::g_intern_order_digest.load();
-        const auto expect = dump_index(files[0], env.get_dir() + "/idx1");
+        const auto expect = dump_index(files[0], env.dir() + "/idx1");
         for (int run = 0; run < 3; ++run) {
-            const auto dir = env.get_dir() + "/idx_par" + dstd::to_string(run);
+            const auto dir = env.dir() + "/idx_par" + dstd::to_string(run);
             index::build::g_intern_order_digest.store(0);
             const auto many = build_with(files, dir, WORKERS, 0);
             REQUIRE(many.indexed == files.size());

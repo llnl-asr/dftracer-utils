@@ -854,14 +854,14 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
                                   dstd::Vector<const Series*>{&v2});
         dataframe::agg_merge(*st1, *st2);
-        REQUIRE(dataframe::agg_num_groups(*st1) == 3);
+        REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         DataFrame out = dataframe::agg_finalize(*st1, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::FixedSizeBinary);
         CHECK(out.column("k").data_type().fixed_size() == 4);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
-        for (std::int64_t g = 0; g < dataframe::agg_num_groups(*st1); ++g) {
+        for (std::int64_t g = 0; g < dataframe::agg_group_count(*st1); ++g) {
             const dstd::Vector<dstd::String> key =
                 dataframe::agg_group_key(*st1, g);
             REQUIRE(key.size() == 1);
@@ -890,7 +890,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         const dstd::String blob = dataframe::agg_serialize(*st);
         AggStatePtr back = dataframe::agg_deserialize(blob);
 
-        REQUIRE(dataframe::agg_num_groups(*back) == 3);
+        REQUIRE(dataframe::agg_group_count(*back) == 3);
         DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::FixedSizeBinary);
@@ -961,13 +961,13 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
                                   dstd::Vector<const Series*>{&v2});
         dataframe::agg_merge(*st1, *st2);
-        REQUIRE(dataframe::agg_num_groups(*st1) == 3);
+        REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         // Round-trip the merged partial through the spill blob before
         // finalizing, exercising the same path agg/serialize.cpp writes.
         const dstd::String blob = dataframe::agg_serialize(*st1);
         AggStatePtr back = dataframe::agg_deserialize(blob);
-        REQUIRE(dataframe::agg_num_groups(*back) == 3);
+        REQUIRE(dataframe::agg_group_count(*back) == 3);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
@@ -1042,11 +1042,11 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
                                   dstd::Vector<const Series*>{&v2});
         dataframe::agg_merge(*st1, *st2);
-        REQUIRE(dataframe::agg_num_groups(*st1) == 3);
+        REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         const dstd::String blob = dataframe::agg_serialize(*st1);
         AggStatePtr back = dataframe::agg_deserialize(blob);
-        REQUIRE(dataframe::agg_num_groups(*back) == 3);
+        REQUIRE(dataframe::agg_group_count(*back) == 3);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
@@ -1115,11 +1115,11 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
                                   dstd::Vector<const Series*>{&v2});
         dataframe::agg_merge(*st1, *st2);
-        REQUIRE(dataframe::agg_num_groups(*st1) == 3);
+        REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         const dstd::String blob = dataframe::agg_serialize(*st1);
         AggStatePtr back = dataframe::agg_deserialize(blob);
-        REQUIRE(dataframe::agg_num_groups(*back) == 3);
+        REQUIRE(dataframe::agg_group_count(*back) == 3);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
@@ -1185,11 +1185,11 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
                                   dstd::Vector<const Series*>{&v2});
         dataframe::agg_merge(*st1, *st2);
-        REQUIRE(dataframe::agg_num_groups(*st1) == 3);
+        REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         const dstd::String blob = dataframe::agg_serialize(*st1);
         AggStatePtr back = dataframe::agg_deserialize(blob);
-        REQUIRE(dataframe::agg_num_groups(*back) == 3);
+        REQUIRE(dataframe::agg_group_count(*back) == 3);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
@@ -1276,11 +1276,11 @@ TEST_SUITE("dataframe_arrow_types_compute") {
                                   dstd::Vector<const Series*>{&v2});
         dataframe::agg_merge(*st1, *st2);
         // {1.0}x2, {-0.0}x2, {+0.0}x1, {NaN}x1
-        REQUIRE(dataframe::agg_num_groups(*st1) == 4);
+        REQUIRE(dataframe::agg_group_count(*st1) == 4);
 
         const dstd::String blob = dataframe::agg_serialize(*st1);
         AggStatePtr back = dataframe::agg_deserialize(blob);
-        REQUIRE(dataframe::agg_num_groups(*back) == 4);
+        REQUIRE(dataframe::agg_group_count(*back) == 4);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 4);

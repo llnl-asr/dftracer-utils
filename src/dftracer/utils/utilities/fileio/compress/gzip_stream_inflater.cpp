@@ -46,7 +46,7 @@ void warm_up() {
         def.next_out = comp;
         def.avail_out = sizeof(comp);
         zng_deflate(&def, Z_FINISH);
-        const auto comp_len =
+        const auto comp_size =
             static_cast<std::uint32_t>(sizeof(comp) - def.avail_out);
         zng_deflateEnd(&def);
 
@@ -54,7 +54,7 @@ void warm_up() {
         track_allocations(inf);
         if (zng_inflateInit2(&inf, 31) == Z_OK) {
             inf.next_in = comp;
-            inf.avail_in = comp_len;
+            inf.avail_in = comp_size;
             inf.next_out = back;
             inf.avail_out = sizeof(back);
             zng_inflate(&inf, Z_FINISH);

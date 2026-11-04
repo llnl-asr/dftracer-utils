@@ -91,10 +91,11 @@ static coro::CoroTask<HttpResponse> handle_file_info(const HttpRequest& /*req*/,
     b.append_key_value("compressed_size",
                        static_cast<std::int64_t>(info->compressed_size));
     b.append_comma();
-    b.append_key_value("num_lines", static_cast<std::int64_t>(info->num_lines));
+    b.append_key_value("num_lines",
+                       static_cast<std::int64_t>(info->line_count));
     b.append_comma();
     b.append_key_value("num_checkpoints",
-                       static_cast<std::int64_t>(info->num_checkpoints));
+                       static_cast<std::int64_t>(info->checkpoint_count));
     b.append_comma();
     b.append_key_value("uncompressed_size",
                        static_cast<std::int64_t>(info->uncompressed_size));

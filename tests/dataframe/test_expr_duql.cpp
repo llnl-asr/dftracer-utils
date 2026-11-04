@@ -544,8 +544,8 @@ TEST_CASE("substr takes column start and length") {
                       {&s, &start, &len})) ==
           Opt<dstd::String>{"\xc3\xa9ll", dstd::nullopt, dstd::nullopt, "",
                             dstd::nullopt, dstd::nullopt});
-    const Expr lit_len = dataframe::lit(std::int64_t{2});
-    CHECK(as_strs(run(dataframe::expr_str_substr_col(c0(), c1(), &lit_len),
+    const Expr lit_size = dataframe::lit(std::int64_t{2});
+    CHECK(as_strs(run(dataframe::expr_str_substr_col(c0(), c1(), &lit_size),
                       {&s, &start})) ==
           Opt<dstd::String>{"\xc3\xa9l", "ab", dstd::nullopt, "", dstd::nullopt,
                             dstd::nullopt});
@@ -715,7 +715,7 @@ TEST_CASE("list functions") {
         make_list({0, 3, 3, 3, 5}, ints({1, 2, 3, 4, dstd::nullopt}),
                   {true, true, false, true});
     REQUIRE(l.valid());
-    CHECK(as_ints(run(dataframe::expr_list_len(c0()), {&l})) ==
+    CHECK(as_ints(run(dataframe::expr_list_size(c0()), {&l})) ==
           Opt<std::int64_t>{3, 0, dstd::nullopt, 2});
     CHECK(as_ints(run(dataframe::expr_list_get(c0(), 0), {&l})) ==
           Opt<std::int64_t>{1, dstd::nullopt, dstd::nullopt, 4});
@@ -752,7 +752,7 @@ TEST_CASE("list functions") {
           Opt<bool>{true, false});
 
     const Series i = ints({1});
-    CHECK_THROWS_AS(run(dataframe::expr_list_len(c0()), {&i}),
+    CHECK_THROWS_AS(run(dataframe::expr_list_size(c0()), {&i}),
                     std::invalid_argument);
 }
 

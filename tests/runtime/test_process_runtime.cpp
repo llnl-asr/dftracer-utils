@@ -145,12 +145,12 @@ TEST_SUITE("ProcessRuntime") {
         // Let the pool retire down to its floor of one.
         const auto deadline =
             std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (default_runtime().get_progress().workers.size() > 1 &&
+        while (default_runtime().progress().workers.size() > 1 &&
                std::chrono::steady_clock::now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        REQUIRE(default_runtime().get_progress().workers.size() == 1);
+        REQUIRE(default_runtime().progress().workers.size() == 1);
         configure_default_runtime({.threads = 8});
-        CHECK(default_runtime().get_progress().workers.size() < 8);
+        CHECK(default_runtime().progress().workers.size() < 8);
     }
 
     TEST_CASE("shutdown of the process runtime leaves it running") {

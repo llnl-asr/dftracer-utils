@@ -267,7 +267,7 @@ dstd::String describe(const trace::views::detail::FoldEvent& ev,
 TEST_SUITE("IndexParseWalks") {
     TEST_CASE("each record and each args object is walked once") {
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::String file = write_trace(env.get_dir());
+        const dstd::String file = write_trace(env.dir());
         std::uint64_t with_args = 0;
         for (int i = 0; i < RECORDS; ++i)
             if (has_args_object(shape_of(i))) ++with_args;
@@ -275,7 +275,7 @@ TEST_SUITE("IndexParseWalks") {
         trace::internal::parse_walks::g_record_walks = 0;
         trace::internal::parse_walks::g_args_walks = 0;
         trace::internal::parse_walks::g_count = true;
-        build_one(file, env.get_dir() + "/idx");
+        build_one(file, env.dir() + "/idx");
         trace::internal::parse_walks::g_count = false;
 
         MESSAGE("record walks "
@@ -290,12 +290,12 @@ TEST_SUITE("IndexParseWalks") {
 
     TEST_CASE("the index of a fixed trace is unchanged") {
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::String file = write_trace(env.get_dir());
-        build_one(file, env.get_dir() + "/idx");
+        const dstd::String file = write_trace(env.dir());
+        build_one(file, env.dir() + "/idx");
         const dstd::String path =
-            trace::internal::determine_index_path(file, env.get_dir() + "/idx");
+            trace::internal::determine_index_path(file, env.dir() + "/idx");
         const auto digests = namespace_digests(
-            index::store::internal::normalize_index_root(path), env.get_dir());
+            index::store::internal::normalize_index_root(path), env.dir());
         for (const auto& [name, digest] : digests)
             MESSAGE("namespace " << name << " " << digest);
         CHECK(digests.size() == std::size(RECORDED));
@@ -328,8 +328,8 @@ TEST_SUITE("IndexParseWalks") {
         out += "]\n";
         dftu_utils_test::TestEnvironment env(10);
         const dstd::String file =
-            dftu_utils_test::write_gz_trace(env.get_dir() + "/bad.pfw.gz", out);
-        const auto result = build_one(file, env.get_dir() + "/idx");
+            dftu_utils_test::write_gz_trace(env.dir() + "/bad.pfw.gz", out);
+        const auto result = build_one(file, env.dir() + "/idx");
         REQUIRE(result.results.size() == 1);
         CHECK(result.results[0].events_processed == std::size_t{GOOD});
     }
@@ -394,15 +394,15 @@ TEST_SUITE("IndexParseWalks") {
                 }
                 dftu_utils_test::TestEnvironment env(10);
                 const dstd::String file = dftu_utils_test::write_gz_trace(
-                    env.get_dir() + "/odd.pfw.gz", out);
+                    env.dir() + "/odd.pfw.gz", out);
                 const auto result =
-                    build_one(file, env.get_dir() + "/idx", 32 * 1024);
+                    build_one(file, env.dir() + "/idx", 32 * 1024);
                 REQUIRE(result.results.size() == 1);
                 CHECK(result.results[0].events_processed ==
                       std::size_t{GOOD + 1});
 
                 utilities::reader::TraceReader reader(
-                    {.file_path = file, .index_dir = env.get_dir() + "/idx"});
+                    {.file_path = file, .index_dir = env.dir() + "/idx"});
                 REQUIRE(reader.has_index());
                 const auto found = [&](const dstd::String& query) {
                     utilities::reader::ReadConfig rc;
@@ -521,14 +521,14 @@ TEST_SUITE("IndexParseWalks") {
         }
         out += "]\n";
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::String file = dftu_utils_test::write_gz_trace(
-            env.get_dir() + "/mixed.pfw.gz", out);
-        const auto result = build_one(file, env.get_dir() + "/idx");
+        const dstd::String file =
+            dftu_utils_test::write_gz_trace(env.dir() + "/mixed.pfw.gz", out);
+        const auto result = build_one(file, env.dir() + "/idx");
         REQUIRE(result.results.size() == 1);
         CHECK(result.results[0].events_processed == tags.size());
 
         utilities::reader::TraceReader reader(
-            {.file_path = file, .index_dir = env.get_dir() + "/idx"});
+            {.file_path = file, .index_dir = env.dir() + "/idx"});
         REQUIRE(reader.has_index());
         for (const auto& tag : tags) {
             utilities::reader::ReadConfig rc;
@@ -564,14 +564,14 @@ TEST_SUITE("IndexParseWalks") {
         }
         out += "]\n";
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::String file = dftu_utils_test::write_gz_trace(
-            env.get_dir() + "/shape.pfw.gz", out);
-        const auto result = build_one(file, env.get_dir() + "/idx");
+        const dstd::String file =
+            dftu_utils_test::write_gz_trace(env.dir() + "/shape.pfw.gz", out);
+        const auto result = build_one(file, env.dir() + "/idx");
         REQUIRE(result.results.size() == 1);
         CHECK(result.results[0].events_processed == std::size_t{GOOD + 3});
 
         utilities::reader::TraceReader reader(
-            {.file_path = file, .index_dir = env.get_dir() + "/idx"});
+            {.file_path = file, .index_dir = env.dir() + "/idx"});
         REQUIRE(reader.has_index());
         for (const char* tag : {"g0", "g39"}) {
             utilities::reader::ReadConfig rc;
@@ -599,9 +599,9 @@ TEST_SUITE("IndexParseWalks") {
         }
         out += "]\n";
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::String file = dftu_utils_test::write_gz_trace(
-            env.get_dir() + "/pair.pfw.gz", out);
-        const auto result = build_one(file, env.get_dir() + "/idx");
+        const dstd::String file =
+            dftu_utils_test::write_gz_trace(env.dir() + "/pair.pfw.gz", out);
+        const auto result = build_one(file, env.dir() + "/idx");
         REQUIRE(result.results.size() == 1);
         CHECK(result.results[0].events_processed == std::size_t{GOOD + 2});
         CHECK(result.results[0].dropped_lines == 0);
@@ -623,8 +623,8 @@ TEST_SUITE("IndexParseWalks") {
         out += "]\n";
         dftu_utils_test::TestEnvironment env(10);
         const dstd::String file =
-            dftu_utils_test::write_gz_trace(env.get_dir() + "/cut.pfw.gz", out);
-        const auto result = build_one(file, env.get_dir() + "/idx");
+            dftu_utils_test::write_gz_trace(env.dir() + "/cut.pfw.gz", out);
+        const auto result = build_one(file, env.dir() + "/idx");
         REQUIRE(result.results.size() == 1);
         CHECK(result.results[0].events_processed == std::size_t{GOOD});
         CHECK(result.results[0].dropped_lines == 1);
@@ -647,11 +647,11 @@ TEST_SUITE("IndexParseWalks") {
         }
         out += "]\n";
         dftu_utils_test::TestEnvironment env(10);
-        const dstd::String file = dftu_utils_test::write_gz_trace(
-            env.get_dir() + "/long.pfw.gz", out);
+        const dstd::String file =
+            dftu_utils_test::write_gz_trace(env.dir() + "/long.pfw.gz", out);
         trace::internal::parse_walks::g_record_walks = 0;
         trace::internal::parse_walks::g_count = true;
-        const auto result = build_one(file, env.get_dir() + "/idx");
+        const auto result = build_one(file, env.dir() + "/idx");
         trace::internal::parse_walks::g_count = false;
         REQUIRE(result.results.size() == 1);
         CHECK(result.results[0].events_processed == std::size_t{LINES});

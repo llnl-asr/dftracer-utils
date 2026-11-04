@@ -31,7 +31,7 @@ namespace {
 // ("M"/"X"), so the same code path is exercised through read_phase either way.
 dstd::String create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
     const dstd::String tag = numeric_ph ? "num" : "str";
-    const dstd::String dir = env.get_dir() + "/" + tag;
+    const dstd::String dir = env.dir() + "/" + tag;
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     const dstd::String pfw = dir + "/meta.pfw";
     dftu_utils_test::FileOut ofs(pfw);
@@ -153,7 +153,7 @@ namespace {
 // 4 FH records, over small gzip members so the records spread across chunks.
 // Only thread 0 writes "open" events.
 dstd::String create_threaded_trace(TestEnvironment& env) {
-    const dstd::String pfw = env.get_dir() + "/threads.pfw";
+    const dstd::String pfw = env.dir() + "/threads.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
         ofs << "[\n";
@@ -248,7 +248,7 @@ TEST_SUITE("View - metadata under pruning") {
 
     TEST_CASE("a metadata query reads no chunk of a file without metadata") {
         TestEnvironment env(200);
-        const dstd::String pfw = env.get_dir() + "/plain.pfw";
+        const dstd::String pfw = env.dir() + "/plain.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 2000; ++i)

@@ -82,12 +82,12 @@ void Scheduler::finish_task(dstd::SharedPtr<Task> task) noexcept {
         on_task_completed(task);
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR(
-            "Exception in on_task_completed for task '%s': %s",
-            task->get_name(), e.what());
+            "Exception in on_task_completed for task '%s': %s", task->name(),
+            e.what());
     } catch (...) {
         DFTRACER_UTILS_LOG_ERROR(
             "Unknown exception in on_task_completed for task '%s'",
-            task->get_name());
+            task->name());
     }
     // Notified under the lock: the destructor cannot finish, and free the
     // mutex, before this returns.
@@ -146,22 +146,22 @@ void Scheduler::schedule(dstd::SharedPtr<Task> source, const std::any& input) {
     try {
         std::any src_input;
         if (source->has_initial_input()) {
-            src_input = source->get_initial_input().value();
+            src_input = source->initial_input().value();
         } else {
             src_input = input;
         }
 
         if (watchdog_) {
             std::chrono::milliseconds timeout = source->has_timeout()
-                                                    ? source->get_timeout()
+                                                    ? source->timeout()
                                                     : default_task_timeout_;
-            watchdog_->register_task_start(source->get_id(), source, timeout);
+            watchdog_->register_task_start(source->id(), source, timeout);
         }
 
         submit_task_to_executor(source, src_input);
     } catch (...) {
         DFTRACER_UTILS_LOG_ERROR("Failed to prepare source task ID %ld ('%s')",
-                                 source->get_id(), source->get_name());
+                                 source->id(), source->name());
         source->set_exception(std::current_exception());
         handle_task_error(source);
     }
@@ -249,11 +249,11 @@ void Scheduler::on_task_completed(dstd::SharedPtr<Task> task) {
     }
 
     DFTRACER_UTILS_LOG_DEBUG("Task ID %ld ('%s') completed notification",
-                             task->get_id(), task->get_name());
+                             task->id(), task->name());
 
     // Unregister from watchdog
     if (watchdog_) {
-        watchdog_->unregister_task(task->get_id());
+        watchdog_->unregister_task(task->id());
     }
 
     // Check if task failed
@@ -272,13 +272,13 @@ void Scheduler::on_task_completed(dstd::SharedPtr<Task> task) {
         DFTRACER_UTILS_LOG_DEBUG(
             "Skipping child scheduling for task '%s' due to shutdown or "
             "FAIL_FAST",
-            task->get_name());
+            task->name());
         return;
     }
 
     // Make a copy of children to avoid iterator invalidation or use-after-free
     // if task is destroyed during iteration
-    auto children = task->get_children();
+    auto children = task->children();
 
     // Schedule ready children by submitting directly to executor.
     // Even if this task failed with CONTINUE/CUSTOM policy, we still
@@ -297,7 +297,7 @@ void Scheduler::on_task_completed(dstd::SharedPtr<Task> task) {
             // For CONTINUE/CUSTOM policy: skip children if any parent failed
             bool has_failed_parent = false;
             if (error_policy_ != ErrorPolicy::FailFast) {
-                for (const auto& parent : child->get_parents()) {
+                for (const auto& parent : child->parents()) {
                     if (parent->result().has_exception()) {
                         has_failed_parent = true;
                         break;
@@ -309,7 +309,7 @@ void Scheduler::on_task_completed(dstd::SharedPtr<Task> task) {
                 DFTRACER_UTILS_LOG_WARN(
                     "Skipping child task ID %ld ('%s') because parent failed "
                     "(CONTINUE policy)",
-                    child->get_id(), child->get_name());
+                    child->id(), child->name());
 
                 // Mark child as failed and propagate to its children
                 skip_task_and_descendants(child);
@@ -327,22 +327,21 @@ void Scheduler::on_task_completed(dstd::SharedPtr<Task> task) {
                 // Register with watchdog if available
                 if (watchdog_) {
                     std::chrono::milliseconds timeout =
-                        child->has_timeout() ? child->get_timeout()
+                        child->has_timeout() ? child->timeout()
                                              : default_task_timeout_;
-                    watchdog_->register_task_start(child->get_id(), child,
-                                                   timeout);
+                    watchdog_->register_task_start(child->id(), child, timeout);
                 }
 
                 submit_task_to_executor(child, input);
 
                 DFTRACER_UTILS_LOG_DEBUG(
                     "Directly submitted child task '%s' to executor",
-                    child->get_name());
+                    child->name());
             } catch (...) {
                 DFTRACER_UTILS_LOG_ERROR(
                     "Failed to prepare input for child task ID %ld "
                     "('%s')",
-                    child->get_id(), child->get_name());
+                    child->id(), child->name());
 
                 child->set_exception(std::current_exception());
                 handle_task_error(child);
@@ -355,12 +354,12 @@ void Scheduler::on_task_completed(dstd::SharedPtr<Task> task) {
     // to avoid race condition where schedule() returns before progress callback
     // is invoked for the last task
     if (progress_callback_) {
-        auto executor_progress = executor_->get_progress();
+        auto executor_progress = executor_->progress();
         progress_callback_(executor_progress.tasks_completed, total_tasks_);
     }
 
     // Invoke coroutine completion callbacks (resume awaiting coroutines)
-    invoke_completion_callbacks(task->get_id());
+    invoke_completion_callbacks(task->id());
 
     // Decrement pending count
     // Only if not already decremented by handle_task_error
@@ -415,12 +414,12 @@ void Scheduler::reset() {
 }
 
 std::any Scheduler::prepare_input_for_task(dstd::SharedPtr<Task> task) {
-    const auto& parents = task->get_parents();
+    const auto& parents = task->parents();
 
     if (parents.empty()) {
         // No parents - check for initial input
         if (task->has_initial_input()) {
-            return task->get_initial_input().value();
+            return task->initial_input().value();
         }
         return std::any{};
     }
@@ -456,7 +455,7 @@ std::any Scheduler::prepare_input_for_task(dstd::SharedPtr<Task> task) {
     // Check if all parents have void output (synchronization only)
     bool all_void = std::all_of(
         parents.begin(), parents.end(),
-        [](const auto& p) { return p->get_output_type() == typeid(void); });
+        [](const auto& p) { return p->output_type() == typeid(void); });
 
     if (all_void) {
         // All void - return void
@@ -479,7 +478,7 @@ std::any Scheduler::prepare_input_for_task(dstd::SharedPtr<Task> task) {
 void Scheduler::submit_task_to_executor(dstd::SharedPtr<Task> task,
                                         const std::any& input) {
     DFTRACER_UTILS_LOG_DEBUG("Submitting task ID %ld ('%s') to executor",
-                             task->get_id(), task->get_name());
+                             task->id(), task->name());
 
     // @Note: pending_count_ is incremented before this call,
     // not here, to avoid race condition with wait predicate
@@ -509,14 +508,14 @@ size_t Scheduler::count_reachable_tasks(dstd::SharedPtr<Task> source) {
 void Scheduler::count_tasks_dfs(dstd::SharedPtr<Task> task,
                                 std::unordered_set<common::TaskIndex>& visited,
                                 size_t& count) {
-    if (!task || visited.find(task->get_id()) != visited.end()) {
+    if (!task || visited.find(task->id()) != visited.end()) {
         return;
     }
 
-    visited.insert(task->get_id());
+    visited.insert(task->id());
     ++count;
 
-    for (const auto& child : task->get_children()) {
+    for (const auto& child : task->children()) {
         count_tasks_dfs(child, visited, count);
     }
 }
@@ -529,23 +528,23 @@ void Scheduler::initialize_pending_counts(dstd::SharedPtr<Task> source) {
 void Scheduler::initialize_pending_counts_dfs(
     dstd::SharedPtr<Task> task,
     std::unordered_set<common::TaskIndex>& visited) {
-    if (!task || visited.find(task->get_id()) != visited.end()) {
+    if (!task || visited.find(task->id()) != visited.end()) {
         return;
     }
 
-    visited.insert(task->get_id());
+    visited.insert(task->id());
 
     // Initialize pending count
     task->initialize_pending_count();
 
-    for (const auto& child : task->get_children()) {
+    for (const auto& child : task->children()) {
         initialize_pending_counts_dfs(child, visited);
     }
 }
 
 void Scheduler::handle_task_error(dstd::SharedPtr<Task> task) {
-    DFTRACER_UTILS_LOG_ERROR("Task ID %ld ('%s') failed", task->get_id(),
-                             task->get_name());
+    DFTRACER_UTILS_LOG_ERROR("Task ID %ld ('%s') failed", task->id(),
+                             task->name());
 
     has_error_ = true;
 
@@ -560,7 +559,7 @@ void Scheduler::handle_task_error(dstd::SharedPtr<Task> task) {
     // Call custom error handler if provided
     if (error_handler_) {
         try {
-            auto ex = task->result().get_exception();
+            auto ex = task->result().exception();
             error_handler_(task, ex);
         } catch (...) {
             DFTRACER_UTILS_LOG_ERROR("%s", "Error handler threw exception");
@@ -592,50 +591,49 @@ void Scheduler::validate_task_types(dstd::SharedPtr<Task> task) {
     std::queue<dstd::SharedPtr<Task>> queue;
 
     queue.push(task);
-    visited.insert(task->get_id());
+    visited.insert(task->id());
 
     while (!queue.empty()) {
         auto current = queue.front();
         queue.pop();
 
         // Validate this task's parent connections
-        for (const auto& parent : current->get_parents()) {
+        for (const auto& parent : current->parents()) {
             // Skip validation for void outputs (synchronization only)
-            if (parent->get_output_type() == typeid(void)) {
+            if (parent->output_type() == typeid(void)) {
                 continue;
             }
 
             // For single parent without combiner, types should match
-            if (current->get_parents().size() == 1 &&
-                !current->has_combiner()) {
+            if (current->parents().size() == 1 && !current->has_combiner()) {
                 // std::any works as a wildcard in both directions:
                 // - A task expecting std::any can accept any input type
                 // - A task outputting std::any can connect to any input type
                 // (runtime cast)
                 bool types_match =
-                    (parent->get_output_type() == current->get_input_type()) ||
-                    (current->get_input_type() == typeid(std::any)) ||
-                    (parent->get_output_type() == typeid(std::any));
+                    (parent->output_type() == current->input_type()) ||
+                    (current->input_type() == typeid(std::any)) ||
+                    (parent->output_type() == typeid(std::any));
 
                 if (!types_match) {
-                    auto& cloc = current->get_location();
-                    auto& ploc = parent->get_location();
+                    auto& cloc = current->location();
+                    auto& ploc = parent->location();
                     char buf[1024];
                     std::snprintf(buf, sizeof(buf),
                                   "Type mismatch: task '%s' at %s:%u "
                                   "incompatible with parent '%s' at %s:%u",
-                                  current->get_name(), cloc.file_name(),
-                                  cloc.line(), parent->get_name(),
-                                  ploc.file_name(), ploc.line());
+                                  current->name(), cloc.file_name(),
+                                  cloc.line(), parent->name(), ploc.file_name(),
+                                  ploc.line());
                     throw PipelineError(PipelineError::TypeMismatch, buf);
                 }
             }
         }
 
         // Add children to queue for BFS
-        for (const auto& child : current->get_children()) {
-            if (child && !visited.count(child->get_id())) {
-                visited.insert(child->get_id());
+        for (const auto& child : current->children()) {
+            if (child && !visited.count(child->id())) {
+                visited.insert(child->id());
                 queue.push(child);
             }
         }
@@ -657,11 +655,11 @@ void Scheduler::skip_task_and_descendants(dstd::SharedPtr<Task> task) {
         PipelineError(PipelineError::ExecutionError, "Parent task failed")));
 
     DFTRACER_UTILS_LOG_DEBUG("Skipped task ID %ld ('%s') due to failed parent",
-                             task->get_id(), task->get_name());
+                             task->id(), task->name());
 
     // Recursively skip all children
     // Make a copy to avoid iterator invalidation during recursion
-    auto children = task->get_children();
+    auto children = task->children();
     for (const auto& child : children) {
         if (child) {
             skip_task_and_descendants(child);

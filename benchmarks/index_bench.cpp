@@ -441,7 +441,7 @@ Result measure(const Options& opt, const dstd::String& input,
             if (!file) continue;
             if (auto meta = common::unwrap(
                     dftracer::utils::index::file_metadata(snapshot, *file)))
-                r.lines += meta->num_lines;
+                r.lines += meta->line_count;
             for (const auto& [p, stat] : common::unwrap(
                      dftracer::utils::index::catalog(snapshot, *file)))
                 paths.insert(dstd::String(p));

@@ -122,7 +122,7 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(const ViewPlan& plan,
                                                     std::uint64_t& skipped_out);
 
 // The shared scan driver: gather candidate chunks and scan them in parallel,
-// handing each decoded batch to `on_batch(slot, events)`. `num_slots` worker
+// handing each decoded batch to `on_batch(slot, events)`. `slot_count` worker
 // coroutines round-robin the units (0 = one worker per unit); `limit`
 // (0 = unlimited) caps total produced events. Every per-slot body a streaming
 // terminal needs (write to a sink, fold into a slot map, ...) is the callback;
@@ -133,7 +133,7 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(const ViewPlan& plan,
 // the fan-out joins. They can only ever slow the consumer by what they do per
 // batch, never by waiting. Returns artifacts_committed set if any fold wrote.
 coro::CoroTask<ExportStats> for_each_scanned_batch(
-    const ViewPlan& plan, const ViewDefinition& vdef, std::size_t num_slots,
+    const ViewPlan& plan, const ViewDefinition& vdef, std::size_t slot_count,
     std::uint64_t limit,
     const dstd::Function<void(std::size_t,
                               const dstd::Vector<dstd::StringView>&)>& on_batch,

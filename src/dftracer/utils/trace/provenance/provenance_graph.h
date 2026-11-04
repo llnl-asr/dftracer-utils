@@ -157,9 +157,9 @@ struct ProvenanceGraph {
 /// this adds phase(Any) and scans every event, because the dftracer entity
 /// API attaches relation arrays (used/generated/invalidated/updated) to
 /// events of any category; a byte-level prefilter keeps that cheap.
-/// `num_slots` is the worker parallelism (0 -> 1).
+/// `slot_count` is the worker parallelism (0 -> 1).
 coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
-    const views::View& view, std::size_t num_slots,
+    const views::View& view, std::size_t slot_count,
     ProvenanceOptions options = {});
 
 /// Split `path` into (mount point, path relative to it) using `table`

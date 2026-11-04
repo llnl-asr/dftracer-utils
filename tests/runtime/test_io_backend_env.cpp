@@ -29,7 +29,7 @@ fresh_process::Result run_with(const char* value, const char* test_case) {
 TEST_CASE("child: report the backend" * doctest::skip()) {
     fresh_process::announce();
     ExecutorConfig config;
-    config.num_threads = 2;
+    config.thread_count = 2;
     config.io_pool_size = 2;
     auto executor = make_task_executor(config);
     executor->start();

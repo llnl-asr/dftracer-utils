@@ -13,7 +13,7 @@ namespace dftracer::utils::index::store {
 
 struct FileMetadataResult {
     std::uint64_t checkpoint_size = 0;
-    std::uint64_t num_lines = 0;
+    std::uint64_t line_count = 0;
     std::uint64_t max_bytes = 0;
     /// The trace's last gzip member was cut short when it was indexed.
     bool truncated = false;

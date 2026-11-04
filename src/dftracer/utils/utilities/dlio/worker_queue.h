@@ -24,9 +24,9 @@ using BatchTimeSampler = dstd::Function<dstd::Pair<double, double>()>;
 
 class WorkerQueue {
    public:
-    WorkerQueue(int num_workers, int prefetch_factor)
-        : num_workers_(num_workers),
-          queue_capacity_(static_cast<std::size_t>(num_workers) *
+    WorkerQueue(int worker_count, int prefetch_factor)
+        : worker_count_(worker_count),
+          queue_capacity_(static_cast<std::size_t>(worker_count) *
                           static_cast<std::size_t>(prefetch_factor)) {}
 
     dstd::Vector<WorkInterval> produce_batches(double current_time,
@@ -40,7 +40,7 @@ class WorkerQueue {
     std::uint64_t stall_count() const { return stall_count_; }
 
    private:
-    int num_workers_;
+    int worker_count_;
     std::size_t queue_capacity_;
     std::uint64_t stall_count_ = 0;
     dstd::Vector<double> ready_batches_;  ///< sorted ready times

@@ -20,7 +20,7 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
 
 TEST_CASE("when_all - Two heterogeneous types (int, string)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> int_result{0};
@@ -58,7 +58,7 @@ TEST_CASE("when_all - Two heterogeneous types (int, string)") {
 }
 
 TEST_CASE("when_all - Three heterogeneous types (int, float, string)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> int_result{0};
@@ -105,7 +105,7 @@ TEST_CASE("when_all - Three heterogeneous types (int, float, string)") {
 }
 
 TEST_CASE("when_all - Mixed void and non-void") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> flag{false};
@@ -146,7 +146,7 @@ TEST_CASE("when_all - Mixed void and non-void") {
 }
 
 TEST_CASE("when_all - All void types") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> counter{0};
@@ -183,7 +183,7 @@ TEST_CASE("when_all - All void types") {
 }
 
 TEST_CASE("when_all - Exception propagation from one task") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> exception_caught{false};
@@ -220,7 +220,7 @@ TEST_CASE("when_all - Exception propagation from one task") {
 }
 
 TEST_CASE("when_all - Homogeneous types still work with variadic overload") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};

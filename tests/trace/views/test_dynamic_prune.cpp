@@ -102,7 +102,7 @@ dstd::Vector<dstd::String> matching_names(const NameCollectorFold& f,
 // roughly fixed number of rows, so at 40 it pruned 8 rows of 158 and a fast
 // machine lost the race outright. At 200 it prunes about half.
 dstd::String create_grouped_trace(TestEnvironment& env, int per_name = 40) {
-    dstd::String pfw = env.get_dir() + "/grouped.pfw";
+    dstd::String pfw = env.dir() + "/grouped.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     std::uint64_t ts = 1000;
     int pid = 1;
@@ -178,7 +178,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         "a narrow() prune reads strictly fewer chunks and the same rows") {
         TestEnvironment env(200);
         dstd::String gz = create_grouped_trace(env);
-        const dstd::String idx_dir = env.get_dir() + "/grouped.dftindex";
+        const dstd::String idx_dir = env.dir() + "/grouped.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
         const dstd::String idx =
@@ -259,7 +259,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         "keeps results correct") {
         TestEnvironment env(200);
         dstd::String gz = create_grouped_trace(env, /*per_name=*/200);
-        const dstd::String idx_dir = env.get_dir() + "/grouped2.dftindex";
+        const dstd::String idx_dir = env.dir() + "/grouped2.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
         const dstd::String idx =
@@ -371,7 +371,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         "a lazy join over a trace scan narrows the scan to its build keys") {
         TestEnvironment env(200);
         dstd::String gz = create_grouped_trace(env, /*per_name=*/200);
-        const dstd::String idx_dir = env.get_dir() + "/grouped3.dftindex";
+        const dstd::String idx_dir = env.dir() + "/grouped3.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
         const dstd::String idx =
@@ -425,7 +425,7 @@ TEST_SUITE("Dynamic filter pushdown") {
     TEST_CASE("threads planning and scanning on their own never stall") {
         TestEnvironment env(200);
         dstd::String gz = create_grouped_trace(env, /*per_name=*/200);
-        const dstd::String idx_dir = env.get_dir() + "/stall.dftindex";
+        const dstd::String idx_dir = env.dir() + "/stall.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
         const dstd::String idx =

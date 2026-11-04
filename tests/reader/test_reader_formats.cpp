@@ -32,10 +32,10 @@ class FormatTestFixture {
         index_file_ = env_.get_index_path(test_file_);
     }
 
-    Format get_format() const { return format_; }
-    const dstd::String& get_test_file() const { return test_file_; }
-    const dstd::String& get_index_file() const { return index_file_; }
-    const TestEnvironment& get_env() const { return env_; }
+    Format format() const { return format_; }
+    const dstd::String& test_file() const { return test_file_; }
+    const dstd::String& index_file() const { return index_file_; }
+    const TestEnvironment& env() const { return env_; }
 
    private:
     Format format_;
@@ -68,7 +68,7 @@ TEST_CASE_TEMPLATE("Indexer creation and destruction", FormatType, GZIPFormat) {
 
     SUBCASE("Basic indexer creation") {
         auto indexer = CheckpointIndexerFactory::create(
-            fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024);
+            fixture.test_file(), fixture.index_file(), 1024 * 1024);
         REQUIRE(indexer != nullptr);
         CHECK_FALSE(indexer->exists());
         CHECK(indexer->need_rebuild());
@@ -76,8 +76,8 @@ TEST_CASE_TEMPLATE("Indexer creation and destruction", FormatType, GZIPFormat) {
 
     SUBCASE("Invalid file path") {
         CHECK_THROWS_AS(
-            CheckpointIndexerFactory::create(
-                "/nonexistent/file.gz", fixture.get_index_file(), 1024 * 1024),
+            CheckpointIndexerFactory::create("/nonexistent/file.gz",
+                                             fixture.index_file(), 1024 * 1024),
             index::store::IndexerError);
     }
 }
@@ -87,16 +87,16 @@ TEST_CASE_TEMPLATE("Index building", FormatType, GZIPFormat) {
 
     SUBCASE("Basic index building") {
         auto indexer = CheckpointIndexerFactory::create(
-            fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024);
+            fixture.test_file(), fixture.index_file(), 1024 * 1024);
         REQUIRE(indexer != nullptr);
 
         indexer->build();
-        CHECK(indexer->get_num_lines() > 0);
+        CHECK(indexer->line_count() > 0);
     }
 
     SUBCASE("Rebuild detection") {
         auto indexer = CheckpointIndexerFactory::create(
-            fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024);
+            fixture.test_file(), fixture.index_file(), 1024 * 1024);
         REQUIRE(indexer != nullptr);
 
         // First build
@@ -108,8 +108,7 @@ TEST_CASE_TEMPLATE("Index building", FormatType, GZIPFormat) {
 
     SUBCASE("Force rebuild") {
         auto indexer = CheckpointIndexerFactory::create(
-            fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024,
-            true);
+            fixture.test_file(), fixture.index_file(), 1024 * 1024, true);
         REQUIRE(indexer != nullptr);
 
         indexer->build();
@@ -121,7 +120,7 @@ TEST_CASE_TEMPLATE("Reader creation and basic functionality", FormatType,
     FormatTestFixture fixture(FormatType::value);
 
     auto indexer = CheckpointIndexerFactory::create(
-        fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024);
+        fixture.test_file(), fixture.index_file(), 1024 * 1024);
     REQUIRE(indexer != nullptr);
     indexer->build();
 
@@ -132,8 +131,8 @@ TEST_CASE_TEMPLATE("Reader creation and basic functionality", FormatType,
     }
 
     SUBCASE("Reader creation from files") {
-        auto reader = ReaderFactory::create(
-            fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024);
+        auto reader = ReaderFactory::create(fixture.test_file(),
+                                            fixture.index_file(), 1024 * 1024);
         CHECK(reader != nullptr);
         CHECK(reader->is_valid());
     }
@@ -143,7 +142,7 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
     auto indexer = CheckpointIndexerFactory::create(
-        fixture.get_test_file(), fixture.get_index_file(), 512 * 1024);
+        fixture.test_file(), fixture.index_file(), 512 * 1024);
     REQUIRE(indexer != nullptr);
     indexer->build();
 
@@ -155,7 +154,7 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
         dstd::Vector<char> buffer(buffer_size);
         std::size_t total_bytes = 0;
         std::size_t current_pos = 0;
-        std::uint64_t max_bytes = indexer->get_max_bytes();
+        std::uint64_t max_bytes = indexer->max_bytes();
 
         while (current_pos < max_bytes) {
             std::size_t end_pos = std::min(current_pos + buffer_size,
@@ -168,12 +167,12 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
         }
 
         CHECK(total_bytes > 0);
-        MESSAGE("Format: " << format_name(fixture.get_format())
+        MESSAGE("Format: " << format_name(fixture.format())
                            << ", Total bytes read: " << total_bytes);
     }
 
     SUBCASE("Range reading") {
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
 
         // Test reading from middle of file
         std::size_t start_offset = max_bytes / 4;
@@ -198,7 +197,7 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
         std::size_t total_bytes = 0;
         std::size_t read_count = 0;
         std::size_t current_pos_small = 0;
-        std::uint64_t max_bytes = indexer->get_max_bytes();
+        std::uint64_t max_bytes = indexer->max_bytes();
 
         while (current_pos_small < max_bytes && read_count < 100) {
             std::size_t end_pos =
@@ -214,7 +213,7 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
 
         CHECK(total_bytes > 0);
         CHECK(read_count > 0);
-        MESSAGE("Format: " << format_name(fixture.get_format())
+        MESSAGE("Format: " << format_name(fixture.format())
                            << ", Small buffer reads: " << read_count
                            << ", Total bytes: " << total_bytes);
     }
@@ -224,7 +223,7 @@ TEST_CASE_TEMPLATE("JSON boundary detection", FormatType, GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
     auto indexer = CheckpointIndexerFactory::create(
-        fixture.get_test_file(), fixture.get_index_file(), 512 * 1024);
+        fixture.test_file(), fixture.index_file(), 512 * 1024);
     REQUIRE(indexer != nullptr);
     indexer->build();
 
@@ -241,7 +240,7 @@ TEST_CASE_TEMPLATE("JSON boundary detection", FormatType, GZIPFormat) {
         dstd::Vector<char> raw_buffer(buffer_size);
         dstd::Vector<char> json_buffer(buffer_size);
 
-        std::uint64_t max_bytes = indexer->get_max_bytes();
+        std::uint64_t max_bytes = indexer->max_bytes();
 
         // Read raw data
         std::size_t raw_total = raw_reader->read(
@@ -254,7 +253,7 @@ TEST_CASE_TEMPLATE("JSON boundary detection", FormatType, GZIPFormat) {
         CHECK(raw_total > 0);
         CHECK(json_total > 0);
 
-        MESSAGE("Format: " << format_name(fixture.get_format())
+        MESSAGE("Format: " << format_name(fixture.format())
                            << ", Raw: " << raw_total
                            << " bytes, JSON: " << json_total << " bytes");
 
@@ -268,7 +267,7 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
     // Create a larger test environment for line testing
-    TestEnvironment large_env(1000, fixture.get_format());
+    TestEnvironment large_env(1000, fixture.format());
     REQUIRE(large_env.is_valid());
 
     dstd::String large_test_file = large_env.create_test_file();
@@ -281,7 +280,7 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
     REQUIRE(indexer != nullptr);
     indexer->build();
 
-    uint64_t total_lines = indexer->get_num_lines();
+    uint64_t total_lines = indexer->line_count();
     CHECK(total_lines > 0);
 
     auto reader = ReaderFactory::create(indexer);
@@ -307,7 +306,7 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
         }
 
         CHECK(line_count > 0);
-        MESSAGE("Format: " << format_name(fixture.get_format())
+        MESSAGE("Format: " << format_name(fixture.format())
                            << ", Successfully read " << line_count << " lines");
     }
 

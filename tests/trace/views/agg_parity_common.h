@@ -358,7 +358,7 @@ inline dftu_utils_test::TestEnvironment& parity_env() {
 
 // One index root per trace set, so each set is one first touch.
 inline dftracer::utils::dstd::String parity_sub(const char* name) {
-    const dftracer::utils::dstd::String d = parity_env().get_dir() + "/" + name;
+    const dftracer::utils::dstd::String d = parity_env().dir() + "/" + name;
     REQUIRE(dftracer::utils::dstd::fs::create_directories(d).has_value());
     return d;
 }

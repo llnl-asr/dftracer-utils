@@ -14,7 +14,7 @@ TEST_SUITE("TimestampHistogram") {
         TimestampHistogram h;
         CHECK(h.empty());
         CHECK(h.total_count() == 0);
-        CHECK(h.num_bins() == 0);
+        CHECK(h.bin_count() == 0);
         CHECK(h.count_in_range(0, 1'000'000) == 0);
         CHECK(h.selectivity(0, 1'000'000) == 0.0);
     }
@@ -24,7 +24,7 @@ TEST_SUITE("TimestampHistogram") {
         h.add(500'000);  // 500ms -> bin 5
 
         CHECK(h.total_count() == 1);
-        CHECK(h.num_bins() == 1);
+        CHECK(h.bin_count() == 1);
         CHECK(h.bins()[0].first == 5);
         CHECK(h.bins()[0].second == 1);
     }
@@ -52,7 +52,7 @@ TEST_SUITE("TimestampHistogram") {
         h.add(190'000);
 
         CHECK(h.total_count() == 3);
-        CHECK(h.num_bins() == 1);
+        CHECK(h.bin_count() == 1);
         CHECK(h.bins()[0].first == 1);
         CHECK(h.bins()[0].second == 3);
     }
@@ -65,7 +65,7 @@ TEST_SUITE("TimestampHistogram") {
         h.add(1'050'000);  // bin 10
 
         CHECK(h.total_count() == 4);
-        CHECK(h.num_bins() == 4);
+        CHECK(h.bin_count() == 4);
         CHECK(h.bins()[0] == dstd::Pair<std::uint64_t, std::uint64_t>{0, 1});
         CHECK(h.bins()[1] == dstd::Pair<std::uint64_t, std::uint64_t>{1, 1});
         CHECK(h.bins()[2] == dstd::Pair<std::uint64_t, std::uint64_t>{2, 1});
@@ -110,7 +110,7 @@ TEST_SUITE("TimestampHistogram") {
         a.merge(b);
 
         CHECK(a.total_count() == 4);
-        CHECK(a.num_bins() == 3);
+        CHECK(a.bin_count() == 3);
         CHECK(a.bins()[0] == dstd::Pair<std::uint64_t, std::uint64_t>{0, 2});
         CHECK(a.bins()[1] == dstd::Pair<std::uint64_t, std::uint64_t>{1, 1});
         CHECK(a.bins()[2] == dstd::Pair<std::uint64_t, std::uint64_t>{2, 1});
@@ -124,7 +124,7 @@ TEST_SUITE("TimestampHistogram") {
         a.merge(empty);
 
         CHECK(a.total_count() == 1);
-        CHECK(a.num_bins() == 1);
+        CHECK(a.bin_count() == 1);
     }
 
     TEST_CASE("expansion_weights - uniform") {
@@ -182,7 +182,7 @@ TEST_SUITE("TimestampHistogram") {
         auto h2 = TimestampHistogram::deserialize(data.data(), data.size());
 
         CHECK(h2.total_count() == h.total_count());
-        CHECK(h2.num_bins() == h.num_bins());
+        CHECK(h2.bin_count() == h.bin_count());
         REQUIRE(h2.bins().size() == h.bins().size());
         for (std::size_t i = 0; i < h.bins().size(); ++i) {
             CHECK(h2.bins()[i].first == h.bins()[i].first);
@@ -213,7 +213,7 @@ TEST_SUITE("TimestampHistogram") {
         auto h2 = TimestampHistogram::deserialize(data.data(), data.size());
 
         CHECK(h2.total_count() == 2);
-        CHECK(h2.num_bins() == 2);
+        CHECK(h2.bin_count() == 2);
         CHECK(h2.bins()[0].first == h.bins()[0].first);
         CHECK(h2.bins()[1].first == h.bins()[1].first);
     }

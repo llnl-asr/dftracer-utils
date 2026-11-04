@@ -543,7 +543,7 @@ bool continuation(char c) {
     return (static_cast<unsigned char>(c) & 0xC0) == 0x80;
 }
 
-std::size_t utf8_length(dstd::StringView s) {
+std::size_t utf8_size(dstd::StringView s) {
     return static_cast<std::size_t>(std::count_if(
         s.begin(), s.end(), [](char c) { return !continuation(c); }));
 }
@@ -632,7 +632,7 @@ Value round_to(const Value& v, const Value& digits) {
 
 Value length(const Value& v) {
     if (const auto* s = std::get_if<dstd::StringView>(&v))
-        return static_cast<std::int64_t>(utf8_length(*s));
+        return static_cast<std::int64_t>(utf8_size(*s));
     if (const auto* el = std::get_if<simdjson::dom::element>(&v)) {
         simdjson::dom::array arr;
         if (el->get_array().get(arr) == simdjson::SUCCESS)

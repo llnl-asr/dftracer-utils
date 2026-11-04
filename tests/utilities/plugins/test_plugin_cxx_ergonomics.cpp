@@ -123,7 +123,7 @@ TEST_CASE("plugin cxx: Sketch RAII adds, merges, and frees") {
 
 TEST_CASE("plugin cxx: Io ops are co_await-able directly") {
     dftu_utils_test::TestEnvironment env(0);
-    dstd::String path = env.get_dir() + "/probe.txt";
+    dstd::String path = env.dir() + "/probe.txt";
     const dstd::String body = "alpha\nbeta\ngamma\n";
     {
         (void)dstd::fs::write_file(dstd::PathView(path), body);

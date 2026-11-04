@@ -283,7 +283,7 @@ dstd::String agg_serialize(const AggState& state, bool compact = false);
 AggStatePtr agg_deserialize(const dstd::String& blob, bool compact = false);
 
 /// Number of groups currently held by `state`.
-std::int64_t agg_num_groups(const AggState& state);
+std::int64_t agg_group_count(const AggState& state);
 
 /// The specs `state` was built with, in order (key layout excluded). Lets a
 /// consumer finalizing a persisted or regrouped state recover each value
@@ -292,7 +292,7 @@ const dstd::Vector<AggSpec>& agg_specs(const AggState& state);
 
 /// Render group `g`'s composite key to one string per key column (integer keys
 /// as decimal, string keys verbatim) - a stable per-group identity, e.g. a
-/// rollup row key. `g` must be in [0, agg_num_groups(state)).
+/// rollup row key. `g` must be in [0, agg_group_count(state)).
 dstd::Vector<dstd::String> agg_group_key(const AggState& state, std::int64_t g);
 
 /// Approximate in-memory bytes held by `state` (spill trigger; not exact).

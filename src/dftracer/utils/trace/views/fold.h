@@ -43,7 +43,7 @@ class FoldPortBus {
    public:
     void publish(std::uint64_t key, const void* data, std::uint32_t len);
     /// NULL if `key` was not published since the last clear.
-    const void* consume(std::uint64_t key, std::uint32_t* out_len) const;
+    const void* consume(std::uint64_t key, std::uint32_t* out_size) const;
     void clear();
 
     /// The batch as a frame after the last transforming fold, for every fold

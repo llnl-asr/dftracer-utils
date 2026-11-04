@@ -59,7 +59,7 @@ struct KeySet {
     double mean_bytes = 0;
 };
 
-KeySet fixed_length(std::size_t len) {
+KeySet fixed_size(std::size_t len) {
     KeySet set;
     set.label = "len " + dstd::to_string(len);
     std::uint64_t x = 0x9E3779B97F4A7C15ULL ^ len;
@@ -159,7 +159,7 @@ int main(int argc, char** argv) {
 
     dstd::Vector<KeySet> sets;
     for (std::size_t len : {4, 8, 16, 32, 64, 256}) {
-        sets.push_back(fixed_length(len));
+        sets.push_back(fixed_size(len));
     }
     sets.push_back(realistic());
 

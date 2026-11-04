@@ -63,11 +63,10 @@ TEST_SUITE("IndexBuildParallelism") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i)
-            files.emplace_back(write_small_trace(env.get_dir(), i));
+            files.emplace_back(write_small_trace(env.dir(), i));
 
-        const auto many =
-            build_with(files, env.get_dir() + "/idx_many", WORKERS);
-        const auto one = build_with(files, env.get_dir() + "/idx_one", 1);
+        const auto many = build_with(files, env.dir() + "/idx_many", WORKERS);
+        const auto one = build_with(files, env.dir() + "/idx_one", 1);
 
         REQUIRE(many.indexed == FILES);
         REQUIRE(one.indexed == FILES);

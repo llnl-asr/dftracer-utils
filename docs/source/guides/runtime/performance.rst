@@ -35,17 +35,17 @@ chunks; too many on a shared or oversubscribed node hurts more than it helps.
          Runtime rt(8);   // 8 worker threads; 0 = hardware_concurrency
 
          ExecutorConfig config;
-         config.num_threads = 8;      // running cap; 0 = hardware_concurrency
+         config.thread_count = 8;      // running cap; 0 = hardware_concurrency
          config.io_pool_size = 4;     // I/O thread pool; 0 = one per worker
          config.min_workers = 2;      // elastic floor: start at 2, grow to
-                                       // num_threads under backlog, idle-retire
+                                       // thread_count under backlog, idle-retire
                                        // back down (0 = eager, spawn all up front)
          Runtime elastic_rt(config);
 
       ``DFTRACER_UTILS_THREADS`` overrides any requested count at process
       start (set it to ``1`` for a single-threaded async loop while
       debugging) - it takes precedence over both the constructor argument and
-      ``ExecutorConfig::num_threads``.
+      ``ExecutorConfig::thread_count``.
 
    .. tab-item:: Python
 

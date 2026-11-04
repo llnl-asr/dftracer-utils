@@ -202,12 +202,12 @@ coro::AsyncGenerator<Line> read_lines_indexed(
         config.has_line_range() ? config.end_line : config.end_byte;
 
     if (range_type == internal::RangeType::LineRange) {
-        auto total_lines = reader->get_num_lines();
+        auto total_lines = reader->line_count();
         if (start == 0) start = 1;
         if (end == 0 || end > total_lines) end = total_lines;
         if (start > total_lines) co_return;
     } else {
-        auto max_bytes = reader->get_max_bytes();
+        auto max_bytes = reader->max_bytes();
         if (end == 0 || end > max_bytes) end = max_bytes;
         if (start >= max_bytes) co_return;
     }
@@ -334,12 +334,12 @@ coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
         config.has_line_range() ? config.end_line : config.end_byte;
 
     if (range_type == internal::RangeType::LineRange) {
-        auto total_lines = reader->get_num_lines();
+        auto total_lines = reader->line_count();
         if (start == 0) start = 1;
         if (end == 0 || end > total_lines) end = total_lines;
         if (start > total_lines) co_return;
     } else {
-        auto max_bytes = reader->get_max_bytes();
+        auto max_bytes = reader->max_bytes();
         if (end == 0 || end > max_bytes) end = max_bytes;
         if (start >= max_bytes) co_return;
     }
@@ -476,12 +476,12 @@ void TraceReader::ensure_metadata_cached() {
     if (metadata_cached_) return;
 
     if (has_index_) {
-        auto reader = create_indexed_reader();
-        cached_max_bytes_ = reader->get_max_bytes();
-        cached_num_lines_ = reader->get_num_lines();
+        auto reader = make_indexed_reader();
+        cached_max_bytes_ = reader->max_bytes();
+        cached_line_count_ = reader->line_count();
     } else {
         cached_max_bytes_ = 0;
-        cached_num_lines_ = 0;
+        cached_line_count_ = 0;
     }
     metadata_cached_ = true;
 }
@@ -518,14 +518,14 @@ coro::CoroTask<trace::TimeMetric> TraceReader::read_time_metric(
     co_return metric;
 }
 
-std::size_t TraceReader::get_max_bytes() {
+std::size_t TraceReader::max_bytes() {
     ensure_metadata_cached();
     return cached_max_bytes_;
 }
 
-std::size_t TraceReader::get_num_lines() {
+std::size_t TraceReader::line_count() {
     ensure_metadata_cached();
-    return cached_num_lines_;
+    return cached_line_count_;
 }
 
 std::size_t TraceReader::dropped_line_count() const noexcept {
@@ -544,7 +544,7 @@ void TraceReader::warn_dropped(std::size_t local) const {
                             config_.file_path.c_str(), local);
 }
 
-dstd::SharedPtr<internal::Reader> TraceReader::create_indexed_reader() {
+dstd::SharedPtr<internal::Reader> TraceReader::make_indexed_reader() {
     auto indexer = CheckpointIndexerFactory::create(
         config_.file_path, index_path_, config_.checkpoint_size, false);
     return internal::ReaderFactory::create(indexer);
@@ -574,7 +574,7 @@ coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
     bool cpo = config.chunk_prune_only;
 
     if (has_index_) {
-        return read_lines_indexed(create_indexed_reader(), index_path_,
+        return read_lines_indexed(make_indexed_reader(), index_path_,
                                   config_.file_path, std::move(config),
                                   std::move(query), cpo);
     }
@@ -610,7 +610,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
     // per-line in-place parsing. Query is evaluated on the ondemand document
     // directly, so non-matching docs never hit the yield_parser.
     if (has_index_) {
-        auto reader = create_indexed_reader();
+        auto reader = make_indexed_reader();
         auto chunk_gen = read_chunks_indexed(reader, index_path_,
                                              config_.file_path, config, query);
 
@@ -760,11 +760,12 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         auto opt = co_await line_gen.next();
         if (!opt) break;
         const char* trimmed;
-        std::size_t trimmed_len;
+        std::size_t trimmed_size;
         if (!dftracer::utils::json::trim_and_validate_with_comma(
-                opt->content.data(), opt->content.size(), trimmed, trimmed_len))
+                opt->content.data(), opt->content.size(), trimmed,
+                trimmed_size))
             continue;
-        if (!parser.parse(dstd::StringView(trimmed, trimmed_len))) {
+        if (!parser.parse(dstd::StringView(trimmed, trimmed_size))) {
             count_dropped(dropped);
             continue;
         }
@@ -819,7 +820,8 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         }
 
         parser.rewind();
-        if (internal::is_cropped_object(dstd::StringView(trimmed, trimmed_len)))
+        if (internal::is_cropped_object(
+                dstd::StringView(trimmed, trimmed_size)))
             count_dropped(dropped);
         co_yield JsonLine{opt->content, opt->line_number, &parser};
     }
@@ -829,7 +831,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
 coro::AsyncGenerator<dstd::Span<const char>> TraceReader::read_raw(
     ReadConfig config) {
     if (has_index_) {
-        auto reader = create_indexed_reader();
+        auto reader = make_indexed_reader();
         auto stream_type = resolve_raw_stream_type(config);
         auto range_type = resolve_range_type(config);
         std::size_t start =
@@ -838,12 +840,12 @@ coro::AsyncGenerator<dstd::Span<const char>> TraceReader::read_raw(
             config.has_line_range() ? config.end_line : config.end_byte;
 
         if (range_type == internal::RangeType::LineRange) {
-            auto total_lines = reader->get_num_lines();
+            auto total_lines = reader->line_count();
             if (start == 0) start = 1;
             if (end == 0 || end > total_lines) end = total_lines;
             if (start > total_lines) co_return;
         } else {
-            auto max_bytes = reader->get_max_bytes();
+            auto max_bytes = reader->max_bytes();
             if (end == 0 || end > max_bytes) end = max_bytes;
             if (start >= max_bytes) co_return;
         }

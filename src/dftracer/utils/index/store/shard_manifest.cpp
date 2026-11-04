@@ -63,9 +63,9 @@ dstd::String to_json(const IndexShardManifest& manifest) {
         out += "\n      \"path\": ";
         append_escaped(out, e.path);
         out += ",\n      \"num_files\": ";
-        out += dstd::to_string(e.num_files);
+        out += dstd::to_string(e.file_count);
         out += ",\n      \"num_events\": ";
-        out += dstd::to_string(e.num_events);
+        out += dstd::to_string(e.event_count);
         out += "\n    }";
     }
     out += manifest.shards.empty() ? "]\n}\n" : "\n  ]\n}\n";
@@ -101,8 +101,8 @@ IndexShardManifest parse_manifest(dstd::StringView json) {
         e.path.assign(path);
 
         std::uint64_t u64 = 0;
-        if (s["num_files"].get(u64) == simdjson::SUCCESS) e.num_files = u64;
-        if (s["num_events"].get(u64) == simdjson::SUCCESS) e.num_events = u64;
+        if (s["num_files"].get(u64) == simdjson::SUCCESS) e.file_count = u64;
+        if (s["num_events"].get(u64) == simdjson::SUCCESS) e.event_count = u64;
         manifest.shards.push_back(std::move(e));
     }
     return manifest;

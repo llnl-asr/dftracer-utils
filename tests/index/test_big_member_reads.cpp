@@ -269,7 +269,7 @@ dstd::String read_line_bytes(
             .stream_type(utilities::reader::internal::StreamType::LineBytes)
             .range_type(utilities::reader::internal::RangeType::ByteRange)
             .from(from)
-            .to(reader.get_max_bytes()));
+            .to(reader.max_bytes()));
     dstd::String out;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         dstd::Vector<char> buf(1u << 20);
@@ -354,13 +354,13 @@ TEST_SUITE("BigMemberReads") {
         Files fx(BIG_BYTES, 3, "e");
         Indexed big(fx.big, fx.dir + "/idx_big");
         Indexed many(fx.many, fx.dir + "/idx_many");
-        const auto pieces = big.indexer->get_members();
+        const auto pieces = big.indexer->members();
         REQUIRE(pieces.size() > 16);
         std::size_t restarts = 0;
         for (const auto& p : pieces)
             restarts += p.kind == index::gzip::GzipRecordKind::Restart;
         CHECK(restarts > 16);
-        CHECK(big.indexer->get_num_lines() == many.indexer->get_num_lines());
+        CHECK(big.indexer->line_count() == many.indexer->line_count());
 
         const std::size_t total = fx.trace.lines;
         std::mt19937 rng(11);
@@ -394,12 +394,12 @@ TEST_SUITE("BigMemberReads") {
         // window spans bytes already shipped.
         constexpr std::uint64_t WIDE_CKPT = std::uint64_t{10} << 20;
         Indexed big(fx.big, fx.dir + "/idx_wide", WIDE_CKPT);
-        const auto pieces = big.indexer->get_members();
+        const auto pieces = big.indexer->members();
         std::size_t restarts = 0;
         for (const auto& p : pieces)
             restarts += p.kind == index::gzip::GzipRecordKind::Restart;
         REQUIRE(restarts >= 4);
-        CHECK(big.indexer->get_num_lines() == fx.trace.lines);
+        CHECK(big.indexer->line_count() == fx.trace.lines);
 
         const std::size_t total = fx.trace.lines;
         for (const auto& p : pieces) {
@@ -426,7 +426,7 @@ TEST_SUITE("BigMemberReads") {
             append(bytes, t.text);
             write_file(dir + "/t.gz", bytes);
             Indexed ix(dir + "/t.gz", dir + "/idx");
-            const auto pieces = ix.indexer->get_members();
+            const auto pieces = ix.indexer->members();
             for (const auto& p : pieces) {
                 if (p.kind != index::gzip::GzipRecordKind::Restart) continue;
                 const std::size_t at = static_cast<std::size_t>(p.uc_offset);
@@ -536,7 +536,7 @@ TEST_SUITE("BigMemberReads") {
             append(bytes, t.text);
             write_file(dir + "/t.gz", bytes);
             Indexed ix(dir + "/t.gz", dir + "/idx");
-            for (const auto& p : ix.indexer->get_members()) {
+            for (const auto& p : ix.indexer->members()) {
                 if (p.kind != index::gzip::GzipRecordKind::Restart) continue;
                 const std::size_t at = static_cast<std::size_t>(p.uc_offset);
                 const std::size_t nl = t.text.find('\n', at);
@@ -568,7 +568,7 @@ TEST_SUITE("BigMemberReads") {
             MESSAGE("no /proc/self/io; the bytes read are not counted");
             return;
         }
-        const auto pieces = big.indexer->get_members();
+        const auto pieces = big.indexer->members();
         REQUIRE(pieces.size() > 16);
         const auto& last = pieces.back();
         REQUIRE(last.kind == index::gzip::GzipRecordKind::Restart);
@@ -594,12 +594,12 @@ TEST_SUITE("BigMemberReads") {
         append(bytes, t.text);
         write_file(dir + "/t.gz", bytes);
         Indexed ix(dir + "/t.gz", dir + "/idx");
-        const auto pieces = ix.indexer->get_members();
+        const auto pieces = ix.indexer->members();
         REQUIRE(pieces.size() >= 3);
         const auto& last = pieces.back();
         CHECK(last.kind == index::gzip::GzipRecordKind::Restart);
-        CHECK(ix.indexer->get_max_bytes() == t.text.size());
-        CHECK(ix.indexer->get_num_lines() ==
+        CHECK(ix.indexer->max_bytes() == t.text.size());
+        CHECK(ix.indexer->line_count() ==
               newlines_before(t.text, t.text.size()));
         const std::size_t at = static_cast<std::size_t>(last.uc_offset);
         const bool newline_before = t.text[at - 1] == '\n';
@@ -609,7 +609,7 @@ TEST_SUITE("BigMemberReads") {
         const std::size_t last_newline = t.text.rfind('\n');
         CHECK(read_line_bytes(ix.indexer, at) ==
               t.text.substr(from, last_newline + 1 - from));
-        const std::size_t numbered = ix.indexer->get_num_lines();
+        const std::size_t numbered = ix.indexer->line_count();
         CHECK(ix.read_lines(numbered - 2, numbered) ==
               lines_of(t.text, numbered - 2, numbered));
         (void)dstd::fs::remove_all(dir);

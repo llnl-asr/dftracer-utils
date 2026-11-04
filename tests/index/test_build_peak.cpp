@@ -87,7 +87,7 @@ TEST_SUITE("IndexBuildPeak") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < 256; ++i)
-            files.emplace_back(write_trace(env.get_dir(), i));
+            files.emplace_back(write_trace(env.dir(), i));
         const dstd::Vector<dstd::String> few(files.begin(), files.begin() + 64);
         // The store trains each namespace's dictionary on samples that fill
         // within the first files, so 64 files hold as many sample bytes as 256.
@@ -95,8 +95,8 @@ TEST_SUITE("IndexBuildPeak") {
             dftracer::utils::store::engine::g_dict_sample_bytes.exchange(
                 std::size_t{256} << 10);
 
-        const auto small = peak_live(few, env.get_dir() + "/idx64");
-        const auto large = peak_live(files, env.get_dir() + "/idx256");
+        const auto small = peak_live(few, env.dir() + "/idx64");
+        const auto large = peak_live(files, env.dir() + "/idx256");
         dftracer::utils::store::engine::g_dict_sample_bytes.store(samples);
         MESSAGE("peak live bytes: 64 files " << small << ", 256 files "
                                              << large);

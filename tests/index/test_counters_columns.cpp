@@ -252,8 +252,8 @@ Blocks blocks_of(const dstd::String& gz, const dstd::String& idx) {
 TEST_SUITE("CountersColumns") {
     TEST_CASE("the counters of the index are the per-second means") {
         dftu_utils_test::TestEnvironment env(10);
-        const auto gz = write_trace(env.get_dir());
-        const dstd::String idx = env.get_dir() + "/idx";
+        const auto gz = write_trace(env.dir());
+        const dstd::String idx = env.dir() + "/idx";
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(idx))
             .build();
@@ -272,8 +272,8 @@ TEST_SUITE("CountersColumns") {
 
     TEST_CASE("a shard split splits the counters without a repeat") {
         dftu_utils_test::TestEnvironment env(10);
-        const auto gz = write_trace(env.get_dir());
-        const dstd::String idx = env.get_dir() + "/idx";
+        const auto gz = write_trace(env.dir());
+        const dstd::String idx = env.dir() + "/idx";
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(idx))
             .build();

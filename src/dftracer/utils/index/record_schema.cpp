@@ -332,7 +332,7 @@ std::uint64_t RecordSchema::params_hash() const {
         hasher.update(static_cast<std::uint8_t>(decoder));
         if (!source.empty()) text(source);
         if (path_budget || stats_share) hash_evidence_overrides();
-        return hasher.get_hash().value;
+        return hasher.hash().value;
     }
     hasher.update(std::uint8_t{3});
     text(id);
@@ -357,7 +357,7 @@ std::uint64_t RecordSchema::params_hash() const {
     if (!source.empty()) text(source);
     for (const auto& path : never_index) text(path);
     hash_evidence_overrides();
-    return hasher.get_hash().value;
+    return hasher.hash().value;
 }
 
 namespace {

@@ -85,8 +85,8 @@ class ThreadPoolExecutor final : public TaskExecutor {
     std::atomic<std::size_t> next_worker_id_{0};  // monotonic ids, churn-safe
 
     std::atomic<bool> running_{false};
-    std::atomic<std::size_t> num_threads_{0};     // the running cap
-    // Elastic floor; == num_threads_ when eager.
+    std::atomic<std::size_t> thread_count_{0};    // the running cap
+    // Elastic floor; == thread_count_ when eager.
     std::atomic<std::size_t> min_workers_{0};
     // The full pool up front (true) or grown on demand from the floor. Kept
     // apart from the floor, which is also the cap of an elastic pool of one.
@@ -102,7 +102,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     static constexpr int BLK_HANDED_OFF = 2;
     // Blocks shorter than this pay no handoff; longer ones the sysmon reclaims.
     static constexpr std::int64_t BLOCK_HANDOFF_NS = 100000;
-    // Headroom above num_threads_ for blocking-handoff replacement threads. A
+    // Headroom above thread_count_ for blocking-handoff replacement threads. A
     // burst of concurrent block_on calls parks that many workers at once
     // and each needs a replacement runner, so a small ceiling (e.g. one per
     // core) deadlocks when the inner scopes starve; the permit gate still
@@ -122,7 +122,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     std::mutex sysmon_mutex_;
     std::condition_variable sysmon_cv_;
     // Elastic grow/shrink coordinator (started only when min_workers_ <
-    // num_threads_).
+    // thread_count_).
     dstd::Thread monitor_thread_;
     std::mutex coord_mutex_;
     std::condition_variable coord_cv_;
@@ -228,7 +228,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
 
     void shutdown() override;
 
-    // Spawns one worker up to the num_threads_ cap.
+    // Spawns one worker up to the thread_count_ cap.
     void add_worker();
     // Asks one worker to exit and joins it. Safe while
     /// running; a retired worker strands no work (the run queue is shared) and
@@ -259,17 +259,17 @@ class ThreadPoolExecutor final : public TaskExecutor {
         return shutdown_token_;
     }
 
-    std::size_t get_num_threads() const override {
-        return num_threads_.load(std::memory_order_acquire);
+    std::size_t thread_count() const override {
+        return thread_count_.load(std::memory_order_acquire);
     }
 
     void set_threads(std::size_t threads, dstd::Optional<bool> eager) override;
     void grow_io_threads(std::size_t threads) override;
     void set_deadlock_timeout(std::chrono::seconds timeout) override;
 
-    /// Live worker threads right now (floats under num_threads_ once the
-    /// elastic policy is driving add_worker/retire_worker); num_threads_ is the
-    /// cap.
+    /// Live worker threads right now (floats under thread_count_ once the
+    /// elastic policy is driving add_worker/retire_worker); thread_count_ is
+    /// the cap.
     std::size_t live_workers() const {
         return live_workers_.load(std::memory_order_acquire);
     }
@@ -283,7 +283,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
         return blocked_workers_.load(std::memory_order_acquire);
     }
 
-    std::size_t get_io_pool_size() const override {
+    std::size_t io_pool_size() const override {
         return io_pool_size_.load(std::memory_order_acquire);
     }
 
@@ -299,7 +299,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     /// Used by the watchdog.
     bool is_responsive() const override;
 
-    ExecutorProgress get_progress() const override;
+    ExecutorProgress progress() const override;
 
     /// Primary submission path; all lightweight work funnels through here,
     /// the resume of a combinator included.
@@ -341,7 +341,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     void cancel_in_flight();
 
     /**
-     * Elastic policy loop (runs only when min_workers_ < num_threads_): grow
+     * Elastic policy loop (runs only when min_workers_ < thread_count_): grow
      * one worker per tick while there is run-queue backlog under the cap;
      * retire one per keep-alive of sustained idle down to min_workers_.
      */
@@ -386,7 +386,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     friend struct coro::detail::CoroPromise;
 };
 
-void* get_current_worker_context();
+void* current_worker_context();
 void set_current_worker_context(void* context);
 
 }  // namespace dftracer::utils

@@ -240,7 +240,7 @@ dstd::String event(int ts, const dstd::String& args, int dur = 10) {
 View view_of_lines(TestEnvironment& env,
                    const dstd::Vector<dstd::String>& lines,
                    const dstd::String& name = "lines.pfw") {
-    const dstd::String pfw = env.get_dir() + "/" + name;
+    const dstd::String pfw = env.dir() + "/" + name;
     {
         dftu_utils_test::FileOut o(pfw);
         for (const auto& l : lines) o << l << "\n";
@@ -2405,7 +2405,7 @@ TEST_SUITE("View duql reshape determinism") {
 
     static dstd::String reshape_trace(TestEnvironment & env,
                                       std::size_t member_bytes) {
-        const dstd::String pfw = env.get_dir() + "/rs.pfw";
+        const dstd::String pfw = env.dir() + "/rs.pfw";
         {
             dftu_utils_test::FileOut o(pfw);
             const char* tags[] = {R"(,"tags":["a","b"])", R"(,"tags":[])",
@@ -2872,7 +2872,7 @@ TEST_SUITE("View duql session") {
         TestEnvironment & env,
         const dstd::Vector<std::array<std::int64_t, 4>>& events,
         std::size_t member_bytes = 4096) {
-        const dstd::String pfw = env.get_dir() + "/sess.pfw";
+        const dstd::String pfw = env.dir() + "/sess.pfw";
         {
             dftu_utils_test::FileOut o(pfw);
             for (const auto& [pid, tid, ts, dur] : events)

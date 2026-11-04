@@ -34,7 +34,7 @@ int run_in_child(Body body) {
 
 TEST_CASE("an un-joined scope terminates") {
     int status = run_in_child([] {
-        Runtime rt(ExecutorConfig{.num_threads = 2}, false);
+        Runtime rt(ExecutorConfig{.thread_count = 2}, false);
         auto scope = CoroScope::long_lived(rt.executor());
         scope->spawn([](CoroScope&) -> coro::CoroTask<void> { co_return; });
         scope.reset();
@@ -45,7 +45,7 @@ TEST_CASE("an un-joined scope terminates") {
 
 TEST_CASE("a joined scope is destroyed without terminating") {
     int status = run_in_child([] {
-        Runtime rt(ExecutorConfig{.num_threads = 2}, false);
+        Runtime rt(ExecutorConfig{.thread_count = 2}, false);
         auto scope = CoroScope::long_lived(rt.executor());
         scope->spawn([](CoroScope&) -> coro::CoroTask<void> { co_return; });
         rt.block_on(coro::named("join", [&]() -> coro::CoroTask<void> {
@@ -58,7 +58,7 @@ TEST_CASE("a joined scope is destroyed without terminating") {
 }
 
 TEST_CASE("run_coro_scope joins when its body throws") {
-    Runtime rt(ExecutorConfig{.num_threads = 2}, false);
+    Runtime rt(ExecutorConfig{.thread_count = 2}, false);
     std::atomic<int> done{0};
     CHECK_THROWS_AS(
         rt.block_on(coro::named(

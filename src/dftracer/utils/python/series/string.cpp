@@ -247,7 +247,7 @@ PyObject* Series_str_regex_replace(PyObject* self, PyObject* args) {
 PyObject* Series_list_len(PyObject* self, PyObject*) {
     Series* a = as_series(self);
     if (!a) return nullptr;
-    Series out = a->list_len();
+    Series out = a->list_size();
     if (!out.valid()) {
         PyErr_SetString(PyExc_TypeError, "list_len: not a List column");
         return nullptr;

@@ -546,7 +546,7 @@ struct FnameTrace {
     dstd::String gz;
     dstd::String idx;
     FnameTrace() {
-        dstd::String pfw = env.get_dir() + "/fname.pfw";
+        dstd::String pfw = env.dir() + "/fname.pfw";
         dftu_utils_test::FileOut ofs(pfw);
         for (int i = 0; i < 20; ++i)
             ofs << R"({"ph":"X","name":"open","cat":"POSIX","pid":1,"tid":1,)"
@@ -681,7 +681,7 @@ TEST_SUITE("View - expression keys") {
     TEST_CASE("a computed-key rollup serves only the same expression") {
         const auto& sh = shared_trace();
         TestEnvironment env(10);
-        const dstd::String roots = env.get_dir() + "/rollups";
+        const dstd::String roots = env.dir() + "/rollups";
         auto polls = dstd::make_shared<int>(0);
         View t = View::from_file(dstd::String(sh.gz), dstd::String(sh.idx))
                      .rollup_root(dstd::String(roots))
@@ -762,7 +762,7 @@ struct NestedTrace {
     TestEnvironment env{50};
     dstd::String gz;
     NestedTrace() {
-        const dstd::String pfw = env.get_dir() + "/nested.pfw";
+        const dstd::String pfw = env.dir() + "/nested.pfw";
         dftu_utils_test::FileOut ofs(pfw);
         auto ev = [&](const char* name, const char* cat, int tid, int ts,
                       int dur) {
@@ -1049,7 +1049,7 @@ TEST_SUITE("View - trace terminals") {
 
     TEST_CASE("collect_typed leaves dur null where the record has none") {
         TestEnvironment env(10);
-        const dstd::String pfw = env.get_dir() + "/dur_gap.pfw";
+        const dstd::String pfw = env.dir() + "/dur_gap.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"X","name":"a","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
@@ -1095,7 +1095,7 @@ TEST_SUITE("View - trace terminals") {
 
     TEST_CASE("a batched containment branch honors phase") {
         TestEnvironment env(10);
-        const dstd::String pfw = env.get_dir() + "/phased.pfw";
+        const dstd::String pfw = env.dir() + "/phased.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"X","name":"step","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
@@ -1122,7 +1122,7 @@ TEST_SUITE("View - trace terminals") {
         TestEnvironment env(10);
         auto polls = dstd::make_shared<int>(0);
         View t = nested_viewer()
-                     .rollup_root(dstd::String(env.get_dir() + "/rollups"))
+                     .rollup_root(dstd::String(env.dir() + "/rollups"))
                      .cancel_when([polls] {
                          ++*polls;
                          return false;
@@ -1194,7 +1194,7 @@ TEST_SUITE("View - trace terminals") {
     TEST_CASE("sink_trace writes a trace the viewer reads back") {
         TestEnvironment env(10);
         TraceWriteOptions opts;
-        opts.output_path = env.get_dir() + "/posix.pfw.gz";
+        opts.output_path = env.dir() + "/posix.pfw.gz";
         opts.compress = true;
         test_view_common::run(
             nested_viewer().duql(R"(cat == "POSIX")").sink_trace(opts));
@@ -1205,7 +1205,7 @@ TEST_SUITE("View - trace terminals") {
     TEST_CASE("distributed rollup terminals work through the viewer") {
         TestEnvironment env(10);
         View agg = nested_viewer()
-                       .rollup_root(dstd::String(env.get_dir() + "/rollups"))
+                       .rollup_root(dstd::String(env.dir() + "/rollups"))
                        .group_by({GroupKey::name()})
                        .agg({{AggOp::Count, "", "n"}});
         CHECK_FALSE(agg.reconstruct_if_cached());
@@ -1256,7 +1256,7 @@ TEST_SUITE("View - trace terminals") {
 
     TEST_CASE("select on raw events reads fields the index does not list") {
         TestEnvironment env(10);
-        const dstd::String pfw = env.get_dir() + "/args.pfw";
+        const dstd::String pfw = env.dir() + "/args.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 4; ++i)
@@ -1392,7 +1392,7 @@ TEST_SUITE("View - unindexed reads") {
 namespace {
 
 dstd::String write_args_trace(TestEnvironment& env) {
-    const dstd::String pfw = env.get_dir() + "/args.pfw";
+    const dstd::String pfw = env.dir() + "/args.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
         ofs << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1,"s":"a"}})"
@@ -1554,7 +1554,7 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
         dstd::Vector<dataframe::GroupAgg> engine = typed;
         engine.push_back({dataframe::Agg::CountValid, "args.x", "c"});
 
-        const dstd::String absent_pfw = env.get_dir() + "/absent.pfw";
+        const dstd::String absent_pfw = env.dir() + "/absent.pfw";
         {
             dftu_utils_test::FileOut ofs(absent_pfw);
             ofs << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1}})"
@@ -1621,7 +1621,7 @@ struct BadPartTrace {
     TestEnvironment env{51};
     dstd::String gz;
     BadPartTrace() {
-        const dstd::String pfw = env.get_dir() + "/badpart.pfw";
+        const dstd::String pfw = env.dir() + "/badpart.pfw";
         dftu_utils_test::FileOut ofs(pfw);
         auto ev = [&](int ts, const char* tail) {
             ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
@@ -1735,7 +1735,7 @@ TEST_SUITE("View - batched row plans") {
     TEST_CASE("plans that promise scan order read on their own") {
         TestEnvironment env(10);
         auto counter = dstd::make_shared<ScanCounter>();
-        View t = batch_viewer(env.get_dir(), counter);
+        View t = batch_viewer(env.dir(), counter);
         const dataframe::LazyFrame ordered =
             t.duql("select name, dur, ts | where dur > 100").lazy();
         CHECK_FALSE(absorbed_source(ordered)->batch_key());
@@ -1745,7 +1745,7 @@ TEST_SUITE("View - batched row plans") {
     TEST_CASE("a mixed group streams its streamable plans in one scan") {
         TestEnvironment env(10);
         auto counter = dstd::make_shared<ScanCounter>();
-        View t = batch_viewer(env.get_dir(), counter);
+        View t = batch_viewer(env.dir(), counter);
         const dstd::Vector<dataframe::LazyFrame> plans = {
             t.lazy(),
             t.duql(R"(cat == "POSIX")").lazy(),
@@ -1780,7 +1780,7 @@ TEST_SUITE("View - batched row plans") {
     TEST_CASE("a session returns the same rows as collecting each plan") {
         TestEnvironment env(10);
         auto counter = dstd::make_shared<ScanCounter>();
-        View t = batch_viewer(env.get_dir(), counter);
+        View t = batch_viewer(env.dir(), counter);
         const dstd::Vector<dataframe::LazyFrame> plans = {
             t.lazy(),
             t.duql("dur < 100").select({"ts", "dur", "name", "pid"}),
@@ -1803,7 +1803,7 @@ TEST_SUITE("View - batched row plans") {
     TEST_CASE("plans whose rows cannot stream read buffered and free it") {
         TestEnvironment env(10);
         auto counter = dstd::make_shared<ScanCounter>();
-        View t = batch_viewer(env.get_dir(), counter);
+        View t = batch_viewer(env.dir(), counter);
         const dstd::Vector<dataframe::LazyFrame> plans = {
             t.phase(Phase::Metadata).lazy(),
             t.phase(Phase::Metadata).duql(R"(name == "process_name")").lazy(),
@@ -1824,7 +1824,7 @@ TEST_SUITE("View - batched row plans") {
         auto counter = dstd::make_shared<ScanCounter>();
         // A budget far below the rows of one plan: a read that waited on a
         // cursor nobody drains would stall.
-        View t = batch_viewer(env.get_dir(), counter);
+        View t = batch_viewer(env.dir(), counter);
         const dstd::Vector<dataframe::LazyFrame> plans = {
             t.lazy().head(1).memory_budget(TINY_BUDGET),
             t.lazy().memory_budget(TINY_BUDGET),
@@ -1847,7 +1847,7 @@ TEST_SUITE("View - batched row plans") {
     TEST_CASE("a session member that stops early does not stall the others") {
         TestEnvironment env(10);
         auto counter = dstd::make_shared<ScanCounter>();
-        View t = batch_viewer(env.get_dir(), counter);
+        View t = batch_viewer(env.dir(), counter);
         const dstd::Vector<dataframe::LazyFrame> plans = {
             t.lazy().head(1).memory_budget(TINY_BUDGET),
             t.lazy().memory_budget(TINY_BUDGET),
@@ -1872,7 +1872,7 @@ TEST_SUITE("View - batched row plans") {
     TEST_CASE("a plan with a combine batches beside streaming plans") {
         TestEnvironment env(10);
         auto counter = dstd::make_shared<ScanCounter>();
-        View t = batch_viewer(env.get_dir(), counter);
+        View t = batch_viewer(env.dir(), counter);
         const dstd::Vector<dataframe::LazyFrame> plans = {
             t.lazy(),
             t.duql(R"(cat == "STDIO")").lazy(),

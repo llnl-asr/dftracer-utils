@@ -118,7 +118,7 @@ std::uint64_t calculate_file_hash(int fd, std::uint64_t file_size_u64) {
         }
     }
 
-    return static_cast<std::uint64_t>(hasher.get_hash().value);
+    return static_cast<std::uint64_t>(hasher.hash().value);
 }
 
 std::uint64_t file_size_bytes(dstd::CStringView path) {

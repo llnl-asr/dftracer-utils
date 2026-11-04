@@ -96,8 +96,8 @@ GzipReader::GzipReader(
                           "Invalid indexer provided");
     }
     is_open_ = true;
-    gz_path_ = dstd::String(indexer_->get_archive_path());
-    index_path_ = dstd::String(indexer_->get_index_path());
+    gz_path_ = dstd::String(indexer_->archive_path());
+    index_path_ = dstd::String(indexer_->index_path());
 }
 
 GzipReader::~GzipReader() {
@@ -128,24 +128,24 @@ GzipReader &GzipReader::operator=(GzipReader &&other) noexcept {
     return *this;
 }
 
-std::size_t GzipReader::get_max_bytes() const {
+std::size_t GzipReader::max_bytes() const {
     check_reader_state(is_open_, indexer_.get());
     std::size_t max_bytes =
-        static_cast<std::size_t>(indexer_.get()->get_max_bytes());
+        static_cast<std::size_t>(indexer_.get()->max_bytes());
     DFTRACER_UTILS_LOG_DEBUG("Maximum bytes available: %zu", max_bytes);
     return max_bytes;
 }
 
-std::size_t GzipReader::get_num_lines() const {
+std::size_t GzipReader::line_count() const {
     check_reader_state(is_open_, indexer_.get());
-    std::size_t num_lines = static_cast<std::size_t>(indexer_->get_num_lines());
-    DFTRACER_UTILS_LOG_DEBUG("Total lines available: %zu", num_lines);
-    return num_lines;
+    std::size_t line_count = static_cast<std::size_t>(indexer_->line_count());
+    DFTRACER_UTILS_LOG_DEBUG("Total lines available: %zu", line_count);
+    return line_count;
 }
 
-const dstd::String &GzipReader::get_archive_path() const { return gz_path_; }
+const dstd::String &GzipReader::archive_path() const { return gz_path_; }
 
-const dstd::String &GzipReader::get_index_path() const { return index_path_; }
+const dstd::String &GzipReader::index_path() const { return index_path_; }
 
 void GzipReader::set_buffer_size(std::size_t size) {
     default_buffer_size_ = size;
@@ -162,7 +162,7 @@ coro::CoroTask<std::size_t> GzipReader::read_async(std::size_t start_bytes,
                                                    std::size_t buffer_size) {
     check_reader_state(is_open_, indexer_.get());
     validate_parameters(buffer, buffer_size, start_bytes, end_bytes,
-                        indexer_.get()->get_max_bytes());
+                        indexer_.get()->max_bytes());
 
     DFTRACER_UTILS_LOG_DEBUG(
         "GzipReader::read - request: start_bytes=%zu, end_bytes=%zu, "
@@ -201,12 +201,12 @@ coro::CoroTask<std::size_t> GzipReader::read_line_bytes_async(
     std::size_t buffer_size) {
     check_reader_state(is_open_, indexer_.get());
 
-    if (end_bytes > indexer_.get()->get_max_bytes()) {
-        end_bytes = indexer_.get()->get_max_bytes();
+    if (end_bytes > indexer_.get()->max_bytes()) {
+        end_bytes = indexer_.get()->max_bytes();
     }
 
     validate_parameters(buffer, buffer_size, start_bytes, end_bytes,
-                        indexer_.get()->get_max_bytes());
+                        indexer_.get()->max_bytes());
 
     // Check if we can reuse cached stream
     if (!stream_cache_.can_continue(StreamType::MultiLinesBytes, gz_path_,
@@ -243,7 +243,7 @@ coro::CoroTask<dstd::String> GzipReader::read_lines_async(
                           "Start line must be <= end line");
     }
 
-    std::size_t total_lines = indexer_.get()->get_num_lines();
+    std::size_t total_lines = indexer_.get()->line_count();
     if (start_line > total_lines || end_line > total_lines) {
         throw ReaderError(ReaderError::InvalidArgument,
                           "Line numbers exceed total lines in file (" +
@@ -294,7 +294,7 @@ coro::CoroTask<void> GzipReader::read_lines_with_processor_async(
                           "Start line must be <= end line");
     }
 
-    std::size_t total_lines = indexer_.get()->get_num_lines();
+    std::size_t total_lines = indexer_.get()->line_count();
     if (start_line > total_lines || end_line > total_lines) {
         throw ReaderError(ReaderError::InvalidArgument,
                           "Line numbers exceed total lines in file (" +
@@ -319,13 +319,13 @@ coro::CoroTask<void> GzipReader::read_lines_with_processor_async(
 
         // LineStream returns one complete line with \n
         // Processor expects line without \n
-        std::size_t line_length = bytes_read;
-        if (line_length > 0 && buffer[line_length - 1] == '\n') {
-            line_length--;
+        std::size_t line_size = bytes_read;
+        if (line_size > 0 && buffer[line_size - 1] == '\n') {
+            line_size--;
         }
 
         const auto process_ok =
-            co_await processor.process(buffer.data(), line_length);
+            co_await processor.process(buffer.data(), line_size);
         if (!process_ok) {
             processor.end();
             co_return;
@@ -339,8 +339,8 @@ coro::CoroTask<void> GzipReader::read_line_bytes_with_processor_async(
     std::size_t start_bytes, std::size_t end_bytes, LineProcessor &processor) {
     check_reader_state(is_open_, indexer_.get());
 
-    if (end_bytes > indexer_.get()->get_max_bytes()) {
-        end_bytes = indexer_.get()->get_max_bytes();
+    if (end_bytes > indexer_.get()->max_bytes()) {
+        end_bytes = indexer_.get()->max_bytes();
     }
 
     if (start_bytes >= end_bytes) {
@@ -369,7 +369,7 @@ coro::CoroTask<void> GzipReader::read_line_bytes_with_processor_async(
 
 bool GzipReader::is_valid() const { return is_open_ && indexer_.get(); }
 
-dstd::String GzipReader::get_format_name() const { return "GZIP"; }
+dstd::String GzipReader::format_name() const { return "GZIP"; }
 
 dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
     check_reader_state(is_open_, indexer_.get());
@@ -399,7 +399,7 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
                               "Start line must be <= end line");
         }
 
-        std::size_t total_lines = indexer_->get_num_lines();
+        std::size_t total_lines = indexer_->line_count();
         if (start > total_lines || end > total_lines) {
             throw ReaderError(ReaderError::InvalidArgument,
                               "Line numbers exceed total lines in file (" +
@@ -408,7 +408,7 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
 
         // Members carry the same line bookkeeping as the old recovery
         // points, and their starts are decodable without a dictionary.
-        auto members = indexer_->get_members();
+        auto members = indexer_->members();
 
         std::size_t last_overlap_end = 0;
         bool found_overlap = false;
@@ -421,7 +421,7 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
 
         if (!found_overlap) {
             start_bytes = 0;
-            end_bytes = indexer_->get_max_bytes();
+            end_bytes = indexer_->max_bytes();
             actual_start_line = 1;
             DFTRACER_UTILS_LOG_DEBUG(
                 "No member covers lines %zu-%zu, using full file: "

@@ -347,6 +347,7 @@ set(TEST_CPP_SOURCES
     server/test_cancel.cpp
     server/test_viz_stats_fastpath.cpp
     server/test_viz_aggregated.cpp
+    server/test_viz_refused.cpp
     server/test_viz_schema.cpp
     trace/genesis/test_genesis.cpp
     index/test_index_api.cpp

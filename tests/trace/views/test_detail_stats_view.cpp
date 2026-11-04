@@ -7,6 +7,7 @@
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/statistics/detail_stats_view.h>
 #include <doctest/doctest.h>
+#include <refused_lines.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -86,6 +87,45 @@ TEST_SUITE("detail stats via View") {
         CHECK(d.events_scanned == 8);
         CHECK(d.duration.count() == 5);
         CHECK(d.grouped_duration.at("read").count() == 5);
+    }
+
+    TEST_CASE("a line the DOM parser refuses is scanned") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        const dstd::String pfw = env.get_dir() + "/refused.pfw";
+        {
+            dftu_utils_test::FileOut ofs(pfw);
+            for (int i = 0; i < 5; ++i)
+                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                    << R"("tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
+                    << (10 + i) << R"(,"args":{"ret":4096}})" << "\n";
+            for (int k = 0; k < dftu_utils_test::REFUSED_KINDS; ++k)
+                ofs << dftu_utils_test::refused_line(
+                           k, R"("ph":"X","name":"odd","cat":"POSIX","pid":2,)"
+                              R"("tid":1,"ts":)" +
+                                  dstd::to_string(3000 + k * 100) +
+                                  R"(,"dur":)" + dstd::to_string(100 + k))
+                    << "\n";
+        }
+        const dstd::String gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        (void)dstd::fs::remove(pfw);
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
+
+        dstd::Vector<dstd::String> group_by{"name"};
+        statistics::DetailNeeds needs;
+        needs.group_by = &group_by;
+        statistics::DetailedStatistics d =
+            run_detail(statistics::DetailStatsView::from_file(
+                           dstd::String(gz), dstd::String(idx)),
+                       needs);
+
+        CHECK(d.events_scanned == 5 + dftu_utils_test::REFUSED_KINDS);
+        CHECK(d.duration.count() == 5 + dftu_utils_test::REFUSED_KINDS);
+        CHECK(d.grouped_duration.at("read").count() == 5);
+        CHECK(d.grouped_duration.at("odd").count() ==
+              dftu_utils_test::REFUSED_KINDS);
+        CHECK(d.grouped_duration.at("odd").sum == 12 * 100 + 66);
     }
 
     TEST_CASE("grouped by name") {

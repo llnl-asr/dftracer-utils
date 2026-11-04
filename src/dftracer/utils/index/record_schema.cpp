@@ -23,6 +23,7 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/line.h>
@@ -168,9 +169,11 @@ class Detector {
                                                 length))
             return true;
         simdjson::dom::element root;
-        if (parser_.parse(start, length).get(root) != simdjson::SUCCESS ||
-            !root.is_object())
+        if (parser_.parse(start, length).get(root) != simdjson::SUCCESS &&
+            json::parse_refused(parser_, dstd::StringView(start, length))
+                    .get(root) != simdjson::SUCCESS)
             return true;
+        if (!root.is_object()) return true;
         ++out_.objects;
         const json::JsonValue record(root);
         bool metadata = false;

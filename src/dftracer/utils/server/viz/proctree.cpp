@@ -150,6 +150,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         fields.for_each_event(events, [&](dstd::StringView ev) {
             buf.assign(ev);
             auto res = parse_string(parser, buf);
+            if (res.error()) res = json::parse_refused(parser, ev);
             if (res.error()) return;
             auto root = res.value_unsafe();
             EventScalars s;

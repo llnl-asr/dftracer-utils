@@ -15,6 +15,7 @@
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <refused_lines.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -100,6 +101,16 @@ TEST_SUITE("Schemas") {
         CHECK(index::get_schema("dftracer").params_hash() !=
               index::get_schema("generic").params_hash());
         CHECK_THROWS_AS(index::get_schema("nope"), common::DFTUtilsException);
+    }
+
+    TEST_CASE("detection reads the lines the DOM parser refuses") {
+        dstd::Vector<dstd::String> owned;
+        // The record parser reads a 24-digit integer, kind 2.
+        for (int k : {0, 1, 3, 4, 5})
+            owned.push_back(dftu_utils_test::refused_line(
+                k, R"("id":1,"name":"read","cat":"POSIX","ph":"X","ts":1)"));
+        dstd::Vector<dstd::StringView> lines(owned.begin(), owned.end());
+        CHECK(detect_schema(lines).id == "dftracer");
     }
 
     TEST_CASE("a file's schema is detected from its first lines") {

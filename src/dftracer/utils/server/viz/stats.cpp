@@ -327,6 +327,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
             buf.resize(len + simdjson::SIMDJSON_PADDING);
             auto res = parser.parse(buf.data(), len,
                                     /*realloc_if_needed=*/false);
+            if (res.error()) res = json::parse_refused(parser, ev);
             if (res.error()) return;
             auto root = res.value_unsafe();
             if (!root.is_object()) return;
@@ -403,6 +404,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
             double hi = std::min(end, static_cast<double>(sp.end));
             if (hi <= lo) continue;
             auto pr = lp.parse(simdjson::padded_string(sp.json));
+            if (pr.error()) pr = json::parse_refused(lp, sp.json);
             if (pr.error() || !pr.value_unsafe().is_object()) continue;
             auto root = pr.value_unsafe();
             // A path record's own fields are the event's args.

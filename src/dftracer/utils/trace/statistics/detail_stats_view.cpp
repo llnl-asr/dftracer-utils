@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/args_map.h>
@@ -135,6 +136,7 @@ coro::CoroTask<DetailedStatistics> DetailStatsView::collect(
         group_key_buf.reserve(128);
         for (dstd::StringView line : lines) {
             auto result = parser.parse(line.data(), line.size());
+            if (result.error()) result = json::parse_refused(parser, line);
             if (result.error()) continue;
             auto root = result.value_unsafe();
             if (!root.is_object()) continue;

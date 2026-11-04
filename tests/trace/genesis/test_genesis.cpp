@@ -11,6 +11,7 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <doctest/doctest.h>
+#include <refused_lines.h>
 #include <simdjson.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
@@ -445,6 +446,20 @@ TEST_CASE("duration aggregates are exact across ranks") {
     CHECK(num(x, "/dur/max") == 9);
     CHECK(num(x, "/dur/sum") == 21);
     CHECK(num(x, "/dur/avg") == 7);
+}
+
+TEST_CASE("a line the DOM parser refuses is processed") {
+    dftu_utils_test::ScopedTestDir d("genesis_refused");
+    dstd::String t = rank(1, 0, 1000) + call(1, 1, "main", 0, 1000);
+    for (int k = 0; k < dftu_utils_test::REFUSED_KINDS; ++k)
+        t += call(1, 1, "X", 10 + k * 20, 5, "CPP_APP",
+                  "," + dftu_utils_test::refused_member(k));
+    matrix_run(d, 1, t);
+    auto r = process_only(d);
+    CHECK(r.skips.empty());
+    const auto x = record(r, "main;X");
+    CHECK(num(x, "/count") == dftu_utils_test::REFUSED_KINDS);
+    CHECK(num(x, "/dur/sum") == 5 * dftu_utils_test::REFUSED_KINDS);
 }
 
 TEST_CASE("per-process counters are pro-rated by overlap") {

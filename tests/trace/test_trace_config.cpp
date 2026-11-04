@@ -4,9 +4,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/time_metric_event.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <refused_lines.h>
 #include <testing_utilities.h>
 
 #include <fstream>
@@ -142,5 +144,30 @@ TEST_SUITE("trace-config") {
         REQUIRE(cfgs.size() == 1);
         CHECK(cfgs[0].pid == 5);
         CHECK(cfgs[0].args["num_events"].get<std::uint64_t>() == 41);
+    }
+
+    TEST_CASE("an end event and a time metric the DOM parser refuses") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        for (int k = 0; k < REFUSED_KINDS; ++k) {
+            INFO("kind: ", k);
+            dstd::String body;
+            const dstd::String member = refused_member(k);
+            body += R"({"name":"CM","cat":"dftracer","pid":1,"tid":1,"ts":1,)"
+                    R"("ph":"M","args":{"name":"time_metric","value":"NS",)" +
+                    member + "}}\n";
+            for (int i = 0; i < 20; ++i) body += complete(i) + "\n";
+            body += R"({"id":99,"name":"end","cat":"dftracer","pid":1,)"
+                    R"("tid":1,"ts":9000,"dur":0,"ph":1,"args":{"hhash":"h",)"
+                    R"("num_events":41,"cfg":{"compression":1},)" +
+                    member + "}}\n";
+            const dstd::String gz = make_gz(env, body);
+            CHECK(read_time_metric(gz) == TimeMetric::Ns);
+            auto cfgs = read_trace_config(gz);
+            REQUIRE(cfgs.size() == 1);
+            CHECK(cfgs[0].pid == 1);
+            CHECK(cfgs[0].args["num_events"].get<std::uint64_t>() == 41);
+            CHECK(cfgs[0].args["cfg.compression"].get<std::uint64_t>() == 1);
+        }
     }
 }

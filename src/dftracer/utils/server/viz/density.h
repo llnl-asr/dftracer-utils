@@ -203,6 +203,7 @@ inline dstd::String extract_group_from_line(dstd::StringView event,
     thread_local dstd::String buf;
     buf.assign(event);
     auto res = parse_string(parser, buf);
+    if (res.error()) res = json::parse_refused(parser, event);
     if (res.error()) return "";
     auto root = res.value_unsafe();
     if (!root.is_object()) return "";
@@ -292,6 +293,7 @@ inline void drop_unreferenced_hash_records(dstd::Vector<dstd::String>& big) {
     for (std::size_t i = 0; i < big.size(); ++i) {
         buf.assign(big[i]);
         auto res = parse_string(parser, buf);
+        if (res.error()) res = json::parse_refused(parser, big[i]);
         if (res.error()) continue;
         auto root = res.value_unsafe();
         if (!root.is_object()) continue;
@@ -318,6 +320,7 @@ inline void drop_unreferenced_hash_records(dstd::Vector<dstd::String>& big) {
         if (is_decl[i]) {
             buf.assign(big[i]);
             auto res = parse_string(parser, buf);
+            if (res.error()) res = json::parse_refused(parser, big[i]);
             bool keep = false;
             if (!res.error()) {
                 auto v = res.value_unsafe()["args"]["value"];
@@ -516,6 +519,7 @@ inline void fold_counter(dstd::StringView event, double begin, double bucket_us,
     thread_local dstd::String buf;
     buf.assign(event);
     auto res = parse_string(parser, buf);
+    if (res.error()) res = json::parse_refused(parser, event);
     if (res.error()) return;
     auto root = res.value_unsafe();
 
@@ -648,7 +652,10 @@ inline bool collect_aggregated(json::Value& root, dstd::StringView raw,
                 has_dur = true;
             }
         });
-        if (has_cnt) count = cnt > 0 ? static_cast<std::uint32_t>(cnt) : 1;
+        if (has_cnt)
+            count = cnt > 0 && std::isfinite(cnt)
+                        ? static_cast<std::uint32_t>(cnt)
+                        : 1;
         if (has_dur_sum)
             total = dur_sum;
         else if (has_dur)
@@ -696,8 +703,10 @@ inline void extrapolate_aggregate(const AggRec& r, double interval,
     // we rewrite that one occurrence.
     const dstd::String ts_key =
         "\"ts\":" + dstd::to_string(static_cast<long long>(r.ts));
+    const bool has_dur = std::isfinite(ev_dur);
     const dstd::String tail =
-        ",\"dur\":" + dstd::to_string(ev_dur) + ",\"est\":true}";
+        has_dur ? ",\"dur\":" + dstd::to_string(ev_dur) + ",\"est\":true}"
+                : dstd::String(",\"est\":true}");
     for (std::int64_t i = i_lo; i <= i_hi; i += step) {
         double ts_i = r.ts + static_cast<double>(i) * spacing;
         dstd::String e = r.raw;
@@ -710,7 +719,7 @@ inline void extrapolate_aggregate(const AggRec& r, double interval,
         e.pop_back();
         e += tail;
         big.push_back(std::move(e));
-        big_dur.push_back(ev_dur);
+        big_dur.push_back(has_dur ? ev_dur : 0.0);
     }
 }
 

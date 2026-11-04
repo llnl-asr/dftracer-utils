@@ -15,6 +15,7 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
+#include <refused_lines.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -507,6 +508,91 @@ TEST_SUITE("TraceReader") {
         CHECK(lines[0].find(R"("name":"write")") != dstd::String::npos);
 
         (void)dstd::fs::remove(gz_file);
+    }
+
+    TEST_CASE("Query keeps the lines the DOM parser refuses") {
+        auto test_file =
+            make_unique_test_path("trace_reader_refused_query.pfw");
+        {
+            dstd::String out;
+            out +=
+                R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"ph":"X","args":{"ret":1}})"
+                "\n";
+            for (int k = 0; k < REFUSED_KINDS; ++k)
+                out +=
+                    refused_line(k, R"("name":"write","cat":"POSIX","pid":2,)"
+                                    R"("tid":1,"ts":2,"dur":20,"ph":"X")") +
+                    "\n";
+            for (int k = 0; k < REFUSED_KINDS; ++k)
+                out += refused_line(k, R"("name":"read","cat":"POSIX","pid":3,)"
+                                       R"("tid":1,"ts":3,"dur":20,"ph":"X")") +
+                       "\n";
+            (void)dstd::fs::write_file(dstd::PathView(test_file), out);
+        }
+        const auto uncompressed_size = dstd::fs::file_size(test_file).value();
+        auto gz_file = gzip_fixture(dstd::String(test_file.str()));
+
+        TraceReader reader({.file_path = dstd::String(gz_file)});
+        ReadConfig rc;
+        rc.start_byte = 0;
+        rc.end_byte = uncompressed_size;
+        rc.query = R"(name == "write")";
+        auto lines = collect_lines(reader.read_lines(rc)).get();
+
+        REQUIRE(lines.size() == static_cast<std::size_t>(REFUSED_KINDS));
+        for (const auto& line : lines)
+            CHECK(line.find(R"("name":"write")") != dstd::String::npos);
+
+        (void)dstd::fs::remove(gz_file);
+    }
+
+    TEST_CASE("Query keeps a line nested 100000 deep") {
+        auto test_file = make_unique_test_path("trace_reader_deep_query.pfw");
+        {
+            dstd::String out;
+            for (const char* name : {"read", "write"}) {
+                out +=
+                    R"({"name":")" + dstd::String(name) +
+                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"ph":"X","args":{"ret":1,"deep":)";
+                out.append(100000, '[');
+                out.append(100000, ']');
+                out += "}}\n";
+            }
+            (void)dstd::fs::write_file(dstd::PathView(test_file), out);
+        }
+        const auto uncompressed_size = dstd::fs::file_size(test_file).value();
+        auto gz_file = gzip_fixture(dstd::String(test_file.str()));
+        TraceReader reader({.file_path = dstd::String(gz_file)});
+        ReadConfig rc;
+        rc.start_byte = 0;
+        rc.end_byte = uncompressed_size;
+        rc.query = R"(name == "write")";
+        auto lines = collect_lines(reader.read_lines(rc)).get();
+        REQUIRE(lines.size() == 1);
+        CHECK(lines[0].find(R"("name":"write")") != dstd::String::npos);
+        CHECK(lines[0].size() > 200000);
+        (void)dstd::fs::remove(gz_file);
+    }
+
+    TEST_CASE("The time metric is read from a line the DOM parser refuses") {
+        for (int k = 0; k < REFUSED_KINDS; ++k) {
+            INFO("kind: ", k);
+            auto test_file =
+                make_unique_test_path("trace_reader_refused_metric.pfw");
+            {
+                dstd::String out =
+                    R"({"name":"CM","cat":"dftracer","pid":1,"tid":1,"ts":1,"ph":"M","args":{"name":"time_metric","value":"NS",)" +
+                    refused_member(k) + "}}\n";
+                out +=
+                    R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":"X","args":{"ret":1}})"
+                    "\n";
+                (void)dstd::fs::write_file(dstd::PathView(test_file), out);
+            }
+            auto gz_file = gzip_fixture(dstd::String(test_file.str()));
+            TraceReader reader({.file_path = dstd::String(gz_file)});
+            CHECK(reader.read_time_metric().get() == trace::TimeMetric::Ns);
+            (void)dstd::fs::remove(gz_file);
+        }
     }
 
     TEST_CASE("Query with AND narrows results") {

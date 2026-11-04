@@ -22,6 +22,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -755,7 +756,9 @@ class GroupReader {
             line.remove_suffix(1);
         if (line.empty() || line.front() != '{') return {};
         simdjson::dom::object o;
-        if (parser_.parse(line.data(), line.size()).get(o) != simdjson::SUCCESS)
+        if (parser_.parse(line.data(), line.size()).get(o) !=
+                simdjson::SUCCESS &&
+            json::parse_refused(parser_, line).get(o) != simdjson::SUCCESS)
             return fail(file, "invalid JSON line");
         // One pass over the keys of the record and one over its args, instead
         // of a lookup per key that scans the fields from the start each time.

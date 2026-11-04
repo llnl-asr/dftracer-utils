@@ -19,6 +19,7 @@
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <refused_lines.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -545,6 +546,82 @@ TEST_SUITE("DFTracerView") {
         CHECK(out.find("\"bytes\":4096") != dstd::String::npos);
         CHECK(out.find("\"cat\"") == dstd::String::npos);
         CHECK(out.find("\"dur\"") == dstd::String::npos);
+    }
+
+    TEST_CASE("select projects the lines the DOM parser refuses") {
+        auto binary = find_view_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_view binary not found; skipping");
+            return;
+        }
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        dstd::String dir = env.get_dir() + "/sel_refused";
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        dstd::String pfw = dir + "/t.pfw";
+        {
+            dftu_utils_test::FileOut out(pfw);
+            for (int k = 0; k < dftu_utils_test::REFUSED_KINDS; ++k)
+                out << dftu_utils_test::refused_line(
+                           k, R"("ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                              R"("tid":1,"ts":1000,"dur":10)")
+                    << "\n";
+        }
+        dstd::String gz = pfw + ".gz";
+        REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
+        (void)dstd::fs::remove(pfw);
+
+        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String out;
+        CHECK(run_view_capture(
+                  binary,
+                  {gz, "-q", "name == \"read\"", "--select", "name,ret"}, cap,
+                  out) == 0);
+        std::size_t projected = 0;
+        for (auto at = out.find("{\"name\":\"read\",\"ret\":4096}");
+             at != dstd::String::npos;
+             at = out.find("{\"name\":\"read\",\"ret\":4096}", at + 1))
+            ++projected;
+        CHECK(projected == dftu_utils_test::REFUSED_KINDS);
+        CHECK(out.find("\"cat\"") == dstd::String::npos);
+    }
+
+    TEST_CASE("select keeps a value nested 100000 deep as its raw text") {
+        auto binary = find_view_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_view binary not found; skipping");
+            return;
+        }
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        dstd::String dir = env.get_dir() + "/sel_deep";
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        dstd::String pfw = dir + "/t.pfw";
+        {
+            dftu_utils_test::FileOut out(pfw);
+            dstd::String line =
+                R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
+                R"("ts":1000,"dur":10,"args":{"ret":4096,"deep":)";
+            line.append(100000, '[');
+            line.append(100000, ']');
+            out << line << "}}\n";
+        }
+        dstd::String gz = pfw + ".gz";
+        REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
+        (void)dstd::fs::remove(pfw);
+
+        dstd::String cap = env.get_dir() + "/cap.txt";
+        dstd::String out;
+        CHECK(run_view_capture(
+                  binary,
+                  {gz, "-q", "name == \"read\"", "--select", "name,ret,deep"},
+                  cap, out) == 0);
+        CHECK(out.find("\"name\":\"read\"") != dstd::String::npos);
+        CHECK(out.find("\"ret\":4096") != dstd::String::npos);
+        dstd::String text;
+        text.append(100000 - 127, '[');
+        text.append(100000 - 127, ']');
+        CHECK(out.find(text) != dstd::String::npos);
     }
 
     TEST_CASE("--query runs a pipeline with --param and --explain") {

@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/event_collector_utility.h>
@@ -22,6 +23,7 @@ class EventIdCollector : public utilities::reader::internal::LineProcessor {
    public:
     dstd::Vector<EventId>& events;
     bool trim_commas;
+    std::size_t dropped = 0;
     dftracer::utils::json::RecordParser parser;
 
     explicit EventIdCollector(dstd::Vector<EventId>& event_list,
@@ -43,7 +45,13 @@ class EventIdCollector : public utilities::reader::internal::LineProcessor {
         }
 
         auto result = parser.parse(trimmed, trimmed_length);
-        if (result.error()) co_return true;
+        if (result.error())
+            result = json::parse_refused(
+                parser, dstd::StringView(trimmed, trimmed_length));
+        if (result.error()) {
+            ++dropped;
+            co_return true;
+        }
 
         auto root = result.value_unsafe();
         if (!root.is_object()) co_return true;
@@ -103,6 +111,10 @@ EventCollectorFromMetadataUtility::operator()(
                                            line_opt->content.length());
             }
         }
+
+        if (collector.dropped > 0)
+            DFTRACER_UTILS_LOG_WARN("%s: %zu line(s) could not be read in full",
+                                    file.file_path.c_str(), collector.dropped);
 
 #if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
         std::size_t events_collected = events.size() - events_before;

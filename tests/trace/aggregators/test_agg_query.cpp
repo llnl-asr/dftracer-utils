@@ -1166,6 +1166,81 @@ TEST_SUITE("AggQuery") {
               trace::views::detail::FoldEventBuffer::RETAIN_SLOTS);
     }
 
+    TEST_CASE("a re-read keeps the lines the DOM parser refuses") {
+        auto fx = dstd::make_unique<Fixture>();
+        dftu_utils_test::TextOut text;
+        text << "[\n";
+        const auto line = [&](int pid, const char* name,
+                              const dstd::String& args, int dur) {
+            text << R"({"id":)" << pid << R"(,"name":")" << name
+                 << R"(","cat":"app","pid":)" << pid << R"(,"tid":1,)"
+                 << R"("ph":"X","ts":)" << BASE_TS + std::uint64_t{1000} * pid
+                 << R"(,"dur":)" << dur << R"(,"args":)" << args << "}\n";
+        };
+        for (int i = 0; i < 90; ++i)
+            line(1 + i % 3, "good", R"({"n":)" + dstd::to_string(i) + "}", 10);
+        line(11, "odd", R"({"n":1e400})", 101);
+        line(12, "odd\\qesc", R"({"n":1})", 102);
+        line(13, "odd", R"({"n":123456789012345678901234})", 103);
+        line(14, "odd", "{\"s\":\"x\xffy\"}", 104);
+        line(15, "odd", "{\"s\":\"a\tb\"}", 105);
+        dstd::String deep = R"({"deep":)";
+        for (int i = 0; i < 1100; ++i) deep += '[';
+        for (int i = 0; i < 1100; ++i) deep += ']';
+        deep += "}";
+        line(16, "odd", deep, 106);
+        text << R"({"id":17,"name":"odd","cat":"app","pid":17,"tid":1,)"
+             << R"("ph":"X","ts":)" << BASE_TS << R"(,"dur":107,"args":{"x":)"
+             << "\n";
+        for (int i = 0; i < 30; ++i)
+            line(1 + i % 3, "good", R"({"n":)" + dstd::to_string(i) + "}", 10);
+        text << "]\n";
+        fx->files.push_back(dftu_utils_test::write_gz_trace(
+            fx->env.get_dir() + "/odd.pfw.gz", text.str()));
+        fx->index_dir = fx->env.get_dir() + "/idx_odd";
+        index::IndexerOptions o;
+        o.index_dir = fx->index_dir;
+        o.checkpoint_size = std::size_t{64} << 20;
+        o.aggregation = make_config(FIVE_SECONDS_US);
+        index::Indexer::open(
+            dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o)
+            .build();
+        fx->index_path = dstd::String(
+            trace::internal::determine_index_path(fx->files[0], fx->index_dir));
+
+        Ask ask;
+        ask.by_pid = true;
+        AggQuery q = make_query(*fx, ask, FIVE_SECONDS_US);
+        q.filter = duql::parse_or_throw("ts >= 0");
+        const AggQueryResult r = run(q);
+        CHECK(r.stats.chunks_from_columns == 0);
+        CHECK(r.stats.events_read == 126);
+        CHECK(r.stats.dropped_lines == 1);
+        dstd::Map<dstd::Pair<dstd::String, std::uint64_t>, double> sums;
+        dstd::Map<dstd::Pair<dstd::String, std::uint64_t>, std::uint64_t>
+            counts;
+        for (const auto& [k, p] : r.rows) {
+            const dstd::Pair<dstd::String, std::uint64_t> key(
+                dstd::String(r.text(k.name)), k.pid);
+            sums[key] += p.duration.sum;
+            counts[key] += p.count;
+        }
+        const auto sum_of = [&](const char* name, std::uint64_t pid) {
+            return sums[dstd::Pair<dstd::String, std::uint64_t>(name, pid)];
+        };
+        CHECK(counts.size() == 3 + 6);
+        for (std::uint64_t pid = 1; pid <= 3; ++pid)
+            CHECK(sum_of("good", pid) == 400.0);
+        CHECK(sum_of("odd", 11) == 101.0);
+        CHECK(sum_of("odd\\qesc", 12) == 102.0);
+        CHECK(sum_of("odd", 13) == 103.0);
+        CHECK(sum_of("odd", 14) == 104.0);
+        CHECK(sum_of("odd", 15) == 105.0);
+        CHECK(sum_of("odd", 16) == 106.0);
+        CHECK(counts.count(
+                  dstd::Pair<dstd::String, std::uint64_t>("odd", 17)) == 0);
+    }
+
     TEST_CASE("a member cut inside a line neither doubles nor drops it") {
         auto fx = build(FIVE_SECONDS_US, "cut", true);
         SUBCASE("5 s windows") {

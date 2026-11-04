@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/trace/event.h>
 #include <simdjson.h>
@@ -198,28 +199,45 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
 /// from one scan of the batch, so a single unescaped character in a string
 /// collapses it into one rejected document; on that (nothing delivered) the
 /// chunk is re-parsed line by line so a bad record drops only itself.
+///
+/// A line the DOM parser refuses, such as one with a number too large for a
+/// double, is written as a line it accepts by @ref json::dom_form and
+/// delivered in its place; for it `src` is that text, which lasts until `cb`
+/// returns. A line that still cannot be read is added to `*dropped` when given.
 template <typename Cb>
 std::size_t parse_buffer(simdjson::dom::parser& parser,
                          dstd::SharedPtr<dstd::String> chunk_buffer,
                          std::size_t len, std::size_t checkpoint_idx,
-                         std::size_t& line_number, Cb&& cb) {
+                         std::size_t& line_number, Cb&& cb,
+                         std::size_t* dropped = nullptr) {
     if (!chunk_buffer || len == 0) return 0;
-    return parse_lines(
-        parser, chunk_buffer->data(), len,
-        [&](simdjson::dom::element root, dstd::StringView src) {
-            if (!root.is_object()) return;
-            json::JsonValue json(root);
-            DFTracerEvent ev;
-            simdjson::dom::element args_dom{};
-            bool has_args = false;
-            if (!DFTracerEvent::parse_scalars(root, ev, args_dom, has_args))
-                return;
-            std::size_t ln = line_number++;
-            EventRecord record{ev,           json,           src,
-                               chunk_buffer, checkpoint_idx, ln,
-                               args_dom,     has_args};
-            cb(record);
-        });
+    auto deliver = [&](simdjson::dom::element root, dstd::StringView src) {
+        if (!root.is_object()) return;
+        json::JsonValue json(root);
+        DFTracerEvent ev;
+        simdjson::dom::element args_dom{};
+        bool has_args = false;
+        if (!DFTracerEvent::parse_scalars(root, ev, args_dom, has_args)) return;
+        std::size_t ln = line_number++;
+        EventRecord record{ev, json,     src,     chunk_buffer, checkpoint_idx,
+                           ln, args_dom, has_args};
+        cb(record);
+    };
+    return parse_lines(parser, chunk_buffer->data(), len, deliver,
+                       [&](dstd::StringView line, std::size_t) {
+                           dstd::String form;
+                           if (!json::dom_form(line, form)) {
+                               if (dropped) ++*dropped;
+                               return;
+                           }
+                           auto parsed = parser.parse(form.data(), form.size());
+                           if (parsed.error()) {
+                               if (dropped) ++*dropped;
+                               return;
+                           }
+                           deliver(parsed.value_unsafe(),
+                                   dstd::StringView(form));
+                       });
 }
 
 }  // namespace dftracer::utils::trace

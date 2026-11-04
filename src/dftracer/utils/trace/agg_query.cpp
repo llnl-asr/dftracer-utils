@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/scope.h>
@@ -167,7 +168,8 @@ class Runner {
     coro::CoroTask<void> chunk_task(Source* source, const dstd::String* path,
                                     const index::gzip::ChunkSpan* span,
                                     const ChunkJob* job, std::size_t seq,
-                                    std::size_t sub);
+                                    std::size_t sub,
+                                    std::atomic<std::size_t>* dropped);
 
     std::mutex mu;
     std::array<Stripe, MERGE_STRIPES> stripes;
@@ -424,6 +426,7 @@ void Runner::take_stats(const AggQueryStats& t) {
     s.chunks_from_columns += t.chunks_from_columns;
     s.unanswered += t.unanswered;
     s.events_read += t.events_read;
+    s.dropped_lines += t.dropped_lines;
     s.max_batch_events = std::max(s.max_batch_events, t.max_batch_events);
 }
 
@@ -533,21 +536,27 @@ coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file,
         }
     }
     if (jobs.empty() || is_failed() || cancelled()) co_return;
+    std::atomic<std::size_t> dropped{0};
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (std::size_t at = 0; at < jobs.size(); ++at)
-            scope.spawn([this, &src, &path, &spans, &jobs, seq, at]() {
-                return chunk_task(&src, &path, spans.data(), &jobs[at], seq,
-                                  at + 1);
-            });
+            scope.spawn(
+                [this, &src, &path, &spans, &jobs, &dropped, seq, at]() {
+                    return chunk_task(&src, &path, spans.data(), &jobs[at], seq,
+                                      at + 1, &dropped);
+                });
         co_return;
     });
+    if (dropped.load() > 0)
+        DFTRACER_UTILS_LOG_WARN("%s: %zu line(s) could not be read in full",
+                                path.c_str(), dropped.load());
 }
 
 coro::CoroTask<void> Runner::chunk_task(Source* source,
                                         const dstd::String* path,
                                         const index::gzip::ChunkSpan* spans,
                                         const ChunkJob* job, std::size_t seq,
-                                        std::size_t sub) {
+                                        std::size_t sub,
+                                        std::atomic<std::size_t>* dropped) {
     co_await permits->acquire(1);
     Permit permit(*permits);
     try {
@@ -557,6 +566,7 @@ coro::CoroTask<void> Runner::chunk_task(Source* source,
         const index::gzip::ChunkSpan& span =
             job->whole_file ? whole_file : spans[job->chunk];
         co_await task.read_chunk(*path, span, *job, spans);
+        dropped->fetch_add(task.stats.dropped_lines);
         take_stats(task.stats);
         submit(seq, sub, task.rows);
     } catch (...) {
@@ -913,7 +923,8 @@ void Task::parse_lines_of(dstd::String& pending, std::uint32_t chunk,
                 views::detail::build_fold_event_into(ev, rec.ev, rec.args_dom,
                                                      rec.has_args,
                                                      r_.rules.read, true);
-            });
+            },
+            &stats.dropped_lines);
         stats.max_batch_events =
             std::max(stats.max_batch_events, buffer_.size());
         for (const FoldEvent& ev : buffer_.events())

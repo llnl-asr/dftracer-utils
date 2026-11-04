@@ -40,6 +40,7 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/canonical.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -134,8 +135,10 @@ static dstd::String project_event(simdjson::dom::parser& parser,
                                   bool args_fallback) {
     simdjson::padded_string padded(ev);
     simdjson::dom::element doc;
-    if (parser.parse(padded).get(doc) || !doc.is_object())
+    if (parser.parse(padded).get(doc) &&
+        json::parse_refused(parser, ev).get(doc))
         return dstd::String(ev);
+    if (!doc.is_object()) return dstd::String(ev);
     const json::JsonValue root(doc);
     dstd::String out = "{";
     bool first = true;

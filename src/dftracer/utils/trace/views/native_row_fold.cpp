@@ -17,6 +17,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/json/canonical.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -358,8 +359,10 @@ dataframe::Series list_column(EventRows evs,
         simdjson::dom::element root;
         simdjson::dom::array arr;
         if (!text ||
-            parser.parse(text->data(), text->size()).get(root) !=
-                simdjson::SUCCESS ||
+            (parser.parse(text->data(), text->size()).get(root) !=
+                 simdjson::SUCCESS &&
+             json::parse_refused(parser, *text).get(root) !=
+                 simdjson::SUCCESS) ||
             root.get_array().get(arr) != simdjson::SUCCESS) {
             offsets.push_back(offsets.back());
             rows.push_back(-1);

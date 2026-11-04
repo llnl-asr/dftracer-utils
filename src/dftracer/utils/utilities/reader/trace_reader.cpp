@@ -20,6 +20,7 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -67,6 +68,7 @@ void reject_unless_gzip(common::ArchiveFormat format,
 
 bool line_matches_query(const Query& q, dstd::StringView content) {
     auto result = tl_parser.parse(content.data(), content.size());
+    if (result.error()) result = json::parse_refused(tl_parser, content);
     if (result.error()) return false;
     auto root = result.value_unsafe();
     if (!root.is_object()) return false;
@@ -503,6 +505,8 @@ coro::CoroTask<trace::TimeMetric> TraceReader::read_time_metric(
                                      line_opt->content.size(), start, len))
             continue;
         auto doc = parser.parse(start, len);
+        if (doc.error())
+            doc = json::parse_refused(parser, dstd::StringView(start, len));
         if (doc.error()) continue;
         DFTracerEvent event;
         if (!DFTracerEvent::parse(json::JsonValue(doc.value()), event))

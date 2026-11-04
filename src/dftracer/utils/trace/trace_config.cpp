@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/time_metric_event.h>
 #include <dftracer/utils/trace/trace_config.h>
@@ -126,7 +127,8 @@ TimeMetric read_time_metric(const dstd::String& trace_path) {
         if (line.find("time_metric") != dstd::StringView::npos) {
             simdjson::padded_string padded(line);
             simdjson::dom::element doc;
-            if (!parser.parse(padded).get(doc)) {
+            if (!parser.parse(padded).get(doc) ||
+                !json::parse_refused(parser, line).get(doc)) {
                 auto args = doc["args"];
                 if (!args.error()) {
                     dstd::StringView nm, val;
@@ -151,6 +153,7 @@ dstd::Optional<TraceConfig> parse_end_event(dstd::StringView line) {
     dstd::String padded(line);
     padded.resize(line.size() + simdjson::SIMDJSON_PADDING);
     auto doc = parser.parse(padded.data(), line.size(), false);
+    if (doc.error()) doc = json::parse_refused(parser, line);
     if (doc.error()) return dstd::nullopt;
     DFTracerEvent ev;
     JsonValue jv(doc.value_unsafe());

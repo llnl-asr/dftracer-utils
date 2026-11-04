@@ -423,7 +423,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Keep a line with an invalid string escape, such as `\q` or a lone surrogate, and read that string as its raw text on the on-demand read paths.
   Event collection and containment in a batched session, by path or with nested captures, now read on demand and keep these lines.
   So do typed rows, the viz density scan, the plugin trace read, the event scan of a view, the fold scan of records decoded by path, and the indexed export of path records.
-  Readers that still use the DOM parser drop them.
+  Every other reader of trace lines that uses the DOM parser now reads such a line too: the aggregation query re-read, the viz folds (stats, summary, counters, process tree, density hashes and groups, events of a record schema), the provenance graph, the detailed statistics, the event collection, the trace config and time metric reads, the schema detection, the genesis processing, the reader query filter, `--select` and list columns.
+  A line the DOM parser refuses is read on demand and written as a line it accepts: a number too large for a double becomes the largest finite double of its sign, an invalid escape stays as its raw text, a bad byte becomes `?`, and a part nested deeper than 128 levels is kept as a string holding its raw text. These DOM readers see a number past double range as the largest finite double, not infinity, and an integer of 20 or more digits as a double, not its exact digits.
+  A line the DOM parser accepts takes the same path as before.
+  The aggregation query counts a line that cannot be read in full in `dropped_lines` of its stats and warns once per file, and the event collection warns once per file.
+  The density view no longer writes `"dur":inf` for an aggregate (`ph` 3) whose duration sum is too large for a double: the synthetic events carry no `dur`, and a `dftu_cnt` that is not finite counts as 1.
   A line nested deeper than the DOM limit of 1024 levels is now a valid line in the view scan, where it counted as invalid.
   The on-demand readers descend at most 128 containers (`MAX_READ_DEPTH`), so a very deep line never overflows the stack and is never dropped: a container below that depth stays under its path as its JSON text.
   A value nested between 128 and 1024 levels, which gave one value per leaf, now gives that text below level 128.

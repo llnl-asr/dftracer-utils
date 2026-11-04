@@ -2682,6 +2682,23 @@ TEST_SUITE("View duql array indexes and lists") {
                   line(3, "open", R"("xs":[],"i":0,"tags":[])")});
     }
 
+    TEST_CASE("an array holding a number too large for a double is a list") {
+        TestEnvironment env(10);
+        auto line = [](int ts, const char* name, const dstd::String& args) {
+            return R"({"ph":"X","name":")" + dstd::String(name) +
+                   R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+                   dstd::to_string(ts) + R"(,"dur":10,"args":{)" + args + "}}";
+        };
+        const View v =
+            view_of_lines(env, {line(1, "read", R"("xs":[10,20,30])"),
+                                line(2, "huge", R"("xs":[1,1e400,2,4])"),
+                                line(3, "open", R"("xs":[5])")});
+        const dataframe::DataFrame f =
+            frame(v.duql("derive n = len(xs) | select name, n"));
+        REQUIRE(f.num_rows() == 3);
+        CHECK(nums(f, "n") == dstd::Vector<double>{3, 4, 1});
+    }
+
     TEST_CASE("a per-row index") {
         TestEnvironment env(10);
         const View v = arrays_view(env);

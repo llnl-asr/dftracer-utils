@@ -185,6 +185,9 @@ struct AggQueryStats {
     /// Partials and files that needed a re-read the query did not allow.
     std::size_t unanswered = 0;
     std::uint64_t events_read = 0;
+    /// Lines of a re-read that could not be read in full, such as a cropped
+    /// one, and are left out of the result.
+    std::size_t dropped_lines = 0;
     /// The most events one parse of a re-read decoded into the event buffer.
     std::size_t max_batch_events = 0;
     /// The rows at the end. Rows are never removed, so this is also the most

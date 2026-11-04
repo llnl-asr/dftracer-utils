@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-foreach(name test_value)
+foreach(name test_dom_form test_value)
   set(target json_${name})
   add_executable(${target} ${name}.cpp)
   target_link_libraries(${target} PRIVATE doctest::doctest dftracer_utils)

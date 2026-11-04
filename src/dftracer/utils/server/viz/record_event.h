@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/json/value.h>
 #include <simdjson.h>
@@ -124,6 +125,7 @@ struct TraceFields {
         buf.assign(raw);
         buf.append(simdjson::SIMDJSON_PADDING, '\0');
         auto res = parser.parse(buf.data(), raw.size(), false);
+        if (res.error()) res = json::parse_refused(parser, raw);
         if (res.error() || !res.value_unsafe().is_object()) return false;
         const auto root = res.value_unsafe();
         auto at = [&](const dstd::String& path) {

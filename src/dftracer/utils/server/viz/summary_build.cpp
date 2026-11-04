@@ -407,6 +407,7 @@ static void fold_summary(std::size_t w, dstd::StringView event, SumBuild& b) {
     buf.append(simdjson::SIMDJSON_PADDING, '\0');
     auto res =
         parser.parse(buf.data(), event.size(), /*realloc_if_needed=*/false);
+    if (res.error()) res = json::parse_refused(parser, event);
     if (res.error()) return;
     auto root = res.value_unsafe();
     if (!root.is_object()) return;
@@ -1131,7 +1132,9 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             if (eit == ends.end()) continue;
             dstd::String sbuf(sjson), ebuf(eit->second);
             auto sr = parse_string(sp, sbuf);
+            if (sr.error()) sr = json::parse_refused(sp, sjson);
             auto er = parse_string(ep, ebuf);
+            if (er.error()) er = json::parse_refused(ep, eit->second);
             if (sr.error() || er.error()) continue;
             auto se = sr.value_unsafe();
             auto ee = er.value_unsafe();

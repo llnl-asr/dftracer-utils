@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/trace/provenance/provenance_graph.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <simdjson.h>
@@ -135,6 +136,7 @@ void add_pid(dstd::Vector<std::int64_t>& v, std::int64_t pid) {
 void ingest(Acc& a, dstd::StringView line) {
     thread_local simdjson::dom::parser parser;
     auto doc = parser.parse(line.data(), line.size());
+    if (doc.error()) doc = json::parse_refused(parser, line);
     if (doc.error() || !doc.value_unsafe().is_object()) return;
     auto root = doc.value_unsafe().get_object().value_unsafe();
     auto args_r = root["args"];
@@ -498,6 +500,7 @@ void add_io(IoAcc& a, dstd::StringView aid, dstd::StringView fhash,
 void ingest_io(IoAcc& a, const SpanIndex& spans, dstd::StringView line) {
     thread_local simdjson::dom::parser parser;
     auto doc = parser.parse(line.data(), line.size());
+    if (doc.error()) doc = json::parse_refused(parser, line);
     if (doc.error() || !doc.value_unsafe().is_object()) return;
     auto root = doc.value_unsafe().get_object().value_unsafe();
     auto args_r = root["args"];

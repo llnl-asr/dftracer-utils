@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/value.h>
 #include <dftracer/utils/trace/event.h>
 #include <simdjson.h>
 
@@ -475,6 +476,26 @@ inline simdjson::dom::element resolve_json_path(simdjson::dom::element root,
     return ok ? v.element() : root;
 }
 
+/// Append an unsigned integer under `key_id` as the metric encoding wants it:
+/// exact as int64 when it fits, else as uint64.
+inline void append_uint_arg(ArenaVec<FoldEvent::Arg>& into,
+                            std::uint32_t key_id, std::uint64_t u) {
+    if (u <=
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+        into.emplace_back(key_id, static_cast<std::int64_t>(u));
+    else
+        into.emplace_back(key_id, u);
+}
+
+/// Append a bool under `key_id` as 0/1 and as a special.
+inline void append_bool_arg(ArenaVec<FoldEvent::Arg>& into,
+                            ArenaVec<FoldEvent::SpecialValue>& specials,
+                            std::uint32_t key_id, bool b, bool top) {
+    using S = FoldEvent::Special;
+    into.emplace_back(key_id, static_cast<std::int64_t>(b));
+    specials.push_back({key_id, b ? S::TrueValue : S::FalseValue, top});
+}
+
 /// Append `v` under `key_id` when it is a scalar: a string interned, an integer
 /// exact as int64 (a uint64 above INT64_MAX as double), a bool as 0/1. A null,
 /// a bool and an empty array or object also go to `specials`; a non-empty
@@ -494,24 +515,16 @@ inline void append_scalar_arg(ArenaVec<FoldEvent::Arg>& into,
         case T::INT64:
             into.emplace_back(key_id, v.get_int64().value_unsafe());
             break;
-        case T::UINT64: {
-            const std::uint64_t u = v.get_uint64().value_unsafe();
-            if (u <= static_cast<std::uint64_t>(
-                         std::numeric_limits<std::int64_t>::max()))
-                into.emplace_back(key_id, static_cast<std::int64_t>(u));
-            else
-                into.emplace_back(key_id, u);
+        case T::UINT64:
+            append_uint_arg(into, key_id, v.get_uint64().value_unsafe());
             break;
-        }
         case T::DOUBLE:
             into.emplace_back(key_id, v.get_double().value_unsafe());
             break;
-        case T::BOOL: {
-            const bool b = v.get_bool().value_unsafe();
-            into.emplace_back(key_id, static_cast<std::int64_t>(b));
-            specials.push_back({key_id, b ? S::TrueValue : S::FalseValue, top});
+        case T::BOOL:
+            append_bool_arg(into, specials, key_id, v.get_bool().value_unsafe(),
+                            top);
             break;
-        }
         case T::NULL_VALUE:
             specials.push_back({key_id, S::NullValue, top});
             break;
@@ -702,6 +715,19 @@ void extract_fold_event_into(
     dftracer::utils::dstd::StringIntern& intern, bool needs_args,
     const dstd::Vector<dstd::String>* extra_fields = nullptr,
     bool capture_schema = false, DecodeHints* hints = nullptr);
+
+/// Read the event `event`, an object, into `ev` (reset first) as an owned
+/// event, in one forward walk of its text: no DOM tree is built. It gives the
+/// event the DOM form gives for the same line with the same `needs_args`, with
+/// no extra fields and no schema capture. A read error, such as a bad number
+/// or escape in a part the walk reaches, marks the line broken and leaves `ev`
+/// reset, which no consumer keeps. A part the walk does not reach is not
+/// checked. With `cache`, bound to `intern`, a string the cache has seen is not
+/// looked up in `intern` again.
+void extract_fold_event_into(
+    FoldEvent& ev, json::Value& event,
+    dftracer::utils::dstd::StringIntern& intern, bool needs_args,
+    dftracer::utils::dstd::InternCache* cache = nullptr);
 
 }  // namespace dftracer::utils::trace::views::detail
 

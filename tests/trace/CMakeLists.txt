@@ -57,6 +57,8 @@ set(TRACE_TEST_SOURCES
     views/test_view_mv.cpp
     views/test_coverage.cpp
     views/test_fold.cpp
+    views/test_fold_shapes.cpp
+    views/test_fold_ondemand.cpp
     views/test_pipeline_plan.cpp
     views/test_stream_early_out.cpp
     views/test_agg_transform_memory.cpp

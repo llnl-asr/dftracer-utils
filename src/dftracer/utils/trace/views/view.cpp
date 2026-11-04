@@ -235,15 +235,18 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
         slots->push_back(slot);
         return [slot, by_path, keep_metadata, record_schema](json::Value& jv,
                                                              dstd::StringView) {
-            const auto root = json::detail::ValueAccess::dom(jv);
-            if (!root) return;
+            dstd::Optional<simdjson::dom::element> root;
+            if (by_path) {
+                root = json::detail::ValueAccess::dom(jv);
+                if (!root) return;
+            }
             detail::FoldEvent& fe = slot->events.append();
             if (by_path)
                 detail::decode_record_into(fe, *root, slot->intern,
                                            /*capture_schema=*/false, nullptr,
                                            record_schema);
             else
-                detail::extract_fold_event_into(fe, *root, slot->intern,
+                detail::extract_fold_event_into(fe, jv, slot->intern,
                                                 /*needs_args=*/true);
             if (fe.phase == RecordPhase::Unknown ||
                 (!keep_metadata && fe.phase == RecordPhase::Metadata))

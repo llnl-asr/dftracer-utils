@@ -332,6 +332,20 @@ dstd::Optional<simdjson::dom::element> ValueAccess::dom(const Value& v) {
     return st.dom_root;
 }
 
+bool ValueAccess::begin_object(Value& v, ObjectWalk& out) {
+    if (!v.owner_ || !v.start_ || *v.start_ != '{' || !v.fresh_for_read())
+        return false;
+    if (!note(*v.owner_, inner(v).get_object().get(out.object))) return false;
+    v.state_ = SPENT;
+    out.end = v.owner_->end();
+    out.strings = &v.owner_->strings;
+    return true;
+}
+
+bool ValueAccess::end_object(const Value& v) {
+    return v.owner_ && usable(*v.owner_);
+}
+
 void ValueAccess::rewind(Value& v) {
     if (v.root_ && (v.state_ != FRESH || v.owner_->disturbed)) v.restart_root();
 }

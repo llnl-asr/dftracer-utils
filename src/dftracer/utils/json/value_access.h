@@ -7,6 +7,10 @@
 #include <dftracer/utils/json/value.h>
 #include <simdjson.h>
 
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
 namespace dftracer::utils::json::detail {
 
 /// Private access to @ref Value and @ref Document for the json library and for
@@ -14,6 +18,16 @@ namespace dftracer::utils::json::detail {
 struct EventView {
     simdjson::ondemand::document* doc = nullptr;
     dstd::StringView text;
+    dstd::StringArena* strings = nullptr;
+};
+
+/// The members of an object for one forward walk with simdjson's own iteration.
+struct ObjectWalk {
+    simdjson::ondemand::object object;
+    /// One past the last byte of the line, the limit for @ref value_extent.
+    const char* end = nullptr;
+    /// The string arena of the owning @ref Document, for @ref read_key and
+    /// @ref read_string.
     dstd::StringArena* strings = nullptr;
 };
 
@@ -45,6 +59,19 @@ struct ValueAccess {
     /// @ref Document::parse.
     static dstd::Optional<simdjson::dom::element> dom(const Value& v);
 
+    /// Starts a forward walk of the members of the object `v`, restarting the
+    /// root as any read of `v` would. False when `v` is not an object, its line
+    /// is broken or a walk is running; an error in the object marks the line
+    /// broken. After the call `v` is spent. The caller reads the members
+    /// through `out`, reports a read error with @ref mark_broken, and asks
+    /// @ref end_object whether the line is still readable.
+    static bool begin_object(Value& v, ObjectWalk& out);
+
+    /// Whether the line is readable after a walk that began with
+    /// @ref begin_object, which a skip over a malformed part can make false
+    /// without any read reporting an error.
+    static bool end_object(const Value& v);
+
     /// Makes the root value readable from its start again, as a new parse
     /// would, without parsing. Does nothing for a child value.
     static void rewind(Value& v);
@@ -60,6 +87,18 @@ dstd::StringView value_extent(const char* start, const char* end);
 dstd::Optional<dstd::StringView> decode_string(dstd::StringView text,
                                                dstd::StringArena& arena);
 
+/// `token`, the text up to the next structural byte, without the whitespace
+/// that follows the value. Needs no scan, unlike @ref value_extent.
+inline dstd::StringView trim_token(dstd::StringView token) {
+    std::size_t size = token.size();
+    while (size > 0) {
+        const char c = token[size - 1];
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\r') break;
+        --size;
+    }
+    return token.substr(0, size);
+}
+
 /// The decoded string whose opening quote is the first byte of `token`, a
 /// view of the line or a copy in `arena`. Empty when it is not a string.
 dstd::Optional<dstd::StringView> read_string(dstd::StringView token,
@@ -71,6 +110,34 @@ dstd::Optional<dstd::StringView> read_string(dstd::StringView token,
 dstd::Optional<dstd::StringView> read_key(
     simdjson::ondemand::raw_json_string key, const char* end,
     dstd::StringArena& arena);
+
+/// Whether `text` holds a backslash, eight bytes at a time. A name is short, so
+/// this beats a call to memchr.
+inline bool has_backslash(dstd::StringView text) {
+    constexpr std::uint64_t ONES = 0x0101010101010101ULL;
+    constexpr std::uint64_t HIGH = 0x8080808080808080ULL;
+    const char* p = text.data();
+    std::size_t left = text.size();
+    for (; left >= 8; p += 8, left -= 8) {
+        std::uint64_t word;
+        std::memcpy(&word, p, 8);
+        word ^= ONES * static_cast<std::uint64_t>('\\');
+        if ((word - ONES) & ~word & HIGH) return true;
+    }
+    for (; left > 0; ++p, --left)
+        if (*p == '\\') return true;
+    return false;
+}
+
+/// The decoded name of the member `field` of an object, found without scanning
+/// the key. A view of the line when the name has no backslash, else a copy in
+/// `arena`. Empty on an invalid escape.
+inline dstd::Optional<dstd::StringView> read_key(
+    const simdjson::ondemand::field& field, dstd::StringArena& arena) {
+    const dstd::StringView raw = field.escaped_key();
+    if (!has_backslash(raw)) return raw;
+    return decode_string(raw, arena);
+}
 
 }  // namespace dftracer::utils::json::detail
 

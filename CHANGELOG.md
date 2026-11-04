@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Read each event in `collect_events` once on demand, in place of a second DOM parse of the line.
+  A line whose bad part is never read now stays, and a read of real DFTracer lines takes no more time than one DOM parse.
 - Keep a JSON line whose syntax error lies in a part nothing reads, in the public fold callbacks and predicates (`Query::matches`) and in the reader path for queries with expressions: they read each line once on demand and check only what they read, where they dropped a line that failed a full parse. A line whose bad part is read is dropped. The reader path for plain field filters walks every field of a line, so it drops a line with a bad part anywhere: `{"name":"read","dur":}` is dropped for `name == "read"` and kept for `lower(name) == "read"`. The folds that still read the whole event (event collection, containment, typed rows, density) drop such a line as before. A bigint counts the same way: unknown when read, and no reason to drop the line when not.
 - Pass the callback of `ViewSession::fold` a `json::Value&`, read on demand from one parse of the line, in place of `const json::JsonValue&`. A fold that only counts reads no field, and several folds and predicates on one line share the parse.
 - Hash every string with XXH3-64, in memory and in index, cache and store files.

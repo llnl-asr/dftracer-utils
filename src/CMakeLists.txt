@@ -2137,6 +2137,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/gzip_line_writer_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/gzip_crc_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/index_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/fold_read_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/duql_eval_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/duql_mask_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/prefilter_bench.cpp
@@ -2172,8 +2173,8 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
   # DFTRACER_UTILS_TESTS is ON, which the `bench` preset sets.
   if(DFTRACER_UTILS_TESTS)
     enable_testing()
-    foreach(bench view_api_bench index_bench duql_eval_bench
-                  group_transform_bench)
+    foreach(bench view_api_bench index_bench fold_read_bench
+                  duql_eval_bench group_transform_bench)
       add_test(NAME ${bench}_smoke COMMAND ${bench} --smoke)
       set_tests_properties(${bench}_smoke PROPERTIES LABELS bench_smoke)
     endforeach()

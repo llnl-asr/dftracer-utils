@@ -17,8 +17,8 @@
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/store_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/store/store.h>
@@ -211,8 +211,7 @@ TEST_SUITE("AggExtension") {
         {
             // A value that does not decode as a config reads as absent.
             auto store = dftracer::utils::store::Store::open(
-                index::store::internal::normalize_index_root(index_of(gz)) +
-                "/store");
+                index::normalize_index_root(index_of(gz)) + "/store");
             REQUIRE(store.has_value());
             dftracer::utils::store::NamespaceSpec spec;
             const auto name =

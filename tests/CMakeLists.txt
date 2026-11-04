@@ -110,7 +110,7 @@ elseif(DFTRACER_UTILS_BUILD_SHARED)
 endif()
 if(DFTRACER_UTILS_BUILD_SHARED)
   set(CODEC_EXPORT_LIBS)
-  foreach(lib memory dstd common runtime store json duql dataframe utilities)
+  foreach(lib memory dstd common runtime store io json duql dataframe utilities)
     dftu_variant_target(_target dftracer_utils_${lib} shared)
     if(TARGET ${_target})
       list(APPEND CODEC_EXPORT_LIBS $<TARGET_FILE:${_target}>)
@@ -143,6 +143,12 @@ add_test(
   COMMAND
     sh -c
     "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/include/dftracer/utils/coro\" \"$0/src/dftracer/utils/coro\" | grep -vE '<dftracer/utils/(coro|common|dstd|memory)/'); if [ -n \"$bad\" ]; then echo \"include from coro/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(
+  NAME io_no_upward
+  COMMAND
+    sh -c
+    [=[files=$( { for d in utilities/fileio utilities/hash utilities/filesystem utilities/text utilities/serialization; do find "$0/include/dftracer/utils/$d" "$0/src/dftracer/utils/$d" -type f 2>/dev/null; done | grep -vE '/(indexed_[a-z_]*|async_indexed_[a-z_]*|file_process_types|streaming_line_reader)\.(h|cpp)$'; ls "$0"/src/dftracer/utils/index/store/internal/helpers.*; } ); bad=$(grep -nE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' $files | grep -vE '<dftracer/utils/(memory|dstd|common|coro|runtime|json)/|<dftracer/utils/utilities/(hash|filesystem|text|serialization|fileio)/|<dftracer/utils/index/store/internal/helpers\.h>'; grep -nE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/utilities/fileio/([a-z_/]*/)?(indexed_|async_indexed_|file_process_types|streaming_line_reader)' $files); if [ -n "$bad" ]; then echo "include from io into a module above it:"; echo "$bad"; exit 1; fi]=]
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME spdx_headers
@@ -930,6 +936,16 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         -DTEST_TYPE=pkgconfig -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
+    # Test io library
+    add_test(
+      NAME test_pkgconfig_discovery_io
+      COMMAND
+        ${CMAKE_COMMAND}
+        -DPKG_CONFIG_PATH=${TEST_INSTALL_PREFIX}/lib/pkgconfig:${TEST_INSTALL_PREFIX}/lib64/pkgconfig:${TEST_INSTALL_PREFIX}/lib/${CMAKE_LIBRARY_ARCHITECTURE}/pkgconfig
+        -DLIBRARY_NAME=dftracer_utils_io
+        -DTEST_TYPE=pkgconfig -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
+
     # Test utilities library
     add_test(
       NAME test_pkgconfig_discovery_utilities
@@ -1010,6 +1026,15 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         -DTEST_TYPE=cmake -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
+    # Test io library
+    add_test(
+      NAME test_cmake_discovery_io
+      COMMAND
+        ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
+        -DLIBRARY_NAME=dftracer_utils_io
+        -DTEST_TYPE=cmake -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
+
     # Test utilities library
     add_test(
       NAME test_cmake_discovery_utilities
@@ -1078,11 +1103,13 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       test_pkgconfig_discovery_coro
       test_pkgconfig_discovery_runtime
       test_pkgconfig_discovery_store
+      test_pkgconfig_discovery_io
       test_pkgconfig_discovery_utilities
       test_cmake_discovery_common
       test_cmake_discovery_coro
       test_cmake_discovery_runtime
       test_cmake_discovery_store
+      test_cmake_discovery_io
       test_cmake_discovery_utilities)
   endif()
 
@@ -1101,7 +1128,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
   foreach(VARIANT IN LISTS PACKAGE_TEST_VARIANTS)
     if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
       foreach(LIBRARY dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_coro
-                      dftracer_utils_runtime dftracer_utils_store dftracer_utils_utilities)
+                      dftracer_utils_runtime dftracer_utils_store dftracer_utils_io dftracer_utils_utilities)
         add_target_alias_test(test_target_${LIBRARY}_${VARIANT}
                               "${LIBRARY}::${VARIANT}")
         list(APPEND PACKAGE_DISCOVERY_TESTS test_target_${LIBRARY}_${VARIANT})

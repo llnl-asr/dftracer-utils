@@ -154,8 +154,7 @@ void throw_on_error(const dstd::Error& error, dstd::StringView what) {
 coro::CoroTask<void> drop_plugin_extension(
     const dstd::String& index_path, const dstd::String& name,
     const dstd::Vector<const dstd::String*>& traces) {
-    auto opened =
-        Index::open(store::internal::normalize_index_root(index_path));
+    auto opened = Index::open(normalize_index_root(index_path));
     if (!opened) throw_on_error(opened.error(), "drop extension " + name);
     dstd::Vector<dstd::String> logical;
     logical.reserve(traces.size());

@@ -14,7 +14,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/python/distribution.h>
 #include <dftracer/utils/python/py_agg_config.h>
@@ -262,8 +261,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     // A fresh build of the whole root stages on node-local scratch when the
     // destination is a slow filesystem, then publishes the store across.
     const dftracer::utils::dstd::String final_root =
-        dftracer::utils::index::store::internal::normalize_index_root(
-            index_dir);
+        dftracer::utils::index::normalize_index_root(index_dir);
     dftracer::utils::dstd::Optional<dftracer::utils::common::ScratchSession>
         scratch;
     dftracer::utils::dstd::String build_dir = index_dir;
@@ -358,13 +356,11 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     // reads the destination.
     if (scratch) {
         dftracer::utils::index::release_root(
-            dftracer::utils::index::store::internal::normalize_index_root(
-                build_dir));
+            dftracer::utils::index::normalize_index_root(build_dir));
         dftracer::utils::index::release_root(final_root);
         dftracer::utils::common::publish_path(
             dftracer::utils::dstd::PathView(dftracer::utils::index::store_dir(
-                dftracer::utils::index::store::internal::normalize_index_root(
-                    build_dir))),
+                dftracer::utils::index::normalize_index_root(build_dir))),
             dftracer::utils::dstd::PathView(
                 dftracer::utils::index::store_dir(final_root)));
     }
@@ -382,7 +378,7 @@ static PyObject *write_shard_set_fn(PyObject * /*self*/, PyObject *args) {
         return NULL;
     try {
         const auto normalized_root =
-            dftracer::utils::index::store::internal::normalize_index_root(root);
+            dftracer::utils::index::normalize_index_root(root);
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> dirs;
         dirs.reserve(shard_dirs.size());
         for (const auto &d : shard_dirs)
@@ -402,7 +398,7 @@ static PyObject *consolidate_shard_set_fn(PyObject * /*self*/, PyObject *args) {
     std::size_t files = 0;
     try {
         const auto normalized_root =
-            dftracer::utils::index::store::internal::normalize_index_root(root);
+            dftracer::utils::index::normalize_index_root(root);
         files = dftracer::utils::trace::views::consolidate_shard_set(
             dftracer::utils::dstd::String(normalized_root));
     } catch (const std::exception &e) {

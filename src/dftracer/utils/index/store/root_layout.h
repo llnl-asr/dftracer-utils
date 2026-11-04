@@ -19,6 +19,9 @@ inline constexpr dstd::StringView SHARDS_DIR = "shards";
 inline constexpr dstd::StringView SHARD_MANIFEST = "shards.json";
 inline constexpr dstd::StringView SPILL_DIR = "spill";
 
+// The index root `path` names: the `.dftindex` directory itself, the one beside
+// a file or inside a directory, or the enclosing view or shard root.
+dstd::String normalize_index_root(dstd::StringView path);
 dstd::String store_dir(dstd::StringView root);
 // The store directory under the root `path` names, normalized first, so a plain
 // directory names its own `.dftindex`. Empty `path` names nothing.

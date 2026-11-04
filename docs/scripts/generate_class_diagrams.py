@@ -347,10 +347,13 @@ ARCHITECTURE_MMD = """graph BT
     utilities["dftracer_utils_utilities<br/><i>readers, index, aggregation,<br/>comparison, statistics, plugins, dlio, replay</i>"]
     dataframe["dftracer_utils_dataframe<br/><i>Series/DataFrame, Highway SIMD kernels,<br/>Arrow bridge, columnar query execution</i>"]
     query["dftracer_utils_duql<br/><i>predicate IR, string codec, evaluator</i>"]
+    io["dftracer_utils_io<br/><i>gzip, file I/O, hashing</i>"]
     json["dftracer_utils_json<br/><i>simdjson-backed parsing</i>"]
     runtime["dftracer_utils_runtime<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]
 
+    runtime --> io
     runtime --> json
+    io --> utilities
     json --> query
     query --> dataframe
     dataframe --> utilities
@@ -362,6 +365,7 @@ ARCHITECTURE_MMD = """graph BT
     style dataframe fill:#e8f4e8,stroke:#5a9,color:#333
     style utilities fill:#e8f4e8,stroke:#5a9,color:#333
     style query fill:#f0f0f0,stroke:#999,color:#333
+    style io fill:#f0f0f0,stroke:#999,color:#333
     style json fill:#f0f0f0,stroke:#999,color:#333
     style compose fill:#fff6e0,stroke:#d9a94a,color:#333
 """

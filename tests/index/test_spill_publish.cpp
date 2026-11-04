@@ -16,6 +16,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -83,7 +84,7 @@ index::build::IndexBuildBatchResult run_build(
 }
 
 dstd::String index_root(const dstd::String& file, const dstd::String& dir) {
-    return dstd::String(index::store::internal::normalize_index_root(
+    return dstd::String(index::normalize_index_root(
         trace::internal::determine_index_path(file, dir)));
 }
 

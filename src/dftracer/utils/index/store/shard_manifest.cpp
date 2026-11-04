@@ -5,7 +5,6 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <simdjson.h>
@@ -162,7 +161,7 @@ bool has_shard_manifest(dstd::StringView root) {
 
 dstd::String resolve_shard_set_root(dstd::StringView target) {
     if (target.empty()) return "";
-    const dstd::String root = internal::normalize_index_root(target);
+    const dstd::String root = normalize_index_root(target);
     if (has_shard_manifest(root)) return root;
     return "";
 }

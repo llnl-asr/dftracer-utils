@@ -3,7 +3,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
@@ -37,7 +37,7 @@ dstd::String determine_index_path(dstd::CStringView cpath,
             root = dstd::PathView(path).parent().str();
         }
     }
-    return dftracer::utils::index::store::internal::normalize_index_root(root);
+    return dftracer::utils::index::normalize_index_root(root);
 }
 
 dstd::StringView to_lower_ascii(dstd::StringView s, dstd::String& storage) {

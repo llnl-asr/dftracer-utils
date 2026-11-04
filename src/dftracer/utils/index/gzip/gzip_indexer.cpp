@@ -1086,7 +1086,7 @@ GzipIndexer::GzipIndexer(const dstd::String& gz_path,
                          bool force_rebuild)
     : gz_path_(gz_path),
       gz_path_logical_path_(index::store::internal::get_logical_path(gz_path)),
-      index_path_(index::store::internal::normalize_index_root(idx_path)),
+      index_path_(index::normalize_index_root(idx_path)),
       ckpt_size_(ckpt_size),
       force_rebuild_(force_rebuild),
       cached_is_valid_(false),

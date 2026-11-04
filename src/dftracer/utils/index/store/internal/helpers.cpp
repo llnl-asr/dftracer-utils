@@ -5,7 +5,6 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 // Platform-specific includes for file stats
@@ -29,33 +28,6 @@ dstd::String get_logical_path(dstd::StringView path) {
     const auto abs = dstd::fs::absolute(dstd::PathView(path));
     if (!abs) return dstd::String(dstd::normalize(dstd::PathView(path)).str());
     return dstd::String(dstd::normalize(abs->view()).str());
-}
-
-dstd::String normalize_index_root(dstd::StringView path) {
-    if (auto nested = nested_root_of(path)) return *nested;
-    // A trailing separator leaves the last component empty, so it is neither
-    // the index directory nor a file with an extension.
-    if (!path.empty() && path.back() == '/') {
-        dstd::StringView stripped = path;
-        while (stripped.size() > 1 && stripped.back() == '/') {
-            stripped.remove_suffix(1);
-        }
-        if (dstd::PathView(stripped).filename() == ".dftindex") {
-            return dstd::String(stripped);
-        }
-        return dstd::String((dstd::PathView(stripped) / ".dftindex").str());
-    }
-    const dstd::PathView input(path);
-    if (input.filename() == ".dftindex") {
-        return dstd::String(path);
-    }
-    if (input.parent().filename() == ".dftindex") {
-        return dstd::String(input.parent().str());
-    }
-    if (!input.extension().empty()) {
-        return dstd::String((input.parent() / ".dftindex").str());
-    }
-    return dstd::String((input / ".dftindex").str());
 }
 
 time_t get_file_modification_time(dstd::CStringView file_path) {

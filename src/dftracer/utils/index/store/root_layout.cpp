@@ -3,7 +3,6 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 
 namespace dftracer::utils::index {
@@ -18,9 +17,36 @@ dstd::String join(dstd::StringView base, dstd::StringView leaf) {
 
 dstd::String store_dir(dstd::StringView root) { return join(root, STORE_DIR); }
 
+dstd::String normalize_index_root(dstd::StringView path) {
+    if (auto nested = nested_root_of(path)) return *nested;
+    // A trailing separator leaves the last component empty, so it is neither
+    // the index directory nor a file with an extension.
+    if (!path.empty() && path.back() == '/') {
+        dstd::StringView stripped = path;
+        while (stripped.size() > 1 && stripped.back() == '/') {
+            stripped.remove_suffix(1);
+        }
+        if (dstd::PathView(stripped).filename() == ".dftindex") {
+            return dstd::String(stripped);
+        }
+        return dstd::String((dstd::PathView(stripped) / ".dftindex").str());
+    }
+    const dstd::PathView input(path);
+    if (input.filename() == ".dftindex") {
+        return dstd::String(path);
+    }
+    if (input.parent().filename() == ".dftindex") {
+        return dstd::String(input.parent().str());
+    }
+    if (!input.extension().empty()) {
+        return dstd::String((input.parent() / ".dftindex").str());
+    }
+    return dstd::String((input / ".dftindex").str());
+}
+
 dstd::String store_of(dstd::StringView path) {
     if (path.empty()) return {};
-    return store_dir(store::internal::normalize_index_root(path));
+    return store_dir(normalize_index_root(path));
 }
 
 dstd::String rollups_dir(dstd::StringView root) {

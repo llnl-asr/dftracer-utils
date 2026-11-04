@@ -4,7 +4,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
@@ -35,8 +35,7 @@ index::gzip::GzipMemberRecord record(std::uint64_t idx, std::uint64_t c_offset,
 void persist(const dstd::String& index_root,
              const index::gzip::GzipBuildArtifacts& arts) {
     auto index = dftracer::utils::index::Index::open(
-        dftracer::utils::index::store::internal::normalize_index_root(
-            index_root));
+        dftracer::utils::index::normalize_index_root(index_root));
     REQUIRE(index);
     auto build = index->build("trace.pfw.gz", {});
     REQUIRE(build);

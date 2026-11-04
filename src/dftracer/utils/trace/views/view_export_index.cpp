@@ -14,6 +14,7 @@
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/json/value.h>
@@ -320,8 +321,8 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         using index::store::IndexExtension;
         dstd::String failure;
         try {
-            auto index = index::Index::open(
-                index::store::internal::normalize_index_root(index_path));
+            auto index =
+                index::Index::open(index::normalize_index_root(index_path));
             if (!index) failure = dstd::String(index.error().message());
             // BloomFold::finalize below writes the dft.index data; until then
             // the parts have members but no bloom tier, which a later scan

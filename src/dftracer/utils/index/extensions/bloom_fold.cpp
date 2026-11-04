@@ -15,6 +15,7 @@
 #include <dftracer/utils/index/extensions/catalog_fold.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
 
@@ -674,8 +675,7 @@ coro::CoroTask<bool> BloomFold::finalize(
             auto at = snapshots.find(dstd::StringView(fs.index_path));
             if (at == snapshots.end()) {
                 const auto opened = common::unwrap(index::Index::open(
-                    index::store::internal::normalize_index_root(
-                        fs.index_path)));
+                    index::normalize_index_root(fs.index_path)));
                 at = snapshots
                          .emplace(dstd::String(fs.index_path),
                                   common::unwrap(opened.snapshot()))
@@ -695,8 +695,8 @@ coro::CoroTask<bool> BloomFold::finalize(
 
         // A locked or read-only index persists nothing rather than failing the
         // query.
-        auto opened = index::Index::open(
-            index::store::internal::normalize_index_root(fs.index_path));
+        auto opened =
+            index::Index::open(index::normalize_index_root(fs.index_path));
         auto build = opened
                          ? index::rebuild(*opened, logical)
                          : dstd::Expected<index::FileBuild, dstd::Error>(

@@ -274,8 +274,7 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
         store->index_path = index_path;
         store->members.assign(members.begin(), members.end());
         auto opened = dftracer::utils::index::Index::open(
-            dftracer::utils::index::store::internal::normalize_index_root(
-                index_path));
+            dftracer::utils::index::normalize_index_root(index_path));
         if (opened) {
             store->index.emplace(std::move(*opened));
             auto taken = store->index->snapshot();

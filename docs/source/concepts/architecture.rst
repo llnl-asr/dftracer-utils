@@ -7,10 +7,10 @@ What this explains: how the codebase is layered, and the path a query takes
 from a ``.pfw.gz`` trace file on disk to a result the caller can use, in C++,
 C, or Python.
 
-Six libraries, one dependency direction
-------------------------------------------
+Seven libraries, one dependency direction
+-------------------------------------------
 
-The C++ build produces six layered libraries, each as both a shared and a
+The C++ build produces seven layered libraries, each as both a shared and a
 static variant (``src/CMakeLists.txt``), aggregated behind
 ``dftracer::utils``:
 
@@ -21,6 +21,9 @@ static variant (``src/CMakeLists.txt``), aggregated behind
 - ``dftracer_utils_store`` is the key-value store engine: data files, the
   writer and its committer, and the snapshot that reads them. It links only
   the runtime and knows nothing about traces.
+- ``dftracer_utils_io`` is the file I/O layer: gzip readers and writers,
+  the parallel writers, hashing, directory scanning and text filters. It
+  links the runtime and the JSON library and knows nothing about traces.
 - ``dftracer_utils_json`` is the simdjson-backed JSON layer: parsing and
   the JSON value type.
 - ``dftracer_utils_duql`` is the duql filter language: the predicate IR, the string
@@ -29,7 +32,7 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   ``DataFrame``, the Highway kernels, and the Arrow bridge. It also holds the
   duql parts that call the dataframe (``vectorize``, ``lookup``, ``overlap``
   and ``group_fold``), so it links ``dftracer_utils_duql``.
-- ``dftracer_utils_utilities`` depends on the four libraries above and
+- ``dftracer_utils_utilities`` depends on the libraries above and
   holds the top domain logic: trace reading, indexing, aggregation,
   comparison, statistics, plugins, and replay.
 
@@ -45,17 +48,21 @@ active.
    graph TB
        Runtime["dftracer_utils_runtime<br/>runtime, coro, io, pipeline"]
        Store["dftracer_utils_store<br/>key-value store engine"]
+       Io["dftracer_utils_io<br/>file I/O, gzip, hashing"]
        Json["dftracer_utils_json<br/>simdjson-backed parsing"]
        Query["dftracer_utils_duql<br/>predicate IR, evaluator"]
        DF["dftracer_utils_dataframe<br/>Series/DataFrame, SIMD kernels"]
        Util["dftracer_utils_utilities<br/>trace, indexer, plugins"]
        Store --> Runtime
+       Io --> Runtime
+       Io --> Json
        Json --> Runtime
        Query --> Runtime
        Query --> Json
        DF --> Runtime
        DF --> Query
        Util --> Runtime
+       Util --> Io
        Util --> Json
        Util --> Query
        Util --> DF

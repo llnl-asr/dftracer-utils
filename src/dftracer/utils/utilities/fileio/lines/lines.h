@@ -25,6 +25,7 @@
  */
 
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/sources.h>
+#include <dftracer/utils/utilities/fileio/lines/sources/async_file_source.h>
+#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 
 #endif  // DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINES_H

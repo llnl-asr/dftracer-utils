@@ -9,7 +9,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 
 namespace dftracer::utils::index::build {
@@ -21,8 +21,8 @@ AggRun::AggRun(dstd::String path,
 AggRun start_aggregation(
     dstd::StringView index_path,
     const index::schemas::dft::agg::AggregationConfig& config) {
-    auto target = common::unwrap(index::Index::open(
-        index::store::internal::normalize_index_root(index_path)));
+    auto target = common::unwrap(
+        index::Index::open(index::normalize_index_root(index_path)));
     auto intern = index::schemas::dft::agg::intern_for_index(index_path);
     common::unwrap(agg_dictionary(common::unwrap(target.snapshot()), *intern));
     index::schemas::dft::agg::tier::write_config(
@@ -39,8 +39,8 @@ AggRun start_aggregation(
 }
 
 void finish_aggregation(AggRun& run, IndexBuildBatchResult& batch) {
-    auto target = common::unwrap(index::Index::open(
-        index::store::internal::normalize_index_root(run.index_path)));
+    auto target = common::unwrap(
+        index::Index::open(index::normalize_index_root(run.index_path)));
     index::schemas::dft::agg::merge_aggregation_folds(batch.agg_outputs,
                                                       target);
 }
@@ -48,8 +48,8 @@ void finish_aggregation(AggRun& run, IndexBuildBatchResult& batch) {
 void clear_aggregation(const dstd::String& index_path) {
     DFTRACER_UTILS_LOG_INFO("Clearing the aggregation tier of %s",
                             index_path.c_str());
-    auto target = common::unwrap(index::Index::open(
-        index::store::internal::normalize_index_root(index_path)));
+    auto target = common::unwrap(
+        index::Index::open(index::normalize_index_root(index_path)));
     index::schemas::dft::agg::tier::clear(target);
 }
 

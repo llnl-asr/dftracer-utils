@@ -52,8 +52,9 @@ MetadataCollectorUtility::operator()(
                 modified_input.index_path =
                     internal::determine_index_path(file_path, "");
             } else {
-                modified_input.index_path = dftracer::utils::index::store::
-                    internal::normalize_index_root(modified_input.index_path);
+                modified_input.index_path =
+                    dftracer::utils::index::normalize_index_root(
+                        modified_input.index_path);
             }
             meta.index_path = modified_input.index_path;
             co_return co_await process_compressed(modified_input);

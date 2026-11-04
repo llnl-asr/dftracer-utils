@@ -26,6 +26,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <fcntl.h>
@@ -472,8 +473,8 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
 
     // A lookup per file stalled a build on Lustre for minutes.
     index::load_index_schemas(state->index_path);
-    auto writer_index = index::Index::open(
-        index::store::internal::normalize_index_root(state->index_path));
+    auto writer_index =
+        index::Index::open(index::normalize_index_root(state->index_path));
     if (!writer_index) {
         for (auto& result : *state->results) {
             result.success = false;

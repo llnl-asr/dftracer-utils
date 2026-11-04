@@ -12,7 +12,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/internal/parse_walks.h>
@@ -294,8 +294,8 @@ TEST_SUITE("IndexParseWalks") {
         build_one(file, env.dir() + "/idx");
         const dstd::String path =
             trace::internal::determine_index_path(file, env.dir() + "/idx");
-        const auto digests = namespace_digests(
-            index::store::internal::normalize_index_root(path), env.dir());
+        const auto digests =
+            namespace_digests(index::normalize_index_root(path), env.dir());
         for (const auto& [name, digest] : digests)
             MESSAGE("namespace " << name << " " << digest);
         CHECK(digests.size() == std::size(RECORDED));

@@ -1717,30 +1717,26 @@ TEST_CASE("column types come from the path catalog of a file") {
 }
 
 TEST_CASE("a legacy index path normalizes to the root-local .dftindex") {
-    CHECK(index::store::internal::normalize_index_root(
-              "/data/run/trace.pfw.gz.idx") == "/data/run/.dftindex");
-    CHECK(index::store::internal::normalize_index_root("/data/run/.dftindex") ==
+    CHECK(index::normalize_index_root("/data/run/trace.pfw.gz.idx") ==
           "/data/run/.dftindex");
-    CHECK(index::store::internal::normalize_index_root("/data/run") ==
+    CHECK(index::normalize_index_root("/data/run/.dftindex") ==
           "/data/run/.dftindex");
+    CHECK(index::normalize_index_root("/data/run") == "/data/run/.dftindex");
 }
 
 TEST_CASE("a view or shard root normalizes to itself") {
-    CHECK(index::store::internal::normalize_index_root("/d/.dftindex") ==
-          "/d/.dftindex");
-    CHECK(index::store::internal::normalize_index_root("/d/.dftindex/store") ==
-          "/d/.dftindex");
-    CHECK(index::store::internal::normalize_index_root(
-              "/d/.dftindex/views/q-1a2b") == "/d/.dftindex/views/q-1a2b");
-    CHECK(index::store::internal::normalize_index_root(
+    CHECK(index::normalize_index_root("/d/.dftindex") == "/d/.dftindex");
+    CHECK(index::normalize_index_root("/d/.dftindex/store") == "/d/.dftindex");
+    CHECK(index::normalize_index_root("/d/.dftindex/views/q-1a2b") ==
+          "/d/.dftindex/views/q-1a2b");
+    CHECK(index::normalize_index_root(
               "/d/.dftindex/views/q.x-1a2b/parts/p.pfw.gz") ==
           "/d/.dftindex/views/q.x-1a2b");
-    CHECK(index::store::internal::normalize_index_root(
-              "/d/.dftindex/views/q.x-1a2b/store") ==
+    CHECK(index::normalize_index_root("/d/.dftindex/views/q.x-1a2b/store") ==
           "/d/.dftindex/views/q.x-1a2b");
-    CHECK(index::store::internal::normalize_index_root(
-              "/d/.dftindex/shards/3/store") == "/d/.dftindex/shards/3");
-    CHECK(index::store::internal::normalize_index_root("/d/views/q/t.pfw.gz") ==
+    CHECK(index::normalize_index_root("/d/.dftindex/shards/3/store") ==
+          "/d/.dftindex/shards/3");
+    CHECK(index::normalize_index_root("/d/views/q/t.pfw.gz") ==
           "/d/views/q/.dftindex");
 }
 

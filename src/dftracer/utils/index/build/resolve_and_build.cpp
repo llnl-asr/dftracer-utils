@@ -21,7 +21,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -375,8 +374,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         if (common::unwrap(
                 dstd::fs::exists(dstd::PathView(index::store_dir(root))))) {
             index::release_root(root);
-            auto target = common::unwrap(index::Index::open(
-                index::store::internal::normalize_index_root(root)));
+            auto target = common::unwrap(
+                index::Index::open(index::normalize_index_root(root)));
             index::schemas::dft::agg::tier::clear(target);
         }
     dstd::String retry_failure;

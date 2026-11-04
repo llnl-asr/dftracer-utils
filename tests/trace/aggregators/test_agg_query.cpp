@@ -23,6 +23,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/agg_query.h>
@@ -1031,8 +1032,8 @@ TEST_SUITE("AggQuery") {
     TEST_CASE("a file indexed without partials is read whole") {
         auto fx = build(FIVE_SECONDS_US, "five");
         {
-            auto opened = index::Index::open(
-                index::store::internal::normalize_index_root(fx->index_path));
+            auto opened =
+                index::Index::open(index::normalize_index_root(fx->index_path));
             REQUIRE(opened.has_value());
             const auto snapshot = opened->snapshot();
             REQUIRE(snapshot.has_value());

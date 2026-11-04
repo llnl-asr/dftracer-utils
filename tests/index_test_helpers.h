@@ -10,6 +10,7 @@
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/store.h>
@@ -41,8 +42,7 @@ T index_take(
 inline dftracer::utils::index::Index open_test_index(
     dftracer::utils::dstd::StringView index_path) {
     return index_take(dftracer::utils::index::Index::open(
-        dftracer::utils::index::store::internal::normalize_index_root(
-            index_path)));
+        dftracer::utils::index::normalize_index_root(index_path)));
 }
 
 inline dftracer::utils::index::Snapshot index_snapshot(
@@ -89,9 +89,7 @@ struct IndexRecord {
 inline dftracer::utils::dstd::Vector<IndexRecord> dump_index(
     dftracer::utils::dstd::StringView index_path) {
     auto store = index_take(dftracer::utils::store::Store::open(
-        dftracer::utils::index::store::internal::normalize_index_root(
-            index_path) +
-        "/store"));
+        dftracer::utils::index::normalize_index_root(index_path) + "/store"));
     auto snapshot = index_take(store.snapshot());
     auto declared = index_take(snapshot.namespaces());
     dftracer::utils::dstd::Vector<IndexRecord> out;

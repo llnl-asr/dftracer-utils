@@ -15,6 +15,7 @@
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -193,8 +194,7 @@ TEST_SUITE("RawGzipFuse") {
             const auto bytes =
                 dftracer::utils::index::store::internal::file_size_bytes(gz);
             auto index = dftracer::utils::index::Index::open(
-                dftracer::utils::index::store::internal::normalize_index_root(
-                    idx));
+                dftracer::utils::index::normalize_index_root(idx));
             REQUIRE(index);
             auto build = index->build(
                 logical,

@@ -14,7 +14,6 @@
 #include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -336,7 +335,7 @@ dstd::String cache_dir(const trace::views::detail::ViewPlan& plan) {
     for (const auto& f : plan.files)
         if (f.index_path != p) return {};
     // The index root holds every durable artifact, so the caches go inside it.
-    return store::internal::normalize_index_root(p);
+    return normalize_index_root(p);
 }
 
 dstd::String rollup_cache_path(const trace::views::detail::ViewPlan& plan) {

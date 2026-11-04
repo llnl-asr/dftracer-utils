@@ -11,7 +11,6 @@
 namespace dftracer::utils::index::store::internal {
 
 dstd::String get_logical_path(dstd::StringView path);
-dstd::String normalize_index_root(dstd::StringView path);
 time_t get_file_modification_time(dstd::CStringView file_path);
 std::uint64_t calculate_file_hash(dstd::CStringView file_path);
 /// The same hash of an open file of `file_size` bytes.

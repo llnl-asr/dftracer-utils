@@ -7,7 +7,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
@@ -28,8 +27,7 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
         input.index_path.empty()
             ? dftracer::utils::trace::internal::determine_index_path(
                   input.file_path, "")
-            : dftracer::utils::index::store::internal::normalize_index_root(
-                  input.index_path);
+            : dftracer::utils::index::normalize_index_root(input.index_path);
 
     // Step 1: Check if index needs to be built/rebuilt
     bool need_build =

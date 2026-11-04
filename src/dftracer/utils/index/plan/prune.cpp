@@ -9,6 +9,7 @@
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 
 #include <algorithm>
@@ -138,8 +139,7 @@ coro::CoroTask<dstd::Result<PruneResult>> prune_data(
 }  // namespace
 
 dstd::Result<index::Snapshot> open_snapshot(dstd::StringView index_path) {
-    auto opened =
-        Index::open(store::internal::normalize_index_root(index_path));
+    auto opened = Index::open(normalize_index_root(index_path));
     if (!opened) return dstd::Unexpected(std::move(opened).error());
     return opened->snapshot();
 }

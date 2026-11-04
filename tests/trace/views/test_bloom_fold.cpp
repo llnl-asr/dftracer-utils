@@ -16,6 +16,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -81,8 +82,7 @@ dstd::String create_bloom_trace(TestEnvironment& env, int n,
 dftracer::utils::index::FileBuild rebuild_file(const dstd::String& index_path,
                                                dstd::StringView logical_path) {
     auto index = dftracer::utils::index::Index::open(
-        dftracer::utils::index::store::internal::normalize_index_root(
-            index_path));
+        dftracer::utils::index::normalize_index_root(index_path));
     REQUIRE(index);
     auto build = dftracer::utils::index::rebuild(
         *index, dstd::StringView(logical_path.data(), logical_path.size()));
@@ -136,7 +136,7 @@ dstd::String stored_path(const dftracer::utils::index::Snapshot& snapshot,
 // hangs off.
 dftracer::utils::index::FileBuild start_build(const dstd::String& root) {
     auto index = dftracer::utils::index::Index::open(
-        dftracer::utils::index::store::internal::normalize_index_root(root));
+        dftracer::utils::index::normalize_index_root(root));
     REQUIRE(index);
     auto registered = dftu_utils_test::register_test_file(*index, "f.pfw.gz");
     dftu_utils_test::commit_test_build(registered);

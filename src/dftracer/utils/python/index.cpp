@@ -7,6 +7,7 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/python/index.h>
 #include <dftracer/utils/python/py_agg_config.h>
 #include <dftracer/utils/python/py_errors.h>
@@ -89,8 +90,8 @@ int Index_init(IndexObject *self, PyObject *args, PyObject *kwds) {
                                      const_cast<char **>(kwlist), &index_path))
         return -1;
     try {
-        auto opened = dftracer::utils::common::unwrap(index::Index::open(
-            index::store::internal::normalize_index_root(index_path)));
+        auto opened = dftracer::utils::common::unwrap(
+            index::Index::open(index::normalize_index_root(index_path)));
         delete self->index;
         self->index = new index::Index(std::move(opened));
     } catch (const std::exception &e) {

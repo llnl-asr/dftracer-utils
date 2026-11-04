@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string.h>
@@ -149,6 +150,59 @@ void check_deep(int where) {
             CHECK(got.kept_text);
         }
     }
+}
+
+struct DepthRead {
+    bool parsed = false;
+    bool leaf = false;
+    bool as_text = false;
+};
+
+DepthRead read_depth(int where, std::size_t levels, bool object = true) {
+    const String deep = nested(levels, object);
+    const char opener = object ? '{' : '[';
+    DepthRead out;
+    if (where == 4) {
+        const String line =
+            R"({"ph":"X","name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
+            deep + "}}";
+        json::JsonParser parser;
+        if (!parser.parse(line)) return out;
+        out.parsed = true;
+        dftracer::utils::trace::DFTracerEvent ev;
+        dftracer::utils::trace::DFTracerEvent::parse_ondemand(parser, ev);
+        ev.args.for_each_member([&](StringView, const auto& value) {
+            const auto number = value.template get_optional<std::int64_t>();
+            if (number && *number == 1) out.leaf = true;
+            const auto text = value.template get_optional<String>();
+            if (text && !text->empty() && (*text)[0] == opener)
+                out.as_text = true;
+        });
+        return out;
+    }
+    const String line =
+        where == 0
+            ? R"({"ph":"X","name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
+                  deep + "}}"
+            : R"({"id":7,"v":)" + deep + "}";
+    json::Document doc;
+    auto value = doc.parse(line);
+    if (!value) return out;
+    out.parsed = true;
+    StringIntern intern;
+    FoldEvent ev;
+    if (where == 0)
+        extract_fold_event_into(ev, *value, intern, true);
+    else
+        decode_record_into(ev, *value, intern, true);
+    for (const auto& [key, v] : ev.args) {
+        if (v.index() == 1 && std::get<1>(v) == 1) out.leaf = true;
+        if (v.index() == 2) {
+            const StringView text = intern.resolve(std::get<2>(v));
+            if (!text.empty() && text[0] == opener) out.as_text = true;
+        }
+    }
+    return out;
 }
 
 struct OnDemandRead {
@@ -399,6 +453,133 @@ void check_captures(json::Document& doc, StringView line,
     }
 }
 
+using dftracer::utils::trace::views::detail::append_dftracer_record;
+using dftracer::utils::trace::views::detail::FoldEventBuffer;
+
+// Records with top-level leaves of every kind around args and the other axis
+// keys, where the order of the schema leaves could differ between readers.
+const char* const SCHEMA_LINES[] = {
+    R"j({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":3,"dur":4,"ph":"X","args":{"fhash":"f","hhash":"h","size":5,"io":{"off":1,"len":[1,{"k":"v"}],"e":{}},"flag":true,"nul":null,"neg":-5,"big":9223372036854775808,"d":2.5,"s":"x"}})j",
+    R"j({"ph":"X","args":{"a":1},"extra":7,"tail":"t","z":[1,2,3],"obj":{"p":{"q":[1,2,{"r":"z"}]},"e":[]}})j",
+    R"j({"extra":7,"obj":{"p":1},"ph":"X","args":{"a":1},"after":null})j",
+    R"j({"ph":"X","args":{},"extra":1})j",
+    R"j({"ph":"X","args":5,"extra":1})j",
+    R"j({"ph":"X","args":[1,2,{"a":1}],"extra":1})j",
+    R"j({"ph":"X","args":{"a":1},"args":{"b":{"c":2}},"x":1})j",
+    R"j({"ph":"X","args":3,"args":{"a":1},"x":1})j",
+    R"j({"ph":"X","args":{"a":1},"args":3,"x":1})j",
+    R"j({"ph":"X","args":{"a":1},"x":1,"x":"two","x":[1]})j",
+    R"j({"ph":"X","":1,"o":{"":2,"y":3},"e":[],"f":{}})j",
+    R"j({"ph":"X","args":{"fhash":{"a":1},"hhash":[1,2],"c":1}})j",
+    R"j({"ph":"X","args":{"fhash":5,"hhash":null,"c":[]}})j",
+    R"j({"ph":"X","name":"n","cat":"c","args":{"k":"v"},"cat":"d","name":"m"})j",
+    R"j({"args":{"a":1},"name":"n","cat":"c","ph":"X"})j",
+    R"j({"name":"n","args":{"a":{"b":{"c":1}}},"ph":"X","cat":"c"})j",
+    R"j({"ph":"X","args":{"big":123456789012345678901234567890,"u":18446744073709551615,"m":-9223372036854775808}})j",
+    R"j({"ph":"X","t":18446744073709551615,"b":-9223372036854775809,"f":1.5e3,"i":-3})j",
+    R"j({"ph":"M","name":"FH","args":{"name":"/a","value":"fh1"}})j",
+    R"j({"ph":"X","args":{"a.b":1,"a":{"b":2},"l":[[1,2],[3]]},"a.b":4,"a":{"b":{"c":5}}})j",
+};
+
+// The DOM reader and the on-demand reader give the same event, schema leaves
+// in the same order, for every way to call them. The hints and the intern
+// table live across the lines of a run, as in a scan.
+void check_schema_lines(const dstd::Vector<StringView>& lines) {
+    for (const bool needs_args : {true, false}) {
+        for (const bool with_hints : {false, true}) {
+            for (const bool with_cache : {false, true}) {
+                CAPTURE(needs_args);
+                CAPTURE(with_hints);
+                CAPTURE(with_cache);
+                json::Document doc;
+                StringIntern dom_intern;
+                StringIntern od_intern;
+                dstd::InternCache cache(od_intern);
+                DecodeHints dom_hints;
+                DecodeHints od_hints;
+                FoldEvent dom_ev;
+                FoldEvent od_ev;
+                for (StringView line : lines) {
+                    CAPTURE(line);
+                    static thread_local json::RecordParser parser;
+                    const simdjson::padded_string padded(line.data(),
+                                                         line.size());
+                    simdjson::dom::element root;
+                    const bool dom_ok = !parser.parse(padded).get(root);
+                    auto value = doc.parse(line);
+                    if (!value) {
+                        CHECK_FALSE(dom_ok);
+                        continue;
+                    }
+                    if (!dom_ok) continue;
+                    extract_fold_event_into(dom_ev, root, dom_intern,
+                                            needs_args, nullptr, true,
+                                            with_hints ? &dom_hints : nullptr);
+                    extract_fold_event_into(
+                        od_ev, *value, od_intern, needs_args,
+                        with_cache ? &cache : nullptr, nullptr, true,
+                        with_hints ? &od_hints : nullptr);
+                    CHECK_FALSE(ValueAccess::broken(*value));
+                    CHECK(describe_path(od_ev, od_intern) ==
+                          describe_path(dom_ev, dom_intern));
+                }
+            }
+        }
+    }
+}
+
+// append_dftracer_record in its two forms keeps the same events.
+void check_append_lines(const dstd::Vector<StringView>& lines) {
+    for (const bool needs_args : {true, false}) {
+        for (const bool capture_schema : {true, false}) {
+            CAPTURE(needs_args);
+            CAPTURE(capture_schema);
+            json::Document doc;
+            StringIntern dom_intern;
+            StringIntern od_intern;
+            dstd::InternCache dom_cache(dom_intern);
+            dstd::InternCache od_cache(od_intern);
+            DecodeHints dom_hints;
+            DecodeHints od_hints;
+            FoldEventBuffer dom_batch;
+            FoldEventBuffer od_batch;
+            for (StringView line : lines) {
+                CAPTURE(line);
+                static thread_local json::RecordParser parser;
+                const simdjson::padded_string padded(line.data(), line.size());
+                simdjson::dom::element root;
+                const bool dom_ok = !parser.parse(padded).get(root);
+                auto value = doc.parse(line);
+                if (!value) {
+                    CHECK_FALSE(dom_ok);
+                    continue;
+                }
+                if (!dom_ok) continue;
+                const bool dom_kept = append_dftracer_record(
+                    dom_batch, root, dom_intern, needs_args, capture_schema,
+                    dom_hints, &dom_cache);
+                const bool od_kept = append_dftracer_record(
+                    od_batch, *value, od_intern, needs_args, capture_schema,
+                    od_hints, &od_cache);
+                CHECK(od_kept == dom_kept);
+                if (dom_kept && od_kept)
+                    CHECK(describe_path(od_batch.back(), od_intern) ==
+                          describe_path(dom_batch.back(), dom_intern));
+            }
+            CHECK(od_batch.size() == dom_batch.size());
+        }
+    }
+}
+
+dstd::Vector<StringView> schema_corpus(const dstd::Vector<String>& generated) {
+    dstd::Vector<StringView> lines;
+    for (const char* line : SCHEMA_LINES) lines.emplace_back(line);
+    for (const Shape& shape : SHAPES) lines.emplace_back(shape.line);
+    for (const char* line : CAPTURE_LINES) lines.emplace_back(line);
+    for (const char* line : EVENTS) lines.emplace_back(line);
+    for (const String& line : generated) lines.emplace_back(line);
+    return lines;
+}
 }  // namespace
 
 TEST_SUITE("FoldOnDemand") {
@@ -1028,6 +1209,62 @@ TEST_SUITE("FoldOnDemand") {
         CHECK(describe(ev, intern) ==
               "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
               "args{\"x.y\"=s\"p?q\"} top{} sp{}");
+    }
+
+    TEST_CASE("the on-demand schema leaves equal the DOM leaves in order") {
+        const dstd::Vector<String> generated = generated_lines(2000);
+        check_schema_lines(schema_corpus(generated));
+    }
+
+    TEST_CASE("the on-demand append equals the DOM append") {
+        const dstd::Vector<String> generated = generated_lines(2000);
+        check_append_lines(schema_corpus(generated));
+    }
+
+    TEST_CASE("the walkers descend exactly MAX_READ_DEPTH levels") {
+        constexpr std::size_t LIMIT =
+            dftracer::utils::common::constants::reader::MAX_READ_DEPTH;
+        for (const int where : {0, 2, 4}) {
+            for (const bool object : {true, false}) {
+                CAPTURE(where);
+                CAPTURE(object);
+                const DepthRead at = read_depth(where, LIMIT, object);
+                REQUIRE(at.parsed);
+                CHECK(at.leaf);
+                CHECK_FALSE(at.as_text);
+                const DepthRead past = read_depth(where, LIMIT + 1, object);
+                REQUIRE(past.parsed);
+                CHECK_FALSE(past.leaf);
+                CHECK(past.as_text);
+            }
+        }
+    }
+
+    TEST_CASE("the path reader collapses at the limit as written") {
+        constexpr std::size_t LIMIT =
+            dftracer::utils::common::constants::reader::MAX_READ_DEPTH;
+        const auto read_text = [](std::size_t levels) {
+            String line = R"({"id":7,"v":)";
+            for (std::size_t i = 1; i < levels; ++i) line += "{\"a\":";
+            line += R"({"p": 1, "q": 2})";
+            for (std::size_t i = 1; i < levels; ++i) line += "}";
+            line += "}";
+            json::Document doc;
+            auto value = doc.parse(line);
+            REQUIRE(value.has_value());
+            StringIntern intern;
+            dstd::InternCache cache(intern);
+            FoldEvent ev;
+            decode_record_into(ev, *value, intern, true, nullptr, nullptr,
+                               nullptr, 1, nullptr, false, &cache);
+            String text;
+            for (const auto& [key, v] : ev.args)
+                if (v.index() == 2 && intern.resolve(std::get<2>(v))[0] == '{')
+                    text = String(intern.resolve(std::get<2>(v)));
+            return text;
+        };
+        CHECK(read_text(LIMIT) == R"({"p":1,"q":2})");
+        CHECK(read_text(LIMIT + 1) == R"({"p": 1, "q": 2})");
     }
 
     TEST_CASE("args nested past the depth limit stay as text") {

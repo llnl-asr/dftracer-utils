@@ -10,6 +10,8 @@
 
 #include <cstddef>
 #include <cstring>
+#include <type_traits>
+#include <utility>
 
 namespace dftracer::utils::trace {
 
@@ -48,14 +50,49 @@ inline void strip_array_delimiters(char* buf, std::size_t len) {
 /// the batch, not the buffer. A line longer than half of it is parsed alone.
 inline constexpr std::size_t PARSE_BATCH_BYTES = std::size_t{128} << 10;
 
+/// Stands for a refused-line callback that does nothing, so a caller that
+/// wants none pays for none.
+struct NoRefused {
+    void operator()(dstd::StringView, std::size_t) const {}
+};
+
+/// Hands the line `base[begin, end)`, trimmed of blanks, to
+/// `refused(line, capacity)` when it starts with '{'; `capacity` is the bytes
+/// readable from the line in a buffer of `len` bytes plus the simdjson padding.
+template <typename Refused>
+void hand_over_refused(const char* base, std::size_t len, std::size_t begin,
+                       std::size_t end, Refused& refused) {
+    while (begin < end &&
+           (base[begin] == ' ' || base[begin] == '\t' || base[begin] == '\r'))
+        ++begin;
+    while (end > begin && (base[end - 1] == ' ' || base[end - 1] == '\t' ||
+                           base[end - 1] == '\r'))
+        --end;
+    if (end > begin && base[begin] == '{')
+        refused(dstd::StringView(base + begin, end - begin),
+                len + simdjson::SIMDJSON_PADDING - begin);
+}
+
 /// Calls `emit(root, source)` for every JSON document on the complete lines
 /// of `base[0, len)`, with parse_buffer's batch-then-line-by-line recovery.
 /// Returns the bytes after the last newline, which the caller carries.
 /// Documents are read in batches of PARSE_BATCH_BYTES on the calling thread,
 /// so a buffer of any size grows the parser by at most its longest line.
-template <typename Emit>
+/// `base` needs `simdjson::SIMDJSON_PADDING` readable bytes after `len`.
+///
+/// A line the DOM parser refuses, with a number too large for a double, an
+/// invalid escape, a bad byte or a nesting past its limit, goes to
+/// `refused(line, capacity)` instead of being dropped, in its place among the
+/// documents handed to `emit`. `line` is the text of the line without the
+/// blanks around it and starts with '{'; `capacity` is the bytes readable from
+/// it, including the padding. A line that parses is read once, by the DOM
+/// parser, and never reaches `refused`. Two records on one line are two
+/// documents and a record over two lines is one, as parse_many reads them.
+template <typename Emit, typename Refused>
 std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
-                        std::size_t len, Emit&& emit) {
+                        std::size_t len, Emit&& emit, Refused&& refused) {
+    constexpr bool HAS_REFUSED =
+        !std::is_same_v<std::decay_t<Refused>, NoRefused>;
     std::size_t parse_len = 0;
     for (std::size_t i = len; i-- > 0;) {
         if (base[i] == '\n') {
@@ -93,7 +130,17 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
         // swallow the rest of it as one rejected document.
         std::size_t start = covered;
         if (start > pos) {  // resume at the line after the last record parsed
+            std::size_t rest = start;
             while (start < parse_len && base[start] != '\n') ++start;
+            if constexpr (HAS_REFUSED) {
+                // More records after the last one parsed, on its line.
+                while (rest < start &&
+                       (base[rest] == ' ' || base[rest] == '\t' ||
+                        base[rest] == '\r' || base[rest] == ','))
+                    ++rest;
+                if (rest < start)
+                    hand_over_refused(base, len, rest, start, refused);
+            }
             if (start < parse_len) ++start;
         }
         std::size_t end = start;
@@ -105,6 +152,8 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
                 if (!r.error())
                     emit(r.value_unsafe(),
                          dstd::StringView(base + start, end - start));
+                else if constexpr (HAS_REFUSED)
+                    hand_over_refused(base, len, start, end, refused);
             }
             pos = end + 1;
             continue;
@@ -119,6 +168,8 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
                 if (!r.error())
                     emit(r.value_unsafe(),
                          dstd::StringView(base + at, stop - at));
+                else if constexpr (HAS_REFUSED)
+                    hand_over_refused(base, len, at, stop, refused);
             }
             at = stop + 1;
         }
@@ -126,6 +177,13 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
     }
 
     return len - parse_len;
+}
+
+template <typename Emit>
+std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
+                        std::size_t len, Emit&& emit) {
+    return parse_lines(parser, base, len, std::forward<Emit>(emit),
+                       NoRefused{});
 }
 
 /// Iterate parsed dftracer events from one inflated buffer (NDJSON plus

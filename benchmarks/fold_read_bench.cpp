@@ -17,6 +17,23 @@
 //   ondemand/capture json::Document::parse + the on-demand reader, same captures
 //   cached/path      as ondemand/path, interning through dstd::InternCache
 //   cached/capture   as ondemand/capture, interning through dstd::InternCache
+//   index/dom        the index build's parse of a batch of lines: DOM
+//                    parse_many through trace::parse_lines + the DOM
+//                    append_dftracer_record, args and schema leaves
+//   index/refused    the same batch of a copy of the file where 1 line in 1000
+//                    is refused by the DOM parser (it ends in a number too large
+//                    for a double): trace::parse_lines with its refused-line
+//                    callback, which reads that line on demand
+//   index/dropped    the copy of index/refused through trace::parse_lines with no
+//                    refused-line callback, which drops those lines
+//   scan/schema      the view scan's schema capture of a line: DOM parse of each
+//                    line + extract_fold_event_into, args and schema leaves
+//   scan/refused     as scan/schema on the copy of index/refused, a line the DOM
+//                    parser refuses read on demand
+//   index/refod      the copy of index/refused read line by line on demand
+//                    through json::Document::parse + the on-demand
+//                    append_dftracer_record; the checksum reference of
+//                    index/refused
 // clang-format on
 //
 // Each row reuses one parser and one intern table. The rows alternate inside
@@ -124,6 +141,11 @@ void hash_event(Hash& h, const FoldEvent& ev,
         id(s.key);
         h.add(s.kind);
         h.add(s.top);
+    }
+    h.add(ev.schema_leaves.size());
+    for (const auto& [leaf, tag] : ev.schema_leaves) {
+        id(leaf);
+        h.add(tag);
     }
 }
 
@@ -365,6 +387,192 @@ class BatchRow {
     FoldEvent ev_;
 };
 
+// The events a batch of the index build holds are kept for the next batch to
+// reuse, and dropped at the size of a piece.
+constexpr std::size_t PIECE_EVENTS = 8192;
+
+class IndexDomRow {
+   public:
+    explicit IndexDomRow(const Input& in) : in_(in) {}
+    template <bool Check>
+    void run(Acc& acc) {
+        trace::parse_lines(
+            parser_, in_.text.data(), in_.length,
+            [&](simdjson::dom::element root, dstd::StringView) {
+                if (!trace::views::detail::append_dftracer_record(
+                        batch_, root, intern_, true, true, hints_, &cache_))
+                    return;
+                account<Check>(acc, batch_.back(), intern_);
+                if (batch_.size() == PIECE_EVENTS) batch_.clear();
+            });
+        batch_.clear();
+    }
+
+   private:
+    const Input& in_;
+    json::RecordParser parser_;
+    dstd::StringIntern intern_;
+    dstd::InternCache cache_{intern_};
+    trace::views::detail::DecodeHints hints_;
+    trace::views::detail::FoldEventBuffer batch_;
+};
+
+constexpr std::size_t REFUSED_EVERY = 1000;
+
+// The file with one line in REFUSED_EVERY, at least the last, given an arg the
+// DOM parser refuses.
+void load_refused(Input& out, const Input& in) {
+    const std::size_t every = std::min(REFUSED_EVERY, in.lines.size());
+    dstd::String raw;
+    for (std::size_t i = 0; i < in.lines.size(); ++i) {
+        dstd::StringView line = in.lines[i];
+        if (i % every == every - 1) {
+            const std::size_t last = line.rfind('}');
+            if (last != dstd::StringView::npos) {
+                raw.append(line.data(), last);
+                raw.append(R"(,"zz":1e400})");
+                raw.append(line.data() + last + 1, line.size() - last - 1);
+                raw.push_back('\n');
+                continue;
+            }
+        }
+        raw.append(line.data(), line.size());
+        raw.push_back('\n');
+    }
+    load(out, std::move(raw), static_cast<std::size_t>(-1));
+}
+
+class IndexRefusedRow {
+   public:
+    explicit IndexRefusedRow(const Input& in) : in_(in) {}
+    template <bool Check>
+    void run(Acc& acc) {
+        trace::parse_lines(
+            parser_, in_.text.data(), in_.length,
+            [&](simdjson::dom::element root, dstd::StringView) {
+                if (!trace::views::detail::append_dftracer_record(
+                        batch_, root, intern_, true, true, hints_, &cache_))
+                    return;
+                account<Check>(acc, batch_.back(), intern_);
+                if (batch_.size() == PIECE_EVENTS) batch_.clear();
+            },
+            [&](dstd::StringView line, std::size_t capacity) {
+                auto parsed =
+                    doc_.parse_in_place(line.data(), line.size(), capacity);
+                if (!parsed) return;
+                if (!trace::views::detail::append_dftracer_record(
+                        batch_, *parsed, intern_, true, true, refused_hints_,
+                        &cache_))
+                    return;
+                account<Check>(acc, batch_.back(), intern_);
+                if (batch_.size() == PIECE_EVENTS) batch_.clear();
+            });
+        batch_.clear();
+    }
+
+   private:
+    const Input& in_;
+    simdjson::dom::parser parser_;
+    json::Document doc_;
+    dstd::StringIntern intern_;
+    dstd::InternCache cache_{intern_};
+    trace::views::detail::DecodeHints hints_;
+    trace::views::detail::DecodeHints refused_hints_;
+    trace::views::detail::FoldEventBuffer batch_;
+};
+
+class IndexDroppedRow {
+   public:
+    explicit IndexDroppedRow(const Input& in) : in_(in) {}
+    template <bool Check>
+    void run(Acc& acc) {
+        trace::parse_lines(
+            parser_, in_.text.data(), in_.length,
+            [&](simdjson::dom::element root, dstd::StringView) {
+                if (!trace::views::detail::append_dftracer_record(
+                        batch_, root, intern_, true, true, hints_, &cache_))
+                    return;
+                account<Check>(acc, batch_.back(), intern_);
+                if (batch_.size() == PIECE_EVENTS) batch_.clear();
+            });
+        batch_.clear();
+    }
+
+   private:
+    const Input& in_;
+    simdjson::dom::parser parser_;
+    dstd::StringIntern intern_;
+    dstd::InternCache cache_{intern_};
+    trace::views::detail::DecodeHints hints_;
+    trace::views::detail::FoldEventBuffer batch_;
+};
+
+class ScanSchemaRow {
+   public:
+    ScanSchemaRow(const Input& in, bool on_demand_fallback)
+        : in_(in), fallback_(on_demand_fallback) {
+        buf_.resize(simdjson::SIMDJSON_PADDING);
+    }
+    template <bool Check>
+    void run(Acc& acc) {
+        for (dstd::StringView line : in_.lines) {
+            buf_.assign(line.data(), line.size());
+            buf_.resize(line.size() + simdjson::SIMDJSON_PADDING);
+            simdjson::dom::element root;
+            if (!parser_.parse(buf_.data(), line.size(), false).get(root)) {
+                trace::views::detail::extract_fold_event_into(
+                    ev_, root, intern_, true, nullptr, true, &hints_);
+                account<Check>(acc, ev_, intern_);
+                continue;
+            }
+            if (!fallback_) continue;
+            auto value = doc_.parse(line);
+            if (!value) continue;
+            trace::views::detail::extract_fold_event_into(
+                ev_, *value, intern_, true, &cache_, nullptr, true, &hints_);
+            if (json::detail::ValueAccess::broken(*value)) continue;
+            account<Check>(acc, ev_, intern_);
+        }
+    }
+
+   private:
+    const Input& in_;
+    bool fallback_;
+    json::RecordParser parser_;
+    json::Document doc_;
+    dstd::String buf_;
+    dstd::StringIntern intern_;
+    dstd::InternCache cache_{intern_};
+    trace::views::detail::DecodeHints hints_;
+    FoldEvent ev_;
+};
+
+class IndexRefOnDemandRow {
+   public:
+    explicit IndexRefOnDemandRow(const Input& in) : in_(in) {}
+    template <bool Check>
+    void run(Acc& acc) {
+        for (dstd::StringView line : in_.lines) {
+            auto parsed = doc_.parse(line);
+            if (!parsed) continue;
+            if (!trace::views::detail::append_dftracer_record(
+                    batch_, *parsed, intern_, true, true, hints_, &cache_))
+                continue;
+            account<Check>(acc, batch_.back(), intern_);
+            if (batch_.size() == PIECE_EVENTS) batch_.clear();
+        }
+        batch_.clear();
+    }
+
+   private:
+    const Input& in_;
+    json::Document doc_;
+    dstd::StringIntern intern_;
+    dstd::InternCache cache_{intern_};
+    trace::views::detail::DecodeHints hints_;
+    trace::views::detail::FoldEventBuffer batch_;
+};
+
 struct Result {
     const char* name;
     int reference;  // index of the row this one is compared with, or -1
@@ -414,7 +622,7 @@ int main(int argc, char** argv) {
                  : static_cast<std::size_t>(-1);
     const unsigned row_mask =
         argc > 4 ? static_cast<unsigned>(std::strtoul(argv[4], nullptr, 0))
-                 : 0x1FFFu;
+                 : 0x7FFFFu;
     Input in;
     load(in, std::move(raw), max_lines);
     if (in.lines.empty()) {
@@ -435,13 +643,23 @@ int main(int argc, char** argv) {
     OnDemandCaptureRow od_capture(in);
     OnDemandPathRow cached_path(in, true);
     OnDemandCaptureRow cached_capture(in, true);
+    IndexDomRow index_dom(in);
+    Input refused_in;
+    load_refused(refused_in, in);
+    IndexRefusedRow index_refused(refused_in);
+    IndexRefOnDemandRow index_refod(refused_in);
+    IndexDroppedRow index_dropped(refused_in);
+    ScanSchemaRow scan_schema(in, false);
+    ScanSchemaRow scan_refused(refused_in, true);
 
     Result results[] = {
-        {"dom/args", -1},     {"ondemand/args", 0},    {"batch/args", 0},
-        {"dom/noargs", -1},   {"ondemand/noargs", 3},  {"cached/args", 0},
-        {"cached/noargs", 3}, {"dom/path", -1},        {"ondemand/path", 7},
-        {"dom/capture", -1},  {"ondemand/capture", 9}, {"cached/path", 7},
-        {"cached/capture", 9}};
+        {"dom/args", -1},      {"ondemand/args", 0},    {"batch/args", 0},
+        {"dom/noargs", -1},    {"ondemand/noargs", 3},  {"cached/args", 0},
+        {"cached/noargs", 3},  {"dom/path", -1},        {"ondemand/path", 7},
+        {"dom/capture", -1},   {"ondemand/capture", 9}, {"cached/path", 7},
+        {"cached/capture", 9}, {"index/dom", -1},       {"index/refused", 15},
+        {"index/refod", -1},   {"index/dropped", -1},   {"scan/schema", 13},
+        {"scan/refused", 14}};
     constexpr int ROWS = sizeof(results) / sizeof(results[0]);
     const auto check = [&](int row, auto& r) {
         Acc acc;
@@ -463,6 +681,12 @@ int main(int argc, char** argv) {
     if (wanted(10)) check(10, od_capture);
     if (wanted(11)) check(11, cached_path);
     if (wanted(12)) check(12, cached_capture);
+    if (wanted(13)) check(13, index_dom);
+    if (wanted(14)) check(14, index_refused);
+    if (wanted(15)) check(15, index_refod);
+    if (wanted(16)) check(16, index_dropped);
+    if (wanted(17)) check(17, scan_schema);
+    if (wanted(18)) check(18, scan_refused);
 
     dstd::Vector<double> samples[ROWS];
     Acc acc;
@@ -508,8 +732,26 @@ int main(int argc, char** argv) {
                 case 11:
                     ns = timed(cached_path, acc, in.lines.size());
                     break;
-                default:
+                case 12:
                     ns = timed(cached_capture, acc, in.lines.size());
+                    break;
+                case 13:
+                    ns = timed(index_dom, acc, in.lines.size());
+                    break;
+                case 14:
+                    ns = timed(index_refused, acc, in.lines.size());
+                    break;
+                case 15:
+                    ns = timed(index_refod, acc, in.lines.size());
+                    break;
+                case 16:
+                    ns = timed(index_dropped, acc, in.lines.size());
+                    break;
+                case 17:
+                    ns = timed(scan_schema, acc, in.lines.size());
+                    break;
+                default:
+                    ns = timed(scan_refused, acc, in.lines.size());
                     break;
             }
             samples[row].push_back(ns);
@@ -521,9 +763,10 @@ int main(int argc, char** argv) {
     std::printf("%-17s %10s %8s %9s %18s\n", "row", "ns/line", "ratio",
                 "events", "checksum");
     bool match = true;
+    for (int i = 0; i < ROWS; ++i)
+        if (wanted(i)) results[i].median_ns = median(samples[i]);
     for (int i = 0; i < ROWS; ++i) {
         if (!wanted(i)) continue;
-        results[i].median_ns = median(samples[i]);
         const int against = results[i].reference;
         const Result& ref =
             results[against >= 0 && wanted(against) ? against : i];
@@ -534,6 +777,9 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(results[i].events),
                     static_cast<unsigned long long>(results[i].checksum));
     }
+    if (wanted(13) && wanted(14))
+        std::printf("index/refused vs index/dom: %.3f\n",
+                    results[14].median_ns / results[13].median_ns);
     std::printf("checksums %s\n", match ? "match" : "DIFFER");
     return acc.sink == 1 ? 3 : (match ? 0 : 1);
 }

@@ -2,18 +2,22 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -105,9 +109,11 @@ class StreamCounter {
     explicit StreamCounter(bool path_decoder) : path_decoder_(path_decoder) {}
 
     std::size_t count() const { return count_; }
+    std::size_t dropped_count() const { return dropped_; }
 
     // Whole lines go into work_ because parse_lines needs SIMDJSON_PADDING
     // after them and strip_array_delimiters writes in place.
+    // A line the DOM parser refuses is read on demand, as in the index build.
     // A last line with no newline is never parsed, as in the index build.
     void feed(dstd::StringView chunk) {
         const std::size_t cut = chunk.rfind('\n');
@@ -128,14 +134,39 @@ class StreamCounter {
                 if (path_decoder_ ? root.is_object()
                                   : trace::views::detail::counts_as_event(root))
                     ++count_;
+            },
+            [&](dstd::StringView line, std::size_t capacity) {
+                auto parsed = document_.parse_in_place(line.data(), line.size(),
+                                                       capacity);
+                if (!parsed) {
+                    ++dropped_;
+                    return;
+                }
+                // The path decoder keeps a record the index build reads whole.
+                if (path_decoder_)
+                    trace::views::detail::decode_record_into(
+                        ev_, *parsed, intern_, true, nullptr, nullptr, nullptr,
+                        trace::views::detail::INDEX_MAX_CHILDREN);
+                const bool counted =
+                    path_decoder_
+                        ? true
+                        : trace::views::detail::counts_as_event(*parsed);
+                if (json::detail::ValueAccess::broken(*parsed))
+                    ++dropped_;
+                else if (counted)
+                    ++count_;
             });
     }
 
    private:
     simdjson::dom::parser parser_;
+    json::Document document_;
     dstd::String carry_;
     dstd::String work_;
+    dftracer::utils::dstd::StringIntern intern_;
+    trace::views::detail::FoldEvent ev_;
     std::size_t count_ = 0;
+    std::size_t dropped_ = 0;
     bool path_decoder_;
 };
 
@@ -178,6 +209,9 @@ coro::CoroTask<std::size_t> stream_count(dstd::String path) {
             offset += static_cast<std::uint64_t>(got);
         }
     }
+    if (counter.dropped_count() > 0)
+        DFTRACER_UTILS_LOG_WARN("%s: %zu line(s) could not be read in full",
+                                path.c_str(), counter.dropped_count());
     co_return counter.count();
 }
 

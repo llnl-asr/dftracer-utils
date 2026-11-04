@@ -71,6 +71,7 @@ static dstd::String create_metadata_pfw_gz(TestEnvironment& env) {
 struct CollectedViewOutput {
     dstd::Vector<dstd::String> events;
     dstd::Vector<dstd::String> fold_names;
+    dstd::Vector<std::size_t> fold_leaf_counts;
     std::uint64_t events_matched = 0;
     std::uint64_t events_scanned = 0;
     std::uint64_t lines_invalid = 0;
@@ -85,9 +86,11 @@ static coro::CoroTask<CollectedViewOutput> collect_view_coro(
         output.events_scanned += batch->events_scanned;
         output.lines_invalid += batch->lines_invalid;
         for (const auto& ev : batch->events) output.events.emplace_back(ev);
-        for (const auto& ev : batch->fold_events)
+        for (const auto& ev : batch->fold_events) {
             output.fold_names.emplace_back(
                 input.fold_intern->resolve(ev.name_id));
+            output.fold_leaf_counts.push_back(ev.schema_leaves.size());
+        }
     }
     co_return output;
 }
@@ -395,5 +398,34 @@ TEST_SUITE("ViewScanner") {
         std::sort(output.fold_names.begin(), output.fold_names.end());
         CHECK(output.fold_names ==
               dstd::Vector<dstd::String>{"a", R"(b\q)", "c?d", "d", "e"});
+    }
+
+    TEST_CASE(
+        "ViewScanner - schema capture keeps the lines the DOM parser refuses") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        const dstd::String gz = create_refused_gz(env);
+        dftracer::utils::dstd::StringIntern intern;
+        detail::FoldEventBuffer buffer;
+        ViewScannerInput input;
+        input.with_file_path(dstd::String(gz))
+            .with_index_path(dstd::String(determine_index_path(gz, "")))
+            .with_checkpoint_size(1024)
+            .with_byte_range(0, std::numeric_limits<std::size_t>::max());
+        input.fold_intern = &intern;
+        input.fold_buffer = &buffer;
+        input.fold_needs_args = true;
+        input.fold_capture_schema = true;
+        ViewScannerUtility reader;
+        auto output = collect_view_output(reader, input);
+        CHECK(output.lines_invalid == 0);
+        REQUIRE(output.fold_names.size() == 5);
+        const dstd::Vector<dstd::String> names{"a", R"(b\q)", "c?d", "d", "e"};
+        const std::size_t leaves[] = {3, 2, 2, 3, 2};
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            INFO(names[i]);
+            CHECK(output.fold_names[i] == names[i]);
+            CHECK(output.fold_leaf_counts[i] == leaves[i]);
+        }
     }
 }

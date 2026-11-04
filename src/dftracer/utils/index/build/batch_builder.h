@@ -60,6 +60,8 @@ struct IndexBuildResult {
     std::size_t events_processed = 0;
     std::size_t chunks_processed = 0;
     std::size_t total_lines = 0;
+    /// Lines left out of the index because they could not be read in full.
+    std::size_t dropped_lines = 0;
     dstd::String error_message;
 };
 

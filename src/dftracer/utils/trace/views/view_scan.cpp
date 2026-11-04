@@ -560,8 +560,8 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                 dstd::String parse_buf;
                 FoldEventBuffer fold_events;
                 DecodeHints hints;
-                // A dftracer event that also enumerates its schema leaves has
-                // no on-demand form.
+                // A dftracer event that also enumerates its schema leaves is
+                // read by the DOM parser; a line it refuses is read on demand.
                 const bool dom_decode = !vdef.by_path && any_wants_schema;
                 for (;;) {
                     if (produced.load(std::memory_order_relaxed) >= cap) break;
@@ -606,13 +606,16 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                                         '\0');
                                     auto doc = parser.parse(parse_buf.data(),
                                                             line.size(), false);
-                                    if (doc.error()) continue;
-                                    extract_fold_event_into(
-                                        fold_events.append(),
-                                        doc.value_unsafe(), *intern,
-                                        any_needs_args, nullptr,
-                                        any_wants_schema);
-                                    continue;
+                                    if (!doc.error()) {
+                                        extract_fold_event_into(
+                                            fold_events.append(),
+                                            doc.value_unsafe(), *intern,
+                                            any_needs_args, nullptr,
+                                            any_wants_schema);
+                                        continue;
+                                    }
+                                    // A line the DOM parser refuses is read on
+                                    // demand below.
                                 }
                                 auto parsed = document.parse(line);
                                 if (!parsed) continue;
@@ -633,9 +636,9 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                                         any_wants_schema && skip_never_indexed,
                                         &*cache);
                                 else
-                                    extract_fold_event_into(fe, record, *intern,
-                                                            any_needs_args,
-                                                            &*cache);
+                                    extract_fold_event_into(
+                                        fe, record, *intern, any_needs_args,
+                                        &*cache, nullptr, any_wants_schema);
                                 if (json::detail::ValueAccess::broken(record))
                                     fold_events.discard_last();
                             }

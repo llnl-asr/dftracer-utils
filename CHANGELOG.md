@@ -412,6 +412,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The private static archives install as `libdftracer_hs.a`, `libdftracer_hwy.a`, `libdftracer_hwy_contrib.a` and `libdftracer_utf8proc_static.a`, and the `zlib` package is now `dftracer_utils_zlib`.
 - Read a line of any size: a line longer than the read buffer no longer fails the read of its file.
   The buffer doubles for that line and stays that size for the lines after it.
+- Index every line the DOM parser refuses, with a number too large for a double, an invalid escape, a 20-digit integer, bad UTF-8, a raw control byte in a string or a nesting deeper than 1024 levels.
+  The index build, the schema capture of a view scan or export, and `dftracer_event_count` read such a line on demand, so a query by equality on it finds it through the index.
+  A line the DOM parser accepts is read once by the DOM parser, as before, and the index of such lines is unchanged.
+  A line that cannot be read in full, such as a cropped one, is left out of the index and counted: `dropped_lines` in the build result of its file and one warning per file with the path and the count.
+  `dftracer_event_count` counts only the lines the index build keeps and prints the same warning.
+  A query literal with a `?` is no longer a required text for the line prefilter, since a reader writes `?` for a bad byte.
 - Keep a line with a number too large for a double, such as `1e400`, and read that number as positive or negative infinity on the on-demand read paths.
 - A listed path that holds a json field no longer gives a duplicate arg on the on-demand read paths.
 - Keep a line with an invalid string escape, such as `\q` or a lone surrogate, and read that string as its raw text on the on-demand read paths.

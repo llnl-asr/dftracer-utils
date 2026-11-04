@@ -43,9 +43,12 @@ std::size_t letter_rank(char c) {
     return i == dstd::StringView::npos ? 0 : i;
 }
 
+// A reader repairs a bad byte in a string to '?', so a '?' of the value need
+// not be in the text.
 bool safe(dstd::StringView v) {
     for (unsigned char c : v)
-        if (c < 0x20 || c > 0x7E || c == '"' || c == '\\' || c == '/')
+        if (c < 0x20 || c > 0x7E || c == '"' || c == '\\' || c == '/' ||
+            c == '?')
             return false;
     return true;
 }

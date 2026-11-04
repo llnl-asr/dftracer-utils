@@ -22,6 +22,8 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
@@ -291,6 +293,10 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     /// The dictionary is file-global, so one seal attributes every entry to the
     /// file; BloomFold buckets by checkpoint and does not need a per-member
     /// seal.
+    /// Lines the DOM parser refused and the on-demand read could not keep, such
+    /// as a cropped line. Complete once flush() has stepped every piece.
+    std::size_t dropped_lines() const { return dropped_lines_; }
+
     void seal() {
         trace::views::detail::ScanUnit unit;
         unit.file_path = file_path_;
@@ -339,6 +345,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         std::size_t chunk_end = 0;
         dstd::UniquePtr<EventBuffer> batch;
         dstd::Vector<dstd::StringView> lines;
+        // Lines the DOM parser refused and the on-demand read could not keep.
+        std::size_t dropped = 0;
         // The strings of a piece parsed ahead, interned here with ids of their
         // own, and given the file's ids in piece order when the folds see it.
         dstd::UniquePtr<dftracer::utils::dstd::StringIntern> local;
@@ -390,6 +398,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // never suspends, so no two tasks use a thread's parser at once.
     struct LocalParser {
         json::RecordParser parser;
+        json::Document document;
 #if DFTRACER_UTILS_TEST_PROBES
         std::uint64_t held = 0;
 
@@ -417,6 +426,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             record();
             if (parser.capacity() > PARSER_RETAIN_BYTES)
                 parser = json::RecordParser();
+            if (document.capacity() > PARSER_RETAIN_BYTES)
+                document = json::Document();
             record();
         }
 
@@ -440,13 +451,13 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 #if DFTRACER_UTILS_TEST_PROBES
         if (g_probe_parse.load(std::memory_order_relaxed)) {
             ProbedParse probed(cfg);
-            parse_with(cfg, local.parser, c);
+            parse_with(cfg, local.parser, local.document, c);
             probe_live();
         } else {
-            parse_with(cfg, local.parser, c);
+            parse_with(cfg, local.parser, local.document, c);
         }
 #else
-        parse_with(cfg, local.parser, c);
+        parse_with(cfg, local.parser, local.document, c);
 #endif
         local.release();
     }
@@ -489,13 +500,17 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     }
 #endif
 
+    // A line the DOM parser refuses is read on demand by `document`, in its
+    // place among the other lines, so it is indexed and no other line is lost.
     static void parse_with(const ParseConfig& cfg, json::RecordParser& parser,
-                           Parsed& c) {
+                           json::Document& document, Parsed& c) {
         dftracer::utils::dstd::StringIntern& intern =
             c.local ? *c.local : *cfg.intern;
         std::size_t total = c.buf->size();
         trace::strip_array_delimiters(c.buf->data(), total);
         c.buf->resize(total + simdjson::SIMDJSON_PADDING, '\0');
+        trace::views::detail::DecodeHints hints;
+        dftracer::utils::dstd::InternCache cache(intern);
         if (cfg.decoder == index::Decoder::Path) {
             trace::parse_lines(
                 parser, c.buf->data(), total,
@@ -507,10 +522,31 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                         cfg.record_schema, nullptr,
                         trace::views::detail::INDEX_MAX_CHILDREN, nullptr,
                         cfg.skip_never_indexed);
+                },
+                [&](dstd::StringView line, std::size_t capacity) {
+                    auto parsed = document.parse_in_place(
+                        line.data(), line.size(), capacity);
+                    if (!parsed) {
+                        ++c.dropped;
+                        return;
+                    }
+                    json::Value& record = *parsed;
+                    if (record.type() != json::Value::Type::Object) return;
+                    trace::views::detail::DecodeHints refused_hints;
+                    trace::views::detail::decode_record_into(
+                        c.batch->append(), record, intern, true, nullptr,
+                        cfg.record_schema, nullptr,
+                        trace::views::detail::INDEX_MAX_CHILDREN,
+                        &refused_hints, cfg.skip_never_indexed, &cache);
+                    if (json::detail::ValueAccess::broken(record)) {
+                        c.batch->discard_last();
+                        ++c.dropped;
+                        return;
+                    }
+                    if (cfg.keep_lines) c.lines.push_back(line);
                 });
         } else {
-            trace::views::detail::DecodeHints hints;
-            dftracer::utils::dstd::InternCache cache(intern);
+            trace::views::detail::DecodeHints refused_hints;
             trace::parse_lines(
                 parser, c.buf->data(), total,
                 [&](simdjson::dom::element root, dstd::StringView line) {
@@ -522,6 +558,23 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                     for (const auto& name : cfg.extra_fields)
                         trace::views::detail::capture_extra_field(
                             c.batch->events_mut().back(), root, intern, name);
+                },
+                [&](dstd::StringView line, std::size_t capacity) {
+                    auto parsed = document.parse_in_place(
+                        line.data(), line.size(), capacity);
+                    if (!parsed) {
+                        ++c.dropped;
+                        return;
+                    }
+                    if (!trace::views::detail::append_dftracer_record(
+                            *c.batch, *parsed, intern, cfg.needs_args,
+                            cfg.capture_schema, refused_hints, &cache,
+                            &cfg.extra_fields)) {
+                        if (json::detail::ValueAccess::broken(*parsed))
+                            ++c.dropped;
+                        return;
+                    }
+                    if (cfg.keep_lines) c.lines.push_back(line);
                 });
         }
     }
@@ -552,6 +605,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     static constexpr std::size_t MAX_PIECES_HELD = 64;
 
     void step(Parsed& c) {
+        dropped_lines_ += c.dropped;
         const auto unit = unit_of(c);
         trace::views::detail::FoldBatch fb{c.batch->events(), unit};
         for (auto* f : folds_) f->step(fb);
@@ -579,6 +633,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // Each fold steps on its own chain of tasks, so it sees every batch in
     // order while the folds and this thread run at once.
     coro::CoroTask<void> step_ahead(dstd::UniquePtr<Parsed> done) {
+        dropped_lines_ += done->dropped;
         if (builders_) builders_->step(done->checkpoint_idx, done->lines);
         if (!permits_) {
             permits_ = dstd::make_unique<coro::CoroSemaphore>(MAX_PIECES_HELD);
@@ -848,6 +903,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     dstd::String partial_;
     std::size_t plain_offset_ = 0;
     dstd::String file_path_;
+    std::size_t dropped_lines_ = 0;
     dstd::String index_path_;
     dstd::Vector<dstd::String> extra_fields_;
     index::extensions::PluginBuilders* builders_ = nullptr;

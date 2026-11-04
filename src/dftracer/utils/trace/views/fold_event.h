@@ -634,6 +634,25 @@ struct DecodeHints {
     };
     dftracer::utils::dstd::Vector<KeyAt> arg_key_at;
     dftracer::utils::dstd::Vector<KeyAt> top_key_at;
+    /// A leaf of the record being read on demand whose path id waits for the
+    /// end of the record, so the paths are interned in the order the DOM
+    /// reader interns them. A top-level scalar names its `key`; a leaf under a
+    /// nested key holds its path in `deferred_text`; a `resolved` one already
+    /// has its `id`. `in_args` marks a leaf below "args", dropped when the
+    /// event's own args walk lists it.
+    struct DeferredLeaf {
+        dstd::StringView key;
+        std::size_t offset = 0;
+        std::size_t size = 0;
+        std::size_t pos = 0;
+        std::uint32_t id = 0;
+        std::uint8_t tag = 0;
+        bool composed = false;
+        bool resolved = false;
+        bool in_args = false;
+    };
+    dstd::Vector<DeferredLeaf> deferred;
+    dstd::String deferred_text;
 };
 
 /// Whether build_fold_event_into, given DecodeHints, walks the record's args
@@ -726,6 +745,11 @@ bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
 /// Allocates and interns nothing.
 bool counts_as_event(simdjson::dom::element root);
 
+/// As above for a record read on demand, for a line the DOM parser refused. The
+/// last "ph" counts. A record that reads badly is marked broken and does not
+/// count.
+bool counts_as_event(json::Value& record);
+
 /// Parse a DOM object into `ev` (reset first) as an owned event. Every string
 /// is interned, so the result stays valid after the parser that produced `root`
 /// is reused. Args are captured only when `needs_args`. `extra_fields`, if
@@ -756,7 +780,23 @@ void extract_fold_event_into(
     FoldEvent& ev, json::Value& event,
     dftracer::utils::dstd::StringIntern& intern, bool needs_args,
     dftracer::utils::dstd::InternCache* cache = nullptr,
-    const dstd::Vector<dstd::String>* nested_captures = nullptr);
+    const dstd::Vector<dstd::String>* nested_captures = nullptr,
+    bool capture_schema = false, DecodeHints* hints = nullptr);
+
+/// Decode the DFTracer record `record` into the next slot of `batch` in one
+/// forward read of its text, as the DOM overload does, with the same
+/// `schema_leaves` in the same order. A line the DOM parser refuses for a big
+/// number, an invalid escape or a bad byte in a string is kept. Returns false,
+/// appending no slot, for a record that is not an object, has no phase or reads
+/// badly; the last marks `record` broken. `extra_fields` are captured as
+/// @ref extract_fold_event_into captures `nested_captures`. `hints` is the
+/// calling worker's own.
+bool append_dftracer_record(
+    FoldEventBuffer& batch, json::Value& record,
+    dftracer::utils::dstd::StringIntern& intern, bool needs_args,
+    bool capture_schema, DecodeHints& hints,
+    dftracer::utils::dstd::InternCache* cache,
+    const dstd::Vector<dstd::String>* extra_fields = nullptr);
 
 }  // namespace dftracer::utils::trace::views::detail
 

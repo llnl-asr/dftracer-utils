@@ -305,7 +305,14 @@ static coro::CoroTask<void> parse_and_write_worker(
                         result.chunks_processed = job.artifacts.members.size();
                         // Publish the dictionary's pending entries now that
                         // every member is parsed. Bloom needs none.
-                        if (driver) driver->seal();
+                        if (driver) {
+                            driver->seal();
+                            result.dropped_lines = driver->dropped_lines();
+                            if (result.dropped_lines > 0)
+                                DFTRACER_UTILS_LOG_WARN(
+                                    "%s: %zu line(s) could not be read in full",
+                                    pf.file_path.c_str(), result.dropped_lines);
+                        }
                         if (job.bloom_fold) {
                             result.events_processed = static_cast<std::size_t>(
                                 job.bloom_fold->total_events());

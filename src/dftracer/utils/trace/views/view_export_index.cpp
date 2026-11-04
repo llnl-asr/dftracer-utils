@@ -147,11 +147,21 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
                                  '\0');
             auto doc =
                 sl->parser.parse(sl->parse_buf.data(), line.size(), false);
-            if (doc.error()) continue;
-            extract_fold_event_into(sl->events.append(), doc.value_unsafe(),
-                                    intern, /*needs_args=*/true,
-                                    /*extra_fields=*/nullptr,
+            if (!doc.error()) {
+                extract_fold_event_into(sl->events.append(), doc.value_unsafe(),
+                                        intern, /*needs_args=*/true,
+                                        /*extra_fields=*/nullptr,
+                                        /*capture_schema=*/true);
+                continue;
+            }
+            auto parsed = sl->document.parse(line);
+            if (!parsed) continue;
+            FoldEvent& fe = sl->events.append();
+            extract_fold_event_into(fe, *parsed, intern, /*needs_args=*/true,
+                                    &sl->cache, /*nested_captures=*/nullptr,
                                     /*capture_schema=*/true);
+            if (json::detail::ValueAccess::broken(*parsed))
+                sl->events.discard_last();
         }
         ScanUnit unit;
         unit.file_path = utilities::fileio::gzip_part_path(

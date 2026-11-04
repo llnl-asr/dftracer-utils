@@ -22,7 +22,11 @@ namespace detail {
 struct DocumentState {
     simdjson::ondemand::parser parser;
     dstd::String buffer;
+    // The line being read: the private buffer, or text the caller owns.
+    const char* text = nullptr;
     std::size_t length = 0;
+    // Bytes readable from `text`, at least `length` plus the simdjson padding.
+    std::size_t capacity = 0;
     simdjson::ondemand::document doc;
     dstd::StringArena strings;
     bool broken = false;
@@ -34,7 +38,7 @@ struct DocumentState {
     dstd::UniquePtr<simdjson::ondemand::parser> child_parser;
     simdjson::ondemand::document child_doc;
 
-    const char* end() const { return buffer.data() + length; }
+    const char* end() const { return text + length; }
 };
 
 }  // namespace detail
@@ -75,8 +79,7 @@ bool usable(detail::DocumentState& st) {
 
 simdjson::error_code open_document(detail::DocumentState& st,
                                    simdjson::ondemand::value& root) {
-    auto parsed =
-        st.parser.iterate(st.buffer.data(), st.length, st.buffer.size());
+    auto parsed = st.parser.iterate(st.text, st.length, st.capacity);
     if (parsed.error()) return parsed.error();
     st.doc = std::move(parsed.value_unsafe());
     return st.doc.get_value().get(root);
@@ -461,13 +464,13 @@ bool ValueAccess::event(const Value& v, EventView& out) {
         if (st.walking > 0) return false;
         v.state_ = SPENT;
         out.doc = &st.doc;
-        out.text = dstd::StringView(st.buffer.data(), st.length);
+        out.text = dstd::StringView(st.text, st.length);
         return true;
     }
     const dstd::StringView text = value_extent(v.start_, st.end());
     if (!st.child_parser)
         st.child_parser = dstd::make_unique<simdjson::ondemand::parser>();
-    const char* const limit = st.buffer.data() + st.buffer.size();
+    const char* const limit = st.text + st.capacity;
     if (st.child_parser
             ->iterate(text.data(), text.size(),
                       static_cast<std::size_t>(limit - text.data()))
@@ -513,23 +516,50 @@ Document::~Document() = default;
 Document::Document(Document&&) noexcept = default;
 Document& Document::operator=(Document&&) noexcept = default;
 
-dstd::Result<Value> Document::parse(dstd::StringView line) {
-    detail::DocumentState& st = *state_;
-    st.buffer.assign(line.data() ? line.data() : "", line.size());
-    st.buffer.resize(line.size() + simdjson::SIMDJSON_PADDING);
-    st.length = line.size();
+namespace {
+
+dstd::Result<Value> open_line(detail::DocumentState& st) {
     st.strings.clear();
     st.broken = false;
     st.disturbed = false;
     OnDemand root;
     simdjson::error_code code = open_document(st, root);
     if (detail::is_repairable(code)) {
+        if (st.text != st.buffer.data()) {
+            st.buffer.assign(st.text, st.length);
+            st.buffer.resize(st.length + simdjson::SIMDJSON_PADDING);
+            st.text = st.buffer.data();
+            st.capacity = st.buffer.size();
+        }
         detail::repair_line(st.buffer.data(), st.length);
         code = open_document(st, root);
     }
     if (code) return parse_error(code);
     return Access::make(&st, root, true);
 }
+
+}  // namespace
+
+dstd::Result<Value> Document::parse(dstd::StringView line) {
+    detail::DocumentState& st = *state_;
+    st.buffer.assign(line.data() ? line.data() : "", line.size());
+    st.buffer.resize(line.size() + simdjson::SIMDJSON_PADDING);
+    st.text = st.buffer.data();
+    st.length = line.size();
+    st.capacity = st.buffer.size();
+    return open_line(st);
+}
+
+dstd::Result<Value> Document::parse_in_place(const char* line, std::size_t size,
+                                             std::size_t capacity) {
+    detail::DocumentState& st = *state_;
+    st.text = line;
+    st.length = size;
+    st.capacity = capacity;
+    return open_line(st);
+}
+
+std::size_t Document::capacity() const { return state_->parser.capacity(); }
 
 Value::Type Value::type() {
     switch (*start_) {

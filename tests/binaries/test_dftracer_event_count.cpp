@@ -56,11 +56,14 @@ dstd::String event_line(int id, const char* ph) {
            dstd::to_string(1000 + id) + R"(,"dur":5,"args":{"ret":1}})";
 }
 
-// Lines the index counts under the dftracer decoder: 3 X and 2 C. It skips
-// metadata, malformed JSON, the blank line, the brackets and the last event,
-// which has no trailing newline. With `no_phase_line` the file has an object
-// with no "ph", so schema detection picks the path decoder, which counts every
-// object line, metadata included: 8 in all.
+// Lines the index counts under the dftracer decoder: 4 X and 2 C, one X of
+// them a line the DOM parser refuses for a number too large for a double and an
+// invalid escape. It skips metadata, two cropped lines (one of them refused by
+// the DOM parser and cut after a nested "}"), the blank line, the
+// brackets and the last event, which has no trailing newline. With
+// `no_phase_line` the file has an object with no "ph", so schema detection
+// picks the path decoder, which counts every object line, metadata included:
+// 9 in all.
 dstd::String mixed_fixture(bool no_phase_line) {
     dstd::String text = "[\n";
     text += event_line(1, "X") + "\n";
@@ -72,17 +75,22 @@ dstd::String mixed_fixture(bool no_phase_line) {
                 "\n";
     text += R"({"id":6,"name":"broken","ph":"X")"
             "\n";
+    text += R"({"id":12,"name":"cut","ph":"X","a":1e400,"b":{"c":1})"
+            "\n";
     text += "\n";
     text += event_line(7, "C") + "\n";
     text += event_line(8, "M") + "\n";
     text += event_line(9, "X") + "\n";
+    text += R"({"id":11,"pid":1,"tid":1,"name":"odd","cat":"POSIX","ph":"X",)"
+            R"("ts":1,"dur":1,"args":{"ret":1e400,"s":"a\q"}})"
+            "\n";
     text += "]\n";
     text += event_line(10, "X");
     return text;
 }
 
-constexpr int DFTRACER_FIXTURE_EVENTS = 5;
-constexpr int PATH_FIXTURE_EVENTS = 8;
+constexpr int DFTRACER_FIXTURE_EVENTS = 6;
+constexpr int PATH_FIXTURE_EVENTS = 9;
 
 bool dir_has_dftindex(const dstd::String& dir) {
     for (const auto& entry : dftu_utils_test::walk_dir(dir)) {
@@ -262,6 +270,10 @@ TEST_SUITE("DFTracerEventCount") {
             auto cold = run_event_count_capture(
                 binary, {dir.str(), "--index-dir", idx_dir});
             CHECK(parse_event_count(cold) == expected);
+            const auto warned = dftu_utils_test::run_process_capture(
+                binary, {dir.str(), "--index-dir", idx_dir}, true);
+            CHECK(warned.find("2 line(s) could not be read in full") !=
+                  dstd::String::npos);
             CHECK(!dstd::fs::exists(idx_dir).value());
             CHECK(!dir_has_dftindex(dir.str()));
 

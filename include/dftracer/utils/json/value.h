@@ -170,6 +170,20 @@ class Document {
     /// previous parse.
     dstd::Result<Value> parse(dstd::StringView line);
 
+    /// As @ref parse for a line that sits in a buffer of the caller, with
+    /// `capacity` bytes readable from `line`, at least `size` plus
+    /// `simdjson::SIMDJSON_PADDING`: the line is not copied, and the values
+    /// and string views read from it live as long as the caller keeps the
+    /// buffer and until the next parse. A line with a bad UTF-8 or control
+    /// byte is copied and repaired as @ref parse does; the buffer is never
+    /// written.
+    dstd::Result<Value> parse_in_place(const char* line, std::size_t size,
+                                       std::size_t capacity);
+
+    /// Bytes the parser can read without growing: the longest line parsed so
+    /// far, up to the allocation the parser made for it.
+    std::size_t capacity() const;
+
    private:
     friend class Value;
     friend struct detail::ValueAccess;

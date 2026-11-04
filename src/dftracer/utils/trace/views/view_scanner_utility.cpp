@@ -104,24 +104,27 @@ void decode_into(detail::FoldEvent& ev, simdjson::dom::element root,
                                     input.fold_extra_fields, schema, &hints);
 }
 
-// As decode_into, reading the record on demand: no schema leaves for a
-// dftracer event, so the caller sends that case to decode_into.
+// As decode_into, reading the record on demand, for a line the DOM parser
+// refuses. `schema` is whether a dftracer event enumerates its schema leaves.
 void decode_into(detail::FoldEvent& ev, json::Value& record,
-                 const ViewScannerInput& input, detail::DecodeHints& hints,
+                 const ViewScannerInput& input, bool schema,
+                 detail::DecodeHints& hints,
                  dftracer::utils::dstd::InternCache* cache) {
-    const bool schema = input.fold_capture_schema;
     if (input.view.by_path) {
-        const bool skip_never = schema && input.fold_skip_never_indexed;
+        const bool by_path_schema = input.fold_capture_schema;
+        const bool skip_never = by_path_schema && input.fold_skip_never_indexed;
         detail::decode_record_into(
-            ev, record, *input.fold_intern, schema,
-            schema || input.view.paths.empty() ? nullptr : &input.view.paths,
+            ev, record, *input.fold_intern, by_path_schema,
+            by_path_schema || input.view.paths.empty() ? nullptr
+                                                       : &input.view.paths,
             input.view.record_schema, &input.view.path_fields,
-            schema ? detail::INDEX_MAX_CHILDREN : 0, &hints, skip_never, cache);
+            by_path_schema ? detail::INDEX_MAX_CHILDREN : 0, &hints, skip_never,
+            cache);
         return;
     }
     detail::extract_fold_event_into(ev, record, *input.fold_intern,
                                     input.fold_needs_args, cache,
-                                    input.fold_extra_fields);
+                                    input.fold_extra_fields, schema, &hints);
 }
 
 bool in_role_window(json::Value& root, const ViewDefinition& view) {
@@ -239,7 +242,8 @@ void scan_line(LineScan& ls, const char* line_start, std::size_t json_len) {
     if (!match) return;
     if (input.fold_intern) {
         json::detail::ValueAccess::rewind(event);
-        decode_into(ls.pool.append(), event, input, ls.hints, ls.cache);
+        decode_into(ls.pool.append(), event, input,
+                    !metadata && input.fold_capture_schema, ls.hints, ls.cache);
         if (json::detail::ValueAccess::broken(event)) {
             ls.pool.discard_last();
             ++batch.lines_invalid;
@@ -253,13 +257,18 @@ void scan_line(LineScan& ls, const char* line_start, std::size_t json_len) {
     batch.events_matched++;
 }
 
-// One line read through the DOM, for a dftracer fold that captures schema.
+// One line read through the DOM, for a dftracer fold that captures schema. A
+// line the DOM parser refuses goes to scan_line.
 void scan_dom_line(LineScan& ls, const char* line_start, std::size_t json_len) {
     const ViewScannerInput& input = ls.input;
     ViewScannerBatch& batch = ls.batch;
     auto result = ls.parser.parse(line_start, json_len);
-    const bool object = !result.error() && result.value_unsafe().is_object();
-    if (!object) {
+    if (result.error()) {
+        // A line the DOM parser refuses is read on demand.
+        scan_line(ls, line_start, json_len);
+        return;
+    }
+    if (!result.value_unsafe().is_object()) {
         ++batch.lines_invalid;
         return;
     }

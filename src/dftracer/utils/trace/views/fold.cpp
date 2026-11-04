@@ -262,6 +262,30 @@ void set_fold_scalars(FoldEvent& ev, const Scalars& s, Ids& ids) {
     if (!s.name.empty()) ev.name_id = ids.get_or_insert(s.name);
 }
 
+// The cat and name already interned for an event, so the strings of its args
+// follow them as in the DOM form.
+struct InternedHead {
+    bool done = false;
+    dstd::StringView cat;
+    dstd::StringView name;
+};
+
+// As set_fold_scalars, interning only the cat and name that `head` has not.
+template <class Scalars>
+void set_fold_scalars(FoldEvent& ev, const Scalars& s, Ids& ids,
+                      const InternedHead& head) {
+    ev.phase = s.phase;
+    ev.pid = s.pid;
+    ev.tid = s.tid;
+    ev.ts = s.ts;
+    ev.dur = s.dur;
+    ev.has_dur = s.has_dur;
+    if (!s.cat.empty() && !(head.done && head.cat == s.cat))
+        ev.cat_id = ids.get_or_insert(s.cat);
+    if (!s.name.empty() && !(head.done && head.name == s.name))
+        ev.name_id = ids.get_or_insert(s.name);
+}
+
 // Flatten a nested arg into dotted scalar keys named as event.h flatten_arg
 // names them: objects "a.b", arrays "a.0". `path` holds the key so far.
 void flatten_nested_arg(dstd::String& path, simdjson::dom::element v,
@@ -815,20 +839,149 @@ std::uint8_t leaf_tag(const Leaf& leaf) {
     return static_cast<std::uint8_t>(t);
 }
 
+std::uint8_t container_tag(OnDemandType type) {
+    using dftracer::utils::index::store::PathType;
+    return static_cast<std::uint8_t>(
+        type == OnDemandType::object ? PathType::Object : PathType::Array);
+}
+
+// The PathType of the value `v` of `type` as leaf_type_tag gives the DOM
+// element; false on a read error. A container is not read, a string is not
+// decoded.
+bool value_tag(OnDemandValue& v, OnDemandType type, std::uint8_t& tag) {
+    using dftracer::utils::index::store::PathType;
+    switch (type) {
+        case OnDemandType::object:
+        case OnDemandType::array:
+            tag = container_tag(type);
+            return true;
+        case OnDemandType::string:
+            tag = static_cast<std::uint8_t>(PathType::String);
+            return true;
+        case OnDemandType::number: {
+            Leaf leaf;
+            if (!read_leaf_number(v, leaf)) return false;
+            tag = leaf_tag(leaf);
+            return true;
+        }
+        case OnDemandType::boolean: {
+            bool b;
+            if (v.get_bool().get(b)) return false;
+            tag = static_cast<std::uint8_t>(PathType::Bool);
+            return true;
+        }
+        case OnDemandType::null: {
+            bool is_null;
+            if (v.is_null().get(is_null) || !is_null) return false;
+            tag = static_cast<std::uint8_t>(PathType::NullValue);
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+// The phase `v` holds; false on a read error. A value that is no phase reads
+// as Unknown.
+bool read_phase_value(OnDemandValue& v, dstd::StringArena& arena,
+                      RecordPhase& out) {
+    OnDemandType type;
+    if (v.type().get(type) || type == OnDemandType::unknown) return false;
+    out = RecordPhase::Unknown;
+    if (type == OnDemandType::number) {
+        std::uint64_t plain;
+        if (!v.get_uint64().get(plain)) {
+            out = phase_from_int(plain);
+            return true;
+        }
+        Number n;
+        if (!read_number(v, n)) return false;
+        if (n.kind == Number::Kind::Int && n.i >= 0)
+            out = phase_from_int(static_cast<std::uint64_t>(n.i));
+        else if (n.kind == Number::Kind::Uint)
+            out = phase_from_int(n.u);
+    } else if (type == OnDemandType::string) {
+        const auto letter = json::detail::read_string(
+            json::detail::trim_token(v.raw_json_token()), arena);
+        if (!letter) return false;
+        out = phase_from_letter(*letter);
+    }
+    return true;
+}
+
+// The most positions of an args object or a record whose keys are remembered.
+constexpr std::size_t MAX_KEY_POSITIONS = 64;
+
+// Two overlapping loads cover a key of up to 16 bytes without a library call.
+bool same_bytes(const char* a, const char* b, std::size_t n) {
+    if (n >= 8) {
+        if (n > 16) return std::memcmp(a, b, n) == 0;
+        std::uint64_t a0, a1, b0, b1;
+        std::memcpy(&a0, a, 8);
+        std::memcpy(&b0, b, 8);
+        std::memcpy(&a1, a + n - 8, 8);
+        std::memcpy(&b1, b + n - 8, 8);
+        return ((a0 ^ b0) | (a1 ^ b1)) == 0;
+    }
+    if (n >= 4) {
+        std::uint32_t a0, a1, b0, b1;
+        std::memcpy(&a0, a, 4);
+        std::memcpy(&b0, b, 4);
+        std::memcpy(&a1, a + n - 4, 4);
+        std::memcpy(&b1, b + n - 4, 4);
+        return ((a0 ^ b0) | (a1 ^ b1)) == 0;
+    }
+    for (std::size_t i = 0; i < n; ++i)
+        if (a[i] != b[i]) return false;
+    return true;
+}
+
+// The id the previous record had for the same key at `pos`, else
+// `resolve(key)`, which is remembered.
+template <class Resolve>
+std::uint32_t key_at(dftracer::utils::dstd::Vector<DecodeHints::KeyAt>& slots,
+                     std::size_t pos, dstd::StringView key, Resolve&& resolve) {
+    if (pos >= MAX_KEY_POSITIONS) return resolve(key);
+    if (pos >= slots.size()) slots.resize(pos + 1);
+    DecodeHints::KeyAt& slot = slots[pos];
+    if (slot.id != dftracer::utils::dstd::StringIntern::NO_ID &&
+        slot.key.size() == key.size() &&
+        same_bytes(slot.key.data(), key.data(), key.size()))
+        return slot.id;
+    slot.id = resolve(key);
+    slot.key.assign(key.data(), key.size());
+    return slot.id;
+}
+
+// Where a reader without DecodeHints of its own keeps the leaves it defers.
+DecodeHints& scratch_hints() {
+    static thread_local DecodeHints scratch;
+    return scratch;
+}
+
 // One event read in one forward walk of its text. Strings are views of the
 // line or of the document's string arena, and live until the next parse.
 class OnDemandReader {
    public:
+    // With `capture_schema`, every leaf of the record also goes into
+    // schema_leaves in the order the DOM form lists them: those of a non-empty
+    // args object first when `hints` is given and the fold wants args, then
+    // the other top-level ones.
     OnDemandReader(FoldEvent& ev, dftracer::utils::dstd::StringIntern& intern,
                    dftracer::utils::dstd::InternCache* cache, bool needs_args,
-                   const char* end, dstd::StringArena& arena)
+                   const char* end, dstd::StringArena& arena,
+                   bool capture_schema = false, DecodeHints* hints = nullptr)
         : ev_(ev),
           out_(&ev),
           ids_{intern, cache},
           plain_{intern, nullptr},
           needs_args_(needs_args),
           end_(end),
-          arena_(arena) {}
+          arena_(arena),
+          schema_(capture_schema),
+          walk_(capture_schema && needs_args && hints != nullptr),
+          hints_(hints),
+          scratch_(hints ? hints : &scratch_hints()) {}
 
     // Whether the walk found a phase, which makes the line an event.
     bool has_event() const { return has_event_; }
@@ -840,29 +993,43 @@ class OnDemandReader {
         FoldScalars s;
         bool has_ph = false;
         bool has_args = false;
+        std::size_t top_pos = 0;
+        if (schema_) {
+            scratch_->deferred.clear();
+            scratch_->deferred_text.clear();
+        }
         for (auto member : object) {
             simdjson::ondemand::field field;
             if (std::move(member).get(field)) return false;
             const auto key = json::detail::read_key(field, arena_);
             if (!key) return false;
             OnDemandValue v = field.value();
+            bool leaf = schema_;
+            bool counted = schema_;
+            bool in_args = false;
             switch (key->size()) {
                 case 2:
                     if (is_key(*key, "ph")) {
                         if (!read_phase(v, s.phase)) return false;
                         has_ph = true;
+                        leaf = counted = false;
                     } else if (is_key(*key, "ts")) {
                         if (read_unsigned(v, s.ts) == Field::Error)
                             return false;
+                        leaf = counted = false;
+                    } else if (is_key(*key, "id")) {
+                        leaf = counted = false;
                     }
                     break;
                 case 3:
                     if (is_key(*key, "pid")) {
                         if (read_unsigned(v, s.pid) == Field::Error)
                             return false;
+                        leaf = counted = false;
                     } else if (is_key(*key, "tid")) {
                         if (read_unsigned(v, s.tid) == Field::Error)
                             return false;
+                        leaf = counted = false;
                     } else if (is_key(*key, "cat")) {
                         if (!read_string_field(v, s.cat)) return false;
                     } else if (is_key(*key, "dur")) {
@@ -873,6 +1040,7 @@ class OnDemandReader {
                             s.dur = dur;
                             s.has_dur = true;
                         }
+                        leaf = counted = false;
                     }
                     break;
                 case 4:
@@ -881,22 +1049,34 @@ class OnDemandReader {
                     } else if (is_key(*key, "args")) {
                         OnDemandType type;
                         if (v.type().get(type)) return false;
+                        in_args = true;
                         if (type != OnDemandType::object) break;
-                        if (has_args) discard_args();
+                        if (has_args) {
+                            discard_args();
+                        } else {
+                            trace::internal::parse_walks::args_walk();
+                        }
                         has_args = true;
+                        if (has_ph) intern_head(s);
+                        if (schema_)
+                            args_deferred_at_ = scratch_->deferred.size();
                         if (!read_args(v)) return false;
+                        leaf = false;
                     }
                     break;
                 default:
                     break;
             }
+            const std::size_t pos = counted ? top_pos++ : 0;
+            if (leaf && !defer_top(*key, v, in_args, pos)) return false;
         }
         if (!has_ph) {
             reset_fold_event(ev_);
             return true;
         }
-        set_fold_scalars(ev_, s, ids_);
+        set_fold_scalars(ev_, s, ids_, head_);
         has_event_ = true;
+        if (schema_) emit_deferred();
         return true;
     }
 
@@ -1362,32 +1542,30 @@ class OnDemandReader {
     }
 
     bool read_phase(OnDemandValue& v, RecordPhase& out) {
-        OnDemandType type;
-        if (v.type().get(type) || type == OnDemandType::unknown) return false;
-        out = RecordPhase::Unknown;
-        if (type == OnDemandType::number) {
-            std::uint64_t plain;
-            if (!v.get_uint64().get(plain)) {
-                out = phase_from_int(plain);
-                return true;
-            }
-            Number n;
-            if (!read_number(v, n)) return false;
-            if (n.kind == Number::Kind::Int && n.i >= 0)
-                out = phase_from_int(static_cast<std::uint64_t>(n.i));
-            else if (n.kind == Number::Kind::Uint)
-                out = phase_from_int(n.u);
-        } else if (type == OnDemandType::string) {
-            dstd::StringView letter;
-            if (!read_text(v, letter)) return false;
-            out = phase_from_letter(letter);
-        }
-        return true;
+        return read_phase_value(v, arena_, out);
     }
 
     void discard_args() {
+        // The DOM form lists the leaves of an args object that a later one
+        // replaces among the top-level ones when the later one has none.
+        if (!ev_.schema_leaves.empty()) {
+            dstd::Vector<DecodeHints::DeferredLeaf> listed;
+            for (const auto& [id, tag] : ev_.schema_leaves) {
+                DecodeHints::DeferredLeaf leaf;
+                leaf.id = id;
+                leaf.tag = tag;
+                leaf.resolved = true;
+                leaf.in_args = true;
+                listed.push_back(leaf);
+            }
+            auto& deferred = scratch_->deferred;
+            deferred.insert(deferred.begin() + args_deferred_at_,
+                            listed.begin(), listed.end());
+        }
         ev_.args.clear();
         ev_.specials.clear();
+        ev_.schema_leaves.clear();
+        args_walked_ = false;
         ev_.fhash_id = dftracer::utils::dstd::StringIntern::NO_ID;
         ev_.hhash_id = dftracer::utils::dstd::StringIntern::NO_ID;
     }
@@ -1397,37 +1575,221 @@ class OnDemandReader {
     bool read_args(OnDemandValue& args) {
         simdjson::ondemand::object object;
         if (args.get_object().get(object)) return false;
+        bool any = false;
+        std::size_t at = 0;
         for (auto member : object) {
+            any = true;
+            const std::size_t pos = at++;
             simdjson::ondemand::field field;
             if (std::move(member).get(field)) return false;
             const auto key = json::detail::read_key(field, arena_);
             if (!key) return false;
             OnDemandValue v = field.value();
+            OnDemandType type;
+            if (v.type().get(type)) return false;
             if (key->size() == 5 &&
                 (is_key(*key, "fhash") || is_key(*key, "hhash"))) {
                 std::uint32_t id = dftracer::utils::dstd::StringIntern::NO_ID;
-                OnDemandType type;
-                if (v.type().get(type)) return false;
                 if (type == OnDemandType::string) {
                     dstd::StringView text;
                     if (!read_text(v, text)) return false;
                     id = ids_.get_or_insert(text);
                 }
                 (is_key(*key, "fhash") ? ev_.fhash_id : ev_.hhash_id) = id;
+                if (walk_) {
+                    std::uint8_t tag;
+                    if (!value_tag(v, type, tag)) return false;
+                    ev_.schema_leaves.emplace_back(
+                        arg_leaf_id(*hints_, plain_.intern, key_id(pos, *key),
+                                    *key),
+                        tag);
+                } else if (schema_ && !enumerate_arg(*key, v, type)) {
+                    return false;
+                }
             } else if (needs_args_) {
-                OnDemandType type;
-                if (v.type().get(type)) return false;
                 if (type == OnDemandType::object ||
                     type == OnDemandType::array) {
                     path_.assign(*key);
                     if (!flatten(v, type)) return false;
-                } else if (!read_scalar(ids_.get_or_insert(*key), v, type,
-                                        ids_)) {
-                    return false;
+                } else {
+                    const std::uint32_t id = key_id(pos, *key);
+                    std::uint8_t tag;
+                    if (!read_scalar(id, v, type, ids_, tag)) return false;
+                    note_leaf(id, *key, tag);
                 }
+            } else if (schema_ && !enumerate_arg(*key, v, type)) {
+                return false;
             }
         }
+        if (!schema_) return true;
+        if (!any)
+            defer_path("args", container_tag(OnDemandType::object), true);
+        else if (walk_)
+            args_walked_ = true;
         return true;
+    }
+
+    // The id of the args key at position `pos`, which the previous record's key
+    // at the same position gives without a lookup when it is the same.
+    std::uint32_t key_id(std::size_t pos, dstd::StringView key) {
+        if (!hints_) return ids_.get_or_insert(key);
+        return key_at(hints_->arg_key_at, pos, key, [&](dstd::StringView k) {
+            return ids_.get_or_insert(k);
+        });
+    }
+
+    // A leaf of an argument at `key`, the key of its flattened value: listed
+    // at once when the args walk lists the leaves, else deferred as the DOM
+    // form lists "args.<key>" among the top-level leaves.
+    void note_leaf(std::uint32_t key_id, dstd::StringView key,
+                   std::uint8_t tag) {
+        if (!schema_ || out_ != &ev_) return;
+        if (walk_) {
+            ev_.schema_leaves.emplace_back(
+                arg_leaf_id(*hints_, plain_.intern, key_id, key), tag);
+            return;
+        }
+        enum_path_.assign("args.");
+        enum_path_.append(key);
+        defer_path(enum_path_, tag, true);
+    }
+
+    void defer_path(dstd::StringView path, std::uint8_t tag, bool in_args) {
+        DecodeHints::DeferredLeaf leaf;
+        leaf.offset = scratch_->deferred_text.size();
+        leaf.size = path.size();
+        leaf.tag = tag;
+        leaf.composed = true;
+        leaf.in_args = in_args;
+        scratch_->deferred_text.append(path);
+        scratch_->deferred.push_back(leaf);
+    }
+
+    // The leaves of the top-level value `v` at `key`, deferred.
+    bool defer_top(dstd::StringView key, OnDemandValue& v, bool in_args,
+                   std::size_t pos) {
+        OnDemandType type;
+        if (v.type().get(type)) return false;
+        if (type == OnDemandType::object || type == OnDemandType::array) {
+            enum_path_.assign(key);
+            return enumerate(v, type, 0, in_args);
+        }
+        std::uint8_t tag;
+        if (!value_tag(v, type, tag)) return false;
+        DecodeHints::DeferredLeaf leaf;
+        leaf.key = key;
+        leaf.pos = pos;
+        leaf.tag = tag;
+        leaf.in_args = in_args;
+        scratch_->deferred.push_back(leaf);
+        return true;
+    }
+
+    // The leaves of the argument `key`, deferred as "args.<key>...".
+    bool enumerate_arg(dstd::StringView key, OnDemandValue& v,
+                       OnDemandType type) {
+        enum_path_.assign("args.");
+        enum_path_.append(key);
+        return enumerate(v, type, 0, true);
+    }
+
+    // Defers every leaf of `v` under enum_path_ as enumerate_leaves lists the
+    // DOM element: a non-empty container by its members, anything else, an
+    // empty container included, as a leaf of its own. A container below the
+    // depth limit is a leaf.
+    bool enumerate(OnDemandValue& v, OnDemandType type, std::size_t depth,
+                   bool in_args) {
+        if (type == OnDemandType::object || type == OnDemandType::array) {
+            if (depth >= MAX_READ_DEPTH) {
+                defer_path(enum_path_, container_tag(type), in_args);
+                return true;
+            }
+            bool any = false;
+            if (type == OnDemandType::object) {
+                simdjson::ondemand::object object;
+                if (v.get_object().get(object)) return false;
+                for (auto member : object) {
+                    any = true;
+                    simdjson::ondemand::field field;
+                    if (std::move(member).get(field)) return false;
+                    const auto key = json::detail::read_key(field, arena_);
+                    if (!key) return false;
+                    OnDemandValue child = field.value();
+                    OnDemandType child_type;
+                    if (child.type().get(child_type)) return false;
+                    const std::size_t base = enum_path_.size();
+                    if (base) enum_path_.push_back('.');
+                    enum_path_.append(*key);
+                    if (!enumerate(child, child_type, depth + 1, in_args))
+                        return false;
+                    enum_path_.resize(base);
+                }
+            } else {
+                simdjson::ondemand::array array;
+                if (v.get_array().get(array)) return false;
+                std::size_t index = 0;
+                for (auto element : array) {
+                    any = true;
+                    OnDemandValue child;
+                    if (element.get(child)) return false;
+                    OnDemandType child_type;
+                    if (child.type().get(child_type)) return false;
+                    const std::size_t base = enum_path_.size();
+                    if (base) enum_path_.push_back('.');
+                    dftracer::utils::trace::detail::append_index(enum_path_,
+                                                                 index++);
+                    if (!enumerate(child, child_type, depth + 1, in_args))
+                        return false;
+                    enum_path_.resize(base);
+                }
+            }
+            if (any) return true;
+        }
+        std::uint8_t tag;
+        if (!value_tag(v, type, tag)) return false;
+        if (!enum_path_.empty()) defer_path(enum_path_, tag, in_args);
+        return true;
+    }
+
+    // Lists the deferred leaves, interning their paths after everything else
+    // the event interned. The leaves under args are dropped when the args walk
+    // listed them.
+    void emit_deferred() {
+        const bool args_listed = walk_ && args_walked_;
+        for (const auto& leaf : scratch_->deferred) {
+            if (leaf.in_args && args_listed) continue;
+            std::uint32_t id;
+            if (leaf.resolved) {
+                id = leaf.id;
+            } else if (leaf.composed) {
+                id = intern_leaf_path(
+                    plain_.intern,
+                    dstd::StringView(
+                        scratch_->deferred_text.data() + leaf.offset,
+                        leaf.size));
+            } else if (leaf.key.empty()) {
+                continue;
+            } else if (hints_) {
+                id = key_at(hints_->top_key_at, leaf.pos, leaf.key,
+                            [&](dstd::StringView k) {
+                                return top_leaf_id(*hints_, plain_.intern, k);
+                            });
+            } else {
+                id = intern_leaf_path(plain_.intern, leaf.key);
+            }
+            ev_.schema_leaves.emplace_back(id, leaf.tag);
+        }
+    }
+
+    // Interns the cat and name of the event ahead of its args, as the DOM form
+    // does, once the line is known to be an event.
+    void intern_head(const FoldScalars& s) {
+        if (head_.done) return;
+        head_.done = true;
+        head_.cat = s.cat;
+        head_.name = s.name;
+        if (!s.cat.empty()) ev_.cat_id = ids_.get_or_insert(s.cat);
+        if (!s.name.empty()) ev_.name_id = ids_.get_or_insert(s.name);
     }
 
     // The members or elements of `container` under path_, one leaf each. An
@@ -1461,12 +1823,15 @@ class OnDemandReader {
                 path_.resize(base);
             }
         }
-        if (!any)
-            out_->specials.push_back({plain_.get_or_insert(path_),
+        if (!any) {
+            const std::uint32_t id = plain_.get_or_insert(path_);
+            out_->specials.push_back({id,
                                       type == OnDemandType::object
                                           ? FoldEvent::Special::EmptyObject
                                           : FoldEvent::Special::EmptyArray,
                                       false});
+            note_leaf(id, path_, container_tag(type));
+        }
         return true;
     }
 
@@ -1474,34 +1839,46 @@ class OnDemandReader {
         OnDemandType type;
         if (v.type().get(type)) return false;
         if (type == OnDemandType::object || type == OnDemandType::array) {
-            if (depth_ + 1 >= MAX_READ_DEPTH) return keep_raw(v);
+            if (depth_ + 1 >= MAX_READ_DEPTH) return keep_raw(v, type);
             ++depth_;
             const bool ok = flatten(v, type);
             --depth_;
             return ok;
         }
-        return read_scalar(plain_.get_or_insert(path_), v, type, plain_);
+        const std::uint32_t id = plain_.get_or_insert(path_);
+        std::uint8_t tag;
+        if (!read_scalar(id, v, type, plain_, tag)) return false;
+        note_leaf(id, path_, tag);
+        return true;
     }
 
     // A container below the depth limit stays under its path as its JSON text.
-    bool keep_raw(OnDemandValue& v) {
-        out_->args.emplace_back(plain_.get_or_insert(path_),
+    bool keep_raw(OnDemandValue& v, OnDemandType type) {
+        const std::uint32_t id = plain_.get_or_insert(path_);
+        out_->args.emplace_back(id,
                                 plain_.get_or_insert(json::detail::value_extent(
                                     v.raw_json_token().data(), end_)));
+        note_leaf(id, path_, container_tag(type));
         return true;
     }
 
     // Appends the number `v` under `key_id`; false when it is not a number.
-    bool read_number_arg(std::uint32_t key_id, OnDemandValue& v, Ids& ids) {
+    // `tag` is the PathType the DOM gives the number.
+    bool read_number_arg(std::uint32_t key_id, OnDemandValue& v, Ids& ids,
+                         std::uint8_t& tag) {
+        using dftracer::utils::index::store::PathType;
         // A failed get_uint64 leaves the value unread for the general path.
         std::uint64_t plain;
         if (!v.get_uint64().get(plain)) {
+            tag = static_cast<std::uint8_t>(PathType::Int);
             if (plain <= static_cast<std::uint64_t>(
-                             std::numeric_limits<std::int64_t>::max()))
+                             std::numeric_limits<std::int64_t>::max())) {
                 out_->args.emplace_back(key_id,
                                         static_cast<std::int64_t>(plain));
-            else
+            } else {
+                tag = static_cast<std::uint8_t>(PathType::Uint);
                 append_uint_arg(out_->args, key_id, plain);
+            }
             return true;
         }
         simdjson::ondemand::number n;
@@ -1509,6 +1886,7 @@ class OnDemandReader {
         if (code == simdjson::BIGINT_ERROR ||
             (code == simdjson::NUMBER_ERROR && refused_big_integer(v))) {
             // Wider than 64 bits: kept exact as its digits.
+            tag = static_cast<std::uint8_t>(PathType::NullValue);
             out_->args.emplace_back(
                 key_id, ids.get_or_insert(json::detail::value_extent(
                             v.raw_json_token().data(), end_)));
@@ -1517,41 +1895,51 @@ class OnDemandReader {
         if (code == simdjson::NUMBER_ERROR) {
             const auto refused = refused_real(v);
             if (!refused) return false;
+            tag = static_cast<std::uint8_t>(PathType::Double);
             out_->args.emplace_back(key_id, *refused);
             return true;
         }
         if (code) return false;
-        if (n.is_double())
+        if (n.is_double()) {
+            tag = static_cast<std::uint8_t>(PathType::Double);
             out_->args.emplace_back(key_id, n.get_double());
-        else if (n.is_int64())
+        } else if (n.is_int64()) {
+            tag = static_cast<std::uint8_t>(PathType::Int);
             out_->args.emplace_back(key_id, n.get_int64());
-        else
+        } else {
+            tag = static_cast<std::uint8_t>(PathType::Uint);
             append_uint_arg(out_->args, key_id, n.get_uint64());
+        }
         return true;
     }
 
     // Appends the scalar `v` under `key_id` as append_scalar_arg does; false
-    // on a read error or a text that is no JSON value.
+    // on a read error or a text that is no JSON value. `tag` is the PathType
+    // of the leaf.
     bool read_scalar(std::uint32_t key_id, OnDemandValue& v, OnDemandType type,
-                     Ids& ids) {
+                     Ids& ids, std::uint8_t& tag) {
+        using dftracer::utils::index::store::PathType;
         switch (type) {
             case OnDemandType::string: {
                 dstd::StringView text;
                 if (!read_text(v, text)) return false;
+                tag = static_cast<std::uint8_t>(PathType::String);
                 out_->args.emplace_back(key_id, ids.get_or_insert(text));
                 return true;
             }
             case OnDemandType::number:
-                return read_number_arg(key_id, v, ids);
+                return read_number_arg(key_id, v, ids, tag);
             case OnDemandType::boolean: {
                 bool b;
                 if (v.get_bool().get(b)) return false;
+                tag = static_cast<std::uint8_t>(PathType::Bool);
                 append_bool_arg(out_->args, out_->specials, key_id, b, false);
                 return true;
             }
             case OnDemandType::null: {
                 bool is_null;
                 if (v.is_null().get(is_null) || !is_null) return false;
+                tag = static_cast<std::uint8_t>(PathType::NullValue);
                 out_->specials.push_back(
                     {key_id, FoldEvent::Special::NullValue, false});
                 return true;
@@ -1573,28 +1961,71 @@ class OnDemandReader {
     dstd::StringArena& arena_;
     dstd::String path_;
     std::size_t depth_ = 0;
+    bool schema_;
+    // The leaves of a non-empty args object go straight into schema_leaves.
+    bool walk_;
+    bool args_walked_ = false;
+    std::size_t args_deferred_at_ = 0;
+    DecodeHints* hints_;
+    DecodeHints* scratch_;
+    InternedHead head_;
+    dstd::String enum_path_;
 };
 
 }  // namespace
 
-void extract_fold_event_into(
-    FoldEvent& ev, json::Value& event,
-    dftracer::utils::dstd::StringIntern& intern, bool needs_args,
-    dftracer::utils::dstd::InternCache* cache,
-    const dstd::Vector<dstd::String>* nested_captures) {
+namespace {
+
+enum class DftracerRead : std::uint8_t { Event, NotEvent, Broken };
+
+DftracerRead read_dftracer(FoldEvent& ev, json::Value& event,
+                           dftracer::utils::dstd::StringIntern& intern,
+                           bool needs_args,
+                           dftracer::utils::dstd::InternCache* cache,
+                           const dstd::Vector<dstd::String>* captures,
+                           bool capture_schema, DecodeHints* hints) {
     reset_fold_event(ev);
     json::detail::ObjectWalk walk;
-    if (!json::detail::ValueAccess::begin_object(event, walk)) return;
+    if (!json::detail::ValueAccess::begin_object(event, walk))
+        return DftracerRead::NotEvent;
+    trace::internal::parse_walks::record_walk();
     OnDemandReader reader(ev, intern, cache, needs_args, walk.end,
-                          *walk.strings);
+                          *walk.strings, capture_schema, hints);
     bool ok = reader.run(walk.object);
-    if (ok && reader.has_event() && nested_captures &&
-        !nested_captures->empty())
-        ok = reader.capture_all(event, *nested_captures);
+    if (ok && reader.has_event() && captures && !captures->empty())
+        ok = reader.capture_all(event, *captures);
     if (!ok || !json::detail::ValueAccess::end_object(event)) {
         json::detail::ValueAccess::mark_broken(event);
         reset_fold_event(ev);
+        return DftracerRead::Broken;
     }
+    return reader.has_event() ? DftracerRead::Event : DftracerRead::NotEvent;
+}
+
+}  // namespace
+
+void extract_fold_event_into(FoldEvent& ev, json::Value& event,
+                             dftracer::utils::dstd::StringIntern& intern,
+                             bool needs_args,
+                             dftracer::utils::dstd::InternCache* cache,
+                             const dstd::Vector<dstd::String>* nested_captures,
+                             bool capture_schema, DecodeHints* hints) {
+    read_dftracer(ev, event, intern, needs_args, cache, nested_captures,
+                  capture_schema, hints);
+}
+
+bool append_dftracer_record(FoldEventBuffer& batch, json::Value& record,
+                            dftracer::utils::dstd::StringIntern& intern,
+                            bool needs_args, bool capture_schema,
+                            DecodeHints& hints,
+                            dftracer::utils::dstd::InternCache* cache,
+                            const dstd::Vector<dstd::String>* extra_fields) {
+    FoldEvent& ev = batch.append();
+    if (read_dftracer(ev, record, intern, needs_args, cache, extra_fields,
+                      capture_schema, &hints) == DftracerRead::Event)
+        return true;
+    batch.discard_last();
+    return false;
 }
 
 namespace {
@@ -2348,54 +2779,6 @@ bool read_text(simdjson::dom::element v, dstd::StringView& out) {
 
 }  // namespace
 
-namespace {
-
-// The most positions of an args object or a record whose keys are remembered.
-constexpr std::size_t MAX_KEY_POSITIONS = 64;
-
-// Two overlapping loads cover a key of up to 16 bytes without a library call.
-bool same_bytes(const char* a, const char* b, std::size_t n) {
-    if (n >= 8) {
-        if (n > 16) return std::memcmp(a, b, n) == 0;
-        std::uint64_t a0, a1, b0, b1;
-        std::memcpy(&a0, a, 8);
-        std::memcpy(&b0, b, 8);
-        std::memcpy(&a1, a + n - 8, 8);
-        std::memcpy(&b1, b + n - 8, 8);
-        return ((a0 ^ b0) | (a1 ^ b1)) == 0;
-    }
-    if (n >= 4) {
-        std::uint32_t a0, a1, b0, b1;
-        std::memcpy(&a0, a, 4);
-        std::memcpy(&b0, b, 4);
-        std::memcpy(&a1, a + n - 4, 4);
-        std::memcpy(&b1, b + n - 4, 4);
-        return ((a0 ^ b0) | (a1 ^ b1)) == 0;
-    }
-    for (std::size_t i = 0; i < n; ++i)
-        if (a[i] != b[i]) return false;
-    return true;
-}
-
-// The id the previous record had for the same key at `pos`, else
-// `resolve(key)`, which is remembered.
-template <class Resolve>
-std::uint32_t key_at(dftracer::utils::dstd::Vector<DecodeHints::KeyAt>& slots,
-                     std::size_t pos, dstd::StringView key, Resolve&& resolve) {
-    if (pos >= MAX_KEY_POSITIONS) return resolve(key);
-    if (pos >= slots.size()) slots.resize(pos + 1);
-    DecodeHints::KeyAt& slot = slots[pos];
-    if (slot.id != dftracer::utils::dstd::StringIntern::NO_ID &&
-        slot.key.size() == key.size() &&
-        same_bytes(slot.key.data(), key.data(), key.size()))
-        return slot.id;
-    slot.id = resolve(key);
-    slot.key.assign(key.data(), key.size());
-    return slot.id;
-}
-
-}  // namespace
-
 bool counts_as_event(simdjson::dom::element root) {
     simdjson::dom::object top;
     if (root.get_object().get(top) != simdjson::SUCCESS) return false;
@@ -2406,6 +2789,39 @@ bool counts_as_event(simdjson::dom::element root) {
             phase = trace::read_phase(field.value);
             has_ph = true;
         }
+    }
+    return has_ph && phase != RecordPhase::Metadata;
+}
+
+bool counts_as_event(json::Value& record) {
+    json::detail::ObjectWalk walk;
+    if (!json::detail::ValueAccess::begin_object(record, walk)) return false;
+    RecordPhase phase = RecordPhase::Unknown;
+    bool has_ph = false;
+    bool ok = true;
+    for (auto member : walk.object) {
+        simdjson::ondemand::field field;
+        if (std::move(member).get(field)) {
+            ok = false;
+            break;
+        }
+        const auto key = json::detail::read_key(field, *walk.strings);
+        if (!key) {
+            ok = false;
+            break;
+        }
+        if (key->size() == 2 && key_is(*key, "ph")) {
+            OnDemandValue v = field.value();
+            if (!read_phase_value(v, *walk.strings, phase)) {
+                ok = false;
+                break;
+            }
+            has_ph = true;
+        }
+    }
+    if (!ok || !json::detail::ValueAccess::end_object(record)) {
+        json::detail::ValueAccess::mark_broken(record);
+        return false;
     }
     return has_ph && phase != RecordPhase::Metadata;
 }

@@ -408,6 +408,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix the row order of a `collect_all` or `TraceSession` plan that promises scan order (a duql pipeline with a stage after the scan, such as `select ... | where ...` or `derive`): it came back in worker order, and now reads on its own in scan order.
+  Streaming row plans of one session no longer wait for a plan that cannot stream: they share one scan with a bounded buffer, where one such plan used to make every plan hold all of its events until the scan ended (3.3 GB and 1.5x the time for five row plans over 1.44M events, now 0.6 GB and 0.6x).
+  A leading `select` of a plan that is not absorbed by the source streams too.
+  Fix a hang when one plan of a streamed `collect_all` or session stopped early (`head(1)`) while a small memory budget held the others: the senders still waiting on its budget never woke.
+  The cost: each ordered row plan in a batch now reads on its own, and a join or concat child reads apart from the streamed roots, so those cost one more scan than before.
 - Fix `find_package` for the installed shared and static libraries: a project that links one now finds Threads, simdjson, nanoarrow, pcre2, highway, utf8proc, vectorscan, zlib-ng, zstd and libdeflate from the same prefix with no extra flags.
   The private static archives install as `libdftracer_hs.a`, `libdftracer_hwy.a`, `libdftracer_hwy_contrib.a` and `libdftracer_utf8proc_static.a`, and the `zlib` package is now `dftracer_utils_zlib`.
 - Read a line of any size: a line longer than the read buffer no longer fails the read of its file.

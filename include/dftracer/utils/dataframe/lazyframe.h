@@ -326,6 +326,12 @@ class Source {
         return dstd::nullopt;
     }
 
+    /// Whether open_batch() can feed this member. A member that cannot (it
+    /// needs its rows in scan order, say) is read through collect_batch()
+    /// with the others like it, so it does not hold the streaming members
+    /// back. The default is true.
+    virtual bool streams_in_batch() const { return true; }
+
     /// Convenience: the schema's column names. Non-virtual; a caller that only
     /// needs names reads this instead of building a full scan.
     dstd::Vector<dstd::String> names() const {

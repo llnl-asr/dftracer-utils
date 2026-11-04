@@ -13,6 +13,7 @@
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_source.h>
+#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -1659,5 +1660,230 @@ TEST_SUITE("View - malformed lines") {
                     R"("ts":2,"dur":10,"args":{},"zz":tru})");
             }
         CHECK(bad == 1);
+    }
+}
+
+namespace {
+
+constexpr int BATCH_FILES = 3;
+constexpr int BATCH_MEMBERS = 6;
+constexpr int BATCH_PER_MEMBER = 400;
+
+// BATCH_FILES gzip files of BATCH_MEMBERS members each, so a scan has many
+// units to hand out of order.
+View batch_viewer(const dstd::String& dir,
+                  dstd::SharedPtr<ScanCounter> counter) {
+    dstd::Vector<ViewFile> files;
+    const char* names[] = {"read", "write", "open", "close"};
+    for (int f = 0; f < BATCH_FILES; ++f) {
+        dstd::Vector<std::uint8_t> bytes;
+        for (int m = 0; m < BATCH_MEMBERS; ++m) {
+            dstd::String text;
+            if (f == 0 && m == 0)
+                text +=
+                    R"({"ph":"M","name":"process_name","pid":1,"tid":0,"args":{"name":"app"}})"
+                    "\n";
+            for (int i = 0; i < BATCH_PER_MEMBER; ++i) {
+                const int n = (f * BATCH_MEMBERS + m) * BATCH_PER_MEMBER + i;
+                text += dstd::String("{\"ph\":\"X\",\"name\":\"") +
+                        names[n % 4] + "\",\"cat\":\"" +
+                        (n % 4 < 2 ? "POSIX" : "STDIO") +
+                        "\",\"pid\":" + dstd::to_string(1 + n % 5) +
+                        ",\"tid\":1,\"ts\":" + dstd::to_string(1000 + n * 7) +
+                        ",\"dur\":" + dstd::to_string(1 + (n * 37) % 500) +
+                        ",\"args\":{\"size\":" + dstd::to_string(n) + "}}\n";
+            }
+            utilities::fileio::compress::GzipMemberCompressor c;
+            dstd::Vector<std::uint8_t> buf(c.bound(text.size()));
+            auto len =
+                c.compress(text.data(), text.size(), buf.data(), buf.size());
+            REQUIRE(len.has_value());
+            bytes.insert(bytes.end(), buf.begin(), buf.begin() + *len);
+        }
+        ViewFile vf;
+        vf.file_path = dir + "/b" + dstd::to_string(f) + ".pfw.gz";
+        vf.index_path = dir + "/b" + dstd::to_string(f) + ".idx";
+        {
+            dftu_utils_test::FileOut out(vf.file_path);
+            out.write(reinterpret_cast<const char*>(bytes.data()),
+                      static_cast<std::streamsize>(bytes.size()));
+        }
+        files.push_back(std::move(vf));
+    }
+    return View::from_files(std::move(files)).count_scans(std::move(counter));
+}
+
+dstd::Vector<dstd::String> sorted_rows(const dataframe::DataFrame& f) {
+    dstd::Vector<dstd::String> rows;
+    for (std::int64_t r = 0; r < f.num_rows(); ++r) {
+        dstd::String row;
+        for (std::size_t c = 0; c < f.columns.size(); ++c)
+            row += f.names[c] + "=" +
+                   dstd::String(dataframe::cell_to_string(f.columns[c], r)) +
+                   ";";
+        rows.push_back(std::move(row));
+    }
+    std::sort(rows.begin(), rows.end());
+    return rows;
+}
+
+}  // namespace
+
+constexpr std::uint64_t TINY_BUDGET = 4096;
+
+TEST_SUITE("View - batched row plans") {
+    TEST_CASE("plans that promise scan order read on their own") {
+        TestEnvironment env(10);
+        auto counter = dstd::make_shared<ScanCounter>();
+        View t = batch_viewer(env.get_dir(), counter);
+        const dataframe::LazyFrame ordered =
+            t.duql("select name, dur, ts | where dur > 100").lazy();
+        CHECK_FALSE(absorbed_source(ordered)->batch_key());
+        CHECK(absorbed_source(t.lazy())->batch_key());
+    }
+
+    TEST_CASE("a mixed group streams its streamable plans in one scan") {
+        TestEnvironment env(10);
+        auto counter = dstd::make_shared<ScanCounter>();
+        View t = batch_viewer(env.get_dir(), counter);
+        const dstd::Vector<dataframe::LazyFrame> plans = {
+            t.lazy(),
+            t.duql(R"(cat == "POSIX")").lazy(),
+            t.duql("dur > 400").select({"ts", "dur", "name"}),
+            t.duql("select name, dur, ts | where dur > 100").lazy(),
+            t.duql("derive ms = dur / 1000 | where ms < 0.2").lazy(),
+        };
+        dstd::Vector<dataframe::DataFrame> alone;
+        dstd::Vector<std::uint64_t> scanned_alone;
+        for (const auto& p : plans) {
+            counter->events_scanned = 0;
+            alone.push_back(test_view_common::run(p.collect()));
+            scanned_alone.push_back(counter->events_scanned.load());
+        }
+        counter->events_scanned = 0;
+        dstd::Vector<dataframe::DataFrame> together = test_view_common::run(
+            dftracer::utils::dataframe::collect_all(plans));
+        REQUIRE(together.size() == plans.size());
+        // The three streamable plans share one scan; each ordered plan reads
+        // the traces on its own.
+        CHECK(counter->events_scanned.load() ==
+              scanned_alone[0] + scanned_alone[3] + scanned_alone[4]);
+        for (std::size_t i = 0; i < 3; ++i) {
+            CHECK(together[i].num_rows() == alone[i].num_rows());
+            CHECK(sorted_rows(together[i]) == sorted_rows(alone[i]));
+        }
+        // The ordered plans return their rows in scan order, as alone.
+        for (std::size_t i = 3; i < plans.size(); ++i)
+            check_same_rows(together[i], alone[i]);
+    }
+
+    TEST_CASE("a session returns the same rows as collecting each plan") {
+        TestEnvironment env(10);
+        auto counter = dstd::make_shared<ScanCounter>();
+        View t = batch_viewer(env.get_dir(), counter);
+        const dstd::Vector<dataframe::LazyFrame> plans = {
+            t.lazy(),
+            t.duql("dur < 100").select({"ts", "dur", "name", "pid"}),
+            t.duql("select name, dur, ts | where dur > 100").lazy(),
+        };
+        TraceSession s = t.session();
+        dstd::Vector<Deferred<dataframe::DataFrame>> handles;
+        for (const auto& p : plans) handles.push_back(s.collect(p));
+        test_view_common::run(s.execute());
+        for (std::size_t i = 0; i < plans.size(); ++i) {
+            const dataframe::DataFrame want =
+                test_view_common::run(plans[i].collect());
+            if (i == 2)
+                check_same_rows(handles[i].get(), want);
+            else
+                CHECK(sorted_rows(handles[i].get()) == sorted_rows(want));
+        }
+    }
+
+    TEST_CASE("plans whose rows cannot stream read buffered and free it") {
+        TestEnvironment env(10);
+        auto counter = dstd::make_shared<ScanCounter>();
+        View t = batch_viewer(env.get_dir(), counter);
+        const dstd::Vector<dataframe::LazyFrame> plans = {
+            t.phase(Phase::Metadata).lazy(),
+            t.phase(Phase::Metadata).duql(R"(name == "process_name")").lazy(),
+            t.phase(Phase::Metadata).duql(R"(name == "absent")").lazy(),
+        };
+        for (const auto& p : plans)
+            CHECK_FALSE(absorbed_source(p)->streams_in_batch());
+        dstd::Vector<dataframe::DataFrame> together = test_view_common::run(
+            dftracer::utils::dataframe::collect_all(plans));
+        CHECK(together[0].num_rows() == 1);
+        for (std::size_t i = 0; i < plans.size(); ++i)
+            CHECK(sorted_rows(together[i]) ==
+                  sorted_rows(test_view_common::run(plans[i].collect())));
+    }
+
+    TEST_CASE("a member that stops early does not stall the streamed group") {
+        TestEnvironment env(10);
+        auto counter = dstd::make_shared<ScanCounter>();
+        // A budget far below the rows of one plan: a read that waited on a
+        // cursor nobody drains would stall.
+        View t = batch_viewer(env.get_dir(), counter);
+        const dstd::Vector<dataframe::LazyFrame> plans = {
+            t.lazy().head(1).memory_budget(TINY_BUDGET),
+            t.lazy().memory_budget(TINY_BUDGET),
+            t.duql(R"(cat == "POSIX")")
+                .lazy()
+                .head(0)
+                .memory_budget(TINY_BUDGET),
+            t.duql("dur > 400").lazy().memory_budget(TINY_BUDGET),
+        };
+        dstd::Vector<dataframe::DataFrame> together = test_view_common::run(
+            dftracer::utils::dataframe::collect_all(plans));
+        CHECK(together[0].num_rows() == 1);
+        CHECK(together[2].num_rows() == 0);
+        CHECK(sorted_rows(together[1]) ==
+              sorted_rows(test_view_common::run(plans[1].collect())));
+        CHECK(sorted_rows(together[3]) ==
+              sorted_rows(test_view_common::run(plans[3].collect())));
+    }
+
+    TEST_CASE("a session member that stops early does not stall the others") {
+        TestEnvironment env(10);
+        auto counter = dstd::make_shared<ScanCounter>();
+        View t = batch_viewer(env.get_dir(), counter);
+        const dstd::Vector<dataframe::LazyFrame> plans = {
+            t.lazy().head(1).memory_budget(TINY_BUDGET),
+            t.lazy().memory_budget(TINY_BUDGET),
+            t.duql(R"(cat == "POSIX")")
+                .lazy()
+                .head(0)
+                .memory_budget(TINY_BUDGET),
+            t.duql("dur > 400").lazy().memory_budget(TINY_BUDGET),
+        };
+        TraceSession s = t.session();
+        dstd::Vector<Deferred<dataframe::DataFrame>> handles;
+        for (const auto& p : plans) handles.push_back(s.collect(p));
+        test_view_common::run(s.execute());
+        CHECK(handles[0].get().num_rows() == 1);
+        CHECK(handles[2].get().num_rows() == 0);
+        CHECK(sorted_rows(handles[1].get()) ==
+              sorted_rows(test_view_common::run(plans[1].collect())));
+        CHECK(sorted_rows(handles[3].get()) ==
+              sorted_rows(test_view_common::run(plans[3].collect())));
+    }
+
+    TEST_CASE("a plan with a combine batches beside streaming plans") {
+        TestEnvironment env(10);
+        auto counter = dstd::make_shared<ScanCounter>();
+        View t = batch_viewer(env.get_dir(), counter);
+        const dstd::Vector<dataframe::LazyFrame> plans = {
+            t.lazy(),
+            t.duql(R"(cat == "STDIO")").lazy(),
+            t.duql(R"(cat == "POSIX")")
+                .lazy()
+                .concat(t.duql("dur > 450").lazy()),
+        };
+        dstd::Vector<dataframe::DataFrame> together = test_view_common::run(
+            dftracer::utils::dataframe::collect_all(plans));
+        for (std::size_t i = 0; i < plans.size(); ++i)
+            CHECK(sorted_rows(together[i]) ==
+                  sorted_rows(test_view_common::run(plans[i].collect())));
     }
 }

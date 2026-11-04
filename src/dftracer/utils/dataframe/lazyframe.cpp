@@ -5600,15 +5600,30 @@ class OpenedSource final : public Source {
     bool undeclared_columns() const override { return undeclared_; }
 
     ScanResult scan(const ScanRequest& req) const override {
-        if (!req.projection.empty() && req.projection != names())
-            throw std::logic_error(
-                "a batch-opened source cannot take a projection");
+        const dstd::Vector<dstd::String> all = names();
+        dstd::Vector<int> pick;
+        if (!req.projection.empty() && req.projection != all) {
+            for (const dstd::String& n : req.projection) {
+                const auto it = std::find(all.begin(), all.end(), n);
+                if (it == all.end())
+                    throw std::logic_error(
+                        "a batch-opened source cannot project a column it "
+                        "does not declare");
+                pick.push_back(static_cast<int>(it - all.begin()));
+            }
+        }
         std::lock_guard<std::mutex> lock(mu_);
         if (!cursor_)
             throw std::logic_error("a batch-opened source was scanned twice");
         ScanResult r;
         r.filters.assign(req.filters.size(), Pushed::No);
         r.cursor = std::move(cursor_);
+        if (!pick.empty()) {
+            r.cursor = dstd::make_unique<AlignCursor>(std::move(r.cursor),
+                                                      schema_.fields, false);
+            r.cursor = dstd::make_unique<SelectCursor>(std::move(r.cursor),
+                                                       std::move(pick));
+        }
         return r;
     }
 
@@ -5707,11 +5722,11 @@ PlanParts finish_tree(PlannedTree t) {
 }
 
 // Leaves whose sources share a batch key (within one source type) read their
-// data once. A group of top-level plans (`roots`) whose ops start with no
-// projection streams through Source::open_batch() when the source supports it,
-// so the caller must then drain those roots concurrently; any other group
-// reads through Source::collect_batch(), each leaf then scanning its result
-// from memory. Either way a leaf keeps its remaining ops above its source.
+// data once. The top-level plans (`roots`) of a group that can stream stream
+// through Source::open_batch() when the source supports it, so the caller must
+// then drain those roots concurrently; the rest of the group reads through
+// Source::collect_batch(), each leaf then scanning its result from memory.
+// Either way a leaf keeps its remaining ops above its source.
 coro::CoroTask<void> batch_leaves(
     dstd::Vector<PlannedTree*> leaves,
     const dstd::Vector<PlannedTree*>& roots = {}) {
@@ -5734,49 +5749,85 @@ coro::CoroTask<void> batch_leaves(
         else
             it->members.push_back(leaf);
     }
+    // A member streams when it is a root and its leading projection, if any,
+    // names only declared columns: the opened source projects them itself.
     auto streamable = [&](const PlannedTree* m) {
-        return std::find(roots.begin(), roots.end(), m) != roots.end() &&
-               (m->parts.ops.empty() ||
-                !std::holds_alternative<SelectOp>(m->parts.ops.front()->node));
+        if (std::find(roots.begin(), roots.end(), m) == roots.end())
+            return false;
+        if (m->parts.ops.empty()) return true;
+        const auto* s = std::get_if<SelectOp>(&m->parts.ops.front()->node);
+        if (!s) return true;
+        const dstd::Vector<dstd::String> all = m->parts.source->names();
+        return std::all_of(
+            s->names.begin(), s->names.end(), [&](const dstd::String& n) {
+                return std::find(all.begin(), all.end(), n) != all.end();
+            });
     };
-    for (Group& g : groups) {
-        if (g.members.size() < 2) continue;
-        dstd::Vector<dstd::SharedPtr<const Source>> sources;
-        sources.reserve(g.members.size());
-        for (PlannedTree* m : g.members) sources.push_back(m->parts.source);
-        if (std::all_of(g.members.begin(), g.members.end(), streamable)) {
-            const std::uint64_t budget =
-                memory::resolve_spill_budget(g.members.front()->memory_budget);
-            if (auto cursors = sources.front()->open_batch(sources, budget)) {
-                if (cursors->size() != g.members.size())
-                    throw std::logic_error(
-                        ("Source::open_batch returned " +
-                         dstd::to_string(cursors->size()) + " cursors for " +
-                         dstd::to_string(g.members.size()) + " members")
-                            .c_str());
-                for (std::size_t k = 0; k < g.members.size(); ++k)
-                    g.members[k]->parts.source =
-                        dstd::make_shared<OpenedSource>(
-                            sources[k]->schema(), std::move((*cursors)[k]),
-                            sources[k]->undeclared_columns());
-                continue;
-            }
-        }
+    auto sources_of = [](const dstd::Vector<PlannedTree*>& members) {
+        dstd::Vector<dstd::SharedPtr<const Source>> out;
+        out.reserve(members.size());
+        for (PlannedTree* m : members) out.push_back(m->parts.source);
+        return out;
+    };
+    auto collect_buffered =
+        [&sources_of](
+            dstd::Vector<PlannedTree*> members) -> coro::CoroTask<void> {
+        auto sources = sources_of(members);
         dstd::Vector<DataFrame> frames =
             co_await sources.front()->collect_batch(sources);
-        if (frames.size() != g.members.size())
+        if (frames.size() != members.size())
             throw std::logic_error(
                 ("Source::collect_batch returned " +
                  dstd::to_string(frames.size()) + " frames for " +
-                 dstd::to_string(g.members.size()) + " members")
+                 dstd::to_string(members.size()) + " members")
                     .c_str());
-        for (std::size_t k = 0; k < g.members.size(); ++k)
-            g.members[k]->parts.source =
+        for (std::size_t k = 0; k < members.size(); ++k)
+            members[k]->parts.source =
                 sources[k]->undeclared_columns()
                     ? dstd::SharedPtr<const Source>(
                           dstd::make_shared<CollectedSource>(
                               sources[k]->schema(), std::move(frames[k])))
                     : dstd::make_shared<InMemorySource>(std::move(frames[k]));
+    };
+    // Members that stream share one opened read; the rest of their group
+    // share a buffered one. Fewer than two that stream read the whole group
+    // buffered, as one read. Every buffered read runs before any opened read
+    // starts: an opened read waits on cursors that nobody drains until the
+    // caller starts draining, and a buffered read never waits on a cursor.
+    dstd::Vector<dstd::Vector<PlannedTree*>> to_open;
+    for (Group& g : groups) {
+        if (g.members.size() < 2) continue;
+        dstd::Vector<PlannedTree*> stream, buffered;
+        for (PlannedTree* m : g.members)
+            (streamable(m) && m->parts.source->streams_in_batch() ? stream
+                                                                  : buffered)
+                .push_back(m);
+        if (stream.size() < 2) {
+            buffered = g.members;
+            stream.clear();
+        }
+        if (buffered.size() >= 2)
+            co_await collect_buffered(std::move(buffered));
+        if (!stream.empty()) to_open.push_back(std::move(stream));
+    }
+    for (dstd::Vector<PlannedTree*>& members : to_open) {
+        auto sources = sources_of(members);
+        const std::uint64_t budget =
+            memory::resolve_spill_budget(members.front()->memory_budget);
+        if (auto cursors = sources.front()->open_batch(sources, budget)) {
+            if (cursors->size() != members.size())
+                throw std::logic_error(
+                    ("Source::open_batch returned " +
+                     dstd::to_string(cursors->size()) + " cursors for " +
+                     dstd::to_string(members.size()) + " members")
+                        .c_str());
+            for (std::size_t k = 0; k < members.size(); ++k)
+                members[k]->parts.source = dstd::make_shared<OpenedSource>(
+                    sources[k]->schema(), std::move((*cursors)[k]),
+                    sources[k]->undeclared_columns());
+            continue;
+        }
+        co_await collect_buffered(std::move(members));
     }
 }
 

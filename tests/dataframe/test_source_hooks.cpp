@@ -701,16 +701,19 @@ struct BatchLog {
     int scans = 0;
     int batches = 0;
     std::size_t last_members = 0;
+    std::size_t last_opened = 0;
 };
 
 // An in-memory source that reports a batch key, and counts how it is read.
 class KeyedSource final : public Source {
    public:
-    KeyedSource(DataFrame df, dstd::String key, dstd::SharedPtr<BatchLog> log)
+    KeyedSource(DataFrame df, dstd::String key, dstd::SharedPtr<BatchLog> log,
+                bool streams = true)
         : inner_(share(df)),
           frame_(std::move(df)),
           key_(std::move(key)),
-          log_(std::move(log)) {}
+          log_(std::move(log)),
+          streams_(streams) {}
 
     Schema schema() const override { return inner_.schema(); }
     ScanResult scan(const ScanRequest& req) const override {
@@ -718,11 +721,13 @@ class KeyedSource final : public Source {
         return inner_.scan(req);
     }
     dstd::Optional<dstd::String> batch_key() const override { return key_; }
+    bool streams_in_batch() const override { return streams_; }
     dstd::Optional<
         dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>
     open_batch(dstd::Vector<dstd::SharedPtr<const Source>> members,
                std::uint64_t) const override {
         ++log_->opened;
+        log_->last_opened = members.size();
         dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>> out;
         for (const auto& m : members)
             out.push_back(static_cast<const KeyedSource&>(*m)
@@ -745,11 +750,13 @@ class KeyedSource final : public Source {
     DataFrame frame_;
     dstd::String key_;
     dstd::SharedPtr<BatchLog> log_;
+    bool streams_;
 };
 
-LazyFrame keyed(const dstd::String& key, dstd::SharedPtr<BatchLog> log) {
-    return LazyFrame::scan(
-        dstd::make_shared<KeyedSource>(make_df(), key, std::move(log)));
+LazyFrame keyed(const dstd::String& key, dstd::SharedPtr<BatchLog> log,
+                bool streams = true) {
+    return LazyFrame::scan(dstd::make_shared<KeyedSource>(
+        make_df(), key, std::move(log), streams));
 }
 
 }  // namespace
@@ -806,12 +813,45 @@ TEST_SUITE("batched leaves") {
         CHECK(out[2].num_rows() == 6);
     }
 
-    TEST_CASE("a leading projection keeps a group on the buffered read") {
+    TEST_CASE("a leading projection streams with the group") {
+        auto log = dstd::make_shared<BatchLog>();
+        dstd::Vector<DataFrame> out =
+            run(dftracer::utils::dataframe::collect_all(
+                {keyed("k", log).select({"g", "a"}), keyed("k", log)}));
+        CHECK(log->opened == 1);
+        CHECK(log->batches == 0);
+        const DataFrame want =
+            run(make_df().lazy().select({"g", "a"}).collect());
+        CHECK(out[0].names == want.names);
+        CHECK(ints(out[0], "a") == ints(want, "a"));
+        CHECK(out[1].num_rows() == 6);
+    }
+
+    TEST_CASE("a member that cannot stream does not hold the others back") {
+        auto log = dstd::make_shared<BatchLog>();
+        dstd::Vector<DataFrame> out =
+            run(dftracer::utils::dataframe::collect_all(
+                {keyed("k", log).filter(col(0) > std::int64_t{3}),
+                 keyed("k", log, false).head(2), keyed("k", log),
+                 keyed("k", log, false)}));
+        // Two stream together; the two that cannot share one buffered read.
+        CHECK(log->opened == 1);
+        CHECK(log->last_opened == 2);
+        CHECK(log->batches == 1);
+        CHECK(log->last_members == 2);
+        CHECK(ints(out[0], "a") == dstd::Vector<std::int64_t>{4, 5, 6});
+        CHECK(out[1].num_rows() == 2);
+        CHECK(out[2].num_rows() == 6);
+        CHECK(out[3].num_rows() == 6);
+    }
+
+    TEST_CASE("a single member that can stream reads with the others") {
         auto log = dstd::make_shared<BatchLog>();
         run(dftracer::utils::dataframe::collect_all(
-            {keyed("k", log).select({"a"}), keyed("k", log)}));
+            {keyed("k", log), keyed("k", log, false)}));
         CHECK(log->opened == 0);
         CHECK(log->batches == 1);
+        CHECK(log->last_members == 2);
     }
 
     TEST_CASE("collect_all batches leaves across roots and their children") {
@@ -820,9 +860,12 @@ TEST_SUITE("batched leaves") {
             run(dftracer::utils::dataframe::collect_all(
                 {keyed("k", log).join(keyed("k", log), {"a"}),
                  keyed("k", log).head(2)}));
-        CHECK(log->batches == 1);
-        CHECK(log->last_members == 3);
-        CHECK(log->scans == 0);
+        // The two roots stream; the join's other side is no root, so it
+        // reads on its own.
+        CHECK(log->opened == 1);
+        CHECK(log->last_opened == 2);
+        CHECK(log->batches == 0);
+        CHECK(log->scans == 1);
         CHECK(out[0].num_rows() == 6);
         CHECK(out[1].num_rows() == 2);
     }

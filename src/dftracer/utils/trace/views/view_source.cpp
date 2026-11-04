@@ -860,6 +860,10 @@ dstd::Optional<dstd::String> ViewSource::batch_key() const {
         p.materialize || p.auto_numeric_metrics || !p.sort_col.empty() ||
         !p.topk_col.empty() || p.limit || p.offset)
         return dstd::nullopt;
+    // A shared scan hands rows out unordered, so a plan that promises scan
+    // order reads on its own.
+    if (p.ordered && output_ == TraceOutput::Events && detail::is_row_query(p))
+        return dstd::nullopt;
     // The session's export branch writes whole events.
     if (output_ == TraceOutput::ExportJson && !p.select.empty())
         return dstd::nullopt;
@@ -1109,12 +1113,7 @@ ViewSource::open_batch(
     views.reserve(members.size());
     for (const auto& m : members) {
         const auto* v = dynamic_cast<const ViewSource*>(m.get());
-        // A shared scan hands rows out unordered, so an ordered view scans
-        // on its own.
-        if (!v || v->plan_->ordered ||
-            (v->output_ == TraceOutput::Events &&
-             detail::is_row_query(*v->plan_) && !v->can_stream_rows()))
-            return dstd::nullopt;
+        if (!v || !v->streams_in_batch()) return dstd::nullopt;
         views.push_back(v);
     }
     // Streaming only pays for members whose rows it bounds; finished frames
@@ -1157,6 +1156,11 @@ ViewSource::open_batch(
             dstd::Vector<ViewFile>{}, 1.0, dstd::Vector<dstd::String>{}, false,
             nullptr));
     return cursors;
+}
+
+bool ViewSource::streams_in_batch() const {
+    return output_ != TraceOutput::Events || !detail::is_row_query(*plan_) ||
+           can_stream_rows();
 }
 
 coro::CoroTask<dstd::Vector<dataframe::DataFrame>> ViewSource::collect_batch(

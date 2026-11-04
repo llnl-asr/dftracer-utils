@@ -147,12 +147,16 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// Row members stream as branches of one ViewSession scan; an aggregation
     /// member arrives as one frame once the scan ends. dstd::nullopt when a
     /// member's rows cannot stream (a select that needs the name resolver).
+    /// Only members with streams_in_batch() are offered.
     dstd::Optional<
         dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>
     open_batch(
         dstd::Vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
             members,
         std::uint64_t memory_budget) const override;
+
+    /// False for a row query whose rows cannot stream as a branch.
+    bool streams_in_batch() const override;
 
     struct Batch {
         dstd::Vector<dftracer::utils::dataframe::DataFrame> frames;

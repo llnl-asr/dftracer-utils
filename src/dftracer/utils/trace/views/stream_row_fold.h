@@ -106,7 +106,10 @@ class StreamRowFold : public Fold {
 
     coro::CoroTask<void> send(dataframe::Morsel m, std::uint64_t bytes) {
         co_await budget_->acquire(bytes);
-        co_await channel_->send(std::move(m));
+        // A closed channel never gives the permits back through a receive;
+        // return them so the senders still waiting on this budget wake too.
+        const bool sent = co_await channel_->send(std::move(m));
+        if (!sent) budget_->release(bytes);
     }
 
     dstd::SharedPtr<coro::Channel<dataframe::Morsel>> channel_;

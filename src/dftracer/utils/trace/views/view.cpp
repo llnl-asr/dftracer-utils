@@ -215,10 +215,17 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
     // Per-worker owned events built straight into native columns (no Arrow);
     // each worker interns its own strings, so build_row_frame resolves them per
     // worker.
+    // finalize frees a slot's events as soon as its frame is built; the
+    // frame's strings keep the intern chunks they view.
     struct Slot {
-        dftracer::utils::dstd::StringIntern intern;
-        dftracer::utils::dstd::InternCache cache{intern};
-        detail::FoldEventBuffer events;
+        Slot()
+            : intern(dstd::make_unique<dftracer::utils::dstd::StringIntern>()),
+              cache(dstd::make_unique<dftracer::utils::dstd::InternCache>(
+                  *intern)),
+              events(dstd::make_unique<detail::FoldEventBuffer>()) {}
+        dstd::UniquePtr<dftracer::utils::dstd::StringIntern> intern;
+        dstd::UniquePtr<dftracer::utils::dstd::InternCache> cache;
+        dstd::UniquePtr<detail::FoldEventBuffer> events;
     };
     auto slots = dstd::make_shared<dstd::Vector<dstd::SharedPtr<Slot>>>();
     auto select = dstd::make_shared<dstd::Vector<dstd::String>>(bp.select);
@@ -235,28 +242,32 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
         slots->push_back(slot);
         return [slot, by_path, keep_metadata, record_schema](json::Value& jv,
                                                              dstd::StringView) {
-            detail::FoldEvent& fe = slot->events.append();
+            detail::FoldEvent& fe = slot->events->append();
             if (by_path)
-                detail::decode_record_into(fe, jv, slot->intern,
+                detail::decode_record_into(fe, jv, *slot->intern,
                                            /*capture_schema=*/false, nullptr,
                                            record_schema, nullptr, 0, nullptr,
-                                           false, &slot->cache);
+                                           false, slot->cache.get());
             else
-                detail::extract_fold_event_into(fe, jv, slot->intern,
+                detail::extract_fold_event_into(fe, jv, *slot->intern,
                                                 /*needs_args=*/true,
-                                                &slot->cache);
+                                                slot->cache.get());
             if (fe.phase == RecordPhase::Unknown ||
                 (!keep_metadata && fe.phase == RecordPhase::Metadata))
-                slot->events.discard_last();
+                slot->events->discard_last();
         };
     };
     auto finalize = [slots, select, out, time_scale, by_path]() {
         dstd::Vector<dataframe::DataFrame> frames;
         frames.reserve(slots->size());
         for (const auto& s : *slots) {
-            if (s->events.empty()) continue;
-            frames.push_back(detail::build_row_frame(
-                s->events.events(), s->intern, *select, time_scale, by_path));
+            if (!s->events->empty())
+                frames.push_back(detail::build_row_frame(s->events->events(),
+                                                         *s->intern, *select,
+                                                         time_scale, by_path));
+            s->cache.reset();
+            s->events.reset();
+            s->intern.reset();
         }
         if (frames.empty()) return;  // out stays an empty frame
         dstd::Vector<const dataframe::DataFrame*> parts;

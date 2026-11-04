@@ -1188,8 +1188,10 @@ void check_windows(const WindowFixture& f, dstd::Vector<std::size_t> cuts) {
             json.push_back(std::move(l));
         arrow += count_arrow_rows(reader.read_arrow(rc)).get();
     }
-    CHECK(raw == f.lines);
-    CHECK(json == f.lines);
+    const bool raw_same = raw == f.lines;
+    const bool json_same = json == f.lines;
+    CHECK(raw_same);
+    CHECK(json_same);
     CHECK(arrow == f.lines.size());
 }
 
@@ -2020,6 +2022,84 @@ TEST_SUITE("TraceReader valid but odd values") {
                 CHECK(count_arrow_rows(reader.read_arrow(rc)).get() ==
                       bad_kept);
             }
+        }
+    }
+}
+
+namespace {
+
+constexpr std::size_t LONG_LINE_BYTES = 9 * 1024 * 1024;
+
+WindowFixture long_line_fixture(bool indexed) {
+    WindowFixture f;
+    dstd::String content;
+    static const char HEX[] = "0123456789abcdef";
+    std::mt19937_64 rng(11);
+    const std::size_t sizes[] = {40, 400, LONG_LINE_BYTES, 40, 4000};
+    for (const std::size_t size : sizes) {
+        dstd::String line = common::str_cat(R"({"name":"read","ph":"X","id":)",
+                                            f.lines.size(), R"(,"pad":")");
+        for (std::size_t i = 0; i < size; ++i) line.push_back(HEX[rng() & 15]);
+        line += R"("})";
+        f.starts.push_back(content.size());
+        content += line;
+        content += "\n";
+        f.lines.push_back(std::move(line));
+    }
+    f.total = content.size();
+    const dstd::Path dir = make_unique_test_path("long_line");
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    const dstd::String pfw((dir / "trace.pfw").str());
+    REQUIRE(dstd::fs::write_file(dstd::PathView(pfw), content).has_value());
+    f.gz = gzip_fixture(pfw);
+    if (indexed) REQUIRE(dftu_utils_test::build_index(f.gz, "", 1024 * 1024));
+    return f;
+}
+
+static CoroTask<dstd::String> collect_raw_text(
+    AsyncGenerator<dstd::Span<const char>> gen) {
+    dstd::String out;
+    while (auto chunk = co_await gen.next())
+        out.append(chunk->data(), chunk->size());
+    co_return out;
+}
+
+}  // namespace
+
+TEST_SUITE("TraceReader long lines") {
+    TEST_CASE("a line longer than the read buffer is kept whole") {
+        for (const bool indexed : {false, true}) {
+            INFO("indexed=" << indexed);
+            const WindowFixture f = long_line_fixture(indexed);
+            dstd::String expected;
+            for (const auto& l : f.lines) expected += indexed ? l + "\n" : l;
+            TraceReader reader({.file_path = f.gz});
+            REQUIRE(reader.has_index() == indexed);
+            const bool lines_same =
+                collect_lines(reader.read_lines(ReadConfig{})).get() == f.lines;
+            CHECK(lines_same);
+            const bool json_same =
+                collect_json_text(reader.read_json(ReadConfig{})).get() ==
+                f.lines;
+            CHECK(json_same);
+            CHECK(count_arrow_rows(reader.read_arrow(ReadConfig{})).get() ==
+                  f.lines.size());
+            const bool raw_same =
+                collect_raw_text(reader.read_raw(ReadConfig{})).get() ==
+                expected;
+            CHECK(raw_same);
+            CHECK(reader.dropped_line_count() == 0);
+        }
+    }
+
+    TEST_CASE("byte windows cut inside a long line give each line once") {
+        const WindowFixture f = long_line_fixture(true);
+        const std::size_t long_start = f.starts[2];
+        for (const std::size_t at :
+             {std::size_t{0}, std::size_t{1}, std::size_t{4 * 1024 * 1024},
+              std::size_t{LONG_LINE_BYTES / 2}, f.lines[2].size()}) {
+            CAPTURE(at);
+            check_windows(f, {long_start + at});
         }
     }
 }

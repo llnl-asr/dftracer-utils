@@ -160,38 +160,39 @@ class GzipLineByteStream : public GzipStream {
             if (extend_to_line_boundary_ && !partial_line_buffer_.empty() &&
                 current_position_ < max_file_bytes_) {
                 std::size_t partial_size = partial_line_buffer_.size();
-                if (partial_size <= buffer_.size()) {
-                    std::memcpy(buffer_.data(), partial_line_buffer_.data(),
-                                partial_size);
-                    std::size_t avail = buffer_.size() - partial_size;
+                grow_buffer_past(partial_size);
+                std::memcpy(buffer_.data(), partial_line_buffer_.data(),
+                            partial_size);
+                std::size_t total = partial_size;
+                std::size_t emit = 0;
+                while (emit == 0 && current_position_ < max_file_bytes_) {
+                    if (total == buffer_.size()) grow_buffer_past(total);
                     std::size_t cap = static_cast<std::size_t>(
                         max_file_bytes_ - current_position_);
-                    std::size_t to_read = std::min(avail, cap);
+                    std::size_t to_read = std::min(buffer_.size() - total, cap);
                     std::size_t got = 0;
                     bool ok = co_await inflater_.read(
                         fd_, file_offset_,
                         reinterpret_cast<unsigned char *>(buffer_.data() +
-                                                          partial_size),
+                                                          total),
                         to_read, got);
-                    if (ok && got > 0) {
-                        current_position_ += got;
-                        std::size_t total = partial_size + got;
-                        std::size_t emit = 0;
-                        for (std::size_t i = partial_size; i < total; ++i) {
-                            if (buffer_[i] == '\n') {
-                                emit = i + 1;
-                                break;
-                            }
+                    if (!ok || got == 0) break;
+                    current_position_ += got;
+                    for (std::size_t i = total; i < total + got; ++i) {
+                        if (buffer_[i] == '\n') {
+                            emit = i + 1;
+                            break;
                         }
-                        partial_line_buffer_.clear();
-                        is_finished_ = true;
-                        if (emit > 0) {
-                            bytes_returned_ += emit;
-                            co_return emit;
-                        }
-                        co_return 0;
                     }
+                    total += got;
                 }
+                partial_line_buffer_.clear();
+                is_finished_ = true;
+                if (emit > 0) {
+                    bytes_returned_ += emit;
+                    co_return emit;
+                }
+                co_return 0;
             }
             is_finished_ = true;
             co_return 0;
@@ -199,20 +200,13 @@ class GzipLineByteStream : public GzipStream {
 
         // Copy partial line buffer to internal buffer (if exists)
         std::size_t partial_size = partial_line_buffer_.size();
-        std::size_t available_buffer_space = buffer_.size();
 
         if (partial_size > 0) {
-            // A line that fills the buffer can never complete in it.
-            if (partial_size >= buffer_.size()) {
-                throw ReaderError(ReaderError::ReadError,
-                                  "a line is longer than the read buffer (" +
-                                      dstd::to_string(buffer_.size()) +
-                                      " bytes)");
-            }
+            grow_buffer_past(partial_size);
             std::memcpy(buffer_.data(), partial_line_buffer_.data(),
                         partial_size);
-            available_buffer_space -= partial_size;
         }
+        std::size_t available_buffer_space = buffer_.size() - partial_size;
 
         // Read data directly into internal buffer - stay strictly within target
         // bounds
@@ -305,6 +299,15 @@ class GzipLineByteStream : public GzipStream {
         buffer_pos_ = 0;
         actual_start_bytes_ = 0;
         bytes_returned_ = 0;
+    }
+
+    /// A line has no size limit: a partial line that fills the buffer doubles
+    /// it, and the buffer keeps that size for the lines after.
+    void grow_buffer_past(std::size_t partial_size) {
+        if (partial_size < buffer_.size()) return;
+        std::size_t size = buffer_.size();
+        while (size <= partial_size) size *= 2;
+        buffer_.resize(size);
     }
 
     void update_partial_buffer(const char *buffer, std::size_t adjusted_size,

@@ -178,6 +178,45 @@ TEST_SUITE("ViewScanner") {
         CHECK(ts == want);
     }
 
+    TEST_CASE("ViewScanner - a line longer than the read buffer is kept") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        dstd::String pfw = env.get_dir() + "/longline.pfw";
+        dstd::Vector<dstd::String> lines;
+        for (int i = 0; i < 5; ++i) {
+            dstd::String line =
+                R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+                dstd::to_string(1000 + i) + R"(,"dur":1,"args":{"pad":")";
+            if (i == 2) {
+                for (std::size_t k = 0; k < 9 * 1024 * 1024; ++k)
+                    line.push_back(
+                        static_cast<char>('a' + (k * 7 + k / 13) % 26));
+            }
+            line += R"("}})";
+            lines.push_back(std::move(line));
+        }
+        {
+            dftu_utils_test::FileOut ofs(pfw);
+            for (const auto& l : lines) ofs << l << "\n";
+        }
+        dstd::String gz = pfw + ".gz";
+        compress_file_to_gzip(pfw, gz);
+        (void)dstd::fs::remove(pfw);
+
+        ViewScannerInput input;
+        input.with_file_path(dstd::String(gz))
+            .with_index_path(dstd::String(determine_index_path(gz, "")))
+            .with_checkpoint_size(1024 * 1024)
+            .with_byte_range(0, std::numeric_limits<std::size_t>::max());
+        ViewScannerUtility reader;
+        const auto output = collect_view_output(reader, input);
+        REQUIRE(output.events.size() == lines.size());
+        bool same = true;
+        for (std::size_t i = 0; i < lines.size(); ++i)
+            same = same && output.events[i] == lines[i];
+        CHECK(same);
+    }
+
     TEST_CASE("ViewScanner - No query matches all events") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());

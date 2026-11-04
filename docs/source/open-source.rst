@@ -53,9 +53,6 @@ Runtime dependencies
    * - moodycamel concurrentqueue
      - ``BSD-2-Clause``
      - https://github.com/cameron314/concurrentqueue
-   * - moodycamel readerwriterqueue
-     - ``BSD-2-Clause``
-     - https://github.com/cameron314/readerwriterqueue
    * - unordered_dense
      - ``MIT``
      - https://github.com/martinus/unordered_dense
@@ -105,6 +102,6 @@ test suite.
 
 .. note::
 
-   moodycamel's queues embed Jeff Preshing's semaphore implementation
+   moodycamel concurrentqueue embeds Jeff Preshing's semaphore implementation
    (``Zlib`` license). The full third-party notices, including this detail,
    live in ``THIRD-PARTY-NOTICES.md`` at the repository root.

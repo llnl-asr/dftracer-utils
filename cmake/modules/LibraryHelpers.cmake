@@ -142,6 +142,8 @@ Usage:
 
     # CMake config dependencies (for programmatic generation)
     [FIND_DEPENDENCIES dep1 dep2 ...]      # Dependencies to find_dependency() in config
+    [BUNDLED_PACKAGES pkg1 ...]            # Packages installed beside this one, found there first
+    [STATIC_BUNDLED_PACKAGES pkg1 ...]     # The same, for the static variant only
   )
 
 Both variants are linked from one OBJECT library, ${NAME}_objects, which holds
@@ -188,7 +190,9 @@ function(create_library)
       PUBLIC_COMPILE_DEFINITIONS
       PRIVATE_COMPILE_DEFINITIONS
       PROPERTIES
-      FIND_DEPENDENCIES)
+      FIND_DEPENDENCIES
+      BUNDLED_PACKAGES
+      STATIC_BUNDLED_PACKAGES)
 
   cmake_parse_arguments(LIB "${options}" "${oneValueArgs}" "${multiValueArgs}"
                         ${ARGN})
@@ -433,6 +437,8 @@ function(create_library)
       ${LIB_PKG_CONFIG_CFLAGS_PRIVATE}
       FIND_DEPENDENCIES
       ${LIB_FIND_DEPENDENCIES}
+      BUNDLED_PACKAGES
+      ${LIB_BUNDLED_PACKAGES}
       OUTPUT_NAME
       ${LIB_NAME})
   endif()
@@ -519,6 +525,8 @@ function(create_library)
       ${LIB_PKG_CONFIG_CFLAGS_PRIVATE}
       FIND_DEPENDENCIES
       ${LIB_FIND_DEPENDENCIES}
+      BUNDLED_PACKAGES
+      ${LIB_BUNDLED_PACKAGES}
       OUTPUT_NAME
       ${BASE_NAME})
   endif()
@@ -574,6 +582,9 @@ function(create_library)
       ${LIB_PKG_CONFIG_CFLAGS_PRIVATE}
       FIND_DEPENDENCIES
       ${LIB_FIND_DEPENDENCIES}
+      BUNDLED_PACKAGES
+      ${LIB_BUNDLED_PACKAGES}
+      ${LIB_STATIC_BUNDLED_PACKAGES}
       OUTPUT_NAME
       ${BASE_NAME})
   endif()
@@ -587,6 +598,18 @@ function(create_library)
   # Return list of all created targets
   set(${LIB_NAME}_TARGETS
       ${CREATED_TARGETS}
+      PARENT_SCOPE)
+endfunction()
+
+#[=[
+Sets ${OUT} to the config-file line that finds PKG, a package installed under
+the same lib/cmake directory as the file that holds the line. That copy comes
+first, so a system copy of another version never replaces the one the library
+was built against.
+#]=]
+function(bundled_find_dependency OUT PKG)
+  set(${OUT}
+      "find_dependency(${PKG} CONFIG HINTS \"\${CMAKE_CURRENT_LIST_DIR}/..\")\n"
       PARENT_SCOPE)
 endfunction()
 
@@ -605,7 +628,7 @@ function(_create_library_package_configs)
       PKG_CONFIG_LIBS_PRIVATE
       PKG_CONFIG_CFLAGS_PRIVATE
       OUTPUT_NAME)
-  set(multiValueArgs FIND_DEPENDENCIES)
+  set(multiValueArgs FIND_DEPENDENCIES BUNDLED_PACKAGES)
 
   cmake_parse_arguments(PKG "${options}" "${oneValueArgs}" "${multiValueArgs}"
                         ${ARGN})
@@ -659,6 +682,15 @@ function(_create_library_package_configs)
     string(APPEND CONFIG_CONTENT "# Find dependencies\n")
     foreach(dep ${PKG_FIND_DEPENDENCIES})
       string(APPEND CONFIG_CONTENT "find_dependency(${dep})\n")
+    endforeach()
+    string(APPEND CONFIG_CONTENT "\n")
+  endif()
+
+  if(PKG_BUNDLED_PACKAGES)
+    string(APPEND CONFIG_CONTENT "# Packages installed beside this one\n")
+    foreach(pkg ${PKG_BUNDLED_PACKAGES})
+      bundled_find_dependency(line ${pkg})
+      string(APPEND CONFIG_CONTENT "${line}")
     endforeach()
     string(APPEND CONFIG_CONTENT "\n")
   endif()

@@ -35,6 +35,78 @@ find_package(
   OPTIONAL_COMPONENTS Development.SABIModule)
 
 # ==============================================================================
+# Package configs for dependencies we install
+# ==============================================================================
+
+# Writes and installs lib/cmake/<name>/<name>Config.cmake. It finds each
+# package in DEPENDENCIES beside this one (see bundled_find_dependency) and
+# includes TARGETS_FILE, the file install(EXPORT) wrote.
+function(install_dependency_config NAME TARGETS_FILE)
+  cmake_parse_arguments(ARG "" "" DEPENDENCIES ${ARGN})
+  set(content "include(CMakeFindDependencyMacro)\n")
+  foreach(pkg ${ARG_DEPENDENCIES})
+    bundled_find_dependency(line ${pkg})
+    string(APPEND content "${line}")
+  endforeach()
+  string(APPEND content
+         "include(\"\${CMAKE_CURRENT_LIST_DIR}/${TARGETS_FILE}\")\n")
+  file(WRITE ${CMAKE_BINARY_DIR}/${NAME}/${NAME}Config.cmake "${content}")
+  install(FILES ${CMAKE_BINARY_DIR}/${NAME}/${NAME}Config.cmake
+          DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${NAME})
+endfunction()
+
+# The static libraries link highway, utf8proc and vectorscan privately, so a
+# program that links one needs their archives. Highway and utf8proc install as
+# the export dftracer_utils_deps, vectorscan as a hand-written imported target
+# because an imported target cannot be exported. Archives and CMake files only:
+# no header of these reaches the prefix, and no public header includes one.
+function(install_private_static_deps)
+  if(NOT DFTRACER_UTILS_BUILD_STATIC)
+    return()
+  endif()
+
+  set(deps_targets)
+  foreach(target hwy hwy_contrib utf8proc_static)
+    if(TARGET ${target})
+      set_target_properties(${target} PROPERTIES OUTPUT_NAME dftracer_${target})
+      list(APPEND deps_targets ${target})
+    endif()
+  endforeach()
+  if(deps_targets)
+    install(
+      TARGETS ${deps_targets}
+      EXPORT dftracer_utils_depsTargets
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(
+      EXPORT dftracer_utils_depsTargets
+      FILE dftracer_utils_depsTargets.cmake
+      NAMESPACE dftracer_utils_deps::
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils_deps)
+    install_dependency_config(dftracer_utils_deps dftracer_utils_depsTargets.cmake)
+  endif()
+
+  if(TARGET dftracer_utils_vectorscan::hs)
+    get_target_property(hs_lib dftracer_utils_vectorscan::hs IMPORTED_LOCATION)
+    set(hs_name ${CMAKE_STATIC_LIBRARY_PREFIX}dftracer_hs${CMAKE_STATIC_LIBRARY_SUFFIX})
+    install(FILES "${hs_lib}" DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RENAME ${hs_name})
+    set(hs_config ${CMAKE_BINARY_DIR}/dftracer_utils_vectorscan/dftracer_utils_vectorscanConfig.cmake)
+    file(
+      WRITE ${hs_config}
+      "if(NOT TARGET dftracer_utils_vectorscan::hs)
+  add_library(dftracer_utils_vectorscan::hs STATIC IMPORTED)
+  set_target_properties(
+    dftracer_utils_vectorscan::hs
+    PROPERTIES IMPORTED_LOCATION
+               \"\${CMAKE_CURRENT_LIST_DIR}/../../${hs_name}\")
+endif()
+")
+    install(FILES ${hs_config}
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils_vectorscan)
+  endif()
+endfunction()
+
+# ==============================================================================
 # Utility Dependencies
 # ==============================================================================
 
@@ -126,6 +198,11 @@ function(need_simdjson)
         FILE simdjsonTargets.cmake
         NAMESPACE simdjson::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/simdjson)
+
+      file(WRITE ${CMAKE_BINARY_DIR}/simdjson/simdjsonConfig.cmake
+           "include(\"\${CMAKE_CURRENT_LIST_DIR}/simdjsonTargets.cmake\")\n")
+      install(FILES ${CMAKE_BINARY_DIR}/simdjson/simdjsonConfig.cmake
+              DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/simdjson)
     endif()
   endif()
 endfunction()
@@ -246,13 +323,14 @@ function(need_zlib)
   if(DFTRACER_UTILS_BUILD_STATIC)
     install(
       TARGETS ${_zng}
-      EXPORT ZlibTargets
+      EXPORT dftracer_utils_zlibTargets
       ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
     install(
-      EXPORT ZlibTargets
-      FILE ZlibTargets.cmake
+      EXPORT dftracer_utils_zlibTargets
+      FILE dftracer_utils_zlibTargets.cmake
       NAMESPACE dftracer::
-      DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlib)
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils_zlib)
+    install_dependency_config(dftracer_utils_zlib dftracer_utils_zlibTargets.cmake)
   endif()
   dftracer_utils_ok("Using zlib-ng ${CPM_PACKAGE_zlib-ng_VERSION} (native, static, hidden)")
 endfunction()
@@ -322,11 +400,8 @@ function(need_zstd)
     APPEND
     PROPERTY INTERFACE_INCLUDE_DIRECTORIES
              "$<BUILD_INTERFACE:${zstd_SOURCE_DIR}/lib>")
-  # A program that links our static libraries also links this archive.
-  install(TARGETS libzstd_static ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-  install(FILES "${zstd_SOURCE_DIR}/lib/zstd.h"
-          DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
+  # zstd's own install puts the archive and zstdTargets.cmake, which names
+  # zstd::libzstd_static, under the prefix.
   # zstd's build tree names only libzstd_static; nanoarrow links
   # zstd::libzstd_static.
   if(NOT TARGET zstd::libzstd_static)
@@ -403,40 +478,6 @@ endfunction()
 # ==============================================================================
 # Concurrency Dependencies
 # ==============================================================================
-
-function(need_readerwriterqueue)
-  if(NOT readerwriterqueue_ADDED)
-    cpmaddpackage(
-      NAME
-      readerwriterqueue
-      GITHUB_REPOSITORY
-      cameron314/readerwriterqueue
-      GIT_TAG
-      211616e0554f93152ab3108b8d93fbc23174a9d9
-      DOWNLOAD_ONLY
-      YES)
-
-    if(readerwriterqueue_ADDED)
-      add_library(readerwriterqueue INTERFACE)
-      target_include_directories(
-        readerwriterqueue
-        INTERFACE $<BUILD_INTERFACE:${readerwriterqueue_SOURCE_DIR}>
-                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      install(FILES ${readerwriterqueue_SOURCE_DIR}/readerwriterqueue.h
-                    ${readerwriterqueue_SOURCE_DIR}/atomicops.h
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
-      # Install and export the target
-      install(TARGETS readerwriterqueue EXPORT readerwriterqueueTargets)
-      install(
-        EXPORT readerwriterqueueTargets
-        FILE readerwriterqueueTargets.cmake
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/readerwriterqueue)
-
-      dftracer_utils_ok("Added readerwriterqueue header-only library")
-    endif()
-  endif()
-endfunction()
 
 # concurrentqueue is vendored as
 # include/dftracer/utils/dstd/vendor/concurrentqueue.h, because a public header
@@ -603,6 +644,14 @@ function(need_nanoarrow)
         FILE nanoarrowTargets.cmake
         NAMESPACE nanoarrow::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nanoarrow)
+
+      # nanoarrow_static links zstd for the IPC codec.
+      set(nanoarrow_dependencies)
+      if(DFTRACER_UTILS_ENABLE_ARROW_IPC AND DFTRACER_UTILS_BUILD_STATIC)
+        set(nanoarrow_dependencies zstd)
+      endif()
+      install_dependency_config(nanoarrow nanoarrowTargets.cmake DEPENDENCIES
+                                ${nanoarrow_dependencies})
     endif()
 
     dftracer_utils_ok("Added nanoarrow 0.8.0 via CPM")
@@ -752,8 +801,8 @@ function(need_utf8proc)
     # utf8proc.c includes utf8proc_data.c itself. The static archive links into
     # our shared libraries, so it must be PIC.
     add_library(utf8proc_static STATIC ${utf8proc_SOURCE_DIR}/utf8proc.c)
-    target_include_directories(utf8proc_static SYSTEM
-                               PUBLIC ${utf8proc_SOURCE_DIR})
+    target_include_directories(
+      utf8proc_static SYSTEM PUBLIC $<BUILD_INTERFACE:${utf8proc_SOURCE_DIR}>)
     target_compile_definitions(utf8proc_static PUBLIC UTF8PROC_STATIC)
     target_compile_options(utf8proc_static PRIVATE -w)
     set_target_properties(utf8proc_static PROPERTIES POSITION_INDEPENDENT_CODE
@@ -767,7 +816,7 @@ endfunction()
 # ==============================================================================
 
 function(need_vectorscan)
-  if(TARGET dftracer_utils_hs)
+  if(TARGET dftracer_utils_vectorscan::hs)
     return()
   endif()
   include(ExternalProject)
@@ -833,9 +882,9 @@ function(need_vectorscan)
   set(hs_lib "${hs_prefix}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}hs${CMAKE_STATIC_LIBRARY_SUFFIX}")
   set(hs_stamp "${hs_prefix}/.dftracer-fingerprint")
 
-  add_library(dftracer_utils_hs STATIC IMPORTED GLOBAL)
+  add_library(dftracer_utils_vectorscan::hs STATIC IMPORTED GLOBAL)
   set_target_properties(
-    dftracer_utils_hs PROPERTIES IMPORTED_LOCATION "${hs_lib}"
+    dftracer_utils_vectorscan::hs PROPERTIES IMPORTED_LOCATION "${hs_lib}"
                                  INTERFACE_INCLUDE_DIRECTORIES
                                  "${hs_prefix}/include/hs")
 
@@ -948,7 +997,7 @@ function(need_vectorscan)
             "${CMAKE_BINARY_DIR}/_deps/vectorscan.fingerprint" "${hs_stamp}"
     DEPENDEES install)
 
-  add_dependencies(dftracer_utils_hs dftracer_utils_vectorscan_ep)
+  add_dependencies(dftracer_utils_vectorscan::hs dftracer_utils_vectorscan_ep)
   dftracer_utils_ok("Vectorscan ${hs_version} external static build (${hs_lib})")
 endfunction()
 

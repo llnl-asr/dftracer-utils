@@ -1008,6 +1008,28 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       -DTEST_TYPE=cmake -P
       ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
+  # A project outside this build, using only the installed packages.
+  if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
+    set(PACKAGE_CONSUMER_VARIANTS)
+    if(DFTRACER_UTILS_BUILD_SHARED)
+      list(APPEND PACKAGE_CONSUMER_VARIANTS shared)
+    endif()
+    if(DFTRACER_UTILS_BUILD_STATIC)
+      list(APPEND PACKAGE_CONSUMER_VARIANTS static)
+    endif()
+    add_test(
+      NAME test_package_consumer
+      COMMAND
+        ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/package_consumer
+        -DWORK_DIR=${CMAKE_BINARY_DIR}/test_package_consumer
+        -DPREFIX=${TEST_INSTALL_PREFIX} "-DVARIANTS=${PACKAGE_CONSUMER_VARIANTS}"
+        "-DGENERATOR=${CMAKE_GENERATOR}"
+        -DC_COMPILER=${CMAKE_C_COMPILER} -DCXX_COMPILER=${CMAKE_CXX_COMPILER}
+        "-DCXX_FLAGS=${CMAKE_CXX_FLAGS}"
+        "-DLINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}" -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/package_consumer/run.cmake)
+  endif()
+
   # ==========================================================================
   # Target alias tests
   # ==========================================================================
@@ -1026,6 +1048,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
     list(
       APPEND
       PACKAGE_DISCOVERY_TESTS
+      test_package_consumer
       test_pkgconfig_discovery_memory
       test_cmake_discovery_memory
       test_pkgconfig_discovery_dstd

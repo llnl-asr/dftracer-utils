@@ -9,7 +9,6 @@ need_zlib()
 need_libdeflate()
 need_zstd()
 need_simdjson()
-need_readerwriterqueue()
 need_boost_math()
 need_yaml_cpp()
 
@@ -21,6 +20,18 @@ need_pcre2()
 need_utf8proc()
 if(DFTRACER_UTILS_ENABLE_VECTORSCAN)
   need_vectorscan()
+endif()
+install_private_static_deps()
+
+# Packages a static library finds beside its own, because its archive links
+# them privately. Highway and utf8proc come from dftracer_utils_deps.
+set(DFTU_ARROW_PACKAGES)
+if(DFTRACER_UTILS_ENABLE_ARROW)
+  set(DFTU_ARROW_PACKAGES nanoarrow)
+endif()
+set(DFTU_VECTORSCAN_PACKAGES)
+if(DFTRACER_UTILS_ENABLE_VECTORSCAN)
+  set(DFTU_VECTORSCAN_PACKAGES dftracer_utils_vectorscan)
 endif()
 
 # ##############################################################################
@@ -450,7 +461,9 @@ create_library(
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_LIBS_PRIVATE
-  "-lpthread -ldl")
+  "-lpthread -ldl"
+  FIND_DEPENDENCIES
+  Threads)
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_memory ${variant})
@@ -680,7 +693,6 @@ create_library(
   dftracer_utils_coro::static
   PUBLIC_LINK_LIBRARIES
   Threads::Threads
-  readerwriterqueue
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -793,7 +805,10 @@ create_library(
   PKG_CONFIG_REQUIRES
   "dftracer_utils_runtime"
   FIND_DEPENDENCIES
-  dftracer_utils_runtime)
+  dftracer_utils_runtime
+  STATIC_BUNDLED_PACKAGES
+  libdeflate
+  zstd)
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_store ${variant})
@@ -950,7 +965,9 @@ create_library(
   PKG_CONFIG_REQUIRES
   "dftracer_utils_common"
   FIND_DEPENDENCIES
-  dftracer_utils_common)
+  dftracer_utils_common
+  BUNDLED_PACKAGES
+  simdjson)
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_json ${variant})
@@ -1030,21 +1047,26 @@ create_library(
   "dftracer_utils_common dftracer_utils_json"
   FIND_DEPENDENCIES
   dftracer_utils_common
-  dftracer_utils_json)
+  dftracer_utils_json
+  BUNDLED_PACKAGES
+  simdjson
+  STATIC_BUNDLED_PACKAGES
+  pcre2
+  dftracer_utils_deps
+  ${DFTU_VECTORSCAN_PACKAGES})
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_duql ${variant})
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
-    target_link_libraries(${VARIANT_TARGET}
-                          PRIVATE $<BUILD_INTERFACE:pcre2-8-static>)
+    target_link_libraries(${VARIANT_TARGET} PRIVATE pcre2-8-static)
     # The one library gets hwy from dataframe and vectorscan from utilities, and
     # a second entry for either makes the linker warn about a duplicate.
     if(NOT DFTRACER_UTILS_SINGLE_LIBRARY OR variant STREQUAL "objects")
-      target_link_libraries(${VARIANT_TARGET} PRIVATE $<BUILD_INTERFACE:hwy>)
+      target_link_libraries(${VARIANT_TARGET} PRIVATE hwy)
       if(DFTRACER_UTILS_ENABLE_VECTORSCAN)
         target_link_libraries(${VARIANT_TARGET}
-                              PRIVATE $<BUILD_INTERFACE:dftracer_utils_hs>)
+                              PRIVATE dftracer_utils_vectorscan::hs)
       endif()
     endif()
     link_simdjson(${VARIANT_TARGET} ${VARIANT_UPPER})
@@ -1119,7 +1141,11 @@ create_library(
   PKG_CONFIG_REQUIRES
     "dftracer_utils_runtime dftracer_utils_duql"
   FIND_DEPENDENCIES
-    dftracer_utils_runtime dftracer_utils_duql)
+    dftracer_utils_runtime dftracer_utils_duql
+  BUNDLED_PACKAGES
+    simdjson ${DFTU_ARROW_PACKAGES}
+  STATIC_BUNDLED_PACKAGES
+    dftracer_utils_deps zstd)
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_dataframe ${variant})
@@ -1140,14 +1166,11 @@ foreach(variant objects shared static)
     # alone when contrib is absent; linking both puts libhwy.a on the line
     # twice.
     if(TARGET hwy_contrib)
-      target_link_libraries(${VARIANT_TARGET}
-                            PRIVATE $<BUILD_INTERFACE:hwy_contrib>)
+      target_link_libraries(${VARIANT_TARGET} PRIVATE hwy_contrib)
     elseif(TARGET hwy)
-      target_link_libraries(${VARIANT_TARGET}
-                            PRIVATE $<BUILD_INTERFACE:hwy>)
+      target_link_libraries(${VARIANT_TARGET} PRIVATE hwy)
     endif()
-    target_link_libraries(${VARIANT_TARGET}
-                          PRIVATE $<BUILD_INTERFACE:utf8proc_static>)
+    target_link_libraries(${VARIANT_TARGET} PRIVATE utf8proc_static)
     # Spill files compress each morsel with zstd (spill.cpp).
     link_zstd(${VARIANT_TARGET})
     if(DFTRACER_UTILS_ENABLE_ARROW)
@@ -1205,7 +1228,19 @@ create_library(
   PKG_CONFIG_REQUIRES
   "dftracer_utils_runtime"
   FIND_DEPENDENCIES
-  dftracer_utils_runtime)
+  dftracer_utils_runtime
+  dftracer_utils_dataframe
+  dftracer_utils_json
+  dftracer_utils_duql
+  dftracer_utils_store
+  BUNDLED_PACKAGES
+    ${DFTU_ARROW_PACKAGES}
+  STATIC_BUNDLED_PACKAGES
+    dftracer_utils_zlib
+    yaml-cpp
+    libdeflate
+    zstd
+    ${DFTU_VECTORSCAN_PACKAGES})
 
 # Post-process utilities library targets simdjson (third-party) inlined here
 # trips GCC's optimizer-based -Wstrict-overflow that -isystem cannot suppress;
@@ -1231,7 +1266,7 @@ foreach(variant objects shared static)
 
     if(DFTRACER_UTILS_ENABLE_VECTORSCAN)
       target_link_libraries(${VARIANT_TARGET}
-                            PRIVATE $<BUILD_INTERFACE:dftracer_utils_hs>)
+                            PRIVATE dftracer_utils_vectorscan::hs)
     endif()
 
 
@@ -1424,6 +1459,60 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
 
   create_unified_library_config(
     NAME
+    dftracer_utils_json
+    VERSION
+    ${PROJECT_VERSION}
+    DESCRIPTION
+    "DFTracer utils json library (JSON parser and values)"
+    URL
+    "https://github.com/llnl-asr/dftracer-utils"
+    BUILD_SHARED
+    ${DFTRACER_UTILS_BUILD_SHARED}
+    BUILD_STATIC
+    ${DFTRACER_UTILS_BUILD_STATIC}
+    PKG_CONFIG_REQUIRES
+    "dftracer_utils_common"
+    FIND_DEPENDENCIES
+    dftracer_utils_common)
+
+  create_unified_library_config(
+    NAME
+    dftracer_utils_duql
+    VERSION
+    ${PROJECT_VERSION}
+    DESCRIPTION
+    "DFTracer utils duql library (query language)"
+    URL
+    "https://github.com/llnl-asr/dftracer-utils"
+    BUILD_SHARED
+    ${DFTRACER_UTILS_BUILD_SHARED}
+    BUILD_STATIC
+    ${DFTRACER_UTILS_BUILD_STATIC}
+    PKG_CONFIG_REQUIRES
+    "dftracer_utils_common dftracer_utils_json"
+    FIND_DEPENDENCIES
+    dftracer_utils_common dftracer_utils_json)
+
+  create_unified_library_config(
+    NAME
+    dftracer_utils_dataframe
+    VERSION
+    ${PROJECT_VERSION}
+    DESCRIPTION
+    "DFTracer utils dataframe library (Series, DataFrame, LazyFrame)"
+    URL
+    "https://github.com/llnl-asr/dftracer-utils"
+    BUILD_SHARED
+    ${DFTRACER_UTILS_BUILD_SHARED}
+    BUILD_STATIC
+    ${DFTRACER_UTILS_BUILD_STATIC}
+    PKG_CONFIG_REQUIRES
+    "dftracer_utils_runtime dftracer_utils_duql"
+    FIND_DEPENDENCIES
+    dftracer_utils_runtime dftracer_utils_duql)
+
+  create_unified_library_config(
+    NAME
     dftracer_utils_utilities
     VERSION
     ${PROJECT_VERSION}
@@ -1525,6 +1614,18 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
            "find_dependency(dftracer_utils_utilities)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT
            "find_dependency(dftracer_utils_dataframe)\n\n")
+  else()
+    set(DFTU_SINGLE_PACKAGES simdjson ${DFTU_ARROW_PACKAGES})
+    if(DFTRACER_UTILS_BUILD_STATIC)
+      list(APPEND DFTU_SINGLE_PACKAGES pcre2 dftracer_utils_deps
+           dftracer_utils_zlib yaml-cpp libdeflate zstd
+           ${DFTU_VECTORSCAN_PACKAGES})
+    endif()
+    foreach(pkg ${DFTU_SINGLE_PACKAGES})
+      bundled_find_dependency(line ${pkg})
+      string(APPEND UNIFIED_CONFIG_CONTENT "${line}")
+    endforeach()
+    string(APPEND UNIFIED_CONFIG_CONTENT "\n")
   endif()
   string(APPEND UNIFIED_CONFIG_CONTENT "# Include the unified targets file\n")
   string(

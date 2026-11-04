@@ -25,7 +25,6 @@ notices here cover only the third-party dependencies.
 | Boost.Math | `BSL-1.0` | https://github.com/boostorg/math |
 | yaml-cpp | `MIT` | https://github.com/jbeder/yaml-cpp |
 | moodycamel concurrentqueue | `BSD-2-Clause` | https://github.com/cameron314/concurrentqueue |
-| moodycamel readerwriterqueue | `BSD-2-Clause` | https://github.com/cameron314/readerwriterqueue |
 | unordered_dense | `MIT` | https://github.com/martinus/unordered_dense |
 | tl::expected | `CC0-1.0` | https://github.com/TartanLlama/expected |
 | PCRE2 | `BSD-3-Clause WITH PCRE2-exception` | https://github.com/PCRE2Project/pcre2 |

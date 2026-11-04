@@ -10,13 +10,18 @@
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <nanoarrow/nanoarrow.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstring>
+#include <limits>
 #include <random>
 
 using namespace dftracer::utils;
@@ -964,13 +969,10 @@ TEST_SUITE("TraceReader malformed lines") {
         // `x == 1 or name == "read"` reads every field of a line, so a bad
         // value anywhere in the line drops it, as Query::matches does.
         const dstd::Vector<dstd::String> lines = {
-            R"({"name":"read","dur":5})",
-            R"({"x":01,"name":"read"})",
-            R"({"name":"read","x":01})",
-            R"({"name":"read","x":tru,"y":1})",
-            R"({"name":"read","x":-})",
-            R"({"name":"read","x":"\q"})",
-            R"({"name":"read","args":{"x":01}})",
+            R"({"name":"read","dur":5})", R"({"x":01,"name":"read"})",
+            R"({"name":"read","x":01})",  R"({"name":"read","x":tru,"y":1})",
+            R"({"name":"read","x":-})",   R"({"name":"read","args":{"x":01}})",
+            R"({"name":"read","x":1x})",
         };
         for (const bool indexed : {false, true}) {
             CAPTURE(indexed);
@@ -1228,5 +1230,232 @@ TEST_SUITE("TraceReader byte windows") {
         }
         CHECK(mid_line_pieces > 0);
         check_windows(f, cuts);
+    }
+}
+
+namespace {
+
+// What the two readers give back for lines that hold a number too large for a
+// double or a string with an invalid escape.
+struct OddRead {
+    dstd::Vector<dstd::String> lines;
+    dstd::Vector<dstd::Optional<double>> json_doubles;
+    dstd::Vector<dstd::Optional<dstd::String>> json_strings;
+    std::size_t arrow_rows = 0;
+};
+
+static CoroTask<void> collect_odd_json(AsyncGenerator<JsonLine> gen,
+                                       OddRead& out) {
+    while (auto opt = co_await gen.next()) {
+        out.lines.emplace_back(opt->content);
+        auto* p = opt->parser;
+        out.json_doubles.push_back(p->get_double("x"));
+        p->rewind();
+        auto s = p->get_string("x");
+        out.json_strings.push_back(
+            s ? dstd::Optional<dstd::String>(dstd::String(*s)) : dstd::nullopt);
+    }
+}
+
+// The values of column `name` over every row, as doubles or strings.
+static CoroTask<void> collect_odd_arrow(
+    AsyncGenerator<dftracer::utils::utilities::arrow::ArrowExportResult> gen,
+    const char* name, dstd::Vector<dstd::Optional<double>>& doubles,
+    dstd::Vector<dstd::Optional<dstd::String>>& strings, std::size_t& rows) {
+    while (auto opt = co_await gen.next()) {
+        ArrowArrayView view;
+        if (dftracer::utils::utilities::arrow::init_array_view(
+                view, opt->get_schema(), opt->get_array()) != NANOARROW_OK)
+            co_return;
+        int column = -1;
+        for (std::int64_t i = 0; i < opt->get_schema()->n_children; ++i)
+            if (std::strcmp(opt->get_schema()->children[i]->name, name) == 0)
+                column = static_cast<int>(i);
+        for (std::int64_t r = 0; r < view.length; ++r) {
+            ++rows;
+            if (column < 0 || ArrowArrayViewIsNull(view.children[column], r)) {
+                doubles.push_back(dstd::nullopt);
+                strings.push_back(dstd::nullopt);
+                continue;
+            }
+            const ArrowArrayView* child = view.children[column];
+            if (child->storage_type == NANOARROW_TYPE_STRING) {
+                const ArrowStringView text =
+                    ArrowArrayViewGetStringUnsafe(child, r);
+                strings.push_back(dstd::String(
+                    text.data, static_cast<std::size_t>(text.size_bytes)));
+                doubles.push_back(dstd::nullopt);
+            } else {
+                doubles.push_back(ArrowArrayViewGetDoubleUnsafe(child, r));
+                strings.push_back(dstd::nullopt);
+            }
+        }
+        ArrowArrayViewReset(&view);
+    }
+}
+
+dstd::String write_odd_trace(const dstd::Vector<dstd::String>& lines,
+                             bool indexed) {
+    dstd::String content;
+    for (const auto& l : lines) content += l + "\n";
+    const dstd::Path dir = make_unique_test_path("odd_reader");
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    const dstd::String pfw((dir / "trace.pfw").str());
+    REQUIRE(dstd::fs::write_file(dstd::PathView(pfw), content).has_value());
+    const dstd::String gz = gzip_fixture(pfw);
+    if (indexed) REQUIRE(dftu_utils_test::build_index(gz));
+    return gz;
+}
+
+}  // namespace
+
+TEST_SUITE("TraceReader valid but odd values") {
+    // The odd line comes first and its `x` is the value under test; the line
+    // after it must be read whatever the first one holds.
+    struct Odd {
+        const char* name;
+        const char* line;
+        const char* selective;   // matches the odd line only
+        const char* expression;  // the same, as an expression query
+        bool is_string;
+        double expected_double;
+        const char* expected_string;
+    };
+    constexpr double INF = std::numeric_limits<double>::infinity();
+    const Odd cases[] = {
+        {"plus_overflow", R"({"name":"read","x":1e400})", "x > 1",
+         R"(lower(name) == "read" and x > 1)", false, INF, nullptr},
+        {"minus_overflow", R"({"name":"read","x":-1e400})", "x < -1",
+         R"(lower(name) == "read" and x < -1)", false, -INF, nullptr},
+        {"big_exponent", R"({"name":"read","x":1.5E+999})", "x > 1",
+         R"(lower(name) == "read" and x > 1)", false, INF, nullptr},
+        {"bad_escape", R"({"name":"read","x":"a\qb"})", R"(x != "ok")",
+         R"(lower(x) == "a\\qb")", true, 0, R"(a\qb)"},
+        {"high_surrogate", R"({"name":"read","x":"\ud800"})", R"(x != "ok")",
+         R"(lower(x) == "\\ud800")", true, 0, R"(\ud800)"},
+        {"low_surrogate", R"({"name":"read","x":"\udc00"})", R"(x != "ok")",
+         R"(lower(x) == "\\udc00")", true, 0, R"(\udc00)"},
+        {"short_unicode", R"({"name":"read","x":"\u12"})", R"(x != "ok")",
+         R"(lower(x) == "\\u12")", true, 0, R"(\u12)"},
+    };
+    const char* const next_line = R"({"name":"read","dur":7,"y":0})";
+    const char* const next_string_line =
+        R"({"name":"read","dur":7,"y":0,"x":"ok"})";
+
+    TEST_CASE("a value read by the query keeps the line and reads as is") {
+        for (const Odd& odd : cases) {
+            for (const bool indexed : {false, true}) {
+                for (const bool expression : {false, true}) {
+                    INFO(dstd::String(odd.name)
+                         << " indexed=" << indexed
+                         << " expression=" << expression);
+                    const dstd::Vector<dstd::String> lines = {
+                        odd.line, odd.is_string ? next_string_line : next_line};
+                    const dstd::String gz = write_odd_trace(lines, indexed);
+                    TraceReader reader({.file_path = gz});
+                    REQUIRE(reader.has_index() == indexed);
+
+                    ReadConfig selective;
+                    selective.query =
+                        expression ? odd.expression : odd.selective;
+                    selective.flatten_objects = true;
+                    OddRead json;
+                    collect_odd_json(reader.read_json(selective), json).get();
+                    REQUIRE(json.lines.size() == 1);
+                    CHECK(json.lines[0] == odd.line);
+                    if (odd.is_string) {
+                        REQUIRE(json.json_strings[0].has_value());
+                        CHECK(*json.json_strings[0] == odd.expected_string);
+                    } else {
+                        REQUIRE(json.json_doubles[0].has_value());
+                        CHECK(*json.json_doubles[0] == odd.expected_double);
+                    }
+                    dstd::Vector<dstd::Optional<double>> doubles;
+                    dstd::Vector<dstd::Optional<dstd::String>> strings;
+                    std::size_t rows = 0;
+                    collect_odd_arrow(reader.read_arrow(selective), "x",
+                                      doubles, strings, rows)
+                        .get();
+                    REQUIRE(rows == 1);
+                    if (odd.is_string) {
+                        REQUIRE(strings[0].has_value());
+                        CHECK(*strings[0] == odd.expected_string);
+                    } else {
+                        REQUIRE(doubles[0].has_value());
+                        CHECK(*doubles[0] == odd.expected_double);
+                    }
+
+                    ReadConfig both;
+                    both.query = expression
+                                     ? R"(x > 5 or lower(name) == "read")"
+                                     : R"(x > 5 or name == "read")";
+                    OddRead all;
+                    collect_odd_json(reader.read_json(both), all).get();
+                    CHECK(all.lines.size() == 2);
+                    CHECK(all.lines[1] == lines[1]);
+                    std::size_t arrow_rows = 0;
+                    dstd::Vector<dstd::Optional<double>> d2;
+                    dstd::Vector<dstd::Optional<dstd::String>> s2;
+                    collect_odd_arrow(reader.read_arrow(both), "x", d2, s2,
+                                      arrow_rows)
+                        .get();
+                    CHECK(arrow_rows == 2);
+                }
+            }
+        }
+    }
+
+    TEST_CASE("a name with an invalid escape keeps the line") {
+        const dstd::Vector<dstd::String> shapes = {
+            R"({"name":"read","k\q":1,"x":5})",
+            R"({"name":"read","args":{"k\q":1,"x":5}})",
+            R"({"name":"read","args":{"p":{"k\ud800":1},"x":5}})",
+        };
+        for (const auto& shape : shapes) {
+            for (const bool indexed : {false, true}) {
+                for (const char* query :
+                     {"x == 5", R"(lower(name) == "read" and x == 5)",
+                      R"(lower(name) == "read")"}) {
+                    INFO(shape << " indexed=" << indexed << " " << query);
+                    const dstd::Vector<dstd::String> lines = {
+                        shape, R"({"name":"read","x":0})"};
+                    const dstd::String gz = write_odd_trace(lines, indexed);
+                    TraceReader reader({.file_path = gz});
+                    ReadConfig rc;
+                    rc.query = query;
+                    const bool selects_one =
+                        std::strcmp(query, "x == 5") == 0 ||
+                        std::strstr(query, "and x == 5");
+                    const std::size_t expected = selects_one ? 1 : 2;
+                    CHECK(count_json_lines(reader.read_json(rc)).get() ==
+                          expected);
+                    CHECK(count_arrow_rows(reader.read_arrow(rc)).get() ==
+                          expected);
+                }
+            }
+        }
+    }
+
+    TEST_CASE("text that is no number or an unterminated string is dropped") {
+        const char* const bad_values[] = {"tru", "01", "1x", "-",
+                                          "1.",  "1e", "\"x"};
+        for (const char* bad : bad_values) {
+            for (const bool indexed : {false, true}) {
+                INFO(dstd::String(bad) << " indexed=" << indexed);
+                const dstd::Vector<dstd::String> lines = {
+                    common::str_cat(R"({"name":"read","x":)", bad,
+                                    R"(,"y":1})"),
+                    R"({"name":"read","x":2,"y":1})"};
+                const dstd::String gz = write_odd_trace(lines, indexed);
+                TraceReader reader({.file_path = gz});
+                ReadConfig rc;
+                rc.query = R"(x == 1 or name == "read")";
+                const std::size_t bad_kept =
+                    count_json_lines(reader.read_json(rc)).get();
+                CHECK(bad_kept <= 1);
+                CHECK(count_arrow_rows(reader.read_arrow(rc)).get() ==
+                      bad_kept);
+            }
+        }
     }
 }

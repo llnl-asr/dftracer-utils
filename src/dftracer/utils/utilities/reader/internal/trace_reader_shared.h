@@ -11,6 +11,7 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/line.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <simdjson.h>
@@ -114,14 +115,22 @@ inline bool ondemand_to_cell(simdjson::ondemand::value val,
     if (type.error()) return false;
     switch (type.value_unsafe()) {
         case simdjson::ondemand::json_type::string: {
-            auto r = val.get_string();
-            if (r.error()) return false;
-            out = duql::Cell(dstd::String(r.value_unsafe()));
+            const auto text = json::detail::get_string_or_raw(val);
+            if (!text) return false;
+            out = duql::Cell(dstd::String(*text));
             return true;
         }
         case simdjson::ondemand::json_type::number: {
             auto num = val.get_number();
-            if (num.error()) return is_bigint_token(val.raw_json_token());
+            if (num.error()) {
+                if (is_bigint_token(val.raw_json_token())) return true;
+                if (num.error() != simdjson::NUMBER_ERROR) return false;
+                const auto refused = json::detail::refused_number(
+                    json::detail::trim_token(val.raw_json_token()));
+                if (!refused) return false;
+                out = duql::Cell(*refused);
+                return true;
+            }
             auto n = num.value_unsafe();
             if (n.is_int64()) {
                 out = duql::Cell(n.get_int64());

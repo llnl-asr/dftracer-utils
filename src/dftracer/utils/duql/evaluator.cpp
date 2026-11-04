@@ -1741,6 +1741,12 @@ OdLeaf read_leaf(const OnDemandEvent& ev, OnDemand& v) {
     simdjson::error_code code;
     if (token.find_first_of(".eE") != dstd::StringView::npos) {
         code = v.get_double().get(out.d);
+        if (code == simdjson::NUMBER_ERROR) {
+            if (const auto refused = json::detail::refused_number(token)) {
+                out.d = *refused;
+                code = simdjson::SUCCESS;
+            }
+        }
         if (code) ev.broken = true;
         if (!code) out.kind = OdLeaf::Kind::Double;
         return out;

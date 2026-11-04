@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/json/value_access.h>
 #include <simdjson.h>
 
 #include <cstddef>
@@ -171,13 +172,13 @@ void JsonParser::for_each_field(Fn&& fn) {
     for (auto field : obj_result.value()) {
         if (field.error()) continue;
 
-        auto key_result = field.unescaped_key();
-        if (key_result.error()) continue;
+        const auto key_result = detail::get_key_or_raw(field);
+        if (!key_result) continue;
 
         auto val_result = field.value();
         if (val_result.error()) continue;
 
-        fn(key_result.value(), val_result.value());
+        fn(*key_result, val_result.value());
     }
 }
 
@@ -191,13 +192,13 @@ bool JsonParser::for_each_field(dstd::StringView object_key, Fn&& fn) {
     for (auto field : nested_result.value()) {
         if (field.error()) continue;
 
-        auto key_result = field.unescaped_key();
-        if (key_result.error()) continue;
+        const auto key_result = detail::get_key_or_raw(field);
+        if (!key_result) continue;
 
         auto val_result = field.value();
         if (val_result.error()) continue;
 
-        fn(key_result.value(), val_result.value());
+        fn(*key_result, val_result.value());
     }
     return true;
 }
@@ -223,8 +224,7 @@ struct JsonValueHelper {
     }
 
     static dstd::Optional<double> get_double(simdjson::ondemand::value& val) {
-        auto r = val.get_double();
-        return r.error() ? dstd::nullopt : dstd::Optional<double>(r.value());
+        return detail::get_double_or_refused(val);
     }
 
     static dstd::Optional<bool> get_bool(simdjson::ondemand::value& val) {
@@ -234,9 +234,7 @@ struct JsonValueHelper {
 
     static dstd::Optional<dstd::StringView> get_string(
         simdjson::ondemand::value& val) {
-        auto r = val.get_string();
-        return r.error() ? dstd::nullopt
-                         : dstd::Optional<dstd::StringView>(r.value());
+        return detail::get_string_or_raw(val);
     }
 
     static bool is_null(simdjson::ondemand::value& val) {

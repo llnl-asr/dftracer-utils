@@ -642,8 +642,8 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                             readable = false;
                             break;
                         }
-                        auto key_r = field.unescaped_key();
-                        if (key_r.error()) {
+                        const auto key_r = json::detail::get_key_or_raw(field);
+                        if (!key_r) {
                             readable = false;
                             break;
                         }
@@ -652,7 +652,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                             readable = false;
                             break;
                         }
-                        auto key = key_r.value();
+                        auto key = *key_r;
                         auto val = val_r.value();
                         auto type_r = val.type();
                         if (type_r.error()) {
@@ -671,15 +671,16 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                                     readable = false;
                                     break;
                                 }
-                                auto nk_r = nf.unescaped_key();
+                                const auto nk_r =
+                                    json::detail::get_key_or_raw(nf);
                                 auto nv_r = nf.value();
-                                if (nk_r.error() || nv_r.error()) {
+                                if (!nk_r || nv_r.error()) {
                                     readable = false;
                                     break;
                                 }
                                 if (!internal::store_referenced_nested(
                                         fields, *query, query_has_dotted, key,
-                                        nk_r.value(), nv_r.value())) {
+                                        *nk_r, nv_r.value())) {
                                     readable = false;
                                     break;
                                 }

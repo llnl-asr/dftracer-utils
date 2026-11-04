@@ -95,7 +95,16 @@ void append_scalar_or_json(RecordBatchBuilder& builder,
     switch (type) {
         case simdjson::ondemand::json_type::number: {
             auto num_r = val.get_number();
-            if (num_r.error()) break;
+            if (num_r.error()) {
+                if (num_r.error() != simdjson::NUMBER_ERROR) break;
+                const auto refused = json::detail::refused_number(
+                    json::detail::trim_token(val.raw_json_token()));
+                if (!refused) break;
+                auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
+                                           ColumnType::Double);
+                builder.append_double(idx, *refused);
+                break;
+            }
             auto num = num_r.value();
             if (num.is_int64()) {
                 auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
@@ -113,11 +122,11 @@ void append_scalar_or_json(RecordBatchBuilder& builder,
             break;
         }
         case simdjson::ondemand::json_type::string: {
-            auto str_r = val.get_string();
-            if (str_r.error()) break;
+            const auto str = json::detail::get_string_or_raw(val);
+            if (!str) break;
             auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
                                        ColumnType::String);
-            builder.append_string(idx, str_r.value());
+            builder.append_string(idx, *str);
             break;
         }
         case simdjson::ondemand::json_type::boolean: {
@@ -168,9 +177,9 @@ bool arrow_row_from_doc(RecordBatchBuilder& builder,
     std::size_t pos = 0;
     for (auto field : obj_result.value()) {
         if (field.error()) continue;
-        auto key_r = field.unescaped_key();
-        if (key_r.error()) continue;
-        auto key_sv = key_r.value();
+        const auto key_r = json::detail::get_key_or_raw(field);
+        if (!key_r) continue;
+        auto key_sv = *key_r;
         auto val_r = field.value();
         if (val_r.error()) continue;
         auto val = val_r.value();
@@ -183,9 +192,9 @@ bool arrow_row_from_doc(RecordBatchBuilder& builder,
             if (nested.error()) continue;
             for (auto nf : nested.value()) {
                 if (nf.error()) continue;
-                auto nk_r = nf.unescaped_key();
-                if (nk_r.error()) continue;
-                auto nk = nk_r.value();
+                const auto nk_r = json::detail::get_key_or_raw(nf);
+                if (!nk_r) continue;
+                auto nk = *nk_r;
                 auto nv_r = nf.value();
                 if (nv_r.error()) continue;
                 auto nv = nv_r.value();
@@ -247,11 +256,11 @@ bool collect_query_fields(simdjson::ondemand::document_reference doc,
     if (obj.error()) return false;
     for (auto field : obj.value()) {
         if (field.error()) return false;
-        auto key_r = field.unescaped_key();
-        if (key_r.error()) return false;
+        const auto key_r = json::detail::get_key_or_raw(field);
+        if (!key_r) return false;
         auto val_r = field.value();
         if (val_r.error()) return false;
-        auto key = key_r.value();
+        auto key = *key_r;
         auto val = val_r.value();
         auto type_r = val.type();
         if (type_r.error()) return false;
@@ -261,13 +270,12 @@ bool collect_query_fields(simdjson::ondemand::document_reference doc,
             if (nested.error()) return false;
             for (auto nf : nested.value()) {
                 if (nf.error()) return false;
-                auto nk_r = nf.unescaped_key();
-                if (nk_r.error()) return false;
+                const auto nk_r = json::detail::get_key_or_raw(nf);
+                if (!nk_r) return false;
                 auto nv_r = nf.value();
                 if (nv_r.error()) return false;
-                if (!internal::store_referenced_nested(out, query, check_dotted,
-                                                       key, nk_r.value(),
-                                                       nv_r.value()))
+                if (!internal::store_referenced_nested(
+                        out, query, check_dotted, key, *nk_r, nv_r.value()))
                     return false;
             }
         } else {

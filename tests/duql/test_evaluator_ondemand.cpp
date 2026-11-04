@@ -255,7 +255,7 @@ constexpr const char* BROKEN_BEFORE[] = {
 constexpr const char* BROKEN_TOKEN[] = {
     R"({"x":01,"name":"read"})",  R"({"x":tru,"name":"read"})",
     R"({"x":nul,"name":"read"})", R"({"x":.5,"name":"read"})",
-    R"({"x":-,"name":"read"})",   R"({"x":"\q","name":"read"})",
+    R"({"x":-,"name":"read"})",   R"({"x":1x,"name":"read"})",
     R"({"x":1e,"name":"read"})",  R"({"x":+1,"name":"read"})",
 };
 
@@ -314,6 +314,77 @@ TEST_CASE("a bad token is dropped when the filter reads it and not otherwise") {
         REQUIRE(q.has_value());
         CAPTURE(line);
         CHECK(q->matches(*parsed));
+    }
+}
+
+TEST_CASE("a number too large for a double is an infinity, not a bad token") {
+    json::Document doc;
+    struct Case {
+        const char* line;
+        const char* filter;
+        bool expected;
+    };
+    const Case cases[] = {
+        {R"({"name":"read","args":{"a":1e400}})", "args.a > 1", true},
+        {R"({"name":"read","args":{"a":1e400}})", "a > 1e308", true},
+        {R"({"name":"read","args":{"a":1e400}})", "args.a < 1", false},
+        {R"({"name":"read","args":{"a":1e400}})", "args.a == 1", false},
+        {R"({"name":"read","args":{"a":-1e400}})", "args.a < -1e308", true},
+        {R"({"name":"read","args":{"a":-1e400}})", "args.a > 0", false},
+        {R"({"name":"read","args":{"a":1.5E+999}})", "args.a >= 1", true},
+        {R"({"name":"read","dur":1e400})", "dur > 5", true},
+        {R"({"name":"read","dur":1e400})", "not (dur > 5)", false},
+        {R"({"name":"read","dur":1e400,"pid":4})", "dur > 5 and pid == 4",
+         true},
+        {R"({"name":"read","args":{"a":1e400}})",
+         R"(lower(name) == "read" and args.a > 1)", true},
+        {R"({"name":"read","args":{"a":1e400}})", R"(any(args.l) > 1)", false},
+        {R"({"name":"read","args":{"l":[1,1e400]}})", "any(args.l) > 1000",
+         true},
+    };
+    for (const Case& c : cases) {
+        auto parsed = doc.parse(c.line);
+        REQUIRE(parsed.has_value());
+        auto q = duql::Query::from_string(c.filter);
+        REQUIRE(q.has_value());
+        INFO(dstd::String(c.line) << " | " << dstd::String(c.filter));
+        CHECK(q->matches(*parsed) == c.expected);
+        CHECK(q->matches(*parsed) == c.expected);
+    }
+}
+
+TEST_CASE("a string with an invalid escape is its raw text") {
+    json::Document doc;
+    struct Case {
+        const char* line;
+        const char* filter;
+        bool expected;
+    };
+    const Case cases[] = {
+        {R"({"name":"a\qb","dur":5})", R"(name == "a\\qb")", true},
+        {R"({"name":"A\qB","dur":5})", R"(lower(name) == "a\\qb")", true},
+        {R"({"name":"a\qb","dur":5})", R"(lower(name) == "a\\qb" and dur > 1)",
+         true},
+        {R"({"name":"a\qb","dur":5})", R"(name == "aqb")", false},
+        {R"({"name":"\ud800","dur":5})", R"(name == "\\ud800")", true},
+        {R"({"name":"\udc00","dur":5})", R"(lower(name) == "\\udc00")", true},
+        {R"({"name":"\u12","dur":5})", R"(lower(name) == "\\u12")", true},
+        {R"({"args":{"p":"x\qy"},"dur":5})", R"(args.p == "x\\qy")", true},
+        {R"({"k\q":1,"name":"read","dur":5})",
+         R"(lower(name) == "read" and dur > 1)", true},
+        {R"({"args":{"k\q":1,"n":2},"name":"read"})",
+         R"(lower(name) == "read" and args.n == 2)", true},
+        {R"({"name":"read","x":"\q"})", R"(x == 1 or name == "read")", true},
+        {R"({"name":"read","x":"\q"})", "x == 1", false},
+    };
+    for (const Case& c : cases) {
+        auto parsed = doc.parse(c.line);
+        REQUIRE(parsed.has_value());
+        auto q = duql::Query::from_string(c.filter);
+        REQUIRE(q.has_value());
+        INFO(dstd::String(c.line) << " | " << dstd::String(c.filter));
+        CHECK(q->matches(*parsed) == c.expected);
+        CHECK(q->matches(*parsed) == c.expected);
     }
 }
 

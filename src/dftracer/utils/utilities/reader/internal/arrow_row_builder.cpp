@@ -88,9 +88,9 @@ ParsedArgs parse_row_args(simdjson::ondemand::value &args_val) {
     if (obj.error()) return a;
     for (auto field : obj.value_unsafe()) {
         if (field.error()) continue;
-        auto key_r = field.unescaped_key();
-        if (key_r.error()) continue;
-        dstd::StringView key = key_r.value_unsafe();
+        const auto key_r = json::detail::get_key_or_raw(field);
+        if (!key_r) continue;
+        dstd::StringView key = *key_r;
         auto val_r = field.value();
         if (val_r.error()) continue;
         auto val = val_r.value_unsafe();
@@ -386,7 +386,16 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
         switch (json_type) {
             case simdjson::ondemand::json_type::number: {
                 auto num_result = val.get_number();
-                if (num_result.error()) break;
+                if (num_result.error()) {
+                    if (num_result.error() != simdjson::NUMBER_ERROR) break;
+                    const auto refused = json::detail::refused_number(
+                        json::detail::trim_token(val.raw_json_token()));
+                    if (!refused) break;
+                    std::size_t idx =
+                        builder.add_or_get_column(key_sv, ColumnType::Double);
+                    builder.append_double(idx, *refused);
+                    break;
+                }
                 auto num = num_result.value_unsafe();
                 const bool time_key =
                     opts.time_scale != 1.0 &&
@@ -411,9 +420,9 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
                 break;
             }
             case simdjson::ondemand::json_type::string: {
-                auto str_result = val.get_string();
-                if (str_result.error()) break;
-                auto str = str_result.value_unsafe();
+                const auto str_result = json::detail::get_string_or_raw(val);
+                if (!str_result) break;
+                const auto str = *str_result;
                 if (opts.dict_strings) {
                     std::size_t idx = builder.add_or_get_column(
                         key_sv, ColumnType::DictString);

@@ -409,6 +409,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Fix `find_package` for the installed shared and static libraries: a project that links one now finds Threads, simdjson, nanoarrow, pcre2, highway, utf8proc, vectorscan, zlib-ng, zstd and libdeflate from the same prefix with no extra flags.
   The private static archives install as `libdftracer_hs.a`, `libdftracer_hwy.a`, `libdftracer_hwy_contrib.a` and `libdftracer_utf8proc_static.a`, and the `zlib` package is now `dftracer_utils_zlib`.
+- Keep a line with a number too large for a double, such as `1e400`, and read that number as positive or negative infinity on the on-demand read paths.
+- Keep a line with an invalid string escape, such as `\q` or a lone surrogate, and read that string as its raw text on the on-demand read paths.
+  Readers that still use the DOM parser drop these lines.
 - Fix byte range reads that open more than 512 bytes into a line, which returned the tail of that line and lost the event.
   Adjacent byte ranges now give each line once and whole, at any cut and any line size.
 - Keep the duration sum of a chunk at INT64_MAX where a larger sum overflowed and gave a negative sum or a wrong mean.

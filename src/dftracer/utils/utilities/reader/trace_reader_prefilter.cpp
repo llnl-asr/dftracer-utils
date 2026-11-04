@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/utilities/reader/internal/trace_reader_prefilter.h>
 #include <simdjson.h>
 
@@ -70,9 +71,9 @@ bool probe_matches_value(const CompiledEqProbe& p,
                          simdjson::ondemand::value val) {
     switch (p.kind) {
         case CompiledEqProbe::Kind::String: {
-            auto r = val.get_string();
-            if (r.error()) return false;
-            auto sv = r.value_unsafe();
+            const auto r = json::detail::get_string_or_raw(val);
+            if (!r) return false;
+            const auto sv = *r;
             return sv.size() == p.s_val.size() &&
                    std::memcmp(sv.data(), p.s_val.data(), sv.size()) == 0;
         }
@@ -106,9 +107,8 @@ bool probe_matches_value(const CompiledEqProbe& p,
             return n.get_double() == static_cast<double>(p.u64_val);
         }
         case CompiledEqProbe::Kind::Double: {
-            auto r = val.get_double();
-            if (r.error()) return false;
-            return r.value_unsafe() == p.d_val;
+            const auto r = json::detail::get_double_or_refused(val);
+            return r && *r == p.d_val;
         }
         case CompiledEqProbe::Kind::Bool: {
             auto r = val.get_bool();

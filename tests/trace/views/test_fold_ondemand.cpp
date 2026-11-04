@@ -261,4 +261,134 @@ TEST_SUITE("FoldOnDemand") {
               "ph=2 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
               "args{\"c\"=i3} top{} sp{}");
     }
+
+    TEST_CASE(
+        "a number too large for a double and a string with an invalid "
+        "escape keep the line") {
+        // The DOM parser rejects each of these lines, so the expected event is
+        // written out here.
+        struct OddShape {
+            const char* name;
+            const char* line;
+            const char* expected;
+        };
+        const OddShape shapes[] = {
+            {"args_plus_overflow", R"j({"ph":1,"args":{"a":1e400,"x":1}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"a\"=dinf \"x\"=i1} top{} sp{}"},
+            {"args_minus_overflow", R"j({"ph":1,"args":{"a":-1e400,"x":1}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"a\"=d-inf \"x\"=i1} top{} sp{}"},
+            {"args_big_exponent", R"j({"ph":1,"args":{"a":1.5E+999,"x":1}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"a\"=dinf \"x\"=i1} top{} sp{}"},
+            {"args_underflow_still_reads",
+             R"j({"ph":1,"args":{"a":1e-400,"x":1}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"a\"=d0 \"x\"=i1} top{} sp{}"},
+            {"args_overflow_nested",
+             R"j({"ph":1,"args":{"l":[1,1e400,-1e400],"o":{"k":1e400}}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"l.0\"=i1 \"l.1\"=dinf \"l.2\"=d-inf \"o.k\"=dinf} top{} "
+             "sp{}"},
+            {"ts_overflow", R"j({"ph":1,"ts":1e400,"name":"n"})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=\"n\" fh=- hh=- args{} "
+             "top{} sp{}"},
+            {"dur_overflow", R"j({"ph":1,"dur":-1e400,"ts":5})j",
+             "ph=1 pid=0 tid=0 ts=5 dur=- cat=- name=- fh=- hh=- args{} top{} "
+             "sp{}"},
+            {"ph_overflow", R"j({"ph":1e400,"ts":5})j",
+             "ph=0 pid=0 tid=0 ts=5 dur=- cat=- name=- fh=- hh=- args{} top{} "
+             "sp{}"},
+            {"bad_escape_name", R"j({"ph":1,"name":"a\qb"})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=\"a\\\\qb\" fh=- hh=- "
+             "args{} top{} sp{}"},
+            {"bad_escape_cat", R"j({"ph":1,"cat":"\q"})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=\"\\\\q\" name=- fh=- hh=- "
+             "args{} top{} sp{}"},
+            {"bad_escape_arg", R"j({"ph":1,"args":{"a":"x\qy","b":2}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"a\"=s\"x\\\\qy\" \"b\"=i2} top{} sp{}"},
+            {"lone_high_surrogate", R"j({"ph":1,"args":{"a":"\ud800"}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"a\"=s\"\\\\ud800\"} top{} sp{}"},
+            {"lone_low_surrogate", R"j({"ph":1,"args":{"a":"\udc00"}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"a\"=s\"\\\\udc00\"} top{} sp{}"},
+            {"short_unicode_escape", R"j({"ph":1,"args":{"a":"\u12"}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"a\"=s\"\\\\u12\"} top{} sp{}"},
+            {"bad_escape_key", R"j({"ph":1,"args":{"k\q":1,"b":2}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"k\\\\q\"=i1 \"b\"=i2} top{} sp{}"},
+            {"bad_escape_nested_key", R"j({"ph":1,"args":{"o":{"k\q":1}}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"o.k\\\\q\"=i1} top{} sp{}"},
+            {"bad_escape_top_key", R"j({"k\q":1,"ph":1,"ts":5})j",
+             "ph=1 pid=0 tid=0 ts=5 dur=- cat=- name=- fh=- hh=- args{} top{} "
+             "sp{}"},
+            {"bad_escape_fhash", R"j({"ph":1,"args":{"fhash":"a\qb"}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=\"a\\\\qb\" hh=- "
+             "args{} top{} sp{}"},
+            {"bad_escape_ph", R"j({"ph":"\q"})j",
+             "ph=0 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- args{} top{} "
+             "sp{}"},
+        };
+        json::Document doc;
+        for (const OddShape& shape : shapes) {
+            INFO(String(shape.name) << " " << shape.line);
+            StringIntern dom_intern;
+            FoldEvent dom_ev;
+            const bool dom_ok = read_dom(shape.line, dom_ev, dom_intern, true);
+            if (StringView(shape.name) != "args_underflow_still_reads")
+                CHECK_FALSE(dom_ok);
+            for (const bool needs_args : {true, false}) {
+                CAPTURE(needs_args);
+                const OnDemandRead got =
+                    read_on_demand(doc, shape.line, needs_args);
+                REQUIRE(got.parsed);
+                CHECK_FALSE(got.broken);
+                if (needs_args ||
+                    StringView(shape.line).find("\"args\"") == StringView::npos)
+                    CHECK(got.text == shape.expected);
+                const OnDemandRead next = read_on_demand(
+                    doc, R"j({"ph":1,"ts":9,"name":"z"})j", needs_args);
+                CHECK_FALSE(next.broken);
+                CHECK(next.text ==
+                      "ph=1 pid=0 tid=0 ts=9 dur=- cat=- name=\"z\" fh=- "
+                      "hh=- args{} top{} sp{}");
+            }
+        }
+    }
+
+    TEST_CASE(
+        "text that is not a number or a closed string is still an error") {
+        json::Document doc;
+        const char* const bad_args[] = {"tru", "01",  "1x",  "-",
+                                        "1.",  "+1",  ".5",  "NaN",
+                                        "1e",  "1e+", "0x1", "1e400x"};
+        for (const char* token : bad_args) {
+            INFO(String("token ") << token);
+            const String line = common::str_cat(
+                R"({"ph":1,"ts":5,"args":{"a":)", token, R"(,"b":2}})");
+            const OnDemandRead got = read_on_demand(doc, line, true);
+            CHECK_FALSE((got.parsed && !got.broken));
+            // A field the reader only type-checks never looks at an atom that
+            // starts like no number.
+            if (token[0] < '0' || token[0] > '9') continue;
+            const String top =
+                common::str_cat(R"({"ph":1,"ts":)", token, R"(,"name":"n"})");
+            const OnDemandRead top_got = read_on_demand(doc, top, true);
+            CHECK_FALSE((top_got.parsed && !top_got.broken));
+        }
+        const char* const cropped[] = {
+            R"j({"ph":1,"args":{"a":"x)j", R"j({"ph":1,"args":{"a":"x\q)j",
+            R"j({"ph":1,"args":{"a":"x\)j", R"j({"ph":1,"args":{"a":)j",
+            R"j({"ph":1,"args":{"k\q":)j"};
+        for (const char* line : cropped) {
+            INFO(String("line ") << line);
+            const OnDemandRead got = read_on_demand(doc, line, true);
+            CHECK_FALSE((got.parsed && !got.broken));
+        }
+    }
 }

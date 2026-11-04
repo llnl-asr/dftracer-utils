@@ -7,6 +7,7 @@
 #include <dftracer/utils/json/value_access.h>
 #include <doctest/doctest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <type_traits>
@@ -577,4 +578,117 @@ TEST_CASE("a read of the parent inside its own walk comes back empty") {
     });
     CHECK(elements == 3);
     CHECK(parent_reads == 0);
+}
+
+TEST_CASE("a number too large for a double reads as an infinity") {
+    Document doc;
+    Value v = root(doc, R"({"a":1e400,"b":2,"c":-1e400,"d":1.5E+999,)"
+                        R"("e":1.7976931348623159e308,"f":"x"})");
+    const double inf = std::numeric_limits<double>::infinity();
+    CHECK(field(v, "a").type() == Value::Type::Double);
+    CHECK(field(v, "a").as_double() == inf);
+    CHECK(field(v, "b").as_int() == 2);
+    CHECK(field(v, "c").as_double() == -inf);
+    CHECK(field(v, "d").as_double() == inf);
+    CHECK(field(v, "e").as_double() == inf);
+    CHECK(field(v, "f").as_string() == "x");
+}
+
+TEST_CASE("a member walk goes past numbers too large for a double") {
+    Document doc;
+    Value v = root(doc, R"({"a":1e400,"b":-1e400,"c":3,"d":1e-400})");
+    dstd::Vector<double> seen;
+    v.for_each_member([&](dstd::StringView, Value m) {
+        if (auto d = m.as_double()) seen.push_back(*d);
+    });
+    REQUIRE(seen.size() == 4);
+    CHECK(seen[0] == std::numeric_limits<double>::infinity());
+    CHECK(seen[1] == -std::numeric_limits<double>::infinity());
+    CHECK(seen[2] == 3.0);
+    CHECK(seen[3] == 0.0);
+}
+
+TEST_CASE("a number with a bad grammar stays a read error") {
+    Document doc;
+    for (const char* bad : {"tru", "01", "1x", "-", "1.", "+1", ".5", "NaN",
+                            "1e", "1e+", "0x1"}) {
+        const dstd::String line = dstd::String(R"({"a":)") + bad + R"(,"b":2})";
+        auto parsed = doc.parse(line);
+        if (!parsed) continue;
+        CAPTURE(bad);
+        auto a = parsed->find("a");
+        REQUIRE(a.has_value());
+        CHECK_FALSE(a->as_double().has_value());
+        CHECK_FALSE(a->as_int().has_value());
+        const bool reaches_parser =
+            bad[0] == '-' || (bad[0] >= '0' && bad[0] <= '9');
+        if (reaches_parser) CHECK_FALSE(parsed->find("b").has_value());
+    }
+}
+
+TEST_CASE("refused_number gives the double of a number simdjson refuses") {
+    using json::detail::refused_number;
+    const double inf = std::numeric_limits<double>::infinity();
+    CHECK(refused_number("1e400") == inf);
+    CHECK(refused_number("-1e400") == -inf);
+    CHECK(refused_number("1.5E+999") == inf);
+    CHECK(refused_number("-0.5e400") == -inf);
+    CHECK(refused_number("1e99999999999999999999") == inf);
+    CHECK(refused_number("1.7976931348623159e308") == inf);
+    CHECK(refused_number("1e-99999999999999999999") == 0.0);
+    const auto negative_zero = refused_number("-1e-99999999999999999999");
+    REQUIRE(negative_zero.has_value());
+    CHECK(*negative_zero == 0.0);
+    CHECK(std::signbit(*negative_zero));
+    for (const char* bad :
+         {"", "tru", "01", "1x", "-", "1.", "+1", ".5", "NaN", "1e", "1e+",
+          "1e400x", "--1e400", "1e4.0", "0x1", "1.5", "42"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(refused_number(bad).has_value());
+    }
+}
+
+TEST_CASE("a string with an invalid escape reads as its raw text") {
+    Document doc;
+    Value v = root(doc, R"({"a":"x\qy","b":2,"c":"\ud800","d":"\udc00",)"
+                        R"("e":"\u12","f":"ok"})");
+    CHECK(field(v, "a").as_string() == R"(x\qy)");
+    CHECK(field(v, "b").as_int() == 2);
+    CHECK(field(v, "c").as_string() == R"(\ud800)");
+    CHECK(field(v, "d").as_string() == R"(\udc00)");
+    CHECK(field(v, "e").as_string() == R"(\u12)");
+    CHECK(field(v, "f").as_string() == "ok");
+}
+
+TEST_CASE("a name with an invalid escape is its raw text") {
+    Document doc;
+    Value v = root(doc, R"({"k\q":1,"l\ud800":2,"m":3})");
+    dstd::String names;
+    int sum = 0;
+    v.for_each_member([&](dstd::StringView name, Value m) {
+        names += name;
+        names += '|';
+        sum += static_cast<int>(m.as_int().value_or(0));
+    });
+    CHECK(names == R"(k\q|l\ud800|m|)");
+    CHECK(sum == 6);
+    Value again = root(doc, R"({"k\q":1,"m":3})");
+    CHECK(field(again, R"(k\q)").as_int() == 1);
+    CHECK(field(again, "m").as_int() == 3);
+}
+
+TEST_CASE("an unterminated string or a cropped line is still an error") {
+    Document doc;
+    for (const char* bad :
+         {R"({"a":"x)", R"({"a":"x\q)", R"({"a":"x\)", R"({"a\q":1,"b":"y)"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(doc.parse(bad).has_value());
+    }
+    for (const char* cropped : {R"({"a":)", R"({"a\q":1,"b":)"}) {
+        CAPTURE(cropped);
+        auto parsed = doc.parse(cropped);
+        if (!parsed) continue;
+        auto b = parsed->find("b");
+        if (b) CHECK_FALSE(b->as_int().has_value());
+    }
 }

@@ -717,13 +717,15 @@ void extract_fold_event_into(
     bool capture_schema = false, DecodeHints* hints = nullptr);
 
 /// Read the event `event`, an object, into `ev` (reset first) as an owned
-/// event, in one forward walk of its text: no DOM tree is built. It gives the
-/// event the DOM form gives for the same line with the same `needs_args`, with
-/// no extra fields and no schema capture. A read error, such as a bad number
-/// or escape in a part the walk reaches, marks the line broken and leaves `ev`
-/// reset, which no consumer keeps. A part the walk does not reach is not
-/// checked. With `cache`, bound to `intern`, a string the cache has seen is not
-/// looked up in `intern` again.
+/// event, in one forward walk of its text: no DOM tree is built. On a line the
+/// DOM parser accepts, it gives the event the DOM form gives with the same
+/// `needs_args`, with no extra fields and no schema capture. It also keeps a
+/// line with an invalid string escape, as the raw text, or with a number too
+/// large for a double, as signed infinity, which the DOM parser refuses. A read
+/// error, such as text that is no JSON value in a part the walk reaches, marks
+/// the line broken and leaves `ev` reset, which no consumer keeps. A part the
+/// walk does not reach is not checked. With `cache`, bound to `intern`, a
+/// string the cache has seen is not looked up in `intern` again.
 void extract_fold_event_into(
     FoldEvent& ev, json::Value& event,
     dftracer::utils::dstd::StringIntern& intern, bool needs_args,

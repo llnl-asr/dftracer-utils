@@ -574,12 +574,28 @@ struct Number {
     Number() : i(0) {}
 };
 
+// The double of a fraction or exponent form that simdjson refused for its
+// magnitude, as Python's json gives it.
+dstd::Optional<double> refused_real(OnDemandValue& v) {
+    const dstd::StringView token = json::detail::trim_token(v.raw_json_token());
+    if (token.find_first_of(".eE") == dstd::StringView::npos)
+        return dstd::nullopt;
+    return json::detail::refused_number(token);
+}
+
 // False when the text is not a valid number.
 bool read_number(OnDemandValue& v, Number& out) {
     simdjson::ondemand::number n;
     const simdjson::error_code code = v.get_number().get(n);
     if (code == simdjson::BIGINT_ERROR) {
         out.kind = Number::Kind::Big;
+        return true;
+    }
+    if (code == simdjson::NUMBER_ERROR) {
+        const auto refused = refused_real(v);
+        if (!refused) return false;
+        out.kind = Number::Kind::Double;
+        out.d = *refused;
         return true;
     }
     if (code) return false;
@@ -863,6 +879,12 @@ class OnDemandReader {
             ev_.args.emplace_back(key_id,
                                   ids.get_or_insert(json::detail::value_extent(
                                       v.raw_json_token().data(), end_)));
+            return true;
+        }
+        if (code == simdjson::NUMBER_ERROR) {
+            const auto refused = refused_real(v);
+            if (!refused) return false;
+            ev_.args.emplace_back(key_id, *refused);
             return true;
         }
         if (code) return false;

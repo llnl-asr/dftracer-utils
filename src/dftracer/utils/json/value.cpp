@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -237,7 +238,7 @@ dstd::Optional<dstd::StringView> decode_string(dstd::StringView text,
     std::size_t length;
     // The copy in the arena is the source, so decode over it in place: a
     // decoded byte is never written ahead of the byte being read.
-    if (!unescape(room, dst, length)) return dstd::nullopt;
+    if (!unescape(room, dst, length)) return text;
     return dstd::StringView(dst, length);
 }
 
@@ -260,6 +261,82 @@ dstd::Optional<dstd::StringView> read_key(
     if (q >= end) return dstd::nullopt;
     return decode_string(
         dstd::StringView(begin, static_cast<std::size_t>(q - begin)), arena);
+}
+
+dstd::Optional<double> refused_number(dstd::StringView token) {
+    constexpr long EXPONENT_CAP = 100000000;
+    const char* p = token.data();
+    const char* const end = p + token.size();
+    const bool negative = p < end && *p == '-';
+    if (negative) ++p;
+    const auto is_digit = [](char c) { return c >= '0' && c <= '9'; };
+    if (p == end || !is_digit(*p)) return dstd::nullopt;
+    const char* const int_begin = p;
+    if (*p == '0') {
+        ++p;
+    } else {
+        while (p < end && is_digit(*p)) ++p;
+    }
+    const char* const int_end = p;
+    const char* frac_begin = p;
+    const char* frac_end = p;
+    if (p < end && *p == '.') {
+        frac_begin = ++p;
+        while (p < end && is_digit(*p)) ++p;
+        frac_end = p;
+        if (frac_end == frac_begin) return dstd::nullopt;
+    }
+    long exponent = 0;
+    if (p < end && (*p == 'e' || *p == 'E')) {
+        ++p;
+        bool exponent_negative = false;
+        if (p < end && (*p == '+' || *p == '-'))
+            exponent_negative = *p++ == '-';
+        const char* const digits = p;
+        for (; p < end && is_digit(*p); ++p)
+            if (exponent < EXPONENT_CAP) exponent = exponent * 10 + (*p - '0');
+        if (p == digits) return dstd::nullopt;
+        if (exponent_negative) exponent = -exponent;
+    }
+    if (p != end) return dstd::nullopt;
+    long leading_zeros = 0;
+    bool nonzero = false;
+    for (const char* d = int_begin; d < int_end && !nonzero; ++d) {
+        if (*d == '0')
+            ++leading_zeros;
+        else
+            nonzero = true;
+    }
+    for (const char* d = frac_begin; d < frac_end && !nonzero; ++d) {
+        if (*d == '0')
+            ++leading_zeros;
+        else
+            nonzero = true;
+    }
+    const double sign = negative ? -1.0 : 1.0;
+    if (!nonzero) return sign * 0.0;
+    // The decimal exponent of the first nonzero digit.
+    const long magnitude =
+        static_cast<long>(int_end - int_begin) - 1 - leading_zeros + exponent;
+    if (magnitude >= 308) return sign * std::numeric_limits<double>::infinity();
+    if (magnitude < -330) return sign * 0.0;
+    return dstd::nullopt;
+}
+
+dstd::Optional<dstd::StringView> raw_string(simdjson::ondemand::value& value) {
+    const dstd::StringView token = trim_token(value.raw_json_token());
+    if (token.size() < 2 || token.front() != '"' || token.back() != '"')
+        return dstd::nullopt;
+    return token.substr(1, token.size() - 2);
+}
+
+dstd::StringView raw_key(const char* begin) {
+    const char* q = begin;
+    while (*q != '"') {
+        if (*q == '\\') ++q;
+        ++q;
+    }
+    return dstd::StringView(begin, static_cast<std::size_t>(q - begin));
 }
 
 Value ValueAccess::make(DocumentState* owner, OnDemand v, bool root) {
@@ -488,7 +565,15 @@ dstd::Optional<double> Value::as_double() {
     if ((c != '-' && (c < '0' || c > '9')) || !fresh_for_read())
         return dstd::nullopt;
     double out;
-    if (Access::inner(*this).get_double().get(out)) {
+    const simdjson::error_code code =
+        Access::inner(*this).get_double().get(out);
+    if (code == simdjson::NUMBER_ERROR) {
+        if (const auto refused = detail::refused_number(raw())) {
+            state_ = SPENT;
+            return refused;
+        }
+    }
+    if (code) {
         owner_->broken = true;
         return dstd::nullopt;
     }

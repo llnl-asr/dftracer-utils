@@ -71,7 +71,8 @@ class Value {
     /// The member `key` of an object, or empty when this is not an object or
     /// has no such member. `key` is compared with the name as it is written in
     /// the text, so a name that holds an escape such as `\"` is found by its
-    /// escaped spelling; @ref for_each_member gives decoded names.
+    /// escaped spelling; @ref for_each_member gives decoded names, or the raw
+    /// text of a name that holds an invalid escape.
     dstd::Optional<Value> find(dstd::StringView key);
 
     /// Calls `fn` with each member name and value of an object, in order.
@@ -95,13 +96,16 @@ class Value {
     /// @ref as_double.
     dstd::Optional<std::int64_t> as_int();
     /// The number as a double, or empty when this is not a number. An integer
-    /// converts, and may lose precision past 2^53.
+    /// converts, and may lose precision past 2^53. A number too large for a
+    /// double reads as +inf or -inf, one too small as a signed zero.
     dstd::Optional<double> as_double();
-    /// The string with escapes decoded, or empty when this is not a string or
-    /// an escape is invalid. A string with no backslash is a view of the line
-    /// itself. A decoded string lives in a buffer owned by the @ref Document,
-    /// which a later read never moves. Either view lives until the next
-    /// @ref Document::parse, however often you read.
+    /// The string with escapes decoded, or empty when this is not a string. A
+    /// string with an invalid escape (`\q`, a short `\u12`, a lone surrogate)
+    /// is the raw text between the quotes, undecoded. A string with no
+    /// backslash is a view of the line itself. A decoded string lives in a
+    /// buffer owned by the @ref Document, which a later read never moves.
+    /// Either view lives until the next @ref Document::parse, however often
+    /// you read.
     dstd::Optional<dstd::StringView> as_string();
     /// The boolean, or empty when this is not a boolean.
     dstd::Optional<bool> as_bool();

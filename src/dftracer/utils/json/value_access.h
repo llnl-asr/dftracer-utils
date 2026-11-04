@@ -83,9 +83,15 @@ dstd::StringView value_extent(const char* start, const char* end);
 
 /// `text`, the inside of a JSON string, with escapes decoded: a view of `text`
 /// when it has no backslash, else a copy in `arena`, which never moves a copy
-/// made earlier. Empty on an invalid escape.
+/// made earlier. A view of `text` itself, undecoded, on an invalid escape.
 dstd::Optional<dstd::StringView> decode_string(dstd::StringView text,
                                                dstd::StringArena& arena);
+
+/// The double that `token`, a JSON number that simdjson refused, reads as: a
+/// signed infinity when its magnitude is too large for a double, a signed zero
+/// when it is too small. Empty when `token` is not a JSON number. Ask only
+/// after simdjson reports an error, so a valid line costs nothing.
+dstd::Optional<double> refused_number(dstd::StringView token);
 
 /// `token`, the text up to the next structural byte, without the whitespace
 /// that follows the value. Needs no scan, unlike @ref value_extent.
@@ -100,7 +106,8 @@ inline dstd::StringView trim_token(dstd::StringView token) {
 }
 
 /// The decoded string whose opening quote is the first byte of `token`, a
-/// view of the line or a copy in `arena`. Empty when it is not a string.
+/// view of the line or a copy in `arena`; the raw text between the quotes on an
+/// invalid escape. Empty when it is not a string.
 dstd::Optional<dstd::StringView> read_string(dstd::StringView token,
                                              dstd::StringArena& arena);
 
@@ -131,12 +138,53 @@ inline bool has_backslash(dstd::StringView text) {
 
 /// The decoded name of the member `field` of an object, found without scanning
 /// the key. A view of the line when the name has no backslash, else a copy in
-/// `arena`. Empty on an invalid escape.
+/// `arena`. The raw name on an invalid escape.
 inline dstd::Optional<dstd::StringView> read_key(
     const simdjson::ondemand::field& field, dstd::StringArena& arena) {
     const dstd::StringView raw = field.escaped_key();
     if (!has_backslash(raw)) return raw;
     return decode_string(raw, arena);
+}
+
+/// The raw text between the quotes of the string that starts at `value`, for a
+/// string whose escape simdjson rejected. Empty when `value` is no string.
+dstd::Optional<dstd::StringView> raw_string(simdjson::ondemand::value& value);
+
+/// The raw key text that starts at `begin`, the byte after the opening quote.
+/// The closing quote is there because the document parsed.
+dstd::StringView raw_key(const char* begin);
+
+/// The string `value` as @ref simdjson::ondemand::value::get_string reads it,
+/// or its raw text when simdjson rejects an escape in it. Empty when `value` is
+/// no string.
+inline dstd::Optional<dstd::StringView> get_string_or_raw(
+    simdjson::ondemand::value& value) {
+    auto result = value.get_string();
+    if (!result.error()) return dstd::StringView(result.value_unsafe());
+    if (result.error() != simdjson::STRING_ERROR) return dstd::nullopt;
+    return raw_string(value);
+}
+
+/// The double `value` as @ref simdjson::ondemand::value::get_double reads it,
+/// or the @ref refused_number of its text when simdjson refuses the magnitude.
+inline dstd::Optional<double> get_double_or_refused(
+    simdjson::ondemand::value& value) {
+    auto result = value.get_double();
+    if (!result.error()) return result.value_unsafe();
+    if (result.error() != simdjson::NUMBER_ERROR) return dstd::nullopt;
+    return refused_number(trim_token(value.raw_json_token()));
+}
+
+/// The name of `field`, a simdjson field or its result, as
+/// @ref simdjson::ondemand::field::unescaped_key reads it, or its raw text when
+/// simdjson rejects an escape in it.
+template <class Field>
+inline dstd::Optional<dstd::StringView> get_key_or_raw(Field&& field) {
+    const char* const begin = field.key().raw();
+    auto result = field.unescaped_key();
+    if (!result.error()) return dstd::StringView(result.value_unsafe());
+    if (result.error() != simdjson::STRING_ERROR) return dstd::nullopt;
+    return raw_key(begin);
 }
 
 }  // namespace dftracer::utils::json::detail

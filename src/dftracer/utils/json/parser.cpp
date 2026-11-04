@@ -48,9 +48,10 @@ dstd::Optional<std::uint64_t> JsonParser::get_uint64(dstd::StringView key) {
 
 dstd::Optional<double> JsonParser::get_double(dstd::StringView key) {
     if (!valid_) return dstd::nullopt;
-    auto result = active_[key].get_double();
+    auto result = active_[key];
     if (result.error()) return dstd::nullopt;
-    return result.value();
+    auto value = result.value_unsafe();
+    return detail::get_double_or_refused(value);
 }
 
 dstd::Optional<bool> JsonParser::get_bool(dstd::StringView key) {
@@ -62,9 +63,10 @@ dstd::Optional<bool> JsonParser::get_bool(dstd::StringView key) {
 
 dstd::Optional<dstd::StringView> JsonParser::get_string(dstd::StringView key) {
     if (!valid_) return dstd::nullopt;
-    auto result = active_[key].get_string();
+    auto result = active_[key];
     if (result.error()) return dstd::nullopt;
-    return result.value();
+    auto value = result.value_unsafe();
+    return detail::get_string_or_raw(value);
 }
 
 dstd::Optional<simdjson::ondemand::value> JsonParser::get_value(

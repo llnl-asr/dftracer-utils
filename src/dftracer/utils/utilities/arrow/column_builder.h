@@ -48,6 +48,21 @@ enum class ColumnType {
     Float32
 };
 
+/// Which backing vectors of @ref ColumnData a @ref ColumnType uses. The
+/// fixed-width integer and float variants share their 64-bit accumulator.
+enum class StorageKind : std::uint8_t {
+    Int64,
+    Uint64,
+    Double,
+    String,
+    Bool,
+    Dict,
+    Hist,
+    StringList,
+    Int64List,
+    StructList
+};
+
 struct ColumnSpec {
     dstd::String name;
     ColumnType type;
@@ -69,6 +84,8 @@ struct StructCell {
 struct ColumnData {
     dstd::String name;
     ColumnType type;
+    /// The storage of `type`; each append checks it before it writes.
+    StorageKind kind = StorageKind::Int64;
     dstd::Vector<std::int64_t> int64_values;
     dstd::Vector<std::uint64_t> uint64_values;
     dstd::Vector<double> double_values;
@@ -127,9 +144,26 @@ class RecordBatchBuilder {
 
     /// Dynamic schema mode - returns column index.
     /// Creates column (backfilling nulls) if it doesn't exist.
-    /// Returns existing index if column already exists; type is ignored for
-    /// existing columns - callers must use find_column() to check type before
-    /// appending, and fall back to append_null() on mismatch.
+    ///
+    /// Returns the existing index if the column exists. When `type` differs
+    /// from the column's type and the schema is not declared, the column is
+    /// promoted so that no value is lost: mixed Int64, Uint64 and Double make
+    /// it Double, and any mix with a String, Bool or DictString makes it
+    /// String, where a number or bool is its JSON text. Rows already appended
+    /// are converted. A locked schema promotes too, and a later batch keeps the
+    /// wider type. The returned index stays valid after a later promotion, and
+    /// every append_* accepts a value of any scalar type: it converts the value
+    /// to the column's current type.
+    ///
+    /// Promotion is lossy in two ways. An integer above 2^53 in magnitude
+    /// becomes the nearest double, which is inexact. A number that becomes text
+    /// is written in a normalized form, not its source text: `1.50` is `1.5`,
+    /// a whole double keeps a `.0` (`2.0`), and a non-finite double is
+    /// `Infinity`, `-Infinity` or `NaN`, which is no JSON.
+    ///
+    /// A declared schema keeps its types. A value the column can hold without
+    /// loss is converted (an integer into Double, a number, bool or string
+    /// into String); any other value is stored as a null.
     std::size_t add_or_get_column(dstd::StringView name, ColumnType type);
 
     /// Returns the index of an existing column, or dstd::nullopt if not found.
@@ -204,7 +238,13 @@ class RecordBatchBuilder {
     bool schema_locked_ = false;
     dstd::Vector<bool> touched_;
 
+    struct Scalar;
+
     void init_column(ColumnData& col, ColumnType type, dstd::StringView name);
+    void promote_column(ColumnData& col, ColumnType target);
+    // The slow path of the append_* calls: `col_idx` holds another type than
+    // the value, so the value is converted or stored as a null.
+    void append_scalar_slow(std::size_t col_idx, const Scalar& value);
     void backfill_nulls(ColumnData& col, std::size_t target_count);
     // Dynamic-mode first-touch tracking for column col_idx (no-op once the
     // schema is declared or locked).

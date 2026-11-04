@@ -9,6 +9,8 @@
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 
+#include <limits>
+
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::utilities::arrow;
@@ -240,4 +242,425 @@ TEST_CASE("RecordBatchBuilder - HIST list<struct> column") {
           dstd::String("+s"));
 }
 
+namespace {
+
+// The cells of column `col` of a finished batch, read through nanoarrow.
+struct Cells {
+    ArrowArrayView view;
+    explicit Cells(ArrowExportResult& r) {
+        REQUIRE(init_array_view(view, r.get_schema(), r.get_array()) ==
+                NANOARROW_OK);
+    }
+    ~Cells() { ArrowArrayViewReset(&view); }
+    Cells(const Cells&) = delete;
+    Cells& operator=(const Cells&) = delete;
+    bool is_null(int col, std::int64_t row) const {
+        return ArrowArrayViewIsNull(view.children[col], row);
+    }
+    std::int64_t i64(int col, std::int64_t row) const {
+        return ArrowArrayViewGetIntUnsafe(view.children[col], row);
+    }
+    double f64(int col, std::int64_t row) const {
+        return ArrowArrayViewGetDoubleUnsafe(view.children[col], row);
+    }
+    dstd::String str(int col, std::int64_t row) const {
+        const ArrowStringView s =
+            ArrowArrayViewGetStringUnsafe(view.children[col], row);
+        return dstd::String(s.data, static_cast<std::size_t>(s.size_bytes));
+    }
+};
+
+}  // namespace
+
+TEST_CASE("RecordBatchBuilder - mixed numbers promote the column to Double") {
+    SUBCASE("int64 then double") {
+        RecordBatchBuilder b;
+        auto x = b.add_or_get_column("x", ColumnType::Int64);
+        b.append_int64(x, 1);
+        b.end_row();
+        x = b.add_or_get_column("x", ColumnType::Double);
+        b.append_double(x, 1.5);
+        b.end_row();
+        auto result = b.finish();
+        REQUIRE(result.valid());
+        CHECK(child_schema_format(result, 0) == dstd::String("g"));
+        Cells c(result);
+        CHECK(c.f64(0, 0) == 1.0);
+        CHECK(c.f64(0, 1) == 1.5);
+    }
+    SUBCASE("double then int64") {
+        RecordBatchBuilder b;
+        auto x = b.add_or_get_column("x", ColumnType::Double);
+        b.append_double(x, 1.5);
+        b.end_row();
+        x = b.add_or_get_column("x", ColumnType::Int64);
+        b.append_int64(x, 7);
+        b.end_row();
+        auto result = b.finish();
+        REQUIRE(result.valid());
+        CHECK(child_schema_format(result, 0) == dstd::String("g"));
+        Cells c(result);
+        CHECK(c.f64(0, 0) == 1.5);
+        CHECK(c.f64(0, 1) == 7.0);
+    }
+    SUBCASE("int64 with uint64 in both orders") {
+        for (const bool signed_first : {true, false}) {
+            RecordBatchBuilder b;
+            auto x = b.add_or_get_column(
+                "x", signed_first ? ColumnType::Int64 : ColumnType::Uint64);
+            if (signed_first)
+                b.append_int64(x, -3);
+            else
+                b.append_uint64(x, 18446744073709551615ULL);
+            b.end_row();
+            x = b.add_or_get_column(
+                "x", signed_first ? ColumnType::Uint64 : ColumnType::Int64);
+            if (signed_first)
+                b.append_uint64(x, 18446744073709551615ULL);
+            else
+                b.append_int64(x, -3);
+            b.end_row();
+            auto result = b.finish();
+            REQUIRE(result.valid());
+            CHECK(child_schema_format(result, 0) == dstd::String("g"));
+            Cells c(result);
+            const double big = 18446744073709551615.0;
+            CHECK(c.f64(0, 0) == (signed_first ? -3.0 : big));
+            CHECK(c.f64(0, 1) == (signed_first ? big : -3.0));
+        }
+    }
+    SUBCASE("a null stays a null and rows added before the column are null") {
+        RecordBatchBuilder b;
+        auto y = b.add_or_get_column("y", ColumnType::Int64);
+        b.append_int64(y, 1);
+        b.end_row();
+        auto x = b.add_or_get_column("x", ColumnType::Int64);
+        b.append_int64(y, 2);
+        b.append_int64(x, 5);
+        b.end_row();
+        b.append_int64(y, 3);
+        b.append_null(x);
+        b.end_row();
+        x = b.add_or_get_column("x", ColumnType::Double);
+        b.append_int64(y, 4);
+        b.append_double(x, 2.5);
+        b.end_row();
+        auto result = b.finish();
+        REQUIRE(result.valid());
+        Cells c(result);
+        CHECK(c.is_null(1, 0));
+        CHECK(c.f64(1, 1) == 5.0);
+        CHECK(c.is_null(1, 2));
+        CHECK(c.f64(1, 3) == 2.5);
+    }
+    SUBCASE("a stale index keeps working after the column is promoted") {
+        RecordBatchBuilder b;
+        const auto x = b.add_or_get_column("x", ColumnType::Int64);
+        b.append_int64(x, 1);
+        b.end_row();
+        b.add_or_get_column("x", ColumnType::Double);
+        b.append_int64(x, 2);
+        b.end_row();
+        b.append_uint64(x, 3);
+        b.end_row();
+        auto result = b.finish();
+        REQUIRE(result.valid());
+        Cells c(result);
+        CHECK(c.f64(0, 0) == 1.0);
+        CHECK(c.f64(0, 1) == 2.0);
+        CHECK(c.f64(0, 2) == 3.0);
+    }
+}
+
+TEST_CASE(
+    "RecordBatchBuilder - a string, bool or nested value makes it String") {
+    SUBCASE("number then string") {
+        RecordBatchBuilder b;
+        auto x = b.add_or_get_column("x", ColumnType::Int64);
+        b.append_int64(x, 42);
+        b.end_row();
+        b.append_null(x);
+        b.end_row();
+        x = b.add_or_get_column("x", ColumnType::String);
+        b.append_string(x, "abc");
+        b.end_row();
+        auto result = b.finish();
+        REQUIRE(result.valid());
+        CHECK(child_schema_format(result, 0) == dstd::String("u"));
+        Cells c(result);
+        CHECK(c.str(0, 0) == "42");
+        CHECK(c.is_null(0, 1));
+        CHECK(c.str(0, 2) == "abc");
+    }
+    SUBCASE("string then each scalar") {
+        RecordBatchBuilder b;
+        auto x = b.add_or_get_column("x", ColumnType::String);
+        b.append_string(x, "abc");
+        b.end_row();
+        x = b.add_or_get_column("x", ColumnType::Int64);
+        b.append_int64(x, -7);
+        b.end_row();
+        x = b.add_or_get_column("x", ColumnType::Uint64);
+        b.append_uint64(x, 18446744073709551615ULL);
+        b.end_row();
+        x = b.add_or_get_column("x", ColumnType::Double);
+        b.append_double(x, 1.5);
+        b.end_row();
+        b.append_double(x, 2.0);
+        b.end_row();
+        x = b.add_or_get_column("x", ColumnType::Bool);
+        b.append_bool(x, true);
+        b.end_row();
+        auto result = b.finish();
+        REQUIRE(result.valid());
+        Cells c(result);
+        CHECK(c.str(0, 0) == "abc");
+        CHECK(c.str(0, 1) == "-7");
+        CHECK(c.str(0, 2) == "18446744073709551615");
+        CHECK(c.str(0, 3) == "1.5");
+        CHECK(c.str(0, 4) == "2.0");
+        CHECK(c.str(0, 5) == "true");
+    }
+    SUBCASE("each scalar then string converts the earlier rows") {
+        const ColumnType firsts[] = {ColumnType::Int64, ColumnType::Uint64,
+                                     ColumnType::Double, ColumnType::Bool};
+        const char* const texts[] = {"-4", "9", "0.25", "false"};
+        for (int k = 0; k < 4; ++k) {
+            RecordBatchBuilder b;
+            auto x = b.add_or_get_column("x", firsts[k]);
+            if (k == 0) b.append_int64(x, -4);
+            if (k == 1) b.append_uint64(x, 9);
+            if (k == 2) b.append_double(x, 0.25);
+            if (k == 3) b.append_bool(x, false);
+            b.end_row();
+            x = b.add_or_get_column("x", ColumnType::String);
+            b.append_string(x, "s");
+            b.end_row();
+            auto result = b.finish();
+            REQUIRE(result.valid());
+            Cells c(result);
+            CHECK(c.str(0, 0) == texts[k]);
+            CHECK(c.str(0, 1) == "s");
+        }
+    }
+    SUBCASE("bool with a number, both orders") {
+        for (const bool bool_first : {true, false}) {
+            RecordBatchBuilder b;
+            auto x = b.add_or_get_column(
+                "x", bool_first ? ColumnType::Bool : ColumnType::Int64);
+            if (bool_first)
+                b.append_bool(x, true);
+            else
+                b.append_int64(x, 3);
+            b.end_row();
+            x = b.add_or_get_column(
+                "x", bool_first ? ColumnType::Int64 : ColumnType::Bool);
+            if (bool_first)
+                b.append_int64(x, 3);
+            else
+                b.append_bool(x, true);
+            b.end_row();
+            auto result = b.finish();
+            REQUIRE(result.valid());
+            Cells c(result);
+            CHECK(c.str(0, bool_first ? 0 : 1) == "true");
+            CHECK(c.str(0, bool_first ? 1 : 0) == "3");
+        }
+    }
+    SUBCASE("a dict string column with a number") {
+        RecordBatchBuilder b;
+        auto x = b.add_or_get_column("x", ColumnType::DictString);
+        b.append_dict_string(x, "a");
+        b.end_row();
+        b.append_dict_string(x, "b");
+        b.end_row();
+        x = b.add_or_get_column("x", ColumnType::Int64);
+        b.append_int64(x, 5);
+        b.end_row();
+        auto result = b.finish();
+        REQUIRE(result.valid());
+        CHECK(child_schema_format(result, 0) == dstd::String("u"));
+        Cells c(result);
+        CHECK(c.str(0, 0) == "a");
+        CHECK(c.str(0, 1) == "b");
+        CHECK(c.str(0, 2) == "5");
+    }
+}
+
+TEST_CASE(
+    "RecordBatchBuilder - a declared type is kept, a locked one promotes") {
+    SUBCASE("a number in a locked Double column converts") {
+        RecordBatchBuilder b;
+        const auto x = b.add_or_get_column("x", ColumnType::Double);
+        b.lock_schema();
+        b.append_int64(x, 4);
+        b.end_row();
+        b.append_double(x, 0.5);
+        b.end_row();
+        auto result = b.finish();
+        REQUIRE(result.valid());
+        CHECK(child_schema_format(result, 0) == dstd::String("g"));
+        Cells c(result);
+        CHECK(c.f64(0, 0) == 4.0);
+        CHECK(c.f64(0, 1) == 0.5);
+    }
+    SUBCASE("a locked Int64 column promotes, and the next batch keeps it") {
+        RecordBatchBuilder b;
+        auto x = b.add_or_get_column("x", ColumnType::Int64);
+        b.append_int64(x, 8);
+        b.end_row();
+        b.lock_schema();
+        x = b.add_or_get_column("x", ColumnType::Double);
+        b.append_double(x, 1.5);
+        b.end_row();
+        x = b.add_or_get_column("x", ColumnType::String);
+        b.append_string(x, "abc");
+        b.end_row();
+        x = b.add_or_get_column("x", ColumnType::Bool);
+        b.append_bool(x, true);
+        b.end_row();
+        {
+            auto result = b.finish();
+            REQUIRE(result.valid());
+            CHECK(child_schema_format(result, 0) == dstd::String("u"));
+            Cells c(result);
+            CHECK(c.str(0, 0) == "8.0");
+            CHECK(c.str(0, 1) == "1.5");
+            CHECK(c.str(0, 2) == "abc");
+            CHECK(c.str(0, 3) == "true");
+        }
+        b.reset(true);
+        x = b.add_or_get_column("x", ColumnType::Int64);
+        b.append_int64(x, 5);
+        b.end_row();
+        auto next = b.finish();
+        REQUIRE(next.valid());
+        CHECK(child_schema_format(next, 0) == dstd::String("u"));
+        Cells c(next);
+        CHECK(c.str(0, 0) == "5");
+    }
+    SUBCASE(
+        "a locked Int64 column promotes to Double, and the next batch keeps "
+        "it") {
+        RecordBatchBuilder b;
+        auto x = b.add_or_get_column("x", ColumnType::Int64);
+        b.append_int64(x, 8);
+        b.end_row();
+        b.lock_schema();
+        x = b.add_or_get_column("x", ColumnType::Double);
+        b.append_double(x, 1.5);
+        b.end_row();
+        {
+            auto result = b.finish();
+            REQUIRE(result.valid());
+            CHECK(child_schema_format(result, 0) == dstd::String("g"));
+            Cells c(result);
+            CHECK(c.f64(0, 0) == 8.0);
+            CHECK(c.f64(0, 1) == 1.5);
+        }
+        b.reset(true);
+        x = b.add_or_get_column("x", ColumnType::Int64);
+        b.append_int64(x, 5);
+        b.end_row();
+        auto next = b.finish();
+        REQUIRE(next.valid());
+        CHECK(child_schema_format(next, 0) == dstd::String("g"));
+        Cells c(next);
+        CHECK(c.f64(0, 0) == 5.0);
+    }
+    SUBCASE("a value a declared Int64 column cannot hold is a null") {
+        RecordBatchBuilder b;
+        b.declare_schema({{"x", ColumnType::Int64}});
+        b.append_double(0, 1.5);
+        b.end_row();
+        b.append_string(0, "abc");
+        b.end_row();
+        b.append_bool(0, true);
+        b.end_row();
+        b.append_int64(0, 8);
+        b.end_row();
+        auto result = b.finish();
+        REQUIRE(result.valid());
+        CHECK(child_schema_format(result, 0) == dstd::String("l"));
+        Cells c(result);
+        CHECK(c.is_null(0, 0));
+        CHECK(c.is_null(0, 1));
+        CHECK(c.is_null(0, 2));
+        CHECK(c.i64(0, 3) == 8);
+    }
+    SUBCASE("a declared String column takes a number as text") {
+        RecordBatchBuilder b;
+        b.declare_schema({{"x", ColumnType::String}});
+        b.append_int64(0, 12);
+        b.end_row();
+        b.append_string(0, "z");
+        b.end_row();
+        auto result = b.finish();
+        REQUIRE(result.valid());
+        Cells c(result);
+        CHECK(c.str(0, 0) == "12");
+        CHECK(c.str(0, 1) == "z");
+    }
+    SUBCASE("a declared Bool column holds a string as a null") {
+        RecordBatchBuilder b;
+        b.declare_schema({{"x", ColumnType::Bool}});
+        b.append_string(0, "no");
+        b.end_row();
+        b.append_bool(0, true);
+        b.end_row();
+        auto result = b.finish();
+        REQUIRE(result.valid());
+        Cells c(result);
+        CHECK(c.is_null(0, 0));
+    }
+}
+
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
+
+TEST_CASE("RecordBatchBuilder - a number promoted to text is normalized") {
+    RecordBatchBuilder b;
+    auto x = b.add_or_get_column("x", ColumnType::Double);
+    const double values[] = {1.5,
+                             2.0,
+                             -0.0,
+                             1e22,
+                             9007199254740993.0,
+                             std::numeric_limits<double>::infinity(),
+                             -std::numeric_limits<double>::infinity(),
+                             0.1};
+    for (const double v : values) {
+        b.append_double(x, v);
+        b.end_row();
+    }
+    x = b.add_or_get_column("x", ColumnType::String);
+    b.append_string(x, "s");
+    b.end_row();
+    auto result = b.finish();
+    REQUIRE(result.valid());
+    Cells c(result);
+    CHECK(c.str(0, 0) == "1.5");
+    CHECK(c.str(0, 1) == "2.0");
+    CHECK(c.str(0, 2) == "-0.0");
+    CHECK(c.str(0, 3) == "1e+22");
+    CHECK(c.str(0, 4) == "9007199254740992.0");
+    CHECK(c.str(0, 5) == "Infinity");
+    CHECK(c.str(0, 6) == "-Infinity");
+    CHECK(c.str(0, 7) == "0.1");
+    CHECK(c.str(0, 8) == "s");
+}
+
+TEST_CASE(
+    "RecordBatchBuilder - an integer above 2^53 becomes an inexact double") {
+    RecordBatchBuilder b;
+    auto x = b.add_or_get_column("x", ColumnType::Int64);
+    b.append_int64(x, 9007199254740993LL);
+    b.end_row();
+    x = b.add_or_get_column("x", ColumnType::Double);
+    b.append_double(x, 0.5);
+    b.end_row();
+    auto result = b.finish();
+    REQUIRE(result.valid());
+    Cells c(result);
+    CHECK(c.f64(0, 0) == 9007199254740992.0);
+    CHECK(c.f64(0, 1) == 0.5);
+}

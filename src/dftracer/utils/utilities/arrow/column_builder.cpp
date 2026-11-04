@@ -5,10 +5,14 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <nanoarrow/nanoarrow.h>
 
+#include <cmath>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 namespace dftracer::utils::utilities::arrow {
@@ -59,22 +63,6 @@ ArrowType to_nanoarrow_type(ColumnType t) noexcept {
     return NANOARROW_TYPE_UNINITIALIZED;
 }
 
-// Which backing storage a ColumnType uses. Collapses the fixed-width integer
-// and float variants onto their 64-bit accumulator, so the resize / push /
-// reserve switches classify once here instead of re-listing every width.
-enum class StorageKind {
-    Int64,
-    Uint64,
-    Double,
-    String,
-    Bool,
-    Dict,
-    Hist,
-    StringList,
-    Int64List,
-    StructList
-};
-
 constexpr StorageKind storage_kind(ColumnType t) noexcept {
     switch (t) {
         case ColumnType::Int64:
@@ -109,12 +97,100 @@ constexpr StorageKind storage_kind(ColumnType t) noexcept {
     return StorageKind::Int64;
 }
 
+bool is_number(ColumnType t) noexcept {
+    return t == ColumnType::Int64 || t == ColumnType::Uint64 ||
+           t == ColumnType::Double;
+}
+
+bool is_text(ColumnType t) noexcept {
+    return t == ColumnType::String || t == ColumnType::DictString;
+}
+
+// The types a dynamic column moves between; any other type is never promoted.
+bool is_promotable(ColumnType t) noexcept {
+    return is_number(t) || is_text(t) || t == ColumnType::Bool;
+}
+
+// The type that holds both `a`, a column's type, and `b`, a new value's type.
+ColumnType merged_type(ColumnType a, ColumnType b) noexcept {
+    if (a == b || !is_promotable(a) || !is_promotable(b)) return a;
+    if (is_number(a) && is_number(b)) return ColumnType::Double;
+    if (is_text(a) && is_text(b)) return a;
+    return ColumnType::String;
+}
+
+dstd::String double_json_text(double v) {
+    if (std::isnan(v)) return "NaN";
+    if (std::isinf(v)) return v > 0 ? "Infinity" : "-Infinity";
+    dstd::String text = dstd::double_text(v);
+    if (text.find_first_of(".eE") == dstd::String::npos) text += ".0";
+    return text;
+}
+
 }  // namespace
+
+struct RecordBatchBuilder::Scalar {
+    enum class Kind : std::uint8_t { Int64, Uint64, Double, Bool, String };
+    Kind kind = Kind::Int64;
+    std::int64_t i = 0;
+    std::uint64_t u = 0;
+    double d = 0.0;
+    bool b = false;
+    dstd::StringView s;
+
+    static Scalar of(std::int64_t v) {
+        Scalar out;
+        out.kind = Kind::Int64;
+        out.i = v;
+        return out;
+    }
+    static Scalar of(std::uint64_t v) {
+        Scalar out;
+        out.kind = Kind::Uint64;
+        out.u = v;
+        return out;
+    }
+    static Scalar of(double v) {
+        Scalar out;
+        out.kind = Kind::Double;
+        out.d = v;
+        return out;
+    }
+    static Scalar of(bool v) {
+        Scalar out;
+        out.kind = Kind::Bool;
+        out.b = v;
+        return out;
+    }
+    static Scalar of(dstd::StringView v) {
+        Scalar out;
+        out.kind = Kind::String;
+        out.s = v;
+        return out;
+    }
+
+    dstd::String text() const {
+        switch (kind) {
+            case Kind::Int64:
+                return dstd::to_string(i);
+            case Kind::Uint64:
+                return dstd::to_string(u);
+            case Kind::Double:
+                return double_json_text(d);
+            case Kind::Bool:
+                return b ? "true" : "false";
+            case Kind::String:
+                break;
+        }
+        return dstd::String(s);
+    }
+};
 
 void RecordBatchBuilder::init_column(ColumnData& col, ColumnType type,
                                      dstd::StringView name) {
     col.name = dstd::String(name);
     col.type = type;
+    col.kind = storage_kind(type);
     col.count = 0;
     col.has_nulls = false;
 }
@@ -208,8 +284,11 @@ std::size_t RecordBatchBuilder::add_or_get_column(dstd::StringView name,
                                                   ColumnType type) {
     auto it = name_to_index_.find(name);
     if (it != name_to_index_.end()) {
-        // Existing column: type is ignored. Callers that need type-safe
-        // appends should use find_column() + column_type() first.
+        ColumnData& col = columns_[it->second];
+        if (col.type != type && !schema_declared_) [[unlikely]] {
+            const ColumnType merged = merged_type(col.type, type);
+            if (merged != col.type) promote_column(col, merged);
+        }
         return it->second;
     }
 
@@ -222,6 +301,86 @@ std::size_t RecordBatchBuilder::add_or_get_column(dstd::StringView name,
     name_to_index_.emplace(dstd::String(name), idx);
     touched_.push_back(false);
     return idx;
+}
+
+void RecordBatchBuilder::promote_column(ColumnData& col, ColumnType target) {
+    const std::size_t rows = col.count;
+    if (target == ColumnType::Double) {
+        col.double_values.resize(rows);
+        if (col.kind == StorageKind::Int64) {
+            for (std::size_t r = 0; r < rows; ++r)
+                col.double_values[r] = static_cast<double>(col.int64_values[r]);
+            col.int64_values.clear();
+        } else {
+            for (std::size_t r = 0; r < rows; ++r)
+                col.double_values[r] =
+                    static_cast<double>(col.uint64_values[r]);
+            col.uint64_values.clear();
+        }
+    } else {
+        col.string_offsets.clear();
+        col.string_data.clear();
+        col.string_offsets.reserve(rows);
+        for (std::size_t r = 0; r < rows; ++r) {
+            const bool is_null =
+                (col.has_nulls && col.validity[r] == 0) ||
+                (col.kind == StorageKind::Dict && col.dict_indices[r] < 0);
+            if (!is_null) {
+                switch (col.kind) {
+                    case StorageKind::Int64: {
+                        const dstd::String t =
+                            dstd::to_string(col.int64_values[r]);
+                        col.string_data.insert(col.string_data.end(), t.begin(),
+                                               t.end());
+                        break;
+                    }
+                    case StorageKind::Uint64: {
+                        const dstd::String t =
+                            dstd::to_string(col.uint64_values[r]);
+                        col.string_data.insert(col.string_data.end(), t.begin(),
+                                               t.end());
+                        break;
+                    }
+                    case StorageKind::Double: {
+                        const dstd::String t =
+                            double_json_text(col.double_values[r]);
+                        col.string_data.insert(col.string_data.end(), t.begin(),
+                                               t.end());
+                        break;
+                    }
+                    case StorageKind::Bool: {
+                        const dstd::StringView t =
+                            col.bool_values[r] ? "true" : "false";
+                        col.string_data.insert(col.string_data.end(), t.begin(),
+                                               t.end());
+                        break;
+                    }
+                    case StorageKind::Dict: {
+                        const dstd::String& t =
+                            col.dict_values[static_cast<std::size_t>(
+                                col.dict_indices[r])];
+                        col.string_data.insert(col.string_data.end(), t.begin(),
+                                               t.end());
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+            col.string_offsets.push_back(
+                static_cast<std::int32_t>(col.string_data.size()));
+        }
+        col.int64_values.clear();
+        col.uint64_values.clear();
+        col.double_values.clear();
+        col.bool_values.clear();
+        col.dict_indices.clear();
+        col.dict_values.clear();
+        col.dict_map.clear();
+        if (!col.has_nulls) col.validity.clear();
+    }
+    col.type = target;
+    col.kind = storage_kind(target);
 }
 
 dstd::Optional<std::size_t> RecordBatchBuilder::find_column(
@@ -242,52 +401,24 @@ void RecordBatchBuilder::mark_touched(std::size_t col_idx) {
     }
 }
 
-void RecordBatchBuilder::append_int64(std::size_t col_idx, std::int64_t value) {
-    auto& col = columns_[col_idx];
-    col.int64_values.push_back(value);
+namespace {
+
+template <class Values, class T>
+void push_value(ColumnData& col, Values& values, T value) {
+    values.push_back(value);
     if (col.has_nulls) col.validity.push_back(1);
     ++col.count;
-    mark_touched(col_idx);
 }
 
-void RecordBatchBuilder::append_uint64(std::size_t col_idx,
-                                       std::uint64_t value) {
-    auto& col = columns_[col_idx];
-    col.uint64_values.push_back(value);
-    if (col.has_nulls) col.validity.push_back(1);
-    ++col.count;
-    mark_touched(col_idx);
-}
-
-void RecordBatchBuilder::append_double(std::size_t col_idx, double value) {
-    auto& col = columns_[col_idx];
-    col.double_values.push_back(value);
-    if (col.has_nulls) col.validity.push_back(1);
-    ++col.count;
-    mark_touched(col_idx);
-}
-
-void RecordBatchBuilder::append_string(std::size_t col_idx,
-                                       dstd::StringView value) {
-    auto& col = columns_[col_idx];
+void push_text(ColumnData& col, dstd::StringView value) {
     col.string_data.insert(col.string_data.end(), value.begin(), value.end());
     col.string_offsets.push_back(
         static_cast<std::int32_t>(col.string_data.size()));
     if (col.has_nulls) col.validity.push_back(1);
     ++col.count;
-    mark_touched(col_idx);
 }
 
-void RecordBatchBuilder::append_binary(std::size_t col_idx,
-                                       dstd::StringView value) {
-    // BINARY shares STRING's storage and append_string does no UTF-8
-    // validation, so the two paths are identical.
-    append_string(col_idx, value);
-}
-
-void RecordBatchBuilder::append_dict_string(std::size_t col_idx,
-                                            dstd::StringView value) {
-    auto& col = columns_[col_idx];
+void push_dict(ColumnData& col, dstd::StringView value) {
     auto it = col.dict_map.find(value);
     std::int32_t idx;
     if (it != col.dict_map.end()) {
@@ -301,14 +432,152 @@ void RecordBatchBuilder::append_dict_string(std::size_t col_idx,
     col.dict_indices.push_back(idx);
     col.validity.push_back(1);
     ++col.count;
+}
+
+}  // namespace
+
+void RecordBatchBuilder::append_scalar_slow(std::size_t col_idx,
+                                            const Scalar& v) {
+    using Kind = Scalar::Kind;
+    ColumnData& col = columns_[col_idx];
+    switch (col.kind) {
+        case StorageKind::Int64:
+            if (v.kind == Kind::Int64) {
+                push_value(col, col.int64_values, v.i);
+                mark_touched(col_idx);
+                return;
+            }
+            if (v.kind == Kind::Uint64 &&
+                v.u <= static_cast<std::uint64_t>(
+                           std::numeric_limits<std::int64_t>::max())) {
+                push_value(col, col.int64_values,
+                           static_cast<std::int64_t>(v.u));
+                mark_touched(col_idx);
+                return;
+            }
+            break;
+        case StorageKind::Uint64:
+            if (v.kind == Kind::Uint64) {
+                push_value(col, col.uint64_values, v.u);
+                mark_touched(col_idx);
+                return;
+            }
+            if (v.kind == Kind::Int64 && v.i >= 0) {
+                push_value(col, col.uint64_values,
+                           static_cast<std::uint64_t>(v.i));
+                mark_touched(col_idx);
+                return;
+            }
+            break;
+        case StorageKind::Double:
+            if (v.kind == Kind::Double || v.kind == Kind::Int64 ||
+                v.kind == Kind::Uint64) {
+                push_value(col, col.double_values,
+                           v.kind == Kind::Double  ? v.d
+                           : v.kind == Kind::Int64 ? static_cast<double>(v.i)
+                                                   : static_cast<double>(v.u));
+                mark_touched(col_idx);
+                return;
+            }
+            break;
+        case StorageKind::Bool:
+            if (v.kind == Kind::Bool) {
+                push_value(col, col.bool_values,
+                           static_cast<std::uint8_t>(v.b ? 1 : 0));
+                mark_touched(col_idx);
+                return;
+            }
+            break;
+        case StorageKind::String:
+            if (col.type == ColumnType::String) {
+                if (v.kind == Kind::String)
+                    push_text(col, v.s);
+                else
+                    push_text(col, v.text());
+                mark_touched(col_idx);
+                return;
+            }
+            break;
+        case StorageKind::Dict:
+            if (v.kind == Kind::String)
+                push_dict(col, v.s);
+            else
+                push_dict(col, v.text());
+            mark_touched(col_idx);
+            return;
+        default:
+            break;
+    }
+    append_null(col_idx);
+}
+
+void RecordBatchBuilder::append_int64(std::size_t col_idx, std::int64_t value) {
+    auto& col = columns_[col_idx];
+    if (col.kind != StorageKind::Int64) [[unlikely]] {
+        append_scalar_slow(col_idx, Scalar::of(value));
+        return;
+    }
+    push_value(col, col.int64_values, value);
+    mark_touched(col_idx);
+}
+
+void RecordBatchBuilder::append_uint64(std::size_t col_idx,
+                                       std::uint64_t value) {
+    auto& col = columns_[col_idx];
+    if (col.kind != StorageKind::Uint64) [[unlikely]] {
+        append_scalar_slow(col_idx, Scalar::of(value));
+        return;
+    }
+    push_value(col, col.uint64_values, value);
+    mark_touched(col_idx);
+}
+
+void RecordBatchBuilder::append_double(std::size_t col_idx, double value) {
+    auto& col = columns_[col_idx];
+    if (col.kind != StorageKind::Double) [[unlikely]] {
+        append_scalar_slow(col_idx, Scalar::of(value));
+        return;
+    }
+    push_value(col, col.double_values, value);
+    mark_touched(col_idx);
+}
+
+void RecordBatchBuilder::append_string(std::size_t col_idx,
+                                       dstd::StringView value) {
+    auto& col = columns_[col_idx];
+    if (col.kind != StorageKind::String) [[unlikely]] {
+        append_scalar_slow(col_idx, Scalar::of(value));
+        return;
+    }
+    push_text(col, value);
+    mark_touched(col_idx);
+}
+
+void RecordBatchBuilder::append_binary(std::size_t col_idx,
+                                       dstd::StringView value) {
+    // BINARY shares STRING's storage and append_string does no UTF-8
+    // validation, so the two paths are identical.
+    append_string(col_idx, value);
+}
+
+void RecordBatchBuilder::append_dict_string(std::size_t col_idx,
+                                            dstd::StringView value) {
+    auto& col = columns_[col_idx];
+    if (col.kind != StorageKind::Dict) [[unlikely]] {
+        append_scalar_slow(col_idx, Scalar::of(value));
+        return;
+    }
+    push_dict(col, value);
     mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::append_bool(std::size_t col_idx, bool value) {
     auto& col = columns_[col_idx];
-    col.bool_values.push_back(value ? 1 : 0);
-    if (col.has_nulls) col.validity.push_back(1);
-    ++col.count;
+    if (col.kind != StorageKind::Bool) [[unlikely]] {
+        append_scalar_slow(col_idx, Scalar::of(value));
+        return;
+    }
+    push_value(col, col.bool_values, static_cast<std::uint8_t>(value ? 1 : 0));
     mark_touched(col_idx);
 }
 

@@ -144,6 +144,10 @@ void append_json_scalar(const ArrowArrayView *view, ArrowType t, int64_t row,
     }
 }
 
+bool same_format(const ArrowSchema *a, const ArrowSchema *b) {
+    return a && b && a->format && b->format && cstr_eq(a->format, b->format);
+}
+
 }  // namespace
 
 SchemaReconciler::SchemaReconciler() = default;
@@ -249,7 +253,9 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
     for (int64_t i = 0; i < n_known; ++i) {
         const dstd::String &name = names_[static_cast<size_t>(i)];
         auto it = in_idx.find(name);
-        if (it != in_idx.end()) {
+        if (it != in_idx.end() &&
+            same_format(locked_schema_->children[i],
+                        in_schema->children[it->second])) {
             // Release the pre-initialized placeholder child and move the
             // input child into its slot (zero copy; release of the input
             // goes null after the move).
@@ -267,12 +273,16 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
         }
     }
 
-    // Find input children whose names aren't in the union: these feed _extra.
+    // Input children whose names aren't in the union feed _extra, and so do
+    // those whose type differs from the locked column: moving such a child in
+    // would make a reader misread its buffers.
     dstd::Vector<int64_t> unknown_in;
     for (int64_t i = 0; i < in_schema->n_children; ++i) {
         const ArrowSchema *c = in_schema->children[i];
         if (!c || !c->name) continue;
-        if (!name_to_idx_.count(dstd::StringView(c->name)))
+        const auto known = name_to_idx_.find(dstd::StringView(c->name));
+        if (known == name_to_idx_.end() ||
+            !same_format(locked_schema_->children[known->second], c))
             unknown_in.push_back(i);
     }
 

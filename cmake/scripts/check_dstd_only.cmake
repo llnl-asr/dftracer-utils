@@ -8,6 +8,8 @@
 # Usage: cmake -DSOURCE_DIR=<repo root> -P check_dstd_only.cmake
 #        cmake -DSOURCE_DIR=<repo root> -DSELF_TEST=ON -P check_dstd_only.cmake
 
+cmake_policy(SET CMP0057 NEW)
+
 if(NOT SOURCE_DIR)
   message(FATAL_ERROR "check_dstd_only.cmake requires -DSOURCE_DIR=...")
 endif()

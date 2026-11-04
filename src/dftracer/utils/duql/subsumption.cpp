@@ -104,15 +104,15 @@ void add_set_value(Buckets& b, const dstd::String& field,
 // An `or` made only of equality/IN tests on ONE field is a value set
 // (`name == a or name == b` is `name in [a,b]`). Collects the field + values,
 // or returns false if the disjunction mixes fields or carries any other op.
-bool or_to_set(const QueryNode& node, dstd::String& field,
+bool or_to_set(const detail::QueryNode& node, dstd::String& field,
                dstd::Map<dstd::String, dstd::Optional<double>>& vals) {
     return std::visit(
         [&](auto&& n) -> bool {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, OrNode>) {
+            if constexpr (std::is_same_v<T, detail::OrNode>) {
                 return or_to_set(*n.left, field, vals) &&
                        or_to_set(*n.right, field, vals);
-            } else if constexpr (std::is_same_v<T, CompareNode>) {
+            } else if constexpr (std::is_same_v<T, detail::CompareNode>) {
                 if (n.op != CompareOp::Eq || n.field.any) return false;
                 if (field.empty())
                     field = n.field.path;
@@ -121,7 +121,7 @@ bool or_to_set(const QueryNode& node, dstd::String& field,
                 vals.emplace(literal_key(n.value.value),
                              as_number(n.value.value));
                 return true;
-            } else if constexpr (std::is_same_v<T, InNode>) {
+            } else if constexpr (std::is_same_v<T, detail::InNode>) {
                 if (n.field.any) return false;
                 if (field.empty())
                     field = n.field.path;
@@ -137,14 +137,14 @@ bool or_to_set(const QueryNode& node, dstd::String& field,
         node.data);
 }
 
-void flatten(const QueryNode& node, Buckets& b) {
+void flatten(const detail::QueryNode& node, Buckets& b) {
     std::visit(
         [&](auto&& n) {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, AndNode>) {
+            if constexpr (std::is_same_v<T, detail::AndNode>) {
                 flatten(*n.left, b);
                 flatten(*n.right, b);
-            } else if constexpr (std::is_same_v<T, CompareNode>) {
+            } else if constexpr (std::is_same_v<T, detail::CompareNode>) {
                 // Two any() bounds may hold on different elements, so they
                 // do not narrow one interval.
                 if (n.field.any) {
@@ -171,14 +171,14 @@ void flatten(const QueryNode& node, Buckets& b) {
                 } else {
                     b.residual.insert(to_string(node));  // NE, or non-numeric
                 }
-            } else if constexpr (std::is_same_v<T, InNode>) {
+            } else if constexpr (std::is_same_v<T, detail::InNode>) {
                 if (n.field.any) {
                     b.residual.insert(to_string(node));
                     return;
                 }
                 for (const auto& e : n.values.elements)
                     add_set_value(b, n.field.path, e.value);
-            } else if constexpr (std::is_same_v<T, OrNode>) {
+            } else if constexpr (std::is_same_v<T, detail::OrNode>) {
                 // An all-equality/IN-on-one-field `or` is a value set; any
                 // other disjunction stays an opaque residual.
                 dstd::String field;
@@ -210,7 +210,8 @@ bool set_within_interval(
 
 // Conjunctive containment: both predicates flattened to buckets, no top-level
 // disjunction (or is one opaque residual atom here).
-static bool conj_subsumes(const QueryNode& mv, const QueryNode& query) {
+static bool conj_subsumes(const detail::QueryNode& mv,
+                          const detail::QueryNode& query) {
     Buckets M, Q;
     flatten(mv, M);
     flatten(query, Q);
@@ -267,10 +268,11 @@ static bool conj_subsumes(const QueryNode& mv, const QueryNode& query) {
     return true;
 }
 
-bool query_subsumes(const QueryNode& mv, const QueryNode& query) {
+bool query_subsumes(const detail::QueryNode& mv,
+                    const detail::QueryNode& query) {
     // A top-level `or` on the query is a union: mv must subsume every branch.
     // Exact (rows(A or B) subset X iff rows(A) subset X and rows(B) subset X).
-    if (auto* o = std::get_if<OrNode>(&query.data))
+    if (auto* o = std::get_if<detail::OrNode>(&query.data))
         return query_subsumes(mv, *o->left) && query_subsumes(mv, *o->right);
     // Conjunctive match first - it also matches a whole `or` as an identical
     // residual (e.g. the query re-uses the mv's disjunction verbatim).
@@ -278,7 +280,7 @@ bool query_subsumes(const QueryNode& mv, const QueryNode& query) {
     // Otherwise a top-level `or` on the mv widens it: the query fits if it fits
     // some branch. Sound but incomplete - a query spanning branches is
     // declined.
-    if (auto* o = std::get_if<OrNode>(&mv.data))
+    if (auto* o = std::get_if<detail::OrNode>(&mv.data))
         return query_subsumes(*o->left, query) ||
                query_subsumes(*o->right, query);
     return false;

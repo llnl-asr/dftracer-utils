@@ -1,23 +1,16 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DUQL_EVALUATOR_H
-#define DFTRACER_UTILS_DUQL_EVALUATOR_H
+#ifndef DFTRACER_UTILS_DUQL_VALUE_MAP_H
+#define DFTRACER_UTILS_DUQL_VALUE_MAP_H
 
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
-#include <dftracer/utils/duql/ast.h>
-#include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/duql/types.h>
 
 #include <cstdint>
 #include <type_traits>
 #include <utility>
 
 namespace dftracer::utils::duql {
-
-using json::JsonValue;
-
-/// A three-valued result: a leaf on a missing or null field, or across types,
-/// is UNKNOWN; `and`, `or` and `not` follow Kleene logic.
-enum class Truth : std::uint8_t { No, Yes, Unknown };
 
 /// A present field of a flattened record: a scalar, JSON `null`, or an array
 /// or object held as its canonical JSON text in `value`.
@@ -50,19 +43,6 @@ struct Cell {
 /// the map is a missing field.
 using ValueMap = dftracer::utils::dstd::StringViewMap<Cell>;
 
-/// The result of `node` on a JSON record. With `args_fallback`, a bare name
-/// the record lacks reads the field of that name under `args`.
-Truth evaluate_truth(const QueryNode& node, const JsonValue& event,
-                     bool args_fallback = true);
-
-/// The result of `node` on a flattened record.
-Truth evaluate_truth(const QueryNode& node, const ValueMap& fields);
-
-/// Whether a filter keeps the record: evaluate_truth(...) == Truth::YES.
-bool evaluate(const QueryNode& node, const JsonValue& event,
-              bool args_fallback = true);
-bool evaluate(const QueryNode& node, const ValueMap& fields);
-
 }  // namespace dftracer::utils::duql
 
-#endif  // DFTRACER_UTILS_DUQL_EVALUATOR_H
+#endif  // DFTRACER_UTILS_DUQL_VALUE_MAP_H

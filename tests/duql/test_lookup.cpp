@@ -14,6 +14,7 @@
 #include <dftracer/utils/duql/vectorize.h>
 #include <dftracer/utils/json/json_value.h>
 #include <doctest/doctest.h>
+#include <duql/eval_json.h>
 #include <simdjson.h>
 
 #include <memory>
@@ -44,7 +45,7 @@ Query bound(const dstd::String& text) {
         if (const auto* l = std::get_if<TLookup>(&t.node))
             l->slot->table = make_lookup_table(*l, runs());
     });
-    return Query::from_node(clone(*p->main.filter));
+    return duql::detail::QueryAccess::from_node(clone(*p->main.filter));
 }
 
 bool on_json(const Query& q, const dstd::String& json) {
@@ -52,7 +53,7 @@ bool on_json(const Query& q, const dstd::String& json) {
     simdjson::dom::element doc;
     REQUIRE(parser.parse(json.data(), json.size()).get(doc) ==
             simdjson::SUCCESS);
-    return q.evaluate(dftracer::utils::json::JsonValue(doc));
+    return eval_json(q, dftracer::utils::json::JsonValue(doc));
 }
 
 bool on_map(const Query& q, std::int64_t run) {
@@ -94,7 +95,8 @@ TEST_CASE("an arrow's conflicting values fail in a value position") {
         if (const auto* l = std::get_if<TLookup>(&t.node))
             l->slot->table = make_lookup_table(*l, f);
     });
-    const Query q = Query::from_node(clone(*p->main.filter));
+    const Query q =
+        duql::detail::QueryAccess::from_node(clone(*p->main.filter));
     try {
         (void)on_json(q, R"({"run":1})");
         FAIL("no conflict error");
@@ -112,16 +114,20 @@ TEST_CASE("an arrow's conflicting values fail in a value position") {
         if (const auto* l = std::get_if<TLookup>(&t.node))
             l->slot->table = make_lookup_table(*l, f);
     });
-    CHECK(on_json(Query::from_node(clone(*any->main.filter)), R"({"run":1})"));
+    CHECK(
+        on_json(duql::detail::QueryAccess::from_node(clone(*any->main.filter)),
+                R"({"run":1})"));
 }
 
 TEST_CASE("a lookup leaf is a residual to subsumption") {
     const Query q =
         bound("let runs = where run > 0; where run -> runs.app == \"amg\"");
-    const Query plain = Query::from_node(
+    const Query plain = duql::detail::QueryAccess::from_node(
         clone(*compile_program("where run == 1", {}, nullptr)->main.filter));
-    CHECK_FALSE(query_subsumes(plain.root(), q.root()));
-    CHECK_FALSE(query_subsumes(q.root(), plain.root()));
+    CHECK_FALSE(query_subsumes(duql::detail::QueryAccess::root(plain),
+                               duql::detail::QueryAccess::root(q)));
+    CHECK_FALSE(query_subsumes(duql::detail::QueryAccess::root(q),
+                               duql::detail::QueryAccess::root(plain)));
 }
 
 TEST_CASE("an unbound lookup fails loudly") {
@@ -129,7 +135,8 @@ TEST_CASE("an unbound lookup fails loudly") {
         "let runs = where run > 0; where run -> runs.app == \"amg\"", {},
         nullptr);
     REQUIRE(p);
-    const Query q = Query::from_node(clone(*p->main.filter));
+    const Query q =
+        duql::detail::QueryAccess::from_node(clone(*p->main.filter));
     CHECK_THROWS_AS((void)on_json(q, R"({"run":1})"),
                     dftracer::utils::common::DFTUtilsException);
 }
@@ -198,7 +205,8 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const auto [p, l] = lookup_of(
         "where dur == (from data | where pid == ^.pid and ts < ^.ts | agg { "
         "m = max(dur) })");
-    const Query q = Query::from_node(clone(*p->main.filter));
+    const Query q =
+        duql::detail::QueryAccess::from_node(clone(*p->main.filter));
     CHECK(on_json(q, R"({"pid":1,"ts":25,"dur":9})"));
     CHECK(on_json(q, R"({"pid":1,"ts":20,"dur":5})"));
     CHECK(on_json(q, R"({"pid":1,"ts":20.5,"dur":9})"));

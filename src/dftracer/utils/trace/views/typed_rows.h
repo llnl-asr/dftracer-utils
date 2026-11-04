@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schema_class.h>
 #include <dftracer/utils/json/canonical.h>
+#include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <simdjson.h>
 

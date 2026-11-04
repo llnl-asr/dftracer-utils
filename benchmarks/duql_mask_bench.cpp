@@ -69,8 +69,8 @@ int main(int argc, char** argv) {
         std::int64_t kept = 0;
         for (int r = 0; r < rounds; ++r) {
             const auto t0 = std::chrono::steady_clock::now();
-            const dataframe::Series m =
-                dataframe::evaluate_mask(parsed->root(), f);
+            const dataframe::Series m = dataframe::evaluate_mask(
+                duql::detail::QueryAccess::root(*parsed), f);
             t.push_back(std::chrono::duration<double, std::milli>(
                             std::chrono::steady_clock::now() - t0)
                             .count());

@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
@@ -406,8 +407,10 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
             auto root = pr.value_unsafe();
             // A path record's own fields are the event's args.
             if (view.query &&
-                !view.query->evaluate(json::JsonValue(
-                    fields.by_path ? root["args"].value_unsafe() : root)))
+                !duql::evaluate(
+                    duql::detail::QueryAccess::root(*view.query),
+                    json::JsonValue(fields.by_path ? root["args"].value_unsafe()
+                                                   : root)))
                 continue;
             double dur = static_cast<double>(sp.end - sp.begin);
             auto& a = byKey[extract_group_value(root, gcol)];

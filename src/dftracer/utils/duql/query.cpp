@@ -1,9 +1,19 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/duql/evaluator.h>
+#include <dftracer/utils/duql/fields.h>
+#include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/query.h>
 
 namespace dftracer::utils::duql {
+
+Query::Query(detail::QueryNodePtr root, dstd::String source)
+    : root_(std::move(root)),
+      source_(std::move(source)),
+      fields_(collect_fields(*root_)),
+      any_paths_(collect_any_paths(*root_)),
+      has_expressions_(has_expression_leaf(*root_)) {}
 
 Query::Query(const Query& other)
     : root_(clone(*other.root_)),
@@ -19,8 +29,9 @@ Query& Query::operator=(const Query& other) {
 }
 
 Query conjoin(const Query& a, const Query& b) {
-    return Query::from_node(
-        make_node(AndNode{clone(a.root()), clone(b.root())}));
+    return detail::QueryAccess::from_node(detail::make_node(
+        detail::AndNode{clone(detail::QueryAccess::root(a)),
+                        clone(detail::QueryAccess::root(b))}));
 }
 
 dftracer::utils::dstd::Expected<Query, DuqlError> Query::from_string(
@@ -30,20 +41,16 @@ dftracer::utils::dstd::Expected<Query, DuqlError> Query::from_string(
     return Query(std::move(*result), dstd::String(input));
 }
 
-Query Query::from_node(QueryNodePtr root) {
-    dstd::String source = duql::to_string(*root);
+Query detail::QueryAccess::from_node(QueryNodePtr root) {
+    dstd::String source = to_string(*root);
     return Query(std::move(root), std::move(source));
-}
-
-bool Query::evaluate(const json::JsonValue& event, bool args_fallback) const {
-    return duql::evaluate(*root_, event, args_fallback);
 }
 
 bool Query::evaluate(const ValueMap& fields) const {
     return duql::evaluate(*root_, fields);
 }
 
-dstd::String Query::to_string() const { return duql::to_string(*root_); }
+dstd::String Query::to_string() const { return detail::to_string(*root_); }
 
 Query parse_or_throw(dstd::StringView input) {
     auto result = Query::from_string(input);

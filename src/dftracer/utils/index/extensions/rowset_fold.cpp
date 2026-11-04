@@ -20,8 +20,8 @@ namespace dftracer::utils::index::extensions {
 namespace {
 
 // Whether `n` is `ph in ["M", 4]` or `ph == "M"`: the metadata phase.
-bool metadata_phase(const duql::QueryNode& n) {
-    const auto* in = std::get_if<duql::InNode>(&n.data);
+bool metadata_phase(const duql::detail::QueryNode& n) {
+    const auto* in = std::get_if<duql::detail::InNode>(&n.data);
     if (in) {
         if (in->field.any || in->field.path != "ph" || in->values.set)
             return false;
@@ -34,16 +34,16 @@ bool metadata_phase(const duql::QueryNode& n) {
         }
         return true;
     }
-    const auto* c = std::get_if<duql::CompareNode>(&n.data);
+    const auto* c = std::get_if<duql::detail::CompareNode>(&n.data);
     const auto* s = c ? std::get_if<dstd::String>(&c->value.value) : nullptr;
     return c && c->op == duql::CompareOp::Eq && !c->field.any &&
            c->field.path == "ph" && s && *s == "M";
 }
 
 // The top-level `and` terms of `n` that compare a field with a string.
-void equalities(const duql::QueryNode& n,
+void equalities(const duql::detail::QueryNode& n,
                 dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& out) {
-    if (const auto* a = std::get_if<duql::AndNode>(&n.data)) {
+    if (const auto* a = std::get_if<duql::detail::AndNode>(&n.data)) {
         equalities(*a->left, out);
         equalities(*a->right, out);
         return;
@@ -52,7 +52,7 @@ void equalities(const duql::QueryNode& n,
         out.emplace_back("ph", "M");
         return;
     }
-    const auto* c = std::get_if<duql::CompareNode>(&n.data);
+    const auto* c = std::get_if<duql::detail::CompareNode>(&n.data);
     if (!c || c->op != duql::CompareOp::Eq || c->field.any) return;
     if (const auto* s = std::get_if<dstd::String>(&c->value.value))
         out.emplace_back(dstd::String(c->field.path), dstd::String(*s));
@@ -60,13 +60,14 @@ void equalities(const duql::QueryNode& n,
 
 // `n` without its top-level `and` terms that test the metadata phase; null
 // when nothing else is left.
-duql::QueryNodePtr without_phase(const duql::QueryNode& n) {
-    if (const auto* a = std::get_if<duql::AndNode>(&n.data)) {
+duql::detail::QueryNodePtr without_phase(const duql::detail::QueryNode& n) {
+    if (const auto* a = std::get_if<duql::detail::AndNode>(&n.data)) {
         auto l = without_phase(*a->left);
         auto r = without_phase(*a->right);
         if (!l) return r;
         if (!r) return l;
-        return duql::make_node(duql::AndNode{std::move(l), std::move(r)});
+        return duql::detail::make_node(
+            duql::detail::AndNode{std::move(l), std::move(r)});
     }
     if (metadata_phase(n)) return nullptr;
     return duql::clone(n);
@@ -204,15 +205,18 @@ RowSetFold::RowSetFold(dftracer::utils::dstd::StringIntern& intern,
         sealed_[r].columns.resize(rowsets_[r].columns.size());
         Guard g;
         dstd::Vector<dstd::Pair<dstd::String, dstd::String>> eq;
-        if (rowsets_[r].filter) equalities(rowsets_[r].filter->root(), eq);
+        if (rowsets_[r].filter)
+            equalities(duql::detail::QueryAccess::root(*rowsets_[r].filter),
+                       eq);
         for (const auto& [field, value] : eq) {
             if (field == "ph" && value == "M")
                 g.phase = trace::RecordPhase::Metadata;
             if (field == "name") g.name = intern_->get_or_insert(value);
         }
         if (g.phase) {
-            if (auto rest = without_phase(rowsets_[r].filter->root()))
-                g.rest = duql::Query::from_node(std::move(rest));
+            if (auto rest = without_phase(
+                    duql::detail::QueryAccess::root(*rowsets_[r].filter)))
+                g.rest = duql::detail::QueryAccess::from_node(std::move(rest));
         }
         guards_.push_back(std::move(g));
     }

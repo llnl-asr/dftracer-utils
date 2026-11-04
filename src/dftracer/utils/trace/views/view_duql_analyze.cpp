@@ -516,21 +516,23 @@ void reject_resolved(const duql::Program& p) {
                "row set of the source, such as 'fhash -> files.path', "
                "'hhash -> hosts.name' or 'run -> runs.app'");
     };
-    dstd::Function<void(const duql::QueryNode&)> node =
-        [&](const duql::QueryNode& n) {
+    dstd::Function<void(const duql::detail::QueryNode&)> node =
+        [&](const duql::detail::QueryNode& n) {
             std::visit(
                 [&](const auto& x) {
                     using T = std::decay_t<decltype(x)>;
-                    if constexpr (std::is_same_v<T, duql::AndNode> ||
-                                  std::is_same_v<T, duql::OrNode>) {
+                    if constexpr (std::is_same_v<T, duql::detail::AndNode> ||
+                                  std::is_same_v<T, duql::detail::OrNode>) {
                         node(*x.left);
                         node(*x.right);
-                    } else if constexpr (std::is_same_v<T, duql::NotNode>) {
+                    } else if constexpr (std::is_same_v<
+                                             T, duql::detail::NotNode>) {
                         node(*x.operand);
-                    } else if constexpr (std::is_same_v<T, duql::CompareNode> ||
-                                         std::is_same_v<T, duql::InNode> ||
-                                         std::is_same_v<T, duql::NotInNode> ||
-                                         std::is_same_v<T, duql::MatchNode>) {
+                    } else if constexpr (
+                        std::is_same_v<T, duql::detail::CompareNode> ||
+                        std::is_same_v<T, duql::detail::InNode> ||
+                        std::is_same_v<T, duql::detail::NotInNode> ||
+                        std::is_same_v<T, duql::detail::MatchNode>) {
                         check(x.field.path);
                     }
                 },
@@ -621,14 +623,14 @@ void each_pushed(
     const duql::Pipeline& p,
     const dstd::Function<void(const duql::Term&, const duql::TField&,
                               const duql::TLookup&, const duql::Term*)>& fn) {
-    dstd::Function<void(const duql::QueryNode&)> walk =
-        [&](const duql::QueryNode& n) {
-            if (const auto* a = std::get_if<duql::AndNode>(&n.data)) {
+    dstd::Function<void(const duql::detail::QueryNode&)> walk =
+        [&](const duql::detail::QueryNode& n) {
+            if (const auto* a = std::get_if<duql::detail::AndNode>(&n.data)) {
                 walk(*a->left);
                 walk(*a->right);
                 return;
             }
-            const auto* leaf = std::get_if<duql::ExprLeaf>(&n.data);
+            const auto* leaf = std::get_if<duql::detail::ExprLeaf>(&n.data);
             if (!leaf) return;
             const duql::Term* cond = nullptr;
             const duql::TLookup* l =
@@ -675,31 +677,34 @@ dstd::Optional<duql::LiteralNode> literal_of(const dataframe::Series& s,
 dstd::Optional<duql::Query> pushed(const Pushdown& p,
                                    dstd::Optional<duql::Query> query) {
     if (!query) return p.extra;
-    duql::QueryNodePtr root = duql::clone(query->root());
-    dstd::Function<void(duql::QueryNodePtr&)> walk =
-        [&](duql::QueryNodePtr& n) {
-            if (auto* a = std::get_if<duql::AndNode>(&n->data)) {
+    duql::detail::QueryNodePtr root =
+        duql::clone(duql::detail::QueryAccess::root(*query));
+    dstd::Function<void(duql::detail::QueryNodePtr&)> walk =
+        [&](duql::detail::QueryNodePtr& n) {
+            if (auto* a = std::get_if<duql::detail::AndNode>(&n->data)) {
                 walk(a->left);
                 walk(a->right);
                 return;
             }
-            if (const auto* leaf = std::get_if<duql::ExprLeaf>(&n->data))
+            if (const auto* leaf =
+                    std::get_if<duql::detail::ExprLeaf>(&n->data))
                 for (const auto& [term, keys] : p.replace)
                     if (leaf->term.get() == term) {
-                        n = duql::clone(keys.root());
+                        n = duql::clone(duql::detail::QueryAccess::root(keys));
                         return;
                     }
         };
     walk(root);
     if (p.extra)
-        root = duql::make_node(
-            duql::AndNode{duql::clone(p.extra->root()), std::move(root)});
-    return duql::Query::from_node(std::move(root));
+        root = duql::detail::make_node(duql::detail::AndNode{
+            duql::clone(duql::detail::QueryAccess::root(*p.extra)),
+            std::move(root)});
+    return duql::detail::QueryAccess::from_node(std::move(root));
 }
 
 Pushdown key_sets(const duql::Pipeline& p) {
     Pushdown out;
-    duql::QueryNodePtr extra;
+    duql::detail::QueryNodePtr extra;
     each_pushed(p, [&](const duql::Term& leaf, const duql::TField& f,
                        const duql::TLookup& l, const duql::Term* cond) {
         const duql::LookupTable& t = *l.slot->table;
@@ -726,7 +731,7 @@ Pushdown key_sets(const duql::Pipeline& p) {
             return !pass->is_null(r) &&
                    ((pass->data<std::uint8_t>()[r >> 3] >> (r & 7)) & 1);
         };
-        duql::ArrayNode arr;
+        duql::detail::ArrayNode arr;
         for (const auto& [key, rows] : t.rows)
             for (const std::int64_t r : rows)
                 if (passes(r)) {
@@ -738,20 +743,21 @@ Pushdown key_sets(const duql::Pipeline& p) {
         // the same rows without a per-record scan of the list.
         if (arr.elements.size() > index::plan::SEMI_JOIN_CAP) return;
         arr.set = duql::make_in_set(arr);
-        auto node = duql::make_node(
-            duql::InNode{duql::FieldNode{f.base}, std::move(arr)});
+        auto node = duql::detail::make_node(duql::detail::InNode{
+            duql::detail::FieldNode{f.base}, std::move(arr)});
         // A condition on the row set's value alone passes the same records
         // as the key set, so the set replaces the term.
         if (!cond || pass) {
-            out.replace.emplace_back(&leaf,
-                                     duql::Query::from_node(std::move(node)));
+            out.replace.emplace_back(
+                &leaf, duql::detail::QueryAccess::from_node(std::move(node)));
             return;
         }
-        extra = extra ? duql::make_node(
-                            duql::AndNode{std::move(extra), std::move(node)})
+        extra = extra ? duql::detail::make_node(duql::detail::AndNode{
+                            std::move(extra), std::move(node)})
                       : std::move(node);
     });
-    if (extra) out.extra = duql::Query::from_node(std::move(extra));
+    if (extra)
+        out.extra = duql::detail::QueryAccess::from_node(std::move(extra));
     return out;
 }
 

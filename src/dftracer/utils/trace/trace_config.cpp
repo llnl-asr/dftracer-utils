@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/event.h>
+#include <dftracer/utils/trace/time_metric_event.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <simdjson.h>

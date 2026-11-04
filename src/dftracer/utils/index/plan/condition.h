@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/detail/ast.h>
 #include <dftracer/utils/index/store/file.h>
 
 #include <cstddef>
@@ -23,7 +23,7 @@ using ChunkSet = dstd::Set<std::uint64_t>;
 inline constexpr std::size_t SEMI_JOIN_CAP = 4096;
 
 /// Whether `node` is an `in` or `not in` list longer than SEMI_JOIN_CAP.
-bool too_wide(const duql::QueryNode& node);
+bool too_wide(const duql::detail::QueryNode& node);
 
 /// One source of pruning evidence for one file and one query. Every answer is
 /// sound: a chunk or file is ruled out only when this source proves that no
@@ -38,19 +38,19 @@ class Condition {
         return dstd::String(index::store::extension_name(extension()));
     }
     /// False only when no event of the file can match `root`.
-    virtual bool file_may_match(const duql::QueryNode&) { return true; }
+    virtual bool file_may_match(const duql::detail::QueryNode&) { return true; }
     /// The chunks of `candidates` in which an event may match the query leaf
     /// `leaf` (a result may also name chunks outside `candidates`, which the
     /// evaluator intersects away); nullopt when this source has no evidence
     /// for the leaf.
-    virtual dstd::Optional<ChunkSet> may_match(const duql::QueryNode& leaf,
-                                               const ChunkSet& candidates) = 0;
+    virtual dstd::Optional<ChunkSet> may_match(
+        const duql::detail::QueryNode& leaf, const ChunkSet& candidates) = 0;
     /// True when every answer of may_match is exactly the matching chunks,
     /// so no other source can rule out more and the evaluator stops there.
     virtual bool exact() const { return false; }
     /// The chunks in which every event matches `leaf`; nullopt without
     /// evidence.
-    virtual dstd::Optional<ChunkSet> all_match(const duql::QueryNode&) {
+    virtual dstd::Optional<ChunkSet> all_match(const duql::detail::QueryNode&) {
         return dstd::nullopt;
     }
 };
@@ -72,14 +72,15 @@ Conditions make_metadata_conditions(
     const dstd::HashMap<std::uint64_t, index::store::ChunkMetadata>& metadata);
 
 /// False only when some Condition proves no event of the file matches.
-bool file_may_match(const duql::QueryNode& root, const Conditions& conditions);
+bool file_may_match(const duql::detail::QueryNode& root,
+                    const Conditions& conditions);
 
 /// The chunks of `universe` that may hold an event matching `root`: a leaf
 /// keeps the chunks every Condition allows, AND intersects, OR unions, NOT p
 /// keeps the chunks where not every event is proved to match p, and a leaf no
 /// Condition knows keeps everything.
-ChunkSet evaluate(const duql::QueryNode& root, const Conditions& conditions,
-                  const ChunkSet& universe);
+ChunkSet evaluate(const duql::detail::QueryNode& root,
+                  const Conditions& conditions, const ChunkSet& universe);
 
 }  // namespace dftracer::utils::index::plan
 

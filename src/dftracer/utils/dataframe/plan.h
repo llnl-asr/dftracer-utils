@@ -6,7 +6,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/detail/ast.h>
 
 #include <cstdint>
 
@@ -19,7 +19,7 @@ namespace dftracer::utils::dataframe {
 /// WHERE + GROUP BY/agg + SELECT + ORDER BY + LIMIT over a batch, applied in
 /// that order. Absent stages are skipped.
 struct QueryPlan {
-    const dftracer::utils::duql::QueryNode* where =
+    const dftracer::utils::duql::detail::QueryNode* where =
         nullptr;            ///< predicate (borrowed); null = all rows
     dstd::String group_by;  ///< group key column; empty = no grouping
     dstd::Vector<dftracer::utils::dataframe::GroupAgg> aggs;  ///< aggregates

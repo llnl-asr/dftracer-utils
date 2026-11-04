@@ -4,7 +4,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/string_literal.h>
+#include <dftracer/utils/duql/detail/string_literal.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/duql/term.h>
 
@@ -282,7 +282,7 @@ bool is_reserved(dstd::StringView s) {
 }
 
 void put_string(dstd::String& out, const dstd::String& raw) {
-    out += quote_string(raw);
+    out += duql::detail::quote_string(raw);
 }
 
 bool all_digits(dstd::StringView s) {

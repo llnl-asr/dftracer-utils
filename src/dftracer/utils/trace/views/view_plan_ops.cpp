@@ -27,7 +27,7 @@
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/trace/time_metric.h>
+#include <dftracer/utils/trace/time_metric_event.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>

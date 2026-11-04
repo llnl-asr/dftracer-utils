@@ -20,7 +20,7 @@ namespace {
 // evaluator does, top level first and then under "args"; "args.<key>" reads
 // args only. Other dotted paths may name a nested object or a flat dotted
 // key, so they are left to the full evaluator (returns false).
-bool compile_eq_leaf(const duql::CompareNode& n, CompiledEqProbe& out) {
+bool compile_eq_leaf(const duql::detail::CompareNode& n, CompiledEqProbe& out) {
     if (n.op != duql::CompareOp::Eq) return false;
     const dstd::String& path = n.field.path;
     const auto dot = path.find('.');
@@ -124,16 +124,16 @@ bool probe_matches_value(const CompiledEqProbe& p,
 // Try to compile the query AST as an AND of EQ leaves. nullopt on
 // unsupported shapes; the ValueMap path handles those.
 dstd::Optional<dstd::Vector<CompiledEqProbe>> try_compile_eq_probes(
-    const duql::QueryNode& node) {
+    const duql::detail::QueryNode& node) {
     using namespace duql;
     return std::visit(
         [&](const auto& n) -> dstd::Optional<dstd::Vector<CompiledEqProbe>> {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, CompareNode>) {
+            if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
                 CompiledEqProbe p;
                 if (n.field.any || !compile_eq_leaf(n, p)) return dstd::nullopt;
                 return dstd::Vector<CompiledEqProbe>{std::move(p)};
-            } else if constexpr (std::is_same_v<T, AndNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::AndNode>) {
                 auto l = try_compile_eq_probes(*n.left);
                 if (!l) return dstd::nullopt;
                 auto r = try_compile_eq_probes(*n.right);

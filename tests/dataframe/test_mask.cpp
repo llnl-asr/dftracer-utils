@@ -41,14 +41,15 @@ dstd::String truth(const Series& m) {
 Series mask_of(const char* q, const DataFrame& b) {
     auto parsed = duql::Query::from_string(q);
     REQUIRE(parsed.has_value());
-    return dataframe::evaluate_mask(parsed->root(), b);
+    return dataframe::evaluate_mask(duql::detail::QueryAccess::root(*parsed),
+                                    b);
 }
 
 std::int64_t kept_rows(const char* q, const DataFrame& b) {
     auto parsed = duql::Query::from_string(q);
     REQUIRE(parsed.has_value());
     dataframe::QueryPlan plan;
-    plan.where = &parsed->root();
+    plan.where = &duql::detail::QueryAccess::root(*parsed);
     return dataframe::execute(plan, b).num_rows();
 }
 
@@ -73,7 +74,8 @@ TEST_SUITE("query vec_mask") {
 
         auto q = duql::Query::from_string("dur > 100 and cat == \"io\"");
         REQUIRE(q.has_value());
-        Series mask = dataframe::evaluate_mask(q->root(), b);
+        Series mask =
+            dataframe::evaluate_mask(duql::detail::QueryAccess::root(*q), b);
         REQUIRE(mask.type() == dftracer::utils::dataframe::TypeId::Bool);
         REQUIRE(mask.length() == 5);
         // dur>100: {1,2,4}; cat==io: {0,2,3}; AND -> only row 2.
@@ -92,7 +94,8 @@ TEST_SUITE("query vec_mask") {
 
         auto q = duql::Query::from_string("x in [2, 4]");
         REQUIRE(q.has_value());
-        Series mask = dataframe::evaluate_mask(q->root(), b);
+        Series mask =
+            dataframe::evaluate_mask(duql::detail::QueryAccess::root(*q), b);
         CHECK(bit_at(mask, 0) == 0);
         CHECK(bit_at(mask, 1) == 1);
         CHECK(bit_at(mask, 2) == 0);
@@ -124,7 +127,7 @@ TEST_SUITE("query vec_mask") {
         REQUIRE(q.has_value());
         bool threw = false;
         try {
-            dataframe::evaluate_mask(q->root(), b);
+            dataframe::evaluate_mask(duql::detail::QueryAccess::root(*q), b);
         } catch (const dftracer::utils::common::DFTUtilsException& e) {
             threw = true;
             CHECK(e.condition() == dstd::Condition::Unsupported);
@@ -192,7 +195,7 @@ TEST_SUITE("query vec_mask") {
         auto q = duql::Query::from_string("dur > 60");
         REQUIRE(q.has_value());
         dataframe::QueryPlan plan;
-        plan.where = &q->root();
+        plan.where = &duql::detail::QueryAccess::root(*q);
         plan.select = {"dur", "cat"};
         plan.order_by = "dur";
         plan.descending = true;

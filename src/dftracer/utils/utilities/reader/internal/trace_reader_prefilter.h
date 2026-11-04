@@ -44,7 +44,7 @@ struct CompiledEqProbe {
 };
 
 dstd::Optional<dstd::Vector<CompiledEqProbe>> try_compile_eq_probes(
-    const duql::QueryNode& node);
+    const duql::detail::QueryNode& node);
 
 bool eval_compiled_eq(const dstd::Vector<CompiledEqProbe>& probes,
                       simdjson::ondemand::document_reference doc);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/trace/time_metric.h>
+#include <dftracer/utils/trace/time_metric_event.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils;

@@ -33,17 +33,17 @@ struct Leaf {
     duql::PatternPtr compiled;
 };
 
-void leaves(const duql::QueryNode& node, dstd::Vector<Leaf>& out) {
+void leaves(const duql::detail::QueryNode& node, dstd::Vector<Leaf>& out) {
     std::visit(
         [&](const auto& n) {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, duql::AndNode> ||
-                          std::is_same_v<T, duql::OrNode>) {
+            if constexpr (std::is_same_v<T, duql::detail::AndNode> ||
+                          std::is_same_v<T, duql::detail::OrNode>) {
                 leaves(*n.left, out);
                 leaves(*n.right, out);
-            } else if constexpr (std::is_same_v<T, duql::NotNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::NotNode>) {
                 leaves(*n.operand, out);
-            } else if constexpr (std::is_same_v<T, duql::MatchNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::MatchNode>) {
                 out.push_back({n.op, n.pattern, n.compiled});
             }
         },

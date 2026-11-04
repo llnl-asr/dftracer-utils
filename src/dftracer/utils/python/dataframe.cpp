@@ -220,7 +220,7 @@ PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
                     dftracer::utils::dstd::Error{duql::DuqlErrc::Parse,
                                                  parsed.error().format()});
             q.emplace(std::move(*parsed));
-            plan.where = &q->root();
+            plan.where = &duql::detail::QueryAccess::root(*q);
         }
         if (group_by && *group_by) plan.group_by = group_by;
         if (aggs_obj && aggs_obj != Py_None) {

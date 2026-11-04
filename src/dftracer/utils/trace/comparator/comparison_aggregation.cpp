@@ -61,9 +61,11 @@ int shape_of(const ComparisonFilter& f) {
            (f.has_names ? SHAPE_NAMES : 0) | (f.has_pids ? SHAPE_PIDS : 0);
 }
 
-bool is_category(const duql::FieldNode& f) { return !f.any && f.path == "cat"; }
+bool is_category(const duql::detail::FieldNode& f) {
+    return !f.any && f.path == "cat";
+}
 
-void lower_literals(duql::ArrayNode& values) {
+void lower_literals(duql::detail::ArrayNode& values) {
     for (auto& e : values.elements)
         if (auto* text = std::get_if<dstd::String>(&e.value))
             for (char& c : *text)
@@ -76,7 +78,8 @@ void lower_literals(duql::ArrayNode& values) {
 // turns case-insensitive.
 template <class Leaf>
 dstd::String lowered_leaf(Leaf leaf) {
-    const dstd::String text = duql::to_string(duql::QueryNode(std::move(leaf)));
+    const dstd::String text =
+        duql::detail::to_string(duql::detail::QueryNode(std::move(leaf)));
     constexpr dstd::StringView FIELD = "cat";
     dstd::String out("lower(cat)");
     out.append(dstd::StringView(text).substr(FIELD.size()));
@@ -95,43 +98,48 @@ dstd::String join(const dstd::String& left, dstd::StringView op,
     return out;
 }
 
-dstd::String fold_category(const duql::QueryNode& n) {
-    if (const auto* c = std::get_if<duql::CompareNode>(&n.data)) {
-        if (!is_category(c->field)) return dstd::String(duql::to_string(n));
-        duql::CompareNode leaf = *c;
+dstd::String fold_category(const duql::detail::QueryNode& n) {
+    if (const auto* c = std::get_if<duql::detail::CompareNode>(&n.data)) {
+        if (!is_category(c->field))
+            return dstd::String(duql::detail::to_string(n));
+        duql::detail::CompareNode leaf = *c;
         if (auto* text = std::get_if<dstd::String>(&leaf.value.value))
             for (char& ch : *text)
                 if (ch >= 'A' && ch <= 'Z')
                     ch = static_cast<char>(ch - 'A' + 'a');
         return lowered_leaf(std::move(leaf));
     }
-    if (const auto* in = std::get_if<duql::InNode>(&n.data)) {
-        if (!is_category(in->field)) return dstd::String(duql::to_string(n));
-        duql::InNode leaf = *in;
+    if (const auto* in = std::get_if<duql::detail::InNode>(&n.data)) {
+        if (!is_category(in->field))
+            return dstd::String(duql::detail::to_string(n));
+        duql::detail::InNode leaf = *in;
         lower_literals(leaf.values);
         return lowered_leaf(std::move(leaf));
     }
-    if (const auto* in = std::get_if<duql::NotInNode>(&n.data)) {
-        if (!is_category(in->field)) return dstd::String(duql::to_string(n));
-        duql::NotInNode leaf = *in;
+    if (const auto* in = std::get_if<duql::detail::NotInNode>(&n.data)) {
+        if (!is_category(in->field))
+            return dstd::String(duql::detail::to_string(n));
+        duql::detail::NotInNode leaf = *in;
         lower_literals(leaf.values);
         return lowered_leaf(std::move(leaf));
     }
-    if (const auto* m = std::get_if<duql::MatchNode>(&n.data)) {
-        if (!is_category(m->field)) return dstd::String(duql::to_string(n));
-        duql::MatchNode leaf = *m;
+    if (const auto* m = std::get_if<duql::detail::MatchNode>(&n.data)) {
+        if (!is_category(m->field))
+            return dstd::String(duql::detail::to_string(n));
+        duql::detail::MatchNode leaf = *m;
         if (leaf.op == duql::MatchOp::Like) leaf.op = duql::MatchOp::Ilike;
         if (leaf.op == duql::MatchOp::Regex) leaf.op = duql::MatchOp::Iregex;
         leaf.compiled.reset();
-        return dstd::String(duql::to_string(duql::QueryNode(std::move(leaf))));
+        return dstd::String(
+            duql::detail::to_string(duql::detail::QueryNode(std::move(leaf))));
     }
-    if (const auto* a = std::get_if<duql::AndNode>(&n.data))
+    if (const auto* a = std::get_if<duql::detail::AndNode>(&n.data))
         return join(fold_category(*a->left), "and", fold_category(*a->right));
-    if (const auto* o = std::get_if<duql::OrNode>(&n.data))
+    if (const auto* o = std::get_if<duql::detail::OrNode>(&n.data))
         return join(fold_category(*o->left), "or", fold_category(*o->right));
-    if (const auto* nt = std::get_if<duql::NotNode>(&n.data))
+    if (const auto* nt = std::get_if<duql::detail::NotNode>(&n.data))
         return dstd::String("not (") + fold_category(*nt->operand) + ")";
-    return dstd::String(duql::to_string(n));
+    return dstd::String(duql::detail::to_string(n));
 }
 
 struct Translator {
@@ -147,7 +155,7 @@ struct Translator {
     // Restricts `field` to the literals, or fails when the field or a
     // literal is not one a set can hold.
     dstd::Optional<ComparisonFilter> set_of(
-        const duql::FieldNode& field,
+        const duql::detail::FieldNode& field,
         const dstd::Vector<const duql::LiteralValue*>& values) {
         ComparisonFilter f;
         if (field.any) return fail();
@@ -186,7 +194,8 @@ struct Translator {
         return fail();
     }
 
-    dstd::Optional<ComparisonFilter> compare(const duql::CompareNode& c) {
+    dstd::Optional<ComparisonFilter> compare(
+        const duql::detail::CompareNode& c) {
         if (c.field.path == "ts" && !c.field.any) {
             const auto v = as_uint(c.value.value);
             if (!v) return fail();
@@ -217,13 +226,13 @@ struct Translator {
         return set_of(c.field, {&c.value.value});
     }
 
-    dstd::Optional<ComparisonFilter> in_list(const duql::InNode& in) {
+    dstd::Optional<ComparisonFilter> in_list(const duql::detail::InNode& in) {
         dstd::Vector<const duql::LiteralValue*> values;
         for (const auto& e : in.values.elements) values.push_back(&e.value);
         return set_of(in.field, values);
     }
 
-    dstd::Optional<ComparisonFilter> conj(const duql::AndNode& a) {
+    dstd::Optional<ComparisonFilter> conj(const duql::detail::AndNode& a) {
         auto l = node(*a.left);
         if (!l) return dstd::nullopt;
         auto r = node(*a.right);
@@ -237,7 +246,7 @@ struct Translator {
         return l;
     }
 
-    dstd::Optional<ComparisonFilter> disj(const duql::OrNode& o) {
+    dstd::Optional<ComparisonFilter> disj(const duql::detail::OrNode& o) {
         auto l = node(*o.left);
         if (!l) return dstd::nullopt;
         auto r = node(*o.right);
@@ -255,14 +264,15 @@ struct Translator {
         return l;
     }
 
-    dstd::Optional<ComparisonFilter> node(const duql::QueryNode& n) {
-        if (const auto* c = std::get_if<duql::CompareNode>(&n.data))
+    dstd::Optional<ComparisonFilter> node(const duql::detail::QueryNode& n) {
+        if (const auto* c = std::get_if<duql::detail::CompareNode>(&n.data))
             return compare(*c);
-        if (const auto* in = std::get_if<duql::InNode>(&n.data))
+        if (const auto* in = std::get_if<duql::detail::InNode>(&n.data))
             return in_list(*in);
-        if (const auto* a = std::get_if<duql::AndNode>(&n.data))
+        if (const auto* a = std::get_if<duql::detail::AndNode>(&n.data))
             return conj(*a);
-        if (const auto* o = std::get_if<duql::OrNode>(&n.data)) return disj(*o);
+        if (const auto* o = std::get_if<duql::detail::OrNode>(&n.data))
+            return disj(*o);
         return fail();
     }
 };
@@ -389,10 +399,11 @@ bool ComparisonFilter::same_cut(const ComparisonFilter& other) const {
 
 dstd::Result<ComparisonFilter> filter_from_query(const duql::Query& query) {
     Translator t;
-    auto f = t.node(query.root());
+    auto f = t.node(duql::detail::QueryAccess::root(query));
     if (f) return std::move(*f);
     ComparisonFilter out;
-    const dstd::String text = fold_category(query.root());
+    const dstd::String text =
+        fold_category(duql::detail::QueryAccess::root(query));
     auto folded = duql::Query::from_string(text);
     // The folded text is the query's own with `cat` wrapped in lower(), so a
     // parse failure is a bug of the rewrite.

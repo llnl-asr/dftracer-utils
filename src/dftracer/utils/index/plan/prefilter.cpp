@@ -6,7 +6,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/detail/ast.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/prefilter.h>
@@ -68,16 +68,16 @@ dstd::Optional<dstd::String> needle(const duql::LiteralNode& lit) {
 
 // The clauses a line matching `node` must satisfy; empty when nothing can be
 // required of its bytes.
-Clauses clauses_of(const duql::QueryNode& node) {
+Clauses clauses_of(const duql::detail::QueryNode& node) {
     return std::visit(
         [](auto&& n) -> Clauses {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, duql::CompareNode>) {
+            if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
                 if (n.op != duql::CompareOp::Eq) return {};
                 auto s = needle(n.value);
                 if (!s) return {};
                 return {{std::move(*s)}};
-            } else if constexpr (std::is_same_v<T, duql::InNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::InNode>) {
                 if (n.values.elements.size() > SEMI_JOIN_CAP) return {};
                 dstd::Vector<dstd::String> any;
                 for (const auto& e : n.values.elements) {
@@ -87,7 +87,7 @@ Clauses clauses_of(const duql::QueryNode& node) {
                 }
                 if (any.empty()) return {};
                 return {std::move(any)};
-            } else if constexpr (std::is_same_v<T, duql::MatchNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::MatchNode>) {
                 // A case-sensitive pattern's required literals sit in the
                 // value's bytes unless JSON escaping hides them.
                 if (n.negated || !n.compiled ||
@@ -99,13 +99,13 @@ Clauses clauses_of(const duql::QueryNode& node) {
                     if (lit.size() >= MIN_NEEDLE && safe(lit))
                         out.push_back({dstd::String(lit)});
                 return out;
-            } else if constexpr (std::is_same_v<T, duql::AndNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::AndNode>) {
                 Clauses out = clauses_of(*n.left);
                 Clauses right = clauses_of(*n.right);
                 out.insert(out.end(), std::make_move_iterator(right.begin()),
                            std::make_move_iterator(right.end()));
                 return out;
-            } else if constexpr (std::is_same_v<T, duql::OrNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::OrNode>) {
                 // (a1 and a2) or (b1 and b2) holds each ai-or-bj clause.
                 const Clauses l = clauses_of(*n.left);
                 const Clauses r = clauses_of(*n.right);
@@ -140,14 +140,14 @@ bool plain_key(dstd::StringView k) {
 
 // The ranges a line matching `node` must satisfy: numeric order leaves
 // joined by `and`.
-void ranges_of(const duql::QueryNode& node,
+void ranges_of(const duql::detail::QueryNode& node,
                dstd::Vector<Prefilter::Range>& out) {
-    if (const auto* a = std::get_if<duql::AndNode>(&node.data)) {
+    if (const auto* a = std::get_if<duql::detail::AndNode>(&node.data)) {
         ranges_of(*a->left, out);
         ranges_of(*a->right, out);
         return;
     }
-    const auto* n = std::get_if<duql::CompareNode>(&node.data);
+    const auto* n = std::get_if<duql::detail::CompareNode>(&node.data);
     // An any() key is followed by an array, not the number a range reads.
     if (!n || n->field.any || n->op == duql::CompareOp::Ne) return;
     const dstd::String path(n->field.path);
@@ -341,8 +341,9 @@ hs_error_t scan_grow(const hs_database_t* db, dstd::StringView s, Hits& hits) {
 }  // namespace
 #endif
 
-Prefilter::Prefilter(const duql::Query& q) : clauses_(clauses_of(q.root())) {
-    ranges_of(q.root(), ranges_);
+Prefilter::Prefilter(const duql::Query& q)
+    : clauses_(clauses_of(duql::detail::QueryAccess::root(q))) {
+    ranges_of(duql::detail::QueryAccess::root(q), ranges_);
     pivots_.reserve(clauses_.size());
     for (const auto& clause : clauses_) {
         auto& p = pivots_.emplace_back();

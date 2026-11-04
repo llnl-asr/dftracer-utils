@@ -6,7 +6,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/args_map.h>
-#include <dftracer/utils/trace/time_metric.h>
 
 #include <cstdint>
 
@@ -24,11 +23,6 @@ struct TraceConfig {
 /// member holds no end (reorganized trace, mid-file split chunk, crash);
 /// callers should then fall back to a full scan.
 dstd::Vector<TraceConfig> read_trace_config(const dstd::String& trace_path);
-
-/// The trace's native time unit, from the leading CM time_metric in the first
-/// gzip member (US when absent/unreadable). Used to normalize ts/dur to a
-/// target unit without decoding the whole trace.
-TimeMetric read_time_metric(const dstd::String& trace_path);
 
 /// Parse one NDJSON line into a @ref TraceConfig if it is an end event; nullopt
 /// otherwise. Shared by the tail probe and the index-assisted scan fallback.

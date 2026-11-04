@@ -12,6 +12,7 @@
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <doctest/doctest.h>
+#include <duql/eval_json.h>
 #include <simdjson.h>
 
 #include <cstring>
@@ -67,8 +68,8 @@ TEST_CASE("C++ fluent Field builder matches parse") {
 
     JsonDoc hit(R"({"cat":"POSIX","dur":200})");
     JsonDoc miss(R"({"cat":"POSIX","dur":50})");
-    CHECK(built->evaluate(hit.root()));
-    CHECK_FALSE(built->evaluate(miss.root()));
+    CHECK(eval_json(*built, hit.root()));
+    CHECK_FALSE(eval_json(*built, miss.root()));
 
     CHECK(Field("name").like("%read%").to_string() ==
           Query::from_string(R"(name like "%read%")")->to_string());
@@ -85,11 +86,11 @@ TEST_CASE("C++ builder compare matches parse") {
 
     JsonDoc match(R"({"cat":"POSIX"})");
     JsonDoc no_match(R"({"cat":"STDIO"})");
-    CHECK(built->evaluate(match.root()) == parsed->evaluate(match.root()));
-    CHECK(built->evaluate(no_match.root()) ==
-          parsed->evaluate(no_match.root()));
-    CHECK(built->evaluate(match.root()));
-    CHECK_FALSE(built->evaluate(no_match.root()));
+    CHECK(eval_json(*built, match.root()) == eval_json(*parsed, match.root()));
+    CHECK(eval_json(*built, no_match.root()) ==
+          eval_json(*parsed, no_match.root()));
+    CHECK(eval_json(*built, match.root()));
+    CHECK_FALSE(eval_json(*built, no_match.root()));
 }
 
 TEST_CASE("C++ builder numeric typing round-trips") {
@@ -112,7 +113,7 @@ TEST_CASE("C++ builder combinators match parse") {
                             R"({"cat":"STDIO","dur":100})"};
     for (const char* ev : events) {
         JsonDoc doc(ev);
-        CHECK(built->evaluate(doc.root()) == parsed->evaluate(doc.root()));
+        CHECK(eval_json(*built, doc.root()) == eval_json(*parsed, doc.root()));
     }
 }
 
@@ -124,8 +125,8 @@ TEST_CASE("C++ builder or / not match parse") {
     REQUIRE(parsed.has_value());
     CHECK(built->to_string() == parsed->to_string());
     JsonDoc doc(R"({"cat":"POSIX"})");
-    CHECK(built->evaluate(doc.root()) == parsed->evaluate(doc.root()));
-    CHECK(built->evaluate(doc.root()));
+    CHECK(eval_json(*built, doc.root()) == eval_json(*parsed, doc.root()));
+    CHECK(eval_json(*built, doc.root()));
 }
 
 TEST_CASE("C++ builder in / match round-trip") {
@@ -144,10 +145,10 @@ TEST_CASE("C++ builder in / match round-trip") {
     CHECK(like->to_string() == parsed->to_string());
     JsonDoc a(R"({"name":"MPI_Send"})");
     JsonDoc b(R"({"name":"POSIX_read"})");
-    CHECK(like->evaluate(a.root()) == parsed->evaluate(a.root()));
-    CHECK(like->evaluate(b.root()) == parsed->evaluate(b.root()));
-    CHECK(like->evaluate(a.root()));
-    CHECK_FALSE(like->evaluate(b.root()));
+    CHECK(eval_json(*like, a.root()) == eval_json(*parsed, a.root()));
+    CHECK(eval_json(*like, b.root()) == eval_json(*parsed, b.root()));
+    CHECK(eval_json(*like, a.root()));
+    CHECK_FALSE(eval_json(*like, b.root()));
 }
 
 TEST_CASE("C ABI builder compare matches parse") {
@@ -159,8 +160,8 @@ TEST_CASE("C ABI builder compare matches parse") {
 
     JsonDoc match(R"({"cat":"POSIX"})");
     JsonDoc no_match(R"({"cat":"STDIO"})");
-    CHECK(built.duql().evaluate(match.root()));
-    CHECK_FALSE(built.duql().evaluate(no_match.root()));
+    CHECK(eval_json(built.duql(), match.root()));
+    CHECK_FALSE(eval_json(built.duql(), no_match.root()));
 }
 
 TEST_CASE("C ABI builder numeric and combinators") {
@@ -179,12 +180,12 @@ TEST_CASE("C ABI builder numeric and combinators") {
 
     JsonDoc doc(R"({"cat":"POSIX","dur":100})");
     JsonDoc doc2(R"({"cat":"POSIX","dur":10})");
-    CHECK(both.duql().evaluate(doc.root()) ==
-          parsed.duql().evaluate(doc.root()));
-    CHECK(both.duql().evaluate(doc2.root()) ==
-          parsed.duql().evaluate(doc2.root()));
-    CHECK(both.duql().evaluate(doc.root()));
-    CHECK_FALSE(both.duql().evaluate(doc2.root()));
+    CHECK(eval_json(both.duql(), doc.root()) ==
+          eval_json(parsed.duql(), doc.root()));
+    CHECK(eval_json(both.duql(), doc2.root()) ==
+          eval_json(parsed.duql(), doc2.root()));
+    CHECK(eval_json(both.duql(), doc.root()));
+    CHECK_FALSE(eval_json(both.duql(), doc2.root()));
 }
 
 TEST_CASE("C ABI builder in / not_in / match") {
@@ -208,9 +209,9 @@ TEST_CASE("C ABI builder in / not_in / match") {
     REQUIRE(match_parsed.h != nullptr);
     CHECK(match.str() == match_parsed.str());
     JsonDoc a(R"({"name":"MPI_Send"})");
-    CHECK(match.duql().evaluate(a.root()) ==
-          match_parsed.duql().evaluate(a.root()));
-    CHECK(match.duql().evaluate(a.root()));
+    CHECK(eval_json(match.duql(), a.root()) ==
+          eval_json(match_parsed.duql(), a.root()));
+    CHECK(eval_json(match.duql(), a.root()));
 }
 
 TEST_CASE("C ABI builder or / not") {
@@ -222,7 +223,7 @@ TEST_CASE("C ABI builder or / not") {
     REQUIRE(parsed.h != nullptr);
     CHECK(q.str() == parsed.str());
     JsonDoc doc(R"({"cat":"POSIX"})");
-    CHECK(q.duql().evaluate(doc.root()));
+    CHECK(eval_json(q.duql(), doc.root()));
 }
 
 TEST_CASE("C ABI builder null field is safe") {
@@ -243,10 +244,10 @@ TEST_CASE("any() builds the same leaf from C++, the C ABI and the DSL") {
 
     JsonDoc hit(R"({"tags":["b","a"],"sizes":[1,200]})");
     JsonDoc miss(R"({"tags":["b"],"sizes":[1]})");
-    CHECK(c.duql().evaluate(hit.root()));
-    CHECK_FALSE(c.duql().evaluate(miss.root()));
-    CHECK(in.duql().evaluate(hit.root()));
-    CHECK_FALSE(in.duql().evaluate(miss.root()));
+    CHECK(eval_json(c.duql(), hit.root()));
+    CHECK_FALSE(eval_json(c.duql(), miss.root()));
+    CHECK(eval_json(in.duql(), hit.root()));
+    CHECK_FALSE(eval_json(in.duql(), miss.root()));
 }
 
 namespace {

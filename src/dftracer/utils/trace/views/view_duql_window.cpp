@@ -73,8 +73,9 @@ void Applier::stage(const duql::PipelineTimeRange& t) {
         return;
     }
     if (scan_) {
-        v_ = v_.filter(duql::Query::from_node(
-            duql::make_node(duql::ExprLeaf{t.condition, t.text})));
+        v_ = v_.filter(
+            duql::detail::QueryAccess::from_node(duql::detail::make_node(
+                duql::detail::ExprLeaf{t.condition, t.text})));
         lines.push_back(dstd::String("scan filter: " + t.text + " (pushed)"));
         return;
     }

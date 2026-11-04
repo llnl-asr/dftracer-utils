@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DUQL_AST_STRING_H
-#define DFTRACER_UTILS_DUQL_AST_STRING_H
+#ifndef DFTRACER_UTILS_DUQL_DETAIL_AST_STRING_H
+#define DFTRACER_UTILS_DUQL_DETAIL_AST_STRING_H
 
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/duql/ast.h>
-#include <dftracer/utils/duql/string_literal.h>
+#include <dftracer/utils/duql/detail/ast.h>
+#include <dftracer/utils/duql/detail/string_literal.h>
 
 #include <cstddef>
 #include <cstdio>
@@ -127,8 +127,6 @@ inline void node_to_string(dstd::String& os, const QueryNode& node) {
         node.data);
 }
 
-}  // namespace detail
-
 /// Human-readable string for a CompareOp (e.g., "==", "!=").
 inline const char* compare_op_str(CompareOp op) {
     switch (op) {
@@ -151,10 +149,12 @@ inline const char* compare_op_str(CompareOp op) {
 /// Serialize an AST back to query DSL string.
 inline dstd::String to_string(const QueryNode& node) {
     dstd::String os;
-    detail::node_to_string(os, node);
+    node_to_string(os, node);
     return os;
 }
 
+}  // namespace detail
+
 }  // namespace dftracer::utils::duql
 
-#endif  // DFTRACER_UTILS_DUQL_AST_STRING_H
+#endif  // DFTRACER_UTILS_DUQL_DETAIL_AST_STRING_H

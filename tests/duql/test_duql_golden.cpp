@@ -32,7 +32,7 @@ TEST_CASE("the golden filters keep their trees") {
         CAPTURE(q);
         CHECK(tree.has_value() == ok);
         if (ok && tree)
-            CHECK(dftracer::utils::duql::to_string(**tree) ==
+            CHECK(dftracer::utils::duql::detail::to_string(**tree) ==
                   dstd::String(row["tree"].get_string().value()));
         ++checked;
     }

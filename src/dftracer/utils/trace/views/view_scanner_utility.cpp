@@ -307,18 +307,22 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                         if (metadata) {
                             // Metadata records bypass the event query unless
                             // they are rows the query filters.
-                            match = input.view.include_metadata &&
-                                    (!use_query ||
-                                     !(input.view.filter_metadata ||
-                                       input.view.metadata_records) ||
-                                     query->evaluate(json,
-                                                     input.view.args_fallback));
+                            match =
+                                input.view.include_metadata &&
+                                (!use_query ||
+                                 !(input.view.filter_metadata ||
+                                   input.view.metadata_records) ||
+                                 duql::evaluate(
+                                     duql::detail::QueryAccess::root(*query),
+                                     json, input.view.args_fallback));
                         } else {
                             batch.events_scanned++;
-                            match = in_window(root, input.view) &&
-                                    (!use_query ||
-                                     query->evaluate(json,
-                                                     input.view.args_fallback));
+                            match =
+                                in_window(root, input.view) &&
+                                (!use_query ||
+                                 duql::evaluate(
+                                     duql::detail::QueryAccess::root(*query),
+                                     json, input.view.args_fallback));
                         }
                         if (match) {
                             if (input.fold_intern) {

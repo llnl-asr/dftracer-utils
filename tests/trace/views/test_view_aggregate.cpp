@@ -17,6 +17,7 @@
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/fold.h>
+#include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_executor.h>

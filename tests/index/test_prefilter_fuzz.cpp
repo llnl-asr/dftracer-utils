@@ -12,6 +12,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <duql/eval_json.h>
 #include <simdjson.h>
 #include <testing_utilities.h>
 
@@ -276,7 +277,7 @@ TEST_CASE("the pre-filter never drops a match") {
         std::uint64_t data = 0, all = 0;
         for (std::size_t k = 0; k < lines.size(); ++k) {
             auto root = parser.parse(padded[k]).value();
-            if (!q.evaluate(dftracer::utils::json::JsonValue(root))) continue;
+            if (!eval_json(q, dftracer::utils::json::JsonValue(root))) continue;
             ++all;
             if (lines[k].find("\"M\"") == dstd::String::npos) ++data;
         }
@@ -351,8 +352,8 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
         const duql::Query q = dftracer::utils::duql::parse_or_throw(text);
         std::uint64_t all = 0;
         for (auto& p : padded)
-            all += q.evaluate(dftracer::utils::json::JsonValue(
-                       parser.parse(p).value()))
+            all += eval_json(q, dftracer::utils::json::JsonValue(
+                                    parser.parse(p).value()))
                        ? 1
                        : 0;
         const ViewCounts v = view_counts(gz, q);

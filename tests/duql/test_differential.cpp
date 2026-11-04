@@ -24,19 +24,19 @@ using namespace dftracer::utils;
 
 namespace {
 
-void leaves(const duql::QueryNode& node,
-            dstd::Vector<const duql::QueryNode*>& out) {
+void leaves(const duql::detail::QueryNode& node,
+            dstd::Vector<const duql::detail::QueryNode*>& out) {
     std::visit(
         [&](const auto& n) {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, duql::AndNode> ||
-                          std::is_same_v<T, duql::OrNode>) {
+            if constexpr (std::is_same_v<T, duql::detail::AndNode> ||
+                          std::is_same_v<T, duql::detail::OrNode>) {
                 leaves(*n.left, out);
                 leaves(*n.right, out);
-            } else if constexpr (std::is_same_v<T, duql::NotNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::NotNode>) {
                 leaves(*n.operand, out);
-            } else if constexpr (std::is_same_v<T, duql::ExprLeaf>) {
-            } else if constexpr (std::is_same_v<T, duql::MatchNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::ExprLeaf>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::MatchNode>) {
                 if (!n.field.any && n.op != duql::MatchOp::Icontains)
                     out.push_back(&node);
             } else {
@@ -46,14 +46,14 @@ void leaves(const duql::QueryNode& node,
         node.data);
 }
 
-const duql::FieldNode& field_of(const duql::QueryNode& leaf) {
+const duql::detail::FieldNode& field_of(const duql::detail::QueryNode& leaf) {
     return std::visit(
-        [](const auto& n) -> const duql::FieldNode& {
+        [](const auto& n) -> const duql::detail::FieldNode& {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, duql::CompareNode> ||
-                          std::is_same_v<T, duql::InNode> ||
-                          std::is_same_v<T, duql::NotInNode> ||
-                          std::is_same_v<T, duql::MatchNode>)
+            if constexpr (std::is_same_v<T, duql::detail::CompareNode> ||
+                          std::is_same_v<T, duql::detail::InNode> ||
+                          std::is_same_v<T, duql::detail::NotInNode> ||
+                          std::is_same_v<T, duql::detail::MatchNode>)
                 return n.field;
             else
                 throw std::logic_error("not a literal leaf");
@@ -63,8 +63,8 @@ const duql::FieldNode& field_of(const duql::QueryNode& leaf) {
 
 // The leaf's text with its field read through if(), which forces the
 // expression form without changing the value.
-dstd::String expression_form(const duql::QueryNode& leaf) {
-    const dstd::String text = duql::to_string(leaf);
+dstd::String expression_form(const duql::detail::QueryNode& leaf) {
+    const dstd::String text = duql::detail::to_string(leaf);
     const dstd::String& path = field_of(leaf).path;
     const dstd::String wrapped = "if(true, " + path + ", null)";
     const auto at = text.find(path);
@@ -93,7 +93,7 @@ dstd::String json_literal(const duql::LiteralValue& v) {
 
 // Values to place at the leaf's field: its literals and their neighbours,
 // every JSON type, and nothing at all.
-dstd::Vector<dstd::String> values_for(const duql::QueryNode& leaf) {
+dstd::Vector<dstd::String> values_for(const duql::detail::QueryNode& leaf) {
     dstd::Vector<dstd::String> out = {"null", "true",      "false", "0",
                                       "1.5",  "\"\"",      "\"a\"", "[1]",
                                       "[]",   "{\"k\":1}", "-7"};
@@ -112,12 +112,12 @@ dstd::Vector<dstd::String> values_for(const duql::QueryNode& leaf) {
     std::visit(
         [&](const auto& n) {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, duql::CompareNode>) {
+            if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
                 add(n.value.value);
-            } else if constexpr (std::is_same_v<T, duql::InNode> ||
-                                 std::is_same_v<T, duql::NotInNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::InNode> ||
+                                 std::is_same_v<T, duql::detail::NotInNode>) {
                 for (const auto& e : n.values.elements) add(e.value);
-            } else if constexpr (std::is_same_v<T, duql::MatchNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::MatchNode>) {
                 out.push_back(json_literal(n.pattern));
             }
         },
@@ -203,9 +203,9 @@ TEST_CASE("literal leaves and their expression form agree") {
         const auto tree =
             duql::parse(dstd::String(row["q"].get_string().value()));
         REQUIRE(tree);
-        dstd::Vector<const duql::QueryNode*> found;
+        dstd::Vector<const duql::detail::QueryNode*> found;
         leaves(**tree, found);
-        for (const duql::QueryNode* leaf : found) {
+        for (const duql::detail::QueryNode* leaf : found) {
             const dstd::String& path = field_of(*leaf).path;
             if (path.find_first_of("[`") != dstd::String::npos) continue;
             const dstd::String form = expression_form(*leaf);
@@ -213,7 +213,8 @@ TEST_CASE("literal leaves and their expression form agree") {
             const auto expr = duql::parse(form);
             REQUIRE_MESSAGE(expr.has_value(),
                             (expr ? dstd::String() : expr.error().message));
-            REQUIRE(std::holds_alternative<duql::ExprLeaf>((*expr)->data));
+            REQUIRE(
+                std::holds_alternative<duql::detail::ExprLeaf>((*expr)->data));
             dstd::Vector<dstd::String> placed = {path};
             if (path.find('.') == dstd::String::npos)
                 placed.push_back("args." + path);

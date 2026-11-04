@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_RESULT_JOIN_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/trace/views/join_type.h>
 
 #include <cstdint>
 
@@ -11,8 +12,6 @@
 /// aggregation schema rides through opaquely. No Arrow dependency: it composes
 /// vec's take() (which fills nulls for OUTER rows via a negative index).
 namespace dftracer::utils::trace::views {
-
-enum class JoinType { Inner, Left, Right, Full, LeftSemi, LeftAnti };
 
 /// Equi join `left` and `right` on their first `n_key` columns (the group key).
 /// Output columns: the key columns (kept by name), then each non-key left

@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/builder.h>
+#include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
@@ -174,8 +175,9 @@ class Detector {
         const json::JsonValue record(root);
         bool metadata = false;
         for (std::size_t k = 0; k < conds_.size(); ++k) {
-            truth_[k] = duql::evaluate_truth(conds_[k].query.root(), record,
-                                             conds_[k].args_fallback);
+            truth_[k] = duql::evaluate_truth(
+                duql::detail::QueryAccess::root(conds_[k].query), record,
+                conds_[k].args_fallback);
             if (truth_[k] == duql::Truth::No) {
                 metadata = true;
                 ++conds_[k].left_out;

@@ -6,11 +6,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/detail/ast.h>
+#include <dftracer/utils/duql/detail/string_literal.h>
 #include <dftracer/utils/duql/lower.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/pipeline.h>
-#include <dftracer/utils/duql/string_literal.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/duql/syntax/tree.h>
@@ -53,7 +53,7 @@ const duql::syntax::Expr& where_condition(const duql::syntax::Program& q) {
 dstd::String lowered(dstd::StringView text, const duql::Params& params = {}) {
     auto node = duql::parse(text, params);
     if (!node) FAIL(node.error().format());
-    return duql::to_string(**node);
+    return duql::detail::to_string(**node);
 }
 
 dstd::Expected<duql::Pipeline, duql::DuqlError> compile_pipeline(
@@ -300,8 +300,8 @@ TEST_CASE("parse - string escapes decode and print back") {
             duql::syntax::parse(dstd::String("where x == ") + bad).has_value());
     }
     const dstd::String all = "q\" s' b\\ n\n t\t c\x01 u\xc3\xa9";
-    const dstd::String printed =
-        duql::syntax::to_text(parsed("where x == " + duql::quote_string(all)));
+    const dstd::String printed = duql::syntax::to_text(
+        parsed("where x == " + duql::detail::quote_string(all)));
     CHECK(value(printed.substr(
               printed.find("== ") + 3,
               printed.rfind('\n') - printed.find("== ") - 3)) == all);
@@ -567,7 +567,7 @@ TEST_CASE("parse - list and pattern parameters print back") {
 TEST_CASE("parse - negative literal lowers to int64") {
     auto node = duql::parse("x > -5");
     REQUIRE(node.has_value());
-    const auto& cmp = std::get<duql::CompareNode>((*node)->data);
+    const auto& cmp = std::get<duql::detail::CompareNode>((*node)->data);
     CHECK(cmp.field.path == "x");
     CHECK(cmp.op == duql::CompareOp::Gt);
     REQUIRE(std::holds_alternative<std::int64_t>(cmp.value.value));
@@ -583,7 +583,7 @@ TEST_CASE("parse - subtraction") {
     CHECK(sub->op == duql::syntax::BinaryOp::Sub);
     auto node = duql::parse("ts-1000 > 5");
     REQUIRE(node.has_value());
-    CHECK(duql::to_string(**node) == "(ts - 1000) > 5");
+    CHECK(duql::detail::to_string(**node) == "(ts - 1000) > 5");
 }
 
 TEST_CASE("parse - quoted key path") {
@@ -1085,7 +1085,7 @@ TEST_CASE("pipeline - stages") {
         " | distinct name | drop ts | rename d = dur | take $n | skip 1",
         params, nullptr);
     REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
-    CHECK(std::holds_alternative<duql::AndNode>(p->filter->data));
+    CHECK(std::holds_alternative<duql::detail::AndNode>(p->filter->data));
     CHECK(p->scan_select == dstd::Vector<dstd::String>{"name", "dur", "ts"});
     REQUIRE(p->stages.size() == 7);
     const auto& derive = std::get<duql::PipelineDerive>(p->stages[0]);
@@ -1141,7 +1141,7 @@ TEST_CASE("pipeline - durations and time functions") {
         " | where dur between 1ms and 1.5ms",
         {}, &roles);
     REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
-    const auto& cmp = std::get<duql::CompareNode>(p->filter->data);
+    const auto& cmp = std::get<duql::detail::CompareNode>(p->filter->data);
     CHECK(std::get<std::uint64_t>(cmp.value.value) == 250000);
     const auto& d = std::get<duql::PipelineDerive>(p->stages[0]);
     CHECK(d.items[0].text == "(ts // 1000000) * 1000000");
@@ -1211,7 +1211,7 @@ TEST_CASE("lower - parameters") {
     params.emplace("app", duql::LiteralValue{dstd::String("laghos")});
     auto node = duql::parse("app == $app", params);
     REQUIRE(node.has_value());
-    const auto& cmp = std::get<duql::CompareNode>((*node)->data);
+    const auto& cmp = std::get<duql::detail::CompareNode>((*node)->data);
     CHECK(cmp.field.path == "app");
     CHECK(cmp.op == duql::CompareOp::Eq);
     REQUIRE(std::holds_alternative<dstd::String>(cmp.value.value));

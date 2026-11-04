@@ -11,7 +11,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/detail/ast.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/term.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
@@ -178,16 +178,16 @@ dstd::Optional<dstd::Vector<GroupKey>> partial_keys(const ViewPlan& plan) {
     return keys;
 }
 
-bool reads_lookup(const duql::QueryNode& node) {
+bool reads_lookup(const duql::detail::QueryNode& node) {
     return std::visit(
         [](const auto& n) -> bool {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, duql::AndNode> ||
-                          std::is_same_v<T, duql::OrNode>) {
+            if constexpr (std::is_same_v<T, duql::detail::AndNode> ||
+                          std::is_same_v<T, duql::detail::OrNode>) {
                 return reads_lookup(*n.left) || reads_lookup(*n.right);
-            } else if constexpr (std::is_same_v<T, duql::NotNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::NotNode>) {
                 return reads_lookup(*n.operand);
-            } else if constexpr (std::is_same_v<T, duql::ExprLeaf>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::ExprLeaf>) {
                 bool found = false;
                 duql::for_each_term(*n.term, [&found](const duql::Term& t) {
                     found =
@@ -206,7 +206,7 @@ bool query_answerable(const ViewPlan& plan) {
     // Aggregated records keep no array elements.
     if (!q.any_paths().empty()) return false;
     // The view binds a row set's rows only on the scan path.
-    if (reads_lookup(q.root())) return false;
+    if (reads_lookup(duql::detail::QueryAccess::root(q))) return false;
     for (dstd::StringView f : q.fields()) {
         const dstd::String t = tier_field(plan, f);
         if (t != "name" && t != "pid" && t != "tid" && t != "fhash" &&
@@ -296,7 +296,7 @@ struct FilterSets {
     dstd::Vector<std::uint64_t> pids;
 };
 
-bool add_leaf(const ViewPlan& plan, const duql::FieldNode& field,
+bool add_leaf(const ViewPlan& plan, const duql::detail::FieldNode& field,
               const dstd::Vector<const duql::LiteralValue*>& values,
               FilterSets& sets) {
     if (field.any || values.empty()) return false;
@@ -329,19 +329,19 @@ bool add_leaf(const ViewPlan& plan, const duql::FieldNode& field,
     return true;
 }
 
-bool extract_sets(const ViewPlan& plan, const duql::QueryNode& n,
+bool extract_sets(const ViewPlan& plan, const duql::detail::QueryNode& n,
                   FilterSets& sets) {
     using namespace duql;
     return std::visit(
         [&](const auto& node) -> bool {
             using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, AndNode>) {
+            if constexpr (std::is_same_v<T, duql::detail::AndNode>) {
                 return extract_sets(plan, *node.left, sets) &&
                        extract_sets(plan, *node.right, sets);
-            } else if constexpr (std::is_same_v<T, CompareNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
                 if (node.op != CompareOp::Eq) return false;
                 return add_leaf(plan, node.field, {&node.value.value}, sets);
-            } else if constexpr (std::is_same_v<T, InNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::InNode>) {
                 dstd::Vector<const LiteralValue*> values;
                 for (const auto& e : node.values.elements)
                     values.push_back(&e.value);
@@ -574,7 +574,8 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
 
     if (plan.query) {
         FilterSets sets;
-        if (extract_sets(plan, plan.query->root(), sets)) {
+        if (extract_sets(plan, duql::detail::QueryAccess::root(*plan.query),
+                         sets)) {
             q.categories = std::move(sets.categories);
             q.names = std::move(sets.names);
             q.hosts = std::move(sets.hosts);

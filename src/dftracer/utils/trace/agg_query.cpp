@@ -14,6 +14,8 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/evaluator.h>
+#include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/member.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
@@ -902,7 +904,10 @@ void Task::parse_lines_of(dstd::String& pending, std::uint32_t chunk,
         trace::parse_buffer(
             parser_, buf_, total, chunk, line_number,
             [&](const trace::EventRecord& rec) {
-                if (r_.rules.q.filter && !r_.rules.q.filter->evaluate(rec.json))
+                if (r_.rules.q.filter &&
+                    !duql::evaluate(
+                        duql::detail::QueryAccess::root(*r_.rules.q.filter),
+                        rec.json))
                     return;
                 FoldEvent& ev = buffer_.append();
                 views::detail::build_fold_event_into(ev, rec.ev, rec.args_dom,

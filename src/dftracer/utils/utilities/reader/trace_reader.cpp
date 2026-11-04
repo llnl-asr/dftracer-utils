@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
@@ -21,6 +22,7 @@
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/time_metric_event.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -67,7 +69,7 @@ bool line_matches_query(const Query& q, dstd::StringView content) {
     auto root = result.value_unsafe();
     if (!root.is_object()) return false;
     JsonValue json(root);
-    return q.evaluate(json);
+    return duql::evaluate(duql::detail::QueryAccess::root(q), json);
 }
 
 struct LineRange {
@@ -633,7 +635,8 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                     simdjson::dom::element record;
                     if (expr_parser.parse(src.data(), src.size()).get(record) !=
                             simdjson::SUCCESS ||
-                        !query->evaluate(json::JsonValue(record)))
+                        !duql::evaluate(duql::detail::QueryAccess::root(*query),
+                                        json::JsonValue(record)))
                         continue;
                 } else if (query) {
                     duql::ValueMap fields;
@@ -705,7 +708,8 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
             simdjson::dom::element record;
             if (expr_parser.parse(trimmed, trimmed_len).get(record) !=
                     simdjson::SUCCESS ||
-                !query->evaluate(json::JsonValue(record)))
+                !duql::evaluate(duql::detail::QueryAccess::root(*query),
+                                json::JsonValue(record)))
                 continue;
         } else if (query) {
             duql::ValueMap fields;

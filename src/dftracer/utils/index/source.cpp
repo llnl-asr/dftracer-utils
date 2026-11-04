@@ -194,7 +194,9 @@ dstd::Vector<IndexedRowSet> indexed_rowsets(const RecordSchema& schema) {
         if (reads_sides) continue;
         IndexedRowSet r;
         r.name = side.name;
-        if (p.filter) r.filter = duql::Query::from_node(duql::clone(*p.filter));
+        if (p.filter)
+            r.filter =
+                duql::detail::QueryAccess::from_node(duql::clone(*p.filter));
         bool plain = true;
         std::size_t stages = p.stages.size();
         if (stages > 0)

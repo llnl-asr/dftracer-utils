@@ -4,7 +4,6 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/trace/event.h>
 
 #include <cstdint>
 
@@ -78,19 +77,6 @@ struct TimeScaleState {
     TimeMetric metric = TimeMetric::Us;
     dstd::Optional<TimeMetric> target;
 };
-
-/// True when the event is the CM time_metric declaration; sets `out` to its
-/// unit.
-inline bool extract_time_metric(const DFTracerEvent& event, TimeMetric& out) {
-    if (!event.is_metadata() || event.name != "CM") return false;
-    auto name = event.args["name"];
-    if (!name.is_string() || name.get<dstd::StringView>() != "time_metric")
-        return false;
-    auto value = event.args["value"];
-    if (!value.is_string()) return false;
-    out = parse_time_metric(value.get<dstd::StringView>());
-    return true;
-}
 
 }  // namespace dftracer::utils::trace
 

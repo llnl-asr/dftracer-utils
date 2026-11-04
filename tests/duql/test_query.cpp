@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
+#include <duql/eval_json.h>
 #include <simdjson.h>
 
 #include <cstring>
@@ -50,10 +51,10 @@ TEST_CASE("Query::evaluate") {
     REQUIRE(q.has_value());
 
     JsonDoc match(R"({"cat":"POSIX","dur":100})");
-    CHECK(q->evaluate(match.root()));
+    CHECK(eval_json(*q, match.root()));
 
     JsonDoc no_match(R"({"cat":"STDIO","dur":100})");
-    CHECK_FALSE(q->evaluate(no_match.root()));
+    CHECK_FALSE(eval_json(*q, no_match.root()));
 }
 
 TEST_CASE("Query::to_string") {
@@ -85,7 +86,7 @@ TEST_CASE("Query with case-insensitive keywords") {
     REQUIRE(q.has_value());
 
     JsonDoc doc(R"({"cat":"POSIX","dur":100})");
-    CHECK(q->evaluate(doc.root()));
+    CHECK(eval_json(*q, doc.root()));
 }
 
 TEST_CASE("Query with NOT IN") {
@@ -93,10 +94,10 @@ TEST_CASE("Query with NOT IN") {
     REQUIRE(q.has_value());
 
     JsonDoc match(R"({"cat":"POSIX"})");
-    CHECK(q->evaluate(match.root()));
+    CHECK(eval_json(*q, match.root()));
 
     JsonDoc no_match(R"({"cat":"STDIO"})");
-    CHECK_FALSE(q->evaluate(no_match.root()));
+    CHECK_FALSE(eval_json(*q, no_match.root()));
 }
 
 TEST_CASE("Query resolves bare nested args fields") {
@@ -106,47 +107,47 @@ TEST_CASE("Query resolves bare nested args fields") {
 
     auto qh = Query::from_string(R"(fhash == "abc")");
     REQUIRE(qh.has_value());
-    CHECK(qh->evaluate(doc.root()));
+    CHECK(eval_json(*qh, doc.root()));
 
     auto qr = Query::from_string("ret == 64");
     REQUIRE(qr.has_value());
-    CHECK(qr->evaluate(doc.root()));
+    CHECK(eval_json(*qr, doc.root()));
 
     // Dotted form still works.
     auto qd = Query::from_string("args.ret == 64");
     REQUIRE(qd.has_value());
-    CHECK(qd->evaluate(doc.root()));
+    CHECK(eval_json(*qd, doc.root()));
 
     // Top-level still wins / unaffected.
     auto qc = Query::from_string(R"(cat == "POSIX")");
     REQUIRE(qc.has_value());
-    CHECK(qc->evaluate(doc.root()));
+    CHECK(eval_json(*qc, doc.root()));
 
     auto qmiss = Query::from_string(R"(fhash == "zzz")");
     REQUIRE(qmiss.has_value());
-    CHECK_FALSE(qmiss->evaluate(doc.root()));
+    CHECK_FALSE(eval_json(*qmiss, doc.root()));
 }
 
 TEST_CASE("Query bare-nested substring/regex on fhash") {
     JsonDoc doc(R"({"cat":"POSIX","args":{"fhash":"deadbeefcafe"}})");
     auto q = Query::from_string(R"('beef' in fhash)");
     REQUIRE(q.has_value());
-    CHECK(q->evaluate(doc.root()));
+    CHECK(eval_json(*q, doc.root()));
 }
 
 TEST_CASE("Query LIKE / ILIKE") {
     auto q = Query::from_string(R"(name like "MPI_%")");
     REQUIRE(q.has_value());
     JsonDoc a(R"({"name":"MPI_Send"})");
-    CHECK(q->evaluate(a.root()));
+    CHECK(eval_json(*q, a.root()));
     JsonDoc b(R"({"name":"POSIX_read"})");
-    CHECK_FALSE(q->evaluate(b.root()));
+    CHECK_FALSE(eval_json(*q, b.root()));
     JsonDoc c(R"({"name":"mpi_send"})");
-    CHECK_FALSE(q->evaluate(c.root()));  // LIKE is case-sensitive
+    CHECK_FALSE(eval_json(*q, c.root()));  // LIKE is case-sensitive
 
     auto qi = Query::from_string(R"(name ilike "mpi_%")");
     REQUIRE(qi.has_value());
-    CHECK(qi->evaluate(a.root()));  // ILIKE matches MPI_Send
+    CHECK(eval_json(*qi, a.root()));  // ILIKE matches MPI_Send
 }
 
 TEST_CASE("Query regex ~ and ~*") {
@@ -154,13 +155,13 @@ TEST_CASE("Query regex ~ and ~*") {
     REQUIRE(q.has_value());
     JsonDoc a(R"({"name":"MPI_Send"})");
     JsonDoc b(R"({"name":"MPI_Init"})");
-    CHECK(q->evaluate(a.root()));
-    CHECK_FALSE(q->evaluate(b.root()));
+    CHECK(eval_json(*q, a.root()));
+    CHECK_FALSE(eval_json(*q, b.root()));
 
     auto qi = Query::from_string(R"(name ~* "send|recv")");
     REQUIRE(qi.has_value());
     JsonDoc c(R"({"name":"MPI_SEND"})");
-    CHECK(qi->evaluate(c.root()));
+    CHECK(eval_json(*qi, c.root()));
 }
 
 TEST_CASE("Query negated match !~ and not like") {
@@ -168,8 +169,8 @@ TEST_CASE("Query negated match !~ and not like") {
     REQUIRE(q.has_value());
     JsonDoc a(R"({"name":"MPI_Send"})");
     JsonDoc b(R"({"name":"MPI_Init"})");
-    CHECK(q->evaluate(a.root()));
-    CHECK_FALSE(q->evaluate(b.root()));
+    CHECK(eval_json(*q, a.root()));
+    CHECK_FALSE(eval_json(*q, b.root()));
 }
 
 TEST_CASE("Query substring 'sub' in field is case-insensitive") {
@@ -178,9 +179,9 @@ TEST_CASE("Query substring 'sub' in field is case-insensitive") {
     JsonDoc a(R"({"name":"MPI_Send"})");
     JsonDoc b(R"({"name":"MPI_RECV"})");
     JsonDoc c(R"({"name":"MPI_Init"})");
-    CHECK(q->evaluate(a.root()));
-    CHECK(q->evaluate(b.root()));
-    CHECK_FALSE(q->evaluate(c.root()));
+    CHECK(eval_json(*q, a.root()));
+    CHECK(eval_json(*q, b.root()));
+    CHECK_FALSE(eval_json(*q, c.root()));
 }
 
 TEST_CASE("Query substring not in") {
@@ -188,8 +189,8 @@ TEST_CASE("Query substring not in") {
     REQUIRE(q.has_value());
     JsonDoc a(R"({"name":"MPI_Send"})");
     JsonDoc b(R"({"name":"MPI_Init"})");
-    CHECK(q->evaluate(a.root()));
-    CHECK_FALSE(q->evaluate(b.root()));
+    CHECK(eval_json(*q, a.root()));
+    CHECK_FALSE(eval_json(*q, b.root()));
 }
 
 TEST_CASE("Query match on missing/non-string field is false") {
@@ -197,8 +198,8 @@ TEST_CASE("Query match on missing/non-string field is false") {
     REQUIRE(q.has_value());
     JsonDoc missing(R"({"cat":"POSIX"})");
     JsonDoc numeric(R"({"name":42})");
-    CHECK_FALSE(q->evaluate(missing.root()));
-    CHECK_FALSE(q->evaluate(numeric.root()));
+    CHECK_FALSE(eval_json(*q, missing.root()));
+    CHECK_FALSE(eval_json(*q, numeric.root()));
 }
 
 TEST_CASE("Query match participates in fields()") {
@@ -287,11 +288,11 @@ TEST_CASE("Query::evaluate keeps only TRUE records") {
     JsonDoc missing("{}");
     JsonDoc null_x(R"({"x":null})");
     JsonDoc empty(R"({"x":""})");
-    CHECK_FALSE(q->evaluate(one.root()));
-    CHECK(q->evaluate(two.root()));
-    CHECK_FALSE(q->evaluate(missing.root()));
-    CHECK_FALSE(q->evaluate(null_x.root()));
-    CHECK_FALSE(q->evaluate(empty.root()));
+    CHECK_FALSE(eval_json(*q, one.root()));
+    CHECK(eval_json(*q, two.root()));
+    CHECK_FALSE(eval_json(*q, missing.root()));
+    CHECK_FALSE(eval_json(*q, null_x.root()));
+    CHECK_FALSE(eval_json(*q, empty.root()));
 
     ValueMap m;
     CHECK_FALSE(q->evaluate(m));

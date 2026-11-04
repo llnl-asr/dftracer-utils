@@ -11,7 +11,7 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/detail/ast.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/term.h>
 #include <dftracer/utils/duql/wildcard.h>
@@ -380,7 +380,7 @@ struct Input {
 /// later stage in order.
 struct Pipeline {
     Input input;
-    QueryNodePtr filter;  ///< Null when no stage leads with `where`.
+    detail::QueryNodePtr filter;  ///< Null when no stage leads with `where`.
     dstd::String filter_text;
     dstd::Vector<dstd::String> scan_select;
     dstd::Vector<PipelineStage> stages;

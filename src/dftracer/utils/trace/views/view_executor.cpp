@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/file_admission.h>
@@ -1912,7 +1913,9 @@ class BranchDriverFold : public Fold {
             for (std::size_t i = 0; i < branches_->size(); ++i) {
                 const BranchHooks* br = (*branches_)[i];
                 if (metadata && !br->wants_metadata) continue;
-                if (!br->predicate || br->predicate->evaluate(jv))
+                if (!br->predicate ||
+                    duql::evaluate(
+                        duql::detail::QueryAccess::root(*br->predicate), jv))
                     consumers_[i](jv, line);
             }
         }

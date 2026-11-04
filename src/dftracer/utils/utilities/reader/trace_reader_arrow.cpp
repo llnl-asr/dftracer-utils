@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -303,7 +304,8 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     dstd::Vector<CompiledEqProbe> compiled_probes;
     bool use_compiled = false;
     if (query && !config.chunk_prune_only) {
-        if (auto p = try_compile_eq_probes(query->root())) {
+        if (auto p = try_compile_eq_probes(
+                duql::detail::QueryAccess::root(*query))) {
             compiled_probes = std::move(*p);
             use_compiled = !compiled_probes.empty();
         }
@@ -430,7 +432,8 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
                     simdjson::dom::element record;
                     if (expr_parser.parse(src.data(), src.size()).get(record) !=
                             simdjson::SUCCESS ||
-                        !query->evaluate(json::JsonValue(record)))
+                        !duql::evaluate(duql::detail::QueryAccess::root(*query),
+                                        json::JsonValue(record)))
                         continue;
                 } else {
                     duql::ValueMap fields;

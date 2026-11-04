@@ -27,14 +27,14 @@ DuqlParseError::DuqlParseError(DuqlError err)
           dftracer::utils::dstd::Error{DuqlErrc::Parse, err.format()}),
       err_(std::move(err)) {}
 
-dftracer::utils::dstd::Expected<QueryNodePtr, DuqlError> parse(
+dftracer::utils::dstd::Expected<detail::QueryNodePtr, DuqlError> parse(
     dstd::StringView input, const Params& params) {
     auto tree = duql::syntax::parse(input);
     if (!tree) return dftracer::utils::dstd::Unexpected(tree.error());
     return duql::lower_filter(std::move(*tree), params, input);
 }
 
-dftracer::utils::dstd::Expected<QueryNodePtr, DuqlError> parse(
+dftracer::utils::dstd::Expected<detail::QueryNodePtr, DuqlError> parse(
     dstd::StringView input) {
     return parse(input, Params{});
 }

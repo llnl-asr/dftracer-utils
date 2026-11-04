@@ -7,8 +7,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/ast.h>
-#include <dftracer/utils/duql/string_literal.h>
+#include <dftracer/utils/duql/detail/ast.h>
+#include <dftracer/utils/duql/detail/query_access.h>
+#include <dftracer/utils/duql/detail/string_literal.h>
+#include <dftracer/utils/duql/types.h>
 
 #include <charconv>
 #include <cmath>
@@ -20,10 +22,9 @@
 #include <type_traits>
 #include <utility>
 
-// Render-only: Field/F/Expr and Expr::to_string() are header-only and pull
-// neither the parser nor simdjson, so a plugin links nothing. Expr::build() has
-// a deduced return type and is defined in query.h, so only consumers that
-// include query.h can call it (and only they pull the parser).
+// Render-only: Field/F/Expr and Expr::to_string() are header-only, so a plugin
+// links nothing. Expr::build() has a deduced return type and is defined in
+// query.h, so only consumers that include query.h can call it.
 namespace dftracer::utils::duql {
 
 namespace detail {
@@ -60,32 +61,40 @@ LiteralNode literal(F v) {
 /// A query expression under construction. Move-only; owns an AST node.
 class Expr {
    public:
-    explicit Expr(QueryNodePtr node) : node_(std::move(node)) {}
     Expr(Expr&&) = default;
     Expr& operator=(Expr&&) = default;
     Expr(const Expr&) = delete;
     Expr& operator=(const Expr&) = delete;
 
     /// Serialize to the canonical DSL string.
-    dstd::String to_string() const { return duql::to_string(*node_); }
-
-    /// Borrow the underlying node.
-    const QueryNode& node() const { return *node_; }
-
-    /// Relinquish ownership of the underlying node.
-    QueryNodePtr release() { return std::move(node_); }
+    dstd::String to_string() const { return detail::to_string(*node_); }
 
     /// Build an executable Query (dstd::Expected<Query, @ref DuqlError>).
     /// Defined in query.h, so include it to call this.
     auto build() const;
 
    private:
-    QueryNodePtr node_;
+    friend struct detail::QueryAccess;
+
+    explicit Expr(detail::QueryNodePtr node) : node_(std::move(node)) {}
+
+    detail::QueryNodePtr node_;
 };
+
+namespace detail {
+
+inline Expr QueryAccess::expr(QueryNodePtr node) {
+    return Expr(std::move(node));
+}
+inline const QueryNode& QueryAccess::node(const Expr& e) { return *e.node_; }
+inline QueryNodePtr QueryAccess::release(Expr& e) { return std::move(e.node_); }
+
+}  // namespace detail
 
 /// field op value with an explicit CompareOp and prebuilt literal.
 inline Expr field_cmp(dstd::StringView name, CompareOp op, LiteralNode value) {
-    return Expr(make_node(CompareNode{field_node(name), op, std::move(value)}));
+    return detail::QueryAccess::expr(detail::make_node(
+        detail::CompareNode{detail::field_node(name), op, std::move(value)}));
 }
 
 #define DFTRACER_UTILS_DUQL_DEFINE_CMP(fn, op_enum)                \
@@ -107,61 +116,70 @@ DFTRACER_UTILS_DUQL_DEFINE_CMP(field_le, CompareOp::Le)
 /// field in [values].
 inline Expr field_in(dstd::StringView name,
                      const dstd::Vector<std::int64_t>& values) {
-    ArrayNode arr;
+    detail::ArrayNode arr;
     arr.elements.reserve(values.size());
     for (std::int64_t v : values) arr.elements.push_back(detail::literal(v));
-    return Expr(make_node(InNode{field_node(name), std::move(arr)}));
+    return detail::QueryAccess::expr(detail::make_node(
+        detail::InNode{detail::field_node(name), std::move(arr)}));
 }
 
 inline Expr field_in(dstd::StringView name,
                      const dstd::Vector<dstd::String>& values) {
-    ArrayNode arr;
+    detail::ArrayNode arr;
     arr.elements.reserve(values.size());
     for (const auto& v : values) arr.elements.push_back(LiteralNode{v});
-    return Expr(make_node(InNode{field_node(name), std::move(arr)}));
+    return detail::QueryAccess::expr(detail::make_node(
+        detail::InNode{detail::field_node(name), std::move(arr)}));
 }
 
 /// field not in [values].
 inline Expr field_not_in(dstd::StringView name,
                          const dstd::Vector<std::int64_t>& values) {
-    ArrayNode arr;
+    detail::ArrayNode arr;
     arr.elements.reserve(values.size());
     for (std::int64_t v : values) arr.elements.push_back(detail::literal(v));
-    return Expr(make_node(NotInNode{field_node(name), std::move(arr)}));
+    return detail::QueryAccess::expr(detail::make_node(
+        detail::NotInNode{detail::field_node(name), std::move(arr)}));
 }
 
 inline Expr field_not_in(dstd::StringView name,
                          const dstd::Vector<dstd::String>& values) {
-    ArrayNode arr;
+    detail::ArrayNode arr;
     arr.elements.reserve(values.size());
     for (const auto& v : values) arr.elements.push_back(LiteralNode{v});
-    return Expr(make_node(NotInNode{field_node(name), std::move(arr)}));
+    return detail::QueryAccess::expr(detail::make_node(
+        detail::NotInNode{detail::field_node(name), std::move(arr)}));
 }
 
 /// field like/ilike/~/~*/icontains pattern. The compiled matcher is filled in
 /// by Expr::build() (or the C ABI wrap), not here.
 inline Expr field_match(dstd::StringView name, MatchOp op,
                         dstd::StringView pattern, bool negated = false) {
-    MatchNode node;
-    node.field = field_node(name);
+    detail::MatchNode node;
+    node.field = detail::field_node(name);
     node.op = op;
     node.pattern = dstd::String(pattern);
     node.negated = negated;
-    return Expr(make_node(std::move(node)));
+    return detail::QueryAccess::expr(detail::make_node(std::move(node)));
 }
 
 /// a and b.
 inline Expr all_of(Expr a, Expr b) {
-    return Expr(make_node(AndNode{a.release(), b.release()}));
+    return detail::QueryAccess::expr(detail::make_node(detail::AndNode{
+        detail::QueryAccess::release(a), detail::QueryAccess::release(b)}));
 }
 
 /// a or b.
 inline Expr any_of(Expr a, Expr b) {
-    return Expr(make_node(OrNode{a.release(), b.release()}));
+    return detail::QueryAccess::expr(detail::make_node(detail::OrNode{
+        detail::QueryAccess::release(a), detail::QueryAccess::release(b)}));
 }
 
 /// not a.
-inline Expr negate(Expr a) { return Expr(make_node(NotNode{a.release()})); }
+inline Expr negate(Expr a) {
+    return detail::QueryAccess::expr(
+        detail::make_node(detail::NotNode{detail::QueryAccess::release(a)}));
+}
 
 inline Expr operator&&(Expr a, Expr b) {
     return all_of(std::move(a), std::move(b));

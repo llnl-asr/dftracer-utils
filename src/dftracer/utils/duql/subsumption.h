@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DUQL_SUBSUMPTION_H
 #define DFTRACER_UTILS_DUQL_SUBSUMPTION_H
 
-#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/detail/ast.h>
 
 namespace dftracer::utils::duql {
 
@@ -30,7 +30,8 @@ namespace dftracer::utils::duql {
  * (the evaluator is 2-valued with missing-field -> false, so De Morgan is
  * unsound), so every `not (...)` stays an opaque residual.
  */
-bool query_subsumes(const QueryNode& mv, const QueryNode& query);
+bool query_subsumes(const detail::QueryNode& mv,
+                    const detail::QueryNode& query);
 
 }  // namespace dftracer::utils::duql
 

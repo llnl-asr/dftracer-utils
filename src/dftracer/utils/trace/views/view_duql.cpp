@@ -160,7 +160,8 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
     if (p.filter) {
         lines.push_back(
             dstd::String("scan filter: " + p.filter_text + " (pushed)"));
-        v = v.filter(duql::Query::from_node(duql::clone(*p.filter)));
+        v = v.filter(
+            duql::detail::QueryAccess::from_node(duql::clone(*p.filter)));
     }
     each_pushed(p, [&](const duql::Term&, const duql::TField& f,
                        const duql::TLookup& l, const duql::Term*) {

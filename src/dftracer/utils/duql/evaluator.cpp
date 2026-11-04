@@ -116,7 +116,7 @@ bool plain_string(const LiteralValue& v) {
 // YES when the value equals an element, NO when it is comparable with some
 // element and equals none, UNKNOWN when it is comparable with none.
 template <class V>
-Truth in_values(const ArrayNode& values, const V& v) {
+Truth in_values(const detail::ArrayNode& values, const V& v) {
     if (values.set) {
         if (!plain_string(v)) return Truth::Unknown;
         return of(values.set->values.contains(*as_string(v)));
@@ -1424,7 +1424,7 @@ struct JsonRecord {
     }
 
     template <class Leaf>
-    Truth field(const FieldNode& f, Leaf&& leaf) const {
+    Truth field(const detail::FieldNode& f, Leaf&& leaf) const {
         const JsonValue v = lookup(f.path);
         if (!f.any) {
             if (!v.exists() || v.is_null()) return Truth::Unknown;
@@ -1467,7 +1467,7 @@ struct MapRecord {
     const ValueMap& fields;
 
     template <class Leaf>
-    Truth field(const FieldNode& f, Leaf&& leaf) const {
+    Truth field(const detail::FieldNode& f, Leaf&& leaf) const {
         if (!f.any) {
             const auto it = fields.find(f.path);
             if (it == fields.end() || !scalar(it->second))
@@ -1496,23 +1496,23 @@ struct MapRecord {
 };
 
 template <class Record>
-Truth eval(const QueryNode& node, const Record& rec) {
+Truth eval(const detail::QueryNode& node, const Record& rec) {
     return std::visit(
         [&rec](const auto& n) -> Truth {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, CompareNode>) {
+            if constexpr (std::is_same_v<T, detail::CompareNode>) {
                 return rec.field(n.field, [&](const auto& v) {
                     return apply(n.op, compare(v, n.value));
                 });
-            } else if constexpr (std::is_same_v<T, InNode>) {
+            } else if constexpr (std::is_same_v<T, detail::InNode>) {
                 return rec.field(n.field, [&](const auto& v) {
                     return in_values(n.values, v);
                 });
-            } else if constexpr (std::is_same_v<T, NotInNode>) {
+            } else if constexpr (std::is_same_v<T, detail::NotInNode>) {
                 return rec.field(n.field, [&](const auto& v) {
                     return t_not(in_values(n.values, v));
                 });
-            } else if constexpr (std::is_same_v<T, MatchNode>) {
+            } else if constexpr (std::is_same_v<T, detail::MatchNode>) {
                 if (!n.compiled) return Truth::Unknown;
                 return rec.field(n.field, [&](const auto& v) {
                     const auto s = as_string(v);
@@ -1520,15 +1520,15 @@ Truth eval(const QueryNode& node, const Record& rec) {
                     const Truth t = pattern_truth(*n.compiled, *s);
                     return n.negated ? t_not(t) : t;
                 });
-            } else if constexpr (std::is_same_v<T, AndNode>) {
+            } else if constexpr (std::is_same_v<T, detail::AndNode>) {
                 const Truth l = eval(*n.left, rec);
                 if (l == Truth::No) return Truth::No;
                 return t_and(l, eval(*n.right, rec));
-            } else if constexpr (std::is_same_v<T, OrNode>) {
+            } else if constexpr (std::is_same_v<T, detail::OrNode>) {
                 const Truth l = eval(*n.left, rec);
                 if (l == Truth::Yes) return Truth::Yes;
                 return t_or(l, eval(*n.right, rec));
-            } else if constexpr (std::is_same_v<T, NotNode>) {
+            } else if constexpr (std::is_same_v<T, detail::NotNode>) {
                 return t_not(eval(*n.operand, rec));
             } else {
                 scratch.reset();
@@ -1540,21 +1540,21 @@ Truth eval(const QueryNode& node, const Record& rec) {
 
 }  // namespace
 
-Truth evaluate_truth(const QueryNode& node, const JsonValue& event,
+Truth evaluate_truth(const detail::QueryNode& node, const JsonValue& event,
                      bool args_fallback) {
     return eval(node, JsonRecord{event, args_fallback});
 }
 
-Truth evaluate_truth(const QueryNode& node, const ValueMap& fields) {
+Truth evaluate_truth(const detail::QueryNode& node, const ValueMap& fields) {
     return eval(node, MapRecord{fields});
 }
 
-bool evaluate(const QueryNode& node, const JsonValue& event,
+bool evaluate(const detail::QueryNode& node, const JsonValue& event,
               bool args_fallback) {
     return evaluate_truth(node, event, args_fallback) == Truth::Yes;
 }
 
-bool evaluate(const QueryNode& node, const ValueMap& fields) {
+bool evaluate(const detail::QueryNode& node, const ValueMap& fields) {
     return evaluate_truth(node, fields) == Truth::Yes;
 }
 

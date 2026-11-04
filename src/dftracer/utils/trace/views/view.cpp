@@ -23,6 +23,7 @@
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
+#include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_executor.h>

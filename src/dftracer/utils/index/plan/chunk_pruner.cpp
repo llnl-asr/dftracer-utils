@@ -84,47 +84,50 @@ Positions any_positions(const Snapshot& snapshot, const FileRef& file,
 }
 
 template <class Leaf>
-duql::QueryNodePtr expand_field_leaf(const Leaf& leaf,
-                                     const Positions& positions) {
-    if (!leaf.field.any) return duql::make_node(Leaf(leaf));
+duql::detail::QueryNodePtr expand_field_leaf(const Leaf& leaf,
+                                             const Positions& positions) {
+    if (!leaf.field.any) return duql::detail::make_node(Leaf(leaf));
     const auto& paths = positions.at(leaf.field.path);
-    if (paths.size() > MAX_ANY_POSITIONS) return duql::make_node(Leaf(leaf));
+    if (paths.size() > MAX_ANY_POSITIONS)
+        return duql::detail::make_node(Leaf(leaf));
     auto at = [&](const dstd::String& path) {
         Leaf copy(leaf);
-        copy.field = duql::FieldNode{path};
-        return duql::make_node(std::move(copy));
+        copy.field = duql::detail::FieldNode{path};
+        return duql::detail::make_node(std::move(copy));
     };
     // No position: the plain path, which the catalog check rules out.
     if (paths.empty()) return at(leaf.field.path);
-    duql::QueryNodePtr out = at(paths.front());
+    duql::detail::QueryNodePtr out = at(paths.front());
     for (std::size_t i = 1; i < paths.size(); ++i)
-        out = duql::make_node(duql::OrNode{std::move(out), at(paths[i])});
+        out = duql::detail::make_node(
+            duql::detail::OrNode{std::move(out), at(paths[i])});
     return out;
 }
 
 template <class Leaf>
-duql::QueryNodePtr expand_leaf(const Leaf& leaf, const Positions& positions) {
-    if constexpr (std::is_same_v<Leaf, duql::ExprLeaf>) {
-        return duql::make_node(Leaf(leaf));
+duql::detail::QueryNodePtr expand_leaf(const Leaf& leaf,
+                                       const Positions& positions) {
+    if constexpr (std::is_same_v<Leaf, duql::detail::ExprLeaf>) {
+        return duql::detail::make_node(Leaf(leaf));
     } else {
         return expand_field_leaf(leaf, positions);
     }
 }
 
-duql::QueryNodePtr expand(const duql::QueryNode& node,
-                          const Positions& positions) {
+duql::detail::QueryNodePtr expand(const duql::detail::QueryNode& node,
+                                  const Positions& positions) {
     return std::visit(
-        [&](auto&& n) -> duql::QueryNodePtr {
+        [&](auto&& n) -> duql::detail::QueryNodePtr {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, duql::AndNode>) {
-                return duql::make_node(duql::AndNode{
+            if constexpr (std::is_same_v<T, duql::detail::AndNode>) {
+                return duql::detail::make_node(duql::detail::AndNode{
                     expand(*n.left, positions), expand(*n.right, positions)});
-            } else if constexpr (std::is_same_v<T, duql::OrNode>) {
-                return duql::make_node(duql::OrNode{
+            } else if constexpr (std::is_same_v<T, duql::detail::OrNode>) {
+                return duql::detail::make_node(duql::detail::OrNode{
                     expand(*n.left, positions), expand(*n.right, positions)});
-            } else if constexpr (std::is_same_v<T, duql::NotNode>) {
-                return duql::make_node(
-                    duql::NotNode{expand(*n.operand, positions)});
+            } else if constexpr (std::is_same_v<T, duql::detail::NotNode>) {
+                return duql::detail::make_node(
+                    duql::detail::NotNode{expand(*n.operand, positions)});
             } else {
                 return expand_leaf(n, positions);
             }
@@ -138,9 +141,10 @@ duql::QueryNodePtr expand(const duql::QueryNode& node,
 dstd::Optional<Query> expand_any(const Snapshot& snapshot, const FileRef& file,
                                  const Query& query) {
     if (query.any_paths().empty()) return dstd::nullopt;
-    duql::QueryNodePtr root =
-        expand(query.root(), any_positions(snapshot, file, query));
-    return duql::Query::from_node(std::move(root));
+    duql::detail::QueryNodePtr root =
+        expand(duql::detail::QueryAccess::root(query),
+               any_positions(snapshot, file, query));
+    return duql::detail::QueryAccess::from_node(std::move(root));
 }
 
 ChunkPrunerOutput prune_file_chunks(const Snapshot& snapshot,
@@ -161,7 +165,7 @@ ChunkPrunerOutput prune_file_chunks(const Snapshot& snapshot,
     ctx.file = &*file;
     ctx.by_path = indexed_by_path(snapshot, *file);
     auto conds = make_query_conditions(ctx);
-    if (!file_may_match(query.root(), conds)) {
+    if (!file_may_match(duql::detail::QueryAccess::root(query), conds)) {
         out.file_may_match = false;
         return out;
     }
@@ -170,7 +174,8 @@ ChunkPrunerOutput prune_file_chunks(const Snapshot& snapshot,
     out.total_checkpoints = ctx.total_chunks;
     if (ctx.all_chunks.empty()) return out;
 
-    auto candidates = evaluate(query.root(), conds, ctx.all_chunks);
+    auto candidates =
+        evaluate(duql::detail::QueryAccess::root(query), conds, ctx.all_chunks);
     out.candidate_checkpoints.assign(candidates.begin(), candidates.end());
     out.file_may_match = !out.candidate_checkpoints.empty();
     return out;
@@ -185,9 +190,11 @@ ChunkExplanation::ByExtension explain_alone(const Query& query,
                                             dstd::String name, Conditions own,
                                             const FileIndexData& ctx) {
     ChunkExplanation::ByExtension by{std::move(name), false, {}};
-    by.file_ruled_out = !file_may_match(query.root(), own);
+    by.file_ruled_out =
+        !file_may_match(duql::detail::QueryAccess::root(query), own);
     if (!by.file_ruled_out) {
-        auto kept = evaluate(query.root(), own, ctx.all_chunks);
+        auto kept = evaluate(duql::detail::QueryAccess::root(query), own,
+                             ctx.all_chunks);
         for (auto c : ctx.all_chunks)
             if (!kept.contains(c)) by.removed.push_back(c);
     }
@@ -215,9 +222,11 @@ ChunkExplanation explain_file_chunks(const Snapshot& snapshot,
     load_chunks(ctx);
     out.total_chunks = ctx.total_chunks;
 
-    out.file_may_match = file_may_match(query.root(), conds);
+    out.file_may_match =
+        file_may_match(duql::detail::QueryAccess::root(query), conds);
     if (out.file_may_match) {
-        auto read = evaluate(query.root(), conds, ctx.all_chunks);
+        auto read = evaluate(duql::detail::QueryAccess::root(query), conds,
+                             ctx.all_chunks);
         out.read.assign(read.begin(), read.end());
         out.file_may_match = ctx.all_chunks.empty() || !out.read.empty();
     }

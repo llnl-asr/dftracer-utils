@@ -181,7 +181,7 @@ coro::CoroTask<dstd::Result<PruneResult>> prune_file(PruneRequest request) {
             if (m.records > 0) with_records.insert(chunk);
         const ChunkSet matched =
             request.query
-                ? evaluate(request.query->root(),
+                ? evaluate(duql::detail::QueryAccess::root(*request.query),
                            make_metadata_conditions(*meta), with_records)
                 : with_records;
         result.candidates.insert(result.candidates.end(), matched.begin(),

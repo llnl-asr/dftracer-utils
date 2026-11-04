@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_value.h>
 #include <simdjson.h>
@@ -163,7 +164,10 @@ int main(int argc, char** argv) {
         const double json_ns = ns_per_record(n, rounds, [&] {
             kept = 0;
             for (std::size_t i = 0; i < n; ++i)
-                kept += q->evaluate(JsonValue(roots[i])) ? 1 : 0;
+                kept += duql::evaluate(duql::detail::QueryAccess::root(*q),
+                                       JsonValue(roots[i]))
+                            ? 1
+                            : 0;
         });
         std::size_t kept_map = 0;
         const double map_ns = ns_per_record(n, rounds, [&] {

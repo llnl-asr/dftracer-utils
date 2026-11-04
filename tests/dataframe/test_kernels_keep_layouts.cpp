@@ -250,7 +250,7 @@ dstd::String in_truth(const Series& col, const dstd::String& query) {
     f.columns.push_back(col.share());
     auto q = dftracer::utils::duql::Query::from_string(query);
     REQUIRE(q.has_value());
-    return truth_of(evaluate_mask(q->root(), f));
+    return truth_of(evaluate_mask(duql::detail::QueryAccess::root(*q), f));
 }
 
 }  // namespace

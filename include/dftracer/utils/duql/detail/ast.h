@@ -1,27 +1,29 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DUQL_AST_H
-#define DFTRACER_UTILS_DUQL_AST_H
+#ifndef DFTRACER_UTILS_DUQL_DETAIL_AST_H
+#define DFTRACER_UTILS_DUQL_DETAIL_AST_H
 
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/types.h>
 
 #include <cstdint>
 #include <variant>
 
 namespace dftracer::utils::duql {
 
-/// Comparison operators for query expressions.
-enum class CompareOp { Eq, Ne, Gt, Lt, Ge, Le };
+/// The values of a long all-string list, for constant-time membership.
+struct InSet;
 
-/// Pattern-match operators. LIKE/ILIKE use SQL wildcards (% = any run, _ = one
-/// UTF-8 character) and match the whole string; REGEX/IREGEX use the duql
-/// regex dialect and search anywhere in the value; ICONTAINS is
-/// case-insensitive substring containment (the "'sub' in field" form). The I*
-/// variants are case-insensitive.
-enum class MatchOp { Like, Ilike, Regex, Iregex, Icontains };
+/// Compiled regex backing a @ref MatchNode.
+struct CompiledPattern;
+
+/// The evaluated form of an expression; defined inside the library.
+struct Term;
+
+namespace detail {
 
 /// A field reference (e.g., "cat", "args.level"), or `any(path)`: the leaf
 /// holds when any scalar element of the array at `path` satisfies it.
@@ -46,21 +48,6 @@ inline FieldNode field_node(dstd::StringView text) {
 inline dstd::String field_text(const FieldNode& field) {
     return field.any ? "any(" + field.path + ")" : field.path;
 }
-
-/// A typed literal value in a query expression.
-using LiteralValue =
-    dstd::Variant<dstd::String, int64_t, uint64_t, double, bool>;
-
-/// A value bound to a parameter: a scalar, or a list that `x in $p` reads.
-using ParamValue = dstd::Variant<LiteralValue, dstd::Vector<LiteralValue>>;
-
-/// A literal value node.
-struct LiteralNode {
-    LiteralValue value;
-};
-
-/// The values of a long all-string list, for constant-time membership.
-struct InSet;
 
 /// An array of literal values (used by in/not-in).
 struct ArrayNode {
@@ -91,9 +78,6 @@ struct NotInNode {
     ArrayNode values;
 };
 
-/// Compiled regex backing a @ref MatchNode.
-struct CompiledPattern;
-
 /// field like/ilike/~/~* pattern (e.g., name like "%Send%").
 struct MatchNode {
     FieldNode field;
@@ -120,9 +104,6 @@ struct OrNode {
 struct NotNode {
     QueryNodePtr operand;
 };
-
-/// The evaluated form of an expression; defined inside the library.
-struct Term;
 
 /// A condition that is not one field against literals: arithmetic, a
 /// function, field against field, `between`, `is`, `??`. It never prunes.
@@ -155,10 +136,12 @@ const char* compare_op_str(CompareOp op);
 /// Serialize an AST back to query DSL string.
 dstd::String to_string(const QueryNode& node);
 
+}  // namespace detail
+
 }  // namespace dftracer::utils::duql
 
 // Inline compare_op_str/to_string, included last so the structs above are
 // visible; keeps the DSL renderer usable by plugins that link nothing.
-#include <dftracer/utils/duql/ast_string.h>
+#include <dftracer/utils/duql/detail/ast_string.h>
 
-#endif  // DFTRACER_UTILS_DUQL_AST_H
+#endif  // DFTRACER_UTILS_DUQL_DETAIL_AST_H

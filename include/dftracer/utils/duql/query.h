@@ -6,11 +6,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/builder.h>
-#include <dftracer/utils/duql/evaluator.h>
-#include <dftracer/utils/duql/fields.h>
-#include <dftracer/utils/duql/parser.h>
+#include <dftracer/utils/duql/detail/ast.h>
+#include <dftracer/utils/duql/detail/query_access.h>
+#include <dftracer/utils/duql/error.h>
+#include <dftracer/utils/duql/value_map.h>
 
 namespace dftracer::utils::duql {
 
@@ -20,25 +20,16 @@ class Query {
     /// Parse a query DSL string. Returns error on invalid syntax.
     static dftracer::utils::dstd::Expected<Query, DuqlError> from_string(
         dstd::StringView input);
-    /// A query over a compiled filter; its source is the filter's text.
-    static Query from_node(QueryNodePtr root);
 
     Query(const Query& other);
     Query& operator=(const Query& other);
     Query(Query&&) = default;
     Query& operator=(Query&&) = default;
 
-    /// Whether the filter keeps `event`: TRUE under three-valued logic, so a
-    /// leaf on a missing or null field, or across types, does not pass.
-    /// With `args_fallback`, a bare name the event lacks reads the field of
-    /// that name under `args`.
-    bool evaluate(const json::JsonValue& event,
-                  bool args_fallback = true) const;
-    /// As above, on a flattened record (a key absent from `fields` is
-    /// missing).
+    /// Whether the filter keeps the flattened record `fields`: TRUE under
+    /// three-valued logic, so a leaf on a missing or null field, or across
+    /// types, does not pass. A key absent from `fields` is missing.
     bool evaluate(const ValueMap& fields) const;
-    /// Access the root AST node.
-    const QueryNode& root() const { return *root_; }
     /// Original query source string.
     const dstd::String& source() const { return source_; }
     /// Serialize AST back to query DSL string.
@@ -52,24 +43,27 @@ class Query {
     }
     /// The paths used as any(path), sorted.
     const dstd::Vector<dstd::String>& any_paths() const { return any_paths_; }
-    /// Whether some leaf is an expression (@ref ExprLeaf), which may read a
-    /// whole array or object.
+    /// Whether some leaf is an expression (arithmetic, a function, field
+    /// against field), which may read a whole array or object.
     bool has_expressions() const { return has_expressions_; }
 
    private:
-    Query(QueryNodePtr root, dstd::String source)
-        : root_(std::move(root)),
-          source_(std::move(source)),
-          fields_(collect_fields(*root_)),
-          any_paths_(collect_any_paths(*root_)),
-          has_expressions_(has_expression_leaf(*root_)) {}
+    friend struct detail::QueryAccess;
 
-    QueryNodePtr root_;
+    Query(detail::QueryNodePtr root, dstd::String source);
+
+    detail::QueryNodePtr root_;
     dstd::String source_;
     dftracer::utils::dstd::StringViewSet fields_;
     dstd::Vector<dstd::String> any_paths_;
     bool has_expressions_ = false;
 };
+
+namespace detail {
+
+inline const QueryNode& QueryAccess::root(const Query& q) { return *q.root_; }
+
+}  // namespace detail
 
 /// `a and b`, sharing the expression terms of both.
 Query conjoin(const Query& a, const Query& b);

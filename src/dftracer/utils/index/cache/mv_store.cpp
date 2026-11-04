@@ -439,7 +439,8 @@ bool manifest_matches(const Manifest& m,
     if (!plan.query) return false;     // query keeps every row, MV does not
     auto mv_q = duql::try_parse(m.query);
     if (!mv_q) return false;
-    return duql::query_subsumes(mv_q->root(), plan.query->root());
+    return duql::query_subsumes(duql::detail::QueryAccess::root(*mv_q),
+                                duql::detail::QueryAccess::root(*plan.query));
 }
 
 // True if any base file the manifest was built from is now gone or changed, so
@@ -466,7 +467,9 @@ dstd::String views_root(const trace::views::detail::ViewPlan& plan) {
 
 dstd::String view_slug(const trace::views::detail::ViewPlan& plan) {
     const dstd::String canonical =
-        plan.query ? duql::to_string(plan.query->root()) : "all";
+        plan.query ? duql::detail::to_string(
+                         duql::detail::QueryAccess::root(*plan.query))
+                   : "all";
     return sanitize_predicate(canonical) + phase_tag(plan) + window_tag(plan) +
            "-" + hex8(identity_hash(plan));
 }

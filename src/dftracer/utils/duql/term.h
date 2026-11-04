@@ -7,7 +7,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/detail/ast.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 
 #include <cstddef>

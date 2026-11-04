@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DUQL_STRING_LITERAL_H
-#define DFTRACER_UTILS_DUQL_STRING_LITERAL_H
+#ifndef DFTRACER_UTILS_DUQL_DETAIL_STRING_LITERAL_H
+#define DFTRACER_UTILS_DUQL_DETAIL_STRING_LITERAL_H
 
 #include <dftracer/utils/dstd/string.h>
 
-namespace dftracer::utils::duql {
+namespace dftracer::utils::duql::detail {
 
 /// `v` as a duql string literal that reads back as exactly `v`: in double
 /// quotes, with `\\`, `\"`, `\n`, `\t`, `\r` and `\u00XX` for the other
@@ -46,6 +46,6 @@ inline dstd::String quote_string(dstd::StringView v) {
     return out;
 }
 
-}  // namespace dftracer::utils::duql
+}  // namespace dftracer::utils::duql::detail
 
-#endif  // DFTRACER_UTILS_DUQL_STRING_LITERAL_H
+#endif  // DFTRACER_UTILS_DUQL_DETAIL_STRING_LITERAL_H

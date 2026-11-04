@@ -17,17 +17,17 @@ namespace {
 // Calls `fn(path, any)` for the field of every leaf under `node`, and for
 // every field an expression leaf reads.
 template <class Fn>
-void for_each_field(const QueryNode& node, Fn&& fn) {
+void for_each_field(const detail::QueryNode& node, Fn&& fn) {
     std::visit(
         [&fn](auto&& n) {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, AndNode> ||
-                          std::is_same_v<T, OrNode>) {
+            if constexpr (std::is_same_v<T, detail::AndNode> ||
+                          std::is_same_v<T, detail::OrNode>) {
                 for_each_field(*n.left, fn);
                 for_each_field(*n.right, fn);
-            } else if constexpr (std::is_same_v<T, NotNode>) {
+            } else if constexpr (std::is_same_v<T, detail::NotNode>) {
                 for_each_field(*n.operand, fn);
-            } else if constexpr (std::is_same_v<T, ExprLeaf>) {
+            } else if constexpr (std::is_same_v<T, detail::ExprLeaf>) {
                 for_each_term_field(*n.term, [&fn](const TField& f) {
                     fn(dstd::StringView(f.base), false);
                 });
@@ -40,14 +40,15 @@ void for_each_field(const QueryNode& node, Fn&& fn) {
 
 }  // namespace
 
-dftracer::utils::dstd::StringViewSet collect_fields(const QueryNode& node) {
+dftracer::utils::dstd::StringViewSet collect_fields(
+    const detail::QueryNode& node) {
     dftracer::utils::dstd::StringViewSet fields;
     for_each_field(node,
                    [&](dstd::StringView path, bool) { fields.insert(path); });
     return fields;
 }
 
-dstd::Vector<dstd::String> collect_any_paths(const QueryNode& node) {
+dstd::Vector<dstd::String> collect_any_paths(const detail::QueryNode& node) {
     dstd::Vector<dstd::String> paths;
     for_each_field(node, [&](dstd::StringView path, bool any) {
         if (any) paths.emplace_back(path);
@@ -57,38 +58,38 @@ dstd::Vector<dstd::String> collect_any_paths(const QueryNode& node) {
     return paths;
 }
 
-bool has_expression_leaf(const QueryNode& node) {
+bool has_expression_leaf(const detail::QueryNode& node) {
     return std::visit(
         [](const auto& n) -> bool {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, AndNode> ||
-                          std::is_same_v<T, OrNode>)
+            if constexpr (std::is_same_v<T, detail::AndNode> ||
+                          std::is_same_v<T, detail::OrNode>)
                 return has_expression_leaf(*n.left) ||
                        has_expression_leaf(*n.right);
-            else if constexpr (std::is_same_v<T, NotNode>)
+            else if constexpr (std::is_same_v<T, detail::NotNode>)
                 return has_expression_leaf(*n.operand);
             else
-                return std::is_same_v<T, ExprLeaf>;
+                return std::is_same_v<T, detail::ExprLeaf>;
         },
         node.data);
 }
 
-QueryNodePtr clone(const QueryNode& node) {
+detail::QueryNodePtr clone(const detail::QueryNode& node) {
     return std::visit(
-        [](const auto& n) -> QueryNodePtr {
+        [](const auto& n) -> detail::QueryNodePtr {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, AndNode> ||
-                          std::is_same_v<T, OrNode>)
-                return make_node(T{clone(*n.left), clone(*n.right)});
-            else if constexpr (std::is_same_v<T, NotNode>)
-                return make_node(NotNode{clone(*n.operand)});
+            if constexpr (std::is_same_v<T, detail::AndNode> ||
+                          std::is_same_v<T, detail::OrNode>)
+                return detail::make_node(T{clone(*n.left), clone(*n.right)});
+            else if constexpr (std::is_same_v<T, detail::NotNode>)
+                return detail::make_node(detail::NotNode{clone(*n.operand)});
             else
-                return make_node(T(n));
+                return detail::make_node(T(n));
         },
         node.data);
 }
 
-dstd::SharedPtr<const InSet> make_in_set(const ArrayNode& values) {
+dstd::SharedPtr<const InSet> make_in_set(const detail::ArrayNode& values) {
     if (values.elements.size() < IN_SET_MIN) return nullptr;
     auto set = dstd::make_shared<InSet>();
     set->values.reserve(values.elements.size());

@@ -39,7 +39,7 @@ using namespace syntax;
 
 using duql::LiteralNode;
 using duql::MatchOp;
-using duql::QueryNodePtr;
+using duql::detail::QueryNodePtr;
 
 struct Failure {
     duql::DuqlError error;
@@ -158,7 +158,7 @@ class Lowering {
              const duql::PluginCatalog* plugins = nullptr)
         : params_(params), src_(source), roles_(roles), plugins_(plugins) {}
 
-    QueryNodePtr filter(const syntax::Program& q) {
+    detail::QueryNodePtr filter(const syntax::Program& q) {
         view_ = false;
         if (!q.decls.empty())
             fail(Span{}, declaration_message(q.decls.front()));
@@ -245,19 +245,19 @@ class Lowering {
 
     // Whether `n` reads an ISO-8601 time role, which the raw record holds as
     // text.
-    bool reads_text_time(const duql::QueryNode& n) const {
+    bool reads_text_time(const duql::detail::QueryNode& n) const {
         if (!roles_ || !roles_->time_text) return false;
         if (duql::collect_fields(n).contains(roles_->time)) return true;
         return std::visit(
             [&](const auto& x) -> bool {
                 using T = std::decay_t<decltype(x)>;
-                if constexpr (std::is_same_v<T, duql::AndNode> ||
-                              std::is_same_v<T, duql::OrNode>)
+                if constexpr (std::is_same_v<T, duql::detail::AndNode> ||
+                              std::is_same_v<T, duql::detail::OrNode>)
                     return reads_text_time(*x.left) ||
                            reads_text_time(*x.right);
-                else if constexpr (std::is_same_v<T, duql::NotNode>)
+                else if constexpr (std::is_same_v<T, duql::detail::NotNode>)
                     return reads_text_time(*x.operand);
-                else if constexpr (std::is_same_v<T, duql::ExprLeaf>) {
+                else if constexpr (std::is_same_v<T, duql::detail::ExprLeaf>) {
                     bool found = false;
                     duql::for_each_term_field(
                         *x.term, [&](const duql::TField& f) {
@@ -298,7 +298,7 @@ class Lowering {
             if (!w) break;
             dstd::Vector<const Expr*> terms;
             conjuncts(*w->condition, terms);
-            QueryNodePtr node;
+            detail::QueryNodePtr node;
             dstd::Vector<const Expr*> after;
             for (const Expr* t : terms) {
                 const auto* semi = std::get_if<In>(&t->node);
@@ -311,19 +311,19 @@ class Lowering {
                 key_set_ = set;
                 auto n = condition(*t);
                 key_set_ = false;
-                node = node ? duql::make_node(
-                                  duql::AndNode{std::move(node), std::move(n)})
+                node = node ? duql::detail::make_node(duql::detail::AndNode{
+                                  std::move(node), std::move(n)})
                             : std::move(n);
             }
             if (node && reads_text_time(*node)) break;
             for (const Expr* t : after) joined.push_back(where_stage(*t));
             if (!node) continue;
             out.filter = out.filter
-                             ? duql::make_node(duql::AndNode{
+                             ? duql::detail::make_node(duql::detail::AndNode{
                                    std::move(out.filter), std::move(node)})
                              : std::move(node);
         }
-        if (out.filter) out.filter_text = duql::to_string(*out.filter);
+        if (out.filter) out.filter_text = duql::detail::to_string(*out.filter);
         const bool after_scan = !joined.empty();
         for (auto& st : joined) out.stages.push_back(std::move(st));
         if (scan && !after_scan && i < steps.size() && steps[i].stage)
@@ -2234,18 +2234,19 @@ class Lowering {
             make_error(src_, span.offset, span.length, std::move(msg))};
     }
 
-    QueryNodePtr condition(const Expr& e) const {
+    detail::QueryNodePtr condition(const Expr& e) const {
         if (const auto* u = std::get_if<Unary>(&e.node)) {
             if (u->op == UnaryOp::Not)
-                return duql::make_node(duql::NotNode{condition(*u->operand)});
+                return duql::detail::make_node(
+                    duql::detail::NotNode{condition(*u->operand)});
         } else if (const auto* b = std::get_if<Binary>(&e.node)) {
             switch (b->op) {
                 case BinaryOp::Or:
-                    return duql::make_node(duql::OrNode{condition(*b->left),
-                                                        condition(*b->right)});
+                    return duql::detail::make_node(duql::detail::OrNode{
+                        condition(*b->left), condition(*b->right)});
                 case BinaryOp::And:
-                    return duql::make_node(duql::AndNode{condition(*b->left),
-                                                         condition(*b->right)});
+                    return duql::detail::make_node(duql::detail::AndNode{
+                        condition(*b->left), condition(*b->right)});
                 case BinaryOp::Eq:
                 case BinaryOp::Ne:
                 case BinaryOp::Lt:
@@ -2276,14 +2277,15 @@ class Lowering {
                     std::move(*f), l->icase ? MatchOp::Ilike : MatchOp::Like,
                     l->pattern, l->negated, e, escape_char(l->escape, e.span));
         } else if (const auto* c = std::get_if<Contains>(&e.node)) {
-            return match(duql::FieldNode{path_text(c->path, e.span), c->any},
-                         MatchOp::Icontains, c->text, c->negated, e);
+            return match(
+                duql::detail::FieldNode{path_text(c->path, e.span), c->any},
+                MatchOp::Icontains, c->text, c->negated, e);
         }
         const Flag in_condition(cond_, true);
         auto t = term(e);
         dstd::String text = duql::term_text(*t);
-        return duql::make_node(
-            duql::ExprLeaf{dstd::to_shared_ptr(std::move(t)), std::move(text)});
+        return duql::detail::make_node(duql::detail::ExprLeaf{
+            dstd::to_shared_ptr(std::move(t)), std::move(text)});
     }
 
     static dstd::Pair<MatchOp, bool> regex_op(BinaryOp op) {
@@ -2302,7 +2304,7 @@ class Lowering {
 
     // `field op value` as a literal leaf, or null when the condition has
     // another shape.
-    QueryNodePtr compare(const Binary& b) const {
+    detail::QueryNodePtr compare(const Binary& b) const {
         reject_null(*b.left);
         reject_null(*b.right);
         auto f = as_field(*b.left);
@@ -2314,12 +2316,12 @@ class Lowering {
                 lit.value = *u;
             else
                 lit.value = std::get<double>(c.value);
-            return duql::make_node(
-                duql::CompareNode{std::move(*f), compare_op(b.op), lit});
+            return duql::detail::make_node(duql::detail::CompareNode{
+                std::move(*f), compare_op(b.op), lit});
         }
         auto value = literal(*b.right);
         if (!value) return nullptr;
-        return duql::make_node(duql::CompareNode{
+        return duql::detail::make_node(duql::detail::CompareNode{
             std::move(*f), compare_op(b.op), std::move(*value)});
     }
 
@@ -2350,11 +2352,11 @@ class Lowering {
     }
 
     // A literal `in` list on a field as a literal leaf, or null.
-    QueryNodePtr membership(const In& in) const {
+    detail::QueryNodePtr membership(const In& in) const {
         reject_null_items(in);
         auto f = as_field(*in.subject);
         if (!f) return nullptr;
-        duql::ArrayNode arr;
+        duql::detail::ArrayNode arr;
         for (const auto& item : in.list) {
             auto value = literal(*item);
             if (!value) return nullptr;
@@ -2362,9 +2364,10 @@ class Lowering {
         }
         arr.set = duql::make_in_set(arr);
         if (in.negated)
-            return duql::make_node(
-                duql::NotInNode{std::move(*f), std::move(arr)});
-        return duql::make_node(duql::InNode{std::move(*f), std::move(arr)});
+            return duql::detail::make_node(
+                duql::detail::NotInNode{std::move(*f), std::move(arr)});
+        return duql::detail::make_node(
+            duql::detail::InNode{std::move(*f), std::move(arr)});
     }
 
     dstd::String pattern(const Expr& e,
@@ -2411,22 +2414,23 @@ class Lowering {
         return (*esc)[0];
     }
 
-    QueryNodePtr match(duql::FieldNode f, MatchOp op, dstd::String pattern,
-                       bool negated, const Expr& at,
-                       dstd::Optional<char> escape = dstd::nullopt) const {
-        duql::MatchNode node;
+    detail::QueryNodePtr match(
+        duql::detail::FieldNode f, MatchOp op, dstd::String pattern,
+        bool negated, const Expr& at,
+        dstd::Optional<char> escape = dstd::nullopt) const {
+        duql::detail::MatchNode node;
         node.compiled = compile(op, pattern, escape, at);
         node.field = std::move(f);
         node.op = op;
         node.pattern = std::move(pattern);
         node.negated = negated;
         node.escape = escape;
-        return duql::make_node(std::move(node));
+        return duql::detail::make_node(std::move(node));
     }
 
     // The field a literal leaf tests: a record path without a negative index,
     // or any(path).
-    dstd::Optional<duql::FieldNode> as_field(const Expr& e) const {
+    dstd::Optional<duql::detail::FieldNode> as_field(const Expr& e) const {
         const Path* p = std::get_if<Path>(&e.node);
         bool any = false;
         if (!p)
@@ -2437,7 +2441,7 @@ class Lowering {
                     any = p != nullptr;
                 }
         if (!p || negative_at(*p) != p->steps.size()) return dstd::nullopt;
-        return duql::FieldNode{path_text(*p, e.span), any};
+        return duql::detail::FieldNode{path_text(*p, e.span), any};
     }
 
     static std::size_t negative_at(const Path& p) {
@@ -3146,18 +3150,20 @@ void for_each_pipeline_term(const duql::Pipeline& p,
     auto keys = [&](const dstd::Vector<duql::PipelineSortKey>& v) {
         for (const auto& k : v) on(k.key.term);
     };
-    dstd::Function<void(const duql::QueryNode&)> node =
-        [&](const duql::QueryNode& n) {
+    dstd::Function<void(const duql::detail::QueryNode&)> node =
+        [&](const duql::detail::QueryNode& n) {
             std::visit(
                 [&](const auto& x) {
                     using T = std::decay_t<decltype(x)>;
-                    if constexpr (std::is_same_v<T, duql::AndNode> ||
-                                  std::is_same_v<T, duql::OrNode>) {
+                    if constexpr (std::is_same_v<T, duql::detail::AndNode> ||
+                                  std::is_same_v<T, duql::detail::OrNode>) {
                         node(*x.left);
                         node(*x.right);
-                    } else if constexpr (std::is_same_v<T, duql::NotNode>) {
+                    } else if constexpr (std::is_same_v<
+                                             T, duql::detail::NotNode>) {
                         node(*x.operand);
-                    } else if constexpr (std::is_same_v<T, duql::ExprLeaf>) {
+                    } else if constexpr (std::is_same_v<
+                                             T, duql::detail::ExprLeaf>) {
                         duql::for_each_term(*x.term, fn);
                     }
                 },
@@ -3254,7 +3260,7 @@ dftracer::utils::dstd::Expected<duql::ParamValue, duql::DuqlError> parse_param(
         "list of them"));
 }
 
-dftracer::utils::dstd::Expected<duql::QueryNodePtr, duql::DuqlError>
+dftracer::utils::dstd::Expected<duql::detail::QueryNodePtr, duql::DuqlError>
 lower_filter(syntax::Program program, const duql::Params& params,
              dstd::StringView source) {
     dstd::Vector<Def> defs = duql::take_defs(program.decls);

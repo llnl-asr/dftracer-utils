@@ -119,7 +119,8 @@ Series compare_mask(const Series& col, CompareOp op, const LiteralValue& v) {
 
 // Kleene OR of the equalities with the comparable elements; UNKNOWN when no
 // element is comparable, as in the row evaluator.
-Series in_mask(const Series& col, const ArrayNode& arr, bool negated) {
+Series in_mask(const Series& col, const duql::detail::ArrayNode& arr,
+               bool negated) {
     if (is_string(col)) {
         dstd::HashSet<dstd::StringView> set;
         for (const LiteralNode& e : arr.elements)
@@ -146,14 +147,15 @@ Series in_mask(const Series& col, const ArrayNode& arr, bool negated) {
 }
 
 template <class Leaf>
-Series field_mask(const DataFrame& b, const FieldNode& field, Leaf&& leaf) {
+Series field_mask(const DataFrame& b, const duql::detail::FieldNode& field,
+                  Leaf&& leaf) {
     if (field.any) unsupported("any() has no dataframe-mask lowering");
     const std::int64_t i = b.column_index(field.path);
     if (i < 0) return unknown(b.num_rows());
     return leaf(b.columns[static_cast<std::size_t>(i)]);
 }
 
-Series leaf_mask(const ExprLeaf& leaf, const DataFrame& b) {
+Series leaf_mask(const duql::detail::ExprLeaf& leaf, const DataFrame& b) {
     dstd::Vector<VectorColumn> cols;
     dstd::Vector<const Series*> inputs;
     cols.reserve(b.columns.size());
@@ -183,23 +185,23 @@ Series leaf_mask(const ExprLeaf& leaf, const DataFrame& b) {
     return eval(*e, inputs);
 }
 
-Series lower(const QueryNode& node, const DataFrame& b) {
+Series lower(const duql::detail::QueryNode& node, const DataFrame& b) {
     return std::visit(
         [&](const auto& n) -> Series {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, CompareNode>) {
+            if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
                 return field_mask(b, n.field, [&](const Series& c) {
                     return compare_mask(c, n.op, n.value.value);
                 });
-            } else if constexpr (std::is_same_v<T, InNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::InNode>) {
                 return field_mask(b, n.field, [&](const Series& c) {
                     return in_mask(c, n.values, false);
                 });
-            } else if constexpr (std::is_same_v<T, NotInNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::NotInNode>) {
                 return field_mask(b, n.field, [&](const Series& c) {
                     return in_mask(c, n.values, true);
                 });
-            } else if constexpr (std::is_same_v<T, MatchNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::MatchNode>) {
                 return field_mask(b, n.field, [&](const Series& c) {
                     if (!is_string(c) || !n.compiled)
                         return unknown(c.length());
@@ -207,15 +209,15 @@ Series lower(const QueryNode& node, const DataFrame& b) {
                         eval(expr_str_pattern(expr_col(0), n.compiled), {&c});
                     return n.negated ? negate(std::move(m)) : std::move(m);
                 });
-            } else if constexpr (std::is_same_v<T, AndNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::AndNode>) {
                 Series a = lower(*n.left, b), c = lower(*n.right, b);
                 return Series{dftu_series_logical(a.handle(), c.handle(),
                                                   DFTU_LOGICAL_AND)};
-            } else if constexpr (std::is_same_v<T, OrNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::OrNode>) {
                 Series a = lower(*n.left, b), c = lower(*n.right, b);
                 return Series{dftu_series_logical(a.handle(), c.handle(),
                                                   DFTU_LOGICAL_OR)};
-            } else if constexpr (std::is_same_v<T, NotNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::NotNode>) {
                 return negate(lower(*n.operand, b));
             } else {
                 return leaf_mask(n, b);
@@ -229,7 +231,8 @@ Series lower(const QueryNode& node, const DataFrame& b) {
 // An UNKNOWN row keeps its null and stores data 0, so a selection over the data
 // bits keeps only TRUE rows. The data buffer is replaced, not written, because
 // a leaf may share a caller's column.
-Series evaluate_mask(const QueryNode& node, const DataFrame& batch) {
+Series evaluate_mask(const duql::detail::QueryNode& node,
+                     const DataFrame& batch) {
     Series m = lower(node, batch);
     if (m.handle() && m.handle()->encoding != Encoding::Flat)
         m = Series{dftu_series_materialize(m.handle())};

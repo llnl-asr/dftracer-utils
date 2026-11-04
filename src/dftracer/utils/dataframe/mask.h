@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_MASK_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/duql/detail/ast.h>
 
 // The post-materialization predicate backend: evaluate a query AST against an
 // in-memory columnar batch as a SIMD boolean mask. One of the query language's
@@ -22,7 +22,7 @@ namespace dftracer::utils::dataframe {
 /// ordered comparison on a string or bool column, and an expression on a
 /// column that is not bool, integer, float or string.
 dftracer::utils::dataframe::Series evaluate_mask(
-    const dftracer::utils::duql::QueryNode& node,
+    const dftracer::utils::duql::detail::QueryNode& node,
     const dftracer::utils::dataframe::DataFrame& batch);
 
 }  // namespace dftracer::utils::dataframe

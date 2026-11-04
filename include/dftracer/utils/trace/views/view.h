@@ -19,8 +19,9 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/trace_config.h>
-#include <dftracer/utils/trace/views/result_join.h>
+#include <dftracer/utils/trace/views/join_type.h>
 
 #include <atomic>
 #include <cstddef>
@@ -564,8 +565,6 @@ class ViewSession {
     /// execute() since they read two already-resolved branch outputs.
     dstd::Vector<dstd::Function<void()>> combines_;
 };
-
-enum class JoinType;
 
 /// A column of the trace schema and its type, as the index reports it.
 struct ColumnInfo {

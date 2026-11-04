@@ -97,20 +97,22 @@ void ChunkStatistics::update_from_event(NameSlots& names, PidSlots& pids,
     if (!has_dur) return;
 
     // Welford's online algorithm for variance
-    double old_mean = (duration_count > 0)
-                          ? static_cast<double>(duration_sum_us) /
-                                static_cast<double>(duration_count)
-                          : 0.0;
+    const double old_mean = duration_mean();
 
     ++duration_count;
-    duration_sum_us += static_cast<std::int64_t>(dur);
+    duration_sum_us = saturating_duration_sum(duration_sum_us, dur);
     if (dur < duration_min_us) duration_min_us = dur;
     if (dur > duration_max_us) duration_max_us = dur;
 
-    double delta = static_cast<double>(dur) - old_mean;
-    double new_mean = static_cast<double>(duration_sum_us) /
-                      static_cast<double>(duration_count);
-    double delta2 = static_cast<double>(dur) - new_mean;
+    const double delta = static_cast<double>(dur) - old_mean;
+    // Once the sum has saturated it no longer gives the mean.
+    const double new_mean =
+        duration_sum_us == std::numeric_limits<std::int64_t>::max()
+            ? old_mean + delta / static_cast<double>(duration_count)
+            : static_cast<double>(duration_sum_us) /
+                  static_cast<double>(duration_count);
+    duration_mean_us = new_mean;
+    const double delta2 = static_cast<double>(dur) - new_mean;
     duration_m2 += delta * delta2;
 
     double dur_d = static_cast<double>(dur);
@@ -163,12 +165,14 @@ void ChunkStatistics::merge_from(const ChunkStatistics& other) {
 
     // Merge duration stats using parallel Welford's
     if (other.duration_count > 0 && duration_count > 0) {
-        double mean_a = static_cast<double>(duration_sum_us) /
-                        static_cast<double>(duration_count);
-        double mean_b = static_cast<double>(other.duration_sum_us) /
-                        static_cast<double>(other.duration_count);
+        const double mean_a = duration_mean();
+        const double mean_b = other.duration_mean();
         double delta = mean_b - mean_a;
         std::uint64_t combined_count = duration_count + other.duration_count;
+        duration_mean_us =
+            (mean_a * static_cast<double>(duration_count) +
+             mean_b * static_cast<double>(other.duration_count)) /
+            static_cast<double>(combined_count);
         duration_m2 = duration_m2 + other.duration_m2 +
                       delta * delta * static_cast<double>(duration_count) *
                           static_cast<double>(other.duration_count) /
@@ -177,9 +181,11 @@ void ChunkStatistics::merge_from(const ChunkStatistics& other) {
     } else if (other.duration_count > 0) {
         duration_count = other.duration_count;
         duration_m2 = other.duration_m2;
+        duration_mean_us = other.duration_mean();
     }
 
-    duration_sum_us += other.duration_sum_us;
+    duration_sum_us = saturating_duration_sum(
+        duration_sum_us, static_cast<std::uint64_t>(other.duration_sum_us));
     duration_min_us = std::min(duration_min_us, other.duration_min_us);
     duration_max_us = std::max(duration_max_us, other.duration_max_us);
 
@@ -216,8 +222,17 @@ void ChunkStatistics::merge_from(const ChunkStatistics& other) {
     }
 }
 
+std::int64_t saturating_duration_sum(std::int64_t sum, std::uint64_t add) {
+    constexpr std::int64_t MAX = std::numeric_limits<std::int64_t>::max();
+    const auto room = static_cast<std::uint64_t>(MAX - sum);
+    return add > room ? MAX : sum + static_cast<std::int64_t>(add);
+}
+
 double ChunkStatistics::duration_mean() const {
     if (duration_count == 0) return 0.0;
+    if (duration_sum_us == std::numeric_limits<std::int64_t>::max() &&
+        duration_mean_us > 0.0)
+        return duration_mean_us;
     return static_cast<double>(duration_sum_us) /
            static_cast<double>(duration_count);
 }

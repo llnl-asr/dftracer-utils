@@ -400,6 +400,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Keep the duration sum of a chunk at INT64_MAX where a larger sum overflowed and gave a negative sum or a wrong mean.
+  The mean stays right until the statistics are reloaded from disk, where a saturated sum gives a lower bound.
 - Fix aggregation queries that aborted with "names chunk N past its N", or read the wrong chunks, after a file was indexed again with another chunk size.
   A re-index by the gzip indexer or the view's bootstrap build now drops the old per-chunk index data, such as the aggregation partials, and keeps the per-file catalog, profile and row sets.
 - Make `Store::erase` return an `Unsupported` error when another data file holds the current copy of the scope, where it reported success and erased nothing.

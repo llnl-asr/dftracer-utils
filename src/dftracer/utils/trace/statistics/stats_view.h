@@ -149,7 +149,9 @@ class StatsView {
             }
             st.total_events += ni;
             st.duration_count += ni;
-            st.duration_sum_us += i64_at(cdsum, i);
+            st.duration_sum_us = index::schemas::dft::saturating_duration_sum(
+                st.duration_sum_us,
+                static_cast<std::uint64_t>(i64_at(cdsum, i)));
             st.duration_min_us =
                 std::min(st.duration_min_us,
                          static_cast<std::uint64_t>(i64_at(cdmin, i)));

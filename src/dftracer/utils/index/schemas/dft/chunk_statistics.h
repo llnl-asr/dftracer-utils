@@ -23,6 +23,9 @@ namespace dftracer::utils::index::schemas::dft {
  * Map fields serialize to JSON text for storage in the
  * shared `.dftindex` database.
  */
+/// `sum` + `add`, held to INT64_MAX. `sum` is not negative.
+std::int64_t saturating_duration_sum(std::int64_t sum, std::uint64_t add);
+
 struct ChunkStatistics {
     std::uint64_t total_events = 0;
     dstd::StringViewMap<std::uint64_t> category_counts;
@@ -36,10 +39,17 @@ struct ChunkStatistics {
         std::numeric_limits<std::uint64_t>::max();
     std::uint64_t max_timestamp_us = 0;
     std::uint64_t duration_count = 0;
+    /// Sum of durations, held to INT64_MAX. Stored as is; the layout on disk
+    /// does not change.
     std::int64_t duration_sum_us = 0;
     std::uint64_t duration_min_us = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t duration_max_us = 0;
     double duration_m2 = 0.0;
+    /// The running mean, kept only in memory (not stored): @ref duration_mean
+    /// reads it once the sum has saturated and the sum no longer gives the
+    /// mean. Statistics reloaded from disk have none, so the mean of a
+    /// saturated sum is then sum / count, a lower bound.
+    double duration_mean_us = 0.0;
 
     dataframe::DDSketch duration_sketch{0.01};
     dataframe::Log2Histogram duration_histogram;

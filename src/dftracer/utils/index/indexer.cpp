@@ -14,6 +14,7 @@
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/indexer_scanned.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>
@@ -254,21 +255,20 @@ Indexer Indexer::open(dstd::Vector<dstd::String> paths,
     return finish_open(std::move(impl));
 }
 
-Indexer Indexer::open_scanned(
+Indexer detail::open_scanned(
     dstd::Vector<utilities::filesystem::FileEntry> files,
     IndexerOptions options) {
     if (files.empty())
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            "Indexer::open_scanned: no trace files given");
-    auto impl = dstd::make_shared<Impl>();
+        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                        "open_scanned: no trace files given");
+    auto impl = dstd::make_shared<Indexer::Impl>();
     impl->options = std::move(options);
-    validate_options(*impl);
+    Indexer::validate_options(*impl);
     for (auto& e : files) {
         impl->paths.emplace_back(e.path.str());
         impl->opened.push_back(std::move(e));
     }
-    return finish_open(std::move(impl));
+    return Indexer::finish_open(std::move(impl));
 }
 
 coro::CoroTask<IndexStatus> Indexer::status(coro::Scope& scope) const {

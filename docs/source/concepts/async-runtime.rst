@@ -73,9 +73,8 @@ goes wrong when a coroutine's lifetime is not tracked this carefully.
 The io backend: one abstraction, several implementations
 ------------------------------------------------------------
 
-``runtime/io/io_backend.h`` defines ``IoBackend`` as the abstract surface async
-I/O suspends on, with a selectable concrete implementation
-(``IoBackendType``):
+``IoBackend`` is the abstract surface async I/O suspends on, with a selectable
+concrete implementation (``IoBackendType`` in ``runtime/io/backend_type.h``):
 
 - **io_uring** on Linux, when available - the kernel does the async I/O and
   the coroutine resumes on completion, no worker thread blocks on it.
@@ -127,6 +126,5 @@ See also
   this model requires in practice.
 - :doc:`architecture` for how the runtime relates to the domain layer above
   it.
-- :doc:`../cpp_api/coro` and :doc:`../cpp_api/io` for the generated API
-  reference.
+- :doc:`../cpp_api/coro` for the generated API reference.
 - :doc:`../guides/pipelines/patterns` for task-oriented pipeline recipes.

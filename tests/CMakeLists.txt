@@ -223,6 +223,14 @@ add_test(
   NAME public_third_party_headers_self
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
           ${CMAKE_SOURCE_DIR}/cmake/scripts/check_public_third_party_headers.cmake)
+add_test(
+  NAME public_headers
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+          ${CMAKE_SOURCE_DIR}/cmake/scripts/check_public_headers.cmake)
+add_test(
+  NAME public_headers_self
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
+          ${CMAKE_SOURCE_DIR}/cmake/scripts/check_public_headers.cmake)
 add_test(NAME coro_lambdas
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_lambdas.cmake)
@@ -844,6 +852,15 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       ${TEST_INSTALL_PREFIX})
   set_tests_properties(install_package PROPERTIES FIXTURES_SETUP
                                                    "installed_package")
+
+  add_test(
+    NAME public_headers_compile
+    COMMAND
+      ${CMAKE_COMMAND} -DBUILD_DIR=${CMAKE_BINARY_DIR}
+      -DWORK_DIR=${CMAKE_BINARY_DIR}/public_headers_compile
+      "-DGENERATOR=${CMAKE_GENERATOR}" -DC_COMPILER=${CMAKE_C_COMPILER}
+      -DCXX_COMPILER=${CMAKE_CXX_COMPILER} "-DCXX_FLAGS=${CMAKE_CXX_FLAGS}" -P
+      ${CMAKE_SOURCE_DIR}/cmake/scripts/check_public_headers_compile.cmake)
 
   # ==========================================================================
   # pkg-config discovery tests

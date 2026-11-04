@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/awaitable.h>
+#include <dftracer/utils/runtime/io/backend_type.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -23,16 +24,6 @@ class Executor;
 namespace dftracer::utils::io {
 
 using IoCompletionFn = void (*)(void *context, ssize_t result) noexcept;
-
-/// Backend selection preference.
-enum class IoBackendType {
-    Auto,     ///< Runtime detection: io_uring > epoll/kqueue+threadpool >
-              ///< threadpool
-    IoUring,  ///< Force io_uring (Linux only, fails if unavailable)
-    EpollThreadpool,   ///< Force epoll + thread pool (Linux only)
-    KqueueThreadpool,  ///< Force kqueue + thread pool (macOS/BSD only)
-    Threadpool         ///< Force pure thread pool
-};
 
 /// Abstract I/O backend interface.
 /// Concrete implementations (io_uring, epoll+threadpool, threadpool-only)

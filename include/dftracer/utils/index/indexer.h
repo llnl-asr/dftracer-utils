@@ -12,10 +12,13 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/filesystem/types.h>
 
 #include <cstddef>
 #include <cstdint>
+
+namespace dftracer::utils::utilities::filesystem {
+struct FileEntry;
+}  // namespace dftracer::utils::utilities::filesystem
 
 namespace dftracer::utils::index {
 
@@ -56,7 +59,7 @@ struct IndexerOptions {
     /// keys and sketches but cannot turn it off.
     schemas::dft::agg::AggregationConfig aggregation =
         schemas::dft::agg::standard_aggregation_config();
-    /// @ref RecordSchema every trace is decoded with ("dftracer" or "generic");
+    /// Schema every trace is decoded with ("dftracer" or "generic");
     /// empty detects each file's from its first lines.
     dstd::String schema;
     /// Bytes a build may hold at once, as View::memory_budget: 0 is about a
@@ -142,6 +145,13 @@ struct FileExplain {
 dstd::String to_json(const dstd::Vector<FileManifest>& manifest);
 dstd::String to_json(const dstd::Vector<FileExplain>& explain);
 
+class Indexer;
+
+namespace detail {
+Indexer open_scanned(dstd::Vector<utilities::filesystem::FileEntry> files,
+                     IndexerOptions options);
+}  // namespace detail
+
 /// Builds and inspects the index of a fixed set of traces.
 ///
 /// Copies share one state. Use an Indexer from one thread at a time; separate
@@ -156,14 +166,6 @@ class Indexer {
     /// inside it. Reads nothing else and writes nothing.
     static Indexer open(dstd::Vector<dstd::String> paths,
                         IndexerOptions options = {});
-
-    /// Opens trace files a caller already scanned, with the size and mtime that
-    /// scan read. The first status(), build() or rebuild() uses them without
-    /// stat'ing. Later calls, and every call on an Indexer from open(), stat
-    /// the files.
-    static Indexer open_scanned(
-        dstd::Vector<utilities::filesystem::FileEntry> files,
-        IndexerOptions options = {});
 
     /// Which files are ready for the requested tiers. Writes nothing.
     coro::CoroTask<IndexStatus> status(coro::Scope& scope) const;
@@ -217,6 +219,9 @@ class Indexer {
     const IndexerOptions& options() const;
 
    private:
+    friend Indexer detail::open_scanned(
+        dstd::Vector<utilities::filesystem::FileEntry> files,
+        IndexerOptions options);
     struct Impl;
     explicit Indexer(dstd::SharedPtr<Impl> impl);
     static void validate_options(Impl& impl);

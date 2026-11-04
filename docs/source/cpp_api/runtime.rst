@@ -5,7 +5,7 @@ Runtime
 
 .. seealso::
 
-   :doc:`../concepts/async-runtime` for the runtime model, and :doc:`coro` and :doc:`io` for the primitives it drives.
+   :doc:`../concepts/async-runtime` for the runtime model, and :doc:`coro` for the primitives it drives.
 
 The core async runtime lives in ``dftracer::utils``: the
 ``Executor`` that owns worker threads and the coroutine scheduler, the
@@ -21,5 +21,6 @@ How the runtime, executors, tasks, and pipeline relate:
 .. mermaid:: /_generated/runtime.mmd
 
 .. include:: /cpp_api/_generated/core.rst.inc
-.. include:: /cpp_api/_generated/bits.rst.inc
-.. include:: /cpp_api/_generated/logger.rst.inc
+.. include:: /cpp_api/_generated/common.rst.inc
+.. include:: /cpp_api/_generated/common.logger.rst.inc
+.. include:: /cpp_api/_generated/memory.rst.inc

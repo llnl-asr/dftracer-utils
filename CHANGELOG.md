@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Build a plugin against the installed headers without nanoarrow: `plugins/owned_arrow.h` holds the Arrow C structs and releases them itself.
+- Add the ctests `public_headers` and `public_headers_compile`: the first checks `include/` against `cmake/public_headers.txt`, the second compiles each installed header alone, and the abi headers as C.
 - Read each event in `collect_events` once on demand, in place of a second DOM parse of the line.
   A line whose bad part is never read now stays, and a read of real DFTracer lines takes no more time than one DOM parse.
   Records decoded by path, and the nested captures of a containment branch, read on demand too.
@@ -357,6 +359,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Stop installing the C++ headers `runtime/io/io_backend.h`, `runtime/io/awaitable.h`, `utilities/filesystem/types.h`, `utilities/hash/*.h`, `common/input_stat.h`, `common/intern_table.h` and `dstd/hash/hash.h`, and remove `Indexer::open_scanned`. They are now private to the library.
 - Remove the Python `JsonDictValue` class. No reader returned it.
 - Remove the C++ `dlio::write_dlio_yaml(std::ostream&, ...)`. Use `render_dlio_yaml` and write the string to a file.
 - Remove the `ghc::filesystem` dependency and `common/filesystem.h`. The library and the tests use `dstd::fs` and `dstd::Path`.

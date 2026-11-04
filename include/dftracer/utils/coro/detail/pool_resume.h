@@ -2,11 +2,14 @@
 #ifndef DFTRACER_UTILS_CORO_DETAIL_POOL_RESUME_H
 #define DFTRACER_UTILS_CORO_DETAIL_POOL_RESUME_H
 
-#include <dftracer/utils/common/intern_table.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
 #include <coroutine>
 #include <type_traits>
+
+namespace dftracer::utils::common {
+class InternTable;
+}  // namespace dftracer::utils::common
 
 namespace dftracer::utils::coro::detail {
 
@@ -16,14 +19,10 @@ namespace dftracer::utils::coro::detail {
 struct RunContext {
     memory::detail::TaskTag tag{memory::detail::current_task()};
 
-    RunContext() noexcept {
-        if (auto* table = intern()) table->add_ref();
-    }
+    RunContext() noexcept;
     RunContext(const RunContext&) = delete;
     RunContext& operator=(const RunContext&) = delete;
-    ~RunContext() {
-        if (auto* table = intern()) table->release();
-    }
+    ~RunContext();
 
     common::InternTable* intern() const noexcept {
         return static_cast<common::InternTable*>(tag.user);

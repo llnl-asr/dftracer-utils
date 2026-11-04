@@ -11,7 +11,7 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/io/io_backend.h>
+#include <dftracer/utils/runtime/io/backend_type.h>
 
 #include <any>
 #include <atomic>
@@ -22,6 +22,10 @@
 #include <memory>
 
 namespace dftracer::utils {
+
+namespace io {
+class IoBackend;
+}  // namespace io
 
 class Task;
 
@@ -225,9 +229,8 @@ class TaskExecutor : public coro::Executor {
     /// Records `executor` as the I/O backend owner of the calling thread, or
     /// clears it with null. A worker calls it where it sets
     /// @ref Executor::current, so a scope that suppresses that executor
-    /// falls back to blocking calls too. Reads back through
-    /// @ref io::current_backend. Not inherited by threads the executor did not
-    /// start.
+    /// falls back to blocking calls too. Not inherited by threads the executor
+    /// did not start.
     static void set_current_backend(TaskExecutor* executor) noexcept;
 };
 

@@ -1,8 +1,17 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/intern_table.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/executor.h>
 
 namespace dftracer::utils::coro::detail {
+
+RunContext::RunContext() noexcept {
+    if (auto* table = intern()) table->add_ref();
+}
+
+RunContext::~RunContext() {
+    if (auto* table = intern()) table->release();
+}
 
 std::coroutine_handle<> CoroPromise::FinalAwaiter::await_suspend(
     std::coroutine_handle<CoroPromise> h) noexcept {

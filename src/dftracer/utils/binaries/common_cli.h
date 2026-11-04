@@ -29,6 +29,7 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/indexer_scanned.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
@@ -627,7 +628,7 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     options.bloom->required = false;
     options.aggregation = std::move(aggregation);
     if (checkpoint_size != 0) options.checkpoint_size = checkpoint_size;
-    auto indexer = dftracer::utils::index::Indexer::open_scanned(
+    auto indexer = dftracer::utils::index::detail::open_scanned(
         *entries, std::move(options));
     if (force_rebuild)
         co_await indexer.rebuild(ctx);

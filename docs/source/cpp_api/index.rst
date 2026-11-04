@@ -23,7 +23,6 @@ layer that composes all below it.
 
    runtime
    coro
-   io
 
 .. toctree::
    :maxdepth: 1

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -19,12 +20,12 @@ namespace dftracer::utils::utilities::reader::internal {
 class GzipLineByteStream : public GzipStream {
    private:
     static constexpr std::size_t SEARCH_BUFFER_SIZE = 2048;
-    static constexpr std::size_t LINE_SEARCH_LOOKBACK = 512;
 
     dstd::Vector<char> partial_line_buffer_;
     std::size_t actual_start_bytes_;
     std::size_t bytes_returned_;  // Track how many bytes we've returned to user
     bool extend_to_line_boundary_ = false;
+    bool open_at_earlier_piece_ = false;
 
    public:
     GzipLineByteStream(std::size_t buffer_size = DEFAULT_BUFFER_SIZE)
@@ -37,6 +38,11 @@ class GzipLineByteStream : public GzipStream {
     using GzipStream::read_async;
 
     void set_extend_to_line_boundary(bool v) { extend_to_line_boundary_ = v; }
+
+    /// Start at the line holding the target even when that line opens in an
+    /// earlier piece, so adjacent ranges that each leave their last partial
+    /// line to the next one return every line once.
+    void set_open_at_earlier_piece(bool v) { open_at_earlier_piece_ = v; }
 
     void initialize(
         const dstd::String &gz_path, std::size_t start_bytes,
@@ -54,14 +60,10 @@ class GzipLineByteStream : public GzipStream {
     }
 
     coro::CoroTask<std::size_t> find_line_start(std::size_t target_start) {
-        std::size_t current_pos = seek_anchor_offset();
-        std::size_t actual_start = target_start;
-
-        // A piece that starts inside a line owns its lines from the first
-        // newline on, as the piece before reads past its end to finish the line
-        // it opens. A target before that newline starts at the newline's
-        // successor.
-        if (mid_line_start_) {
+        // Unless asked for the line under the target, a piece that starts
+        // inside a line owns its lines from the first newline on: the caller
+        // counts lines from there, or the piece before finishes the line.
+        if (mid_line_start_ && !open_at_earlier_piece_) {
             const std::size_t first = co_await first_line_start_after_anchor();
             co_await restart_compression();
             if (target_start < first) {
@@ -70,43 +72,49 @@ class GzipLineByteStream : public GzipStream {
             }
         }
 
-        // If target is at the start of the file, no adjustment needed
-        if (target_start <= current_pos) {
+        if (!mid_line_start_ && target_start <= seek_anchor_offset()) {
             co_return target_start;
         }
 
-        std::size_t search_start = (target_start >= LINE_SEARCH_LOOKBACK)
-                                       ? target_start - LINE_SEARCH_LOOKBACK
-                                       : current_pos;
-
-        if (search_start > current_pos) {
-            co_await skip(search_start);
-            current_pos = search_start;
-        }
-
-        // Use stack allocation for small search buffer
-        alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) unsigned char
-            search_buffer[SEARCH_BUFFER_SIZE];
-        std::size_t search_bytes;
-        const auto read_ok =
-            co_await inflater_.read(fd_, file_offset_, search_buffer,
-                                    sizeof(search_buffer) - 1, search_bytes);
-        if (read_ok) {
-            std::size_t relative_target = target_start - current_pos;
-            if (relative_target < search_bytes) {
-                // Always use backward search to find line start
-                // This ensures we start at the beginning of a complete line
-                for (int64_t i = static_cast<int64_t>(relative_target); i >= 0;
-                     i--) {
-                    if ((i == 0 && !(mid_line_start_ &&
-                                     current_pos == seek_anchor_offset())) ||
-                        (i > 0 && search_buffer[i - 1] == '\n')) {
-                        actual_start =
-                            current_pos + static_cast<std::size_t>(i);
+        // A line has no size limit, so only the data from the anchor can show
+        // where the line holding the target opens. A skip decodes it anyway.
+        // A range ending inside a line leaves that line to the next range, so
+        // a line that opens before this piece is read from an earlier one.
+        std::size_t actual_start = seek_anchor_offset();
+        while (true) {
+            std::size_t current_pos = seek_anchor_offset();
+            bool found = false;
+            while (current_pos < target_start) {
+                std::size_t got = 0;
+                const bool read_ok = co_await inflater_.read(
+                    fd_, file_offset_,
+                    reinterpret_cast<unsigned char *>(buffer_.data()),
+                    std::min(buffer_.size(), target_start - current_pos), got);
+                if (!read_ok) {
+                    throw ReaderError(
+                        ReaderError::CompressionError,
+                        "gzip decode failed mid-stream at position " +
+                            dstd::to_string(current_pos));
+                }
+                if (got == 0) break;
+                for (std::size_t i = got; i > 0; --i) {
+                    if (buffer_[i - 1] == '\n') {
+                        actual_start = current_pos + i;
+                        found = true;
                         break;
                     }
                 }
+                current_pos += got;
             }
+            if (found || !mid_line_start_) break;
+            if (!indexer_->find_member(seek_anchor_offset() - 1, member_)) {
+                throw ReaderError(ReaderError::CompressionError,
+                                  "Failed to find the piece before position " +
+                                      dstd::to_string(seek_anchor_offset()));
+            }
+            co_await restart_compression();
+            mid_line_start_ = piece_starts_mid_line();
+            actual_start = seek_anchor_offset();
         }
 
         co_await restart_compression();

@@ -15,7 +15,9 @@
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
+#include <algorithm>
 #include <cstddef>
+#include <random>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::reader;
@@ -1114,5 +1116,117 @@ TEST_SUITE("TraceReader malformed lines") {
                 CHECK(kept.arrow == 2);
             }
         }
+    }
+}
+
+namespace {
+
+static CoroTask<dstd::Vector<dstd::String>> collect_json_text(
+    AsyncGenerator<JsonLine> gen) {
+    dstd::Vector<dstd::String> out;
+    while (auto line = co_await gen.next()) out.emplace_back(line->content);
+    co_return out;
+}
+
+struct WindowFixture {
+    dstd::String gz;
+    dstd::Vector<dstd::String> lines;
+    dstd::Vector<std::size_t> starts;
+    std::size_t total = 0;
+};
+
+// Lines long and short around the sizes a line start search could assume.
+WindowFixture window_fixture(std::size_t rounds, std::size_t checkpoint_size) {
+    WindowFixture f;
+    dstd::String content;
+    const std::size_t sizes[] = {40, 400, 511, 512, 513, 600, 3000, 20000};
+    static const char HEX[] = "0123456789abcdef";
+    std::mt19937_64 rng(7);
+    for (std::size_t round = 0; round < rounds; ++round) {
+        for (const std::size_t size : sizes) {
+            dstd::String line =
+                common::str_cat(R"({"name":"read","ph":"X","id":)",
+                                f.lines.size(), R"(,"pad":")");
+            for (std::size_t i = 0; i < size; ++i)
+                line.push_back(HEX[rng() & 15]);
+            line += R"("})";
+            f.starts.push_back(content.size());
+            content += line;
+            content += "\n";
+            f.lines.push_back(std::move(line));
+        }
+    }
+    f.total = content.size();
+    const dstd::Path dir = make_unique_test_path("byte_windows");
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    const dstd::String pfw((dir / "trace.pfw").str());
+    REQUIRE(dstd::fs::write_file(dstd::PathView(pfw), content).has_value());
+    f.gz = gzip_fixture(pfw);
+    REQUIRE(dftu_utils_test::build_index(f.gz, "", checkpoint_size));
+    return f;
+}
+
+void check_windows(const WindowFixture& f, dstd::Vector<std::size_t> cuts) {
+    cuts.push_back(0);
+    cuts.push_back(f.total);
+    std::sort(cuts.begin(), cuts.end());
+    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+    dstd::Vector<dstd::String> raw;
+    dstd::Vector<dstd::String> json;
+    std::size_t arrow = 0;
+    for (std::size_t i = 0; i + 1 < cuts.size(); ++i) {
+        ReadConfig rc;
+        rc.start_byte = cuts[i];
+        rc.end_byte = cuts[i + 1];
+        TraceReader reader({.file_path = f.gz});
+        REQUIRE(reader.has_index());
+        for (auto& l : collect_lines(reader.read_lines(rc)).get())
+            raw.push_back(std::move(l));
+        for (auto& l : collect_json_text(reader.read_json(rc)).get())
+            json.push_back(std::move(l));
+        arrow += count_arrow_rows(reader.read_arrow(rc)).get();
+    }
+    CHECK(raw == f.lines);
+    CHECK(json == f.lines);
+    CHECK(arrow == f.lines.size());
+}
+
+}  // namespace
+
+TEST_SUITE("TraceReader byte windows") {
+    TEST_CASE("adjacent windows give each line once and whole, at any cut") {
+        const WindowFixture f = window_fixture(1, 1024 * 1024);
+        for (std::size_t i = 0; i < f.lines.size(); ++i) {
+            const std::size_t size = f.lines[i].size();
+            for (const std::size_t at :
+                 {std::size_t{0}, std::size_t{1}, std::size_t{511},
+                  std::size_t{512}, std::size_t{513}, size - 1, size}) {
+                if (at > size) continue;
+                CAPTURE(i);
+                CAPTURE(at);
+                check_windows(f, {f.starts[i] + at});
+            }
+        }
+    }
+
+    TEST_CASE("a window near a restart piece finds its line") {
+        const std::size_t checkpoint = 1024 * 1024;
+        const WindowFixture f = window_fixture(480, checkpoint);
+        const auto indexer = CheckpointIndexerFactory::create(
+            f.gz, determine_index_path(f.gz, ""), checkpoint, false);
+        REQUIRE(indexer != nullptr);
+        std::size_t mid_line_pieces = 0;
+        dstd::Vector<std::size_t> cuts;
+        for (const auto& member : indexer->get_members()) {
+            if (member.kind != GzipRecordKind::Restart) continue;
+            const auto at = static_cast<std::size_t>(member.uc_offset);
+            mid_line_pieces +=
+                !std::binary_search(f.starts.begin(), f.starts.end(), at);
+            for (const std::size_t cut :
+                 {at - 600, at - 1, at, at + 1, at + 600})
+                cuts.push_back(cut);
+        }
+        CHECK(mid_line_pieces > 0);
+        check_windows(f, cuts);
     }
 }

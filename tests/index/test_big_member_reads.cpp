@@ -544,9 +544,12 @@ TEST_SUITE("BigMemberReads") {
                 CAPTURE(seed);
                 CAPTURE(p.member_idx);
                 const bool newline_before = t.text[at - 1] == '\n';
-                // The first line the piece holds is ours when it starts at the
-                // piece, else the next one is.
-                const std::size_t expect_from = newline_before ? at : nl + 1;
+                // The line under the target, wherever it opens: the range that
+                // ends inside it left it to this one.
+                const std::size_t expect_from =
+                    t.text.rfind('\n', at) == dstd::String::npos
+                        ? 0
+                        : t.text.rfind('\n', at) + 1;
                 CHECK(read_line_bytes(ix.indexer, at + 1) ==
                       t.text.substr(expect_from));
                 (newline_before ? after_newline : mid) = true;
@@ -601,7 +604,7 @@ TEST_SUITE("BigMemberReads") {
         const std::size_t at = static_cast<std::size_t>(last.uc_offset);
         const bool newline_before = t.text[at - 1] == '\n';
         const std::size_t from =
-            newline_before ? at : t.text.find('\n', at) + 1;
+            newline_before ? at : t.text.rfind('\n', at - 1) + 1;
         // The last line has no newline, so the line-aligned stream omits it.
         const std::size_t last_newline = t.text.rfind('\n');
         CHECK(read_line_bytes(ix.indexer, at) ==

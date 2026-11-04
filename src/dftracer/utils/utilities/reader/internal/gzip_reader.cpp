@@ -483,6 +483,8 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
                 dstd::make_unique<GzipLineByteStream>(buffer_size);
             line_byte_stream->set_extend_to_line_boundary(
                 extend_to_line_boundary);
+            line_byte_stream->set_open_at_earlier_piece(
+                range_type == RangeType::ByteRange && !extend_to_line_boundary);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
 
@@ -501,6 +503,8 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
                 dstd::make_unique<GzipLineByteStream>(buffer_size);
             line_byte_stream->set_extend_to_line_boundary(
                 extend_to_line_boundary);
+            line_byte_stream->set_open_at_earlier_piece(
+                range_type == RangeType::ByteRange && !extend_to_line_boundary);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
             return line_byte_stream;
@@ -511,6 +515,8 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
                 dstd::make_unique<GzipLineByteStream>(buffer_size);
             line_byte_stream->set_extend_to_line_boundary(
                 extend_to_line_boundary);
+            line_byte_stream->set_open_at_earlier_piece(
+                range_type == RangeType::ByteRange && !extend_to_line_boundary);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
 
@@ -528,6 +534,8 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
                 dstd::make_unique<GzipLineByteStream>(buffer_size);
             line_byte_stream->set_extend_to_line_boundary(
                 extend_to_line_boundary);
+            line_byte_stream->set_open_at_earlier_piece(
+                range_type == RangeType::ByteRange && !extend_to_line_boundary);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
 

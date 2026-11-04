@@ -5,10 +5,14 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <simdjson.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <variant>
 
@@ -503,6 +507,283 @@ inline bool read_dom(StringView line, FoldEvent& ev, StringIntern& intern,
     if (parser.parse(padded).get(root)) return false;
     dftracer::utils::trace::views::detail::extract_fold_event_into(
         ev, root, intern, needs_args);
+    return true;
+}
+
+/// Lines that read by exact path, shaped for the reader that walks every leaf:
+/// repeated keys, nested arrays, a deep path, empty containers, nulls, root
+/// arrays, declared fields that convert or do not, json fields and wide
+/// containers. The path readers are compared on these and on SHAPES.
+inline const char* const PATH_LINES[] = {
+    R"j({"k":1,"k":2,"s":"x","s":"y"})j",
+    R"j({"k":1,"o":{"a":{"b":1,"c":[1,2,3]},"z":"q"},"l":[1,[2,[3,4]],{"m":5}],"f":2.5})j",
+    R"j({"a":{"b":{"c":{"d":{"e":{"f":{"g":{"h":{"i":{"j":{"k":{"l":7}}}}}}}}}}}})j",
+    R"j({"o":{"a":{"b":1}},"o":{"a":{"b":2}},"k":3})j",
+    R"j({"e":[],"f":{},"g":[[]],"h":[{}],"o":{"e":{}},"k":1})j",
+    R"j({"n":null,"o":{"n":null},"l":[null,1],"k":null})j",
+    R"j({"flag":true,"o":{"flag":false},"s":"true","k":"7","f":"2.5"})j",
+    R"j({"k":1.0,"f":3,"s":4,"flag":1,"o":{"a":1}})j",
+    R"j({"k":9223372036854775807,"f":18446744073709551615,"s":123456789012345678901234567890})j",
+    R"j({"k":18446744073709551615,"f":-9223372036854775808,"s":-123456789012345678901234567890})j",
+    R"j({"ts":1500,"dur":2.5,"name":"read","pid":7,"tid":"t3","k":1})j",
+    R"j({"ts":"2024-01-02T03:04:05Z","dur":"1.5","name":"w","pid":"host","tid":9})j",
+    R"j({"ts":-5,"dur":-1,"name":5,"pid":"12","tid":true})j",
+    R"j({"ts":1e3,"dur":"x","name":"n","pid":1.0,"tid":null})j",
+    R"j({"io":{"off":10,"len":[1,2,3]},"hosts":["h0","h1","h2"],"secret":"s3","k":4})j",
+    R"j({"io":{"off":"10","len":4096},"hosts":["h0"],"secret":7,"k":5})j",
+    R"j({"o":{"a":1,"b":2,"c":3},"l":[1,2,3],"x":{"p":{"q":1,"r":2,"s":3}}})j",
+    R"j({"o":{"a":1},"l":[1],"x":{"p":{"q":1}}})j",
+    R"j({"o":[1,{"z":[2,3]}],"l":{"k":{"j":[]}}})j",
+    R"j({"args":{"a":1,"b":2.5,"c":true,"o":{"x":1,"y":[1,2]},"d":"str"},"ph":1})j",
+    R"j({"args":{"a":"7","b":"x","c":0,"o":3,"d":4},"ph":1})j",
+    R"j({"args":{"l":[{"x":1},{"x":2}],"a":1,"a":2},"ph":1,"args":{"b":1}})j",
+    R"j({"":1,"x":{"":2,"y":3},"k":4})j",
+    R"j({"a.b":1,"a":{"b":2},"a":[{"b":3}]})j",
+    R"j([{"k":1},[2,3],"s",4,null,true,{"o":{"a":1}}])j",
+    R"j([])j",
+    R"j([[],{},[[]]])j",
+    R"j({"k\"q":1,"o":{"\u00e9":2,"t\tb":3},"s":"a\"b\\c\n"})j",
+    "{\"k\":1,\"s\":\"\xC3\xA9\xF0\x9F\x98\x80\",\"\xC3\xA9\":2}",
+    R"j({ "k" : 1 , "o" : { "a" : [ 1 , 2 ] , "b" : { } } , "s" : "x" })j",
+};
+
+/// Declared fields and roles for the typed path readers. `schema` registers it
+/// once.
+inline const dftracer::utils::index::RecordSchema& path_schema() {
+    static const dftracer::utils::index::RecordSchema& schema =
+        dftracer::utils::index::register_schema(R"(
+id: fold_shapes_path
+fields:
+  ts: {type: int, role: time, unit: us}
+  dur: {type: float, role: duration, unit: ms}
+  name: {type: string, role: name}
+  pid: {type: int, role: entity}
+  tid: {type: string, role: lane}
+  k: {type: int}
+  f: {type: float}
+  s: {type: string}
+  flag: {type: bool}
+  obj: {type: json, path: o}
+  list: {type: json, path: l}
+  off: {type: int, path: io.off}
+  host1: {type: string, path: hosts.1}
+  deep: {type: int, path: a.b.c.d.e.f.g.h.i.j.k.l}
+  arg_a: {type: int, path: args.a}
+  arg_b: {type: float, path: args.b}
+  arg_c: {type: bool, path: args.c}
+  arg_d: {type: string, path: args.d}
+  arg_o: {type: json, path: args.o}
+index:
+  never_index: [secret, io.len, args.d]
+)",
+                                                "test");
+    return schema;
+}
+
+/// One way to call a path reader.
+struct PathOptions {
+    explicit PathOptions(const char* label) : name(label) {}
+
+    const char* name;
+    bool capture_schema = true;
+    /// Sorted, as the readers need.
+    dftracer::utils::dstd::Vector<String> paths;
+    bool typed = false;
+    std::size_t max_children = 0;
+    bool skip_never = false;
+    bool with_hints = false;
+};
+
+inline dftracer::utils::dstd::Vector<PathOptions> path_option_sets() {
+    dftracer::utils::dstd::Vector<PathOptions> sets;
+    const auto sorted = [](dftracer::utils::dstd::Vector<String> paths) {
+        std::sort(paths.begin(), paths.end());
+        return paths;
+    };
+    sets.emplace_back("plain");
+    {
+        PathOptions o{"no_schema"};
+        o.capture_schema = false;
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"hints"};
+        o.with_hints = true;
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"paths_early"};
+        o.paths = sorted({"k", "o.a.b", "io.off", "l.1.0"});
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"paths_container"};
+        o.paths = sorted({"o", "l", "x.p", "args.o", "k"});
+        o.with_hints = true;
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"paths_one"};
+        o.paths = sorted({"k"});
+        o.capture_schema = false;
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"typed"};
+        o.typed = true;
+        o.with_hints = true;
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"typed_no_schema"};
+        o.typed = true;
+        o.capture_schema = false;
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"typed_paths"};
+        o.typed = true;
+        o.paths = sorted({"k", "o", "l", "ts", "dur", "name", "io.off",
+                          "hosts.1", "args.o", "args.a", "pid", "tid"});
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"typed_paths_early"};
+        o.typed = true;
+        o.paths = sorted({"k", "o.a", "ts"});
+        o.with_hints = true;
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"max2"};
+        o.max_children = 2;
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"max2_typed"};
+        o.max_children = 2;
+        o.typed = true;
+        o.with_hints = true;
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"max1_paths"};
+        o.max_children = 1;
+        o.typed = true;
+        o.paths = sorted({"o", "x.p.q", "l", "k"});
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"never"};
+        o.typed = true;
+        o.skip_never = true;
+        sets.push_back(o);
+    }
+    {
+        PathOptions o{"never_no_schema"};
+        o.typed = true;
+        o.skip_never = true;
+        o.capture_schema = false;
+        sets.push_back(o);
+    }
+    return sets;
+}
+
+/// Names for the captures. They cover a nested path, a flat dotted key, an
+/// array index in both spellings, a name found only under args, a schema field,
+/// a missing name and the odd spellings of a path.
+inline const char* const CAPTURE_NAMES[] = {
+    "io.off",      "args.size",  "type",        "id",
+    "a.b",         "l.1",        "l[1]",        "o.a",
+    "o",           "cqe.raw_ns", "a.b.c",       "name",
+    "tags.0.name", "x",          "size",        "args.io.len.1",
+    "l[0].m",      "ts",         "meta.x.y[2]", "",
+    ".",           "a..b",       "[0]",         "l.9",
+    "k.q",         "hosts",      "args",        "ph",
+    "cat",         "dur",
+};
+
+/// Lines for the captures, with the nested values the names above reach.
+inline const char* const CAPTURE_LINES[] = {
+    R"j({"ph":1,"type":3,"id":5,"args":{"io":{"off":1.5,"len":[1,{"k":"v"}]},"cqe.raw_ns":7,"size":4096,"tags":[{"name":"a"},{"name":"b"}]},"meta":{"x":{"y":[1,2,3]}},"a.b":4,"a":{"b":{"c":5}},"l":[{"m":1},2],"o":{"a":9}})j",
+    R"j({"ph":1,"args":{"a":{"b":1},"o":{"a":{"x":1}},"l":[5,6,7],"x":null,"size":null}})j",
+    R"j({"ph":1,"args":{"a":1},"args":{"a":2,"size":3},"name":"n","type":"t","id":{"x":1}})j",
+    R"j({"ph":1,"id":[],"type":{},"args":{"hosts":["h0","h1"],"k":{"q":2}},"hosts":[]})j",
+    R"j({"ph":1,"args":[{"size":1},{"size":2}],"x":{"y":1}})j",
+    R"j({"ph":1,"a":{"b":[{"c":1}]},"a.b":{"c":2},"a.b.c":3,"l":[[1,2],[3]],"hosts":"h","ts":5,"dur":6})j",
+    R"j({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":2,"ts":3,"dur":4,"type":9,"id":8,"args":{"fhash":"f","hhash":"h","size":7,"io":{"len":[4,5]}}})j",
+    R"j({"name":"no_ph","type":1,"args":{"size":1}})j",
+    R"j({"ph":1,"x":1e5,"args":{"big":123456789012345678901234567890,"u":18446744073709551615,"s":"a\"b","d":2.5,"t":true}})j",
+    R"j({"ph":1,"args":{"a":{"b":1},"size":2,"io":{"off":6}},"a":{"c":3},"size":9,"io":{"len":[1]}})j",
+    R"j({"ph":1,"a.b":7,"cqe.raw_ns":1,"args":{"a.b":8,"cqe.raw_ns":4,"o":{"a":2}}})j",
+    R"j({"ph":1,"args":{"cqe.raw_ns":4,"cqe":{"raw_ns":5}},"o":{"a":1},"cqe":{"x":2}})j",
+    R"j({"ph":1,"args":3,"x":1,"size":4})j",
+    R"j({"ph":1,"args":[{"size":1},{"size":2}],"l":[1,[2,3]]})j",
+    R"j({"ph":1,"args":{"size":1},"args":{"size":2,"io":{"off":3}},"size":5})j",
+    R"j({"ph":1,"size":5,"args":{"a":{"b":9},"io":{"off":3}},"a":{"b":{"c":1}},"a.b.c":2})j",
+    R"j({"ph":1,"a":{"b.c":1,"b":{"c":2}},"args":{"a":{"b.c":3}},"x.y":4,"x":{"y":5}})j",
+};
+
+/// A hundred names, the first of them real, to cross the batch of one walk.
+inline dftracer::utils::dstd::Vector<String> many_capture_names() {
+    dftracer::utils::dstd::Vector<String> names;
+    for (const char* name : CAPTURE_NAMES) names.emplace_back(name);
+    for (int i = 0; i < 100; ++i) {
+        names.emplace_back(dftracer::utils::common::str_cat("n", i, ".x"));
+        if (i % 7 == 0)
+            names.emplace_back(dftracer::utils::common::str_cat("size"));
+    }
+    return names;
+}
+
+/// The text of `ev` for the path readers: `describe`, the schema leaves in
+/// order, the count of values that did not convert and the by_path mark.
+inline String describe_path(const FoldEvent& ev, const StringIntern& intern) {
+    using dftracer::utils::common::str_cat;
+    String out = describe(ev, intern);
+    out += " lv{";
+    bool first = true;
+    for (const auto& [id, tag] : ev.schema_leaves) {
+        if (!first) out += " ";
+        first = false;
+        out += str_cat(intern.resolve(id), ":", static_cast<int>(tag));
+    }
+    out += str_cat("} unc=", ev.unconverted, " bp=", ev.by_path ? 1 : 0);
+    return out;
+}
+
+/// The DOM path reader on `line` with `o`, into `ev`. False when the parser
+/// rejects the line. `hints` is used when `o.with_hints`.
+inline bool read_dom_path(
+    StringView line, FoldEvent& ev, StringIntern& intern, const PathOptions& o,
+    dftracer::utils::trace::views::detail::DecodeHints& hints) {
+    static thread_local dftracer::utils::json::RecordParser parser;
+    const simdjson::padded_string padded(line.data(), line.size());
+    simdjson::dom::element root;
+    if (parser.parse(padded).get(root)) return false;
+    const auto* schema = o.typed ? &path_schema() : nullptr;
+    dftracer::utils::dstd::Vector<const dftracer::utils::index::FieldSpec*>
+        fields;
+    for (const String& path : o.paths)
+        fields.push_back(schema ? schema->field_at(path) : nullptr);
+    dftracer::utils::trace::views::detail::decode_record_into(
+        ev, root, intern, o.capture_schema,
+        o.paths.empty() ? nullptr : &o.paths, schema,
+        o.paths.empty() || !schema ? nullptr : &fields, o.max_children,
+        o.with_hints ? &hints : nullptr, o.skip_never);
+    return true;
+}
+
+/// The DOM reader on `line`, as read_dom, with `names` captured.
+inline bool read_dom_captures(
+    StringView line, FoldEvent& ev, StringIntern& intern, bool needs_args,
+    const dftracer::utils::dstd::Vector<String>& names) {
+    static thread_local dftracer::utils::json::RecordParser parser;
+    const simdjson::padded_string padded(line.data(), line.size());
+    simdjson::dom::element root;
+    if (parser.parse(padded).get(root)) return false;
+    dftracer::utils::trace::views::detail::extract_fold_event_into(
+        ev, root, intern, needs_args, &names);
     return true;
 }
 

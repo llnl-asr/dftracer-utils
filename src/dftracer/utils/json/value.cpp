@@ -505,6 +505,15 @@ bool ValueAccess::begin_object(Value& v, ObjectWalk& out) {
     return true;
 }
 
+bool ValueAccess::begin_value(Value& v, ValueWalk& out) {
+    if (!v.owner_ || !v.start_ || !v.fresh_for_read()) return false;
+    out.value = inner(v);
+    v.state_ = SPENT;
+    out.end = v.owner_->end();
+    out.strings = &v.owner_->strings;
+    return true;
+}
+
 bool ValueAccess::end_object(const Value& v) {
     return v.owner_ && usable(*v.owner_);
 }

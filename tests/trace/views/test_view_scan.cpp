@@ -614,6 +614,57 @@ TEST_SUITE("View") {
     }
 
     TEST_CASE(
+        "View - a batched call tree on a nested arg keeps refused lines") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        dstd::String pfw = env.get_dir() + "/refused.pfw";
+        {
+            dftu_utils_test::FileOut ofs(pfw);
+            for (int i = 0; i < 20; ++i)
+                ofs << R"({"ph":"X","name":"plain","cat":"APP","pid":2,)"
+                       R"("tid":1,"ts":)"
+                    << 5000 + i * 100
+                    << R"(,"dur":10,"args":{"label":)"
+                       R"({"v":"P"}}})"
+                    << "\n";
+            ofs << R"({"ph":"X","name":"hot","cat":"APP","pid":1,"tid":1,)"
+                   R"("ts":1000,"dur":42,"args":{"label":{"v":"A"},)"
+                   R"("f":1e400,"big":123456789012345678901234567890}})"
+                << "\n";
+            ofs << R"({"ph":"X","name":"mid","cat":"APP","pid":1,"tid":1,)"
+                   R"("ts":1010,"dur":20,"args":{"label":{"v":"B"},)"
+                   R"("s":"x\qy"}})"
+                << "\n";
+            ofs << "{\"ph\":\"X\",\"name\":\"cold\",\"cat\":\"APP\",\"pid\":1,"
+                   "\"tid\":1,\"ts\":1020,\"dur\":5,\"args\":{\"label\":"
+                   "{\"v\":\"C\"},\"s\":\"p\xff"
+                   "q\"}}\n";
+        }
+        dstd::String gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        (void)dstd::fs::remove(pfw);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        {
+            StringSink index_build;
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .sink_json(index_build)
+                .get();
+        }
+        View v = View::from_file(dstd::String(gz), dstd::String(idx));
+        const auto [tree, flame] = test_view_common::run(dataframe::collect_all(
+            v.call_tree({"pid", "tid"}, "ts", "dur", "label.v"),
+            v.flamegraph({"pid", "tid"}, "ts", "dur", "label.v")));
+        CHECK(flame.num_rows() > 0);
+        dstd::Vector<dstd::String> labels;
+        for (std::int64_t i = 0; i < tree.num_rows(); ++i)
+            if (bstr(tree, i, "name") != "P")
+                labels.push_back(bstr(tree, i, "name"));
+        std::sort(labels.begin(), labels.end());
+        CHECK(tree.num_rows() == 23);
+        CHECK(labels == dstd::Vector<dstd::String>{"A", "B", "C"});
+    }
+
+    TEST_CASE(
         "View - agg_numeric_args aggregates every numeric arg as a mean") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());

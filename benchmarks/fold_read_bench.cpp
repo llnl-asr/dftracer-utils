@@ -7,12 +7,26 @@
 //   batch/args       DOM parse_many through trace::parse_lines + the DOM reader
 //   dom/noargs       as dom/args, no args
 //   ondemand/noargs  as ondemand/args, no args
+//   cached/args      as ondemand/args, interning through dstd::InternCache
+//   cached/noargs    as ondemand/noargs, interning through dstd::InternCache
+// clang-format off
+//   dom/path         DOM parse of each line + decode_record_into, every leaf by path
+//   ondemand/path    json::Document::parse + the on-demand decode_record_into
+//   dom/capture      DOM parse of each line + extract_fold_event_into, no args and
+//                    two captures (the nested "o.x" and the bare "size")
+//   ondemand/capture json::Document::parse + the on-demand reader, same captures
+//   cached/path      as ondemand/path, interning through dstd::InternCache
+//   cached/capture   as ondemand/capture, interning through dstd::InternCache
+//   old/path         what the consumers did before: json::Document::parse, then
+//                    ValueAccess::dom (a second parse), then the DOM path reader
+//   old/capture      the same with the DOM reader and the two captures
+// clang-format on
 //
 // Each row reuses one parser and one intern table. The rows alternate inside
 // every round, and the order flips on odd rounds. The table shows the median
-// ns per line over the rounds and the ratio to the DOM row with the same args.
+// ns per line over the rounds and the ratio to the DOM row of its kind.
 // The checksum is taken once per row outside the timed loop, over the events
-// with every intern id resolved to text; rows with the same args must match.
+// with every intern id resolved to text; rows of one kind must match.
 // A line a reader rejects adds no event to the checksum. row_mask, a bit per
 // row in the order above, limits the run to some rows, for profiling.
 //
@@ -22,6 +36,7 @@
 //   fold_read_bench --smoke
 
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -82,26 +97,30 @@ void hash_event(Hash& h, const FoldEvent& ev,
     h.add(ev.ts);
     h.add(ev.dur);
     h.add(ev.has_dur);
+    h.add(ev.by_path);
     id(ev.cat_id);
     id(ev.name_id);
     id(ev.fhash_id);
     id(ev.hhash_id);
-    for (const auto& [key, value] : ev.args) {
-        id(key);
-        h.add(value.index());
-        switch (value.index()) {
-            case 0:
-                h.add(std::get<0>(value));
-                break;
-            case 1:
-                h.add(std::get<1>(value));
-                break;
-            case 2:
-                id(std::get<2>(value));
-                break;
-            default:
-                h.add(std::get<3>(value));
-                break;
+    for (const auto* list : {&ev.args, &ev.top_fields}) {
+        h.add(list->size());
+        for (const auto& [key, value] : *list) {
+            id(key);
+            h.add(value.index());
+            switch (value.index()) {
+                case 0:
+                    h.add(std::get<0>(value));
+                    break;
+                case 1:
+                    h.add(std::get<1>(value));
+                    break;
+                case 2:
+                    id(std::get<2>(value));
+                    break;
+                default:
+                    h.add(std::get<3>(value));
+                    break;
+            }
         }
     }
     for (const auto& s : ev.specials) {
@@ -191,15 +210,16 @@ class DomRow {
 
 class OnDemandRow {
    public:
-    OnDemandRow(const Input& in, bool needs_args)
-        : in_(in), needs_args_(needs_args) {}
+    OnDemandRow(const Input& in, bool needs_args, bool use_cache = false)
+        : in_(in), needs_args_(needs_args), use_cache_(use_cache) {}
     template <bool Check>
     void run(Acc& acc) {
         for (dstd::StringView line : in_.lines) {
             auto value = doc_.parse(line);
             if (!value) continue;
-            trace::views::detail::extract_fold_event_into(ev_, *value, intern_,
-                                                          needs_args_);
+            trace::views::detail::extract_fold_event_into(
+                ev_, *value, intern_, needs_args_,
+                use_cache_ ? &cache_ : nullptr);
             if (json::detail::ValueAccess::broken(*value)) continue;
             account<Check>(acc, ev_, intern_);
         }
@@ -208,6 +228,167 @@ class OnDemandRow {
    private:
     const Input& in_;
     bool needs_args_;
+    bool use_cache_;
+    json::Document doc_;
+    dstd::StringIntern intern_;
+    dstd::InternCache cache_{intern_};
+    FoldEvent ev_;
+};
+
+// The names the capture rows capture: one nested and one bare.
+const dstd::Vector<dstd::String>& capture_names() {
+    static const dstd::Vector<dstd::String> names{"o.x", "size"};
+    return names;
+}
+
+class DomPathRow {
+   public:
+    explicit DomPathRow(const Input& in) : in_(in) {
+        buf_.resize(simdjson::SIMDJSON_PADDING);
+    }
+    template <bool Check>
+    void run(Acc& acc) {
+        for (dstd::StringView line : in_.lines) {
+            buf_.assign(line.data(), line.size());
+            buf_.resize(line.size() + simdjson::SIMDJSON_PADDING);
+            simdjson::dom::element root;
+            if (parser_.parse(buf_.data(), line.size(), false).get(root))
+                continue;
+            trace::views::detail::decode_record_into(ev_, root, intern_,
+                                                     /*capture_schema=*/false);
+            account<Check>(acc, ev_, intern_);
+        }
+    }
+
+   private:
+    const Input& in_;
+    json::RecordParser parser_;
+    dstd::String buf_;
+    dstd::StringIntern intern_;
+    FoldEvent ev_;
+};
+
+class OnDemandPathRow {
+   public:
+    explicit OnDemandPathRow(const Input& in, bool use_cache = false)
+        : in_(in), use_cache_(use_cache) {}
+    template <bool Check>
+    void run(Acc& acc) {
+        for (dstd::StringView line : in_.lines) {
+            auto value = doc_.parse(line);
+            if (!value) continue;
+            trace::views::detail::decode_record_into(
+                ev_, *value, intern_, /*capture_schema=*/false, nullptr,
+                nullptr, nullptr, 0, nullptr, false,
+                use_cache_ ? &cache_ : nullptr);
+            if (json::detail::ValueAccess::broken(*value)) continue;
+            account<Check>(acc, ev_, intern_);
+        }
+    }
+
+   private:
+    const Input& in_;
+    bool use_cache_;
+    json::Document doc_;
+    dstd::StringIntern intern_;
+    dstd::InternCache cache_{intern_};
+    FoldEvent ev_;
+};
+
+class OldPathRow {
+   public:
+    explicit OldPathRow(const Input& in) : in_(in) {}
+    template <bool Check>
+    void run(Acc& acc) {
+        for (dstd::StringView line : in_.lines) {
+            auto value = doc_.parse(line);
+            if (!value) continue;
+            const auto root = json::detail::ValueAccess::dom(*value);
+            if (!root) continue;
+            trace::views::detail::decode_record_into(ev_, *root, intern_,
+                                                     /*capture_schema=*/false);
+            account<Check>(acc, ev_, intern_);
+        }
+    }
+
+   private:
+    const Input& in_;
+    json::Document doc_;
+    dstd::StringIntern intern_;
+    FoldEvent ev_;
+};
+
+class DomCaptureRow {
+   public:
+    explicit DomCaptureRow(const Input& in) : in_(in) {
+        buf_.resize(simdjson::SIMDJSON_PADDING);
+    }
+    template <bool Check>
+    void run(Acc& acc) {
+        for (dstd::StringView line : in_.lines) {
+            buf_.assign(line.data(), line.size());
+            buf_.resize(line.size() + simdjson::SIMDJSON_PADDING);
+            simdjson::dom::element root;
+            if (parser_.parse(buf_.data(), line.size(), false).get(root))
+                continue;
+            trace::views::detail::extract_fold_event_into(
+                ev_, root, intern_, false, &capture_names());
+            account<Check>(acc, ev_, intern_);
+        }
+    }
+
+   private:
+    const Input& in_;
+    json::RecordParser parser_;
+    dstd::String buf_;
+    dstd::StringIntern intern_;
+    FoldEvent ev_;
+};
+
+class OnDemandCaptureRow {
+   public:
+    explicit OnDemandCaptureRow(const Input& in, bool use_cache = false)
+        : in_(in), use_cache_(use_cache) {}
+    template <bool Check>
+    void run(Acc& acc) {
+        for (dstd::StringView line : in_.lines) {
+            auto value = doc_.parse(line);
+            if (!value) continue;
+            trace::views::detail::extract_fold_event_into(
+                ev_, *value, intern_, false, use_cache_ ? &cache_ : nullptr,
+                &capture_names());
+            if (json::detail::ValueAccess::broken(*value)) continue;
+            account<Check>(acc, ev_, intern_);
+        }
+    }
+
+   private:
+    const Input& in_;
+    bool use_cache_;
+    json::Document doc_;
+    dstd::StringIntern intern_;
+    dstd::InternCache cache_{intern_};
+    FoldEvent ev_;
+};
+
+class OldCaptureRow {
+   public:
+    explicit OldCaptureRow(const Input& in) : in_(in) {}
+    template <bool Check>
+    void run(Acc& acc) {
+        for (dstd::StringView line : in_.lines) {
+            auto value = doc_.parse(line);
+            if (!value) continue;
+            const auto root = json::detail::ValueAccess::dom(*value);
+            if (!root) continue;
+            trace::views::detail::extract_fold_event_into(
+                ev_, *root, intern_, false, &capture_names());
+            account<Check>(acc, ev_, intern_);
+        }
+    }
+
+   private:
+    const Input& in_;
     json::Document doc_;
     dstd::StringIntern intern_;
     FoldEvent ev_;
@@ -282,7 +463,7 @@ int main(int argc, char** argv) {
                  : static_cast<std::size_t>(-1);
     const unsigned row_mask =
         argc > 4 ? static_cast<unsigned>(std::strtoul(argv[4], nullptr, 0))
-                 : 0x1Fu;
+                 : 0x7FFFu;
     Input in;
     load(in, std::move(raw), max_lines);
     if (in.lines.empty()) {
@@ -295,12 +476,24 @@ int main(int argc, char** argv) {
     BatchRow batch_args(in);
     DomRow dom_noargs(in, false);
     OnDemandRow od_noargs(in, false);
+    OnDemandRow cached_args(in, true, true);
+    OnDemandRow cached_noargs(in, false, true);
+    DomPathRow dom_path(in);
+    OnDemandPathRow od_path(in);
+    DomCaptureRow dom_capture(in);
+    OnDemandCaptureRow od_capture(in);
+    OnDemandPathRow cached_path(in, true);
+    OnDemandCaptureRow cached_capture(in, true);
+    OldPathRow old_path(in);
+    OldCaptureRow old_capture(in);
 
-    Result results[] = {{"dom/args", -1},
-                        {"ondemand/args", 0},
-                        {"batch/args", 0},
-                        {"dom/noargs", -1},
-                        {"ondemand/noargs", 3}};
+    Result results[] = {
+        {"dom/args", -1},      {"ondemand/args", 0},    {"batch/args", 0},
+        {"dom/noargs", -1},    {"ondemand/noargs", 3},  {"cached/args", 0},
+        {"cached/noargs", 3},  {"dom/path", -1},        {"ondemand/path", 7},
+        {"dom/capture", -1},   {"ondemand/capture", 9}, {"cached/path", 7},
+        {"cached/capture", 9}, {"old/path", 7},         {"old/capture", 9}};
+    constexpr int ROWS = sizeof(results) / sizeof(results[0]);
     const auto check = [&](int row, auto& r) {
         Acc acc;
         r.template run<true>(acc);
@@ -313,12 +506,22 @@ int main(int argc, char** argv) {
     if (wanted(2)) check(2, batch_args);
     if (wanted(3)) check(3, dom_noargs);
     if (wanted(4)) check(4, od_noargs);
+    if (wanted(5)) check(5, cached_args);
+    if (wanted(6)) check(6, cached_noargs);
+    if (wanted(7)) check(7, dom_path);
+    if (wanted(8)) check(8, od_path);
+    if (wanted(9)) check(9, dom_capture);
+    if (wanted(10)) check(10, od_capture);
+    if (wanted(11)) check(11, cached_path);
+    if (wanted(12)) check(12, cached_capture);
+    if (wanted(13)) check(13, old_path);
+    if (wanted(14)) check(14, old_capture);
 
-    dstd::Vector<double> samples[5];
+    dstd::Vector<double> samples[ROWS];
     Acc acc;
     for (int round = 0; round < rounds; ++round) {
-        for (int k = 0; k < 5; ++k) {
-            const int row = round % 2 == 0 ? k : 4 - k;
+        for (int k = 0; k < ROWS; ++k) {
+            const int row = round % 2 == 0 ? k : ROWS - 1 - k;
             if (!wanted(row)) continue;
             double ns = 0;
             switch (row) {
@@ -334,8 +537,38 @@ int main(int argc, char** argv) {
                 case 3:
                     ns = timed(dom_noargs, acc, in.lines.size());
                     break;
-                default:
+                case 4:
                     ns = timed(od_noargs, acc, in.lines.size());
+                    break;
+                case 5:
+                    ns = timed(cached_args, acc, in.lines.size());
+                    break;
+                case 6:
+                    ns = timed(cached_noargs, acc, in.lines.size());
+                    break;
+                case 7:
+                    ns = timed(dom_path, acc, in.lines.size());
+                    break;
+                case 8:
+                    ns = timed(od_path, acc, in.lines.size());
+                    break;
+                case 9:
+                    ns = timed(dom_capture, acc, in.lines.size());
+                    break;
+                case 10:
+                    ns = timed(od_capture, acc, in.lines.size());
+                    break;
+                case 11:
+                    ns = timed(cached_path, acc, in.lines.size());
+                    break;
+                case 12:
+                    ns = timed(cached_capture, acc, in.lines.size());
+                    break;
+                case 13:
+                    ns = timed(old_path, acc, in.lines.size());
+                    break;
+                default:
+                    ns = timed(old_capture, acc, in.lines.size());
                     break;
             }
             samples[row].push_back(ns);
@@ -347,7 +580,7 @@ int main(int argc, char** argv) {
     std::printf("%-17s %10s %8s %9s %18s\n", "row", "ns/line", "ratio",
                 "events", "checksum");
     bool match = true;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < ROWS; ++i) {
         if (!wanted(i)) continue;
         results[i].median_ns = median(samples[i]);
         const int against = results[i].reference;

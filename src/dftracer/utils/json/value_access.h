@@ -31,6 +31,16 @@ struct ObjectWalk {
     dstd::StringArena* strings = nullptr;
 };
 
+/// The root value for one forward read through simdjson's own types.
+struct ValueWalk {
+    simdjson::ondemand::value value;
+    /// One past the last byte of the line, the limit for @ref value_extent.
+    const char* end = nullptr;
+    /// The string arena of the owning @ref Document, for @ref read_key and
+    /// @ref read_string.
+    dstd::StringArena* strings = nullptr;
+};
+
 struct ValueAccess {
     static Value make(DocumentState* owner, simdjson::ondemand::value v,
                       bool root);
@@ -66,6 +76,14 @@ struct ValueAccess {
     /// through `out`, reports a read error with @ref mark_broken, and asks
     /// @ref end_object whether the line is still readable.
     static bool begin_object(Value& v, ObjectWalk& out);
+
+    /// Starts a read of the root value `v`, restarting it as any read would,
+    /// whatever its type. False when `v` is not readable (broken line or a walk
+    /// is running). After the call `v` is spent; a second call restarts it
+    /// again, without a parse. The caller reports a read error with
+    /// @ref mark_broken and asks @ref end_object whether the line is still
+    /// readable.
+    static bool begin_value(Value& v, ValueWalk& out);
 
     /// Whether the line is readable after a walk that began with
     /// @ref begin_object, which a skip over a malformed part can make false

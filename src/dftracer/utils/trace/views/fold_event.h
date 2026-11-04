@@ -671,6 +671,29 @@ void decode_record_into(
     std::size_t max_children = 0, DecodeHints* hints = nullptr,
     bool skip_never_indexed = false);
 
+/// Decode the record `record`, an object or array, into `ev` (reset first) as
+/// the DOM overload does, in one forward read of its text: no DOM tree is
+/// built. On a line the DOM parser accepts it gives the same event for the same
+/// arguments. It also keeps a line the DOM parser refuses for a number too
+/// large for a double (as signed infinity) or a string with an invalid escape
+/// (as the raw text). The canonical text of a json field or of a collapsed
+/// array or object is the text of that part as written when it is not valid
+/// JSON for the DOM parser. A read error, such as text that is no JSON value in
+/// a part the read reaches, marks the line broken and leaves `ev` reset, which
+/// no consumer keeps; a part the read does not reach is not checked. With
+/// `cache`, bound to `intern`, a string the cache has seen is not looked up in
+/// `intern` again.
+void decode_record_into(
+    FoldEvent& ev, json::Value& record,
+    dftracer::utils::dstd::StringIntern& intern, bool capture_schema = true,
+    const dstd::Vector<dstd::String>* paths = nullptr,
+    const dftracer::utils::index::RecordSchema* record_schema = nullptr,
+    const dstd::Vector<const dftracer::utils::index::FieldSpec*>* path_fields =
+        nullptr,
+    std::size_t max_children = 0, DecodeHints* hints = nullptr,
+    bool skip_never_indexed = false,
+    dftracer::utils::dstd::InternCache* cache = nullptr);
+
 /// The max_children an index build decodes with, so a record of huge arrays
 /// or maps adds a bounded number of catalog paths and zone keys.
 inline constexpr std::size_t INDEX_MAX_CHILDREN = 256;
@@ -725,11 +748,15 @@ void extract_fold_event_into(
 /// error, such as text that is no JSON value in a part the walk reaches, marks
 /// the line broken and leaves `ev` reset, which no consumer keeps. A part the
 /// walk does not reach is not checked. With `cache`, bound to `intern`, a
-/// string the cache has seen is not looked up in `intern` again.
+/// string the cache has seen is not looked up in `intern` again. With
+/// `nested_captures`, each name is captured into the event as the DOM form
+/// captures `extra_fields`; the line is read from its start once more for each
+/// name, without a parse.
 void extract_fold_event_into(
     FoldEvent& ev, json::Value& event,
     dftracer::utils::dstd::StringIntern& intern, bool needs_args,
-    dftracer::utils::dstd::InternCache* cache = nullptr);
+    dftracer::utils::dstd::InternCache* cache = nullptr,
+    const dstd::Vector<dstd::String>* nested_captures = nullptr);
 
 }  // namespace dftracer::utils::trace::views::detail
 

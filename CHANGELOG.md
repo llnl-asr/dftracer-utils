@@ -11,7 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Read each event in `collect_events` once on demand, in place of a second DOM parse of the line.
   A line whose bad part is never read now stays, and a read of real DFTracer lines takes no more time than one DOM parse.
-- Keep a JSON line whose syntax error lies in a part nothing reads, in the public fold callbacks and predicates (`Query::matches`) and in the reader path for queries with expressions: they read each line once on demand and check only what they read, where they dropped a line that failed a full parse. A line whose bad part is read is dropped. The reader path for plain field filters walks every field of a line, so it drops a line with a bad part anywhere: `{"name":"read","dur":}` is dropped for `name == "read"` and kept for `lower(name) == "read"`. The folds that still read the whole event (event collection, containment, typed rows, density) drop such a line as before. A bigint counts the same way: unknown when read, and no reason to drop the line when not.
+  Records decoded by path, and the nested captures of a containment branch, read on demand too.
+- Keep a JSON line whose syntax error lies in a part nothing reads, in the public fold callbacks and predicates (`Query::matches`) and in the reader path for queries with expressions: they read each line once on demand and check only what they read, where they dropped a line that failed a full parse. A line whose bad part is read is dropped. The reader path for plain field filters walks every field of a line, so it drops a line with a bad part anywhere: `{"name":"read","dur":}` is dropped for `name == "read"` and kept for `lower(name) == "read"`. The folds that still read the whole event (typed rows, density) drop such a line as before. A bigint counts the same way: unknown when read, and no reason to drop the line when not.
 - Pass the callback of `ViewSession::fold` a `json::Value&`, read on demand from one parse of the line, in place of `const json::JsonValue&`. A fold that only counts reads no field, and several folds and predicates on one line share the parse.
 - Hash every string with XXH3-64, in memory and in index, cache and store files.
   Existing indexes, caches and store data files are rebuilt, and the store skips old data files with a warning.
@@ -410,8 +411,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Fix `find_package` for the installed shared and static libraries: a project that links one now finds Threads, simdjson, nanoarrow, pcre2, highway, utf8proc, vectorscan, zlib-ng, zstd and libdeflate from the same prefix with no extra flags.
   The private static archives install as `libdftracer_hs.a`, `libdftracer_hwy.a`, `libdftracer_hwy_contrib.a` and `libdftracer_utf8proc_static.a`, and the `zlib` package is now `dftracer_utils_zlib`.
 - Keep a line with a number too large for a double, such as `1e400`, and read that number as positive or negative infinity on the on-demand read paths.
+- A listed path that holds a json field no longer gives a duplicate arg on the on-demand read paths.
 - Keep a line with an invalid string escape, such as `\q` or a lone surrogate, and read that string as its raw text on the on-demand read paths.
-  Readers that still use the DOM parser drop these lines.
+  Event collection and containment in a batched session, by path or with nested captures, now read on demand and keep these lines.
+  Readers that still use the DOM parser drop them.
 - Fix `read_arrow` when one key holds several value types: the column now widens and keeps every value, where it read past a buffer or wrote a null.
   Mixed numbers become a double column and any other mix becomes a text column, so a value can change form: an integer above 2^53 becomes inexact, and `1.50` becomes `1.5` in text.
 - Fix the Python Arrow stream reading a column of another type under the first type: such a column now goes to `_extra` as JSON.

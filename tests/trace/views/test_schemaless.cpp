@@ -24,6 +24,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <limits>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -1053,6 +1054,70 @@ fields:
         // A field of one type keeps it.
         CHECK_FALSE(
             run(v.duql("select k").lazy().collect()).columns[0].is_json());
+    }
+
+    TEST_CASE(
+        "batched path rows keep lines with a huge number, a bad escape or "
+        "bad bytes") {
+        TestEnvironment env(10);
+        const dstd::Vector<dstd::String> lines = {
+            R"({"k":1,"inf":1e400,"s":"a"})",
+            R"({"k":2,"s":"a\qb"})",
+            dstd::String("{\"k\":3,\"s\":\"b\xff"
+                         "d\"}"),
+            R"({"k":4,"b":123456789012345678901234567890,"s":"c"})",
+            R"({"k":5,"inf":-1e400,"s":"d"})",
+            R"({"k":6,"s":"e"})"};
+        const dstd::String gz = write_indexed(env, "kept", lines, 1 << 20);
+        const View v =
+            View::from_file(
+                dstd::String(gz),
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
+                .record_schema("generic");
+        const auto frames = run(dataframe::collect_all(
+            {v.duql("select k, s, inf, b | sort k").lazy(),
+             v.select({"k"}).lazy()}));
+        const dataframe::DataFrame& f = frames[0];
+        REQUIRE(f.num_rows() == 6);
+        CHECK(frames[1].num_rows() == 6);
+        dstd::Map<std::int64_t, std::int64_t> row_of;
+        for (std::int64_t r = 0; r < f.num_rows(); ++r)
+            row_of[static_cast<std::int64_t>(bnum(f, r, "k"))] = r;
+        REQUIRE(row_of.size() == 6);
+        CHECK(bstr(f, row_of[1], "s") == "a");
+        CHECK(bstr(f, row_of[2], "s") == R"(a\qb)");
+        CHECK(bstr(f, row_of[3], "s") == "b?d");
+        CHECK(bnum(f, row_of[1], "inf") ==
+              std::numeric_limits<double>::infinity());
+        CHECK(bnum(f, row_of[5], "inf") ==
+              -std::numeric_limits<double>::infinity());
+        CHECK(bstr(f, row_of[4], "b") == "123456789012345678901234567890");
+    }
+
+    TEST_CASE(
+        "a batched path call tree keeps lines with a huge number or a bad "
+        "escape") {
+        index::register_schema(DFT_ROLES, "test");
+        TestEnvironment env(10);
+        const dstd::Vector<dstd::String> lines = {
+            R"({"name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":50,"x":1e400,"y":123456789012345678901234567890})",
+            R"({"name":"b\q","cat":"P","pid":1,"tid":1,"ts":110,"dur":10})",
+            dstd::String("{\"name\":\"c\",\"cat\":\"P\",\"pid\":1,"
+                         "\"tid\":1,\"ts\":120,\"dur\":5,\"note\":\"p\xff"
+                         "q\"}")};
+        const dstd::String gz =
+            write_indexed(env, "tree", lines, 1 << 20, "dft_roles");
+        const View v = View::from_file(
+            dstd::String(gz),
+            dstd::String(dstd::String(determine_index_path(gz, ""))));
+        const auto [tree, flame] =
+            run(dataframe::collect_all(v.call_tree(), v.flamegraph()));
+        REQUIRE(tree.num_rows() == 3);
+        dstd::Set<dstd::String> names;
+        for (std::int64_t r = 0; r < tree.num_rows(); ++r)
+            names.insert(bstr(tree, r, "name"));
+        CHECK(names == dstd::Set<dstd::String>{"a", R"(b\q)", "c"});
+        CHECK(flame.num_rows() > 0);
     }
 
     TEST_CASE("sessions of a path schema equal the dftracer sessions") {

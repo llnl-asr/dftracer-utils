@@ -43,6 +43,8 @@
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/index_root.h>
@@ -1814,7 +1816,7 @@ void add_materialize_branch(ViewSessionState& state,
     // session's per-event fold cannot feed, so the materialize branch does no
     // per-event work and (re)builds the rollup through the engine in finalize.
     h.make_consumer = []() -> BranchConsumer {
-        return [](const json::JsonValue&, dstd::StringView) {};
+        return [](json::Value&, dstd::StringView) {};
     };
     h.finalize = [plan]() {
         const dstd::String rdir =
@@ -1857,13 +1859,12 @@ BranchHooks make_export_branch(ExportSink& sink,
     h.make_consumer = [&sink, mtx, counts]() -> BranchConsumer {
         auto count = dstd::make_shared<std::uint64_t>(0);
         counts->push_back(count);
-        return
-            [&sink, mtx, count](const json::JsonValue&, dstd::StringView raw) {
-                std::lock_guard<std::mutex> lk(*mtx);
-                sink.write(raw);
-                sink.write("\n");
-                ++*count;
-            };
+        return [&sink, mtx, count](json::Value&, dstd::StringView raw) {
+            std::lock_guard<std::mutex> lk(*mtx);
+            sink.write(raw);
+            sink.write("\n");
+            ++*count;
+        };
     };
     h.finalize = [out, counts]() {
         std::uint64_t total = 0;
@@ -1897,26 +1898,29 @@ class BranchDriverFold : public Fold {
         return s;
     }
 
+    // One on-demand parse per line serves the metadata gate, every predicate
+    // and every consumer, each starting from the beginning of the event.
     void step(const FoldBatch& b) override {
         for (dstd::StringView line : b.raw) {
-            buf_.assign(line);
-            auto res = parser_.parse(
-                buf_.data(), buf_.size(),
-                buf_.capacity() - buf_.size() < simdjson::SIMDJSON_PADDING);
-            if (res.error()) continue;
-            auto root = res.value_unsafe();
-            if (!root.is_object()) continue;
-            json::JsonValue jv(root);
+            auto parsed = doc_.parse(line);
+            if (!parsed) continue;
+            json::Value& event = *parsed;
+            if (event.type() != json::Value::Type::Object) continue;
             const bool metadata =
                 gate_metadata_ &&
-                trace::read_phase(jv["ph"]) == trace::RecordPhase::Metadata;
+                phase_of(event) == trace::RecordPhase::Metadata;
+            // A line with a syntax error in a part that is read is dropped.
+            if (json::detail::ValueAccess::broken(event)) continue;
             for (std::size_t i = 0; i < branches_->size(); ++i) {
                 const BranchHooks* br = (*branches_)[i];
                 if (metadata && !br->wants_metadata) continue;
-                if (!br->predicate ||
-                    duql::evaluate(
-                        duql::detail::QueryAccess::root(*br->predicate), jv))
-                    consumers_[i](jv, line);
+                if (br->predicate && !br->predicate->matches(event)) {
+                    if (json::detail::ValueAccess::broken(event)) break;
+                    continue;
+                }
+                json::detail::ValueAccess::rewind(event);
+                if (json::detail::ValueAccess::broken(event)) break;
+                consumers_[i](event, line);
             }
         }
     }
@@ -1937,8 +1941,12 @@ class BranchDriverFold : public Fold {
     dstd::SharedPtr<dstd::Vector<const BranchHooks*>> branches_;
     bool gate_metadata_;
     dstd::Vector<BranchConsumer> consumers_;
-    dftracer::utils::json::RecordParser parser_;
-    dstd::String buf_;
+    json::Document doc_;
+
+    static trace::RecordPhase phase_of(json::Value& event) {
+        auto ph = event.find("ph");
+        return ph ? trace::read_phase(*ph) : trace::RecordPhase::Unknown;
+    }
 };
 
 coro::CoroTask<ExportStats> run_session(

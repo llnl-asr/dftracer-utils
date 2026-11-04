@@ -5,7 +5,7 @@ Utilities
 
 The public utility types under ``dftracer::utils::utilities`` and its siblings:
 the filesystem entry and hash types, statistics (DDSketch, histograms) and the
-JSON layer.
+on-demand JSON reader.
 
 Type relationships
 ------------------

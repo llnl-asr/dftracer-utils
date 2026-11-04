@@ -14,6 +14,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
@@ -666,7 +667,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // Every record of a path schema is a data event.
     auto pass1_path = [&](views::ViewSession& p1run) {
         auto ev_h = p1run.fold<Acc>(
-            [&fields, &fold_event](Acc& acc, const auto&,
+            [&fields, &fold_event](Acc& acc, json::Value&,
                                    dstd::StringView raw) {
                 fields.with_event(
                     raw, [&](simdjson::dom::element root, dstd::StringView ev) {
@@ -683,16 +684,18 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     auto pass1 = [&](views::ViewSession& p1run) {
         auto ev_h = p1run.fold<Acc>(
             duql::parse_or_throw("ph == 1 or ph == \"X\""),
-            [&fold_event](Acc& acc, const auto& jv, dstd::StringView raw) {
-                fold_event(acc, jv.element(), raw);
+            [&fold_event](Acc& acc, json::Value& jv, dstd::StringView raw) {
+                if (const auto root = json::detail::ValueAccess::dom(jv))
+                    fold_event(acc, *root, raw);
             },
             merge_acc);
         auto cs_h = p1run.fold<Acc>(
             duql::parse_or_throw("ph == 2 or ph == \"C\""),
-            [begin, threshold, ncols](Acc& acc, const auto& jv,
+            [begin, threshold, ncols](Acc& acc, json::Value& jv,
                                       dstd::StringView) {
-                fold_counter_density(jv.element(), begin, threshold, ncols,
-                                     acc.dens);
+                if (const auto root = json::detail::ValueAccess::dom(jv))
+                    fold_counter_density(*root, begin, threshold, ncols,
+                                         acc.dens);
             },
             merge_acc);
         // ph=3 SELECTIVE-aggregation records: the individual events were
@@ -701,8 +704,9 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         // window is known.
         auto ag_h = p1run.fold<Acc>(
             duql::parse_or_throw("ph == 3 or ph == \"A\""),
-            [](Acc& acc, const auto& jv, dstd::StringView raw) {
-                collect_aggregated(jv.element(), raw, acc.agg);
+            [](Acc& acc, json::Value& jv, dstd::StringView raw) {
+                if (const auto root = json::detail::ValueAccess::dom(jv))
+                    collect_aggregated(*root, raw, acc.agg);
             },
             merge_acc);
         return dstd::Function<void(const views::ExportStats&)>(
@@ -785,10 +789,12 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             if (want_agg)
                 agg_h = s.fold<Acc>(
                     duql::parse_or_throw("ph == 3 or ph == \"A\""),
-                    [agg_lo](Acc& acc, const auto& jv, dstd::StringView raw) {
+                    [agg_lo](Acc& acc, json::Value& jv, dstd::StringView raw) {
                         double ts = 0, dur = 0;
                         if (!parse_ts_dur(raw, ts, dur) || ts < agg_lo) return;
-                        collect_aggregated(jv.element(), raw, acc.agg);
+                        if (const auto root =
+                                json::detail::ValueAccess::dom(jv))
+                            collect_aggregated(*root, raw, acc.agg);
                     },
                     merge_acc);
             auto enclose = [begin, enc_lo, skip_from](Acc& acc,
@@ -803,7 +809,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             };
             if (want_enc && fields.by_path)
                 enc_h = s.fold<Acc>(
-                    [&fields, enclose](Acc& acc, const auto&,
+                    [&fields, enclose](Acc& acc, json::Value&,
                                        dstd::StringView raw) {
                         fields.with_event(raw, [&](simdjson::dom::element,
                                                    dstd::StringView ev) {
@@ -814,7 +820,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             else if (want_enc)
                 enc_h = s.fold<Acc>(
                     duql::parse_or_throw("ph == 1 or ph == \"X\""),
-                    [enclose](Acc& acc, const auto&, dstd::StringView raw) {
+                    [enclose](Acc& acc, json::Value&, dstd::StringView raw) {
                         enclose(acc, raw);
                     },
                     merge_acc);

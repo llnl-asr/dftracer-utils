@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/query.h>
@@ -148,7 +149,7 @@ coro::AsyncGenerator<Line> yield_lines_from_ranges(
 // Raw-chunk variants of the yield/read helpers. Same pruning logic as the
 // line-yielding flavors but emit dstd::Span<const char> buffers untouched
 // (multi-line boundary respected by stream type). Used by read_json to run
-// simdjson iterate_many over each chunk instead of parsing line by line.
+// parse each line of a chunk in place instead of reading line by line.
 coro::AsyncGenerator<dstd::Span<const char>> yield_chunks_from_stream(
     dstd::UniquePtr<internal::ReaderStream> stream,
     const index::plan::Prefilter* prefilter = nullptr) {
@@ -585,7 +586,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         query && internal::query_references_dotted(*query);
 
     // Fast path: indexed gz files go through a chunk generator with
-    // simdjson iterate_many. Query is evaluated on the ondemand document
+    // per-line in-place parsing. Query is evaluated on the ondemand document
     // directly, so non-matching docs never hit the yield_parser.
     if (has_index_) {
         auto reader = create_indexed_reader();
@@ -596,7 +597,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         json::JsonParser yield_parser;
         // An expression may read a whole object or array, which the field map
         // cannot hold, so it runs on the record's DOM.
-        dftracer::utils::json::RecordParser expr_parser;
+        dstd::StringArena event_strings;
 
         for (;;) {
             auto chunk_opt = co_await chunk_gen.next();
@@ -608,18 +609,11 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
             if (trimmed.empty()) continue;
             simdjson::padded_string padded(trimmed);
 
-            auto docs_r = bulk_parser.iterate_many(
-                padded, 1 << 20, /*allow_comma_separated=*/false);
-            if (docs_r.error()) continue;
-            auto& docs = docs_r.value();
-
-            for (auto it = docs.begin(); it != docs.end(); ++it) {
-                auto doc_result = *it;
-                if (doc_result.error()) continue;
-                auto& doc = doc_result.value();
-
-                dstd::StringView src(it.source().data(), it.source().size());
-
+            internal::PaddedLines docs(bulk_parser, padded.data(),
+                                       padded.size());
+            simdjson::ondemand::document_reference doc;
+            dstd::StringView src;
+            while (docs.next(doc, src)) {
                 if (query && config.chunk_prune_only) {
                     bool all_present = true;
                     for (const auto& path : presence_check_paths) {
@@ -632,49 +626,77 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                     if (!all_present) continue;
                     doc.rewind();
                 } else if (query && query->has_expressions()) {
-                    simdjson::dom::element record;
-                    if (expr_parser.parse(src.data(), src.size()).get(record) !=
-                            simdjson::SUCCESS ||
-                        !duql::evaluate(duql::detail::QueryAccess::root(*query),
-                                        json::JsonValue(record)))
+                    event_strings.clear();
+                    if (!duql::evaluate(
+                            duql::detail::QueryAccess::root(*query),
+                            duql::OnDemandEvent(doc, src, event_strings)))
                         continue;
                 } else if (query) {
                     duql::ValueMap fields;
+                    // A syntax error stops the read and drops the line.
+                    bool readable = true;
                     auto obj = doc.get_object();
                     if (obj.error()) continue;
                     for (auto field : obj.value()) {
-                        if (field.error()) continue;
+                        if (field.error()) {
+                            readable = false;
+                            break;
+                        }
                         auto key_r = field.unescaped_key();
-                        if (key_r.error()) continue;
+                        if (key_r.error()) {
+                            readable = false;
+                            break;
+                        }
                         auto val_r = field.value();
-                        if (val_r.error()) continue;
+                        if (val_r.error()) {
+                            readable = false;
+                            break;
+                        }
                         auto key = key_r.value();
                         auto val = val_r.value();
                         auto type_r = val.type();
-                        if (type_r.error()) continue;
+                        if (type_r.error()) {
+                            readable = false;
+                            break;
+                        }
                         auto type = type_r.value();
                         if (type == simdjson::ondemand::json_type::object) {
                             auto nested = val.get_object();
-                            if (nested.error()) continue;
-                            for (auto nf : nested.value()) {
-                                if (nf.error()) continue;
-                                auto nk_r = nf.unescaped_key();
-                                if (nk_r.error()) continue;
-                                auto nv_r = nf.value();
-                                if (nv_r.error()) continue;
-                                internal::store_referenced_nested(
-                                    fields, *query, query_has_dotted, key,
-                                    nk_r.value(), nv_r.value());
+                            if (nested.error()) {
+                                readable = false;
+                                break;
                             }
+                            for (auto nf : nested.value()) {
+                                if (nf.error()) {
+                                    readable = false;
+                                    break;
+                                }
+                                auto nk_r = nf.unescaped_key();
+                                auto nv_r = nf.value();
+                                if (nk_r.error() || nv_r.error()) {
+                                    readable = false;
+                                    break;
+                                }
+                                if (!internal::store_referenced_nested(
+                                        fields, *query, query_has_dotted, key,
+                                        nk_r.value(), nv_r.value())) {
+                                    readable = false;
+                                    break;
+                                }
+                            }
+                            if (!readable) break;
                         } else {
-                            internal::store_referenced(fields, *query, key, val,
-                                                       type);
+                            if (!internal::store_referenced(fields, *query, key,
+                                                            val, type)) {
+                                readable = false;
+                                break;
+                            }
                         }
                     }
-                    if (!query->evaluate(fields)) continue;
+                    if (!readable || !query->evaluate(fields)) continue;
                 }
 
-                // Matched (or no query): lend the iterate_many doc to
+                // Matched (or no query): lend the line's document to
                 // yield_parser without re-parsing. Consumers like
                 // build_arrow_row call parser.for_each_field which now
                 // iterates the borrowed doc_reference.
@@ -692,7 +714,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
     auto line_gen = read_lines(config);
 
     json::JsonParser parser;
-    dftracer::utils::json::RecordParser expr_parser;
+    dstd::StringArena event_strings;
 
     for (;;) {
         auto opt = co_await line_gen.next();
@@ -705,33 +727,47 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         if (!parser.parse(dstd::StringView(trimmed, trimmed_len))) continue;
 
         if (query && query->has_expressions()) {
-            simdjson::dom::element record;
-            if (expr_parser.parse(trimmed, trimmed_len).get(record) !=
-                    simdjson::SUCCESS ||
-                !duql::evaluate(duql::detail::QueryAccess::root(*query),
-                                json::JsonValue(record)))
+            event_strings.clear();
+            if (!duql::evaluate(
+                    duql::detail::QueryAccess::root(*query),
+                    duql::OnDemandEvent(parser.raw_document(), parser.text(),
+                                        event_strings)))
                 continue;
+            parser.rewind();
         } else if (query) {
             duql::ValueMap fields;
             dstd::Vector<dstd::String> nested_keys;
-            parser.for_each_field([&](dstd::StringView key,
-                                      simdjson::ondemand::value val) {
-                auto type = val.type().value_unsafe();
-                if (type == simdjson::ondemand::json_type::object) {
-                    nested_keys.emplace_back(key);
-                } else {
-                    internal::store_referenced(fields, *query, key, val, type);
-                }
-            });
+            bool readable = true;
+            parser.for_each_field(
+                [&](dstd::StringView key, simdjson::ondemand::value val) {
+                    if (!readable) return;
+                    const auto type_r = val.type();
+                    if (type_r.error()) {
+                        readable = false;
+                        return;
+                    }
+                    const auto type = type_r.value_unsafe();
+                    if (type == simdjson::ondemand::json_type::object) {
+                        nested_keys.emplace_back(key);
+                    } else if (!internal::store_referenced(fields, *query, key,
+                                                           val, type)) {
+                        readable = false;
+                    }
+                });
             for (auto& nk : nested_keys) {
+                if (!readable) break;
                 parser.rewind();
                 parser.for_each_field(nk, [&](dstd::StringView key,
                                               simdjson::ondemand::value val) {
-                    internal::store_referenced_nested(
-                        fields, *query, query_has_dotted, nk, key, val);
+                    if (readable &&
+                        !internal::store_referenced_nested(
+                            fields, *query, query_has_dotted, nk, key, val))
+                        readable = false;
                 });
             }
-            if (!query->evaluate(fields)) continue;
+            if (!readable || !parser.raw_document().is_alive() ||
+                !query->evaluate(fields))
+                continue;
             parser.rewind();
         }
 

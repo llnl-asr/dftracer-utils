@@ -9,6 +9,8 @@ JsonParser::JsonParser(std::size_t capacity) : parser_(capacity) {}
 bool JsonParser::parse(dstd::StringView json_line) {
     // Reuse padbuf_'s capacity instead of allocating a padded_string per line;
     // resize() zero-fills the SIMDJSON_PADDING tail On-Demand requires.
+    borrowed_ = false;
+    length_ = json_line.size();
     padbuf_.assign(json_line.data(), json_line.size());
     padbuf_.resize(json_line.size() + simdjson::SIMDJSON_PADDING);
     auto result =
@@ -24,7 +26,8 @@ bool JsonParser::parse(dstd::StringView json_line) {
 }
 
 void JsonParser::rewind() {
-    if (valid_) {
+    // A document a read error abandoned cannot be rewound.
+    if (valid_ && (borrowed_ || doc_.is_alive())) {
         active_.rewind();
     }
 }

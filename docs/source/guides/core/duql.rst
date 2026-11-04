@@ -715,6 +715,48 @@ keep it alive while the query runs.
 :ref:`duql-plugin-functions` for the argument rules and the limits.
 
 
+Filter raw JSON events without an index
+---------------------------------------
+
+Where there is no index, such as a live trace, a socket or a plugin, check one
+JSON line at a time with ``Query::matches``. ``json::Document`` reads a line on
+demand, and ``matches`` applies the same filter text that ``View`` and the CLI
+accept, with the same answer.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/duql/query.h>
+   #include <dftracer/utils/json/value.h>
+
+   using namespace dftracer::utils;
+
+   auto q = duql::Query::from_string("cat == \"POSIX\" and dur > 1000");
+   json::Document doc;                  // one per reader, reused for every line
+   std::string line;
+   while (std::getline(std::cin, line)) {
+       auto ev = doc.parse(line);       // an object or array; else an error
+       if (!ev) continue;
+       if (q->matches(*ev)) forward(line);
+   }
+
+Given these three lines::
+
+   {"name":"read","cat":"POSIX","dur":2000}
+   {"name":"write","cat":"POSIX","dur":10}
+   {"name":"MPI_Send","cat":"MPI","dur":5000}
+
+the loop forwards only the first. Built against the installed headers and
+run with those lines on its input, the program prints::
+
+   {"name":"read","cat":"POSIX","dur":2000}
+
+``matches`` reads the line once, from the parse that ``Document::parse``
+made, and looks up only the fields the filter names. It does not build a tree.
+To read a few fields yourself, call ``find`` and ``as_int`` or ``as_double`` on
+the value, which decodes only what you read. For files on disk, use ``View``,
+the fast path, which reads through the index and never parses a line twice.
+
+
 How it runs
 -----------
 

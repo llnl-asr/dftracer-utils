@@ -367,6 +367,9 @@ def parse_namespace_functions(xml_dir: Path) -> list[APIItem]:
 # merged into their parent namespace.
 MIN_MODULE_SIZE = 3
 
+# Namespaces that keep their own page below MIN_MODULE_SIZE.
+KEEP_SMALL_MODULES = {"json"}
+
 
 def discover_modules(items: list[APIItem]) -> list[Module]:
     """Auto-discover modules from the namespace hierarchy of API items.
@@ -404,7 +407,11 @@ def discover_modules(items: list[APIItem]) -> list[Module]:
     merged: dict[str, list[APIItem]] = {}
     for ns_suffix in sorted(ns_items.keys(), key=lambda s: (-s.count("."), s)):
         items_list = ns_items[ns_suffix]
-        if len(items_list) < MIN_MODULE_SIZE and ns_suffix:
+        if (
+            len(items_list) < MIN_MODULE_SIZE
+            and ns_suffix
+            and ns_suffix not in KEEP_SMALL_MODULES
+        ):
             # Find parent namespace
             parent = ns_suffix.rsplit(".", 1)[0] if "." in ns_suffix else ""
             ns_items[parent].extend(items_list)

@@ -628,6 +628,12 @@ add_subdirectory(utilities)
 add_subdirectory(trace)
 
 # +++++++++++++++++++++++++++++++++++++++++
+# JSON Library Tests
+# +++++++++++++++++++++++++++++++++++++++++
+
+add_subdirectory(json)
+
+# +++++++++++++++++++++++++++++++++++++++++
 # Query Library Tests
 # +++++++++++++++++++++++++++++++++++++++++
 

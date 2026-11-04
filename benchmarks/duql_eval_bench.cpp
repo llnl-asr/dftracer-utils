@@ -10,12 +10,14 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/value.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -149,25 +151,72 @@ int main(int argc, char** argv) {
         R"q(name ~ "(read|write)64")q",
         R"(name ~* "memcpy")",
     };
-    std::printf("%-44s %10s %10s %8s\n", "filter", "json ns", "map ns", "kept");
+    std::printf("%-44s %9s %9s %9s %9s %9s %7s\n", "filter", "dom ns", "od ns",
+                "match ns", "cb ns", "map ns", "kept");
+    simdjson::dom::parser dom_parser;
+    simdjson::ondemand::parser od_parser;
+    dftracer::utils::dstd::StringArena strings;
+    json::Document document;
     for (const char* text : filters) {
         const auto q = duql::try_parse(text);
         if (!q) {
-            std::printf("%-44s %10s %10s %8s\n", text, "n/a", "n/a", "-");
+            std::printf("%-44s %9s %9s %9s %9s %9s %7s\n", text, "n/a", "n/a",
+                        "n/a", "n/a", "n/a", "-");
             continue;
         }
+        const auto& root = duql::detail::QueryAccess::root(*q);
         dftracer::utils::dstd::Vector<duql::ValueMap> maps;
         maps.reserve(n);
         for (std::size_t i = 0; i < n; ++i)
             maps.push_back(map_of(*q, JsonValue(roots[i])));
         std::size_t kept = 0;
-        const double json_ns = ns_per_record(n, rounds, [&] {
+        const double dom_ns = ns_per_record(n, rounds, [&] {
             kept = 0;
-            for (std::size_t i = 0; i < n; ++i)
-                kept += duql::evaluate(duql::detail::QueryAccess::root(*q),
-                                       JsonValue(roots[i]))
-                            ? 1
-                            : 0;
+            for (std::size_t i = 0; i < n; ++i) {
+                simdjson::dom::element el;
+                if (dom_parser.parse(padded[i]).get(el) != simdjson::SUCCESS)
+                    std::abort();
+                kept += duql::evaluate(root, JsonValue(el)) ? 1 : 0;
+            }
+        });
+        std::size_t kept_od = 0;
+        const double od_ns = ns_per_record(n, rounds, [&] {
+            kept_od = 0;
+            for (std::size_t i = 0; i < n; ++i) {
+                simdjson::ondemand::document doc;
+                if (od_parser.iterate(padded[i]).get(doc) != simdjson::SUCCESS)
+                    std::abort();
+                strings.clear();
+                kept_od +=
+                    duql::evaluate(root,
+                                   duql::OnDemandEvent(
+                                       doc,
+                                       dftracer::utils::dstd::StringView(
+                                           padded[i].data(), padded[i].size()),
+                                       strings))
+                        ? 1
+                        : 0;
+            }
+        });
+        std::size_t kept_match = 0;
+        const double match_ns = ns_per_record(n, rounds, [&] {
+            kept_match = 0;
+            for (std::size_t i = 0; i < n; ++i) {
+                auto event = document.parse(texts[i]);
+                if (!event) std::abort();
+                kept_match += q->matches(*event) ? 1 : 0;
+            }
+        });
+        double dur_sum = 0;
+        const double cb_ns = ns_per_record(n, rounds, [&] {
+            dur_sum = 0;
+            for (std::size_t i = 0; i < n; ++i) {
+                auto event = document.parse(texts[i]);
+                if (!event) std::abort();
+                if (!q->matches(*event)) continue;
+                auto dur = event->find("dur");
+                if (dur) dur_sum += dur->as_double().value_or(0);
+            }
         });
         std::size_t kept_map = 0;
         const double map_ns = ns_per_record(n, rounds, [&] {
@@ -175,8 +224,12 @@ int main(int argc, char** argv) {
             for (std::size_t i = 0; i < n; ++i)
                 kept_map += q->evaluate(maps[i]) ? 1 : 0;
         });
-        std::printf("%-44s %10.1f %10.1f %8zu%s\n", text, json_ns, map_ns, kept,
-                    kept == kept_map ? "" : " (map differs)");
+        std::printf("%-44s %9.1f %9.1f %9.1f %9.1f %9.1f %7zu%s%s%s\n", text,
+                    dom_ns, od_ns, match_ns, cb_ns, map_ns, kept,
+                    kept == kept_map ? "" : " (map differs)",
+                    kept == kept_od ? "" : " (od differs)",
+                    kept == kept_match ? "" : " (matches differs)");
+        if (dur_sum < 0) std::abort();
     }
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> names;
     names.reserve(n);

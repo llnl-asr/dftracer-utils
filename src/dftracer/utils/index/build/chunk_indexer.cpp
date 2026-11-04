@@ -191,9 +191,10 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
             bool is_metadata = (phase == trace::RecordPhase::Metadata);
 
             if (!is_metadata) {
-                // Re-parse: the phase read above already consumed the
-                // document's cursor state.
-                parser.parse(line_sv);
+                // The phase read above consumed the document's cursor. A
+                // syntax error in what it read drops the line.
+                if (!parser.raw_document().is_alive()) return;
+                parser.rewind();
                 auto name_opt = parser.get_string("name");
                 dstd::StringView name = name_opt.value_or("");
                 auto cat_opt = parser.get_string("cat");

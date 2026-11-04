@@ -153,14 +153,23 @@ bool eval_compiled_eq(const dstd::Vector<CompiledEqProbe>& probes,
                       simdjson::ondemand::document_reference doc) {
     // The value of `key` in `obj`: nullopt when absent, an empty value when
     // it is null.
+    // A syntax error leaves the iterator unusable and drops the line; no
+    // rewind follows it.
+    bool bad = false;
     using Found = dstd::Optional<dstd::Optional<simdjson::ondemand::value>>;
-    auto field = [](auto&& obj, const dstd::String& key) -> Found {
+    auto field = [&bad](auto&& obj, const dstd::String& key) -> Found {
         auto r = obj.find_field_unordered(dstd::StringView(key));
-        if (r.error()) return dstd::nullopt;
+        if (r.error()) {
+            bad = r.error() != simdjson::NO_SUCH_FIELD;
+            return dstd::nullopt;
+        }
         simdjson::ondemand::value v = r.value_unsafe();
         bool null = false;
-        if (v.is_null().get(null) != simdjson::SUCCESS || null)
-            return Found{std::in_place};
+        if (v.is_null().get(null) != simdjson::SUCCESS) {
+            bad = true;
+            return dstd::nullopt;
+        }
+        if (null) return Found{std::in_place};
         return Found{v};
     };
     for (const auto& p : probes) {
@@ -170,16 +179,16 @@ bool eval_compiled_eq(const dstd::Vector<CompiledEqProbe>& probes,
                 if (!*v || !probe_matches_value(p, **v)) return false;
                 continue;
             }
-            if (!p.args_fallback) return false;
+            if (bad || !p.args_fallback) return false;
             doc.rewind();
         }
         auto args = field(doc, "args");
-        if (!args || !*args) return false;
+        if (bad || !args || !*args) return false;
         auto obj = (*args)->get_object();
         if (obj.error()) return false;
         auto v = field(obj.value_unsafe(),
                        p.nested_key.empty() ? p.top_key : p.nested_key);
-        if (!v || !*v || !probe_matches_value(p, **v)) return false;
+        if (bad || !v || !*v || !probe_matches_value(p, **v)) return false;
     }
     return true;
 }

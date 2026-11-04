@@ -43,7 +43,10 @@ namespace dftracer::utils::json {
  */
 class JsonParser {
    public:
-    static constexpr std::size_t DEFAULT_CAPACITY = 1 << 20;  // 1MB
+    /// The longest line the parser reads, simdjson's own limit. A smaller
+    /// limit drops every line past it.
+    static constexpr std::size_t DEFAULT_CAPACITY =
+        simdjson::SIMDJSON_MAXSIZE_BYTES;
 
     explicit JsonParser(std::size_t capacity = DEFAULT_CAPACITY);
 
@@ -115,6 +118,16 @@ class JsonParser {
     void rewind();
 
     /**
+     * @brief The text of the parsed line, as the document holds it.
+     *
+     * Points into the parser's own padded copy, the buffer that the values of
+     * the document point into. Valid until the next parse() call.
+     */
+    dstd::StringView text() const noexcept {
+        return dstd::StringView(padbuf_.data(), length_);
+    }
+
+    /**
      * @brief Get raw document for advanced usage.
      */
     simdjson::ondemand::document& raw_document() { return doc_; }
@@ -125,13 +138,14 @@ class JsonParser {
      * After this call, for_each_field/rewind/get_* operate on the borrowed
      * reference. The caller must keep the underlying document alive until
      * another parse() / set_borrowed_document() call. Intended for bridging
-     * iterate_many output (document_reference) to consumers that accept a
+     * a document_reference from a line-by-line read to consumers that accept a
      * JsonParser&.
      */
     void set_borrowed_document(
         simdjson::ondemand::document_reference ref) noexcept {
         active_ = ref;
         valid_ = true;
+        borrowed_ = true;
     }
 
    private:
@@ -140,7 +154,9 @@ class JsonParser {
         padbuf_;  ///< reused across parse() calls; grows to fit + padding
     simdjson::ondemand::document doc_;
     simdjson::ondemand::document_reference active_;
+    std::size_t length_ = 0;
     bool valid_ = false;
+    bool borrowed_ = false;
 };
 
 // Template implementations

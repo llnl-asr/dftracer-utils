@@ -916,7 +916,8 @@ set(DFTRACER_UTILS_JSON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/canonical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/json_value.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/line.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/parser.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/parser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/value.cpp)
 
 create_library(
   NAME

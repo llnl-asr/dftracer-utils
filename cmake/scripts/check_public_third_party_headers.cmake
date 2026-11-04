@@ -4,8 +4,8 @@
 # standard header, a C/POSIX/system header, <mpi.h>, and the vendored headers of
 # include/dftracer/utils/dstd/vendor/ (an included path under dftracer/; the
 # folder itself is not scanned, its text is upstream's). Every other third-party
-# library comes through CPM and is used only in src/. simdjson and nanoarrow are
-# the known exceptions until the API cut moves them out of include/.
+# library comes through CPM and is used only in src/. nanoarrow is the known
+# exception until the API cut moves it out of include/.
 #
 # A header missing from a list below is added here, with a reason, not skipped.
 #
@@ -179,7 +179,7 @@ set(PLATFORM_HEADERS fcntl.h intrin.h io.h mpi.h pthread.h sched.h unistd.h)
 set(SYSTEM_PREFIXES arpa/ netinet/ sanitizer/ sys/)
 
 # Known exceptions until the API cut.
-set(EXCEPTIONS simdjson.h)
+set(EXCEPTIONS)
 set(EXCEPTION_PREFIXES nanoarrow/)
 
 # Appends "<file>:<line>: #include <header>" to out_hits for every include that
@@ -242,7 +242,6 @@ if(SELF_TEST)
        "#include <sys/types.h>\n"
        "#include <sanitizer/asan_interface.h>\n"
        "#include <mpi.h>\n"
-       "#include <simdjson.h>\n"
        "#include <nanoarrow/nanoarrow.h>\n")
   set(_rejected_root "${_dir}/rejected/include")
   file(WRITE "${_rejected_root}/bad/bad.h"
@@ -250,6 +249,7 @@ if(SELF_TEST)
        "#define BAD_H 1  // a; b keeps the line number right\n"
        "#include <ankerl/unordered_dense.h>\n"
        "#include <tl/expected.hpp>\n"
+       "#include <simdjson.h>\n"
        "#endif\n")
   # Vendored text may include anything; it is not scanned.
   file(WRITE "${_rejected_root}/${VENDOR_ROOT}/vendored.h"
@@ -262,18 +262,19 @@ if(SELF_TEST)
   endif()
 
   dftu_public_header_hits("${_rejected_root}" _hits _count)
-  if(NOT _count EQUAL 2)
-    message(FATAL_ERROR "public_third_party_headers self test: expected 2 hits "
+  if(NOT _count EQUAL 3)
+    message(FATAL_ERROR "public_third_party_headers self test: expected 3 hits "
                         "in bad/bad.h, got ${_count}:\n${_hits}")
   endif()
   if(NOT _hits MATCHES "bad/bad\\.h:3: #include <ankerl/unordered_dense\\.h>"
-     OR NOT _hits MATCHES "bad/bad\\.h:4: #include <tl/expected\\.hpp>")
+     OR NOT _hits MATCHES "bad/bad\\.h:4: #include <tl/expected\\.hpp>"
+     OR NOT _hits MATCHES "bad/bad\\.h:5: #include <simdjson\\.h>")
     message(FATAL_ERROR "public_third_party_headers self test: wrong hits:\n${_hits}")
   endif()
   file(REMOVE_RECURSE "${_dir}")
   message(
     STATUS
-      "public_third_party_headers_self: 8 allowed includes and 2 hits as expected"
+      "public_third_party_headers_self: 7 allowed includes and 3 hits as expected"
   )
   return()
 endif()

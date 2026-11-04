@@ -113,10 +113,6 @@ function(need_simdjson)
       add_library(simdjson::simdjson ALIAS simdjson_static)
     endif()
 
-    # Install header
-    install(FILES ${simdjson_SOURCE_DIR}/singleheader/simdjson.h
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
     if(SIMDJSON_TARGETS)
       install(
         TARGETS ${SIMDJSON_TARGETS}

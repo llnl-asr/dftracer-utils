@@ -10,20 +10,22 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/canonical.h>
+#include <dftracer/utils/json/line.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <simdjson.h>
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 
 namespace dftracer::utils::utilities::reader::internal {
 
 // Strip a leading `[` and trailing `]` (plus surrounding whitespace) from a
 // chunk buffer. These bookends appear in `.pfw.gz` files to keep them
-// Perfetto-viewable as JSON arrays, but break simdjson iterate_many which
-// expects whitespace-separated NDJSON. Safe to call on any chunk: if the
-// bookends are absent the range is returned unchanged.
+// Perfetto-viewable as JSON arrays, but are not documents of their own. Safe to
+// call on any chunk: if the bookends are absent the range is returned
+// unchanged.
 inline dstd::StringView strip_ndjson_bookends(dstd::StringView bytes) {
     const char* s = bytes.data();
     const char* e = bytes.data() + bytes.size();
@@ -43,47 +45,115 @@ inline dstd::StringView strip_ndjson_bookends(dstd::StringView bytes) {
     return dstd::StringView(s, static_cast<std::size_t>(e - s));
 }
 
+// The lines of a padded buffer of newline-delimited JSON, each parsed as its
+// own document in place. A line is a document, so a bad line cannot swallow or
+// desynchronise the lines around it, and a long line needs no batch capacity.
+// The buffer must be a simdjson::padded_string, or otherwise hold
+// SIMDJSON_PADDING readable bytes after `len`. Blank lines, a lone bracket
+// and a trailing comma are trimmed as on the non-indexed path.
+class PaddedLines {
+   public:
+    PaddedLines(simdjson::ondemand::parser& parser, const char* base,
+                std::size_t len)
+        : parser_(parser), base_(base), len_(len) {}
+
+    // The next line that parses as a document, false at the end. `doc` and
+    // `line` are valid until the next call.
+    bool next(simdjson::ondemand::document_reference& doc,
+              dstd::StringView& line) {
+        while (pos_ < len_) {
+            const char* const from = base_ + pos_;
+            const void* const nl = std::memchr(from, '\n', len_ - pos_);
+            const std::size_t size =
+                nl ? static_cast<std::size_t>(static_cast<const char*>(nl) -
+                                              from)
+                   : len_ - pos_;
+            pos_ += nl ? size + 1 : size;
+            const char* start;
+            std::size_t trimmed;
+            if (!json::trim_and_validate_with_comma(from, size, start, trimmed))
+                continue;
+            const std::size_t capacity =
+                static_cast<std::size_t>(base_ + len_ - start) +
+                simdjson::SIMDJSON_PADDING;
+            if (parser_.iterate(start, trimmed, capacity).get(document_))
+                continue;
+            doc = simdjson::ondemand::document_reference(document_);
+            line = dstd::StringView(start, trimmed);
+            return true;
+        }
+        return false;
+    }
+
+   private:
+    simdjson::ondemand::parser& parser_;
+    const char* base_;
+    std::size_t len_;
+    std::size_t pos_ = 0;
+    simdjson::ondemand::document document_;
+};
+
+// Whether `token` is an integer too large for 64 bits. Such a number has no
+// cell, as the evaluator reads it as unknown, and is not a syntax error.
+inline bool is_bigint_token(dstd::StringView token) {
+    while (!token.empty() && (token.back() == ' ' || token.back() == '\t' ||
+                              token.back() == '\n' || token.back() == '\r'))
+        token.remove_suffix(1);
+    if (!token.empty() && token.front() == '-') token.remove_prefix(1);
+    if (token.size() < 19 || token.front() == '0') return false;
+    return std::all_of(token.begin(), token.end(),
+                       [](char c) { return c >= '0' && c <= '9'; });
+}
+
 // A field's value for the evaluator: JSON null as a null cell, an object or
-// array as its canonical JSON text.
-inline dstd::Optional<duql::Cell> ondemand_to_cell(
-    simdjson::ondemand::value val) {
-    switch (val.type().value_unsafe()) {
+// array as its canonical JSON text. False when reading the value hits a
+// syntax error; `out` stays empty for a value that has no cell.
+inline bool ondemand_to_cell(simdjson::ondemand::value val,
+                             dstd::Optional<duql::Cell>& out) {
+    const auto type = val.type();
+    if (type.error()) return false;
+    switch (type.value_unsafe()) {
         case simdjson::ondemand::json_type::string: {
             auto r = val.get_string();
-            if (!r.error()) return dstd::String(r.value_unsafe());
-            break;
+            if (r.error()) return false;
+            out = duql::Cell(dstd::String(r.value_unsafe()));
+            return true;
         }
         case simdjson::ondemand::json_type::number: {
             auto num = val.get_number();
-            if (!num.error()) {
-                auto n = num.value_unsafe();
-                if (n.is_int64()) return n.get_int64();
-                if (n.is_uint64()) return n.get_uint64();
-                return n.get_double();
+            if (num.error()) return is_bigint_token(val.raw_json_token());
+            auto n = num.value_unsafe();
+            if (n.is_int64()) {
+                out = duql::Cell(n.get_int64());
+            } else if (n.is_uint64()) {
+                out = duql::Cell(n.get_uint64());
+            } else {
+                out = duql::Cell(n.get_double());
             }
-            break;
+            return true;
         }
         case simdjson::ondemand::json_type::boolean: {
             auto r = val.get_bool();
-            if (!r.error()) return r.value_unsafe();
-            break;
+            if (r.error()) return false;
+            out = duql::Cell(r.value_unsafe());
+            return true;
         }
         case simdjson::ondemand::json_type::null:
-            return duql::Cell::null();
+            out = duql::Cell::null();
+            return true;
         case simdjson::ondemand::json_type::object:
         case simdjson::ondemand::json_type::array: {
-            const bool array = val.type().value_unsafe() ==
-                               simdjson::ondemand::json_type::array;
+            const bool array =
+                type.value_unsafe() == simdjson::ondemand::json_type::array;
             auto raw = val.raw_json();
-            if (!raw.error())
-                return duql::Cell::json(
-                    json::canonical_json_text(raw.value_unsafe()), array);
-            break;
+            if (raw.error()) return false;
+            out = duql::Cell::json(
+                json::canonical_json_text(raw.value_unsafe()), array);
+            return true;
         }
         default:
-            break;
+            return true;
     }
-    return dstd::nullopt;
 }
 
 // Whether the query reads `key` as any(key).
@@ -93,46 +163,54 @@ inline bool query_reads_any(const duql::Query& query, dstd::StringView key) {
 }
 
 // Stores the scalar elements of the array `val` under `<key>.<k>`, the keys
-// the evaluator reads for any(key).
-inline void store_positions(duql::ValueMap& fields, dstd::StringView key,
+// the evaluator reads for any(key). False when the array has a syntax error.
+inline bool store_positions(duql::ValueMap& fields, dstd::StringView key,
                             simdjson::ondemand::value val) {
     auto arr = val.get_array();
-    if (arr.error()) return;
+    if (arr.error()) return false;
     std::size_t k = 0;
     for (auto el : arr.value_unsafe()) {
         const std::size_t pos = k++;
-        if (el.error()) continue;
+        if (el.error()) return false;
         simdjson::ondemand::value v = el.value_unsafe();
         const auto type = v.type();
-        if (type.error()) continue;
+        if (type.error()) return false;
         switch (type.value_unsafe()) {
             case simdjson::ondemand::json_type::string:
             case simdjson::ondemand::json_type::number:
-            case simdjson::ondemand::json_type::boolean:
-                if (auto cell = ondemand_to_cell(v))
+            case simdjson::ondemand::json_type::boolean: {
+                dstd::Optional<duql::Cell> cell;
+                if (!ondemand_to_cell(v, cell)) return false;
+                if (cell)
                     fields[dstd::String(key) + "." + dstd::to_string(pos)] =
                         std::move(*cell);
                 break;
+            }
             default:
                 break;
         }
     }
+    return true;
 }
 
 // Stores field `key` of a record for the query: an array read as any(key)
 // by its positions, any other referenced field as one value (a null as a
 // null cell, so an args value of the same name cannot stand in for it).
-inline void store_referenced(duql::ValueMap& fields, const duql::Query& query,
+// False when reading the field hits a syntax error: the caller drops the line.
+inline bool store_referenced(duql::ValueMap& fields, const duql::Query& query,
                              dstd::StringView key,
                              simdjson::ondemand::value val,
                              simdjson::ondemand::json_type type) {
     if (type == simdjson::ondemand::json_type::array &&
         query_reads_any(query, key)) {
-        store_positions(fields, key, val);
-    } else if (query.references(key)) {
-        if (auto cell = ondemand_to_cell(val))
-            fields[dstd::String(key)] = std::move(*cell);
+        return store_positions(fields, key, val);
     }
+    if (query.references(key)) {
+        dstd::Optional<duql::Cell> cell;
+        if (!ondemand_to_cell(val, cell)) return false;
+        if (cell) fields[dstd::String(key)] = std::move(*cell);
+    }
+    return true;
 }
 
 // True if the query references any dotted (nested) field, e.g. "args.ret".
@@ -147,8 +225,9 @@ inline bool query_references_dotted(const duql::Query& query) {
 // Store a nested field into the ValueMap under whichever form(s) the query
 // references: the bare child key (`ret`, the canonical form) and/or the dotted
 // path (`args.ret`). `check_dotted` should be query_references_dotted(query),
-// hoisted out of the per-event loop. Consumes `val` exactly once.
-inline void store_referenced_nested(duql::ValueMap& fields,
+// hoisted out of the per-event loop. Consumes `val` exactly once. False when
+// reading the value hits a syntax error.
+inline bool store_referenced_nested(duql::ValueMap& fields,
                                     const duql::Query& query, bool check_dotted,
                                     dstd::StringView parent,
                                     dstd::StringView child,
@@ -161,21 +240,25 @@ inline void store_referenced_nested(duql::ValueMap& fields,
         dotted.append(parent).append(".").append(child);
         want_dotted = query.references(dotted);
     }
-    if (!want_bare && !want_dotted) return;
-    if (val.type().value_unsafe() == simdjson::ondemand::json_type::array) {
+    if (!want_bare && !want_dotted) return true;
+    const auto type = val.type();
+    if (type.error()) return false;
+    if (type.value_unsafe() == simdjson::ondemand::json_type::array) {
         // The evaluator also tries the bare key, so the positions of an args
         // array are stored once, under whichever form the query names.
         if (query_reads_any(query, dotted))
-            store_positions(fields, dotted, val);
-        else if (query_reads_any(query, child))
-            store_positions(fields, child, val);
-        return;
+            return store_positions(fields, dotted, val);
+        if (query_reads_any(query, child))
+            return store_positions(fields, child, val);
+        return true;
     }
-    auto cell = ondemand_to_cell(val);
-    if (!cell) return;
+    dstd::Optional<duql::Cell> cell;
+    if (!ondemand_to_cell(val, cell)) return false;
+    if (!cell) return true;
     // A top-level field of the same name wins, as the evaluator resolves it.
     if (want_bare) fields.try_emplace(dstd::String(child), *cell);
     if (want_dotted) fields[std::move(dotted)] = std::move(*cell);
+    return true;
 }
 
 // Chunk generator with index-driven pruning. Defined in trace_reader.cpp;

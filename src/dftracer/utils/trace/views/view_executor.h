@@ -215,9 +215,9 @@ struct AggBranch {
 /// worker, serially, before the parallel scan starts, and the consumer it
 /// returns is never shared between workers, so it needs no locking. `finalize`
 /// runs once after the scan and reduces whatever state those consumers hold.
-/// A branch's per-worker consumer: the parsed event plus its raw JSON bytes.
-using BranchConsumer =
-    dstd::Function<void(const json::JsonValue&, dstd::StringView)>;
+/// A branch's per-worker consumer: the event read on demand from the parse of
+/// the line, plus its raw JSON bytes.
+using BranchConsumer = dstd::Function<void(json::Value&, dstd::StringView)>;
 
 struct BranchHooks {
     dstd::Optional<duql::Query> predicate;  // nullopt = match all

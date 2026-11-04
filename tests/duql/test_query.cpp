@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/json/value.h>
 #include <doctest/doctest.h>
 #include <duql/eval_json.h>
+#include <duql/filter_corpus.h>
 #include <simdjson.h>
+#include <testing_utilities.h>
 
 #include <cstring>
 
@@ -300,4 +304,115 @@ TEST_CASE("Query::evaluate keeps only TRUE records") {
     CHECK(q->evaluate(m));
     m["x"] = dstd::String();
     CHECK_FALSE(q->evaluate(m));
+}
+
+TEST_CASE("Query::matches agrees with the engine on every filter and event") {
+    json::Document doc;
+    std::size_t kept = 0;
+    std::size_t dropped = 0;
+    std::size_t pairs = 0;
+
+    const auto check = [&](const Query& q, const char* event) {
+        JsonDoc dom(event);
+        REQUIRE(dom.valid);
+        const bool expected = eval_json(q, dom.root());
+        auto parsed = doc.parse(event);
+        REQUIRE(parsed.has_value());
+        const bool got = q.matches(*parsed);
+        CAPTURE(q.source());
+        CAPTURE(event);
+        CHECK(got == expected);
+        ++pairs;
+        (expected ? kept : dropped)++;
+    };
+
+    for (const char* text : FILTERS) {
+        auto q = Query::from_string(text);
+        CAPTURE(text);
+        if (!q) continue;
+        for (const char* event : EVENTS) check(*q, event);
+    }
+
+    const auto golden = dstd::fs::read_file(DUQL_GOLDEN_PATH);
+    REQUIRE(golden.has_value());
+    dftu_utils_test::LineStream in(*golden);
+    simdjson::dom::parser rows;
+    std::size_t golden_filters = 0;
+    for (dstd::String line; in.next(line);) {
+        if (line.empty()) continue;
+        simdjson::dom::element row;
+        const simdjson::padded_string padded(line);
+        REQUIRE(rows.parse(padded).get(row) == simdjson::SUCCESS);
+        if (!row["ok"].get_bool().value()) continue;
+        const dstd::String text(row["q"].get_string().value());
+        auto q = Query::from_string(text);
+        if (!q) continue;
+        ++golden_filters;
+        for (const char* event : EVENTS) check(*q, event);
+    }
+
+    CHECK(golden_filters > 300);
+    CHECK(pairs > 5000);
+    CHECK(kept > 100);
+    CHECK(dropped > 100);
+}
+
+TEST_CASE("Query::matches keeps the event readable") {
+    auto q = Query::from_string(R"(cat == "POSIX" and dur > 1000)");
+    REQUIRE(q.has_value());
+    json::Document doc;
+    auto event = doc.parse(
+        R"({"name":"read","cat":"POSIX","dur":2000,"args":{"size":4096}})");
+    REQUIRE(event.has_value());
+    CHECK(q->matches(*event));
+    auto dur = event->find("dur");
+    REQUIRE(dur.has_value());
+    CHECK(dur->as_int() == 2000);
+    CHECK(q->matches(*event));
+    auto name = event->find("name");
+    REQUIRE(name.has_value());
+    CHECK(name->as_string() == "read");
+    auto args = event->find("args");
+    REQUIRE(args.has_value());
+    auto size = args->find("size");
+    REQUIRE(size.has_value());
+    CHECK(size->as_int() == 4096);
+    CHECK(q->matches(*event));
+
+    auto other = doc.parse(R"({"cat":"MPI","dur":2000})");
+    REQUIRE(other.has_value());
+    CHECK_FALSE(q->matches(*other));
+}
+
+TEST_CASE("Query::matches evaluates a value taken out of an event") {
+    auto q = Query::from_string("size > 100 and fd == 3");
+    REQUIRE(q.has_value());
+    json::Document doc;
+    auto event = doc.parse(R"({"name":"read","args":{"size":4096,"fd":3}})");
+    REQUIRE(event.has_value());
+    auto args = event->find("args");
+    REQUIRE(args.has_value());
+    CHECK(args->find("fd").has_value());
+    CHECK(q->matches(*args));
+    CHECK(q->matches(*event));
+    auto name = event->find("name");
+    REQUIRE(name.has_value());
+    CHECK_FALSE(q->matches(*name));
+}
+
+TEST_CASE("Query::matches on a line that is not an object keeps nothing") {
+    json::Document doc;
+    for (const char* line : {"[]", "[1,2]", R"([{"cat":"POSIX"}])"}) {
+        auto q = Query::from_string(R"(cat == "POSIX")");
+        REQUIRE(q.has_value());
+        auto event = doc.parse(line);
+        REQUIRE(event.has_value());
+        CHECK_FALSE(q->matches(*event));
+    }
+    auto q = Query::from_string("not exists(cat)");
+    REQUIRE(q.has_value());
+    auto event = doc.parse("[]");
+    REQUIRE(event.has_value());
+    JsonDoc dom("[]");
+    CHECK(q->matches(*event) == eval_json(*q, dom.root()));
 }

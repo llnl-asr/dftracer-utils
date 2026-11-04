@@ -16,6 +16,7 @@
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/parser.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -46,8 +47,7 @@ ViewSession::ViewSession(dstd::SharedPtr<const detail::ViewPlan> plan)
 
 void ViewSession::attach_fold(
     dstd::Optional<Query> predicate,
-    dstd::Function<
-        dstd::Function<void(const json::JsonValue&, dstd::StringView)>()>
+    dstd::Function<dstd::Function<void(json::Value&, dstd::StringView)>()>
         make_consumer,
     dstd::Function<void()> finalize) {
     if (predicate)
@@ -233,15 +233,17 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
     auto make_consumer = [slots, by_path, keep_metadata, record_schema]() {
         auto slot = dstd::make_shared<Slot>();
         slots->push_back(slot);
-        return [slot, by_path, keep_metadata, record_schema](
-                   const json::JsonValue& jv, dstd::StringView) {
+        return [slot, by_path, keep_metadata, record_schema](json::Value& jv,
+                                                             dstd::StringView) {
+            const auto root = json::detail::ValueAccess::dom(jv);
+            if (!root) return;
             detail::FoldEvent& fe = slot->events.append();
             if (by_path)
-                detail::decode_record_into(fe, jv.element(), slot->intern,
+                detail::decode_record_into(fe, *root, slot->intern,
                                            /*capture_schema=*/false, nullptr,
                                            record_schema);
             else
-                detail::extract_fold_event_into(fe, jv.element(), slot->intern,
+                detail::extract_fold_event_into(fe, *root, slot->intern,
                                                 /*needs_args=*/true);
             if (fe.phase == RecordPhase::Unknown ||
                 (!keep_metadata && fe.phase == RecordPhase::Metadata))
@@ -310,14 +312,16 @@ void ViewSession::add_containment_branch(
         bufs->push_back(rows);
         auto scratch = dstd::make_shared<detail::FoldEvent>();
         return [intern, spec, rows, scratch, by_path, record_schema](
-                   const json::JsonValue& jv, dstd::StringView) {
+                   json::Value& jv, dstd::StringView) {
+            const auto root = json::detail::ValueAccess::dom(jv);
+            if (!root) return;
             detail::FoldEvent& fe = *scratch;
             if (by_path)
-                detail::decode_record_into(fe, jv.element(), *intern,
+                detail::decode_record_into(fe, *root, *intern,
                                            /*capture_schema=*/false, nullptr,
                                            record_schema);
             else
-                detail::extract_fold_event_into(fe, jv.element(), *intern,
+                detail::extract_fold_event_into(fe, *root, *intern,
                                                 spec->needs_args,
                                                 &spec->nested_captures);
             detail::ContainmentRow r;

@@ -121,7 +121,7 @@ class TraceReader {
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     /// Direct Arrow batch pipeline: chunk-prune + line-level prefilter +
-    /// simdjson iterate_many + inline row build. Yields complete Arrow
+    /// per-line in-place parsing + inline row build. Yields complete Arrow
     /// record batches sized at `batch_size` rows. Emits the final
     /// partial batch on generator close. Non-normalized schema only
     /// (dynamic columns follow the first row seen).

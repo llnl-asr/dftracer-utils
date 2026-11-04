@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/parser.h>
+#include <dftracer/utils/json/value.h>
 
 #include <cstdint>
 
@@ -139,6 +140,21 @@ inline RecordPhase read_phase(simdjson::ondemand::value& v) {
     return RecordPhase::Unknown;
 }
 
+inline RecordPhase read_phase(json::Value& v) {
+    switch (v.type()) {
+        case json::Value::Type::Int: {
+            const auto n = v.as_int();
+            return n && *n >= 0 ? phase_from_int(static_cast<std::uint64_t>(*n))
+                                : RecordPhase::Unknown;
+        }
+        case json::Value::Type::String: {
+            const auto s = v.as_string();
+            return s ? phase_from_letter(*s) : RecordPhase::Unknown;
+        }
+        default:
+            return RecordPhase::Unknown;
+    }
+}
 inline RecordPhase read_phase(json::JsonParser& parser,
                               dstd::StringView key = "ph") {
     auto v = parser.get_value(key);

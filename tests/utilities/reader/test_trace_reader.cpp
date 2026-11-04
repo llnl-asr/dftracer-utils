@@ -10,6 +10,7 @@
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -97,6 +98,15 @@ static CoroTask<std::size_t> count_json_lines(AsyncGenerator<JsonLine> gen) {
     std::size_t n = 0;
     while (auto opt = co_await gen.next()) {
         ++n;
+    }
+    co_return n;
+}
+
+static CoroTask<std::size_t> count_arrow_rows(
+    AsyncGenerator<dftracer::utils::utilities::arrow::ArrowExportResult> gen) {
+    std::size_t n = 0;
+    while (auto opt = co_await gen.next()) {
+        n += static_cast<std::size_t>(opt->get_array()->length);
     }
     co_return n;
 }
@@ -913,5 +923,196 @@ TEST_SUITE("TraceReader::read_json") {
         CHECK(events[0].ph == "X");
 
         (void)dstd::fs::remove(gz_file);
+    }
+}
+
+namespace {
+
+// Lines written to a gzip trace, read back through read_json and read_arrow
+// with and without an index. Returns the line counts the two readers keep.
+struct KeptCounts {
+    std::size_t json;
+    std::size_t arrow;
+};
+
+KeptCounts read_kept(const dstd::Vector<dstd::String>& lines,
+                     const dstd::String& query, bool indexed) {
+    dstd::String content;
+    for (const auto& l : lines) content += l + "\n";
+    const dstd::Path dir = make_unique_test_path("malformed_reader");
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    const dstd::String pfw((dir / "trace.pfw").str());
+    REQUIRE(dstd::fs::write_file(dstd::PathView(pfw), content).has_value());
+    const dstd::String gz = gzip_fixture(pfw);
+    if (indexed) REQUIRE(dftu_utils_test::build_index(gz));
+    TraceReader reader({.file_path = gz});
+    REQUIRE(reader.has_index() == indexed);
+    ReadConfig rc;
+    rc.query = query;
+    KeptCounts out;
+    out.json = count_json_lines(reader.read_json(rc)).get();
+    out.arrow = count_arrow_rows(reader.read_arrow(rc)).get();
+    return out;
+}
+
+}  // namespace
+
+TEST_SUITE("TraceReader malformed lines") {
+    TEST_CASE("a field filter drops a line whose read part is bad") {
+        // `x == 1 or name == "read"` reads every field of a line, so a bad
+        // value anywhere in the line drops it, as Query::matches does.
+        const dstd::Vector<dstd::String> lines = {
+            R"({"name":"read","dur":5})",
+            R"({"x":01,"name":"read"})",
+            R"({"name":"read","x":01})",
+            R"({"name":"read","x":tru,"y":1})",
+            R"({"name":"read","x":-})",
+            R"({"name":"read","x":"\q"})",
+            R"({"name":"read","args":{"x":01}})",
+        };
+        for (const bool indexed : {false, true}) {
+            CAPTURE(indexed);
+            const auto kept =
+                read_kept(lines, R"(x == 1 or name == "read")", indexed);
+            CHECK(kept.json == 1);
+            CHECK(kept.arrow == 1);
+        }
+    }
+
+    TEST_CASE("a bigint field is not a reason to drop the line") {
+        const dstd::Vector<dstd::String> lines = {
+            R"({"name":"read","x":123456789012345678901234567890})",
+            R"({"name":"write","x":1})",
+        };
+        for (const bool indexed : {false, true}) {
+            CAPTURE(indexed);
+            const auto kept =
+                read_kept(lines, R"(x == 1 or name == "read")", indexed);
+            CHECK(kept.json == 2);
+            CHECK(kept.arrow == 2);
+        }
+    }
+
+    TEST_CASE("a field filter walks the whole line, an expression only reads") {
+        // The field-map path reads every field, so the bad `dur` drops the
+        // line. An expression query reads only `name`, so the line stays.
+        const dstd::Vector<dstd::String> lines = {
+            R"({"name":"read","dur":})",
+        };
+        for (const bool indexed : {false, true}) {
+            CAPTURE(indexed);
+            const auto field_filter =
+                read_kept(lines, R"(name == "read" or pid == 1)", indexed);
+            CHECK(field_filter.json == 0);
+            CHECK(field_filter.arrow == 0);
+            const auto expression =
+                read_kept(lines, R"(lower(name) == "read")", indexed);
+            CHECK(expression.json == 1);
+        }
+    }
+
+    TEST_CASE(
+        "a line with mismatched brackets never stops the lines around it") {
+        // Each line is its own document: a bad line is dropped or kept on what
+        // is read from it, and every good line around it is read exactly once,
+        // with the same count on the indexed and the plain path.
+        struct Bad {
+            const char* text;
+            std::size_t extra;  // lines it may add when named "read"
+        };
+        const Bad bad_templates[] = {
+            {R"({"name":"NAME","dur":5,"yy":[1,2})", 1},
+            {R"({"name":"NAME","dur":5,"yy":{"a":1]})", 1},
+            {R"({"name":"NAME","dur":5,"yy":{"a":[1,2}})", 1},
+            {R"({"name":"NAME","dur":5,"args":{"yy":[1,2},"n":1})", 1},
+            {R"({"name":"NAME","dur":5,"x":")", 1},
+            {R"({"name":"NAME","dur":5)", 1},
+            {R"([{"name":"NAME","dur":5)", 1},
+            {R"({"name":"NAME","dur":5}})", 1},
+            {R"({"name":"NAME","dur":5} {"name":"NAME","dur":5})", 2},
+            {"{", 0},
+            {"[", 0},
+            {"}", 0},
+        };
+        const dstd::String good = R"({"name":"read","dur":5})";
+        const dstd::String long_good = R"({"name":"read","dur":5,"s":")" +
+                                       dstd::String(1500000, 'a') + R"("})";
+        const dstd::String long_bad =
+            R"({"name":"bad","dur":5,"s":")" + dstd::String(1500000, 'a');
+        const char* const queries[] = {
+            R"(name == "read" and dur > 1)",
+            R"(lower(name) == "read" and dur > 1)",
+        };
+        std::size_t shapes = 0;
+        const auto check = [&](const dstd::Vector<dstd::String>& lines,
+                               std::size_t good_lines, std::size_t extra,
+                               const char* query) {
+            const auto plain = read_kept(lines, query, false);
+            const auto indexed = read_kept(lines, query, true);
+            CAPTURE(query);
+            CAPTURE(lines.size());
+            CHECK(plain.json >= good_lines);
+            CHECK(plain.json <= good_lines + extra);
+            CHECK(plain.arrow >= good_lines);
+            CHECK(plain.arrow <= good_lines + extra);
+            CHECK(indexed.json == plain.json);
+            CHECK(indexed.arrow == plain.arrow);
+            ++shapes;
+        };
+        for (const bool crlf : {false, true}) {
+            const dstd::String eol = crlf ? "\r" : "";
+            for (const auto& bad_template : bad_templates) {
+                for (const bool named_read : {false, true}) {
+                    dstd::String bad = bad_template.text;
+                    for (auto at = bad.find("NAME"); at != dstd::String::npos;
+                         at = bad.find("NAME"))
+                        bad.replace(at, 4, named_read ? "read" : "bad");
+                    const dstd::Vector<dstd::Vector<dstd::String>> orders = {
+                        {bad, good},
+                        {good, bad},
+                        {good, bad, good},
+                        {bad, good, good},
+                        {bad, bad, good}};
+                    for (auto lines : orders) {
+                        std::size_t good_lines = 0;
+                        for (auto& l : lines) {
+                            good_lines += l == good;
+                            l += eol;
+                        }
+                        for (const char* query : queries)
+                            check(lines, good_lines,
+                                  named_read ? bad_template.extra * 2 : 0,
+                                  query);
+                    }
+                }
+            }
+        }
+        // A line longer than any batch, good or unterminated, at each place.
+        for (const char* query : queries) {
+            check({long_good, good, good}, 3, 0, query);
+            check({good, long_good, good}, 3, 0, query);
+            check({good, good, long_good}, 3, 0, query);
+            check({long_bad, good, good}, 2, 0, query);
+            check({good, long_bad, good}, 2, 0, query);
+            check({good, good, long_bad}, 2, 0, query);
+        }
+        CHECK(shapes > 400);
+    }
+
+    TEST_CASE("a line holding two documents is read as its first one") {
+        const dstd::String two =
+            R"({"name":"read","dur":5} {"name":"read","dur":7})";
+        const dstd::Vector<dstd::String> lines = {two,
+                                                  R"({"name":"read","dur":5})"};
+        for (const char* query : {R"(name == "read" and dur > 1)",
+                                  R"(lower(name) == "read" and dur > 1)"}) {
+            for (const bool indexed : {false, true}) {
+                CAPTURE(query);
+                CAPTURE(indexed);
+                const auto kept = read_kept(lines, query, indexed);
+                CHECK(kept.json == 2);
+                CHECK(kept.arrow == 2);
+            }
+        }
     }
 }

@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/json/value.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <dftracer/utils/trace/views/join_type.h>
@@ -35,10 +36,6 @@ class StringIntern;
 }
 
 namespace dftracer::utils::index::extensions {}
-
-namespace dftracer::utils::json {
-class JsonValue;
-}
 
 namespace dftracer::utils::trace::views {
 
@@ -409,14 +406,16 @@ class ViewSession {
         std::int64_t n_key = -1);
 
     /// Fold the branch's matching events into a caller partial `P`, one per
-    /// scan worker, reduced by `combine`. The fold gets the parsed event (no
-    /// re-parse) and its raw JSON bytes (for verbatim passthrough). `P` must be
-    /// default-constructible and a default `P` the identity of combine.
+    /// scan worker, reduced by `combine`. The fold gets the event as a
+    /// @ref dftracer::utils::json::Value read on demand from one parse of the
+    /// line, which each fold and each predicate shares, and the raw JSON bytes
+    /// (for verbatim passthrough). The value is the root of the event: it is
+    /// valid only inside the call, and reading it again restarts it. `P` must
+    /// be default-constructible and a default `P` the identity of combine.
     template <class P>
-    Deferred<P> fold(
-        Query predicate,
-        dstd::Function<void(P&, const json::JsonValue&, dstd::StringView)> f,
-        dstd::Function<P(P&&, P&&)> combine) {
+    Deferred<P> fold(Query predicate,
+                     dstd::Function<void(P&, json::Value&, dstd::StringView)> f,
+                     dstd::Function<P(P&&, P&&)> combine) {
         return fold_into<P>(std::move(predicate), std::move(f),
                             std::move(combine));
     }
@@ -424,19 +423,17 @@ class ViewSession {
     /// fold() over the events the base view selects, as collect() does: its
     /// filters and phase (data events unless phase() selects metadata).
     template <class P>
-    Deferred<P> fold(
-        dstd::Function<void(P&, const json::JsonValue&, dstd::StringView)> f,
-        dstd::Function<P(P&&, P&&)> combine) {
+    Deferred<P> fold(dstd::Function<void(P&, json::Value&, dstd::StringView)> f,
+                     dstd::Function<P(P&&, P&&)> combine) {
         return fold_into<P>(dstd::nullopt, std::move(f), std::move(combine));
     }
 
     /// fold() overload taking a unified field predicate (F("dur") > 1000).
     /// Throws if the predicate is not index-pushable.
     template <class P>
-    Deferred<P> fold(
-        const FieldExpr& predicate,
-        dstd::Function<void(P&, const json::JsonValue&, dstd::StringView)> f,
-        dstd::Function<P(P&&, P&&)> combine) {
+    Deferred<P> fold(const FieldExpr& predicate,
+                     dstd::Function<void(P&, json::Value&, dstd::StringView)> f,
+                     dstd::Function<P(P&&, P&&)> combine) {
         return fold<P>(predicate.to_duql(), std::move(f), std::move(combine));
     }
 
@@ -510,20 +507,21 @@ class ViewSession {
     template <class P>
     Deferred<P> fold_into(
         dstd::Optional<Query> predicate,
-        dstd::Function<void(P&, const json::JsonValue&, dstd::StringView)> f,
+        dstd::Function<void(P&, json::Value&, dstd::StringView)> f,
         dstd::Function<P(P&&, P&&)> combine) {
         auto out = dstd::make_shared<P>();
         auto partials = dstd::make_shared<dstd::Vector<dstd::SharedPtr<P>>>();
         auto fn = dstd::make_shared<
-            dstd::Function<void(P&, const json::JsonValue&, dstd::StringView)>>(
+            dstd::Function<void(P&, json::Value&, dstd::StringView)>>(
             std::move(f));
         attach_fold(
             std::move(predicate),
             [fn, partials]() {
                 auto p = dstd::make_shared<P>();
                 partials->push_back(p);
-                return [fn, p](const json::JsonValue& jv,
-                               dstd::StringView raw) { (*fn)(*p, jv, raw); };
+                return [fn, p](json::Value& jv, dstd::StringView raw) {
+                    (*fn)(*p, jv, raw);
+                };
             },
             [partials, out, combine = std::move(combine)]() {
                 P acc{};
@@ -540,8 +538,7 @@ class ViewSession {
     /// no predicate the branch takes the base view's selection.
     void attach_fold(
         dstd::Optional<Query> predicate,
-        dstd::Function<
-            dstd::Function<void(const json::JsonValue&, dstd::StringView)>()>
+        dstd::Function<dstd::Function<void(json::Value&, dstd::StringView)>()>
             make_consumer,
         dstd::Function<void()> finalize);
     /// Look up the leading key-column count recorded for a collect branch's

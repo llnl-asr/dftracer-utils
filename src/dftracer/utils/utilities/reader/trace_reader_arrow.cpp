@@ -209,7 +209,7 @@ bool arrow_row_from_doc(RecordBatchBuilder& builder,
     return true;
 }
 
-void collect_query_fields(simdjson::ondemand::document_reference doc,
+bool collect_query_fields(simdjson::ondemand::document_reference doc,
                           const Query& query, bool check_dotted,
                           duql::ValueMap& out);
 
@@ -240,38 +240,42 @@ dstd::String collect_matching_lines(dstd::Span<const char> chunk,
 
 // Extract fields referenced by the query into a ValueMap, walking one level
 // of object nesting. Fields not referenced by the query are skipped.
-void collect_query_fields(simdjson::ondemand::document_reference doc,
+bool collect_query_fields(simdjson::ondemand::document_reference doc,
                           const Query& query, bool check_dotted,
                           duql::ValueMap& out) {
     auto obj = doc.get_object();
-    if (obj.error()) return;
+    if (obj.error()) return false;
     for (auto field : obj.value()) {
-        if (field.error()) continue;
+        if (field.error()) return false;
         auto key_r = field.unescaped_key();
-        if (key_r.error()) continue;
+        if (key_r.error()) return false;
         auto val_r = field.value();
-        if (val_r.error()) continue;
+        if (val_r.error()) return false;
         auto key = key_r.value();
         auto val = val_r.value();
         auto type_r = val.type();
-        if (type_r.error()) continue;
+        if (type_r.error()) return false;
         auto type = type_r.value();
         if (type == simdjson::ondemand::json_type::object) {
             auto nested = val.get_object();
-            if (nested.error()) continue;
+            if (nested.error()) return false;
             for (auto nf : nested.value()) {
-                if (nf.error()) continue;
+                if (nf.error()) return false;
                 auto nk_r = nf.unescaped_key();
-                if (nk_r.error()) continue;
+                if (nk_r.error()) return false;
                 auto nv_r = nf.value();
-                if (nv_r.error()) continue;
-                internal::store_referenced_nested(out, query, check_dotted, key,
-                                                  nk_r.value(), nv_r.value());
+                if (nv_r.error()) return false;
+                if (!internal::store_referenced_nested(out, query, check_dotted,
+                                                       key, nk_r.value(),
+                                                       nv_r.value()))
+                    return false;
             }
         } else {
-            internal::store_referenced(out, query, key, val, type);
+            if (!internal::store_referenced(out, query, key, val, type))
+                return false;
         }
     }
+    return true;
 }
 
 }  // namespace
@@ -354,7 +358,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
 
     // An expression may read a whole object or array, which the field map
     // cannot hold, so it runs on the record's DOM.
-    dftracer::utils::json::RecordParser expr_parser;
+    dstd::StringArena event_strings;
     simdjson::ondemand::parser bulk_parser;
     RecordBatchBuilder builder;
     dstd::StringArena arena;
@@ -413,32 +417,26 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
             padded = simdjson::padded_string(trimmed);
         }
 
-        auto docs_r = bulk_parser.iterate_many(padded, 1 << 20,
-                                               /*allow_comma_separated=*/false);
-        if (docs_r.error()) continue;
-        auto& docs = docs_r.value();
-
-        for (auto it = docs.begin(); it != docs.end(); ++it) {
-            auto doc_result = *it;
-            if (doc_result.error()) continue;
-            auto& doc = doc_result.value();
-
+        internal::PaddedLines docs(bulk_parser, padded.data(), padded.size());
+        simdjson::ondemand::document_reference doc;
+        dstd::StringView src;
+        while (docs.next(doc, src)) {
             if (query && !config.chunk_prune_only) {
                 if (use_compiled) {
                     if (!eval_compiled_eq(compiled_probes, doc)) continue;
                 } else if (query->has_expressions()) {
-                    const dstd::StringView src(it.source().data(),
-                                               it.source().size());
-                    simdjson::dom::element record;
-                    if (expr_parser.parse(src.data(), src.size()).get(record) !=
-                            simdjson::SUCCESS ||
-                        !duql::evaluate(duql::detail::QueryAccess::root(*query),
-                                        json::JsonValue(record)))
+                    event_strings.clear();
+                    if (!duql::evaluate(
+                            duql::detail::QueryAccess::root(*query),
+                            duql::OnDemandEvent(doc, src, event_strings)))
                         continue;
                 } else {
                     duql::ValueMap fields;
-                    collect_query_fields(doc, *query, query_has_dotted, fields);
-                    if (!query->evaluate(fields)) continue;
+                    // A syntax error stops the read and drops the line.
+                    if (!collect_query_fields(doc, *query, query_has_dotted,
+                                              fields) ||
+                        !query->evaluate(fields))
+                        continue;
                 }
                 doc.rewind();
             } else if (!presence_check_paths.empty()) {

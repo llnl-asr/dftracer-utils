@@ -1151,8 +1151,7 @@ TEST_SUITE("View - trace terminals") {
         auto counting = [seen](ViewSession& s) -> Deferred<std::int64_t> {
             return s.fold<std::int64_t>(
                 dftracer::utils::duql::parse_or_throw("dur >= 0"),
-                [seen](std::int64_t& n, const json::JsonValue&,
-                       dstd::StringView) {
+                [seen](std::int64_t& n, json::Value&, dstd::StringView) {
                     ++n;
                     ++*seen;
                 },
@@ -1610,5 +1609,55 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
                               dstd::Vector<dstd::String>{"3"});
                     }
         }
+    }
+}
+
+namespace {
+
+// Four lines; the second has a bad atom (`tru`) in a part no filter reads.
+// The fold path reads only what a branch asks for, so it keeps that line.
+struct BadPartTrace {
+    TestEnvironment env{51};
+    dstd::String gz;
+    BadPartTrace() {
+        const dstd::String pfw = env.get_dir() + "/badpart.pfw";
+        dftu_utils_test::FileOut ofs(pfw);
+        auto ev = [&](int ts, const char* tail) {
+            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
+                << R"("ts":)" << ts << R"(,"dur":10,"args":{})" << tail
+                << "}\n";
+        };
+        ev(1, "");
+        ev(2, R"(,"zz":tru)");
+        ev(3, "");
+        ev(4, "");
+        ofs.close();
+        gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        (void)dstd::fs::remove(pfw);
+    }
+};
+
+}  // namespace
+
+TEST_SUITE("View - malformed lines") {
+    TEST_CASE(
+        "an export writes a line whose bad part nothing reads, verbatim") {
+        BadPartTrace trace;
+        StringSink sink;
+        test_view_common::run(
+            View::from_file(dstd::String(trace.gz)).sink_json(sink));
+        const auto lines = sink.lines();
+        REQUIRE(lines.size() == 4);
+        std::size_t bad = 0;
+        for (const dstd::String& line : lines)
+            if (line.find("tru}") != dstd::String::npos) {
+                ++bad;
+                CHECK(
+                    line ==
+                    R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
+                    R"("ts":2,"dur":10,"args":{},"zz":tru})");
+            }
+        CHECK(bad == 1);
     }
 }

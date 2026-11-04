@@ -10,6 +10,7 @@
 #include <dftracer/utils/index/schema_class.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <simdjson.h>
 
@@ -151,9 +152,11 @@ dataframe::LazyResult<dstd::Vector<T>> rows(const View& view, Lazy) {
         dstd::Function<Deferred<dstd::Vector<T>>(ViewSession&)>(
             [](ViewSession& s) {
                 return s.fold<dstd::Vector<T>>(
-                    [](dstd::Vector<T>& out, const json::JsonValue& jv,
+                    [](dstd::Vector<T>& out, json::Value& jv,
                        dstd::StringView) {
-                        out.push_back(decode_row<T>(jv.element()));
+                        if (const auto root =
+                                json::detail::ValueAccess::dom(jv))
+                            out.push_back(decode_row<T>(*root));
                     },
                     [](dstd::Vector<T>&& a, dstd::Vector<T>&& b) {
                         if (a.empty()) return std::move(b);

@@ -1641,10 +1641,10 @@ TEST_SUITE("View") {
                     // event.
                     small = run.fold<Small>(
                         Query::from_string("dur < 25").value(),
-                        [](Small& s, const json::JsonValue& jv,
-                           dstd::StringView) {
+                        [](Small& s, json::Value& jv, dstd::StringView) {
                             ++s.n;
-                            s.sum += jv["dur"].get<double>(0);
+                            auto dur = jv.find("dur");
+                            s.sum += dur ? dur->as_double().value_or(0) : 0;
                         },
                         [](Small&& a, Small&& b) {
                             a.n += b.n;

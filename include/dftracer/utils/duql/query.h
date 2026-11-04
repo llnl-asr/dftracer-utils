@@ -12,6 +12,10 @@
 #include <dftracer/utils/duql/error.h>
 #include <dftracer/utils/duql/value_map.h>
 
+namespace dftracer::utils::json {
+class Value;
+}
+
 namespace dftracer::utils::duql {
 
 /// Owns a parsed query AST and provides evaluation.
@@ -30,6 +34,21 @@ class Query {
     /// three-valued logic, so a leaf on a missing or null field, or across
     /// types, does not pass. A key absent from `fields` is missing.
     bool evaluate(const ValueMap& fields) const;
+    /// Whether the filter keeps the raw JSON event `event`, the value that
+    /// @ref json::Document::parse returned, with the same answer as the
+    /// engine: three-valued logic as in @ref evaluate, and a bare name the
+    /// event lacks reads the field of that name under `args`. A line that is
+    /// not a JSON object keeps nothing. Use it where there is no index: a live
+    /// trace, a socket, a plugin, a small file.
+    ///
+    /// It reads from the parse that @ref json::Document::parse made and
+    /// parses nothing again: only the fields the filter names are read, each
+    /// by a fresh lookup from the start of the event. A root `event` stays
+    /// readable afterward, but child values taken from it earlier are
+    /// invalid, as after a new parse. A value taken out of an event is
+    /// evaluated from its own text, which a parser of its own reads once more.
+    /// For files on disk View is the fast path.
+    bool matches(const json::Value& event) const;
     /// Original query source string.
     const dstd::String& source() const { return source_; }
     /// Serialize AST back to query DSL string.

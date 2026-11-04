@@ -5,6 +5,8 @@
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
 
 namespace dftracer::utils::duql {
 
@@ -48,6 +50,15 @@ Query detail::QueryAccess::from_node(QueryNodePtr root) {
 
 bool Query::evaluate(const ValueMap& fields) const {
     return duql::evaluate(*root_, fields);
+}
+
+bool Query::matches(const json::Value& event) const {
+    json::detail::EventView view;
+    if (!json::detail::ValueAccess::event(event, view)) return false;
+    const OnDemandEvent line(*view.doc, view.text, *view.strings);
+    const bool kept = duql::evaluate(*root_, line);
+    if (line.broken) json::detail::ValueAccess::mark_broken(event);
+    return kept;
 }
 
 dstd::String Query::to_string() const { return detail::to_string(*root_); }

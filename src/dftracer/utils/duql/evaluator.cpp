@@ -20,6 +20,7 @@
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value_access.h>
 
 #include <algorithm>
 #include <array>
@@ -56,28 +57,35 @@ using dftracer::utils::duql::compare_numbers;
 using dftracer::utils::duql::detail::order;
 
 // -1/0/1 for less/equal/greater; nullopt when the types differ.
-dstd::Optional<int> compare(const JsonValue& field, const LiteralNode& lit) {
+template <class Json>
+dstd::Optional<int> compare_json(const Json& field, const LiteralNode& lit) {
     return std::visit(
         [&field](const auto& v) -> dstd::Optional<int> {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, dstd::String>) {
                 if (!field.is_string()) return dstd::nullopt;
-                return order(field.get<dstd::StringView>(),
+                return order(field.template get<dstd::StringView>(),
                              dstd::StringView(v));
             } else if constexpr (std::is_same_v<T, bool>) {
                 if (!field.is_bool()) return dstd::nullopt;
-                return order(field.get<bool>(), v);
+                return order(field.template get<bool>(), v);
             } else {
                 if (field.is_int())
-                    return compare_numbers(field.get<std::int64_t>(), v);
+                    return compare_numbers(field.template get<std::int64_t>(),
+                                           v);
                 if (field.is_uint())
-                    return compare_numbers(field.get<std::uint64_t>(), v);
+                    return compare_numbers(field.template get<std::uint64_t>(),
+                                           v);
                 if (field.is_number())
-                    return compare_numbers(field.get<double>(), v);
+                    return compare_numbers(field.template get<double>(), v);
                 return dstd::nullopt;
             }
         },
         lit.value);
+}
+
+dstd::Optional<int> compare(const JsonValue& field, const LiteralNode& lit) {
+    return compare_json(field, lit);
 }
 
 dstd::Optional<int> compare(const LiteralValue& a, const LiteralNode& lit) {
@@ -112,6 +120,50 @@ bool plain_string(const JsonValue& v) { return v.is_string(); }
 bool plain_string(const LiteralValue& v) {
     return std::holds_alternative<dstd::String>(v);
 }
+
+// A scalar read from an on-demand record, with the accessors compare_json
+// needs. A container, a null and an unreadable value are kinds of their own.
+struct OdLeaf {
+    enum class Kind { String, Bool, Int, UInt, Double, Null, Container, Other };
+    Kind kind = Kind::Other;
+    bool b = false;
+    std::int64_t i = 0;
+    std::uint64_t u = 0;
+    double d = 0;
+    dstd::StringView s;
+
+    bool is_string() const { return kind == Kind::String; }
+    bool is_bool() const { return kind == Kind::Bool; }
+    bool is_int() const { return kind == Kind::Int; }
+    bool is_uint() const { return kind == Kind::UInt; }
+    bool is_number() const {
+        return kind == Kind::Int || kind == Kind::UInt || kind == Kind::Double;
+    }
+    template <class T>
+    T get() const {
+        if constexpr (std::is_same_v<T, dstd::StringView>)
+            return s;
+        else if constexpr (std::is_same_v<T, bool>)
+            return b;
+        else if constexpr (std::is_same_v<T, std::int64_t>)
+            return i;
+        else if constexpr (std::is_same_v<T, std::uint64_t>)
+            return u;
+        else
+            return d;
+    }
+};
+
+dstd::Optional<int> compare(const OdLeaf& field, const LiteralNode& lit) {
+    return compare_json(field, lit);
+}
+
+dstd::Optional<dstd::StringView> as_string(const OdLeaf& v) {
+    if (!v.is_string()) return dstd::nullopt;
+    return v.s;
+}
+
+bool plain_string(const OdLeaf& v) { return v.is_string(); }
 
 // YES when the value equals an element, NO when it is comparable with some
 // element and equals none, UNKNOWN when it is comparable with none.
@@ -1495,6 +1547,305 @@ struct MapRecord {
     }
 };
 
+namespace od {
+
+using OnDemand = simdjson::ondemand::value;
+
+char first_char(OnDemand& v) { return v.raw_json_token().data()[0]; }
+
+// An error other than "not there", "wrong type" or "past the end" leaves the
+// iterator unusable, so it marks the line broken: no later read of it counts.
+void note(const OnDemandEvent& ev, simdjson::error_code code) {
+    if (code != simdjson::SUCCESS && code != simdjson::NO_SUCH_FIELD &&
+        code != simdjson::INCORRECT_TYPE &&
+        code != simdjson::INDEX_OUT_OF_BOUNDS)
+        ev.broken = true;
+}
+
+// Finds fields of an on-demand record by the same rules as JsonValue::at.
+// Every lookup starts from the rewound document, so a field can be read any
+// number of times and in any order. Member names compare decoded, as in the
+// DOM, and the first match in line order wins. simdjson compares the raw text,
+// so a line with a backslash scans and decodes each name; a line without one
+// takes the direct lookup.
+struct Resolver {
+    const OnDemandEvent& ev;
+
+    bool member(simdjson::ondemand::object& obj, dstd::StringView name,
+                OnDemand& out, bool restart) const {
+        if (!ev.escapes && name.find('\\') == dstd::StringView::npos) {
+            if (restart) (void)obj.reset();
+            const simdjson::error_code code =
+                obj.find_field_unordered(name).get(out);
+            if (code == simdjson::SUCCESS) return true;
+            note(ev, code);
+            return false;
+        }
+        if (const auto code = obj.reset().error()) {
+            note(ev, code);
+            return false;
+        }
+        for (auto field_result : obj) {
+            simdjson::ondemand::field field;
+            if (const auto code = std::move(field_result).get(field)) {
+                note(ev, code);
+                return false;
+            }
+            const auto key = json::detail::read_key(
+                field.key(), ev.text.data() + ev.text.size(), ev.strings);
+            if (key && *key == name) {
+                out = field.value();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool element(OnDemand& container, std::size_t index, OnDemand& out) const {
+        simdjson::ondemand::array array;
+        if (const auto code = container.get_array().get(array)) {
+            note(ev, code);
+            return false;
+        }
+        const auto code = array.at(index).get(out);
+        note(ev, code);
+        return code == simdjson::SUCCESS;
+    }
+
+    bool resolve(dstd::StringView path, OnDemand& out) const {
+        if (ev.broken) return false;
+        ev.doc.rewind();
+        OnDemand current;
+        if (const auto code = ev.doc.get_value().get(current)) {
+            note(ev, code);
+            return false;
+        }
+        const char* p = path.data();
+        const char* const pend = p + path.size();
+        while (p < pend) {
+            if (*p == '.') {
+                ++p;
+                continue;
+            }
+            if (*p == '[') {
+                ++p;
+                std::size_t index = 0;
+                bool any = false;
+                while (p < pend && *p >= '0' && *p <= '9') {
+                    index = index * 10 + static_cast<std::size_t>(*p - '0');
+                    ++p;
+                    any = true;
+                }
+                if (p < pend && *p == ']') ++p;
+                OnDemand next;
+                if (!any || first_char(current) != '[' ||
+                    !element(current, index, next))
+                    return false;
+                current = next;
+                continue;
+            }
+            const char* start = p;
+            while (p < pend && *p != '.' && *p != '[') ++p;
+            const dstd::StringView key(start,
+                                       static_cast<std::size_t>(p - start));
+            OnDemand next;
+            bool found = false;
+            const char c = first_char(current);
+            if (c == '{') {
+                simdjson::ondemand::object obj;
+                if (const auto code = current.get_object().get(obj)) {
+                    note(ev, code);
+                    return false;
+                }
+                found = member(obj, key, next, false);
+                if (!found && p < pend && *p == '.') {
+                    const char* run_end = p;
+                    while (run_end < pend && *run_end != '[') ++run_end;
+                    for (const char* end = run_end; end > p;) {
+                        const dstd::StringView cand(
+                            start, static_cast<std::size_t>(end - start));
+                        if (member(obj, cand, next, true)) {
+                            found = true;
+                            p = end;
+                            break;
+                        }
+                        if (ev.broken) return false;
+                        --end;
+                        while (end > p && *end != '.') --end;
+                    }
+                }
+            } else if (c == '[') {
+                bool digits = !key.empty();
+                std::size_t index = 0;
+                for (char d : key) {
+                    if (d < '0' || d > '9') {
+                        digits = false;
+                        break;
+                    }
+                    index = index * 10 + static_cast<std::size_t>(d - '0');
+                }
+                found = digits && element(current, index, next);
+            }
+            if (!found || ev.broken) return false;
+            current = next;
+        }
+        out = current;
+        return !ev.broken;
+    }
+};
+
+OdLeaf read_leaf(const OnDemandEvent& ev, OnDemand& v) {
+    OdLeaf out;
+    const dstd::StringView head = v.raw_json_token();
+    const char c = head.data()[0];
+    const char* const end = ev.text.data() + ev.text.size();
+    switch (c) {
+        case '{':
+        case '[':
+            out.kind = OdLeaf::Kind::Container;
+            return out;
+        case 'n': {
+            bool is_null;
+            const auto code = v.is_null().get(is_null);
+            if (code || !is_null)
+                ev.broken = true;
+            else
+                out.kind = OdLeaf::Kind::Null;
+            return out;
+        }
+        case 't':
+        case 'f': {
+            bool b;
+            const auto code = v.get_bool().get(b);
+            if (code) ev.broken = true;
+            if (code) return out;
+            out.kind = OdLeaf::Kind::Bool;
+            out.b = b;
+            return out;
+        }
+        case '"': {
+            const auto s = json::detail::read_string(
+                json::detail::value_extent(head.data(), end), ev.strings);
+            if (!s) {
+                ev.broken = true;
+                return out;
+            }
+            out.kind = OdLeaf::Kind::String;
+            out.s = *s;
+            return out;
+        }
+        default:
+            break;
+    }
+    const dstd::StringView token = json::detail::value_extent(head.data(), end);
+    simdjson::error_code code;
+    if (token.find_first_of(".eE") != dstd::StringView::npos) {
+        code = v.get_double().get(out.d);
+        if (code) ev.broken = true;
+        if (!code) out.kind = OdLeaf::Kind::Double;
+        return out;
+    }
+    std::int64_t as_i64;
+    std::uint64_t as_u64;
+    const char* const first = token.data();
+    const char* const last = first + token.size();
+    const auto i = dstd::from_chars(first, last, as_i64);
+    if (i.ec == std::errc() && i.ptr == last) {
+        code = v.get_int64().get(out.i);
+        if (code) ev.broken = true;
+        if (!code) out.kind = OdLeaf::Kind::Int;
+        return out;
+    }
+    const auto u = dstd::from_chars(first, last, as_u64);
+    if (u.ec == std::errc() && u.ptr == last) {
+        code = v.get_uint64().get(out.u);
+        if (code) ev.broken = true;
+        if (!code) out.kind = OdLeaf::Kind::UInt;
+        return out;
+    }
+    // A run of digits too large for uint64 is a value this engine does not
+    // hold, as in the DOM; anything else is not a number.
+    const std::size_t digits = token.size() - (token.front() == '-' ? 1 : 0);
+    if (digits == 0 ||
+        token.find_first_not_of("0123456789", token.front() == '-' ? 1 : 0) !=
+            dstd::StringView::npos)
+        ev.broken = true;
+    return out;
+}
+
+}  // namespace od
+
+// A record read on demand from a simdjson document, with the same rules as
+// JsonRecord: a bare name the record lacks resolves under "args." when
+// `args_fallback` is set, and a name present as null does not.
+struct OnDemandRecord {
+    const OnDemandEvent& event;
+    bool args_fallback;
+
+    bool lookup(const dstd::String& path, od::OnDemand& out) const {
+        const od::Resolver resolver{event};
+        if (resolver.resolve(path, out)) return true;
+        if (!args_fallback || common::has_args_prefix(path)) return false;
+        return resolver.resolve(event.strings.push("args.", path), out);
+    }
+
+    template <class Leaf>
+    Truth field(const detail::FieldNode& f, Leaf&& leaf) const {
+        od::OnDemand v;
+        if (!lookup(f.path, v)) return Truth::Unknown;
+        if (!f.any) {
+            const OdLeaf l = od::read_leaf(event, v);
+            if (l.kind == OdLeaf::Kind::Null) return Truth::Unknown;
+            return leaf(l);
+        }
+        simdjson::ondemand::array arr;
+        if (od::first_char(v) != '[') return Truth::Unknown;
+        if (const auto code = v.get_array().get(arr)) {
+            od::note(event, code);
+            return Truth::Unknown;
+        }
+        for (auto element : arr) {
+            od::OnDemand el;
+            if (const auto code = element.get(el)) {
+                od::note(event, code);
+                break;
+            }
+            const OdLeaf l = od::read_leaf(event, el);
+            if (l.kind == OdLeaf::Kind::Null ||
+                l.kind == OdLeaf::Kind::Container)
+                continue;
+            if (leaf(l) == Truth::Yes) return Truth::Yes;
+        }
+        return Truth::No;
+    }
+
+    Value get(const TField& f) const {
+        od::OnDemand v;
+        if (!lookup(f.base, v)) return VMissing{};
+        const OdLeaf l = od::read_leaf(event, v);
+        switch (l.kind) {
+            case OdLeaf::Kind::String:
+                return l.s;
+            case OdLeaf::Kind::Bool:
+                return l.b;
+            case OdLeaf::Kind::Int:
+                return l.i;
+            case OdLeaf::Kind::UInt:
+                return l.u;
+            case OdLeaf::Kind::Double:
+                return l.d;
+            case OdLeaf::Kind::Container:
+                return scratch.parse(json::detail::value_extent(
+                    v.raw_json_token().data(),
+                    event.text.data() + event.text.size()));
+            case OdLeaf::Kind::Null:
+            case OdLeaf::Kind::Other:
+                break;
+        }
+        return VNull{};
+    }
+};
+
 template <class Record>
 Truth eval(const detail::QueryNode& node, const Record& rec) {
     return std::visit(
@@ -1547,6 +1898,18 @@ Truth evaluate_truth(const detail::QueryNode& node, const JsonValue& event,
 
 Truth evaluate_truth(const detail::QueryNode& node, const ValueMap& fields) {
     return eval(node, MapRecord{fields});
+}
+
+Truth evaluate_truth(const detail::QueryNode& node, const OnDemandEvent& event,
+                     bool args_fallback) {
+    const Truth t = eval(node, OnDemandRecord{event, args_fallback});
+    return event.broken ? Truth::Unknown : t;
+}
+
+bool evaluate(const detail::QueryNode& node, const OnDemandEvent& event,
+              bool args_fallback) {
+    const Truth t = eval(node, OnDemandRecord{event, args_fallback});
+    return t == Truth::Yes && !event.broken;
 }
 
 bool evaluate(const detail::QueryNode& node, const JsonValue& event,

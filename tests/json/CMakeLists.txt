@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+foreach(name test_value)
+  set(target json_${name})
+  add_executable(${target} ${name}.cpp)
+  target_link_libraries(${target} PRIVATE doctest::doctest dftracer_utils)
+  target_set_warnings(${target})
+  set_target_properties(${target} PROPERTIES OUTPUT_NAME ${name})
+  target_enable_coroutine(${target})
+  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${target} PRIVATE --coverage -fprofile-arcs
+                                             -ftest-coverage)
+    target_link_libraries(${target} PRIVATE --coverage)
+  endif()
+  set(workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${target}")
+  file(MAKE_DIRECTORY "${workdir}")
+  add_test(NAME json/${name} COMMAND ${target})
+  set_tests_properties(json/${name} PROPERTIES WORKING_DIRECTORY "${workdir}")
+endforeach()

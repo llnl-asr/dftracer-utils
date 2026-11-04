@@ -380,8 +380,14 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
         pad_.assign(line);
         pad_.resize(line.size() + simdjson::SIMDJSON_PADDING);
         simdjson::ondemand::document doc;
-        if (parser_.iterate(pad_.data(), line.size(), pad_.size()).get(doc))
-            return trace::RecordPhase::Unknown;
+        simdjson::error_code code =
+            parser_.iterate(pad_.data(), line.size(), pad_.size()).get(doc);
+        if (json::detail::is_repairable(code)) {
+            json::detail::repair_line(pad_.data(), line.size());
+            code =
+                parser_.iterate(pad_.data(), line.size(), pad_.size()).get(doc);
+        }
+        if (code) return trace::RecordPhase::Unknown;
         auto f = doc.find_field_unordered("ph");
         if (f.error()) return trace::RecordPhase::Unknown;
         return trace::read_phase(f.value_unsafe());

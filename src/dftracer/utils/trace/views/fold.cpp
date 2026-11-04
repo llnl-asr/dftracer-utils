@@ -574,6 +574,14 @@ struct Number {
     Number() : i(0) {}
 };
 
+// Whether simdjson refused an integer wider than 64 bits. It reports one of
+// 21 digits or more, or a negative one, as BIGINT_ERROR and a 20-digit one
+// above uint64 as NUMBER_ERROR.
+bool refused_big_integer(OnDemandValue& v) {
+    return json::detail::is_integer_number(
+        json::detail::trim_token(v.raw_json_token()));
+}
+
 // The double of a fraction or exponent form that simdjson refused for its
 // magnitude, as Python's json gives it.
 dstd::Optional<double> refused_real(OnDemandValue& v) {
@@ -592,6 +600,10 @@ bool read_number(OnDemandValue& v, Number& out) {
         return true;
     }
     if (code == simdjson::NUMBER_ERROR) {
+        if (refused_big_integer(v)) {
+            out.kind = Number::Kind::Big;
+            return true;
+        }
         const auto refused = refused_real(v);
         if (!refused) return false;
         out.kind = Number::Kind::Double;
@@ -874,7 +886,8 @@ class OnDemandReader {
         }
         simdjson::ondemand::number n;
         const simdjson::error_code code = v.get_number().get(n);
-        if (code == simdjson::BIGINT_ERROR) {
+        if (code == simdjson::BIGINT_ERROR ||
+            (code == simdjson::NUMBER_ERROR && refused_big_integer(v))) {
             // Wider than 64 bits: kept exact as its digits.
             ev_.args.emplace_back(key_id,
                                   ids.get_or_insert(json::detail::value_extent(

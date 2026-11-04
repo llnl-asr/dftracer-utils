@@ -51,17 +51,23 @@ inline dstd::StringView strip_ndjson_bookends(dstd::StringView bytes) {
 // desynchronise the lines around it, and a long line needs no batch capacity.
 // The buffer must be a simdjson::padded_string, or otherwise hold
 // SIMDJSON_PADDING readable bytes after `len`. Blank lines, a lone bracket
-// and a trailing comma are trimmed as on the non-indexed path.
+// and a trailing comma are trimmed as on the non-indexed path. A line that
+// simdjson refuses for bad UTF-8 or a raw control byte in a string is parsed
+// once more from a repaired private copy (@ref json::detail::repair_line).
 class PaddedLines {
    public:
     PaddedLines(simdjson::ondemand::parser& parser, const char* base,
                 std::size_t len)
         : parser_(parser), base_(base), len_(len) {}
 
-    // The next line that parses as a document, false at the end. `doc` and
-    // `line` are valid until the next call.
+    // The next line that parses as a document, false at the end. `line` is the
+    // original bytes of the line; `text` is the bytes that `doc` points into,
+    // `line` itself unless the line was repaired. `doc`, `line` and `text` are
+    // valid until the next call.
+    //
+    // Lines that no repair made parsable are counted in @ref failed.
     bool next(simdjson::ondemand::document_reference& doc,
-              dstd::StringView& line) {
+              dstd::StringView& line, dstd::StringView& text) {
         while (pos_ < len_) {
             const char* const from = base_ + pos_;
             const void* const nl = std::memchr(from, '\n', len_ - pos_);
@@ -77,25 +83,51 @@ class PaddedLines {
             const std::size_t capacity =
                 static_cast<std::size_t>(base_ + len_ - start) +
                 simdjson::SIMDJSON_PADDING;
-            if (parser_.iterate(start, trimmed, capacity).get(document_))
-                continue;
-            doc = simdjson::ondemand::document_reference(document_);
             line = dstd::StringView(start, trimmed);
+            text = line;
+            simdjson::error_code code =
+                parser_.iterate(start, trimmed, capacity).get(document_);
+            if (json::detail::is_repairable(code)) {
+                repaired_.assign(start, trimmed);
+                repaired_.resize(trimmed + simdjson::SIMDJSON_PADDING);
+                json::detail::repair_line(repaired_.data(), trimmed);
+                code =
+                    parser_.iterate(repaired_.data(), trimmed, repaired_.size())
+                        .get(document_);
+                text = dstd::StringView(repaired_.data(), trimmed);
+            }
+            if (code) {
+                ++failed_;
+                continue;
+            }
+            doc = simdjson::ondemand::document_reference(document_);
             return true;
         }
         return false;
     }
+
+    // The lines so far that did not parse as a document.
+    std::size_t failed() const noexcept { return failed_; }
 
    private:
     simdjson::ondemand::parser& parser_;
     const char* base_;
     std::size_t len_;
     std::size_t pos_ = 0;
+    std::size_t failed_ = 0;
     simdjson::ondemand::document document_;
+    dstd::String repaired_;
 };
 
 // Whether `token` is an integer too large for 64 bits. Such a number has no
 // cell, as the evaluator reads it as unknown, and is not a syntax error.
+// An object line with no closing brace, the check simdjson makes when a read of
+// the object starts. Reads only the text, as that read would abandon the
+// document.
+inline bool is_cropped_object(dstd::StringView line) {
+    return !line.empty() && line.front() == '{' && line.back() != '}';
+}
+
 inline bool is_bigint_token(dstd::StringView token) {
     while (!token.empty() && (token.back() == ' ' || token.back() == '\t' ||
                               token.back() == '\n' || token.back() == '\r'))

@@ -76,6 +76,15 @@ bool usable(detail::DocumentState& st) {
     return !st.broken;
 }
 
+simdjson::error_code open_document(detail::DocumentState& st,
+                                   simdjson::ondemand::value& root) {
+    auto parsed =
+        st.parser.iterate(st.buffer.data(), st.length, st.buffer.size());
+    if (parsed.error()) return parsed.error();
+    st.doc = std::move(parsed.value_unsafe());
+    return st.doc.get_value().get(root);
+}
+
 dstd::Unexpected<dstd::Error> parse_error(simdjson::error_code code) {
     return common::make_error(
         common::ErrorCode::Parse,
@@ -339,6 +348,83 @@ dstd::StringView raw_key(const char* begin) {
     return dstd::StringView(begin, static_cast<std::size_t>(q - begin));
 }
 
+namespace {
+
+// The length of the valid UTF-8 sequence that starts at `p`, or 0.
+std::size_t utf8_length(const unsigned char* p, std::size_t left) {
+    const unsigned char c = p[0];
+    std::size_t need;
+    unsigned char low = 0x80;
+    unsigned char high = 0xBF;
+    if (c >= 0xC2 && c <= 0xDF) {
+        need = 2;
+    } else if (c >= 0xE0 && c <= 0xEF) {
+        need = 3;
+        if (c == 0xE0) low = 0xA0;
+        if (c == 0xED) high = 0x9F;
+    } else if (c >= 0xF0 && c <= 0xF4) {
+        need = 4;
+        if (c == 0xF0) low = 0x90;
+        if (c == 0xF4) high = 0x8F;
+    } else {
+        return 0;
+    }
+    if (left < need || p[1] < low || p[1] > high) return 0;
+    for (std::size_t i = 2; i < need; ++i)
+        if (p[i] < 0x80 || p[i] > 0xBF) return 0;
+    return need;
+}
+
+}  // namespace
+
+void repair_line(char* data, std::size_t size) {
+    bool in_string = false;
+    bool escaped = false;
+    for (std::size_t i = 0; i < size; ++i) {
+        const unsigned char c = static_cast<unsigned char>(data[i]);
+        if (!in_string) {
+            in_string = c == '"';
+            continue;
+        }
+        if (!escaped) {
+            if (c == '"') {
+                in_string = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+        }
+        const bool after_backslash = escaped;
+        escaped = false;
+        if (c < 0x20) {
+            data[i] = '?';
+            if (after_backslash) data[i - 1] = '?';
+        } else if (c >= 0x80) {
+            const std::size_t length = utf8_length(
+                reinterpret_cast<const unsigned char*>(data) + i, size - i);
+            if (length == 0) {
+                data[i] = '?';
+                if (after_backslash) data[i - 1] = '?';
+            } else {
+                i += length - 1;
+            }
+        }
+    }
+}
+
+bool is_integer_number(dstd::StringView token) {
+    std::size_t i = 0;
+    if (i < token.size() && token[i] == '-') ++i;
+    if (i == token.size()) return false;
+    if (token[i] == '0') return i + 1 == token.size();
+    if (token[i] < '1' || token[i] > '9') return false;
+    for (++i; i < token.size(); ++i)
+        if (token[i] < '0' || token[i] > '9') return false;
+    return true;
+}
+
 Value ValueAccess::make(DocumentState* owner, OnDemand v, bool root) {
     static_assert(
         sizeof(OnDemand) <= Value::STORAGE_SIZE && alignof(OnDemand) <= 8,
@@ -444,12 +530,12 @@ dstd::Result<Value> Document::parse(dstd::StringView line) {
     st.dom_ready = false;
     st.broken = false;
     st.disturbed = false;
-    auto parsed =
-        st.parser.iterate(st.buffer.data(), st.length, st.buffer.size());
-    if (parsed.error()) return parse_error(parsed.error());
-    st.doc = std::move(parsed.value_unsafe());
     OnDemand root;
-    const simdjson::error_code code = st.doc.get_value().get(root);
+    simdjson::error_code code = open_document(st, root);
+    if (detail::is_repairable(code)) {
+        detail::repair_line(st.buffer.data(), st.length);
+        code = open_document(st, root);
+    }
     if (code) return parse_error(code);
     return Access::make(&st, root, true);
 }

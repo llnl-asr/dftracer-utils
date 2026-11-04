@@ -330,6 +330,26 @@ TEST_SUITE("FoldOnDemand") {
             {"bad_escape_fhash", R"j({"ph":1,"args":{"fhash":"a\qb"}})j",
              "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=\"a\\\\qb\" hh=- "
              "args{} top{} sp{}"},
+            {"ts_above_uint64", R"j({"ph":1,"ts":18446744073709551616})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- args{} top{} "
+             "sp{}"},
+            {"ts_20_nines",
+             R"j({"ph":1,"ts":99999999999999999999,"name":"n"})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=\"n\" fh=- hh=- args{} "
+             "top{} sp{}"},
+            {"args_bigint_20_over",
+             R"j({"ph":1,"args":{"a":18446744073709551616,"x":1}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"a\"=s\"18446744073709551616\" \"x\"=i1} top{} sp{}"},
+            {"args_bigint_20_nines",
+             R"j({"ph":1,"args":{"a":99999999999999999999,"x":1}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"a\"=s\"99999999999999999999\" \"x\"=i1} top{} sp{}"},
+            {"args_bigint_20_nested",
+             R"j({"ph":1,"args":{"l":[18446744073709551616,1],"o":{"k":99999999999999999999}}})j",
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"l.0\"=s\"18446744073709551616\" \"l.1\"=i1 "
+             "\"o.k\"=s\"99999999999999999999\"} top{} sp{}"},
             {"bad_escape_ph", R"j({"ph":"\q"})j",
              "ph=0 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- args{} top{} "
              "sp{}"},
@@ -388,6 +408,61 @@ TEST_SUITE("FoldOnDemand") {
         for (const char* line : cropped) {
             INFO(String("line ") << line);
             const OnDemandRead got = read_on_demand(doc, line, true);
+            CHECK_FALSE((got.parsed && !got.broken));
+        }
+    }
+
+    TEST_CASE("bad UTF-8 and raw control bytes in a string keep the line") {
+        struct Repaired {
+            String line;
+            const char* expected;
+        };
+        const Repaired shapes[] = {
+            {String("{\"ph\":1,\"name\":\"a\xff"
+                    "b\"}"),
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=\"a?b\" fh=- hh=- args{} "
+             "top{} sp{}"},
+            {String("{\"ph\":1,\"cat\":\"\xe2\x82\",\"ts\":5}"),
+             "ph=1 pid=0 tid=0 ts=5 dur=- cat=\"??\" name=- fh=- hh=- args{} "
+             "top{} sp{}"},
+            {String("{\"ph\":1,\"args\":{\"a\":\"x\ty\",\"b\":2}}"),
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"a\"=s\"x?y\" \"b\"=i2} top{} sp{}"},
+            {String("{\"ph\":1,\"args\":{\"k\tq\":1,\"b\":2}}"),
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
+             "args{\"k?q\"=i1 \"b\"=i2} top{} sp{}"},
+            {String("{\"ph\":1,\"args\":{\"fhash\":\"f\x01\"}}"),
+             "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=\"f?\" hh=- args{} "
+             "top{} sp{}"},
+            {String("{\"\xff\":1,\"ph\":1,\"ts\":7}"),
+             "ph=1 pid=0 tid=0 ts=7 dur=- cat=- name=- fh=- hh=- args{} top{} "
+             "sp{}"},
+        };
+        json::Document doc;
+        for (const Repaired& shape : shapes) {
+            INFO(shape.line);
+            StringIntern dom_intern;
+            FoldEvent dom_ev;
+            CHECK_FALSE(read_dom(shape.line, dom_ev, dom_intern, true));
+            for (const bool needs_args : {true, false}) {
+                const OnDemandRead got =
+                    read_on_demand(doc, shape.line, needs_args);
+                REQUIRE(got.parsed);
+                CHECK_FALSE(got.broken);
+                if (needs_args ||
+                    StringView(shape.line).find("\"args\"") == StringView::npos)
+                    CHECK(got.text == shape.expected);
+                const OnDemandRead next = read_on_demand(
+                    doc, R"j({"ph":1,"ts":9,"name":"z"})j", needs_args);
+                CHECK_FALSE(next.broken);
+            }
+        }
+        for (const String& broken : {String("{\"ph\":1,\x01\"ts\":5}"),
+                                     String("{\"ph\":1,\xff\"ts\":5}"),
+                                     String("{\"ph\":1,\"name\":\"a\tb"),
+                                     String("{\"ph\":1,\"ts\":\x01 5}")}) {
+            INFO(broken);
+            const OnDemandRead got = read_on_demand(doc, broken, true);
             CHECK_FALSE((got.parsed && !got.broken));
         }
     }

@@ -46,8 +46,10 @@ struct CompiledEqProbe {
 dstd::Optional<dstd::Vector<CompiledEqProbe>> try_compile_eq_probes(
     const duql::detail::QueryNode& node);
 
+// Whether every probe holds on `doc`. `broken` is set when a syntax error
+// stopped the read, so a false result means a line that could not be read.
 bool eval_compiled_eq(const dstd::Vector<CompiledEqProbe>& probes,
-                      simdjson::ondemand::document_reference doc);
+                      simdjson::ondemand::document_reference doc, bool& broken);
 
 }  // namespace dftracer::utils::utilities::reader::internal
 

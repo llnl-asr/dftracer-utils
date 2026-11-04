@@ -406,6 +406,24 @@ TEST_CASE("a line broken after the field it reads is kept for that field") {
     CHECK_FALSE(name_only->matches(*parsed));
 }
 
+TEST_CASE("a 20-digit integer above uint64 is unknown, like a longer one") {
+    json::Document doc;
+    for (const char* digits : {"18446744073709551616", "99999999999999999999",
+                               "123456789012345678901"}) {
+        auto parsed = doc.parse(dstd::String(R"({"big":)") + digits +
+                                R"(,"name":"read"})");
+        REQUIRE(parsed.has_value());
+        auto q = duql::Query::from_string(R"(big > 1 or name == "read")");
+        auto only_big = duql::Query::from_string("big > 1");
+        auto none = duql::Query::from_string("not (big > 1)");
+        REQUIRE(q.has_value());
+        CHECK(q->matches(*parsed));
+        CHECK_FALSE(only_big->matches(*parsed));
+        CHECK_FALSE(none->matches(*parsed));
+        CHECK(q->matches(*parsed));
+    }
+}
+
 TEST_CASE("a bigint is unknown, and does not break the line") {
     json::Document doc;
     auto parsed =

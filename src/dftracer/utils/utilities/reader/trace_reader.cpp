@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -523,6 +524,22 @@ std::size_t TraceReader::get_num_lines() {
     return cached_num_lines_;
 }
 
+std::size_t TraceReader::dropped_line_count() const noexcept {
+    return dropped_lines_.load(std::memory_order_relaxed);
+}
+
+void TraceReader::count_dropped(std::size_t& local,
+                                std::size_t count) noexcept {
+    local += count;
+    dropped_lines_.fetch_add(count, std::memory_order_relaxed);
+}
+
+void TraceReader::warn_dropped(std::size_t local) const {
+    if (local == 0) return;
+    DFTRACER_UTILS_LOG_WARN("%s: %zu line(s) could not be read in full",
+                            config_.file_path.c_str(), local);
+}
+
 dstd::SharedPtr<internal::Reader> TraceReader::create_indexed_reader() {
     auto indexer = CheckpointIndexerFactory::create(
         config_.file_path, index_path_, config_.checkpoint_size, false);
@@ -598,6 +615,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         // An expression may read a whole object or array, which the field map
         // cannot hold, so it runs on the record's DOM.
         dstd::StringArena event_strings;
+        std::size_t dropped = 0;
 
         for (;;) {
             auto chunk_opt = co_await chunk_gen.next();
@@ -613,12 +631,15 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                                        padded.size());
             simdjson::ondemand::document_reference doc;
             dstd::StringView src;
-            while (docs.next(doc, src)) {
+            dstd::StringView text;
+            while (docs.next(doc, src, text)) {
                 if (query && config.chunk_prune_only) {
                     bool all_present = true;
                     for (const auto& path : presence_check_paths) {
                         auto fld = doc.find_field_unordered(path);
                         if (fld.error()) {
+                            if (fld.error() != simdjson::NO_SUCH_FIELD)
+                                count_dropped(dropped);
                             all_present = false;
                             break;
                         }
@@ -627,16 +648,22 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                     doc.rewind();
                 } else if (query && query->has_expressions()) {
                     event_strings.clear();
-                    if (!duql::evaluate(
-                            duql::detail::QueryAccess::root(*query),
-                            duql::OnDemandEvent(doc, src, event_strings)))
+                    const duql::OnDemandEvent event(doc, text, event_strings);
+                    if (!duql::evaluate(duql::detail::QueryAccess::root(*query),
+                                        event)) {
+                        if (event.broken) count_dropped(dropped);
                         continue;
+                    }
                 } else if (query) {
                     duql::ValueMap fields;
                     // A syntax error stops the read and drops the line.
                     bool readable = true;
                     auto obj = doc.get_object();
-                    if (obj.error()) continue;
+                    if (obj.error()) {
+                        if (obj.error() != simdjson::INCORRECT_TYPE)
+                            count_dropped(dropped);
+                        continue;
+                    }
                     for (auto field : obj.value()) {
                         if (field.error()) {
                             readable = false;
@@ -694,7 +721,11 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                             }
                         }
                     }
-                    if (!readable || !query->evaluate(fields)) continue;
+                    if (!readable) {
+                        count_dropped(dropped);
+                        continue;
+                    }
+                    if (!query->evaluate(fields)) continue;
                 }
 
                 // Matched (or no query): lend the line's document to
@@ -702,11 +733,14 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                 // build_arrow_row call parser.for_each_field which now
                 // iterates the borrowed doc_reference.
                 doc.rewind();
+                if (internal::is_cropped_object(src)) count_dropped(dropped);
                 yield_parser.set_borrowed_document(
                     simdjson::ondemand::document_reference(doc));
                 co_yield JsonLine{src, 0, &yield_parser};
             }
+            count_dropped(dropped, docs.failed());
         }
+        warn_dropped(dropped);
         co_return;
     }
 
@@ -716,6 +750,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
 
     json::JsonParser parser;
     dstd::StringArena event_strings;
+    std::size_t dropped = 0;
 
     for (;;) {
         auto opt = co_await line_gen.next();
@@ -725,15 +760,20 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         if (!dftracer::utils::json::trim_and_validate_with_comma(
                 opt->content.data(), opt->content.size(), trimmed, trimmed_len))
             continue;
-        if (!parser.parse(dstd::StringView(trimmed, trimmed_len))) continue;
+        if (!parser.parse(dstd::StringView(trimmed, trimmed_len))) {
+            count_dropped(dropped);
+            continue;
+        }
 
         if (query && query->has_expressions()) {
             event_strings.clear();
-            if (!duql::evaluate(
-                    duql::detail::QueryAccess::root(*query),
-                    duql::OnDemandEvent(parser.raw_document(), parser.text(),
-                                        event_strings)))
+            const duql::OnDemandEvent event(parser.raw_document(),
+                                            parser.text(), event_strings);
+            if (!duql::evaluate(duql::detail::QueryAccess::root(*query),
+                                event)) {
+                if (event.broken) count_dropped(dropped);
                 continue;
+            }
             parser.rewind();
         } else if (query) {
             duql::ValueMap fields;
@@ -766,14 +806,20 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                         readable = false;
                 });
             }
-            if (!readable || !parser.raw_document().is_alive() ||
-                !query->evaluate(fields))
+            if (!readable || !parser.raw_document().is_alive()) {
+                count_dropped(dropped);
                 continue;
+            }
+            if (!query->evaluate(fields)) continue;
             parser.rewind();
         }
 
+        parser.rewind();
+        if (internal::is_cropped_object(dstd::StringView(trimmed, trimmed_len)))
+            count_dropped(dropped);
         co_yield JsonLine{opt->content, opt->line_number, &parser};
     }
+    warn_dropped(dropped);
 }
 
 coro::AsyncGenerator<dstd::Span<const char>> TraceReader::read_raw(

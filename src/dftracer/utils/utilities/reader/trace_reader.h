@@ -19,6 +19,7 @@
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 #endif
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -142,6 +143,22 @@ class TraceReader {
     /// Total line count (0 if no index).
     std::size_t get_num_lines();
 
+    /// How many lines @ref read_json and @ref read_arrow could not read in full
+    /// since this reader was made: lines that are no JSON or are cropped, and
+    /// lines broken in a part the query read. A counted line may still reach
+    /// the caller: @ref read_json with no query hands over every line as text,
+    /// and a line that is valid JSON but no object is not counted there. @ref
+    /// read_arrow reads every field, so it also counts a line that is no
+    /// object, which has no row, and a line with a field it could not read,
+    /// whose readable fields stay in a row. A blank line or a lone bracket is
+    /// not a line. A line the query did not match is not counted, and neither
+    /// is a line the index pruned or the line prefilter skipped without
+    /// parsing. The count of a read is final when its generator has run to its
+    /// end; one warning with the path and that count is logged then. A
+    /// generator that is dropped early has counted only the lines it passed.
+    /// Safe to call from any thread.
+    std::size_t dropped_line_count() const noexcept;
+
    private:
     TraceReaderConfig config_;
     bool has_index_ = false;
@@ -151,8 +168,15 @@ class TraceReader {
     std::size_t cached_num_lines_ = 0;
     bool metadata_cached_ = false;
 
+    std::atomic<std::size_t> dropped_lines_{0};
+
     void probe_index();
     void ensure_metadata_cached();
+    // Adds `count` unreadable lines to this reader's total and to `local`, the
+    // count of the read that found them.
+    void count_dropped(std::size_t& local, std::size_t count = 1) noexcept;
+    // Logs one warning for the `local` unreadable lines of a finished read.
+    void warn_dropped(std::size_t local) const;
 
     dstd::SharedPtr<internal::Reader> create_indexed_reader();
 

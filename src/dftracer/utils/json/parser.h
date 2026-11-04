@@ -158,13 +158,19 @@ class JsonParser {
     std::size_t length_ = 0;
     bool valid_ = false;
     bool borrowed_ = false;
+
+    // A read error abandons the document, and any later read of it would crash.
+    bool readable() {
+        return valid_ &&
+               static_cast<simdjson::ondemand::document&>(active_).is_alive();
+    }
 };
 
 // Template implementations
 
 template <typename Fn>
 void JsonParser::for_each_field(Fn&& fn) {
-    if (!valid_) return;
+    if (!readable()) return;
 
     auto obj_result = active_.get_object();
     if (obj_result.error()) return;
@@ -184,7 +190,7 @@ void JsonParser::for_each_field(Fn&& fn) {
 
 template <typename Fn>
 bool JsonParser::for_each_field(dstd::StringView object_key, Fn&& fn) {
-    if (!valid_) return false;
+    if (!readable()) return false;
 
     auto nested_result = active_[object_key].get_object();
     if (nested_result.error()) return false;

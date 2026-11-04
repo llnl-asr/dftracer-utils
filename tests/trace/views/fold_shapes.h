@@ -160,7 +160,6 @@ inline const Shape SHAPES[] = {
     {"ts_uint64_max", R"j({"ph":1,"ts":18446744073709551615})j",
      "ph=1 pid=0 tid=0 ts=18446744073709551615 dur=- cat=- name=- fh=- hh=- "
      "args{} top{} sp{}"},
-    {"ts_above_uint64", R"j({"ph":1,"ts":18446744073709551616})j", "rejected"},
     {"ts_bigint", R"j({"ph":1,"ts":123456789012345678901234567890})j",
      "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- args{} top{} sp{}"},
     {"ts_negative", R"j({"ph":1,"ts":-1})j",
@@ -251,10 +250,6 @@ inline const Shape SHAPES[] = {
      R"j({"ph":1,"args":{"a":-9223372036854775809,"x":1}})j",
      "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
      "args{\"a\"=s\"-9223372036854775809\" \"x\"=i1} top{} sp{}"},
-    {"args_bigint_20_over",
-     R"j({"ph":1,"args":{"a":18446744073709551616,"x":1}})j", "rejected"},
-    {"args_bigint_20_nines",
-     R"j({"ph":1,"args":{"a":99999999999999999999,"x":1}})j", "rejected"},
     {"args_bigint_neg_20",
      R"j({"ph":1,"args":{"a":-18446744073709551616,"x":1}})j",
      "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "

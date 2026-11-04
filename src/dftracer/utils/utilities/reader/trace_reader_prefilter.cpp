@@ -150,12 +150,14 @@ dstd::Optional<dstd::Vector<CompiledEqProbe>> try_compile_eq_probes(
 
 // Evaluate compiled AND-of-EQ probes by directly probing simdjson fields.
 bool eval_compiled_eq(const dstd::Vector<CompiledEqProbe>& probes,
-                      simdjson::ondemand::document_reference doc) {
+                      simdjson::ondemand::document_reference doc,
+                      bool& broken) {
     // The value of `key` in `obj`: nullopt when absent, an empty value when
     // it is null.
     // A syntax error leaves the iterator unusable and drops the line; no
     // rewind follows it.
-    bool bad = false;
+    bool& bad = broken;
+    bad = false;
     using Found = dstd::Optional<dstd::Optional<simdjson::ondemand::value>>;
     auto field = [&bad](auto&& obj, const dstd::String& key) -> Found {
         auto r = obj.find_field_unordered(dstd::StringView(key));

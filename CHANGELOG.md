@@ -412,6 +412,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Keep a line with a number too large for a double, such as `1e400`, and read that number as positive or negative infinity on the on-demand read paths.
 - Keep a line with an invalid string escape, such as `\q` or a lone surrogate, and read that string as its raw text on the on-demand read paths.
   Readers that still use the DOM parser drop these lines.
+- Fix `read_arrow` when one key holds several value types: the column now widens and keeps every value, where it read past a buffer or wrote a null.
+  Mixed numbers become a double column and any other mix becomes a text column, so a value can change form: an integer above 2^53 becomes inexact, and `1.50` becomes `1.5` in text.
+- Fix the Python Arrow stream reading a column of another type under the first type: such a column now goes to `_extra` as JSON.
+- Read an integer of 20 or more digits above the 64-bit range as its exact digits on the on-demand read paths, as a text cell in `read_arrow`.
+- Read a line with bad UTF-8 or a raw control byte in a string, with `?` in place of each bad byte in the parsed fields; the raw line stays as it was.
+- Add `TraceReader::dropped_line_count()` and one warning per read for lines that could not be read in full, such as a cropped line.
+  A cropped line stays in `read_json` as text, and its readable fields stay in `read_arrow`.
+- Fix a crash when code read a field of a line whose document a read error had abandoned.
 - Fix byte range reads that open more than 512 bytes into a line, which returned the tail of that line and lost the event.
   Adjacent byte ranges now give each line once and whole, at any cut and any line size.
 - Keep the duration sum of a chunk at INT64_MAX where a larger sum overflowed and gave a negative sum or a wrong mean.

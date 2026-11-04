@@ -6,6 +6,7 @@
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -171,7 +172,13 @@ static EventProbe probe_event(const char* data, std::size_t n,
     padbuf.resize(n + simdjson::SIMDJSON_PADDING);
     EventProbe p;
     simdjson::ondemand::document doc;
-    if (parser.iterate(padbuf.data(), n, padbuf.size()).get(doc)) return p;
+    simdjson::error_code code =
+        parser.iterate(padbuf.data(), n, padbuf.size()).get(doc);
+    if (json::detail::is_repairable(code)) {
+        json::detail::repair_line(padbuf.data(), n);
+        code = parser.iterate(padbuf.data(), n, padbuf.size()).get(doc);
+    }
+    if (code) return p;
     auto f = doc.find_field_unordered("ph");
     if (!f.error()) p.phase = read_phase(f.value_unsafe());
     if (!view.window) return p;

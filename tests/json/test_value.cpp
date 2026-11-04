@@ -692,3 +692,185 @@ TEST_CASE("an unterminated string or a cropped line is still an error") {
         if (b) CHECK_FALSE(b->as_int().has_value());
     }
 }
+
+TEST_CASE(
+    "an integer wider than 64 bits reads as a double, +inf past 308 digits") {
+    Document doc;
+    const dstd::String d308(308, '9');
+    const dstd::String d309(309, '9');
+    const dstd::String line =
+        R"({"a":18446744073709551616,"b":99999999999999999999,)"
+        R"("c":)" +
+        d308 + R"(,"d":)" + d309 + R"(,"e":-)" + d309 + R"(,"f":2})";
+    Value v = root(doc, line);
+    CHECK(field(v, "a").as_double() == 18446744073709551616.0);
+    CHECK(field(v, "b").as_double() == 1e20);
+    CHECK(field(v, "c").as_double() == doctest::Approx(1e308).epsilon(1e-9));
+    CHECK(field(v, "d").as_double() == std::numeric_limits<double>::infinity());
+    CHECK(field(v, "e").as_double() ==
+          -std::numeric_limits<double>::infinity());
+    CHECK(field(v, "f").as_int() == 2);
+    CHECK(field(v, "a").type() == Value::Type::Double);
+}
+
+TEST_CASE("get_double_or_refused agrees with as_double on wide integers") {
+    const dstd::String d309(309, '9');
+    for (const dstd::String& token :
+         {dstd::String("18446744073709551616"),
+          dstd::String("99999999999999999999"), d309, "-" + d309,
+          dstd::String("1e400")}) {
+        const dstd::String line = R"({"a":)" + token + "}";
+        Document doc;
+        Value v = root(doc, line);
+        const auto expected = field(v, "a").as_double();
+        simdjson::ondemand::parser parser;
+        const simdjson::padded_string padded(line);
+        auto document = parser.iterate(padded);
+        auto object = document.get_object();
+        auto value = object.find_field_unordered("a");
+        auto inner = value.value_unsafe();
+        const auto got = json::detail::get_double_or_refused(inner);
+        REQUIRE(expected.has_value());
+        REQUIRE(got.has_value());
+        CHECK(*got == *expected);
+    }
+}
+
+TEST_CASE(
+    "a line with bad UTF-8 or a raw control byte in a string keeps its "
+    "fields") {
+    Document doc;
+    struct Case {
+        dstd::String line;
+        dstd::String a;
+    };
+    const Case cases[] = {
+        {dstd::String("{\"a\":\"\xff\",\"b\":1}"), "?"},
+        {dstd::String("{\"a\":\"x\xff\xfey\",\"b\":1}"), "x??y"},
+        {dstd::String("{\"a\":\"ab\xff\",\"b\":1}"), "ab?"},
+        {dstd::String("{\"a\":\"\xe2\x82\",\"b\":1}"), "??"},
+        {dstd::String("{\"a\":\"\xe2\x82\xac\xe2\x82\",\"b\":1}"),
+         dstd::String("\xe2\x82\xac??")},
+        {dstd::String("{\"a\":\"\xc0\xaf\",\"b\":1}"), "??"},
+        {dstd::String("{\"a\":\"\xed\xa0\x80\",\"b\":1}"), "???"},
+        {dstd::String("{\"a\":\"x\ty\",\"b\":1}"), "x?y"},
+        {dstd::String("{\"a\":\"x\ny\",\"b\":1}"), "x?y"},
+        {dstd::String("{\"a\":\"\x01\",\"b\":1}"), "?"},
+        {dstd::String("{\"a\":\"x\0y\",\"b\":1}", 17), dstd::String("x?y")},
+        {dstd::String("{\"a\":\"ok\xc3\xa9\",\"b\":1}"),
+         dstd::String("ok\xc3\xa9")},
+    };
+    for (const Case& c : cases) {
+        INFO(c.line);
+        Value v = root(doc, c.line);
+        CHECK(field(v, "a").as_string() == c.a);
+        CHECK(field(v, "b").as_int() == 1);
+    }
+}
+
+TEST_CASE("a bad byte after a backslash replaces the backslash too") {
+    Document doc;
+    struct Case {
+        dstd::String line;
+        dstd::String a;
+    };
+    const Case cases[] = {
+        {dstd::String("{\"a\":\"x\\\xffy\",\"b\":1}"), "x??y"},
+        {dstd::String("{\"a\":\"x\\\ty\",\"b\":1}"), "x??y"},
+        {dstd::String("{\"a\":\"x\\\x01y\",\"b\":1}"), "x??y"},
+        {dstd::String("{\"a\":\"x\\\xe2\x82\",\"b\":1}"), "x???"},
+        {dstd::String("{\"a\":\"x\\\\\xffy\",\"b\":1}"), dstd::String("x\\?y")},
+        {dstd::String("{\"a\":\"x\\\\\ty\",\"b\":1}"), dstd::String("x\\?y")},
+        {dstd::String("{\"a\":\"x\\\\\\\xffy\",\"b\":1}"),
+         dstd::String("x\\??y")},
+        {dstd::String("{\"a\":\"x\\ny\\\xff\",\"b\":1}"),
+         dstd::String("x\ny??")},
+    };
+    for (const Case& c : cases) {
+        INFO(c.line);
+        Value v = root(doc, c.line);
+        CHECK(field(v, "a").as_string() == c.a);
+        CHECK(field(v, "b").as_int() == 1);
+    }
+}
+
+TEST_CASE("bad bytes at the start, middle and end of a line are repaired") {
+    Document doc;
+    const dstd::String lines[] = {
+        dstd::String("{\"a\":\"\xff\"}"),
+        dstd::String("{\"p\":1,\"a\":\"\xff\",\"q\":2}"),
+        dstd::String("{\"p\":1,\"q\":2,\"a\":\"\xff\"}"),
+        dstd::String("{\"a\":\"\t\"}"),
+        dstd::String("{\"p\":1,\"a\":\"\t\",\"q\":2}"),
+        dstd::String("{\"p\":1,\"q\":2,\"a\":\"\t\"}"),
+    };
+    for (const dstd::String& line : lines) {
+        INFO(line);
+        Value v = root(doc, line);
+        CHECK(field(v, "a").as_string() == "?");
+        auto again = root(doc, line);
+        int members = 0;
+        again.for_each_member([&](dstd::StringView, Value) { ++members; });
+        CHECK(members >= 1);
+    }
+}
+
+TEST_CASE(
+    "a name with a raw control byte or bad UTF-8 reads as its repaired text") {
+    Document doc;
+    Value v = root(doc, dstd::String("{\"a\tb\":1,\"c\xff\":2,\"d\":3}"));
+    dstd::String names;
+    v.for_each_member([&](dstd::StringView name, Value m) {
+        names += name;
+        names += '|';
+        (void)m.as_int();
+    });
+    CHECK(names == "a?b|c?|d|");
+    Value again = root(doc, dstd::String("{\"a\tb\":1,\"d\":3}"));
+    CHECK(field(again, "a?b").as_int() == 1);
+    CHECK(field(again, "d").as_int() == 3);
+}
+
+TEST_CASE(
+    "a control byte outside a string, or bad UTF-8 outside one, stays broken") {
+    Document doc;
+    struct Case {
+        dstd::String line;
+        bool parses;
+    };
+    // A line that parses has a document but no readable "b" after the bad
+    // byte; the others are refused by the parser.
+    const Case cases[] = {
+        {dstd::String("{\"a\":1,\x01\"b\":2}"), true},
+        {dstd::String("{\"a\":\x01 1,\"b\":2}"), true},
+        {dstd::String("{\"a\":1,\xff\"b\":2}"), false},
+        {dstd::String("{\"a\":1\xc3,\"b\":2}"), false},
+        {dstd::String("{\"a\":\"x\ty"), false},
+        {dstd::String("{\"a\":\"\xff"), false},
+        {dstd::String("{\"a\":\"x\ty\",\"b\":"), false},
+    };
+    for (const Case& c : cases) {
+        INFO(c.line);
+        auto parsed = doc.parse(c.line);
+        REQUIRE(parsed.has_value() == c.parses);
+        if (!parsed) continue;
+        CHECK_FALSE(parsed->find("b").has_value());
+    }
+}
+
+TEST_CASE("a repaired line leaves the next parse and the views valid") {
+    Document doc;
+    Value first = root(doc, dstd::String("{\"a\":\"x\ty\",\"b\":\"z\"}"));
+    const auto a = field(first, "a").as_string();
+    REQUIRE(a.has_value());
+    const auto b = field(first, "b").as_string();
+    REQUIRE(b.has_value());
+    CHECK(*a == "x?y");
+    CHECK(*b == "z");
+    Value second = root(doc, R"({"a":"plain","b":1})");
+    CHECK(field(second, "a").as_string() == "plain");
+    Value third = root(doc, dstd::String("{\"a\":\"\xff\"}"));
+    CHECK(field(third, "a").as_string() == "?");
+    Value fourth = root(doc, R"({"a":"plain"})");
+    CHECK(field(fourth, "a").as_string() == "plain");
+}

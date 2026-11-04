@@ -212,6 +212,42 @@ TEST_SUITE("ViewScanner") {
     }
 
     TEST_CASE(
+        "ViewScanner - a metadata record with a bad byte is still dropped") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        dstd::String pfw = env.get_dir() + "/badmeta.pfw";
+        {
+            dftu_utils_test::FileOut ofs(pfw);
+            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":1,"args":{}})"
+                << "\n"
+                << dstd::String(
+                       "{\"name\":\"FH\",\"ph\":\"M\",\"args\":{"
+                       "\"name\":\"/a\xffz\",\"value\":\"fh1\"}}")
+                << "\n"
+                << dstd::String(
+                       "{\"name\":\"HH\",\"ph\":\"M\",\"args\":{"
+                       "\"name\":\"n\tm\",\"value\":\"hh1\"}}")
+                << "\n"
+                << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":1,"args":{}})"
+                << "\n";
+        }
+        dstd::String gz = pfw + ".gz";
+        compress_file_to_gzip(pfw, gz);
+        (void)dstd::fs::remove(pfw);
+
+        ViewScannerInput input;
+        input.with_file_path(dstd::String(gz))
+            .with_index_path(dstd::String(determine_index_path(gz, "")))
+            .with_checkpoint_size(1024)
+            .with_byte_range(0, std::numeric_limits<std::size_t>::max());
+        ViewScannerUtility reader;
+        const auto output = collect_view_output(reader, input);
+        REQUIRE(output.events.size() == 2);
+        for (const auto& e : output.events)
+            CHECK(e.find(R"("ph":"M")") == dstd::String::npos);
+    }
+
+    TEST_CASE(
         "ViewScanner - include_metadata returns every metadata record past "
         "the query") {
         TestEnvironment env(200);

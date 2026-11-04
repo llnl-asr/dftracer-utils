@@ -93,6 +93,25 @@ dstd::Optional<dstd::StringView> decode_string(dstd::StringView text,
 /// after simdjson reports an error, so a valid line costs nothing.
 dstd::Optional<double> refused_number(dstd::StringView token);
 
+/// Whether simdjson refuses a line at parse time for a byte that
+/// @ref repair_line can replace: bad UTF-8 or a raw control byte in a string.
+inline bool is_repairable(simdjson::error_code code) {
+    return code == simdjson::UTF8_ERROR || code == simdjson::UNESCAPED_CHARS;
+}
+
+/// Replaces, in place and without changing the length, each invalid UTF-8 byte
+/// and each raw control byte inside a string of the JSON text `data` with `?`.
+/// Bytes outside strings stay, so a line that is broken there stays broken.
+/// Call it on a private copy, only after parsing `data` failed with
+/// @ref is_repairable.
+void repair_line(char* data, std::size_t size);
+
+/// Whether `token` is a JSON integer: no fraction or exponent. Ask for a token
+/// simdjson refused as a number, where it means an integer wider than 64 bits
+/// (simdjson reports the 20-digit ones above uint64 as NUMBER_ERROR, not
+/// BIGINT_ERROR).
+bool is_integer_number(dstd::StringView token);
+
 /// `token`, the text up to the next structural byte, without the whitespace
 /// that follows the value. Needs no scan, unlike @ref value_extent.
 inline dstd::StringView trim_token(dstd::StringView token) {

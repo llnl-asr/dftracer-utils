@@ -307,6 +307,44 @@ TEST_SUITE("RawGzipFuse") {
             snapshot, file));  // index built in the dump pass
     }
 
+    // A metadata record whose string holds a bad byte is still a metadata
+    // record, so the dump drops it.
+    TEST_CASE("View.sink_json drops a metadata record with a bad byte") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        dstd::String pfw = env.get_dir() + "/badmeta.pfw";
+        {
+            dftu_utils_test::FileOut ofs(pfw);
+            ofs << dstd::String(
+                       "{\"name\":\"FH\",\"cat\":\"dftracer\",\"pid\":1,"
+                       "\"tid\":1,\"ph\":\"M\",\"args\":{\"name\":"
+                       "\"/a\xffz\",\"value\":\"fh1\"}}")
+                << "\n"
+                << dstd::String(
+                       "{\"name\":\"HH\",\"cat\":\"dftracer\",\"pid\":1,"
+                       "\"tid\":1,\"ph\":\"M\",\"args\":{\"name\":"
+                       "\"n\tm\",\"value\":\"hh1\"}}")
+                << "\n";
+            for (int i = 0; i < 5; ++i)
+                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                    << (100 + i) << R"(,"dur":2,"args":{"fhash":"fh1"}})"
+                    << "\n";
+        }
+        dstd::String gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 600);
+        (void)dstd::fs::remove(pfw);
+
+        dstd::String idx =
+            dstd::String(determine_index_path(gz, env.get_dir() + "/ei"));
+        StringSink boot;
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .sink_json(boot)
+            .get();
+        const auto lines = boot.lines();
+        CHECK(lines.size() == 5);
+        CHECK(count_containing(lines, R"("ph":"M")") == 0);
+    }
+
     // A filtered first-touch aggregation whose predicate names only
     // POD-evaluable fields (cat here) now takes the bootstrap: it applies the
     // filter in the one pass AND leaves a complete index behind. Correctly

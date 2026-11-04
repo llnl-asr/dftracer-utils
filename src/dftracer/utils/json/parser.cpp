@@ -15,6 +15,11 @@ bool JsonParser::parse(dstd::StringView json_line) {
     padbuf_.resize(json_line.size() + simdjson::SIMDJSON_PADDING);
     auto result =
         parser_.iterate(padbuf_.data(), json_line.size(), padbuf_.size());
+    if (detail::is_repairable(result.error())) {
+        detail::repair_line(padbuf_.data(), json_line.size());
+        result =
+            parser_.iterate(padbuf_.data(), json_line.size(), padbuf_.size());
+    }
     if (result.error()) {
         valid_ = false;
         return false;
@@ -27,27 +32,27 @@ bool JsonParser::parse(dstd::StringView json_line) {
 
 void JsonParser::rewind() {
     // A document a read error abandoned cannot be rewound.
-    if (valid_ && (borrowed_ || doc_.is_alive())) {
+    if (readable()) {
         active_.rewind();
     }
 }
 
 dstd::Optional<std::int64_t> JsonParser::get_int64(dstd::StringView key) {
-    if (!valid_) return dstd::nullopt;
+    if (!readable()) return dstd::nullopt;
     auto result = active_[key].get_int64();
     if (result.error()) return dstd::nullopt;
     return result.value();
 }
 
 dstd::Optional<std::uint64_t> JsonParser::get_uint64(dstd::StringView key) {
-    if (!valid_) return dstd::nullopt;
+    if (!readable()) return dstd::nullopt;
     auto result = active_[key].get_uint64();
     if (result.error()) return dstd::nullopt;
     return result.value();
 }
 
 dstd::Optional<double> JsonParser::get_double(dstd::StringView key) {
-    if (!valid_) return dstd::nullopt;
+    if (!readable()) return dstd::nullopt;
     auto result = active_[key];
     if (result.error()) return dstd::nullopt;
     auto value = result.value_unsafe();
@@ -55,14 +60,14 @@ dstd::Optional<double> JsonParser::get_double(dstd::StringView key) {
 }
 
 dstd::Optional<bool> JsonParser::get_bool(dstd::StringView key) {
-    if (!valid_) return dstd::nullopt;
+    if (!readable()) return dstd::nullopt;
     auto result = active_[key].get_bool();
     if (result.error()) return dstd::nullopt;
     return result.value();
 }
 
 dstd::Optional<dstd::StringView> JsonParser::get_string(dstd::StringView key) {
-    if (!valid_) return dstd::nullopt;
+    if (!readable()) return dstd::nullopt;
     auto result = active_[key];
     if (result.error()) return dstd::nullopt;
     auto value = result.value_unsafe();
@@ -71,7 +76,7 @@ dstd::Optional<dstd::StringView> JsonParser::get_string(dstd::StringView key) {
 
 dstd::Optional<simdjson::ondemand::value> JsonParser::get_value(
     dstd::StringView key) {
-    if (!valid_) return dstd::nullopt;
+    if (!readable()) return dstd::nullopt;
     auto result = active_[key];
     if (result.error()) return dstd::nullopt;
     return result.value();

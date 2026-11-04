@@ -29,7 +29,7 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/indexer_scanned.h>
+#include <dftracer/utils/utilities/filesystem/types.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>

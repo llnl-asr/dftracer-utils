@@ -77,8 +77,14 @@ if(rc)
   message(FATAL_ERROR "the header project does not configure: ${rc}")
 endif()
 
+# Report every bad header in one run, not only the first.
+if(GENERATOR MATCHES "Ninja")
+  set(keep_going -k 0)
+else()
+  set(keep_going -k)
+endif()
 execute_process(COMMAND "${CMAKE_COMMAND}" --build "${WORK_DIR}/build"
-                        --parallel
+                        --parallel -- ${keep_going}
                 RESULT_VARIABLE rc)
 if(rc)
   message(FATAL_ERROR "an installed header does not compile on its own: ${rc}")

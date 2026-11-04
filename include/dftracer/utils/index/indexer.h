@@ -148,6 +148,10 @@ dstd::String to_json(const dstd::Vector<FileExplain>& explain);
 class Indexer;
 
 namespace detail {
+/// Opens trace files a caller already scanned, with the size and mtime that
+/// scan read. The first status(), build() or rebuild() of the @ref Indexer
+/// uses them without stat'ing. Later calls stat the files. Throws
+/// INVALID_ARGUMENT when `files` is empty.
 Indexer open_scanned(dstd::Vector<utilities::filesystem::FileEntry> files,
                      IndexerOptions options);
 }  // namespace detail

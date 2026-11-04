@@ -14,7 +14,7 @@
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/indexer_scanned.h>
+#include <dftracer/utils/utilities/filesystem/types.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>

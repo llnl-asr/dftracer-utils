@@ -655,10 +655,12 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     Acc ev_out, cs_out, ag_out;
     bool truncated = false;
     auto fold_event = [&group_col, threshold, begin](
-                          Acc& acc, simdjson::dom::element root,
-                          dstd::StringView raw) {
+                          Acc& acc, json::Value& root, dstd::StringView raw) {
         double dur = 0;
-        if (!fold_density(root, threshold, begin, acc.dens, &dur, group_col)) {
+        const DensityFold folded =
+            fold_density(root, threshold, begin, acc.dens, &dur, group_col);
+        if (folded == DensityFold::Broken) return;
+        if (folded == DensityFold::Individual) {
             acc.big.emplace_back(raw);
             acc.big_dur.push_back(dur);
         }
@@ -669,10 +671,10 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         auto ev_h = p1run.fold<Acc>(
             [&fields, &fold_event](Acc& acc, json::Value&,
                                    dstd::StringView raw) {
-                fields.with_event(
-                    raw, [&](simdjson::dom::element root, dstd::StringView ev) {
-                        fold_event(acc, root, ev);
-                    });
+                fields.with_event(raw,
+                                  [&](json::Value& root, dstd::StringView ev) {
+                                      fold_event(acc, root, ev);
+                                  });
             },
             merge_acc);
         return dstd::Function<void(const views::ExportStats&)>(
@@ -682,20 +684,14 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             });
     };
     auto pass1 = [&](views::ViewSession& p1run) {
-        auto ev_h = p1run.fold<Acc>(
-            duql::parse_or_throw("ph == 1 or ph == \"X\""),
-            [&fold_event](Acc& acc, json::Value& jv, dstd::StringView raw) {
-                if (const auto root = json::detail::ValueAccess::dom(jv))
-                    fold_event(acc, *root, raw);
-            },
-            merge_acc);
+        auto ev_h =
+            p1run.fold<Acc>(duql::parse_or_throw("ph == 1 or ph == \"X\""),
+                            fold_event, merge_acc);
         auto cs_h = p1run.fold<Acc>(
             duql::parse_or_throw("ph == 2 or ph == \"C\""),
             [begin, threshold, ncols](Acc& acc, json::Value& jv,
                                       dstd::StringView) {
-                if (const auto root = json::detail::ValueAccess::dom(jv))
-                    fold_counter_density(*root, begin, threshold, ncols,
-                                         acc.dens);
+                fold_counter_density(jv, begin, threshold, ncols, acc.dens);
             },
             merge_acc);
         // ph=3 SELECTIVE-aggregation records: the individual events were
@@ -705,8 +701,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         auto ag_h = p1run.fold<Acc>(
             duql::parse_or_throw("ph == 3 or ph == \"A\""),
             [](Acc& acc, json::Value& jv, dstd::StringView raw) {
-                if (const auto root = json::detail::ValueAccess::dom(jv))
-                    collect_aggregated(*root, raw, acc.agg);
+                collect_aggregated(jv, raw, acc.agg);
             },
             merge_acc);
         return dstd::Function<void(const views::ExportStats&)>(
@@ -791,16 +786,15 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
                     duql::parse_or_throw("ph == 3 or ph == \"A\""),
                     [agg_lo](Acc& acc, json::Value& jv, dstd::StringView raw) {
                         double ts = 0, dur = 0;
-                        if (!parse_ts_dur(raw, ts, dur) || ts < agg_lo) return;
-                        if (const auto root =
-                                json::detail::ValueAccess::dom(jv))
-                            collect_aggregated(*root, raw, acc.agg);
+                        if (!parse_ts_dur(jv, ts, dur) || ts < agg_lo) return;
+                        collect_aggregated(jv, raw, acc.agg);
                     },
                     merge_acc);
             auto enclose = [begin, enc_lo, skip_from](Acc& acc,
+                                                      json::Value& event,
                                                       dstd::StringView raw) {
                 double ts = 0, dur = 0;
-                if (!parse_ts_dur(raw, ts, dur) || ts < enc_lo) return;
+                if (!parse_ts_dur(event, ts, dur) || ts < enc_lo) return;
                 if (dur > acc.max_dur) acc.max_dur = dur;
                 if (ts < begin && ts + dur > begin && dur < skip_from) {
                     acc.big.emplace_back(raw);
@@ -811,17 +805,17 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
                 enc_h = s.fold<Acc>(
                     [&fields, enclose](Acc& acc, json::Value&,
                                        dstd::StringView raw) {
-                        fields.with_event(raw, [&](simdjson::dom::element,
-                                                   dstd::StringView ev) {
-                            enclose(acc, ev);
-                        });
+                        fields.with_event(
+                            raw, [&](json::Value& event, dstd::StringView ev) {
+                                enclose(acc, event, ev);
+                            });
                     },
                     merge_acc);
             else if (want_enc)
                 enc_h = s.fold<Acc>(
                     duql::parse_or_throw("ph == 1 or ph == \"X\""),
-                    [enclose](Acc& acc, json::Value&, dstd::StringView raw) {
-                        enclose(acc, raw);
+                    [enclose](Acc& acc, json::Value& jv, dstd::StringView raw) {
+                        enclose(acc, jv, raw);
                     },
                     merge_acc);
             return dstd::Function<void(const views::ExportStats&)>(

@@ -9,10 +9,10 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schema_class.h>
 #include <dftracer/utils/json/canonical.h>
-#include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/json/value_path.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <simdjson.h>
 
 #include <charconv>
 #include <concepts>
@@ -25,68 +25,52 @@ namespace dftracer::utils::trace::views {
 
 namespace detail::typed_rows {
 
-// Walks a dotted path; a numeric segment also indexes an array.
-inline bool find_path(simdjson::dom::element root, dstd::StringView path,
-                      simdjson::dom::element& out) {
-    simdjson::dom::element cur = root;
-    while (true) {
-        const std::size_t dot = path.find('.');
-        const dstd::StringView seg = path.substr(0, dot);
-        simdjson::dom::object obj;
-        simdjson::dom::array arr;
-        if (cur.get(obj) == simdjson::SUCCESS) {
-            if (obj.at_key(seg).get(cur) != simdjson::SUCCESS) return false;
-        } else if (cur.get(arr) == simdjson::SUCCESS) {
-            const dstd::Optional<std::size_t> i =
-                dstd::from_chars<std::size_t>(seg);
-            if (!i || arr.at(*i).get(cur) != simdjson::SUCCESS) return false;
-        } else {
-            return false;
-        }
-        if (dot == dstd::StringView::npos) break;
-        path.remove_prefix(dot + 1);
-    }
-    out = cur;
-    return true;
-}
-
 template <typename V>
-bool convert(simdjson::dom::element e, V& out) {
+bool convert(json::Value& e, V& out) {
     if constexpr (std::same_as<V, bool>) {
-        return e.get(out) == simdjson::SUCCESS;
+        const auto b = e.as_bool();
+        if (!b) return false;
+        out = *b;
+        return true;
     } else if constexpr (std::integral<V>) {
-        std::int64_t i;
-        std::uint64_t u;
-        double d;
-        if (e.get(i) == simdjson::SUCCESS) {
-            if (!std::in_range<V>(i)) return false;
-            out = static_cast<V>(i);
+        const json::Value::Type type = e.type();
+        if (type == json::Value::Type::Int) {
+            const auto i = e.as_int();
+            if (!i || !std::in_range<V>(*i)) return false;
+            out = static_cast<V>(*i);
             return true;
         }
-        if (e.get(u) == simdjson::SUCCESS) {
-            if (!std::in_range<V>(u)) return false;
-            out = static_cast<V>(u);
-            return true;
+        if (type != json::Value::Type::Double) return false;
+        const dstd::StringView token = e.raw();
+        if (!token.empty() && token.front() != '-' &&
+            token.find_first_of(".eE") == dstd::StringView::npos) {
+            const dstd::Optional<std::uint64_t> u =
+                dstd::from_chars<std::uint64_t>(token);
+            if (u) {
+                if (!std::in_range<V>(*u)) return false;
+                out = static_cast<V>(*u);
+                return true;
+            }
         }
-        if (e.get(d) != simdjson::SUCCESS) return false;
-        const auto whole = index::whole_int64(d);
+        const auto d = e.as_double();
+        if (!d) return false;
+        const auto whole = index::whole_int64(*d);
         if (!whole || !std::in_range<V>(*whole)) return false;
         out = static_cast<V>(*whole);
         return true;
     } else if constexpr (std::floating_point<V>) {
-        double d;
-        if (e.get(d) != simdjson::SUCCESS) return false;
-        out = static_cast<V>(d);
+        const auto d = e.as_double();
+        if (!d) return false;
+        out = static_cast<V>(*d);
         return true;
     } else if constexpr (std::same_as<V, dstd::String>) {
-        dstd::StringView s;
-        if (e.get(s) != simdjson::SUCCESS) return false;
-        out.assign(s);
+        const auto s = e.as_string();
+        if (!s) return false;
+        out.assign(*s);
         return true;
     } else {
         static_assert(std::same_as<V, index::Json>);
-        out.text.clear();
-        json::append_canonical_json(out.text, e);
+        out.text = json::canonical_json_text(e.raw());
         return true;
     }
 }
@@ -95,22 +79,26 @@ template <typename F>
 struct FieldRead;
 template <typename T, index::FixedString PATH, typename... Options>
 struct FieldRead<index::Field<T, PATH, Options...>> {
-    static void read(simdjson::dom::element root, T& out) {
-        simdjson::dom::element e;
-        if (!find_path(root, PATH.view(), e)) return;
-        if constexpr (index::detail::Unwrap<T>::OPTIONAL) {
-            typename index::detail::Unwrap<T>::type v{};
-            if (convert(e, v)) out = std::move(v);
-        } else {
-            T v{};
-            if (convert(e, v)) out = std::move(v);
-        }
+    static void read(json::Value& root, T& out) {
+        auto fill = [&out](json::Value& e) {
+            if constexpr (index::detail::Unwrap<T>::OPTIONAL) {
+                typename index::detail::Unwrap<T>::type v{};
+                if (!convert(e, v)) return false;
+                out = std::move(v);
+            } else {
+                T v{};
+                if (!convert(e, v)) return false;
+                out = std::move(v);
+            }
+            return true;
+        };
+        json::at_path(root, PATH.view(), fill);
     }
 };
 
 // Converts to the member it initializes, reading that member's field.
 struct MemberFill {
-    simdjson::dom::element root;
+    json::Value& root;
     template <typename U>
     operator U() const {
         static_assert(index::detail::IsField<U>::value,
@@ -122,12 +110,12 @@ struct MemberFill {
 };
 
 template <std::size_t>
-MemberFill fill(simdjson::dom::element root) {
+MemberFill fill(json::Value& root) {
     return {root};
 }
 
 template <typename T, std::size_t... I>
-T decode(simdjson::dom::element root, std::index_sequence<I...>) {
+T decode(json::Value& root, std::index_sequence<I...>) {
     return T{fill<I>(root)...};
 }
 
@@ -135,9 +123,11 @@ T decode(simdjson::dom::element root, std::index_sequence<I...>) {
 
 /// Decodes one record into schema class `T` (see index::schema_spec). A
 /// missing value, or one that does not convert to the member's type, leaves
-/// the member at its default (empty for an optional member).
+/// the member at its default (empty for an optional member). Reads `record`
+/// on demand; when a read hits a syntax error the record is marked broken
+/// and the members read so far are not meaningful.
 template <typename T>
-T decode_row(simdjson::dom::element record) {
+T decode_row(json::Value& record) {
     return detail::typed_rows::decode<T>(
         record, std::make_index_sequence<index::detail::member_count<T>()>{});
 }
@@ -154,9 +144,9 @@ dataframe::LazyResult<dstd::Vector<T>> rows(const View& view, Lazy) {
                 return s.fold<dstd::Vector<T>>(
                     [](dstd::Vector<T>& out, json::Value& jv,
                        dstd::StringView) {
-                        if (const auto root =
-                                json::detail::ValueAccess::dom(jv))
-                            out.push_back(decode_row<T>(*root));
+                        T row = decode_row<T>(jv);
+                        if (!json::detail::ValueAccess::broken(jv))
+                            out.push_back(std::move(row));
                     },
                     [](dstd::Vector<T>&& a, dstd::Vector<T>&& b) {
                         if (a.empty()) return std::move(b);

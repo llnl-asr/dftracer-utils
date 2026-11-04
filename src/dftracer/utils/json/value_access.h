@@ -61,14 +61,6 @@ struct ValueAccess {
     static bool broken(const Value& v);
     static void mark_broken(const Value& v);
 
-    /// The whole event of the root value as a DOM element, for a consumer
-    /// that cannot read on demand. The first call after a parse parses the
-    /// line a second time, and later calls share that tree, so it costs one
-    /// extra parse per line however many consumers ask. Empty for a child
-    /// value or text the DOM parser rejects. The element lives until the next
-    /// @ref Document::parse.
-    static dstd::Optional<simdjson::dom::element> dom(const Value& v);
-
     /// Starts a forward walk of the members of the object `v`, restarting the
     /// root as any read of `v` would. False when `v` is not an object, its line
     /// is broken or a walk is running; an error in the object marks the line

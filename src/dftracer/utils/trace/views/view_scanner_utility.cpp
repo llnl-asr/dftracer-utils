@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/json/value_path.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -98,6 +102,193 @@ void decode_into(detail::FoldEvent& ev, simdjson::dom::element root,
     detail::extract_fold_event_into(ev, root, *input.fold_intern,
                                     input.fold_needs_args,
                                     input.fold_extra_fields, schema, &hints);
+}
+
+// As decode_into, reading the record on demand: no schema leaves for a
+// dftracer event, so the caller sends that case to decode_into.
+void decode_into(detail::FoldEvent& ev, json::Value& record,
+                 const ViewScannerInput& input, detail::DecodeHints& hints,
+                 dftracer::utils::dstd::InternCache* cache) {
+    const bool schema = input.fold_capture_schema;
+    if (input.view.by_path) {
+        const bool skip_never = schema && input.fold_skip_never_indexed;
+        detail::decode_record_into(
+            ev, record, *input.fold_intern, schema,
+            schema || input.view.paths.empty() ? nullptr : &input.view.paths,
+            input.view.record_schema, &input.view.path_fields,
+            schema ? detail::INDEX_MAX_CHILDREN : 0, &hints, skip_never, cache);
+        return;
+    }
+    detail::extract_fold_event_into(ev, record, *input.fold_intern,
+                                    input.fold_needs_args, cache,
+                                    input.fold_extra_fields);
+}
+
+bool in_role_window(json::Value& root, const ViewDefinition& view) {
+    double ts = 0;
+    const bool has_ts =
+        json::at_path(root, view.time_path, [&](json::Value& t) {
+            switch (t.type()) {
+                case json::Value::Type::Int:
+                case json::Value::Type::Double: {
+                    const auto d = t.as_double();
+                    if (!d) return false;
+                    ts = *d * view.time_factor;
+                    return true;
+                }
+                case json::Value::Type::String: {
+                    const auto text = t.as_string();
+                    const auto us =
+                        text ? dftracer::utils::index::iso8601_micros(*text)
+                             : dstd::nullopt;
+                    if (!us) return false;
+                    ts = static_cast<double>(*us);
+                    return true;
+                }
+                default:
+                    return false;
+            }
+        });
+    if (!has_ts) return false;
+    double dur = 0;
+    if (view.window_overlap && !view.duration_path.empty())
+        json::at_path(root, view.duration_path, [&](json::Value& d) {
+            const auto number = d.type() == json::Value::Type::Int ||
+                                        d.type() == json::Value::Type::Double
+                                    ? d.as_double()
+                                    : dstd::nullopt;
+            if (number) dur = *number * view.duration_factor;
+            return number.has_value();
+        });
+    return in_window(true, ts, dur, view);
+}
+
+bool in_window(json::Value& root, const ViewDefinition& view) {
+    if (!view.window) return true;
+    if (!view.time_path.empty()) return in_role_window(root, view);
+    double ts = 0, dur = 0;
+    bool has_ts = false;
+    if (auto t = root.find("ts"))
+        if (const auto d = t->as_double()) {
+            ts = *d;
+            has_ts = true;
+        }
+    if (view.window_overlap)
+        if (auto t = root.find("dur"))
+            if (const auto d = t->as_double()) dur = *d;
+    return in_window(has_ts, ts, dur, view);
+}
+
+bool query_matches(json::Value& event, const duql::Query& query,
+                   bool args_fallback) {
+    json::detail::EventView view;
+    if (!json::detail::ValueAccess::event(event, view)) return false;
+    const duql::OnDemandEvent line(*view.doc, view.text, *view.strings);
+    const bool kept = duql::evaluate(duql::detail::QueryAccess::root(query),
+                                     line, args_fallback);
+    if (line.broken) json::detail::ValueAccess::mark_broken(event);
+    return kept;
+}
+
+struct LineScan {
+    const ViewScannerInput& input;
+    const dstd::Optional<duql::Query>* query;
+    bool use_query;
+    ViewScannerBatch& batch;
+    detail::FoldEventBuffer& pool;
+    detail::DecodeHints& hints;
+    dftracer::utils::dstd::InternCache* cache;
+    json::Document& document;
+    dftracer::utils::json::RecordParser& parser;
+};
+
+void emit_event(LineScan& ls, const char* line_start, std::size_t json_len) {
+    ls.batch.events.emplace_back(line_start, json_len);
+}
+
+// One line read on demand: the window, the query and the fold decode all
+// read the same parse, which a syntax error in a part they reach drops.
+void scan_line(LineScan& ls, const char* line_start, std::size_t json_len) {
+    const ViewScannerInput& input = ls.input;
+    ViewScannerBatch& batch = ls.batch;
+    auto parsed = ls.document.parse(dstd::StringView(line_start, json_len));
+    if (!parsed || parsed->type() != json::Value::Type::Object) {
+        ++batch.lines_invalid;
+        return;
+    }
+    json::Value& event = *parsed;
+    const RecordPhase phase =
+        input.view.by_path ? RecordPhase::Unknown : trace::event_phase(event);
+    const bool metadata = phase == RecordPhase::Metadata;
+    bool match;
+    if (metadata) {
+        match = input.view.include_metadata &&
+                (!ls.use_query ||
+                 !(input.view.filter_metadata || input.view.metadata_records) ||
+                 query_matches(event, **ls.query, input.view.args_fallback));
+    } else {
+        match = in_window(event, input.view) &&
+                (!ls.use_query ||
+                 query_matches(event, **ls.query, input.view.args_fallback));
+    }
+    if (json::detail::ValueAccess::broken(event)) {
+        ++batch.lines_invalid;
+        return;
+    }
+    if (!metadata) batch.events_scanned++;
+    if (!match) return;
+    if (input.fold_intern) {
+        json::detail::ValueAccess::rewind(event);
+        decode_into(ls.pool.append(), event, input, ls.hints, ls.cache);
+        if (json::detail::ValueAccess::broken(event)) {
+            ls.pool.discard_last();
+            ++batch.lines_invalid;
+            return;
+        }
+        batch.values_unconverted += ls.pool.back().unconverted;
+        if (input.fold_keep_raw) emit_event(ls, line_start, json_len);
+    } else {
+        emit_event(ls, line_start, json_len);
+    }
+    batch.events_matched++;
+}
+
+// One line read through the DOM, for a dftracer fold that captures schema.
+void scan_dom_line(LineScan& ls, const char* line_start, std::size_t json_len) {
+    const ViewScannerInput& input = ls.input;
+    ViewScannerBatch& batch = ls.batch;
+    auto result = ls.parser.parse(line_start, json_len);
+    const bool object = !result.error() && result.value_unsafe().is_object();
+    if (!object) {
+        ++batch.lines_invalid;
+        return;
+    }
+    auto root = result.value_unsafe();
+    JsonValue json(root);
+    const RecordPhase phase = read_phase(json["ph"]);
+    const bool metadata = phase == RecordPhase::Metadata;
+    bool match;
+    if (metadata) {
+        // Metadata records bypass the event query unless they are rows the
+        // query filters.
+        match = input.view.include_metadata &&
+                (!ls.use_query ||
+                 !(input.view.filter_metadata || input.view.metadata_records) ||
+                 duql::evaluate(duql::detail::QueryAccess::root(**ls.query),
+                                json, input.view.args_fallback));
+    } else {
+        batch.events_scanned++;
+        match = in_window(root, input.view) &&
+                (!ls.use_query ||
+                 duql::evaluate(duql::detail::QueryAccess::root(**ls.query),
+                                json, input.view.args_fallback));
+    }
+    if (!match) return;
+    decode_into(ls.pool.append(), root, input,
+                !metadata && input.fold_capture_schema, ls.hints);
+    batch.values_unconverted += ls.pool.back().unconverted;
+    if (input.fold_keep_raw) emit_event(ls, line_start, json_len);
+    batch.events_matched++;
 }
 
 }  // namespace
@@ -239,7 +430,20 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
         input.fold_buffer ? *input.fold_buffer : local_pool;
 
     dftracer::utils::json::RecordParser parser;
+    dftracer::utils::json::Document document;
     detail::DecodeHints hints;
+    dstd::Optional<dftracer::utils::dstd::InternCache> local_cache;
+    dftracer::utils::dstd::InternCache* cache = input.fold_cache;
+    if (!cache && input.fold_intern) {
+        local_cache.emplace(*input.fold_intern);
+        cache = &*local_cache;
+    }
+    // A dftracer event that also enumerates its schema leaves has no on-demand
+    // form.
+    const bool dom_decode =
+        input.fold_intern && !input.view.by_path && input.fold_capture_schema;
+    LineScan scan{input, query_src, use_query, batch, pool,
+                  hints, cache,     document,  parser};
 
     while (!stream->done()) {
         auto chunk = co_await stream->read_async();
@@ -298,59 +502,10 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
 
             const std::size_t json_len = record_length(line_start, line_len);
             if (json_len > 0) {
-                auto result = parser.parse(line_start, json_len);
-                const bool object =
-                    !result.error() && result.value_unsafe().is_object();
-                if (!object) ++batch.lines_invalid;
-                if (object) {
-                    auto root = result.value_unsafe();
-                    {
-                        JsonValue json(root);
-                        const RecordPhase phase = input.view.by_path
-                                                      ? RecordPhase::Unknown
-                                                      : read_phase(json["ph"]);
-                        const bool metadata = phase == RecordPhase::Metadata;
-                        bool match;
-                        if (metadata) {
-                            // Metadata records bypass the event query unless
-                            // they are rows the query filters.
-                            match =
-                                input.view.include_metadata &&
-                                (!use_query ||
-                                 !(input.view.filter_metadata ||
-                                   input.view.metadata_records) ||
-                                 duql::evaluate(
-                                     duql::detail::QueryAccess::root(*query),
-                                     json, input.view.args_fallback));
-                        } else {
-                            batch.events_scanned++;
-                            match =
-                                in_window(root, input.view) &&
-                                (!use_query ||
-                                 duql::evaluate(
-                                     duql::detail::QueryAccess::root(*query),
-                                     json, input.view.args_fallback));
-                        }
-                        if (match) {
-                            if (input.fold_intern) {
-                                // Parse-once: the fold consumer never
-                                // re-parses.
-                                decode_into(
-                                    pool.append(), root, input,
-                                    !metadata && input.fold_capture_schema,
-                                    hints);
-                                batch.values_unconverted +=
-                                    pool.back().unconverted;
-                                if (input.fold_keep_raw)
-                                    batch.events.emplace_back(line_start,
-                                                              json_len);
-                            } else {
-                                batch.events.emplace_back(line_start, json_len);
-                            }
-                            batch.events_matched++;
-                        }
-                    }
-                }
+                if (dom_decode)
+                    scan_dom_line(scan, line_start, json_len);
+                else
+                    scan_line(scan, line_start, json_len);
             }
 
             pos = (newline - data) + 1;

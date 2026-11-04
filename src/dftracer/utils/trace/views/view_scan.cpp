@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -25,6 +26,8 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/coverage.h>
@@ -551,9 +554,15 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                 PendingCoverage pending(covered_v[w]);
                 auto& slices = fslice[w];
                 dftracer::utils::json::RecordParser parser;
+                dftracer::utils::json::Document document;
+                dstd::Optional<dftracer::utils::dstd::InternCache> cache;
+                if (intern) cache.emplace(*intern);
                 dstd::String parse_buf;
                 FoldEventBuffer fold_events;
                 DecodeHints hints;
+                // A dftracer event that also enumerates its schema leaves has
+                // no on-demand form.
+                const bool dom_decode = !vdef.by_path && any_wants_schema;
                 for (;;) {
                     if (produced.load(std::memory_order_relaxed) >= cap) break;
                     if (is_cancelled(plan)) break;
@@ -583,23 +592,35 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                         counts_v[w].add(*b);
                         on_batch(w, b->events);
                         if (!slices.empty()) {
-                            // The scan buffer carries no simdjson padding, so
-                            // parse each event into a reused padded buffer;
-                            // owned FoldEvents let the folds outlive it.
                             fold_events.clear();
                             for (auto line : b->events) {
-                                parse_buf.assign(line);
-                                parse_buf.resize(
-                                    line.size() + simdjson::SIMDJSON_PADDING,
-                                    '\0');
-                                auto doc = parser.parse(parse_buf.data(),
-                                                        line.size(), false);
-                                if (doc.error()) continue;
-                                if (vdef.by_path)
-                                    decode_record_into(
+                                if (dom_decode) {
+                                    // The scan buffer carries no simdjson
+                                    // padding, so parse each event into a
+                                    // reused padded buffer; owned FoldEvents
+                                    // let the folds outlive it.
+                                    parse_buf.assign(line);
+                                    parse_buf.resize(
+                                        line.size() +
+                                            simdjson::SIMDJSON_PADDING,
+                                        '\0');
+                                    auto doc = parser.parse(parse_buf.data(),
+                                                            line.size(), false);
+                                    if (doc.error()) continue;
+                                    extract_fold_event_into(
                                         fold_events.append(),
                                         doc.value_unsafe(), *intern,
-                                        any_wants_schema,
+                                        any_needs_args, nullptr,
+                                        any_wants_schema);
+                                    continue;
+                                }
+                                auto parsed = document.parse(line);
+                                if (!parsed) continue;
+                                json::Value& record = *parsed;
+                                FoldEvent& fe = fold_events.append();
+                                if (vdef.by_path)
+                                    decode_record_into(
+                                        fe, record, *intern, any_wants_schema,
                                         any_wants_schema ||
                                                 any_reads_every_field ||
                                                 vdef.paths.empty()
@@ -609,13 +630,14 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                                         any_wants_schema ? INDEX_MAX_CHILDREN
                                                          : 0,
                                         &hints,
-                                        any_wants_schema && skip_never_indexed);
+                                        any_wants_schema && skip_never_indexed,
+                                        &*cache);
                                 else
-                                    extract_fold_event_into(
-                                        fold_events.append(),
-                                        doc.value_unsafe(), *intern,
-                                        any_needs_args, nullptr,
-                                        any_wants_schema);
+                                    extract_fold_event_into(fe, record, *intern,
+                                                            any_needs_args,
+                                                            &*cache);
+                                if (json::detail::ValueAccess::broken(record))
+                                    fold_events.discard_last();
                             }
                             FoldBatch fb{fold_events.events(), units[i]};
                             for (auto& s : slices) s->step(fb);

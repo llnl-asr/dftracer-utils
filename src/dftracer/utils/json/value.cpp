@@ -25,9 +25,6 @@ struct DocumentState {
     std::size_t length = 0;
     simdjson::ondemand::document doc;
     dstd::StringArena strings;
-    dstd::UniquePtr<simdjson::dom::parser> dom_parser;
-    simdjson::dom::element dom_root;
-    bool dom_ready = false;
     bool broken = false;
     // A value below the root has read since the root last did: the root's
     // iterator no longer sits where its next read expects.
@@ -481,20 +478,6 @@ bool ValueAccess::event(const Value& v, EventView& out) {
     return true;
 }
 
-dstd::Optional<simdjson::dom::element> ValueAccess::dom(const Value& v) {
-    if (!v.owner_ || !v.root_ || v.owner_->broken) return dstd::nullopt;
-    DocumentState& st = *v.owner_;
-    if (!st.dom_ready) {
-        if (!st.dom_parser)
-            st.dom_parser = dstd::make_unique<simdjson::dom::parser>();
-        if (st.dom_parser->parse(st.buffer.data(), st.length, false)
-                .get(st.dom_root))
-            return dstd::nullopt;
-        st.dom_ready = true;
-    }
-    return st.dom_root;
-}
-
 bool ValueAccess::begin_object(Value& v, ObjectWalk& out) {
     if (!v.owner_ || !v.start_ || *v.start_ != '{' || !v.fresh_for_read())
         return false;
@@ -536,7 +519,6 @@ dstd::Result<Value> Document::parse(dstd::StringView line) {
     st.buffer.resize(line.size() + simdjson::SIMDJSON_PADDING);
     st.length = line.size();
     st.strings.clear();
-    st.dom_ready = false;
     st.broken = false;
     st.disturbed = false;
     OnDemand root;

@@ -377,28 +377,16 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
 
    private:
     trace::RecordPhase phase_of(dstd::StringView line) {
-        pad_.assign(line);
-        pad_.resize(line.size() + simdjson::SIMDJSON_PADDING);
-        simdjson::ondemand::document doc;
-        simdjson::error_code code =
-            parser_.iterate(pad_.data(), line.size(), pad_.size()).get(doc);
-        if (json::detail::is_repairable(code)) {
-            json::detail::repair_line(pad_.data(), line.size());
-            code =
-                parser_.iterate(pad_.data(), line.size(), pad_.size()).get(doc);
-        }
-        if (code) return trace::RecordPhase::Unknown;
-        auto f = doc.find_field_unordered("ph");
-        if (f.error()) return trace::RecordPhase::Unknown;
-        return trace::read_phase(f.value_unsafe());
+        auto parsed = doc_.parse(line);
+        return parsed ? trace::event_phase(*parsed)
+                      : trace::RecordPhase::Unknown;
     }
 
     ExportSink* sink_;
     bool drop_metadata_;
     dstd::String buf_;
     dstd::String kept_;
-    dstd::String pad_;
-    simdjson::ondemand::parser parser_;
+    json::Document doc_;
 };
 
 // First-touch full export: for an unindexed, unfiltered whole-trace dump, one
@@ -1914,7 +1902,7 @@ class BranchDriverFold : public Fold {
             if (event.type() != json::Value::Type::Object) continue;
             const bool metadata =
                 gate_metadata_ &&
-                phase_of(event) == trace::RecordPhase::Metadata;
+                trace::event_phase(event) == trace::RecordPhase::Metadata;
             // A line with a syntax error in a part that is read is dropped.
             if (json::detail::ValueAccess::broken(event)) continue;
             for (std::size_t i = 0; i < branches_->size(); ++i) {
@@ -1948,11 +1936,6 @@ class BranchDriverFold : public Fold {
     bool gate_metadata_;
     dstd::Vector<BranchConsumer> consumers_;
     json::Document doc_;
-
-    static trace::RecordPhase phase_of(json::Value& event) {
-        auto ph = event.find("ph");
-        return ph ? trace::read_phase(*ph) : trace::RecordPhase::Unknown;
-    }
 };
 
 coro::CoroTask<ExportStats> run_session(

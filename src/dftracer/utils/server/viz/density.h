@@ -9,11 +9,15 @@
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/server/viz/internal.h>
 #include <dftracer/utils/server/viz/record_event.h>
 #include <simdjson.h>
@@ -99,12 +103,81 @@ inline dstd::String extract_one_group_value(simdjson::dom::element root,
     return "";
 }
 
+// The value at dotted `path` under `root`, read on demand: `fn(value)` runs
+// on it and its result comes back; false when the path is absent. Empty
+// segments are skipped, and every step but the last needs an object.
+template <typename Fn>
+inline bool with_value_at(json::Value& root, dstd::StringView path, Fn&& fn) {
+    dstd::Optional<json::Value> holder;
+    json::Value* cur = &root;
+    std::size_t start = 0;
+    while (start <= path.size()) {
+        const auto dot = path.find('.', start);
+        const auto key = path.substr(start, dot == dstd::StringView::npos
+                                                ? path.size() - start
+                                                : dot - start);
+        if (!key.empty()) {
+            if (cur->type() != json::Value::Type::Object) return false;
+            auto next = cur->find(key);
+            if (!next) return false;
+            holder = std::move(next);
+            cur = &*holder;
+        }
+        if (dot == dstd::StringView::npos) break;
+        start = dot + 1;
+    }
+    return fn(*cur);
+}
+
+// A scalar as display text; "" for null, objects and arrays. An integer past
+// int64 keeps its digits.
+inline dstd::String scalar_text(json::Value& v) {
+    switch (v.type()) {
+        case json::Value::Type::String: {
+            const auto s = v.as_string();
+            return s ? dstd::String(*s) : dstd::String();
+        }
+        case json::Value::Type::Int: {
+            const auto i = v.as_int();
+            return i ? dstd::to_string(*i) : dstd::String();
+        }
+        case json::Value::Type::Double: {
+            const dstd::StringView token = v.raw();
+            if (!token.empty() && token.front() != '-' &&
+                token.find_first_of(".eE") == dstd::StringView::npos)
+                return dstd::String(token);
+            const auto d = v.as_double();
+            return d ? dstd::to_string(*d) : dstd::String();
+        }
+        case json::Value::Type::Bool: {
+            const auto b = v.as_bool();
+            return b && *b ? "true" : "false";
+        }
+        default:
+            return "";
+    }
+}
+
+inline dstd::String extract_one_group_value(json::Value& root,
+                                            dstd::StringView col) {
+    dstd::String out;
+    auto text = [&out](json::Value& v) {
+        out = scalar_text(v);
+        return true;
+    };
+    if (with_value_at(root, col, text)) return out;
+    auto args = root.find("args");
+    if (!args) return "";
+    if (with_value_at(*args, col, text)) return out;
+    return "";
+}
+
 // Group value for one or more columns. A comma-separated `col` ("cat,fhash")
 // yields the per-column values joined by GROUP_SEP so lanes split by the tuple;
 // each component keeps its raw value (hashes stay hashes) for client-side
 // resolution.
-inline dstd::String extract_group_value(simdjson::dom::element root,
-                                        dstd::StringView col) {
+template <typename Root>
+inline dstd::String extract_group_value(Root&& root, dstd::StringView col) {
     if (col.find(',') == dstd::StringView::npos)
         return extract_one_group_value(root, col);
     dstd::String out;
@@ -136,31 +209,13 @@ inline dstd::String extract_group_from_line(dstd::StringView event,
     return extract_group_value(root, col);
 }
 
-// Aggregate one event (already parsed, with its duration) into the density
+// Aggregate one event (its scalars read, with its duration) into the density
 // bucket for its (pid, tid, pixel-column, group). Used both by fold_density for
 // sub-threshold events and to demote a dense window's overflow individuals.
-inline void add_to_density(simdjson::dom::element root, double dur,
-                           double threshold, double begin, DensityMap& dens,
-                           dstd::StringView group_col) {
-    double ts = 0;
-    auto tr = root["ts"];
-    if (!tr.error()) ts = json_number(tr.value_unsafe());
-    std::int64_t pid = 0;
-    auto pr = root["pid"];
-    if (!pr.error())
-        pid = static_cast<std::int64_t>(json_number(pr.value_unsafe()));
-    std::int64_t tid = 0;
-    auto tir = root["tid"];
-    if (!tir.error())
-        tid = static_cast<std::int64_t>(json_number(tir.value_unsafe()));
-    dstd::StringView name;
-    auto nr = root["name"];
-    if (!nr.error() && nr.is_string()) name = nr.get_string().value_unsafe();
-
-    std::int64_t col = static_cast<std::int64_t>((ts - begin) / threshold);
-    dstd::String group;
-    if (!group_col.empty()) group = extract_group_value(root, group_col);
-    DensityKey k{pid, tid, col, std::move(group)};
+inline void add_to_density(const EventScalars& s, double dur, double threshold,
+                           double begin, DensityMap& dens, dstd::String group) {
+    std::int64_t col = static_cast<std::int64_t>((s.ts - begin) / threshold);
+    DensityKey k{s.pid, s.tid, col, std::move(group)};
     auto it = dens.find(k);
     if (it == dens.end()) it = dens.emplace(std::move(k), DensityAgg{}).first;
     auto& a = it->second;
@@ -168,27 +223,35 @@ inline void add_to_density(simdjson::dom::element root, double dur,
     a.total += dur;
     if (dur > a.max_dur) {
         a.max_dur = dur;
-        a.name.assign(name);
+        a.name.assign(s.name);
     }
 }
 
-// Fold a sub-threshold event into the density map. Returns false (caller keeps
-// it as an individual event) when it has no duration or is at/above
-// `threshold`.
-inline bool fold_density(simdjson::dom::element root, double threshold,
-                         double begin, DensityMap& dens,
-                         double* out_dur = nullptr,
-                         dstd::StringView group_col = {}) {
-    if (!root.is_object()) return false;
+enum class DensityFold : std::uint8_t { Folded, Individual, Broken };
 
-    auto dr = root["dur"];
-    if (dr.error()) return false;
-    double dur = json_number(dr.value_unsafe());
-    if (out_dur) *out_dur = dur;
-    if (threshold <= 0 || dur >= threshold) return false;
+// Fold a sub-threshold event into the density map. Individual (the caller
+// keeps it as an individual event) when it has no duration or is at/above
+// `threshold`. Broken, with nothing added, when a read hit a syntax error.
+inline DensityFold fold_density(json::Value& root, double threshold,
+                                double begin, DensityMap& dens,
+                                double* out_dur = nullptr,
+                                dstd::StringView group_col = {}) {
+    EventScalars s;
+    if (!parse_event_scalars(root, s))
+        return json::detail::ValueAccess::broken(root)
+                   ? DensityFold::Broken
+                   : DensityFold::Individual;
+    if (!s.has_dur) return DensityFold::Individual;
+    if (out_dur) *out_dur = s.dur;
+    if (threshold <= 0 || s.dur >= threshold) return DensityFold::Individual;
 
-    add_to_density(root, dur, threshold, begin, dens, group_col);
-    return true;
+    dstd::String group;
+    if (!group_col.empty()) {
+        group = extract_group_value(root, group_col);
+        if (json::detail::ValueAccess::broken(root)) return DensityFold::Broken;
+    }
+    add_to_density(s, s.dur, threshold, begin, dens, std::move(group));
+    return DensityFold::Folded;
 }
 
 // Demote a set of individual events (indices into `big`, already kept whole
@@ -199,13 +262,18 @@ inline void fold_overflow_events(const dstd::Vector<dstd::String>& big,
                                  const dstd::Vector<std::uint32_t>& overflow,
                                  double threshold, double begin,
                                  DensityMap& dens, dstd::StringView group_col) {
-    dftracer::utils::json::RecordParser parser;
+    json::Document document;
     for (std::uint32_t i : overflow) {
-        auto res = parse_string(parser, big[i]);
-        if (res.error()) continue;
-        auto root = res.value_unsafe();
-        if (root.is_object())
-            add_to_density(root, big_dur[i], threshold, begin, dens, group_col);
+        auto parsed = document.parse(big[i]);
+        if (!parsed) continue;
+        EventScalars s;
+        if (!parse_event_scalars(*parsed, s)) continue;
+        dstd::String group;
+        if (!group_col.empty()) {
+            group = extract_group_value(*parsed, group_col);
+            if (json::detail::ValueAccess::broken(*parsed)) continue;
+        }
+        add_to_density(s, big_dur[i], threshold, begin, dens, std::move(group));
     }
 }
 
@@ -268,9 +336,9 @@ inline void drop_unreferenced_hash_records(dstd::Vector<dstd::String>& big) {
     big.resize(out);
 }
 
-// Parse just the ts and dur of an event. Returns false for metadata/instant
-// events that lack either field.
-inline bool parse_ts_dur(dstd::StringView event, double& ts, double& dur) {
+// Read just the ts and dur of an event. Returns false for metadata/instant
+// events that lack either field, and for a record whose read failed.
+inline bool parse_ts_dur(json::Value& event, double& ts, double& dur) {
     EventScalars s;
     if (!parse_event_scalars(event, s) || !s.has_ts || !s.has_dur) return false;
     ts = s.ts;
@@ -499,53 +567,45 @@ inline void add_counter_bucket(DensityMap& dens, std::int64_t pid,
 }
 
 // Fold one ph="C" event into the density map at its column, one block per
-// numeric arg. Takes the parsed element (the partition already parsed it).
-inline void fold_counter_density(simdjson::dom::element root, double begin,
+// numeric arg. Reads the event the partition already holds. Adds nothing when
+// a read hit a syntax error.
+inline void fold_counter_density(json::Value& root, double begin,
                                  double threshold, std::size_t ncols,
                                  DensityMap& dens) {
-    if (!root.is_object() || threshold <= 0 || ncols == 0) return;
-    auto tr = root["ts"];
-    if (tr.error()) return;
-    double ts = json_number(tr.value_unsafe());
-    long col = static_cast<long>((ts - begin) / threshold);
+    if (threshold <= 0 || ncols == 0) return;
+    EventScalars s;
+    if (!parse_event_scalars(root, s) || !s.has_ts) return;
+    long col = static_cast<long>((s.ts - begin) / threshold);
     if (col < 0 || col >= static_cast<long>(ncols)) return;
 
-    dstd::StringView name;
-    auto nr = root["name"];
-    if (!nr.error() && nr.is_string()) name = nr.get_string().value_unsafe();
-    std::int64_t pid = 0, tid = 0;
-    auto pr = root["pid"];
-    if (!pr.error())
-        pid = static_cast<std::int64_t>(json_number(pr.value_unsafe()));
-    auto tir = root["tid"];
-    if (!tir.error())
-        tid = static_cast<std::int64_t>(json_number(tir.value_unsafe()));
-
-    auto args = root["args"];
-    if (args.error() || !args.is_object()) return;
-    for (auto field : args.get_object()) {
+    auto args = root.find("args");
+    if (!args || args->type() != json::Value::Type::Object) return;
+    dstd::Vector<dstd::Pair<dstd::String, double>> samples;
+    args->for_each_member([&](dstd::StringView key, json::Value v) {
         double val = 0;
-        auto v = field.value;
-        if (v.is_int64())
-            val = static_cast<double>(v.get_int64().value_unsafe());
-        else if (v.is_uint64())
-            val = static_cast<double>(v.get_uint64().value_unsafe());
-        else if (v.is_double())
-            val = v.get_double().value_unsafe();
-        else
-            continue;  // non-numeric arg: not a counter sample
+        switch (v.type()) {
+            case json::Value::Type::Int:
+            case json::Value::Type::Double:
+                val = value_number(v);
+                break;
+            default:
+                return;  // non-numeric arg: not a counter sample
+        }
         // Mirror the aggregator's track_default_args arg selection so we match
         // it exactly: skip metadata (hhash/fhash/dur/ret/offset/dftu_cnt) and
         // the pre-aggregated *_sum/_min/_max fields an already-aggregated trace
         // carries. Keeps junk lanes (dftu_cnt, ts, ...) out.
-        if (index::schemas::dft::agg::is_reserved_arg(field.key) ||
-            index::schemas::dft::agg::is_preagg_suffix(field.key))
-            continue;
-        dstd::String series(name);
+        if (index::schemas::dft::agg::is_reserved_arg(key) ||
+            index::schemas::dft::agg::is_preagg_suffix(key))
+            return;
+        dstd::String series(s.name);
         series.push_back('.');
-        series.append(field.key);
-        add_counter_bucket(dens, pid, tid, col, series, val, 1);
-    }
+        series.append(key);
+        samples.emplace_back(std::move(series), val);
+    });
+    if (json::detail::ValueAccess::broken(root)) return;
+    for (const auto& [series, val] : samples)
+        add_counter_bucket(dens, s.pid, s.tid, col, series, val, 1);
 }
 
 // A ph=3 SELECTIVE-aggregation record kept whole (so selection keeps every
@@ -562,44 +622,41 @@ struct AggRec {
     double total;         // dur_sum, native units
 };
 
-inline bool collect_aggregated(simdjson::dom::element root,
-                               dstd::StringView raw,
+inline bool collect_aggregated(json::Value& root, dstd::StringView raw,
                                dstd::Vector<AggRec>& out) {
-    if (!root.is_object()) return false;
-    auto tr = root["ts"];
-    if (tr.error()) return false;
-    std::int64_t pid = 0, tid = 0;
-    auto pr = root["pid"];
-    if (!pr.error())
-        pid = static_cast<std::int64_t>(json_number(pr.value_unsafe()));
-    auto tir = root["tid"];
-    if (!tir.error())
-        tid = static_cast<std::int64_t>(json_number(tir.value_unsafe()));
-    dstd::StringView name, cat;
-    auto nr = root["name"];
-    if (!nr.error() && nr.is_string()) name = nr.get_string().value_unsafe();
-    auto cr = root["cat"];
-    if (!cr.error() && cr.is_string()) cat = cr.get_string().value_unsafe();
+    EventScalars s;
+    if (!parse_event_scalars(root, s) || !s.has_ts) return false;
 
     std::uint32_t count = 1;
     double total = 0;
-    auto args = root["args"];
-    if (!args.error() && args.is_object()) {
-        auto cnt = args["dftu_cnt"];
-        if (!cnt.error()) {
-            double c = json_number(cnt.value_unsafe());
-            count = c > 0 ? static_cast<std::uint32_t>(c) : 1;
-        }
-        auto ds = args["dur_sum"];
-        if (!ds.error())
-            total = json_number(ds.value_unsafe());
-        else {
-            auto d = args["dur"];
-            if (!d.error()) total = json_number(d.value_unsafe());
-        }
+    auto args = root.find("args");
+    if (args && args->type() == json::Value::Type::Object) {
+        bool has_cnt = false, has_dur_sum = false, has_dur = false;
+        double cnt = 0, dur_sum = 0, dur = 0;
+        args->for_each_member([&](dstd::StringView key, json::Value v) {
+            if (key == "dftu_cnt") {
+                if (has_cnt) return;
+                cnt = value_number(v);
+                has_cnt = true;
+            } else if (key == "dur_sum") {
+                if (has_dur_sum) return;
+                dur_sum = value_number(v);
+                has_dur_sum = true;
+            } else if (key == "dur") {
+                if (has_dur) return;
+                dur = value_number(v);
+                has_dur = true;
+            }
+        });
+        if (has_cnt) count = cnt > 0 ? static_cast<std::uint32_t>(cnt) : 1;
+        if (has_dur_sum)
+            total = dur_sum;
+        else if (has_dur)
+            total = dur;
     }
-    out.push_back(AggRec{dstd::String(raw), json_number(tr.value_unsafe()), pid,
-                         tid, dstd::String(name), dstd::String(cat), count,
+    if (json::detail::ValueAccess::broken(root)) return false;
+    out.push_back(AggRec{dstd::String(raw), s.ts, s.pid, s.tid,
+                         dstd::String(s.name), dstd::String(s.cat), count,
                          total});
     return true;
 }

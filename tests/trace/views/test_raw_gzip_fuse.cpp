@@ -345,6 +345,46 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(count_containing(lines, R"("ph":"M")") == 0);
     }
 
+    TEST_CASE(
+        "View.sink_json keeps data lines with a huge number, a bad escape or "
+        "bad bytes and drops the metadata ones") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        dstd::String pfw = env.get_dir() + "/refused.pfw";
+        {
+            dftu_utils_test::FileOut ofs(pfw);
+            ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/a\q","value":"fh1","n":1e400}})"
+                << "\n"
+                << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"h","value":"hh1","n":123456789012345678901234567890}})"
+                << "\n"
+                << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
+                << "\n"
+                << R"({"ph":"X","name":"b\q","cat":"P","pid":1,"tid":1,"ts":110,"dur":5})"
+                << "\n"
+                << dstd::String(
+                       "{\"ph\":\"X\",\"name\":\"c\xff"
+                       "d\",\"cat\":\"P\",\"pid\":1,\"tid\":1,\"ts\":120,"
+                       "\"dur\":5}")
+                << "\n"
+                << R"({"ph":"X","name":"d","cat":"P","pid":1,"tid":1,"ts":130,"dur":5,"args":{"n":123456789012345678901234567890}})"
+                << "\n";
+        }
+        dstd::String gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 600);
+        (void)dstd::fs::remove(pfw);
+
+        dstd::String idx =
+            dstd::String(determine_index_path(gz, env.get_dir() + "/ei"));
+        StringSink boot;
+        View::from_file(dstd::String(gz), dstd::String(idx))
+            .sink_json(boot)
+            .get();
+        const auto lines = boot.lines();
+        CHECK(lines.size() == 4);
+        CHECK(count_containing(lines, R"("ph":"M")") == 0);
+        CHECK(count_containing(lines, R"("name":"b\q")") == 1);
+    }
+
     // A filtered first-touch aggregation whose predicate names only
     // POD-evaluable fields (cat here) now takes the bootstrap: it applies the
     // filter in the one pass AND leaves a complete index behind. Correctly

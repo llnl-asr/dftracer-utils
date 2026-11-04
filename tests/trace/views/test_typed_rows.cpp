@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -63,6 +64,14 @@ dstd::String write_access(TestEnvironment& env, const dstd::String& extra) {
         .build();
     return gz;
 }
+
+struct Wide {
+    index::Field<std::int64_t, "k"> k;
+    index::Field<dstd::Optional<double>, "inf"> inf;
+    index::Field<dstd::Optional<std::uint64_t>, "big"> big;
+    index::Field<dstd::Optional<dstd::String>, "s"> s;
+    index::Field<dstd::Optional<index::Json>, "j"> j;
+};
 
 View view_of(const dstd::String& gz) {
     return View::from_file(
@@ -156,5 +165,41 @@ TEST_SUITE("TypedRows") {
         const auto meta = run(rows<Event>(view_of(gz).phase(Phase::Metadata)));
         REQUIRE(meta.size() == 1);
         CHECK(*meta[0].name == "process_name");
+    }
+
+    TEST_CASE("lines with a huge number, a bad escape or bad bytes are kept") {
+        TestEnvironment env(10);
+        const dstd::String plain = env.get_dir() + "/wide.ndjson";
+        {
+            dftu_utils_test::FileOut out(plain);
+            out << R"({"k":1,"inf":1e400,"s":"a"})" << "\n";
+            out << R"({"k":2,"s":"a\qb"})" << "\n";
+            out << "{\"k\":3,\"s\":\"b\xff"
+                   "d\"}\n";
+            out << R"({"k":4,"big":18446744073709551615,"s":"c"})" << "\n";
+            out << R"({"k":5,"inf":-1e400,"s":"d"})" << "\n";
+            out << R"({"k":6,"j":{"b":[1e400],"a":"q\q"},"s":"e"})" << "\n";
+            out << R"({"k":7,"big":123456789012345678901234567890,"s":"f"})"
+                << "\n";
+        }
+        const dstd::String gz = plain + ".gz";
+        REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
+                                                                   1 << 20));
+        (void)dstd::fs::remove(plain);
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))})
+            .build();
+        auto got = run(rows<Wide>(view_of(gz)));
+        REQUIRE(got.size() == 7);
+        std::sort(got.begin(), got.end(),
+                  [](const Wide& a, const Wide& b) { return *a.k < *b.k; });
+        CHECK(**got[0].inf == std::numeric_limits<double>::infinity());
+        CHECK(**got[1].s == R"(a\qb)");
+        CHECK(**got[2].s == "b?d");
+        CHECK(**got[3].big == 18446744073709551615ULL);
+        CHECK(**got[4].inf == -std::numeric_limits<double>::infinity());
+        CHECK((*got[5].j)->text == R"({"b":[1e400],"a":"q\q"})");
+        CHECK_FALSE(got[6].big->has_value());
+        CHECK(**got[6].s == "f");
     }
 }

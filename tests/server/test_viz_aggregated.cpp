@@ -7,12 +7,14 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/json/value.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/trace_index.h>
+#include <dftracer/utils/server/viz/density.h>
 #include <dftracer/utils/server/viz_api.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -20,6 +22,7 @@
 #include <simdjson.h>
 #include <testing_utilities.h>
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
 
@@ -181,5 +184,136 @@ TEST_SUITE("viz_aggregated") {
             CHECK(ts >= 100000);
             CHECK(ts <= 105000);
         }
+    }
+
+    // A line with a huge number, a bad escape or a bad byte in a part the
+    // density reads no value from is still an event of the window.
+    TEST_CASE("density keeps events whose line is refused by a DOM parse") {
+        dstd::String trace = "[\n";
+        auto event = [](const char* name, long ts, long dur,
+                        const char* extra) {
+            return dstd::String("{\"name\":\"") + name +
+                   "\",\"cat\":\"POSIX\",\"ph\":1,\"pid\":1,\"tid\":1,"
+                   "\"ts\":" +
+                   dstd::to_string(ts) + ",\"dur\":" + dstd::to_string(dur) +
+                   extra + "}\n";
+        };
+        trace += event("a", 1000, 500, R"(,"args":{"x":1e400})");
+        trace += event("b", 2000, 500, R"(,"args":{"s":"p\qq"})");
+        trace += event("c", 3000, 500, R"(,"args":{"s":"p\ud800q"})");
+        trace += event("d", 4000, 500,
+                       R"(,"args":{"n":123456789012345678901234567890})");
+        trace += event("e", 5000, 500, "");
+        trace += event("sa", 6500, 1, R"(,"args":{"x":1e400})");
+        trace += event("sb", 6600, 1, R"(,"args":{"s":"p\qq"})");
+        trace += event("sc", 6700, 1,
+                       ",\"args\":{\"s\":\"p\xff"
+                       "q\"}");
+        trace += R"({"name":"mem","cat":"C","ph":2,"pid":1,"tid":1,"ts":7000,)"
+                 R"("args":{"free":5,"s":"x\q"}})"
+                 "\n";
+        trace += agg_event(7500, 5);
+        trace += end_event(9000);
+        trace += "]\n";
+
+        auto dir = dftu_utils_test::make_unique_test_path("viz_refused");
+        auto index = build_index(trace, dir);
+        Router router;
+        register_viz_api(router, *index);
+
+        dstd::String body = density_body(
+            router,
+            "/api/viz/density?begin=0&end=10000&width=100&ts_normalize=0");
+
+        dftracer::utils::json::Document document;
+        auto parsed = document.parse(body);
+        REQUIRE(parsed.has_value());
+        dstd::Vector<dstd::String> names;
+        auto events = parsed->find("events");
+        REQUIRE(events.has_value());
+        events->for_each_element([&](dftracer::utils::json::Value e) {
+            if (e.find("est")) return;
+            names.emplace_back(*e.find("name")->as_string());
+        });
+        std::sort(names.begin(), names.end());
+        CHECK(names == dstd::Vector<dstd::String>{"a", "b", "c", "d", "e"});
+
+        dstd::Vector<dstd::String> blocks;
+        auto density = parsed->find("density");
+        REQUIRE(density.has_value());
+        density->for_each_element([&](dftracer::utils::json::Value blk) {
+            const dstd::String name(*blk.find("name")->as_string());
+            blocks.push_back(blk.find("counter") ? name + " (counter)" : name);
+        });
+        std::sort(blocks.begin(), blocks.end());
+        CHECK(blocks == dstd::Vector<dstd::String>{"end", "mem.free (counter)",
+                                                   "sa", "sb", "sc"});
+    }
+
+    TEST_CASE("density keeps an event nested far past the depth limit") {
+        dstd::String deep;
+        for (int i = 0; i < 1000000; ++i) deep += "[";
+        deep += "1";
+        for (int i = 0; i < 1000000; ++i) deep += "]";
+        dstd::String trace = "[\n";
+        trace += regular_event(1000);
+        trace +=
+            "{\"name\":\"nest\",\"cat\":\"POSIX\",\"ph\":1,\"pid\":1,"
+            "\"tid\":1,\"ts\":2000,\"dur\":500,\"args\":{\"k\":" +
+            deep + "}}\n";
+        trace += agg_event(6000, 5);
+        trace += end_event(9000);
+        trace += "]\n";
+        auto dir = dftu_utils_test::make_unique_test_path("viz_deep");
+        auto index = build_index(trace, dir);
+        Router router;
+        register_viz_api(router, *index);
+        dstd::String body = density_body(
+            router,
+            "/api/viz/density?begin=0&end=10000&width=100&ts_normalize=0");
+        dftracer::utils::json::Document document;
+        auto parsed = document.parse(body);
+        REQUIRE(parsed.has_value());
+        dstd::Vector<dstd::String> names;
+        auto events = parsed->find("events");
+        REQUIRE(events.has_value());
+        events->for_each_element([&](dftracer::utils::json::Value e) {
+            if (e.find("est")) return;
+            names.emplace_back(*e.find("name")->as_string());
+        });
+        std::sort(names.begin(), names.end());
+        CHECK(names == dstd::Vector<dstd::String>{"nest", "read"});
+    }
+
+    TEST_CASE("a repeated key in a density event keeps its first value") {
+        dftracer::utils::json::Document document;
+        auto parsed = document.parse(
+            R"({"ph":1,"ts":1,"ts":2,"dur":5,"dur":6,"pid":4,"pid":5,"tid":7,"tid":8,"name":"a","name":"b"})");
+        REQUIRE(parsed.has_value());
+        DensityMap dens;
+        double dur = 0;
+        CHECK(fold_density(*parsed, 100, 0, dens, &dur) == DensityFold::Folded);
+        CHECK(dur == 5);
+        REQUIRE(dens.size() == 1);
+        const auto& [key, agg] = *dens.begin();
+        CHECK(key.pid == 4);
+        CHECK(key.tid == 7);
+        CHECK(key.col == 0);
+        CHECK(agg.name == "a");
+
+        DensityMap shifted;
+        auto late = document.parse(R"({"ph":1,"ts":250,"ts":2,"dur":5})");
+        REQUIRE(late.has_value());
+        CHECK(fold_density(*late, 100, 0, shifted) == DensityFold::Folded);
+        CHECK(shifted.begin()->first.col == 2);
+
+        auto agg_line = document.parse(
+            R"({"ts":3,"args":{"dftu_cnt":7,"dftu_cnt":9,"dur_sum":10,"dur_sum":20}})");
+        REQUIRE(agg_line.has_value());
+        dstd::Vector<AggRec> out;
+        REQUIRE(collect_aggregated(*agg_line, "raw", out));
+        REQUIRE(out.size() == 1);
+        CHECK(out[0].count == 7);
+        CHECK(out[0].total == 10);
     }
 }

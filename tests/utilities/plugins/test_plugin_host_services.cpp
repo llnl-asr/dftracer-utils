@@ -7,7 +7,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 // fold_adapter.h transitively pulls nanoarrow (ArrowArray/ArrowSchema); it must
 // precede plugin.h so arrow_abi.h no-ops rather than tripping nanoarrow's outer
@@ -39,6 +42,7 @@
 
 #include <testing_utilities.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -256,6 +260,59 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
     CHECK(sink.count == N);
     CHECK(sink.first_ok);
     MESSAGE("trace round-trip: wrote=" << N << " read=" << sink.count);
+}
+
+TEST_CASE(
+    "plugin host: trace read keeps lines with a huge number, a bad escape or "
+    "bad bytes") {
+    dftu_utils_test::TestEnvironment env(0);
+    HostFixture fx;
+    dftu_plugin_host& host = fx.host();
+    const auto* tr = static_cast<const dftu_svc_trace*>(
+        host.get_service(host.h, DFTU_SVC_TRACE));
+    REQUIRE(tr != nullptr);
+
+    const dstd::String pfw = env.get_dir() + "/refused.pfw";
+    {
+        dftu_utils_test::FileOut ofs(pfw);
+        ofs << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
+            << "\n"
+            << R"({"ph":"X","name":"b\q","cat":"P","pid":1,"tid":1,"ts":110,"dur":5})"
+            << "\n"
+            << dstd::String(
+                   "{\"ph\":\"X\",\"name\":\"c\xff"
+                   "d\",\"cat\":\"P\",\"pid\":1,\"tid\":1,\"ts\":120,"
+                   "\"dur\":5}")
+            << "\n"
+            << R"({"ph":"X","name":"d","cat":"P","pid":1,"tid":1,"ts":130,"dur":5,"args":{"n":123456789012345678901234567890}})"
+            << "\n"
+            << R"({"ph":"X","name":"e","cat":"P","pid":1,"tid":1,"ts":140,"dur":5})"
+            << "\n";
+    }
+    const dstd::String gz = pfw + ".gz";
+    dftu_utils_test::compress_file_to_gzip(pfw, gz);
+    (void)dstd::fs::remove(pfw);
+
+    struct Sink {
+        dstd::Vector<dstd::String> names;
+    };
+    Sink sink;
+    auto on_batch = [](const void* item, void* ud) {
+        const auto* batch_df = static_cast<const dftu_dataframe*>(item);
+        auto* s = static_cast<Sink*>(ud);
+        dftu_series* name_col = dftu_dataframe_column(batch_df, "name");
+        const std::int64_t n = dftu_dataframe_num_rows(batch_df);
+        for (std::int64_t i = 0; i < n; ++i) {
+            std::int64_t len = 0;
+            const char* p = dftu_series_string_at(name_col, i, &len);
+            s->names.emplace_back(p, static_cast<std::size_t>(len));
+        }
+        if (name_col) dftu_series_free(name_col);
+    };
+    REQUIRE(tr->trace_read(host.h, gz.c_str(), on_batch, &sink) == 0);
+    std::sort(sink.names.begin(), sink.names.end());
+    CHECK(sink.names ==
+          dstd::Vector<dstd::String>{"a", R"(b\q)", "c?d", "d", "e"});
 }
 
 TEST_CASE("plugin host: trace close writes line-ended members and the tail") {

@@ -4,10 +4,12 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -68,8 +70,10 @@ static dstd::String create_metadata_pfw_gz(TestEnvironment& env) {
 
 struct CollectedViewOutput {
     dstd::Vector<dstd::String> events;
+    dstd::Vector<dstd::String> fold_names;
     std::uint64_t events_matched = 0;
     std::uint64_t events_scanned = 0;
+    std::uint64_t lines_invalid = 0;
 };
 
 static coro::CoroTask<CollectedViewOutput> collect_view_coro(
@@ -79,7 +83,11 @@ static coro::CoroTask<CollectedViewOutput> collect_view_coro(
     while (auto batch = co_await gen.next()) {
         output.events_matched += batch->events_matched;
         output.events_scanned += batch->events_scanned;
+        output.lines_invalid += batch->lines_invalid;
         for (const auto& ev : batch->events) output.events.emplace_back(ev);
+        for (const auto& ev : batch->fold_events)
+            output.fold_names.emplace_back(
+                input.fold_intern->resolve(ev.name_id));
     }
     co_return output;
 }
@@ -87,6 +95,30 @@ static coro::CoroTask<CollectedViewOutput> collect_view_coro(
 static CollectedViewOutput collect_view_output(ViewScannerUtility& reader,
                                                ViewScannerInput input) {
     return collect_view_coro(&reader, std::move(input)).get();
+}
+
+static dstd::String create_refused_gz(TestEnvironment& env) {
+    dstd::String pfw = env.get_dir() + "/refused.pfw";
+    {
+        dftu_utils_test::FileOut ofs(pfw);
+        ofs << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
+            << "\n"
+            << R"({"ph":"X","name":"b\q","cat":"P","pid":1,"tid":1,"ts":110,"dur":5})"
+            << "\n"
+            << dstd::String(
+                   "{\"ph\":\"X\",\"name\":\"c\xff"
+                   "d\",\"cat\":\"P\",\"pid\":1,\"tid\":1,\"ts\":120,"
+                   "\"dur\":5}")
+            << "\n"
+            << R"({"ph":"X","name":"d","cat":"P","pid":1,"tid":1,"ts":130,"dur":5,"args":{"n":123456789012345678901234567890}})"
+            << "\n"
+            << R"({"ph":"X","name":"e","cat":"P","pid":1,"tid":1,"ts":140,"dur":5})"
+            << "\n";
+    }
+    dstd::String gz = pfw + ".gz";
+    compress_file_to_gzip(pfw, gz);
+    (void)dstd::fs::remove(pfw);
+    return gz;
 }
 
 // A two-member trace whose first member ends inside a line: the newline that
@@ -279,5 +311,50 @@ TEST_SUITE("ViewScanner") {
         CHECK(has(R"("value":"CW01")"));
         CHECK(has(R"("value":"UNUSED01")"));
         CHECK(has(R"("name":"start")"));
+    }
+
+    TEST_CASE(
+        "ViewScanner - a query keeps lines with a huge number, a bad escape "
+        "or bad bytes") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        const dstd::String gz = create_refused_gz(env);
+        ViewScannerInput input;
+        input.with_file_path(dstd::String(gz))
+            .with_index_path(dstd::String(determine_index_path(gz, "")))
+            .with_checkpoint_size(1024)
+            .with_byte_range(0, std::numeric_limits<std::size_t>::max());
+        auto q = duql::Query::from_string("pid == 1");
+        REQUIRE(q.has_value());
+        input.query = std::move(*q);
+        ViewScannerUtility reader;
+        const auto output = collect_view_output(reader, input);
+        CHECK(output.events.size() == 5);
+        CHECK(output.events_matched == 5);
+        CHECK(output.lines_invalid == 0);
+    }
+
+    TEST_CASE(
+        "ViewScanner - fold mode keeps lines with a huge number, a bad "
+        "escape or bad bytes") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        const dstd::String gz = create_refused_gz(env);
+        dftracer::utils::dstd::StringIntern intern;
+        detail::FoldEventBuffer buffer;
+        ViewScannerInput input;
+        input.with_file_path(dstd::String(gz))
+            .with_index_path(dstd::String(determine_index_path(gz, "")))
+            .with_checkpoint_size(1024)
+            .with_byte_range(0, std::numeric_limits<std::size_t>::max());
+        input.fold_intern = &intern;
+        input.fold_buffer = &buffer;
+        input.fold_needs_args = true;
+        ViewScannerUtility reader;
+        auto output = collect_view_output(reader, input);
+        CHECK(output.lines_invalid == 0);
+        std::sort(output.fold_names.begin(), output.fold_names.end());
+        CHECK(output.fold_names ==
+              dstd::Vector<dstd::String>{"a", R"(b\q)", "c?d", "d", "e"});
     }
 }

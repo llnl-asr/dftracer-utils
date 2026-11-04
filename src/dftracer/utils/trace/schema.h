@@ -155,6 +155,12 @@ inline RecordPhase read_phase(json::Value& v) {
             return RecordPhase::Unknown;
     }
 }
+/// The phase of the record `event`, or Unknown when it has no readable "ph".
+inline RecordPhase event_phase(json::Value& event) {
+    auto ph = event.find("ph");
+    return ph ? read_phase(*ph) : RecordPhase::Unknown;
+}
+
 inline RecordPhase read_phase(json::JsonParser& parser,
                               dstd::StringView key = "ph") {
     auto v = parser.get_value(key);

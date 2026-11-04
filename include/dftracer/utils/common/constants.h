@@ -150,6 +150,12 @@ static constexpr std::size_t DEFAULT_BUFFER_SIZE = 65536;  ///< 64KB
 static constexpr std::size_t SKIP_BUFFER_SIZE = 131072;    ///< 128KB
 static constexpr std::size_t FILE_IO_BUFFER_SIZE =
     262144;  ///< 256KB for file I/O
+/// The most nested containers an on-demand walk descends into. A container
+/// below it stays under its path as its JSON text. The walks cost up to about
+/// 450 bytes of stack a level, and several times more under a sanitizer, while
+/// a worker thread has 512 KiB on macOS, so the limit stays well under the
+/// 1024 levels the DOM parser accepts.
+static constexpr std::size_t MAX_READ_DEPTH = 128;
 }  // namespace reader
 
 }  // namespace dftracer::utils::common::constants

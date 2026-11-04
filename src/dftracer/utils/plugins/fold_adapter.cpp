@@ -14,11 +14,13 @@
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
@@ -33,7 +35,6 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
-#include <simdjson.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -763,7 +764,8 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
         dstd::String p(path);
         dftracer::utils::default_runtime().block_on(
             coro::named("dft-plugin-trace-read", [&]() -> coro::CoroTask<void> {
-                dftracer::utils::json::RecordParser parser;
+                dftracer::utils::json::Document document;
+                dftracer::utils::dstd::InternCache cache(intern);
                 trace::views::detail::FoldEventBuffer batch_events;
                 const index::RecordSchema& schema =
                     index::detect_file_schema(p);
@@ -776,18 +778,22 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                         const dstd::Vector<dstd::StringView>& events) {
                         batch_events.clear();
                         for (dstd::StringView ev : events) {
-                            simdjson::padded_string ps(ev);
-                            simdjson::dom::element root;
-                            if (parser.parse(ps).get(root)) continue;
+                            auto parsed = document.parse(ev);
+                            if (!parsed) continue;
+                            json::Value& record = *parsed;
+                            trace::views::detail::FoldEvent& fe =
+                                batch_events.append();
                             if (by_path)
                                 trace::views::detail::decode_record_into(
-                                    batch_events.append(), root, intern,
-                                    /*capture_schema=*/false, nullptr,
-                                    declared);
+                                    fe, record, intern,
+                                    /*capture_schema=*/false, nullptr, declared,
+                                    nullptr, 0, nullptr, false, &cache);
                             else
                                 trace::views::detail::extract_fold_event_into(
-                                    batch_events.append(), root, intern,
-                                    /*needs_args=*/true);
+                                    fe, record, intern, /*needs_args=*/true,
+                                    &cache);
+                            if (json::detail::ValueAccess::broken(record))
+                                batch_events.discard_last();
                         }
                         if (batch_events.empty()) return;
                         dataframe::DataFrame df =

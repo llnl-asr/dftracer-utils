@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -15,6 +16,8 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -95,8 +98,12 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     // workers share no state; all slices merge into `bloom` after the writer
     // closes.
     struct FoldSlice {
+        explicit FoldSlice(dftracer::utils::dstd::StringIntern& table)
+            : cache(table) {}
         dstd::UniquePtr<Fold> bloom;
         dftracer::utils::json::RecordParser parser;
+        dftracer::utils::json::Document document;
+        dftracer::utils::dstd::InternCache cache;
         dstd::String parse_buf;
         FoldEventBuffer events;
     };
@@ -114,7 +121,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             }
         }
         if (!sl) {
-            sl = dstd::make_unique<FoldSlice>();
+            sl = dstd::make_unique<FoldSlice>(intern);
             sl->bloom = bloom.slice();
         }
         sl->events.clear();
@@ -123,23 +130,28 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             dstd::StringView line = data.substr(ls, i - ls);
             ls = i + 1;
             if (line.empty()) continue;
+            if (vdef.by_path) {
+                auto parsed = sl->document.parse(line);
+                if (!parsed) continue;
+                FoldEvent& fe = sl->events.append();
+                decode_record_into(fe, *parsed, intern, /*capture_schema=*/true,
+                                   nullptr, vdef.record_schema, nullptr,
+                                   INDEX_MAX_CHILDREN, nullptr,
+                                   /*skip_never_indexed=*/true, &sl->cache);
+                if (json::detail::ValueAccess::broken(*parsed))
+                    sl->events.discard_last();
+                continue;
+            }
             sl->parse_buf.assign(line);
             sl->parse_buf.resize(line.size() + simdjson::SIMDJSON_PADDING,
                                  '\0');
             auto doc =
                 sl->parser.parse(sl->parse_buf.data(), line.size(), false);
             if (doc.error()) continue;
-            if (vdef.by_path)
-                decode_record_into(sl->events.append(), doc.value_unsafe(),
-                                   intern, /*capture_schema=*/true, nullptr,
-                                   vdef.record_schema, nullptr,
-                                   INDEX_MAX_CHILDREN, nullptr,
-                                   /*skip_never_indexed=*/true);
-            else
-                extract_fold_event_into(sl->events.append(), doc.value_unsafe(),
-                                        intern, /*needs_args=*/true,
-                                        /*extra_fields=*/nullptr,
-                                        /*capture_schema=*/true);
+            extract_fold_event_into(sl->events.append(), doc.value_unsafe(),
+                                    intern, /*needs_args=*/true,
+                                    /*extra_fields=*/nullptr,
+                                    /*capture_schema=*/true);
         }
         ScanUnit unit;
         unit.file_path = utilities::fileio::gzip_part_path(

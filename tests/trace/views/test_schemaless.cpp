@@ -8,12 +8,14 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_agg_partials.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
@@ -209,6 +211,18 @@ dstd::Map<dstd::String, double> counts_by_op(const View& v) {
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out[bstr(f, r, "op")] = bnum(f, r, "n");
     return out;
+}
+
+bool bloom_has(const dstd::String& idx, const dstd::String& gz,
+               dstd::StringView dim, dstd::StringView value) {
+    const auto snapshot = dftu_utils_test::index_snapshot(idx);
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
+    const auto bytes = dftu_utils_test::index_take(index::path_file(
+        snapshot, file, index::store::IndexExtension::Bloom, dim));
+    if (!bytes) return false;
+    const auto bloom = index::extensions::kinds::decode_bloom(
+        dstd::StringView(bytes->data(), bytes->size()));
+    return bloom && bloom->possibly_contains(value);
 }
 
 // The file's recorded schema and whether its pruning tier is built.
@@ -531,7 +545,8 @@ fields:
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("counted");
         const dataframe::DataFrame f = run(v.duql("select n").lazy().collect());
-        CHECK(f.num_rows() == 3);
+        // The nested line is valid JSON that holds no n: a row of nulls.
+        CHECK(f.num_rows() == 4);
         // A filter parses every line; the unfiltered export copies lines
         // through unparsed.
         StringSink sink;
@@ -541,7 +556,7 @@ fields:
                 .get();
         CHECK(sink.lines().size() == 3);
         CHECK(sink.lines()[0] == R"({"n":1})");
-        CHECK(stats.lines_invalid == 2);
+        CHECK(stats.lines_invalid == 1);
     }
 
     TEST_CASE("buckets and time ranges count in the time role's unit") {
@@ -901,6 +916,153 @@ fields:
         const ExportStats st = vo.duql("size < 50").sink_json(sink).get();
         CHECK(sink.lines().size() == 50);
         CHECK(st.chunks_skipped > 0);
+    }
+
+    TEST_CASE(
+        "an index built on the way keeps the values of lines a DOM parse "
+        "refuses") {
+        TestEnvironment env(10);
+        const dstd::Vector<dstd::String> lines = {
+            R"({"k":1,"inf":1e400,"s":"a"})",
+            R"({"k":2,"s":"a\qb"})",
+            dstd::String("{\"k\":3,\"s\":\"b\xff"
+                         "d\"}"),
+            R"({"k":4,"b":123456789012345678901234567890,"s":"c"})",
+            R"({"k":5,"inf":-1e400,"s":"d"})",
+            R"({"k":6,"s":"e"})"};
+        const dstd::String gz = write_gz(env, "ride", lines, 40);
+        const dstd::String idx =
+            dstd::String(determine_index_path(gz, env.get_dir() + "/ri"));
+        const View v = View::from_file(dstd::String(gz), dstd::String(idx))
+                           .record_schema("generic");
+        (void)v.select({"k"}).collect().get();
+        REQUIRE_FALSE(index_state(gz, idx).second);
+        StringSink all;
+        (void)v.sink_json(all).get();
+        CHECK(all.lines().size() == 6);
+        REQUIRE(index_state(gz, idx).second);
+        for (const char* value : {"a", R"(a\qb)", "c", "d", "e"}) {
+            CAPTURE(dstd::String(value));
+            CHECK(bloom_has(idx, gz, "s", value));
+        }
+    }
+
+    TEST_CASE(
+        "an indexed export keeps the values of lines a DOM parse refuses") {
+        TestEnvironment env(10);
+        const dstd::Vector<dstd::String> lines = {
+            R"({"k":1,"inf":1e400,"s":"a"})",
+            R"({"k":2,"s":"a\qb"})",
+            dstd::String("{\"k\":3,\"s\":\"b\xff"
+                         "d\"}"),
+            R"({"k":4,"b":123456789012345678901234567890,"s":"c"})",
+            R"({"k":5,"inf":-1e400,"s":"d"})",
+            R"({"k":6,"s":"e"})"};
+        const dstd::String src = write_indexed(env, "src", lines, 1 << 20);
+        const View vs =
+            View::from_file(dstd::String(src),
+                            dstd::String(determine_index_path(src, "")))
+                .record_schema("generic");
+        TraceWriteOptions opts;
+        opts.output_path = env.get_dir() + "/out.ndjson.gz";
+        opts.build_index = true;
+        opts.member_size = 40;
+        const ExportStats st = vs.sink_trace(opts).get();
+        CHECK(st.lines_invalid == 0);
+
+        const dstd::String idx =
+            dstd::String(determine_index_path(opts.output_path, ""));
+        for (const char* value : {"a", R"(a\qb)", "c", "d", "e"}) {
+            CAPTURE(dstd::String(value));
+            CHECK(bloom_has(idx, opts.output_path, "s", value));
+        }
+    }
+
+    TEST_CASE("a collect keeps lines nested far past the depth limit") {
+        auto deep = [](std::size_t n, bool object) {
+            dstd::String t;
+            for (std::size_t i = 0; i < n; ++i) t += object ? R"({"a":)" : "[";
+            t += "1";
+            for (std::size_t i = 0; i < n; ++i) t += object ? "}" : "]";
+            return t;
+        };
+        for (const std::size_t depth :
+             {std::size_t{100000}, std::size_t{1000000}}) {
+            CAPTURE(depth);
+            // An object line of a million levels is past the 4 MiB line limit.
+            const dstd::String mid =
+                deep(std::min<std::size_t>(depth, 600000), true);
+            const dstd::String arr = deep(depth, false);
+            auto ev = [](const char* name, const dstd::String& extra) {
+                return R"({"ph":"X","name":")" + dstd::String(name) +
+                       R"(","cat":"c","pid":1,"tid":1,"ts":10,"dur":2)" +
+                       extra + "}";
+            };
+            const dstd::Vector<dstd::String> lines = {
+                ev("plain", R"(,"args":{"k":1})"),
+                ev("object", R"(,"args":{"k":)" + mid + "}"),
+                ev("array", R"(,"args":{"k":)" + arr + "}"),
+                ev("top", R"(,"deep":)" + arr)};
+            TestEnvironment env(10);
+            const dstd::String gz = write_gz(env, "deep", lines, 1 << 24);
+            const View v = View::from_file(
+                dstd::String(gz),
+                dstd::String(determine_index_path(gz, env.get_dir() + "/di")));
+            const dataframe::DataFrame f = v.collect().get();
+            REQUIRE(f.num_rows() == 4);
+            dstd::Map<dstd::String, std::size_t> longest;
+            for (std::int64_t r = 0; r < f.num_rows(); ++r) {
+                const dstd::String name = bstr(f, r, "name");
+                for (std::size_t c = 0; c < f.names.size(); ++c) {
+                    if (f.columns[c].type() != dataframe::TypeId::String)
+                        continue;
+                    longest[name] = std::max(
+                        longest[name],
+                        dstd::String(f.columns[c].string_at(r)).size());
+                }
+            }
+            CHECK(longest["object"] > 1000);
+            CHECK(longest["array"] > 1000);
+        }
+    }
+
+    TEST_CASE("a path collect keeps records nested far past the depth limit") {
+        for (const std::size_t depth :
+             {std::size_t{100000}, std::size_t{1000000}}) {
+            CAPTURE(depth);
+            dstd::String mid, arr;
+            const std::size_t object_depth =
+                std::min<std::size_t>(depth, 600000);
+            for (std::size_t i = 0; i < depth; ++i) {
+                if (i < object_depth) mid += R"({"a":)";
+                arr += "[";
+            }
+            mid += "1";
+            arr += "1";
+            for (std::size_t i = 0; i < depth; ++i) {
+                if (i < object_depth) mid += "}";
+                arr += "]";
+            }
+            const dstd::Vector<dstd::String> lines = {
+                R"({"k":1,"s":"plain"})",
+                R"({"k":2,"s":"obj","v":)" + mid + "}",
+                R"({"k":3,"s":"arr","v":)" + arr + "}"};
+            TestEnvironment env(10);
+            const dstd::String gz = write_gz(env, "pdeep", lines, 1 << 24);
+            const View v = View::from_file(dstd::String(gz),
+                                           dstd::String(determine_index_path(
+                                               gz, env.get_dir() + "/pi")))
+                               .record_schema("generic");
+            const dataframe::DataFrame f = v.collect().get();
+            REQUIRE(f.num_rows() == 3);
+            std::size_t long_texts = 0;
+            for (std::int64_t r = 0; r < f.num_rows(); ++r)
+                for (std::size_t c = 0; c < f.names.size(); ++c)
+                    if (f.columns[c].type() == dataframe::TypeId::String &&
+                        dstd::String(f.columns[c].string_at(r)).size() > 1000)
+                        ++long_texts;
+            CHECK(long_texts == 2);
+        }
     }
 
     TEST_CASE("a path-schema file with no index is indexed on first touch") {

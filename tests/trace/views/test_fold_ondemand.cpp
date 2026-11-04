@@ -4,10 +4,13 @@
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/trace/event.h>
 #include <doctest/doctest.h>
 #include <duql/filter_corpus.h>
 #include <trace/views/fold_shapes.h>
@@ -27,6 +30,125 @@ using json::detail::ValueAccess;
 String describe_reset() {
     StringIntern intern;
     return describe(FoldEvent{}, intern);
+}
+
+String nested(std::size_t depth, bool object) {
+    String text;
+    text.reserve(depth * 6 + 8);
+    for (std::size_t i = 0; i < depth; ++i) text += object ? "{\"a\":" : "[";
+    text += "1";
+    for (std::size_t i = 0; i < depth; ++i) text += object ? "}" : "]";
+    return text;
+}
+
+constexpr std::size_t SMALL_STACK = 512 * 1024;
+
+struct DeepRead {
+    bool parsed = false;
+    bool broken = false;
+    bool fields_ok = false;
+    bool kept_text = false;
+};
+
+// The longest string arg is a piece of `line` that closes as `line` does.
+bool is_tail_of(StringView text, StringView line, StringView closing) {
+    return text.size() > 1000 && line.find(text) != StringView::npos &&
+           text.substr(text.size() - closing.size()) == closing;
+}
+
+// where: 0 args of the dftracer reader, 1 a top-level capture, 2 the path
+// reader with a nested field, 3 the path reader with a root array, 4 the
+// args of DFTracerEvent::parse_ondemand.
+DeepRead read_deep_event(StringView line, StringView closing) {
+    DeepRead out;
+    json::JsonParser parser;
+    if (!parser.parse(line)) return out;
+    out.parsed = true;
+    dftracer::utils::trace::DFTracerEvent ev;
+    dftracer::utils::trace::DFTracerEvent::parse_ondemand(parser, ev);
+    out.fields_ok = ev.name == "x" && ev.pid == 1 && ev.tid == 2 &&
+                    ev.ts == 3 && ev.dur == 4;
+    ev.args.for_each_member([&](StringView, const auto& value) {
+        const auto text = value.template get_optional<String>();
+        if (text && is_tail_of(*text, line, closing)) out.kept_text = true;
+    });
+    return out;
+}
+
+DeepRead read_deep(StringView line, int where, StringView closing) {
+    if (where == 4) return read_deep_event(line, closing);
+    DeepRead out;
+    json::Document doc;
+    auto value = doc.parse(line);
+    if (!value) return out;
+    out.parsed = true;
+    StringIntern intern;
+    dstd::InternCache cache(intern);
+    FoldEvent ev;
+    if (where == 0 || where == 1) {
+        const dstd::Vector<String> captures{"deep"};
+        extract_fold_event_into(ev, *value, intern, true, &cache,
+                                where == 1 ? &captures : nullptr);
+        out.fields_ok = intern.resolve(ev.name_id) == "x" && ev.pid == 1 &&
+                        ev.tid == 2 && ev.ts == 3 && ev.dur == 4;
+    } else {
+        decode_record_into(ev, *value, intern, true, nullptr, nullptr, nullptr,
+                           0, nullptr, false, &cache);
+        bool id = where == 3;
+        for (const auto& [key, v] : ev.args)
+            if (intern.resolve(key) == "id" && v.index() == 1 &&
+                std::get<1>(v) == 7)
+                id = true;
+        out.fields_ok = id;
+    }
+    out.broken = ValueAccess::broken(*value);
+    for (const auto& [key, v] : ev.args)
+        if (v.index() == 2 &&
+            is_tail_of(intern.resolve(std::get<2>(v)), line, closing))
+            out.kept_text = true;
+    return out;
+}
+
+DeepRead read_deep_small_stack(std::size_t depth, bool object, int where) {
+    const String deep = nested(depth, object);
+    String line;
+    if (where == 0)
+        line =
+            R"({"ph":"X","name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
+            deep + "}}";
+    else if (where == 1)
+        line =
+            R"({"ph":"X","name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"deep":)" +
+            deep + "}";
+    else if (where == 2)
+        line = R"({"id":7,"v":)" + deep + "}";
+    else if (where == 3)
+        line = "[" + deep + "]";
+    else
+        line =
+            R"({"ph":"X","name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
+            deep + "}}";
+    const StringView closing = object ? "}}" : "]]";
+    DeepRead out;
+    dstd::Thread worker([&] { out = read_deep(line, where, closing); },
+                        "deep-read", SMALL_STACK);
+    worker.join();
+    return out;
+}
+
+void check_deep(int where) {
+    for (const std::size_t depth :
+         {std::size_t{100000}, std::size_t{1000000}}) {
+        for (const bool object : {true, false}) {
+            CAPTURE(depth);
+            CAPTURE(object);
+            const DeepRead got = read_deep_small_stack(depth, object, where);
+            CHECK(got.parsed);
+            CHECK_FALSE(got.broken);
+            CHECK(got.fields_ok);
+            CHECK(got.kept_text);
+        }
+    }
 }
 
 struct OnDemandRead {
@@ -906,5 +1028,43 @@ TEST_SUITE("FoldOnDemand") {
         CHECK(describe(ev, intern) ==
               "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- "
               "args{\"x.y\"=s\"p?q\"} top{} sp{}");
+    }
+
+    TEST_CASE("args nested past the depth limit stay as text") {
+        check_deep(0);
+    }
+
+    TEST_CASE("a top-level capture nested past the depth limit stays as text") {
+        check_deep(1);
+    }
+
+    TEST_CASE(
+        "a path-decoded field nested past the depth limit stays as text") {
+        check_deep(2);
+    }
+
+    TEST_CASE(
+        "a path-decoded root array nested past the depth limit stays as text") {
+        check_deep(3);
+    }
+
+    TEST_CASE("event args nested past the depth limit stay as text") {
+        check_deep(4);
+    }
+
+    TEST_CASE("a value nested under the depth limit is still walked") {
+        const String line =
+            R"({"ph":"X","name":"x","args":{"k":)" + nested(100, true) + "}}";
+        json::Document doc;
+        auto value = doc.parse(line);
+        REQUIRE(value.has_value());
+        StringIntern intern;
+        FoldEvent ev;
+        extract_fold_event_into(ev, *value, intern, true);
+        CHECK_FALSE(ValueAccess::broken(*value));
+        bool leaf = false;
+        for (const auto& [key, v] : ev.args)
+            if (v.index() == 1 && std::get<1>(v) == 1) leaf = true;
+        CHECK(leaf);
     }
 }

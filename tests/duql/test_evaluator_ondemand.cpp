@@ -520,7 +520,7 @@ TEST_CASE("mixed reads and queries on malformed lines never crash") {
         if (!parsed) continue;
         ++accepted;
         for (int step = 0; step < 8; ++step) {
-            const std::size_t op = pick(6);
+            const std::size_t op = pick(5);
             const std::size_t query_index = pick(queries.size());
             switch (op) {
                 case 0: {
@@ -566,9 +566,6 @@ TEST_CASE("mixed reads and queries on malformed lines never crash") {
                     break;
                 case 3:
                     json::detail::ValueAccess::rewind(*parsed);
-                    break;
-                case 4:
-                    (void)json::detail::ValueAccess::dom(*parsed);
                     break;
                 default:
                     if (auto c = parsed->find("tags"))

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/async_semaphore.h>
@@ -545,6 +546,9 @@ void extract_fold_event_into(FoldEvent& ev, simdjson::dom::element root,
 }
 
 namespace {
+
+constexpr std::size_t MAX_READ_DEPTH =
+    dftracer::utils::common::constants::reader::MAX_READ_DEPTH;
 
 using OnDemandValue = simdjson::ondemand::value;
 using OnDemandType = simdjson::ondemand::json_type;
@@ -1469,9 +1473,22 @@ class OnDemandReader {
     bool flatten_member(OnDemandValue& v) {
         OnDemandType type;
         if (v.type().get(type)) return false;
-        if (type == OnDemandType::object || type == OnDemandType::array)
-            return flatten(v, type);
+        if (type == OnDemandType::object || type == OnDemandType::array) {
+            if (depth_ + 1 >= MAX_READ_DEPTH) return keep_raw(v);
+            ++depth_;
+            const bool ok = flatten(v, type);
+            --depth_;
+            return ok;
+        }
         return read_scalar(plain_.get_or_insert(path_), v, type, plain_);
+    }
+
+    // A container below the depth limit stays under its path as its JSON text.
+    bool keep_raw(OnDemandValue& v) {
+        out_->args.emplace_back(plain_.get_or_insert(path_),
+                                plain_.get_or_insert(json::detail::value_extent(
+                                    v.raw_json_token().data(), end_)));
+        return true;
     }
 
     // Appends the number `v` under `key_id`; false when it is not a number.
@@ -1555,6 +1572,7 @@ class OnDemandReader {
     const char* end_;
     dstd::StringArena& arena_;
     dstd::String path_;
+    std::size_t depth_ = 0;
 };
 
 }  // namespace
@@ -2083,6 +2101,8 @@ class PathReader {
         }
         if (d_.paths && !path_.empty() && !wanted_below(*d_.paths, path_))
             return true;
+        if (depth_ >= MAX_READ_DEPTH)
+            return collapse(v.raw_json_token().data(), is_array, true);
         const bool counted = d_.max_children && !path_.empty();
         std::size_t count = 0;
         if (is_array) {
@@ -2096,7 +2116,10 @@ class PathReader {
                 }
                 if (count > d_.max_children) return collapse(start, true);
             }
-            return elements(array);
+            ++depth_;
+            const bool ok = elements(array);
+            --depth_;
+            return ok;
         }
         simdjson::ondemand::object object;
         if (v.get_object().get(object)) return false;
@@ -2108,7 +2131,10 @@ class PathReader {
             }
             if (count > d_.max_children) return collapse(start, false);
         }
-        return members(object);
+        ++depth_;
+        const bool ok = members(object);
+        --depth_;
+        return ok;
     }
 
     dstd::String canonical_text(const char* start) const {
@@ -2136,8 +2162,9 @@ class PathReader {
                                           : FoldEvent::Special::JsonObject});
     }
 
-    // An array or object past max_children: one leaf of its canonical text.
-    bool collapse(const char* start, bool is_array) {
+    // An array or object past max_children, or below the depth limit: one
+    // leaf of its canonical text, or of its text as written when `raw`.
+    bool collapse(const char* start, bool is_array, bool raw = false) {
         using dftracer::utils::index::store::PathType;
         const std::uint32_t id = ids_.get_or_insert(path_);
         // A declared json field already holds its text.
@@ -2146,7 +2173,9 @@ class PathReader {
             d_.ev.schema_leaves.emplace_back(
                 id, static_cast<std::uint8_t>(is_array ? PathType::Array
                                                        : PathType::Object));
-        const dstd::String text = canonical_text(start);
+        const dstd::String text =
+            raw ? dstd::String(json::detail::value_extent(start, end_))
+                : canonical_text(start);
         d_.ev.args.emplace_back(id, ids_.get_or_insert(text));
         d_.ev.specials.push_back({id, is_array
                                           ? FoldEvent::Special::JsonArray
@@ -2207,6 +2236,7 @@ class PathReader {
     dstd::String& path_;
     const char* end_;
     dstd::StringArena& arena_;
+    std::size_t depth_ = 0;
 };
 
 }  // namespace
@@ -2600,6 +2630,7 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
     auto& slices = ctx.fslice[w];
     FoldPortBus bus;
     FoldEventBuffer fold_buffer;
+    dftracer::utils::dstd::InternCache fold_cache(ctx.intern);
     for (auto& s : slices) s->bind_port_bus(&bus);
     PendingCoverage pending(ctx.covered_v[w]);
 
@@ -2648,6 +2679,7 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
         // itself. When both are present, keep both.
         sin.fold_intern = ctx.any_wants_fold_event ? &ctx.intern : nullptr;
         sin.fold_buffer = &fold_buffer;
+        sin.fold_cache = &fold_cache;
         sin.fold_needs_args = ctx.any_needs_args;
         sin.fold_keep_raw = ctx.any_wants_raw && ctx.any_wants_fold_event;
         sin.fold_capture_schema = ctx.any_wants_schema;

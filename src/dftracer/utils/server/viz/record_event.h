@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
 #include <simdjson.h>
 
 #include <cmath>
@@ -165,17 +166,14 @@ struct TraceFields {
     }
 
     // Calls `fn(root, event)` with the path record `raw` read as a trace
-    // event, parsed; both last until `fn` returns.
+    // event, parsed on demand; both last until `fn` returns.
     template <typename Fn>
     void with_event(dstd::StringView raw, Fn&& fn) const {
-        thread_local dftracer::utils::json::RecordParser parser;
+        thread_local dftracer::utils::json::Document document;
         thread_local dstd::String ev;
-        thread_local dstd::String buf;
         if (!to_event(raw, ev)) return;
-        buf.assign(ev);
-        buf.append(simdjson::SIMDJSON_PADDING, '\0');
-        auto res = parser.parse(buf.data(), ev.size(), false);
-        if (!res.error()) fn(res.value_unsafe(), dstd::StringView(ev));
+        auto parsed = document.parse(ev);
+        if (parsed) fn(*parsed, dstd::StringView(ev));
     }
 
     // Calls `fn` with each of `events` as a trace event; the view it gets

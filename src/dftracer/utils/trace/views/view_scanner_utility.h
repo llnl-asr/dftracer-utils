@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -47,6 +48,9 @@ struct ViewScannerInput {
     /// the scan. The events a batch exposes live here until the generator is
     /// resumed.
     detail::FoldEventBuffer* fold_buffer = nullptr;
+    /// A cache in front of `fold_intern` that the caller keeps per worker, so
+    /// it stays warm across units. Null makes one for the scan.
+    dftracer::utils::dstd::InternCache* fold_cache = nullptr;
     bool fold_needs_args = false;
     /// Top-level fields (type, ph, ...) to capture raw into each FoldEvent's
     /// args, for schemaless Field group keys the POD does not natively carry.

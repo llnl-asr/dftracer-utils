@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_EVENT_H
 #define DFTRACER_UTILS_TRACE_EVENT_H
 
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/json_value.h>
@@ -86,9 +87,18 @@ inline void insert_arg_member(ArgsMap& args, dstd::StringView key,
 /// On-demand mirror of flatten_arg: recurse nested objects/arrays into dotted
 /// keys, consuming the cursor in order.
 inline void flatten_arg_ondemand(dstd::String& prefix,
-                                 simdjson::ondemand::value val, ArgsMap& args) {
+                                 simdjson::ondemand::value val, ArgsMap& args,
+                                 std::size_t depth = 0) {
     auto t = val.type();
     if (t.error()) return;
+    if (depth >= dftracer::utils::common::constants::reader::MAX_READ_DEPTH &&
+        (t.value_unsafe() == simdjson::ondemand::json_type::object ||
+         t.value_unsafe() == simdjson::ondemand::json_type::array)) {
+        auto text = val.raw_json();
+        if (!text.error())
+            args.insert(prefix, dstd::String(text.value_unsafe()));
+        return;
+    }
     switch (t.value_unsafe()) {
         case simdjson::ondemand::json_type::object: {
             auto obj = val.get_object();
@@ -102,7 +112,8 @@ inline void flatten_arg_ondemand(dstd::String& prefix,
                 std::size_t base = prefix.size();
                 prefix += '.';
                 prefix.append(k.value_unsafe());
-                flatten_arg_ondemand(prefix, fv.value_unsafe(), args);
+                flatten_arg_ondemand(prefix, fv.value_unsafe(), args,
+                                     depth + 1);
                 prefix.resize(base);
             }
             break;
@@ -116,7 +127,8 @@ inline void flatten_arg_ondemand(dstd::String& prefix,
                 std::size_t base = prefix.size();
                 prefix += '.';
                 append_index(prefix, i++);
-                flatten_arg_ondemand(prefix, el.value_unsafe(), args);
+                flatten_arg_ondemand(prefix, el.value_unsafe(), args,
+                                     depth + 1);
                 prefix.resize(base);
             }
             break;

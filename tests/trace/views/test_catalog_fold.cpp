@@ -181,6 +181,29 @@ TEST_SUITE("CatalogFold") {
         expect_scan_catalog_equals_build(log_lines(), "cf_log");
     }
 
+    TEST_CASE("a scan catalog lists the paths of lines a DOM parse refuses") {
+        register_log_schema();
+        TestEnvironment env(10);
+        auto lines = log_lines();
+        lines.push_back(
+            R"({"op":"x\q","took":1,"worker":"w","extra":{"onlyA":1}})");
+        lines.push_back(
+            R"({"op":"y","took":1e400,"worker":"w","extra":{"onlyB":1}})");
+        lines.push_back(
+            dstd::String("{\"op\":\"z\xff\",\"took\":1,\"worker\":\"w\","
+                         "\"extra\":{\"onlyC\":1}}"));
+        const dstd::String gz = write_gz(env, "r", lines);
+        (void)view_of(gz, "cf_log").duql(R"(op == "read")").collect().get();
+        REQUIRE_FALSE(has_catalog(gz));
+        (void)view_of(gz, "cf_log").collect().get();
+        REQUIRE(has_catalog(gz));
+        const Catalog got = catalog_of(gz);
+        for (const char* path : {"extra.onlyA", "extra.onlyB", "extra.onlyC"}) {
+            CAPTURE(path);
+            CHECK(got.count(path) == 1);
+        }
+    }
+
     TEST_CASE("a filtered first query writes no catalog until a full scan") {
         TestEnvironment env(10);
         const dstd::String gz = write_gz(env, "f", dftracer_lines());

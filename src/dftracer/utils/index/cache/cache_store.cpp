@@ -32,7 +32,7 @@ namespace {
 constexpr std::uint64_t DEFAULT_CACHE_MAX_BYTES = std::uint64_t{2} << 30;
 constexpr dstd::StringView DATA_NAMESPACE = "cache";
 constexpr dstd::StringView USAGE_NAMESPACE = "cache.usage";
-constexpr std::uint32_t NAMESPACE_VERSION = 1;
+constexpr std::uint32_t NAMESPACE_VERSION = 0;
 constexpr dstd::StringView USAGE_KEY = "u";
 
 store::NamespaceSpec spec_of(dstd::StringView name) {

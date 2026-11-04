@@ -359,7 +359,8 @@ dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
             op == DFTU_REDUCE_SUM && v->type == TypeId::Duration;
         if (op != DFTU_REDUCE_MIN && op != DFTU_REDUCE_MAX && !sum_ok)
             return refuse_type(op, v->type);
-        DF_NUMERIC_DISPATCH(physical_type(v->type), reduce_one, *v, op, out)
+        DFTRACER_UTILS_NUMERIC_DISPATCH(physical_type(v->type), reduce_one, *v,
+                                        op, out)
         return out;
     }
 
@@ -388,7 +389,7 @@ dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
         if (promoted) dftu_series_free(promoted);
         return out;
     }
-    DF_NUMERIC_DISPATCH(v->type, reduce_one, *v, op, out)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(v->type, reduce_one, *v, op, out)
     if (promoted) dftu_series_free(promoted);
     return out;
 }
@@ -429,7 +430,7 @@ dftu_scalar dftu_series_product(const dftu_series* v) {
         if (promoted) dftu_series_free(promoted);
         return out;
     }
-    DF_NUMERIC_DISPATCH(v->type, product_one, *v, out)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(v->type, product_one, *v, out)
     if (promoted) dftu_series_free(promoted);
     return out;
 }
@@ -465,8 +466,8 @@ int64_t dftu_series_arg_min(const dftu_series* v) {
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat) return -1;
     if (is_temporal_type(v->type)) {
         std::int64_t idx = -1;
-        DF_NUMERIC_DISPATCH(physical_type(v->type), argextreme_one, *v, true,
-                            idx)
+        DFTRACER_UTILS_NUMERIC_DISPATCH(physical_type(v->type), argextreme_one,
+                                        *v, true, idx)
         return idx;
     }
     if (!is_arithmetic_type(v->type)) {
@@ -478,7 +479,7 @@ int64_t dftu_series_arg_min(const dftu_series* v) {
     v = promote_for_arithmetic(v, promoted);
     std::int64_t idx = -1;
     if (!dftracer::utils::dataframe::arg_extreme_simd(*v, true, idx))
-        DF_NUMERIC_DISPATCH(v->type, argextreme_one, *v, true, idx)
+        DFTRACER_UTILS_NUMERIC_DISPATCH(v->type, argextreme_one, *v, true, idx)
     if (promoted) dftu_series_free(promoted);
     return idx;
 }
@@ -494,8 +495,8 @@ int64_t dftu_series_arg_max(const dftu_series* v) {
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat) return -1;
     if (is_temporal_type(v->type)) {
         std::int64_t idx = -1;
-        DF_NUMERIC_DISPATCH(physical_type(v->type), argextreme_one, *v, false,
-                            idx)
+        DFTRACER_UTILS_NUMERIC_DISPATCH(physical_type(v->type), argextreme_one,
+                                        *v, false, idx)
         return idx;
     }
     if (!is_arithmetic_type(v->type)) {
@@ -507,7 +508,7 @@ int64_t dftu_series_arg_max(const dftu_series* v) {
     v = promote_for_arithmetic(v, promoted);
     std::int64_t idx = -1;
     if (!dftracer::utils::dataframe::arg_extreme_simd(*v, false, idx))
-        DF_NUMERIC_DISPATCH(v->type, argextreme_one, *v, false, idx)
+        DFTRACER_UTILS_NUMERIC_DISPATCH(v->type, argextreme_one, *v, false, idx)
     if (promoted) dftu_series_free(promoted);
     return idx;
 }
@@ -524,7 +525,8 @@ dftu_scalar dftu_series_mode(const dftu_series* v) {
     out.kind = DFTU_SCALAR_TAG_I64;
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat) return out;
     if (is_temporal_type(v->type)) {
-        DF_NUMERIC_DISPATCH(physical_type(v->type), mode_one, *v, out)
+        DFTRACER_UTILS_NUMERIC_DISPATCH(physical_type(v->type), mode_one, *v,
+                                        out)
         return out;
     }
     if (!is_arithmetic_type(v->type)) {
@@ -534,7 +536,7 @@ dftu_scalar dftu_series_mode(const dftu_series* v) {
     }
     dftu_series* promoted = nullptr;
     v = promote_for_arithmetic(v, promoted);
-    DF_NUMERIC_DISPATCH(v->type, mode_one, *v, out)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(v->type, mode_one, *v, out)
     if (promoted) dftu_series_free(promoted);
     return out;
 }

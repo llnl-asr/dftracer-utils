@@ -68,8 +68,8 @@ struct DensityBlock {
     double value = 0;
 };
 
-template <typename builder_type>
-void tag_invoke(simdjson::serialize_tag, builder_type& b,
+template <typename BuilderType>
+void tag_invoke(simdjson::serialize_tag, BuilderType& b,
                 const DensityBlock& d) {
     b.start_object();
     if (!d.group.empty()) {

@@ -1081,34 +1081,34 @@ void persist_gzip_index_artifacts(index::FileBuild& build,
     build.finish(index::store::IndexExtension::Members, 0);
 }
 
-GzipIndexer::GzipIndexer(const dstd::String& gz_path_,
-                         const dstd::String& idx_path_,
-                         std::uint64_t ckpt_size_, bool force_rebuild_)
-    : gz_path(gz_path_),
-      gz_path_logical_path(index::store::internal::get_logical_path(gz_path_)),
-      index_path(index::store::internal::normalize_index_root(idx_path_)),
-      ckpt_size(ckpt_size_),
-      force_rebuild(force_rebuild_),
-      cached_is_valid(false),
-      cached_max_bytes(0),
-      cached_max_bytes_ready(false),
-      cached_num_lines(0),
-      cached_num_lines_ready(false),
-      cached_checkpoint_size(0),
-      cached_checkpoint_size_ready(false) {
-    if (gz_path.empty()) {
+GzipIndexer::GzipIndexer(const dstd::String& gz_path,
+                         const dstd::String& idx_path, std::uint64_t ckpt_size,
+                         bool force_rebuild)
+    : gz_path_(gz_path),
+      gz_path_logical_path_(index::store::internal::get_logical_path(gz_path)),
+      index_path_(index::store::internal::normalize_index_root(idx_path)),
+      ckpt_size_(ckpt_size),
+      force_rebuild_(force_rebuild),
+      cached_is_valid_(false),
+      cached_max_bytes_(0),
+      cached_max_bytes_ready_(false),
+      cached_num_lines_(0),
+      cached_num_lines_ready_(false),
+      cached_checkpoint_size_(0),
+      cached_checkpoint_size_ready_(false) {
+    if (gz_path_.empty()) {
         throw index::store::IndexerError(
             index::store::IndexerError::Type::InvalidArgument,
             "gz_path must not be empty");
     }
 
-    if (!common::input_exists(gz_path)) {
+    if (!common::input_exists(gz_path_)) {
         throw index::store::IndexerError(
             index::store::IndexerError::Type::FileError,
-            "gz_path does not exist: " + gz_path);
+            "gz_path does not exist: " + gz_path_);
     }
 
-    if (ckpt_size == 0) {
+    if (ckpt_size_ == 0) {
         throw index::store::IndexerError(
             index::store::IndexerError::Type::InvalidArgument,
             "ckpt_size must be greater than 0");
@@ -1118,48 +1118,49 @@ GzipIndexer::GzipIndexer(const dstd::String& gz_path_,
 }
 
 GzipIndexer::~GzipIndexer() {
-    DFTRACER_UTILS_LOG_DEBUG("Destroying GZIP indexer for %s", gz_path.c_str());
+    DFTRACER_UTILS_LOG_DEBUG("Destroying GZIP indexer for %s",
+                             gz_path_.c_str());
     close();
 }
 
 GzipIndexer::GzipIndexer(GzipIndexer&& other) noexcept
-    : gz_path(std::move(other.gz_path)),
-      gz_path_logical_path(std::move(other.gz_path_logical_path)),
-      index_path(std::move(other.index_path)),
-      ckpt_size(other.ckpt_size),
-      force_rebuild(other.force_rebuild),
+    : gz_path_(std::move(other.gz_path_)),
+      gz_path_logical_path_(std::move(other.gz_path_logical_path_)),
+      index_path_(std::move(other.index_path_)),
+      ckpt_size_(other.ckpt_size_),
+      force_rebuild_(other.force_rebuild_),
       visitors_(std::move(other.visitors_)),
-      cached_is_valid(other.cached_is_valid.load()),
-      cached_max_bytes(other.cached_max_bytes.load()),
-      cached_max_bytes_ready(other.cached_max_bytes_ready.load()),
-      cached_num_lines(other.cached_num_lines.load()),
-      cached_num_lines_ready(other.cached_num_lines_ready.load()),
-      cached_checkpoint_size(other.cached_checkpoint_size.load()),
-      cached_checkpoint_size_ready(other.cached_checkpoint_size_ready.load()),
-      cached_members(std::move(other.cached_members)),
+      cached_is_valid_(other.cached_is_valid_.load()),
+      cached_max_bytes_(other.cached_max_bytes_.load()),
+      cached_max_bytes_ready_(other.cached_max_bytes_ready_.load()),
+      cached_num_lines_(other.cached_num_lines_.load()),
+      cached_num_lines_ready_(other.cached_num_lines_ready_.load()),
+      cached_checkpoint_size_(other.cached_checkpoint_size_.load()),
+      cached_checkpoint_size_ready_(other.cached_checkpoint_size_ready_.load()),
+      cached_members_(std::move(other.cached_members_)),
       snapshot_(std::move(other.snapshot_)),
       file_ref_(std::move(other.file_ref_)),
-      cached_loaded(other.cached_loaded.load()) {}
+      cached_loaded_(other.cached_loaded_.load()) {}
 
 GzipIndexer& GzipIndexer::operator=(GzipIndexer&& other) noexcept {
     if (this != &other) {
-        gz_path = std::move(other.gz_path);
-        gz_path_logical_path = std::move(other.gz_path_logical_path);
-        index_path = std::move(other.index_path);
-        ckpt_size = other.ckpt_size;
-        force_rebuild = other.force_rebuild;
+        gz_path_ = std::move(other.gz_path_);
+        gz_path_logical_path_ = std::move(other.gz_path_logical_path_);
+        index_path_ = std::move(other.index_path_);
+        ckpt_size_ = other.ckpt_size_;
+        force_rebuild_ = other.force_rebuild_;
         visitors_ = std::move(other.visitors_);
-        cached_is_valid.store(other.cached_is_valid.load());
-        cached_max_bytes.store(other.cached_max_bytes.load());
-        cached_max_bytes_ready.store(other.cached_max_bytes_ready.load());
-        cached_num_lines.store(other.cached_num_lines.load());
-        cached_num_lines_ready.store(other.cached_num_lines_ready.load());
-        cached_checkpoint_size.store(other.cached_checkpoint_size.load());
-        cached_checkpoint_size_ready.store(
-            other.cached_checkpoint_size_ready.load());
-        cached_loaded.store(other.cached_loaded.load());
-        std::lock_guard<std::mutex> lock(cached_members_mutex);
-        cached_members = std::move(other.cached_members);
+        cached_is_valid_.store(other.cached_is_valid_.load());
+        cached_max_bytes_.store(other.cached_max_bytes_.load());
+        cached_max_bytes_ready_.store(other.cached_max_bytes_ready_.load());
+        cached_num_lines_.store(other.cached_num_lines_.load());
+        cached_num_lines_ready_.store(other.cached_num_lines_ready_.load());
+        cached_checkpoint_size_.store(other.cached_checkpoint_size_.load());
+        cached_checkpoint_size_ready_.store(
+            other.cached_checkpoint_size_ready_.load());
+        cached_loaded_.store(other.cached_loaded_.load());
+        std::lock_guard<std::mutex> lock(cached_members_mutex_);
+        cached_members_ = std::move(other.cached_members_);
         snapshot_ = std::move(other.snapshot_);
         file_ref_ = std::move(other.file_ref_);
     }
@@ -1171,34 +1172,34 @@ void GzipIndexer::open() {}
 void GzipIndexer::close() {}
 
 dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
-    if (!force_rebuild && !need_rebuild()) {
+    if (!force_rebuild_ && !need_rebuild()) {
         co_return;
     }
 
     const std::time_t mtime =
-        index::store::internal::get_file_modification_time(gz_path);
-    const auto hash = index::store::internal::calculate_file_hash(gz_path);
+        index::store::internal::get_file_modification_time(gz_path_);
+    const auto hash = index::store::internal::calculate_file_hash(gz_path_);
     const std::uint64_t bytes =
-        index::store::internal::file_size_bytes(gz_path);
+        index::store::internal::file_size_bytes(gz_path_);
     const std::uint64_t final_ckpt_size =
-        determine_checkpoint_size(ckpt_size, gz_path);
-    const dstd::String logical = gz_path_logical_path;
+        determine_checkpoint_size(ckpt_size_, gz_path_);
+    const dstd::String logical = gz_path_logical_path_;
 
     dstd::Optional<GzipBuildArtifacts> artifacts;
     co_await coro::with_scope(
         [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
             artifacts = co_await build_gzip_index_artifacts(
-                gz_path, final_ckpt_size, visitors_, &scope);
+                gz_path_, final_ckpt_size, visitors_, &scope);
         });
     if (!artifacts) {
         throw index::store::IndexerError(
             index::store::IndexerError::Type::BuildError,
-            "Failed to build index for " + gz_path);
+            "Failed to build index for " + gz_path_);
     }
 
     dstd::Optional<index::Snapshot> snapshot;
     {
-        auto opened = index::Index::open(index_path);
+        auto opened = index::Index::open(index_path_);
         bool fresh = false;
         if (opened) {
             auto before = opened->snapshot();
@@ -1224,15 +1225,15 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
         if (!committed) {
             throw index::store::IndexerError(
                 index::store::IndexerError::Type::BuildError,
-                "Failed to write the index of " + gz_path + ": " +
+                "Failed to write the index of " + gz_path_ + ": " +
                     dstd::String(committed.error().message()));
         }
         snapshot.emplace(common::unwrap(opened->snapshot()));
     }
 
-    cached_is_valid = true;
-    cached_checkpoint_size = final_ckpt_size;
-    cached_checkpoint_size_ready = true;
+    cached_is_valid_ = true;
+    cached_checkpoint_size_ = final_ckpt_size;
+    cached_checkpoint_size_ready_ = true;
     const auto file = snapshot->file(logical);
     store::FileMetadataResult metadata;
     if (file) {
@@ -1240,28 +1241,28 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
                 common::unwrap(index::file_metadata(*snapshot, *file)))
             metadata = *stored;
     }
-    cached_num_lines = metadata.num_lines;
-    cached_num_lines_ready = true;
-    cached_max_bytes = metadata.max_bytes;
-    cached_max_bytes_ready = true;
-    std::lock_guard<std::mutex> lock(cached_members_mutex);
+    cached_num_lines_ = metadata.num_lines;
+    cached_num_lines_ready_ = true;
+    cached_max_bytes_ = metadata.max_bytes;
+    cached_max_bytes_ready_ = true;
+    std::lock_guard<std::mutex> lock(cached_members_mutex_);
     if (file) {
         auto members = common::unwrap(index::members(*snapshot, *file));
-        cached_members.assign(members.begin(), members.end());
+        cached_members_.assign(members.begin(), members.end());
     } else {
-        cached_members.clear();
+        cached_members_.clear();
     }
     file_ref_ = file;
     snapshot_ = std::move(snapshot);
-    cached_loaded.store(true, std::memory_order_release);
+    cached_loaded_.store(true, std::memory_order_release);
     co_return;
 }
 
-bool GzipIndexer::is_valid() const { return cached_is_valid; }
+bool GzipIndexer::is_valid() const { return cached_is_valid_; }
 
 bool GzipIndexer::exists() const {
     return common::unwrap(
-        dstd::fs::is_directory(dstd::PathView(index::store_dir(index_path))));
+        dstd::fs::is_directory(dstd::PathView(index::store_dir(index_path_))));
 }
 
 bool GzipIndexer::need_rebuild() const {
@@ -1273,19 +1274,19 @@ bool GzipIndexer::need_rebuild() const {
     }
 
     try {
-        auto opened = common::unwrap(index::Index::open(index_path));
+        auto opened = common::unwrap(index::Index::open(index_path_));
         auto snapshot = common::unwrap(opened.snapshot());
-        const auto file = snapshot.file(gz_path_logical_path);
+        const auto file = snapshot.file(gz_path_logical_path_);
         if (!file) {
             return true;
         }
         index::SourceStat now;
         dftracer::utils::common::InputFileStat st;
-        if (common::stat_input(gz_path, st)) {
+        if (common::stat_input(gz_path_, st)) {
             now.mtime = static_cast<std::uint64_t>(st.mtime);
             now.size = st.size;
         }
-        if (snapshot.freshness(gz_path_logical_path, now) !=
+        if (snapshot.freshness(gz_path_logical_path_, now) !=
             index::Freshness::Current) {
             return true;
         }
@@ -1299,75 +1300,75 @@ bool GzipIndexer::need_rebuild() const {
         if (!metadata || metadata->checkpoint_size == 0) {
             return true;
         }
-        return index::store::internal::calculate_file_hash(gz_path) !=
+        return index::store::internal::calculate_file_hash(gz_path_) !=
                *stored_hash;
     } catch (const std::exception& e) {
         // An unreadable index is stale because the rebuild rewrites it.
         DFTRACER_UTILS_LOG_WARN("Indexer: index %s is unreadable (%s); rebuild",
-                                index_path.c_str(), e.what());
+                                index_path_.c_str(), e.what());
         return true;
     }
 }
 
-const dstd::String& GzipIndexer::get_index_path() const { return index_path; }
+const dstd::String& GzipIndexer::get_index_path() const { return index_path_; }
 
-const dstd::String& GzipIndexer::get_archive_path() const { return gz_path; }
+const dstd::String& GzipIndexer::get_archive_path() const { return gz_path_; }
 
-const dstd::String& GzipIndexer::get_gz_path() const { return gz_path; }
+const dstd::String& GzipIndexer::get_gz_path() const { return gz_path_; }
 
 void GzipIndexer::ensure_loaded() const {
-    if (cached_loaded.load(std::memory_order_acquire)) {
+    if (cached_loaded_.load(std::memory_order_acquire)) {
         return;
     }
-    std::lock_guard<std::mutex> lock(cached_members_mutex);
-    if (cached_loaded.load(std::memory_order_relaxed)) {
+    std::lock_guard<std::mutex> lock(cached_members_mutex_);
+    if (cached_loaded_.load(std::memory_order_relaxed)) {
         return;
     }
-    auto opened = common::unwrap(index::Index::open(index_path));
+    auto opened = common::unwrap(index::Index::open(index_path_));
     auto snapshot = common::unwrap(opened.snapshot());
-    const auto file = snapshot.file(gz_path_logical_path);
+    const auto file = snapshot.file(gz_path_logical_path_);
     if (file) {
         store::FileMetadataResult metadata;
         if (auto stored = common::unwrap(index::file_metadata(snapshot, *file)))
             metadata = *stored;
-        cached_num_lines.store(metadata.num_lines, std::memory_order_relaxed);
-        cached_num_lines_ready.store(true, std::memory_order_relaxed);
-        cached_max_bytes.store(metadata.max_bytes, std::memory_order_relaxed);
-        cached_max_bytes_ready.store(true, std::memory_order_relaxed);
-        cached_checkpoint_size.store(metadata.checkpoint_size,
-                                     std::memory_order_relaxed);
-        cached_checkpoint_size_ready.store(true, std::memory_order_relaxed);
+        cached_num_lines_.store(metadata.num_lines, std::memory_order_relaxed);
+        cached_num_lines_ready_.store(true, std::memory_order_relaxed);
+        cached_max_bytes_.store(metadata.max_bytes, std::memory_order_relaxed);
+        cached_max_bytes_ready_.store(true, std::memory_order_relaxed);
+        cached_checkpoint_size_.store(metadata.checkpoint_size,
+                                      std::memory_order_relaxed);
+        cached_checkpoint_size_ready_.store(true, std::memory_order_relaxed);
         auto members = common::unwrap(index::members(snapshot, *file));
-        cached_members.assign(members.begin(), members.end());
-        for (const auto& m : cached_members)
+        cached_members_.assign(members.begin(), members.end());
+        for (const auto& m : cached_members_)
             if (m.kind == GzipRecordKind::Head)
-                cached_heads.push_back(m.c_offset);
+                cached_heads_.push_back(m.c_offset);
     }
     file_ref_ = file;
     snapshot_ = std::move(snapshot);
-    cached_loaded.store(true, std::memory_order_release);
+    cached_loaded_.store(true, std::memory_order_release);
 }
 
 std::uint64_t GzipIndexer::get_max_bytes() const {
     ensure_loaded();
-    return cached_max_bytes.load(std::memory_order_relaxed);
+    return cached_max_bytes_.load(std::memory_order_relaxed);
 }
 
 std::uint64_t GzipIndexer::get_checkpoint_size() const {
     ensure_loaded();
-    return cached_checkpoint_size.load(std::memory_order_relaxed);
+    return cached_checkpoint_size_.load(std::memory_order_relaxed);
 }
 
 std::uint64_t GzipIndexer::get_num_lines() const {
     ensure_loaded();
-    return cached_num_lines.load(std::memory_order_relaxed);
+    return cached_num_lines_.load(std::memory_order_relaxed);
 }
 
 bool GzipIndexer::find_member(std::size_t target_offset,
                               GzipMemberRecord& member) const {
     ensure_loaded();
-    std::lock_guard<std::mutex> lock(cached_members_mutex);
-    for (const auto& candidate : cached_members) {
+    std::lock_guard<std::mutex> lock(cached_members_mutex_);
+    for (const auto& candidate : cached_members_) {
         if (target_offset < candidate.uc_offset + candidate.uc_size) {
             member = candidate;
             return true;
@@ -1378,19 +1379,19 @@ bool GzipIndexer::find_member(std::size_t target_offset,
 
 dstd::Vector<GzipMemberRecord> GzipIndexer::get_members() const {
     ensure_loaded();
-    std::lock_guard<std::mutex> lock(cached_members_mutex);
-    return cached_members;
+    std::lock_guard<std::mutex> lock(cached_members_mutex_);
+    return cached_members_;
 }
 
 dstd::Vector<std::uint64_t> GzipIndexer::piece_heads() const {
     ensure_loaded();
-    std::lock_guard<std::mutex> lock(cached_members_mutex);
-    return cached_heads;
+    std::lock_guard<std::mutex> lock(cached_members_mutex_);
+    return cached_heads_;
 }
 
 dstd::String GzipIndexer::restart_window(std::uint64_t member_idx) const {
     ensure_loaded();
-    std::lock_guard<std::mutex> lock(cached_members_mutex);
+    std::lock_guard<std::mutex> lock(cached_members_mutex_);
     if (!file_ref_) return {};
     auto window = common::unwrap(
         index::restart_window(*snapshot_, *file_ref_, member_idx));

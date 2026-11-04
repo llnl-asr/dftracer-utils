@@ -85,7 +85,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
             if (hdr_rc < 0) goto stream_done;
 
             {
-                static constexpr char newline_ch = '\n';
+                static constexpr char NEWLINE_CH = '\n';
                 static constexpr char crlf[] = "\r\n";
                 char hex[24];
                 dstd::Vector<struct iovec> iovs;
@@ -109,7 +109,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
                     for (const auto& sv : chunk->views) {
                         iovs.push_back(
                             {const_cast<char*>(sv.data()), sv.size()});
-                        iovs.push_back({const_cast<char*>(&newline_ch), 1});
+                        iovs.push_back({const_cast<char*>(&NEWLINE_CH), 1});
                     }
                     iovs.push_back({const_cast<char*>(crlf), 2});
 

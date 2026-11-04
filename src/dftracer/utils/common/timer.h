@@ -50,8 +50,8 @@ class Timer {
     inline bool is_verbose() const { return verbose_; }
 
     inline Timer& reset() {
-        start_time = Clock::now();
-        end_time = Clock::time_point();
+        start_time_ = Clock::now();
+        end_time_ = Clock::time_point();
         running_ = false;
         return *this;
     }
@@ -71,8 +71,8 @@ class Timer {
     bool running_ = false;
     dstd::String name_;
     using Clock = std::chrono::high_resolution_clock;
-    Clock::time_point start_time;
-    Clock::time_point end_time;
+    Clock::time_point start_time_;
+    Clock::time_point end_time_;
     dstd::HashMap<dstd::String, std::uint64_t> counters_;
 };
 

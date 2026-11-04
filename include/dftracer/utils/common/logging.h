@@ -129,8 +129,9 @@ class ScopeTracer {
         }                                                            \
     } while (0)
 
-#define DFTRACER_UTILS_DETAIL_CONCAT_(a, b) a##b
-#define DFTRACER_UTILS_DETAIL_CONCAT(a, b) DFTRACER_UTILS_DETAIL_CONCAT_(a, b)
+#define DFTRACER_UTILS_DETAIL_CONCAT_IMPL(a, b) a##b
+#define DFTRACER_UTILS_DETAIL_CONCAT(a, b) \
+    DFTRACER_UTILS_DETAIL_CONCAT_IMPL(a, b)
 
 #if defined(DFTRACER_UTILS_LOGGER_LEVEL_TRACE) && \
     (DFTRACER_UTILS_LOGGER_LEVEL_TRACE == 1)

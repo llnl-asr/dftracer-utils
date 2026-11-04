@@ -1497,7 +1497,7 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
     {
         common::ScopedTimer _t(stages, "collect_and_classify");
         if (!config.no_auto_index) {
-            common::ScopedTimer _ef(stages, "ensure_index_fresh");
+            common::ScopedTimer ef(stages, "ensure_index_fresh");
             dstd::String index_dir_arg{dstd::StringView(config.index_dir)};
             if (!config.directory.empty()) {
                 dstd::String directory_arg{dstd::StringView(config.directory)};
@@ -1525,7 +1525,7 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
                 trusted_index_exists ? 1 : 0, config.json_output ? 1 : 0,
                 static_cast<int>(config.report_type));
             if (trusted_index_exists) {
-                common::ScopedTimer _ls(stages, "load_index_snapshot");
+                common::ScopedTimer ls(stages, "load_index_snapshot");
                 auto snapshot =
                     co_await load_index_root_snapshot(trusted_index_path);
                 files = std::move(snapshot->logical_files);
@@ -1536,7 +1536,7 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
 
         if (!used_index_source_of_truth) {
             {
-                common::ScopedTimer _cf(stages, "collect_files");
+                common::ScopedTimer cf(stages, "collect_files");
                 files =
                     co_await collect_files(ctx, config.files, config.directory);
             }
@@ -1544,7 +1544,7 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
                 co_return 1;
             }
             {
-                common::ScopedTimer _ri(stages, "resolve_index_state");
+                common::ScopedTimer ri(stages, "resolve_index_state");
                 dstd::Vector<dstd::String> to_resolve;
                 for (const auto& f : files)
                     to_resolve.emplace_back(dstd::StringView(f));
@@ -1568,7 +1568,7 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
             }
             co_return 1;
         }
-        common::ScopedTimer _ai(stages, "auto_index_files");
+        common::ScopedTimer ai(stages, "auto_index_files");
         co_await auto_index_files(partition, config.index_dir,
                                   config.checkpoint_size,
                                   config.executor_threads);
@@ -1581,7 +1581,7 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
 
     dstd::UniquePtr<AggregateStatsResult> agg_ptr;
     {
-        common::ScopedTimer _ag(stages, "aggregate_stats");
+        common::ScopedTimer ag(stages, "aggregate_stats");
         auto agg_val = co_await run_aggregate_stats(
             ctx, &config,
             dstd::make_unique<IndexPartition>(std::move(partition)));

@@ -121,7 +121,7 @@ inline std::size_t step_char(dstd::StringView s, std::size_t i) {
 // Two-pointer wildcard match: `%` any run, `_` one UTF-8 character. Without
 // `_` (ANY_ONE false) a restart may land on any byte: a literal never
 // matches a UTF-8 continuation byte.
-template <bool ICASE, bool ANY_ONE>
+template <bool ICASE, bool AnyOne>
 bool glob_match_t(const dstd::Vector<GlobToken>& toks, dstd::StringView s) {
     std::size_t si = 0, pi = 0;
     std::size_t star = dstd::StringView::npos;
@@ -129,7 +129,7 @@ bool glob_match_t(const dstd::Vector<GlobToken>& toks, dstd::StringView s) {
     const std::size_t n = s.size();
     const std::size_t m = toks.size();
     while (si < n) {
-        if (ANY_ONE && pi < m && toks[pi].kind == GlobKind::AnyOne) {
+        if (AnyOne && pi < m && toks[pi].kind == GlobKind::AnyOne) {
             si = step_char(s, si);
             ++pi;
         } else if (pi < m && toks[pi].kind == GlobKind::Literal &&
@@ -142,7 +142,7 @@ bool glob_match_t(const dstd::Vector<GlobToken>& toks, dstd::StringView s) {
             ++pi;
         } else if (star != dstd::StringView::npos) {
             pi = star + 1;
-            star_si = ANY_ONE ? step_char(s, star_si) : star_si + 1;
+            star_si = AnyOne ? step_char(s, star_si) : star_si + 1;
             si = star_si;
         } else {
             return false;

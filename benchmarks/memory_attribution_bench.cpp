@@ -72,13 +72,13 @@ constexpr Sizes SMOKE_SIZES{200'000, 2'000, 200'000};
 constexpr Sizes FULL_SIZES{8'000'000, 4'000'000, 2'000'000};
 
 enum class Workload : std::uint8_t {
-    GROUP_BY,
-    SORT,
-    JOIN,
-    INDEX_BUILD,
-    JSON_READ,
-    GENESIS,
-    SPILL_CYCLE,
+    GroupBy,
+    Sort,
+    Join,
+    IndexBuild,
+    JsonRead,
+    Genesis,
+    SpillCycle,
 };
 
 // The pools a workload's own bytes sit in.
@@ -91,13 +91,13 @@ struct WorkloadInfo {
 };
 
 constexpr WorkloadInfo WORKLOADS[] = {
-    {Workload::GROUP_BY, "group_by", PoolGroup::Query},
-    {Workload::SORT, "sort", PoolGroup::Query},
-    {Workload::JOIN, "join", PoolGroup::Query},
-    {Workload::INDEX_BUILD, "index_build", PoolGroup::FoldBuffers},
-    {Workload::JSON_READ, "json_read", PoolGroup::None},
-    {Workload::GENESIS, "genesis", PoolGroup::Genesis},
-    {Workload::SPILL_CYCLE, "spill_cycle", PoolGroup::Query},
+    {Workload::GroupBy, "group_by", PoolGroup::Query},
+    {Workload::Sort, "sort", PoolGroup::Query},
+    {Workload::Join, "join", PoolGroup::Query},
+    {Workload::IndexBuild, "index_build", PoolGroup::FoldBuffers},
+    {Workload::JsonRead, "json_read", PoolGroup::None},
+    {Workload::Genesis, "genesis", PoolGroup::Genesis},
+    {Workload::SpillCycle, "spill_cycle", PoolGroup::Query},
 };
 
 const char* group_name(PoolGroup g) {
@@ -337,19 +337,19 @@ Paths prepare(const dstd::String& dir, const Sizes& s) {
 
 void run_workload(Workload w, const Sizes& s, const Paths& p) {
     switch (w) {
-        case Workload::GROUP_BY:
+        case Workload::GroupBy:
             return group_by(s);
-        case Workload::SORT:
+        case Workload::Sort:
             return sort(s);
-        case Workload::JOIN:
+        case Workload::Join:
             return join(s);
-        case Workload::INDEX_BUILD:
+        case Workload::IndexBuild:
             return index_build(p);
-        case Workload::JSON_READ:
+        case Workload::JsonRead:
             return json_read(p);
-        case Workload::GENESIS:
+        case Workload::Genesis:
             return genesis(p);
-        case Workload::SPILL_CYCLE:
+        case Workload::SpillCycle:
             return spill_cycle(s);
     }
 }
@@ -433,7 +433,7 @@ int main(int argc, char** argv) {
                 "unattributed");
     for (const WorkloadInfo& info : WORKLOADS) {
 #if !defined(__GLIBC__)
-        if (info.id == Workload::SPILL_CYCLE) continue;
+        if (info.id == Workload::SpillCycle) continue;
 #endif
         Peaks r;
         if (!run_child(info, sizes, paths, r)) {
@@ -453,14 +453,14 @@ int main(int argc, char** argv) {
             mib(r.peak_group_live), mib(r.peak_group_reserved),
             static_cast<double>(unattributed) / MIB);
 #if defined(__GLIBC__)
-        if (info.id == Workload::SPILL_CYCLE)
+        if (info.id == Workload::SpillCycle)
             std::printf(
                 "%-12s glibc after one spill cycle: mallinfo in use %.1f MiB, "
                 "heap %.1f MiB, end RSS %.1f MiB, end anon %.1f MiB\n",
                 info.name, mib(r.malloc_in_use), mib(r.malloc_heap),
                 mib(r.end_rss), mib(r.end_anon));
 #endif
-        if (info.id == Workload::GENESIS && r.peak_group_live == 0 &&
+        if (info.id == Workload::Genesis && r.peak_group_live == 0 &&
             r.peak_group_reserved == 0) {
             std::printf("%-12s no genesis pool held bytes  FAIL\n", info.name);
             ++failures;

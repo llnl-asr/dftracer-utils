@@ -117,8 +117,8 @@ struct StatAgg {
     }
 };
 
-template <typename builder_type>
-void tag_invoke(simdjson::serialize_tag, builder_type& b, const StatRow& r) {
+template <typename BuilderType>
+void tag_invoke(simdjson::serialize_tag, BuilderType& b, const StatRow& r) {
     b.start_object();
     b.append_key_value("name", *r.key);
     b.append_comma();
@@ -391,7 +391,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     };
     auto scan =
         co_await sv.map_batches<StatMap>(fold_events, merge_stats, slots, 0);
-    StatMap byKey = std::move(scan.value);
+    StatMap by_key = std::move(scan.value);
 
     // Whole-run enclosers that opened before the scan-back window. The scan's
     // query filter did not see these, so re-apply it per event.
@@ -415,17 +415,17 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
                                                    : root)))
                 continue;
             double dur = static_cast<double>(sp.end - sp.begin);
-            auto& a = byKey[extract_group_value(root, gcol)];
+            auto& a = by_key[extract_group_value(root, gcol)];
             a.add(1.0, hi - lo, dur, dur);
             a.mark(lo, hi, begin, cov_bw);
         }
     }
 
     dstd::Vector<StatRow> rows;
-    rows.reserve(byKey.size());
+    rows.reserve(by_key.size());
     std::uint64_t total_count = 0;
     double total_dur = 0;
-    for (auto& kv : byKey) {
+    for (auto& kv : by_key) {
         auto cnt = static_cast<std::uint64_t>(kv.second.count + 0.5);
         double mn = kv.second.min == std::numeric_limits<double>::infinity()
                         ? 0

@@ -470,9 +470,9 @@ void ThreadPoolExecutor::set_deadlock_timeout(std::chrono::seconds timeout) {
 }
 
 void ThreadPoolExecutor::monitor_loop() {
-    using clock = std::chrono::steady_clock;
+    using Clock = std::chrono::steady_clock;
     const auto keepalive = keepalive_;
-    auto last_busy = clock::now();
+    auto last_busy = Clock::now();
 
     std::unique_lock<std::mutex> lock(coord_mutex_);
     while (running_.load(std::memory_order_acquire)) {
@@ -491,7 +491,7 @@ void ThreadPoolExecutor::monitor_loop() {
         if (run_queue_.size_approx() > 0 ||
             idle_workers_.load(std::memory_order_acquire) <
                 live_workers_.load(std::memory_order_acquire)) {
-            last_busy = clock::now();
+            last_busy = Clock::now();
         }
         // Grow: spawn until the backlog is covered or we hit the cap - all at
         // once, so a burst reaches full parallelism in one wake.
@@ -505,11 +505,11 @@ void ThreadPoolExecutor::monitor_loop() {
         // size reaches its floor in a few keep-alives.
         const std::size_t live = live_workers_.load(std::memory_order_acquire);
         const std::size_t floor = min_workers_.load(std::memory_order_acquire);
-        if (live > floor && clock::now() - last_busy >= keepalive) {
+        if (live > floor && Clock::now() - last_busy >= keepalive) {
             for (std::size_t n = std::max<std::size_t>((live - floor) / 2, 1);
                  n > 0; --n)
                 retire_worker();
-            last_busy = clock::now();
+            last_busy = Clock::now();
         }
         lock.lock();
     }

@@ -29,7 +29,6 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/utilities/filesystem/types.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
@@ -37,6 +36,7 @@
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/utilities/filesystem/types.h>
 #include <sys/resource.h>
 
 #include <algorithm>

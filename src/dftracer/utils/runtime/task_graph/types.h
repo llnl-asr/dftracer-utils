@@ -19,10 +19,10 @@ namespace dftracer::utils::task_graph {
  *     Level 2: [reduce(01,23), reduce(45,6)]               -> 2 items
  *     Level 3: [reduce(0123,456)]                          -> 1 item
  */
-struct split_every {
+struct SplitEvery {
     std::size_t count;
 
-    constexpr explicit split_every(std::size_t n) : count(n) {}
+    constexpr explicit SplitEvery(std::size_t n) : count(n) {}
 };
 
 /**
@@ -34,10 +34,10 @@ struct split_every {
  * Example:
  *   num_outputs{8} creates 8 parallel tasks from one source
  */
-struct num_outputs {
+struct NumOutputs {
     std::size_t count;
 
-    constexpr explicit num_outputs(std::size_t n) : count(n) {}
+    constexpr explicit NumOutputs(std::size_t n) : count(n) {}
 };
 
 /**
@@ -53,10 +53,10 @@ struct num_outputs {
  *     Partition 2: [5,6]
  *     Partition 3: [7,8]
  */
-struct num_partitions {
+struct NumPartitions {
     std::size_t count;
 
-    constexpr explicit num_partitions(std::size_t n) : count(n) {}
+    constexpr explicit NumPartitions(std::size_t n) : count(n) {}
 };
 
 }  // namespace dftracer::utils::task_graph

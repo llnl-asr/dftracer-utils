@@ -170,22 +170,22 @@ class AsyncGenerator {
     using value_type = T;
 
     struct promise_type : detail::FrameAllocation {
-        alignas(T) std::byte value_storage_[sizeof(T)];
-        bool has_value_ = false;
-        std::exception_ptr exception_;
-        std::coroutine_handle<> continuation_{};
+        alignas(T) std::byte value_storage[sizeof(T)];
+        bool has_value = false;
+        std::exception_ptr exception;
+        std::coroutine_handle<> continuation{};
         /// The @ref CoroTask handoff, once per next(): see
         /// CoroTask::await_suspend.
-        std::atomic<bool> handoff_{false};
-        detail::RunContext context_;
+        std::atomic<bool> handoff{false};
+        detail::RunContext context;
 
         T* value_ptr() noexcept {
-            return std::launder(reinterpret_cast<T*>(value_storage_));
+            return std::launder(reinterpret_cast<T*>(value_storage));
         }
         void clear_value() noexcept {
-            if (has_value_) {
+            if (has_value) {
                 value_ptr()->~T();
-                has_value_ = false;
+                has_value = false;
             }
         }
         ~promise_type() { clear_value(); }
@@ -196,26 +196,26 @@ class AsyncGenerator {
         }
 
         detail::EnterPoolOnStart initial_suspend() noexcept {
-            return {&context_};
+            return {&context};
         }
 
         auto yield_value(T value) noexcept {
             clear_value();
-            ::new (static_cast<void*>(value_storage_)) T(std::move(value));
-            has_value_ = true;
-            return ToConsumer{&context_};
+            ::new (static_cast<void*>(value_storage)) T(std::move(value));
+            has_value = true;
+            return ToConsumer{&context};
         }
 
-        auto final_suspend() noexcept { return ToConsumer{&context_}; }
+        auto final_suspend() noexcept { return ToConsumer{&context}; }
 
         template <typename U>
         auto await_transform(U&& awaitable) noexcept {
-            return detail::in_pool(std::forward<U>(awaitable), context_);
+            return detail::in_pool(std::forward<U>(awaitable), context);
         }
 
         void return_void() noexcept {}
 
-        void unhandled_exception() { exception_ = std::current_exception(); }
+        void unhandled_exception() { exception = std::current_exception(); }
 
         // The consumer may destroy the frame once the exchange is done.
         struct ToConsumer {
@@ -224,9 +224,8 @@ class AsyncGenerator {
             bool await_ready() noexcept { return false; }
             void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
                 auto& p = h.promise();
-                std::coroutine_handle<> next = p.continuation_;
-                if (next &&
-                    p.handoff_.exchange(true, std::memory_order_acq_rel))
+                std::coroutine_handle<> next = p.continuation;
+                if (next && p.handoff.exchange(true, std::memory_order_acq_rel))
                     next.resume();
             }
             void await_resume() noexcept { context->enter(); }
@@ -246,24 +245,24 @@ class AsyncGenerator {
         bool await_suspend(std::coroutine_handle<> awaiting) noexcept {
             if (!handle_ || handle_.done()) return false;
             auto& p = handle_.promise();
-            p.continuation_ = awaiting;
-            p.handoff_.store(false, std::memory_order_relaxed);
+            p.continuation = awaiting;
+            p.handoff.store(false, std::memory_order_relaxed);
             handle_.resume();
-            return !p.handoff_.exchange(true, std::memory_order_acq_rel);
+            return !p.handoff.exchange(true, std::memory_order_acq_rel);
         }
 
         dstd::Optional<T> await_resume() {
             if (!handle_) {
                 return dstd::nullopt;
             }
-            if (handle_.promise().exception_) {
-                common::rethrow_and_clear(handle_.promise().exception_);
+            if (handle_.promise().exception) {
+                common::rethrow_and_clear(handle_.promise().exception);
             }
             if (handle_.done()) {
                 return dstd::nullopt;
             }
             auto& promise = handle_.promise();
-            if (promise.has_value_) {
+            if (promise.has_value) {
                 dstd::Optional<T> out(std::move(*promise.value_ptr()));
                 promise.clear_value();
                 return out;
@@ -313,12 +312,12 @@ class AsyncGenerator {
     bool done() const { return !handle_ || handle_.done(); }
 
     bool has_exception() const {
-        return handle_ && handle_.promise().exception_ != nullptr;
+        return handle_ && handle_.promise().exception != nullptr;
     }
 
     void rethrow_if_exception() {
-        if (handle_ && handle_.promise().exception_) {
-            common::rethrow_and_clear(handle_.promise().exception_);
+        if (handle_ && handle_.promise().exception) {
+            common::rethrow_and_clear(handle_.promise().exception);
         }
     }
 

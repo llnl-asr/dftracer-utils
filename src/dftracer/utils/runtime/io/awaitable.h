@@ -30,31 +30,31 @@ struct SubmitContext {
 /// fd for open, 0 for close) or a negative errno on failure.
 struct IoAwaitable {
     /// Set by the backend when the operation completes
-    ssize_t result_ = 0;
+    ssize_t result = 0;
 
     /// Coroutine handle to resume on completion
-    std::coroutine_handle<> handle_{};
+    std::coroutine_handle<> handle{};
 
     /// The executor of the task that awaits this operation, recorded when it
     /// suspends. The completion resumes the task there (task affinity).
-    coro::Executor* resume_on_ = nullptr;
+    coro::Executor* resume_on = nullptr;
 
     /// Opaque pointer to a @ref SubmitContext (backend-specific).
     /// The backend creates a heap-allocated @ref SubmitContext subclass in
     /// submit_*(), stores a pointer here. await_suspend calls
     /// ctx->submit(ctx, this) to trigger the I/O operation.
     /// The backend is responsible for freeing the @ref SubmitContext.
-    SubmitContext* submit_ctx_ = nullptr;
+    SubmitContext* submit_ctx = nullptr;
 
     /// True when result is already available (sync fallback path)
-    bool ready_ = false;
+    bool is_ready = false;
 
-    bool await_ready() const noexcept { return ready_; }
+    bool await_ready() const noexcept { return is_ready; }
 
     /// Declared here, defined in io_awaitable.cpp
     void await_suspend(std::coroutine_handle<> h) noexcept;
 
-    ssize_t await_resume() const noexcept { return result_; }
+    ssize_t await_resume() const noexcept { return result; }
 
     /// Posts the awaiting task to its own executor, or to `fallback` (the
     /// backend's executor) when it suspended outside any executor.
@@ -63,8 +63,8 @@ struct IoAwaitable {
     /// Create an already-completed awaitable (for sync fallback)
     static IoAwaitable ready(ssize_t result) noexcept {
         IoAwaitable a;
-        a.result_ = result;
-        a.ready_ = true;
+        a.result = result;
+        a.is_ready = true;
         return a;
     }
 };

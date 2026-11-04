@@ -200,6 +200,9 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
              ${CMAKE_SOURCE_DIR}/scripts/layering/baseline.sh ${CMAKE_BINARY_DIR}
              ${CMAKE_SOURCE_DIR})
 endif()
+add_test(NAME naming COMMAND sh ${CMAKE_SOURCE_DIR}/scripts/check_naming.sh
+                             ${CMAKE_SOURCE_DIR} ${CMAKE_BINARY_DIR})
+set_tests_properties(naming PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME long_lived_scopes
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_long_lived_scopes.cmake)

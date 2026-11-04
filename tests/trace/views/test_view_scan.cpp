@@ -270,11 +270,11 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // A: write the output with the index fused into the write.
-        dstd::String dirA = env.get_dir() + "/a";
-        REQUIRE(dstd::fs::create_directories(dirA).has_value());
-        const dstd::String outAgz = dirA + "/out.pfw.gz";
+        dstd::String dir_a = env.get_dir() + "/a";
+        REQUIRE(dstd::fs::create_directories(dir_a).has_value());
+        const dstd::String out_agz = dir_a + "/out.pfw.gz";
         TraceWriteOptions opts;
-        opts.output_path = outAgz;
+        opts.output_path = out_agz;
         opts.member_size = 512;  // small members -> several to key per-member
         opts.num_workers = 4;
         opts.compress = true;
@@ -282,22 +282,22 @@ TEST_SUITE("View") {
         auto st = View::from_file(dstd::String(gz), dstd::String(idx))
                       .sink_trace(opts)
                       .get();
-        REQUIRE(dstd::fs::exists(outAgz).value());
-        const dstd::String idxA =
-            dstd::String(determine_index_path(outAgz, ""));
+        REQUIRE(dstd::fs::exists(out_agz).value());
+        const dstd::String idx_a =
+            dstd::String(determine_index_path(out_agz, ""));
         // The write built the index, not a separate pass.
-        REQUIRE(dstd::fs::exists(idxA).value());
+        REQUIRE(dstd::fs::exists(idx_a).value());
 
         // B: identical output bytes in a fresh dir; View auto-indexes it lazily
         // via the standard indexer (the ground truth).
-        dstd::String dirB = env.get_dir() + "/b";
-        REQUIRE(dstd::fs::create_directories(dirB).has_value());
-        const dstd::String outBgz = dirB + "/out.pfw.gz";
-        REQUIRE(dstd::fs::copy_file(outAgz, outBgz,
+        dstd::String dir_b = env.get_dir() + "/b";
+        REQUIRE(dstd::fs::create_directories(dir_b).has_value());
+        const dstd::String out_bgz = dir_b + "/out.pfw.gz";
+        REQUIRE(dstd::fs::copy_file(out_agz, out_bgz,
                                     dstd::fs::CopyMode::FailIfExists)
                     .has_value());
-        const dstd::String idxB =
-            dstd::String(determine_index_path(outBgz, ""));
+        const dstd::String idx_b =
+            dstd::String(determine_index_path(out_bgz, ""));
 
         auto run = [](const dstd::String& f, const dstd::String& ix,
                       const char* q) {
@@ -311,17 +311,17 @@ TEST_SUITE("View") {
         };
 
         // Full scan and pruned queries: fused (A) must equal lazy (B).
-        CHECK(run(outAgz, idxA, nullptr) == run(outBgz, idxB, nullptr));
-        CHECK(run(outAgz, idxA, R"(cat == "POSIX")") ==
-              run(outBgz, idxB, R"(cat == "POSIX")"));
-        CHECK(run(outAgz, idxA, R"(cat == "STDIO")") ==
-              run(outBgz, idxB, R"(cat == "STDIO")"));
+        CHECK(run(out_agz, idx_a, nullptr) == run(out_bgz, idx_b, nullptr));
+        CHECK(run(out_agz, idx_a, R"(cat == "POSIX")") ==
+              run(out_bgz, idx_b, R"(cat == "POSIX")"));
+        CHECK(run(out_agz, idx_a, R"(cat == "STDIO")") ==
+              run(out_bgz, idx_b, R"(cat == "STDIO")"));
         // A query matching nothing: the bloom must prune without dropping a
         // real match (both empty).
-        CHECK(run(outAgz, idxA, R"(name == "does_not_exist")").empty());
-        CHECK(run(outBgz, idxB, R"(name == "does_not_exist")").empty());
+        CHECK(run(out_agz, idx_a, R"(name == "does_not_exist")").empty());
+        CHECK(run(out_bgz, idx_b, R"(name == "does_not_exist")").empty());
         // Fused full scan returns every written event.
-        CHECK(run(outAgz, idxA, nullptr).size() == st.events_matched);
+        CHECK(run(out_agz, idx_a, nullptr).size() == st.events_matched);
     }
 
     // Parts are folded and compressed on parallel workers, so the member
@@ -333,12 +333,12 @@ TEST_SUITE("View") {
         dstd::String gz = create_mixed_trace(env, 400, 400);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        dstd::String dirA = env.get_dir() + "/a";
-        dstd::String dirB = env.get_dir() + "/b";
-        REQUIRE(dstd::fs::create_directories(dirA).has_value());
-        REQUIRE(dstd::fs::create_directories(dirB).has_value());
+        dstd::String dir_a = env.get_dir() + "/a";
+        dstd::String dir_b = env.get_dir() + "/b";
+        REQUIRE(dstd::fs::create_directories(dir_a).has_value());
+        REQUIRE(dstd::fs::create_directories(dir_b).has_value());
         TraceWriteOptions opts;
-        opts.output_path = dirA + "/out.pfw.gz";
+        opts.output_path = dir_a + "/out.pfw.gz";
         opts.member_size = 512;
         opts.part_size = 8192;
         opts.num_workers = 4;
@@ -347,29 +347,30 @@ TEST_SUITE("View") {
             .sink_trace(opts)
             .get();
 
-        dstd::Vector<dstd::String> partsA, partsB;
+        dstd::Vector<dstd::String> parts_a, parts_b;
         for (int i = 0; dstd::fs::exists(utilities::fileio::gzip_part_path(
                                              opts.output_path, i, true))
                             .value();
              ++i) {
-            partsA.emplace_back(
+            parts_a.emplace_back(
                 utilities::fileio::gzip_part_path(opts.output_path, i, true));
-            partsB.push_back(
-                dirB + "/" +
-                dstd::String(dstd::PathView(partsA.back()).filename()));
-            REQUIRE(dstd::fs::copy_file(partsA.back(), partsB.back(),
+            parts_b.push_back(
+                dir_b + "/" +
+                dstd::String(dstd::PathView(parts_a.back()).filename()));
+            REQUIRE(dstd::fs::copy_file(parts_a.back(), parts_b.back(),
                                         dstd::fs::CopyMode::FailIfExists)
                         .has_value());
         }
-        REQUIRE(partsA.size() > 2);
+        REQUIRE(parts_a.size() > 2);
 
-        const dstd::String idxA =
-            dstd::String(determine_index_path(partsA[0], ""));
-        const dstd::String idxB =
-            dstd::String(determine_index_path(partsB[0], ""));
-        std::uint64_t scannedA = 0, scannedB = 0, matchedA = 0, matchedB = 0;
-        dstd::Vector<dstd::String> colsA, colsB;
-        for (std::size_t i = 0; i < partsA.size(); ++i) {
+        const dstd::String idx_a =
+            dstd::String(determine_index_path(parts_a[0], ""));
+        const dstd::String idx_b =
+            dstd::String(determine_index_path(parts_b[0], ""));
+        std::uint64_t scanned_a = 0, scanned_b = 0, matched_a = 0,
+                      matched_b = 0;
+        dstd::Vector<dstd::String> cols_a, cols_b;
+        for (std::size_t i = 0; i < parts_a.size(); ++i) {
             auto q = [&](const dstd::String& f, const dstd::String& ix,
                          std::uint64_t& sc, std::uint64_t& mt,
                          dstd::Vector<dstd::String>& cols) {
@@ -385,17 +386,17 @@ TEST_SUITE("View") {
                          .columns())
                     cols.emplace_back(c);
             };
-            q(partsA[i], idxA, scannedA, matchedA, colsA);
-            q(partsB[i], idxB, scannedB, matchedB, colsB);
+            q(parts_a[i], idx_a, scanned_a, matched_a, cols_a);
+            q(parts_b[i], idx_b, scanned_b, matched_b, cols_b);
         }
-        CHECK(matchedA == 400);
-        CHECK(matchedA == matchedB);
-        CHECK(scannedA == scannedB);
-        CHECK(colsA == colsB);
+        CHECK(matched_a == 400);
+        CHECK(matched_a == matched_b);
+        CHECK(scanned_a == scanned_b);
+        CHECK(cols_a == cols_b);
 
-        for (std::size_t i = 0; i < partsA.size(); ++i) {
-            auto ma = dftu_utils_test::indexed_members(idxA, partsA[i]);
-            auto mb = dftu_utils_test::indexed_members(idxB, partsB[i]);
+        for (std::size_t i = 0; i < parts_a.size(); ++i) {
+            auto ma = dftu_utils_test::indexed_members(idx_a, parts_a[i]);
+            auto mb = dftu_utils_test::indexed_members(idx_b, parts_b[i]);
             REQUIRE(!ma.empty());
             REQUIRE(ma.size() == mb.size());
             for (std::size_t k = 0; k < ma.size(); ++k) {

@@ -41,19 +41,19 @@ StringView longest_flag(const Vector<StringView>& names) {
 }  // namespace
 
 ArgSpec& ArgSpec::required() {
-    is_required = true;
-    has_default = false;
+    is_required_ = true;
+    has_default_ = false;
     return *this;
 }
 
 ArgSpec& ArgSpec::append() {
-    kind = Kind::Value;
-    is_append = true;
+    kind_ = Kind::Value;
+    is_append_ = true;
     return *this;
 }
 
 ArgSpec& ArgSpec::at_least_one() {
-    min_one = true;
+    min_one_ = true;
     return *this;
 }
 
@@ -63,9 +63,9 @@ ArgParser::ArgParser(String program, String version, String description)
       description_(std::move(description)) {
     auto make = [this](Names names, StringView text) {
         auto spec = dstd::make_unique<ArgSpec>();
-        spec->kind = ArgSpec::Kind::Flag;
-        for (const auto& name : names) spec->names.emplace_back(name);
-        spec->help = text;
+        spec->kind_ = ArgSpec::Kind::Flag;
+        for (const auto& name : names) spec->names_.emplace_back(name);
+        spec->help_ = text;
         specs_.push_back(std::move(spec));
     };
     make({"-h", "--help"}, "shows help message and exits");
@@ -79,12 +79,12 @@ void ArgParser::group(StringView title) { groups_.emplace_back(title); }
 ArgSpec& ArgParser::add_value(Names names, StringView help, String default_repr,
                               bool has_default) {
     auto spec = dstd::make_unique<ArgSpec>();
-    spec->kind = ArgSpec::Kind::Value;
-    for (const auto& name : names) spec->names.emplace_back(name);
-    spec->help = help;
-    spec->default_repr = std::move(default_repr);
-    spec->has_default = has_default;
-    spec->group = groups_.size();
+    spec->kind_ = ArgSpec::Kind::Value;
+    for (const auto& name : names) spec->names_.emplace_back(name);
+    spec->help_ = help;
+    spec->default_repr_ = std::move(default_repr);
+    spec->has_default_ = has_default;
+    spec->group_ = groups_.size();
     specs_.push_back(std::move(spec));
     return *specs_.back();
 }
@@ -93,12 +93,12 @@ ArgSpec& ArgParser::add_converted(Names names, StringView help,
                                   StringView default_text,
                                   ArgSpec::Setter convert) {
     ArgSpec& spec = add_value(names, help, String(), true);
-    spec.default_view = default_text;
-    spec.quote_default = true;
-    spec.set = std::move(convert);
-    if (auto error = spec.set(default_text)) {
+    spec.default_view_ = default_text;
+    spec.quote_default_ = true;
+    spec.set_ = std::move(convert);
+    if (auto error = spec.set_(default_text)) {
         std::fprintf(stderr, "bad default for %s: %s\n",
-                     String(spec.names.front()).c_str(), error->c_str());
+                     String(spec.names_.front()).c_str(), error->c_str());
         std::abort();
     }
     return spec;
@@ -120,11 +120,11 @@ StringView ArgParser::long_name(Names names) {
 
 ArgSpec& ArgParser::flag(bool& target, Names names, StringView help) {
     auto spec = dstd::make_unique<ArgSpec>();
-    spec->kind = ArgSpec::Kind::Flag;
-    for (const auto& name : names) spec->names.emplace_back(name);
-    spec->help = help;
-    spec->group = groups_.size();
-    spec->set = [&target](StringView) -> Optional<String> {
+    spec->kind_ = ArgSpec::Kind::Flag;
+    for (const auto& name : names) spec->names_.emplace_back(name);
+    spec->help_ = help;
+    spec->group_ = groups_.size();
+    spec->set_ = [&target](StringView) -> Optional<String> {
         target = true;
         return dstd::nullopt;
     };
@@ -134,9 +134,9 @@ ArgSpec& ArgParser::flag(bool& target, Names names, StringView help) {
 
 ArgSpec& ArgParser::option(StringView& target, Names names, StringView help) {
     ArgSpec& spec = add_value(names, help, String(), true);
-    spec.default_view = target;
-    spec.quote_default = true;
-    spec.set = [&target](StringView text) -> Optional<String> {
+    spec.default_view_ = target;
+    spec.quote_default_ = true;
+    spec.set_ = [&target](StringView text) -> Optional<String> {
         target = text;
         return dstd::nullopt;
     };
@@ -152,8 +152,8 @@ ArgSpec& ArgParser::option(Vector<StringView>& target, Names names,
     }
     repr += "}";
     ArgSpec& spec = add_value(names, help, std::move(repr), true);
-    spec.kind = ArgSpec::Kind::Many;
-    spec.set = [&target](StringView text) -> Optional<String> {
+    spec.kind_ = ArgSpec::Kind::Many;
+    spec.set_ = [&target](StringView text) -> Optional<String> {
         target.push_back(text);
         return dstd::nullopt;
     };
@@ -247,9 +247,9 @@ ArgSpec& ArgParser::optional_duration(Optional<double>& target,
                                       StringView help) {
     const StringView name = long_name(names);
     ArgSpec& spec = add_value(names, help, String(), true);
-    spec.quote_default = true;
-    spec.set = [&target, native_per_second,
-                name](StringView text) -> Optional<String> {
+    spec.quote_default_ = true;
+    spec.set_ = [&target, native_per_second,
+                 name](StringView text) -> Optional<String> {
         if (text.empty()) {
             target = dstd::nullopt;
             return dstd::nullopt;
@@ -268,10 +268,10 @@ ArgSpec& ArgParser::optional_duration(Optional<double>& target,
 ArgSpec& ArgParser::positional(Vector<StringView>& target, StringView name,
                                StringView help) {
     auto spec = dstd::make_unique<ArgSpec>();
-    spec->kind = ArgSpec::Kind::Positional;
-    spec->names.emplace_back(name);
-    spec->help = help;
-    spec->set = [&target](StringView text) -> Optional<String> {
+    spec->kind_ = ArgSpec::Kind::Positional;
+    spec->names_.emplace_back(name);
+    spec->help_ = help;
+    spec->set_ = [&target](StringView text) -> Optional<String> {
         target.push_back(text);
         return dstd::nullopt;
     };
@@ -281,14 +281,14 @@ ArgSpec& ArgParser::positional(Vector<StringView>& target, StringView name,
 
 String ArgParser::help() const {
     auto label = [](const ArgSpec& spec) {
-        String out = join_names(spec.names, ", ");
-        if (spec.kind == ArgSpec::Kind::Value) out += " VALUE";
-        if (spec.kind == ArgSpec::Kind::Many) out += " VALUE...";
+        String out = join_names(spec.names_, ", ");
+        if (spec.kind_ == ArgSpec::Kind::Value) out += " VALUE";
+        if (spec.kind_ == ArgSpec::Kind::Many) out += " VALUE...";
         return out;
     };
     std::size_t width = 0;
     for (const auto& spec : specs_) {
-        if (spec->kind != ArgSpec::Kind::Positional)
+        if (spec->kind_ != ArgSpec::Kind::Positional)
             width = std::max(width, label(*spec).size());
     }
 
@@ -298,18 +298,18 @@ String ArgParser::help() const {
         text.resize(std::max(width, text.size()), ' ');
         out += text;
         out += "  ";
-        out += spec.help;
-        if (spec.kind != ArgSpec::Kind::Flag && spec.has_default) {
+        out += spec.help_;
+        if (spec.kind_ != ArgSpec::Kind::Flag && spec.has_default_) {
             out += " [default: ";
-            if (spec.quote_default)
-                out += quoted(spec.default_view);
+            if (spec.quote_default_)
+                out += quoted(spec.default_view_);
             else
-                out += spec.default_repr;
+                out += spec.default_repr_;
             out += "]";
-        } else if (spec.is_required) {
+        } else if (spec.is_required_) {
             out += " [required]";
         }
-        if (spec.is_append) out += " [repeatable]";
+        if (spec.is_append_) out += " [repeatable]";
         out += '\n';
         return out;
     };
@@ -318,10 +318,10 @@ String ArgParser::help() const {
     out += program_;
     out += " [options]";
     for (const auto& spec : specs_) {
-        if (spec->kind != ArgSpec::Kind::Positional) continue;
-        out += spec->min_one ? " " : " [";
-        out += spec->names.front();
-        out += spec->min_one ? "..." : "...]";
+        if (spec->kind_ != ArgSpec::Kind::Positional) continue;
+        out += spec->min_one_ ? " " : " [";
+        out += spec->names_.front();
+        out += spec->min_one_ ? "..." : "...]";
     }
     out += "\n\n";
     if (!description_.empty()) {
@@ -329,16 +329,16 @@ String ArgParser::help() const {
         out += "\n\n";
     }
     for (const auto& spec : specs_) {
-        if (spec->kind != ArgSpec::Kind::Positional) continue;
+        if (spec->kind_ != ArgSpec::Kind::Positional) continue;
         out += "Inputs:\n  ";
-        out += spec->names.front();
+        out += spec->names_.front();
         out += "  ";
-        out += spec->help;
+        out += spec->help_;
         out += "\n\n";
     }
     out += "Options:\n";
     for (const auto& spec : specs_) {
-        if (spec->kind != ArgSpec::Kind::Positional && spec->group == 0)
+        if (spec->kind_ != ArgSpec::Kind::Positional && spec->group_ == 0)
             out += line(*spec);
     }
     for (std::size_t g = 0; g < groups_.size(); ++g) {
@@ -346,7 +346,8 @@ String ArgParser::help() const {
         out += groups_[g];
         out += ":\n";
         for (const auto& spec : specs_) {
-            if (spec->kind != ArgSpec::Kind::Positional && spec->group == g + 1)
+            if (spec->kind_ != ArgSpec::Kind::Positional &&
+                spec->group_ == g + 1)
                 out += line(*spec);
         }
     }
@@ -363,17 +364,17 @@ ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
     auto find = [this](StringView name) -> ArgSpec* {
         if (name.size() < 2 || name[0] != '-') return nullptr;
         for (auto& spec : specs_) {
-            for (const auto& candidate : spec->names) {
+            for (const auto& candidate : spec->names_) {
                 if (candidate == name) return spec.get();
             }
         }
         return nullptr;
     };
 
-    for (auto& spec : specs_) spec->used = false;
+    for (auto& spec : specs_) spec->used_ = false;
     ArgSpec* positional = nullptr;
     for (auto& spec : specs_) {
-        if (spec->kind == ArgSpec::Kind::Positional) positional = spec.get();
+        if (spec->kind_ == ArgSpec::Kind::Positional) positional = spec.get();
     }
 
     bool options_done = false;
@@ -386,8 +387,8 @@ ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
             if (!positional) {
                 return fail(common::str_cat("Unexpected argument: ", token));
             }
-            positional->set(token);
-            positional->used = true;
+            positional->set_(token);
+            positional->used_ = true;
             ++i;
             continue;
         }
@@ -406,7 +407,7 @@ ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
         ArgSpec* spec = find(name);
         if (!spec) return fail(common::str_cat("Unknown option: ", name));
         ++i;
-        spec->used = true;
+        spec->used_ = true;
         if (spec == specs_[0].get()) {
             ParseOutcome outcome;
             outcome.exit_code = 0;
@@ -419,12 +420,12 @@ ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
             outcome.out = version_ + "\n";
             return outcome;
         }
-        if (spec->kind == ArgSpec::Kind::Flag) {
+        if (spec->kind_ == ArgSpec::Kind::Flag) {
             if (inline_value) {
                 return fail(
                     common::str_cat("Option ", name, " takes no value"));
             }
-            spec->set(StringView());
+            spec->set_(StringView());
             continue;
         }
         Vector<StringView> values;
@@ -434,7 +435,7 @@ ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
             values.push_back(args[i]);
             ++i;
         }
-        if (spec->kind == ArgSpec::Kind::Many && !spec->is_append) {
+        if (spec->kind_ == ArgSpec::Kind::Many && !spec->is_append_) {
             while (i < args.size() && !find(args[i]) &&
                    !(args[i].size() > 1 && args[i][0] == '-' &&
                      args[i][1] == '-')) {
@@ -446,19 +447,19 @@ ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
             return fail(common::str_cat("Missing value for ", name));
         }
         for (const auto& value : values) {
-            if (auto error = spec->set(value)) return fail(std::move(*error));
+            if (auto error = spec->set_(value)) return fail(std::move(*error));
         }
     }
 
     for (const auto& spec : specs_) {
-        if (spec->kind == ArgSpec::Kind::Positional) {
-            if (spec->min_one && !spec->used) {
+        if (spec->kind_ == ArgSpec::Kind::Positional) {
+            if (spec->min_one_ && !spec->used_) {
                 return fail(common::str_cat("Missing required input: ",
-                                            spec->names.front()));
+                                            spec->names_.front()));
             }
-        } else if (spec->is_required && !spec->used) {
+        } else if (spec->is_required_ && !spec->used_) {
             return fail(common::str_cat("Missing required option: ",
-                                        longest_flag(spec->names)));
+                                        longest_flag(spec->names_)));
         }
     }
     return ParseOutcome{};

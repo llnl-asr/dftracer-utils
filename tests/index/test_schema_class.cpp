@@ -26,7 +26,7 @@ struct ClassNginx {
 
 struct ClassStep {
     static constexpr dstd::StringView id = "class_step";
-    using extends = index::schemas::DFTracer;
+    using Extends = index::schemas::DFTracer;
     index::Field<std::int64_t, "args.step"> step;
 };
 

@@ -849,7 +849,7 @@ LazyResult<T> as_result(LazyResult<T> result) {
 }
 
 template <class R>
-using result_of_root =
+using ResultOfRoot =
     typename decltype(as_result(std::declval<R>()))::value_type;
 
 template <std::size_t I, class Results, class Out>
@@ -873,7 +873,7 @@ coro::CoroTask<void> finish_roots(Results& results,
 /// root in argument order: a @ref DataFrame for a @ref LazyFrame, a `T` for a
 /// LazyResult<T>. Every root's plans batch as collect_all(plans) batches them.
 template <class... R>
-coro::CoroTask<dstd::Tuple<detail::result_of_root<R>...>> collect_all(
+coro::CoroTask<dstd::Tuple<detail::ResultOfRoot<R>...>> collect_all(
     R... roots) {
     auto results = std::make_tuple(detail::as_result(std::move(roots))...);
     dstd::Vector<LazyFrame> plans;
@@ -885,7 +885,7 @@ coro::CoroTask<dstd::Tuple<detail::result_of_root<R>...>> collect_all(
         results);
     dstd::Vector<DataFrame> frames;
     if (!plans.empty()) frames = co_await collect_all(std::move(plans));
-    dstd::Tuple<detail::result_of_root<R>...> out;
+    dstd::Tuple<detail::ResultOfRoot<R>...> out;
     co_await detail::finish_roots<0>(results, frames, 0, out);
     co_return out;
 }

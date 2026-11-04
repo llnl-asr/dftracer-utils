@@ -57,11 +57,11 @@ class GzipReader : public Reader {
     dstd::String get_format_name() const override;
 
    private:
-    dstd::String gz_path;
-    dstd::String index_path;
-    bool is_open;
-    std::size_t default_buffer_size;
-    dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer> indexer;
+    dstd::String gz_path_;
+    dstd::String index_path_;
+    bool is_open_;
+    std::size_t default_buffer_size_;
+    dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer> indexer_;
     ReaderStreamCache stream_cache_;
 };
 

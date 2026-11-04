@@ -25,7 +25,7 @@ struct BackendSlot {
     IoBackend* backend = nullptr;
 };
 
-thread_local BackendSlot tls_backend;
+thread_local BackendSlot t_backend;
 
 // Max iovec entries writev(2) accepts. glibc only exposes IOV_MAX under XOPEN
 // feature macros and spells it UIO_MAXIOV; sysconf is the portable query.
@@ -62,14 +62,14 @@ IoAwaitable io_dispatch(Sync sync, Args... args) noexcept {
 }  // namespace
 
 IoBackend* current_backend() noexcept {
-    return coro::Executor::current() == tls_backend.owner ? tls_backend.backend
-                                                          : nullptr;
+    return coro::Executor::current() == t_backend.owner ? t_backend.backend
+                                                        : nullptr;
 }
 
 void set_current_backend(const coro::Executor* owner,
                          IoBackend* backend) noexcept {
-    tls_backend.owner = owner;
-    tls_backend.backend = backend;
+    t_backend.owner = owner;
+    t_backend.backend = backend;
 }
 
 IoAwaitable read(int fd, void* buf, std::size_t len) noexcept {

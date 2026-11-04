@@ -1469,7 +1469,7 @@ class WindowStreamCursor : public Cursor {
     // rows of the held chunk.
     template <class Key>
     coro::CoroTask<void> fetch_figures(std::int64_t emit, const Key& key) {
-        std::int64_t starts = E_ > 0 && key(0) == last_key_ ? 0 : 1;
+        std::int64_t starts = e_ > 0 && key(0) == last_key_ ? 0 : 1;
         dstd::String prev = key(0);
         for (std::int64_t r = 1; r < emit; ++r) {
             dstd::String k = key(r);
@@ -1714,7 +1714,7 @@ class WindowStreamCursor : public Cursor {
             dstd::String o = need_tie_ ? row_key(ok, r) : dstd::String();
             if (r == 0) {
                 new_part[z] = continuing ? 0 : 1;
-                pos[z] = continuing ? E_ + 1 : 1;
+                pos[z] = continuing ? e_ + 1 : 1;
                 tie_prev[z] = continuing && o == last_order_key_ ? 1 : 0;
             } else {
                 new_part[z] = k != prev_key ? 1 : 0;
@@ -2297,7 +2297,7 @@ class WindowStreamCursor : public Cursor {
                const dstd::Vector<Series>& fcols, DataFrame& res,
                const Key& key, std::int64_t n, std::int64_t emit) {
         const std::int64_t ctx_n = ctx_rows_;
-        const bool continuing = E_ > 0 && key(0) == last_key_;
+        const bool continuing = e_ > 0 && key(0) == last_key_;
         std::int64_t run = 0;
         if (continuing) {
             if (key(emit - 1) == last_key_) {
@@ -2322,7 +2322,7 @@ class WindowStreamCursor : public Cursor {
                     ++k_same;
             }
         }
-        const std::int64_t shift = E_ - k_same;
+        const std::int64_t shift = e_ - k_same;
 
         for (SpecState& s : specs_) {
             const int oc = column_index_of(res.names, s.info.out);
@@ -2413,7 +2413,7 @@ class WindowStreamCursor : public Cursor {
             }
             start = hi;
         }
-        E_ = (start == 0 && continuing) ? E_ + emit : emit - start;
+        e_ = (start == 0 && continuing) ? e_ + emit : emit - start;
         last_key_ = new_last;
     }
 
@@ -2488,7 +2488,7 @@ class WindowStreamCursor : public Cursor {
     std::uint64_t held_bytes_ = 0;
     dstd::Vector<Series> ctx_;
     std::int64_t ctx_rows_ = 0;
-    std::int64_t E_ = 0;
+    std::int64_t e_ = 0;
     dstd::String last_key_;
     dstd::String last_order_key_;
     dstd::String why_;

@@ -140,7 +140,7 @@ class TaskGraph {
      * limits in-flight fan-out tasks.
      */
     template <typename U, typename T, typename Func>
-    TaskGroup<U> fan_out(const TaskGroup<T>& source, num_outputs count,
+    TaskGroup<U> fan_out(const TaskGroup<T>& source, NumOutputs count,
                          Func&& mapper, TaskGraphFanOutConfig opts = {}) {
         if (source.size() != 1) {
             throw common::DFTUtilsException(
@@ -211,7 +211,7 @@ class TaskGraph {
      * Tree reduce: M -> 1 with O(log N) depth
      */
     template <typename U, typename T, typename Reducer>
-    TaskGroup<U> reduce(const TaskGroup<T>& group, split_every count,
+    TaskGroup<U> reduce(const TaskGroup<T>& group, SplitEvery count,
                         Reducer&& reducer, TaskGraphReduceConfig opts = {}) {
         if (group.empty()) {
             throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
@@ -275,7 +275,7 @@ class TaskGraph {
      * Each node folds its inputs: op(op(op(init, a), b), c)
      */
     template <typename T, typename BinaryOp>
-    TaskGroup<T> fold(const TaskGroup<T>& group, T init, split_every count,
+    TaskGroup<T> fold(const TaskGroup<T>& group, T init, SplitEvery count,
                       BinaryOp&& op, TaskGraphFoldConfig opts = {}) {
         if (group.empty()) {
             throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
@@ -338,7 +338,7 @@ class TaskGraph {
     template <typename U, typename Intermediate, typename T, typename MapFn,
               typename ReduceFn>
     TaskGroup<U> aggregate(const TaskGroup<T>& group, MapFn&& map_fn,
-                           split_every count, ReduceFn&& reduce_fn,
+                           SplitEvery count, ReduceFn&& reduce_fn,
                            TaskGraphAggregateConfig opts = {}) {
         auto mapped = map<Intermediate>(group, std::forward<MapFn>(map_fn),
                                         {.name = opts.name + "_Map"});
@@ -353,7 +353,7 @@ class TaskGraph {
      */
     template <typename T>
     TaskGroup<std::vector<T>> partition(const std::vector<T>& data,
-                                        num_partitions count,
+                                        NumPartitions count,
                                         TaskGraphPartitionConfig opts = {}) {
         if (count.count == 0) {
             throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
@@ -396,7 +396,7 @@ class TaskGraph {
     template <typename T>
     TaskGroup<std::vector<T>> concat_partitions(
         const TaskGroup<std::vector<T>>& group,
-        split_every count = split_every{2}, TaskGraphConcatConfig opts = {}) {
+        SplitEvery count = SplitEvery{2}, TaskGraphConcatConfig opts = {}) {
         if (group.empty()) {
             throw common::DFTUtilsException(
                 common::ErrorCode::InvalidArgument,

@@ -59,7 +59,7 @@ T decode_input(const std::any& input) {
 template <typename Func>
 std::function<coro::CoroTask<std::any>(CoroScope&, const std::any&)>
 Task::wrap_function(Func&& func) {
-    using Traits = detail::function_traits<std::decay_t<Func>>;
+    using Traits = detail::FunctionTraits<std::decay_t<Func>>;
     using InputType = typename Traits::input_type;
     using OutputType = typename Traits::output_type;
     constexpr bool has_ctx = Traits::has_context;
@@ -196,7 +196,7 @@ Task::wrap_function(Func&& func) {
 
 template <typename Func>
 std::type_index Task::deduce_input_type() {
-    using Traits = detail::function_traits<std::decay_t<Func>>;
+    using Traits = detail::FunctionTraits<std::decay_t<Func>>;
     using InputType = typename Traits::input_type;
 
     if constexpr (std::is_void_v<InputType>) {
@@ -208,7 +208,7 @@ std::type_index Task::deduce_input_type() {
 
 template <typename Func>
 std::type_index Task::deduce_output_type() {
-    using Traits = detail::function_traits<std::decay_t<Func>>;
+    using Traits = detail::FunctionTraits<std::decay_t<Func>>;
     using OutputType = typename Traits::output_type;
 
     if constexpr (std::is_void_v<OutputType>) {
@@ -251,8 +251,8 @@ auto Task::with_combiner(Func&& combiner) -> std::enable_if_t<
     !std::is_same_v<std::decay_t<Func>,
                     std::function<std::any(const std::vector<std::any>&)>>,
     dstd::SharedPtr<Task>> {
-    using traits = detail::function_traits<std::decay_t<Func>>;
-    using func_type = typename traits::template as_std_function<std::any>;
+    using Traits = detail::FunctionTraits<std::decay_t<Func>>;
+    using func_type = typename Traits::template AsStdFunction<std::any>;
     func_type typed_combiner = std::forward<Func>(combiner);
     return with_combiner(typed_combiner);
 }

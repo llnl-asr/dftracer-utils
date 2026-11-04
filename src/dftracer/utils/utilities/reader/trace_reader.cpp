@@ -53,7 +53,7 @@ using internal::strip_ndjson_bookends;
 
 namespace {
 
-thread_local dftracer::utils::json::RecordParser tl_parser;
+thread_local dftracer::utils::json::RecordParser t_parser;
 
 /// Traces must be gzip. A bare .pfw is rejected rather than read, so a file
 /// that was never compressed fails at the reader instead of silently taking
@@ -67,8 +67,8 @@ void reject_unless_gzip(common::ArchiveFormat format,
 }
 
 bool line_matches_query(const Query& q, dstd::StringView content) {
-    auto result = tl_parser.parse(content.data(), content.size());
-    if (result.error()) result = json::parse_refused(tl_parser, content);
+    auto result = t_parser.parse(content.data(), content.size());
+    if (result.error()) result = json::parse_refused(t_parser, content);
     if (result.error()) return false;
     auto root = result.value_unsafe();
     if (!root.is_object()) return false;

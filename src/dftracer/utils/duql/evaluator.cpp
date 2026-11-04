@@ -255,7 +255,7 @@ struct Scratch {
     }
 };
 
-thread_local Scratch scratch;
+thread_local Scratch t_scratch;
 
 Value of_element(simdjson::dom::element e) {
     using T = simdjson::dom::element_type;
@@ -288,7 +288,7 @@ Value of_cell(const Cell& c) {
             return VNull{};
         case Cell::Kind::Array:
         case Cell::Kind::Object:
-            return scratch.parse(std::get<dstd::String>(c.value));
+            return t_scratch.parse(std::get<dstd::String>(c.value));
         case Cell::Kind::Value:
             break;
     }
@@ -773,7 +773,7 @@ dstd::Optional<dstd::StringView> str(const Value& v) {
 
 // The container `json` spells, parsed into the scratch arena.
 Value parsed(const dstd::String& json) {
-    const Value v = scratch.parse(scratch.own(json));
+    const Value v = t_scratch.parse(t_scratch.own(json));
     if (std::holds_alternative<VMissing>(v)) return VNull{};
     return v;
 }
@@ -850,7 +850,7 @@ Value members(const Value& v, bool keys) {
 Value parse_json(const Value& v) {
     const auto s = str(v);
     if (!s) return VNull{};
-    const Value x = scratch.parse(*s);
+    const Value x = t_scratch.parse(*s);
     if (const auto* el = std::get_if<simdjson::dom::element>(&x))
         return of_element(*el);
     return VNull{};
@@ -954,7 +954,7 @@ Value join(const Value& v, const Value& sep) {
         first = false;
         out += *p;
     }
-    return scratch.own(std::move(out));
+    return t_scratch.own(std::move(out));
 }
 
 template <class Record>
@@ -1267,7 +1267,7 @@ class TermEval {
                     if (!t) return VNull{};
                     out += *t;
                 }
-                return scratch.own(std::move(out));
+                return t_scratch.own(std::move(out));
             }
             case Fn::Lower:
             case Fn::Upper: {
@@ -1280,7 +1280,7 @@ class TermEval {
                     if (c.fn == Fn::Upper && ch >= 'a' && ch <= 'z')
                         ch = static_cast<char>(ch - 'a' + 'A');
                 }
-                return scratch.own(std::move(out));
+                return t_scratch.own(std::move(out));
             }
             case Fn::Trim: {
                 const auto s = str(arg(c, 0));
@@ -1320,7 +1320,7 @@ class TermEval {
             case Fn::Json: {
                 auto t = text_of(arg(c, 0), true);
                 if (!t) return VNull{};
-                return scratch.own(std::move(*t));
+                return t_scratch.own(std::move(*t));
             }
             case Fn::Type:
                 return type_name(arg(c, 0));
@@ -1333,7 +1333,7 @@ class TermEval {
                 if (str(v)) return v;
                 auto t = text_of(v, false);
                 if (!t) return VNull{};
-                return scratch.own(std::move(*t));
+                return t_scratch.own(std::move(*t));
             }
             case Fn::Slice:
                 return slice(arg(c, 0), arg(c, 1),
@@ -1378,7 +1378,7 @@ class TermEval {
                     regex_replace(*c.pattern, *c.substitution, *s, out);
                 if (r == MatchResult::Limit) return VNull{};
                 if (r == MatchResult::No) return *s;
-                return scratch.own(std::move(out));
+                return t_scratch.own(std::move(out));
             }
             case Fn::DatePart:
             case Fn::FormatTime: {
@@ -1406,7 +1406,7 @@ class TermEval {
                 dstd::String out;
                 common::format_time(out, ct,
                                     std::get<dstd::String>(fmt->value));
-                return scratch.own(std::move(out));
+                return t_scratch.own(std::move(out));
             }
         }
         return VNull{};
@@ -1457,7 +1457,7 @@ class TermEval {
             pos = hit + from->size();
         }
         out.append(s->substr(pos));
-        return scratch.own(std::move(out));
+        return t_scratch.own(std::move(out));
     }
 };
 
@@ -1841,7 +1841,7 @@ struct OnDemandRecord {
             case OdLeaf::Kind::Double:
                 return l.d;
             case OdLeaf::Kind::Container:
-                return scratch.parse(json::detail::value_extent(
+                return t_scratch.parse(json::detail::value_extent(
                     v.raw_json_token().data(),
                     event.text.data() + event.text.size()));
             case OdLeaf::Kind::Null:
@@ -1888,7 +1888,7 @@ Truth eval(const detail::QueryNode& node, const Record& rec) {
             } else if constexpr (std::is_same_v<T, detail::NotNode>) {
                 return t_not(eval(*n.operand, rec));
             } else {
-                scratch.reset();
+                t_scratch.reset();
                 return truth(TermEval<Record>(rec)(*n.term));
             }
         },

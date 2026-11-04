@@ -47,8 +47,8 @@ struct ChunkDimensionStats {
 
     /// Skips the hash lookup when the same value is observed back-to-back.
     /// Not copied/moved: a copy would point into the original's nodes.
-    const dstd::String* last_key_ = nullptr;
-    std::uint64_t* last_counter_ = nullptr;
+    const dstd::String* last_key = nullptr;
+    std::uint64_t* last_counter = nullptr;
 
     ChunkDimensionStats() = default;
     ChunkDimensionStats(const ChunkDimensionStats& other)
@@ -67,8 +67,8 @@ struct ChunkDimensionStats {
           max_value(std::move(other.max_value)),
           value_type(std::move(other.value_type)),
           value_counts(std::move(other.value_counts)) {
-        other.last_key_ = nullptr;
-        other.last_counter_ = nullptr;
+        other.last_key = nullptr;
+        other.last_counter = nullptr;
     }
     ChunkDimensionStats& operator=(const ChunkDimensionStats& other) {
         if (this != &other) {
@@ -79,8 +79,8 @@ struct ChunkDimensionStats {
             max_value = other.max_value;
             value_type = other.value_type;
             value_counts = other.value_counts;
-            last_key_ = nullptr;
-            last_counter_ = nullptr;
+            last_key = nullptr;
+            last_counter = nullptr;
         }
         return *this;
     }
@@ -93,10 +93,10 @@ struct ChunkDimensionStats {
             max_value = std::move(other.max_value);
             value_type = std::move(other.value_type);
             value_counts = std::move(other.value_counts);
-            last_key_ = nullptr;
-            last_counter_ = nullptr;
-            other.last_key_ = nullptr;
-            other.last_counter_ = nullptr;
+            last_key = nullptr;
+            last_counter = nullptr;
+            other.last_key = nullptr;
+            other.last_counter = nullptr;
         }
         return *this;
     }

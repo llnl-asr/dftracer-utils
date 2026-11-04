@@ -1557,19 +1557,19 @@ TEST_CASE("window - sliding integer sums equal a 128-bit reference") {
         const DataFrame out =
             win(in, {"p"}, {"o"},
                 {frame_spec(WindowFunc::FrameSum, "v", "fs", 2, 1)});
-        __extension__ typedef __int128 wide;
+        __extension__ typedef __int128 Wide;
         for (int i = 0; i < 400; ++i) {
-            wide sum = 0;
+            Wide sum = 0;
             for (int k = std::max(i - 2, (i / 100) * 100);
                  k <= std::min(i + 1, (i / 100) * 100 + 99); ++k)
                 sum += is_unsigned
-                           ? static_cast<wide>(uv[static_cast<std::size_t>(k)])
-                           : static_cast<wide>(sv[static_cast<std::size_t>(k)]);
+                           ? static_cast<Wide>(uv[static_cast<std::size_t>(k)])
+                           : static_cast<Wide>(sv[static_cast<std::size_t>(k)]);
             const Series c = column_of(out, "fs");
             if (is_unsigned)
-                REQUIRE(static_cast<wide>(c.data<std::uint64_t>()[i]) == sum);
+                REQUIRE(static_cast<Wide>(c.data<std::uint64_t>()[i]) == sum);
             else
-                REQUIRE(static_cast<wide>(c.data<std::int64_t>()[i]) == sum);
+                REQUIRE(static_cast<Wide>(c.data<std::int64_t>()[i]) == sum);
         }
     }
 }

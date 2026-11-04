@@ -56,32 +56,32 @@ R end_cancelled(Handle h) noexcept {
 
 /// Wraps an awaitable so the coroutine enters its context again when it
 /// resumes after a suspension, whichever thread resumes it. A wrapper made with
-/// `cancelled_` set ends the task as cancelled at this await instead.
+/// `cancelled` set ends the task as cancelled at this await instead.
 template <typename Inner>
 struct InPool {
-    Inner inner_;
-    const RunContext* context_;
-    bool suspended_ = false;
-    bool cancelled_ = false;
+    Inner inner;
+    const RunContext* context;
+    bool suspended = false;
+    bool cancelled = false;
 
-    bool await_ready() noexcept(noexcept(inner_.await_ready())) {
-        return !cancelled_ && inner_.await_ready();
+    bool await_ready() noexcept(noexcept(inner.await_ready())) {
+        return !cancelled && inner.await_ready();
     }
 
     template <typename Handle>
-    auto await_suspend(Handle h) noexcept(noexcept(inner_.await_suspend(h))) {
-        using R = decltype(inner_.await_suspend(h));
+    auto await_suspend(Handle h) noexcept(noexcept(inner.await_suspend(h))) {
+        using R = decltype(inner.await_suspend(h));
         if constexpr (requires { h.promise().finish_cancelled(); }) {
-            if (cancelled_) return end_cancelled<R>(h);
+            if (cancelled) return end_cancelled<R>(h);
         }
-        suspended_ = true;
-        return inner_.await_suspend(h);
+        suspended = true;
+        return inner.await_suspend(h);
     }
 
-    auto await_resume() noexcept(noexcept(inner_.await_resume()))
-        -> decltype(inner_.await_resume()) {
-        if (suspended_) context_->enter();
-        return inner_.await_resume();
+    auto await_resume() noexcept(noexcept(inner.await_resume()))
+        -> decltype(inner.await_resume()) {
+        if (suspended) context->enter();
+        return inner.await_resume();
     }
 };
 

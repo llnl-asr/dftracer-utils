@@ -353,7 +353,7 @@ struct CursorVt {
         }
     }
     static const dftu_cursor_vt* vt() {
-        static const dftu_cursor_vt v = [] {
+        static const dftu_cursor_vt VT = [] {
             dftu_cursor_vt t{};
             t.next = next;
             t.destroy = destroy;
@@ -375,7 +375,7 @@ struct CursorVt {
                 t.reclaim = reclaim;
             return t;
         }();
-        return &v;
+        return &VT;
     }
 };
 
@@ -572,7 +572,7 @@ struct SourceVt {
     }
 
     static const dftu_source_vt* vt() {
-        static const dftu_source_vt v = [] {
+        static const dftu_source_vt VT = [] {
             dftu_source_vt t{};
             t.schema = schema;
             t.scan = scan;
@@ -581,7 +581,7 @@ struct SourceVt {
             if constexpr (HasApply<S>) t.apply = apply;
             return t;
         }();
-        return &v;
+        return &VT;
     }
 };
 

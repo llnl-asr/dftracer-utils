@@ -4,7 +4,7 @@
 
 // Dispatch a numeric TypeId to FN<T>(...) over untyped buffers. Bool/String/
 // Binary are not numeric and hit the default (no-op) case.
-#define DF_NUMERIC_DISPATCH(TYPE, FN, ...)                \
+#define DFTRACER_UTILS_NUMERIC_DISPATCH(TYPE, FN, ...)    \
     switch (TYPE) {                                       \
         case dftracer::utils::dataframe::TypeId::Int8:    \
             FN<std::int8_t>(__VA_ARGS__);                 \

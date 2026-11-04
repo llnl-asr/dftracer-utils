@@ -19,26 +19,26 @@ namespace dftracer::utils::coro::detail {
 /// @ref CompletionLatch that guards the suspend-vs-complete race. Shutdown
 /// resumes a suspended awaiter with a cancelled error.
 struct CompletionState {
-    std::coroutine_handle<> awaiting_coroutine_{};
-    Executor* executor_{nullptr};
-    CompletionLatch latch_;
+    std::coroutine_handle<> awaiting_coroutine{};
+    Executor* executor{nullptr};
+    CompletionLatch latch;
 
     ~CompletionState() {
-        if (park_) executor_->unpark(park_);
+        if (park_) executor->unpark(park_);
     }
 
     /// Called by await_suspend after deciding to suspend but before returning.
     void mark_suspended_and_check_completion() {
         // Children that are already done leave nothing to wait for, so the
         // registry is not touched.
-        if (executor_ && !latch_.settled()) {
-            park_ = executor_->park(this, &CompletionState::cancel_thunk);
+        if (executor && !latch.settled()) {
+            park_ = executor->park(this, &CompletionState::cancel_thunk);
         }
-        const std::uint8_t before = latch_.on_suspended();
+        const std::uint8_t before = latch.on_suspended();
         if (before &
             (CompletionLatch::BIT_COMPLETED | CompletionLatch::BIT_CANCELLED)) {
             if (!(before & CompletionLatch::BIT_COMPLETED)) cancelled_ = true;
-            resume_continuation(executor_, awaiting_coroutine_);
+            resume_continuation(executor, awaiting_coroutine);
         }
     }
 
@@ -46,7 +46,7 @@ struct CompletionState {
     /// cancelled error when shutdown, not completion, resumed the awaiter.
     void finish_wait() {
         if (park_) {
-            executor_->unpark(park_);
+            executor->unpark(park_);
             park_ = nullptr;
         }
         if (cancelled_) throw_cancelled("wait cancelled");
@@ -57,9 +57,9 @@ struct CompletionState {
     }
 
     void cancel_parked() noexcept {
-        if (latch_.on_cancelled()) {
+        if (latch.on_cancelled()) {
             cancelled_ = true;
-            resume_continuation(executor_, awaiting_coroutine_);
+            resume_continuation(executor, awaiting_coroutine);
         }
     }
 
@@ -93,26 +93,26 @@ class ChildClaims {
 /// All-of accounting: resumes only after every child completes, recording the
 /// first exception observed.
 struct WhenAllCompletionState : CompletionState {
-    std::exception_ptr exception_;
-    std::atomic<bool> has_exception_{false};
-    std::atomic<std::size_t> completed_count_{0};
-    std::size_t total_{0};
+    std::exception_ptr exception;
+    std::atomic<bool> has_exception{false};
+    std::atomic<std::size_t> completed_count{0};
+    std::size_t total{0};
 
     void on_one_complete() {
         std::size_t count =
-            completed_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
-        if (count == total_) {
-            if (latch_.on_completed())
-                resume_continuation(executor_, awaiting_coroutine_);
+            completed_count.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (count == total) {
+            if (latch.on_completed())
+                resume_continuation(executor, awaiting_coroutine);
         }
     }
 
     void on_exception(std::exception_ptr e) {
         bool expected = false;
-        if (has_exception_.compare_exchange_strong(expected, true,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_relaxed)) {
-            exception_ = e;
+        if (has_exception.compare_exchange_strong(expected, true,
+                                                  std::memory_order_acq_rel,
+                                                  std::memory_order_relaxed)) {
+            exception = e;
         }
         on_one_complete();
     }
@@ -122,26 +122,26 @@ struct WhenAllCompletionState : CompletionState {
 /// child wrapper has finished, so no loser runs after it. One atomic holds both
 /// facts, so the update that completes the condition releases the awaiter once.
 struct WhenAnyCompletionState : CompletionState {
-    std::size_t wrappers_total_{0};
+    std::size_t wrappers_total{0};
 
     void on_first_complete() {
         const std::size_t before =
             progress_.fetch_or(WINNER, std::memory_order_acq_rel);
-        if ((before & FINISHED_MASK) == wrappers_total_) release();
+        if ((before & FINISHED_MASK) == wrappers_total) release();
     }
 
     void on_wrapper_finished() {
         const std::size_t before =
             progress_.fetch_add(1, std::memory_order_acq_rel);
         if ((before & WINNER) != 0 &&
-            (before & FINISHED_MASK) + 1 == wrappers_total_) {
+            (before & FINISHED_MASK) + 1 == wrappers_total) {
             release();
         }
     }
 
     bool released() const {
         const std::size_t now = progress_.load(std::memory_order_acquire);
-        return (now & WINNER) != 0 && (now & FINISHED_MASK) == wrappers_total_;
+        return (now & WINNER) != 0 && (now & FINISHED_MASK) == wrappers_total;
     }
 
    private:
@@ -150,8 +150,8 @@ struct WhenAnyCompletionState : CompletionState {
     static constexpr std::size_t FINISHED_MASK = ~WINNER;
 
     void release() {
-        if (latch_.on_completed())
-            resume_continuation(executor_, awaiting_coroutine_);
+        if (latch.on_completed())
+            resume_continuation(executor, awaiting_coroutine);
     }
 
     std::atomic<std::size_t> progress_{0};

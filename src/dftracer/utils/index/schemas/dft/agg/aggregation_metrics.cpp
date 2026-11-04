@@ -10,7 +10,7 @@ namespace dftracer::utils::index::schemas::dft::agg {
 void MetricStats::update(double value, bool compute_percentiles) {
     stat.add(value);
     if (compute_percentiles) {
-        if (!sketch) sketch = dstd::make_unique<DDSketch>(sketch_accuracy_);
+        if (!sketch) sketch = dstd::make_unique<DDSketch>(sketch_accuracy);
         sketch->add(value);
     }
 }
@@ -18,7 +18,7 @@ void MetricStats::update(double value, bool compute_percentiles) {
 void MetricStats::update(std::uint64_t value, bool compute_percentiles) {
     stat.add(value);  // keeps the exact uint64 domain (durations/timestamps)
     if (compute_percentiles) {
-        if (!sketch) sketch = dstd::make_unique<DDSketch>(sketch_accuracy_);
+        if (!sketch) sketch = dstd::make_unique<DDSketch>(sketch_accuracy);
         sketch->add(static_cast<double>(value));
     }
 }
@@ -26,7 +26,7 @@ void MetricStats::update(std::uint64_t value, bool compute_percentiles) {
 void MetricStats::merge_from(const MetricStats& other) {
     stat.merge(other.stat);
     if (other.sketch) {
-        if (!sketch) sketch = dstd::make_unique<DDSketch>(sketch_accuracy_);
+        if (!sketch) sketch = dstd::make_unique<DDSketch>(sketch_accuracy);
         sketch->merge(*other.sketch);
     }
 }

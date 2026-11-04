@@ -106,19 +106,19 @@ template <typename T>
 using generator_value_type_t = typename generator_value_type<T>::type;
 
 // ============================================================================
-// Type trait: awaitable_result_type
+// Type trait: AwaitableResultType
 // Extract result type from awaitable (return type of await_resume())
 // ============================================================================
 
 namespace detail {
 
 template <typename T, typename = void>
-struct awaitable_result_type_impl {
+struct AwaitableResultTypeImpl {
     using type = void;
 };
 
 template <typename T>
-struct awaitable_result_type_impl<
+struct AwaitableResultTypeImpl<
     T, std::void_t<decltype(std::declval<T>().await_resume())>> {
     using type = decltype(std::declval<T>().await_resume());
 };
@@ -126,30 +126,30 @@ struct awaitable_result_type_impl<
 }  // namespace detail
 
 template <typename T>
-struct awaitable_result_type
-    : detail::awaitable_result_type_impl<std::decay_t<T>> {};
+struct AwaitableResultType : detail::AwaitableResultTypeImpl<std::decay_t<T>> {
+};
 
 template <typename T>
-using awaitable_result_type_t = typename awaitable_result_type<T>::type;
+using awaitable_result_type_t = typename AwaitableResultType<T>::type;
 
 // ============================================================================
-// Type trait: unwrap_coro_task
+// Type trait: UnwrapCoroTask
 // Unwrap coro::CoroTask<T> to T, otherwise return as-is
 // Useful for type deduction in make_task()
 // ============================================================================
 
 template <typename T>
-struct unwrap_coro_task {
+struct UnwrapCoroTask {
     using type = T;
 };
 
 template <typename T>
-struct unwrap_coro_task<coro::CoroTask<T>> {
+struct UnwrapCoroTask<coro::CoroTask<T>> {
     using type = T;
 };
 
 template <typename T>
-using unwrap_coro_task_t = typename unwrap_coro_task<T>::type;
+using unwrap_coro_task_t = typename UnwrapCoroTask<T>::type;
 
 // ============================================================================
 // Concept: Awaitable (C++20 concept)

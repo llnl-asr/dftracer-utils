@@ -339,7 +339,7 @@ class Task : public std::enable_shared_from_this<Task> {
     template <typename Func>
     dstd::SharedPtr<Task> tap(Func&& func, std::string name = "") {
         using Traits =
-            dftracer::utils::detail::function_traits<std::decay_t<Func>>;
+            dftracer::utils::detail::FunctionTraits<std::decay_t<Func>>;
         using TapInputType = typename Traits::input_type;
 
         auto wrapper = [captured_func = std::forward<Func>(func)](

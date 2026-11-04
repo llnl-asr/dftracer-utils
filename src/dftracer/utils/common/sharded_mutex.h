@@ -36,9 +36,9 @@ namespace dftracer::utils::common {
  * });
  * @endcode
  */
-template <typename T, std::size_t NUM_SHARDS = 64>
+template <typename T, std::size_t NumShards = 64>
 class ShardedMutex {
-    static_assert((NUM_SHARDS & (NUM_SHARDS - 1)) == 0,
+    static_assert((NumShards & (NumShards - 1)) == 0,
                   "NUM_SHARDS must be power of 2 for fast modulo");
 
    protected:
@@ -47,11 +47,11 @@ class ShardedMutex {
         mutable std::mutex mutex;
 
         /// Padding to prevent false sharing between adjacent shards
-        alignas(DFTRACER_UTILS_CACHE_LINE_SIZE) char padding_
+        alignas(DFTRACER_UTILS_CACHE_LINE_SIZE) char padding
             [DFTRACER_UTILS_CACHE_LINE_SIZE];
     };
 
-    std::array<Shard, NUM_SHARDS> shards_;
+    std::array<Shard, NumShards> shards_;
 
     /**
      * Fast shard selection using bit masking
@@ -62,11 +62,11 @@ class ShardedMutex {
      *          key & MASK gives range [0, 63]
      */
     Shard& get_shard(std::size_t key) noexcept {
-        return shards_[key & (NUM_SHARDS - 1)];
+        return shards_[key & (NumShards - 1)];
     }
 
     const Shard& get_shard(std::size_t key) const noexcept {
-        return shards_[key & (NUM_SHARDS - 1)];
+        return shards_[key & (NumShards - 1)];
     }
 
    public:
@@ -77,14 +77,14 @@ class ShardedMutex {
     /// fresh mutexes. Only safe when no thread holds any lock on either
     /// the source or destination (e.g., after all parallel work is done).
     ShardedMutex(ShardedMutex&& other) noexcept {
-        for (std::size_t i = 0; i < NUM_SHARDS; ++i) {
+        for (std::size_t i = 0; i < NumShards; ++i) {
             shards_[i].data = std::move(other.shards_[i].data);
         }
     }
 
     ShardedMutex& operator=(ShardedMutex&& other) noexcept {
         if (this != &other) {
-            for (std::size_t i = 0; i < NUM_SHARDS; ++i) {
+            for (std::size_t i = 0; i < NumShards; ++i) {
                 shards_[i].data = std::move(other.shards_[i].data);
             }
         }

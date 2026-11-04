@@ -564,14 +564,14 @@ class GroupReader {
     // own chunks.
     IdMap absorb(GroupReader& o) {
         IdMap m;
-        m.sid.resize(o.strings_.size());
-        for (std::size_t i = 0; i < o.strings_.size(); ++i)
-            m.sid[i] = intern(o.strings_[i]);
-        m.pid.resize(o.procs_.size());
-        for (std::size_t i = 0; i < o.procs_.size(); ++i) {
-            Proc& src = o.procs_[i];
+        m.sid.resize(o.strings.size());
+        for (std::size_t i = 0; i < o.strings.size(); ++i)
+            m.sid[i] = intern(o.strings[i]);
+        m.pid.resize(o.procs.size());
+        for (std::size_t i = 0; i < o.procs.size(); ++i) {
+            Proc& src = o.procs[i];
             m.pid[i] = proc_index(src.hhash, src.pid);
-            Proc& dst = procs_[m.pid[i]];
+            Proc& dst = procs[m.pid[i]];
             if (src.start >= 0) dst.start = src.start;
             if (src.end >= 0) dst.end = src.end;
             dst.active = dst.active || src.active;
@@ -579,18 +579,18 @@ class GroupReader {
                 add_papi_name(dst, name);
             for (auto& [k, series] : src.papi) append(dst.papi[k], series);
         }
-        for (auto& [hh, h] : o.hosts_)
+        for (auto& [hh, h] : o.hosts)
             for (auto& [k, series] : h) append(host_series(hh)[k], series);
-        host_hash_.merge(o.host_hash_);
-        for (const auto& [p, tid] : o.gpu_threads_)
-            gpu_threads_.emplace(m.pid[p], tid);
+        host_hash.merge(o.host_hash);
+        for (const auto& [p, tid] : o.gpu_threads)
+            gpu_threads.emplace(m.pid[p], tid);
         return m;
     }
 
     void finish() {
-        for (auto& [_, h] : hosts_)
+        for (auto& [_, h] : hosts)
             for (auto& [__, s] : h) sort_series(s);
-        for (auto& p : procs_) {
+        for (auto& p : procs) {
             for (auto& [_, s] : p.papi) sort_series(s);
             std::sort(p.papi_names.begin(), p.papi_names.end());
             p.papi_names.erase(
@@ -625,8 +625,8 @@ class GroupReader {
                 }
                 if (cols.size() != 6)
                     return fail(f, "GPU CSV row without 6 columns");
-                const auto hh = host_hash_.find(dstd::String(cols[1]));
-                if (hh == host_hash_.end())
+                const auto hh = host_hash.find(dstd::String(cols[1]));
+                if (hh == host_hash.end())
                     return fail(
                         f, "no HH metadata for host " + dstd::String(cols[1]));
                 const auto parsed = dstd::from_chars<double>(cols[0]);
@@ -643,17 +643,17 @@ class GroupReader {
                 }
             }
         }
-        for (auto& [_, h] : hosts_)
+        for (auto& [_, h] : hosts)
             for (auto& [__, s] : h) sort_series(s);
         return {};
     }
 
-    dstd::Vector<Proc> procs_;
-    dstd::Vector<dstd::String> strings_;
-    dstd::StringViewMap<dstd::Map<dstd::String, Series>> hosts_;
-    dstd::Map<dstd::String, dstd::String> host_hash_;
-    dstd::Vector<Chunk> chunks_;
-    dstd::Set<dstd::Pair<std::uint32_t, std::int64_t>> gpu_threads_;
+    dstd::Vector<Proc> procs;
+    dstd::Vector<dstd::String> strings;
+    dstd::StringViewMap<dstd::Map<dstd::String, Series>> hosts;
+    dstd::Map<dstd::String, dstd::String> host_hash;
+    dstd::Vector<Chunk> chunks;
+    dstd::Set<dstd::Pair<std::uint32_t, std::int64_t>> gpu_threads;
 
    private:
     // The samples stay charged to the reader they were read by, which lives
@@ -676,17 +676,17 @@ class GroupReader {
     }
 
     dstd::Map<dstd::String, Series>& host_series(dstd::StringView hhash) {
-        auto it = hosts_.find(hhash);
-        if (it == hosts_.end())
-            it = hosts_.try_emplace(dstd::String(hhash)).first;
+        auto it = hosts.find(hhash);
+        if (it == hosts.end())
+            it = hosts.try_emplace(dstd::String(hhash)).first;
         return it->second;
     }
 
     std::uint32_t intern(dstd::StringView s) {
         auto it = string_ids_.find(s);
         if (it != string_ids_.end()) return it->second;
-        const auto id = static_cast<std::uint32_t>(strings_.size());
-        strings_.emplace_back(s);
+        const auto id = static_cast<std::uint32_t>(strings.size());
+        strings.emplace_back(s);
         string_ids_.emplace(dstd::String(s), id);
         return id;
     }
@@ -696,12 +696,12 @@ class GroupReader {
         if (host == proc_ids_.end())
             host = proc_ids_.try_emplace(dstd::String(hhash)).first;
         auto [it, fresh] = host->second.try_emplace(
-            pid, static_cast<std::uint32_t>(procs_.size()));
+            pid, static_cast<std::uint32_t>(procs.size()));
         if (fresh) {
             Proc p;
             p.hhash = dstd::String(hhash);
             p.pid = pid;
-            procs_.push_back(std::move(p));
+            procs.push_back(std::move(p));
         }
         return it->second;
     }
@@ -744,7 +744,7 @@ class GroupReader {
             cur_.clear();
             if (last) cur_.shrink_to_fit();
         }
-        chunks_.push_back(std::move(c));
+        chunks.push_back(std::move(c));
         return {};
     }
 
@@ -781,8 +781,8 @@ class GroupReader {
             case RecordPhase::Complete: {
                 const std::uint32_t p = proc_index(hhash, pid);
                 if (cat == "dftracer") {
-                    if (name == "start") procs_[p].start = ts;
-                    if (name == "end") procs_[p].end = ts;
+                    if (name == "start") procs[p].start = ts;
+                    if (name == "end") procs[p].end = ts;
                     return {};
                 }
                 const std::int64_t tid = f.tid ? get_i64(*f.tid) : 0;
@@ -790,8 +790,8 @@ class GroupReader {
                     f.arg_tid ? get_i64(*f.arg_tid) : -1;
                 const bool gpu = host_tid >= 0 || f.correlation_id;
                 const std::int64_t dur = f.dur ? get_i64(*f.dur) : 0;
-                procs_[p].active = true;
-                if (gpu) gpu_threads_.emplace(p, tid);
+                procs[p].active = true;
+                if (gpu) gpu_threads.emplace(p, tid);
                 if (cur_.capacity() == 0) cur_.reserve(CHUNK_CALLS);
                 cur_.push_back({tid, host_tid, ts, dur, p, intern(name),
                                 intern(cat), gpu});
@@ -803,7 +803,7 @@ class GroupReader {
                 if (pid == 0)
                     return handle_host(file, cat, name, hhash, ts, args);
                 if (cat == "papi") {
-                    Proc& p = procs_[proc_index(hhash, pid)];
+                    Proc& p = procs[proc_index(hhash, pid)];
                     p.active = true;
                     for (auto [k, v] : args) {
                         const auto num = get_number(v);
@@ -825,7 +825,7 @@ class GroupReader {
                                       dstd::String(cat));
             case RecordPhase::Metadata:
                 if (name == "HH" && has_args)
-                    host_hash_[dstd::String(get_sv(args, "name"))] =
+                    host_hash[dstd::String(get_sv(args, "name"))] =
                         dstd::String(get_sv(args, "value"));
                 return {};
             default:
@@ -991,7 +991,7 @@ class SetAcc {
             return;
         }
         const PathRec& rec = *recs_[item - 1];
-        const dstd::StringView name = r_->strings_[rec.name];
+        const dstd::StringView name = r_->strings[rec.name];
         sb.append_raw(R"({"gtype":"func",)");
         sb.append_key_value("run", dstd::StringView(id_));
         sb.append_comma();
@@ -1005,7 +1005,7 @@ class SetAcc {
         sb.append_comma();
         sb.append_key_value("name", name);
         sb.append_comma();
-        sb.append_key_value("cat", dstd::StringView(r_->strings_[rec.cat]));
+        sb.append_key_value("cat", dstd::StringView(r_->strings[rec.cat]));
         sb.append_comma();
         sb.append_key_value("depth", rec.depth);
         sb.append_comma();
@@ -1085,7 +1085,7 @@ class SetAcc {
         if (!stack_.empty() && end > stack_.back().first) {
             failed_ = GroupError{
                 common::ErrorCode::Parse, spec_->keys.papi_set,
-                common::str_cat("call ", r_->strings_[s.name], " at ts ", s.ts,
+                common::str_cat("call ", r_->strings[s.name], " at ts ", s.ts,
                                 " ends after its parent ",
                                 recs_[stack_.back().second]->path)};
             return;
@@ -1095,8 +1095,8 @@ class SetAcc {
 
     GResult<void> check() const {
         dstd::Vector<std::uint32_t> procs;
-        for (std::uint32_t i = 0; i < r_->procs_.size(); ++i)
-            if (r_->procs_[i].active && r_->procs_[i].set == set_)
+        for (std::uint32_t i = 0; i < r_->procs.size(); ++i)
+            if (r_->procs[i].active && r_->procs[i].set == set_)
                 procs.push_back(i);
         const auto want = spec_->keys.nodes * spec_->keys.ppn;
         if (static_cast<std::int64_t>(procs.size()) != want)
@@ -1104,7 +1104,7 @@ class SetAcc {
                         common::str_cat("expected ", want, " processes, found ",
                                         procs.size()));
         for (const auto i : procs) {
-            const Proc& p = r_->procs_[i];
+            const Proc& p = r_->procs[i];
             if (p.start < 0 || p.end < 0)
                 return fail(spec_->keys.papi_set,
                             common::str_cat("process ", p.hhash, ":", p.pid,
@@ -1135,11 +1135,11 @@ class SetAcc {
         lane_id_ = s.lane;
         stack_.clear();
         sources_.clear();
-        const Proc& p = r_->procs_[s.proc];
+        const Proc& p = r_->procs[s.proc];
         for (const auto& [k, series] : p.papi)
             sources_.push_back(
                 {view_of(series), {}, counter_id(k), Scope::Pid});
-        if (const auto h = r_->hosts_.find(p.hhash); h != r_->hosts_.end())
+        if (const auto h = r_->hosts.find(p.hhash); h != r_->hosts.end())
             for (const auto& [k, series] : h->second)
                 sources_.push_back(
                     {view_of(series), {}, counter_id(k), Scope::Host});
@@ -1160,7 +1160,7 @@ class SetAcc {
         } else {
             rec->depth = 0;
         }
-        rec->path += r_->strings_[name];
+        rec->path += r_->strings[name];
         rec->name = name;
         rec->cat = cat;
         if (auto st = charge_.take(
@@ -1338,7 +1338,7 @@ coro::CoroTask<FilePart> read_file(dstd::String file, GroupMem* mem,
 void derive_sets(const GroupReader& r, RunGroup& g) {
     const SetSpec tmpl = g.sets.at(0);
     dstd::Set<dstd::Vector<dstd::String>> lists;
-    for (const auto& p : r.procs_)
+    for (const auto& p : r.procs)
         if (p.active) lists.insert(p.papi_names);
     g.sets.clear();
     for (const auto& names : lists) {
@@ -1354,7 +1354,7 @@ void derive_sets(const GroupReader& r, RunGroup& g) {
 }
 
 GResult<void> assign_sets(GroupReader& r, const RunGroup& g) {
-    for (auto& p : r.procs_) {
+    for (auto& p : r.procs) {
         if (!p.active) continue;
         if (g.sets.size() == 1) {
             p.set = 0;
@@ -1435,7 +1435,7 @@ dstd::Vector<ChunkRef> chunk_refs(const dstd::Vector<FilePart>& parts,
     dstd::Vector<ChunkRef> out;
     std::uint64_t seq = 0;
     for (std::size_t i = 0; i < parts.size(); ++i) {
-        const auto& chunks = parts[i].reader->chunks_;
+        const auto& chunks = parts[i].reader->chunks;
         for (std::size_t k = 0; k < chunks.size(); ++k) {
             out.push_back({i, k, seq});
             seq += chunks[k].count;
@@ -1459,7 +1459,7 @@ GResult<void> replay_chunks(dstd::Vector<FilePart>& parts,
     for (std::size_t j = 0; j < n; ++j) {
         const ChunkRef& ref = refs[j];
         const GroupReader::IdMap& m = maps[ref.part];
-        auto& chunk = parts[ref.part].reader->chunks_[ref.chunk];
+        auto& chunk = parts[ref.part].reader->chunks[ref.chunk];
         const Call* calls = chunk.mem.data();
         if (chunk.spilled) {
             auto file = mem.spill_file();
@@ -1474,14 +1474,14 @@ GResult<void> replay_chunks(dstd::Vector<FilePart>& parts,
             const Call& c = calls[k];
             const std::uint64_t sq = ref.seq + k;
             const std::uint32_t proc = m.pid[c.proc];
-            const Proc& p = r.procs_[proc];
+            const Proc& p = r.procs[proc];
             if (p.set < 0 || !sets[static_cast<std::size_t>(p.set)].ok())
                 continue;
             SortRec s{0, c.ts, c.dur, sq, proc, m.sid[c.name], m.sid[c.cat],
                       0, 0};
             if (c.ts >= p.start && c.ts + c.dur <= p.end) {
                 const bool attached =
-                    c.host_tid >= 0 || r.gpu_threads_.count({proc, c.tid}) != 0;
+                    c.host_tid >= 0 || r.gpu_threads.count({proc, c.tid}) != 0;
                 s.group = 1;
                 s.kind = attached ? 1 : 0;
                 s.lane =
@@ -1666,7 +1666,7 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     // partial accumulators of its own, at the same time as the others, and
     // the partials are merged in part order.
     const std::size_t ways = std::min<std::size_t>(
-        WALK_WAYS, std::max<std::size_t>(1, r.procs_.size()));
+        WALK_WAYS, std::max<std::size_t>(1, r.procs.size()));
     dstd::Vector<dstd::Deque<SetAcc>> partials(ways);
     for (auto& part_sets : partials)
         for (std::size_t i = 0; i < g.sets.size(); ++i)
@@ -1697,7 +1697,7 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
                 dstd::Deque<SetAcc>& part_sets = partials[w];
                 std::uint64_t fed = 0;
                 auto walked = sorters[w].drain([&](const SortRec& s) {
-                    part_sets[static_cast<std::size_t>(r.procs_[s.proc].set)]
+                    part_sets[static_cast<std::size_t>(r.procs[s.proc].set)]
                         .feed(s);
                     if (progress && ++fed == CHUNK_CALLS) {
                         progress->walked.fetch_add(fed,

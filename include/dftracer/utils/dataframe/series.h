@@ -462,7 +462,7 @@ class Series {
               class = std::enable_if_t<std::is_arithmetic_v<Lo> &&
                                        std::is_arithmetic_v<Hi>>>
     Series clip(Lo lo, Hi hi) const {
-        return clip(to_scalar_(lo), to_scalar_(hi));
+        return clip(as_scalar(lo), as_scalar(hi));
     }
     Series round() const;
     Series fillna(Scalar fill) const;
@@ -470,7 +470,7 @@ class Series {
     /// fill converts to this column's element type.
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series fillna(T fill) const {
-        return fillna(to_scalar_(fill));
+        return fillna(as_scalar(fill));
     }
     Series cumsum() const;
     Series cummax() const;
@@ -642,27 +642,27 @@ class Series {
     /// is converted to this column's element type (exact for i64).
     template <class T>
     Series gt(T v) const {
-        return compare_(DFTU_CMP_GT, v);
+        return compare_to(DFTU_CMP_GT, v);
     }
     template <class T>
     Series ge(T v) const {
-        return compare_(DFTU_CMP_GE, v);
+        return compare_to(DFTU_CMP_GE, v);
     }
     template <class T>
     Series lt(T v) const {
-        return compare_(DFTU_CMP_LT, v);
+        return compare_to(DFTU_CMP_LT, v);
     }
     template <class T>
     Series le(T v) const {
-        return compare_(DFTU_CMP_LE, v);
+        return compare_to(DFTU_CMP_LE, v);
     }
     template <class T>
     Series eq(T v) const {
-        return compare_(DFTU_CMP_EQ, v);
+        return compare_to(DFTU_CMP_EQ, v);
     }
     template <class T>
     Series ne(T v) const {
-        return compare_(DFTU_CMP_NE, v);
+        return compare_to(DFTU_CMP_NE, v);
     }
 
     /// Bit-packed Bool mask, true where lo <= value <= hi (inclusive); the
@@ -670,7 +670,7 @@ class Series {
     template <class T>
     Series is_between(T lo, T hi) const {
         return Series{
-            dftu_series_is_between(handle_, to_scalar_(lo), to_scalar_(hi))};
+            dftu_series_is_between(handle_, as_scalar(lo), as_scalar(hi))};
     }
 
     // Comparison operators return a mask (columnar convention), so equality
@@ -685,19 +685,19 @@ class Series {
     // type. A Series right operand takes the non-template overloads above.
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator+(T v) const {
-        return Series{dftu_series_add_scalar(handle_, to_scalar_(v))};
+        return Series{dftu_series_add_scalar(handle_, as_scalar(v))};
     }
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator-(T v) const {
-        return Series{dftu_series_sub_scalar(handle_, to_scalar_(v))};
+        return Series{dftu_series_sub_scalar(handle_, as_scalar(v))};
     }
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator*(T v) const {
-        return Series{dftu_series_mul_scalar(handle_, to_scalar_(v))};
+        return Series{dftu_series_mul_scalar(handle_, as_scalar(v))};
     }
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator/(T v) const {
-        return Series{dftu_series_div_scalar(handle_, to_scalar_(v))};
+        return Series{dftu_series_div_scalar(handle_, as_scalar(v))};
     }
     Series operator&(const Series& o) const { return logical_and(o); }
     Series operator|(const Series& o) const { return logical_or(o); }
@@ -728,14 +728,14 @@ class Series {
 
    private:
     template <class T>
-    static dftu_scalar to_scalar_(T v) {
+    static dftu_scalar as_scalar(T v) {
         return to_scalar(v);
     }
 
     template <class T>
-    Series compare_(std::int32_t op, T v) const {
+    Series compare_to(std::int32_t op, T v) const {
         return Series{dftu_series_compare(handle_, static_cast<dftu_cmp_op>(op),
-                                          to_scalar_(v))};
+                                          as_scalar(v))};
     }
 
     dftu_series* handle_ = nullptr;

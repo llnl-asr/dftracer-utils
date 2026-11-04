@@ -78,7 +78,7 @@ const char* test_environment_get_dir(test_environment_handle_t env);
 /**
  * Archive formats supported by the test environment
  */
-typedef enum { TEST_FORMAT_GZIP = 0 } test_format_t;
+typedef enum { TestFormatGzip = 0 } test_format_t;
 
 /**
  * Create a test gzip file and return the path
@@ -126,7 +126,7 @@ char* test_make_unique_test_path(const char* name);
 
 namespace dftu_utils_test {
 
-enum class Format { GZIP = 0 };
+enum class Format { Gzip = 0 };
 
 inline std::size_t valgrind_scale(std::size_t n,
                                   [[maybe_unused]] std::size_t divisor = 10) {
@@ -213,8 +213,8 @@ bool build_index(const dftracer::utils::dstd::String& gz,
 
 class TestEnvironment {
    public:
-    TestEnvironment() : TestEnvironment(100, Format::GZIP) {}
-    TestEnvironment(std::size_t lines) : TestEnvironment(lines, Format::GZIP) {}
+    TestEnvironment() : TestEnvironment(100, Format::Gzip) {}
+    TestEnvironment(std::size_t lines) : TestEnvironment(lines, Format::Gzip) {}
     TestEnvironment(std::size_t lines, Format format);
     TestEnvironment(const TestEnvironment&) = delete;
     TestEnvironment& operator=(const TestEnvironment&) = delete;
@@ -241,8 +241,8 @@ class TestEnvironment {
         std::uint64_t gap_us = 5000);
 
    private:
-    std::size_t num_lines;
-    dftracer::utils::dstd::String test_dir;
+    std::size_t num_lines_;
+    dftracer::utils::dstd::String test_dir_;
     Format format_;
 
     dftracer::utils::dstd::String create_test_gzip_file_impl();
@@ -259,9 +259,9 @@ inline int run_process(
     const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& args) {
     // A fixed array, so the forked child (which exits with _exit and never
     // unwinds) holds no heap block of its own for a leak checker to count.
-    constexpr std::size_t kMaxArgs = 64;
-    if (args.size() + 2 > kMaxArgs) return -1;
-    const char* argv[kMaxArgs];
+    constexpr std::size_t MAX_ARGS = 64;
+    if (args.size() + 2 > MAX_ARGS) return -1;
+    const char* argv[MAX_ARGS];
     std::size_t n = 0;
     argv[n++] = binary.c_str();
     for (const auto& a : args) argv[n++] = a.c_str();

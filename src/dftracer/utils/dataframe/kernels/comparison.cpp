@@ -360,7 +360,8 @@ dftu_series* dftu_series_compare(const dftu_series* v, dftu_cmp_op op,
             std::uint8_t* pb = bits + (b >> 3);
             if (!dftracer::utils::dataframe::compare(v->type, pd, e - b, op,
                                                      rhs, pb)) {
-                DF_NUMERIC_DISPATCH(phys, compare_impl, pd, e - b, op, rhs, pb)
+                DFTRACER_UTILS_NUMERIC_DISPATCH(phys, compare_impl, pd, e - b,
+                                                op, rhs, pb)
             }
         });
     return out;
@@ -472,8 +473,8 @@ dftu_series* dftu_series_compare_series(const dftu_series* a,
             } else if (ta == tb) {
                 const void* pa = a->data.data();
                 const void* pb = b->data.data();
-                DF_NUMERIC_DISPATCH(ta, compare_series_impl, pa, pb, lo, hi, op,
-                                    bits)
+                DFTRACER_UTILS_NUMERIC_DISPATCH(ta, compare_series_impl, pa, pb,
+                                                lo, hi, op, bits)
             } else {
                 Series sa{const_cast<dftu_series*>(a)};
                 Series sb{const_cast<dftu_series*>(b)};

@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: MIT
+Checks: "-*,readability-identifier-naming"
+WarningsAsErrors: "readability-identifier-naming"
+CheckOptions:
+  readability-identifier-naming.NamespaceCase: lower_case
+  readability-identifier-naming.ClassCase: CamelCase
+  readability-identifier-naming.StructCase: CamelCase
+  readability-identifier-naming.UnionCase: CamelCase
+  readability-identifier-naming.UnionIgnoredRegexp: "^(dftu_[a-z0-9_]+|DFTU_[A-Za-z0-9_]+)$"
+  readability-identifier-naming.EnumCase: CamelCase
+  readability-identifier-naming.EnumIgnoredRegexp: "^(dftu_[a-z0-9_]+|DFTU_[A-Za-z0-9_]+)$"
+  readability-identifier-naming.EnumConstantCase: CamelCase
+  readability-identifier-naming.EnumConstantIgnoredRegexp: "^(DFTU_[A-Z0-9_]+|[A-Z][A-Za-z]*[0-9]+)$"
+  readability-identifier-naming.TypedefCase: CamelCase
+  readability-identifier-naming.TypeAliasCase: CamelCase
+  readability-identifier-naming.TemplateParameterCase: CamelCase
+  readability-identifier-naming.TypeTemplateParameterCase: CamelCase
+  readability-identifier-naming.ValueTemplateParameterCase: CamelCase
+  readability-identifier-naming.TemplateTemplateParameterCase: CamelCase
+  readability-identifier-naming.FunctionCase: lower_case
+  readability-identifier-naming.MethodCase: lower_case
+  readability-identifier-naming.ParameterCase: lower_case
+  readability-identifier-naming.VariableCase: lower_case
+  readability-identifier-naming.MemberCase: lower_case
+  readability-identifier-naming.MemberIgnoredRegexp: "^(exact_|sketch_|list_)$"
+  readability-identifier-naming.PrivateMemberCase: lower_case
+  readability-identifier-naming.PrivateMemberSuffix: _
+  readability-identifier-naming.ProtectedMemberCase: lower_case
+  readability-identifier-naming.ProtectedMemberSuffix: _
+  readability-identifier-naming.GlobalConstantCase: UPPER_CASE
+  readability-identifier-naming.ConstexprVariableCase: UPPER_CASE
+  readability-identifier-naming.ClassConstantCase: UPPER_CASE
+  readability-identifier-naming.StaticConstantCase: UPPER_CASE
+  readability-identifier-naming.GlobalVariableCase: lower_case
+  readability-identifier-naming.GlobalVariablePrefix: g_
+  readability-identifier-naming.MacroDefinitionCase: UPPER_CASE
+  readability-identifier-naming.MacroDefinitionPrefix: DFTRACER_UTILS_
+  readability-identifier-naming.ClassIgnoredRegexp: "^(promise_type|iterator|const_iterator|(is|has)_[a-z0-9_]+|dftu_[a-z0-9_]+|DFTU_[A-Za-z0-9_]+)$"
+  readability-identifier-naming.StructIgnoredRegexp: "^(promise_type|iterator|const_iterator|(is|has)_[a-z0-9_]+|dftu_[a-z0-9_]+|DFTU_[A-Za-z0-9_]+)$"
+  readability-identifier-naming.TypedefIgnoredRegexp: "^(dftu_[a-z0-9_]+|[a-z][a-z0-9_]*_(t|type))$"
+  readability-identifier-naming.TypeAliasIgnoredRegexp: "^(dftu_[a-z0-9_]+|(is|has)_[a-z0-9_]+|[a-z][a-z0-9_]*_(t|type|category|concept)|type|value|iterator|const_iterator|reverse_iterator|const_reverse_iterator|pointer|const_pointer|reference|const_reference|propagate_on_container_[a-z_]+)$"
+  readability-identifier-naming.FunctionIgnoredRegexp: "^case_$"
+  readability-identifier-naming.GlobalVariableIgnoredRegexp: "^t_[a-z0-9_]+$"
+  readability-identifier-naming.ConstexprVariableIgnoredRegexp: "^(value|nullopt|executor|(is|has)_[a-z0-9_]+_v)$"
+  readability-identifier-naming.MacroDefinitionIgnoredRegexp: "^(DFTU_[A-Z0-9_]+|DFTRACER_INC_METADATA|_[A-Z][A-Z0-9_]+|XXH_[A-Z0-9_]+|ARROW_[A-Z0-9_]+|DOCTEST_[A-Z0-9_]+)$"

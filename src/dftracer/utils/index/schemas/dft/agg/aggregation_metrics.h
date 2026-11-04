@@ -25,23 +25,23 @@ using dataframe::DDSketch;
 struct MetricStats {
     dftracer::utils::dataframe::FieldStat stat;
     dstd::UniquePtr<DDSketch> sketch;
-    double sketch_accuracy_ = 0.01;
+    double sketch_accuracy = 0.01;
 
     explicit MetricStats(double relative_accuracy = 0.01)
-        : sketch_accuracy_(relative_accuracy) {}
+        : sketch_accuracy(relative_accuracy) {}
 
     MetricStats(const MetricStats& other)
         : stat(other.stat),
           sketch(other.sketch ? dstd::make_unique<DDSketch>(*other.sketch)
                               : nullptr),
-          sketch_accuracy_(other.sketch_accuracy_) {}
+          sketch_accuracy(other.sketch_accuracy) {}
 
     MetricStats& operator=(const MetricStats& other) {
         if (this != &other) {
             stat = other.stat;
             sketch = other.sketch ? dstd::make_unique<DDSketch>(*other.sketch)
                                   : nullptr;
-            sketch_accuracy_ = other.sketch_accuracy_;
+            sketch_accuracy = other.sketch_accuracy;
         }
         return *this;
     }

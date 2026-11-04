@@ -256,48 +256,48 @@ namespace {
 
 // The window plan of a group-wise transform. The parameters carry the names
 // of the LazyGroupBy members the cases below read.
-LazyFrame composed_transform(const LazyFrame& plan_,
-                             const dstd::Vector<dstd::String>& keys_,
+LazyFrame composed_transform(const LazyFrame& plan,
+                             const dstd::Vector<dstd::String>& keys,
                              GroupwiseOp kind, std::int64_t n,
                              RankMethod method, bool ascending) {
     switch (kind) {
         case GroupwiseOp::CumSum:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Sum),
+                plan, keys, value_columns(plan, keys, Agg::Sum),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_SUM, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumProd:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Sum),
+                plan, keys, value_columns(plan, keys, Agg::Sum),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_PROD, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumMax:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Max),
+                plan, keys, value_columns(plan, keys, Agg::Max),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_MAX, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumMin:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Min),
+                plan, keys, value_columns(plan, keys, Agg::Min),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_MIN, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumCount:
-            return counter(plan_, keys_, {ROW}, DFTU_WINDOW_ROW_NUMBER,
+            return counter(plan, keys, {ROW}, DFTU_WINDOW_ROW_NUMBER,
                            "cumcount");
         case GroupwiseOp::Shift: {
             const dftu_window_func func =
                 n >= 0 ? DFTU_WINDOW_LAG : DFTU_WINDOW_LEAD;
             const std::int64_t offset = n >= 0 ? n : -n;
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::First),
+                plan, keys, value_columns(plan, keys, Agg::First),
                 [func, offset](const char* c, const char* o) {
                     return spec(func, c, o, offset);
                 },
@@ -306,7 +306,7 @@ LazyFrame composed_transform(const LazyFrame& plan_,
         }
         case GroupwiseOp::Diff:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Sum),
+                plan, keys, value_columns(plan, keys, Agg::Sum),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_DELTA, c, o);
                 },
@@ -314,7 +314,7 @@ LazyFrame composed_transform(const LazyFrame& plan_,
                    const dstd::String& o) { return ref(p, o); });
         case GroupwiseOp::PctChange:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Sum),
+                plan, keys, value_columns(plan, keys, Agg::Sum),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_LAG, c, o, 1);
                 },
@@ -323,30 +323,30 @@ LazyFrame composed_transform(const LazyFrame& plan_,
                     return (ref(p, c) - ref(p, o)) / ref(p, o);
                 });
         case GroupwiseOp::Rank:
-            return ranked(plan_, keys_, method, ascending);
+            return ranked(plan, keys, method, ascending);
         case GroupwiseOp::NGroup:
-            if (keys_.empty())
+            if (keys.empty())
                 throw std::invalid_argument("ngroup: the group-by has no keys");
-            return counter(plan_, {}, keys_, DFTU_WINDOW_DENSE_RANK, "ngroup");
+            return counter(plan, {}, keys, DFTU_WINDOW_DENSE_RANK, "ngroup");
         case GroupwiseOp::Head:
-            return positional(plan_, keys_, CmpOp::Le, n, false);
+            return positional(plan, keys, CmpOp::Le, n, false);
         case GroupwiseOp::Tail:
-            return positional(plan_, keys_, CmpOp::Le, n, true);
+            return positional(plan, keys, CmpOp::Le, n, true);
         case GroupwiseOp::Nth:
-            return n >= 0 ? positional(plan_, keys_, CmpOp::Eq, n + 1, false)
-                          : positional(plan_, keys_, CmpOp::Eq, -n, true);
+            return n >= 0 ? positional(plan, keys, CmpOp::Eq, n + 1, false)
+                          : positional(plan, keys, CmpOp::Eq, -n, true);
         case GroupwiseOp::FFill:
-            return filled(plan_, keys_, false);
+            return filled(plan, keys, false);
         case GroupwiseOp::BFill:
-            return filled(plan_, keys_, true);
+            return filled(plan, keys, true);
         case GroupwiseOp::RollingSum:
-            return rolling(plan_, keys_, DFTU_WINDOW_FRAME_SUM, n);
+            return rolling(plan, keys, DFTU_WINDOW_FRAME_SUM, n);
         case GroupwiseOp::RollingMean:
-            return rolling(plan_, keys_, DFTU_WINDOW_FRAME_MEAN, n);
+            return rolling(plan, keys, DFTU_WINDOW_FRAME_MEAN, n);
         case GroupwiseOp::RollingMin:
-            return rolling(plan_, keys_, DFTU_WINDOW_FRAME_MIN, n);
+            return rolling(plan, keys, DFTU_WINDOW_FRAME_MIN, n);
         case GroupwiseOp::RollingMax:
-            return rolling(plan_, keys_, DFTU_WINDOW_FRAME_MAX, n);
+            return rolling(plan, keys, DFTU_WINDOW_FRAME_MAX, n);
     }
     throw std::invalid_argument(("group_by transform: unknown transform " +
                                  dstd::to_string(static_cast<int>(kind)))

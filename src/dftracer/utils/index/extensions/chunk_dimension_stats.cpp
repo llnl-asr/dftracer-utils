@@ -27,8 +27,8 @@ bool dimension_value_less(dstd::StringView a, dstd::StringView b,
 
 void ChunkDimensionStats::observe(dstd::StringView value) {
     ++present;
-    if (last_key_ != nullptr && *last_key_ == value) {
-        ++*last_counter_;
+    if (last_key != nullptr && *last_key == value) {
+        ++*last_counter;
         return;
     }
 
@@ -39,16 +39,16 @@ void ChunkDimensionStats::observe(dstd::StringView value) {
     auto it = value_counts->find(value);
     if (it != value_counts->end()) {
         it->second++;
-        last_key_ = &it->first;
-        last_counter_ = &it->second;
+        last_key = &it->first;
+        last_counter = &it->second;
         return;
     }
 
     auto [new_it, _] = value_counts->emplace(value, 1);
     it = new_it;
     distinct_count = value_counts->size();
-    last_key_ = &it->first;
-    last_counter_ = &it->second;
+    last_key = &it->first;
+    last_counter = &it->second;
 
     const dstd::StringView val_ref = it->first;
 

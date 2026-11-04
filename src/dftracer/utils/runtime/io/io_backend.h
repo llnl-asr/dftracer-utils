@@ -138,17 +138,17 @@ class IoBackend {
     virtual void cancel_pending() {}
 
     /// Accept a connection on a listening socket.
-    /// Returns the new client fd via IoAwaitable::result_.
+    /// Returns the new client fd via IoAwaitable::result.
     virtual IoAwaitable submit_accept(int listen_fd, struct sockaddr *addr,
                                       socklen_t *addrlen) = 0;
 
     /// Receive data from a connected socket.
-    /// Returns bytes received via IoAwaitable::result_.
+    /// Returns bytes received via IoAwaitable::result.
     virtual IoAwaitable submit_recv(int fd, void *buf, std::size_t len,
                                     int flags) = 0;
 
     /// Send data to a connected socket.
-    /// Returns bytes sent via IoAwaitable::result_.
+    /// Returns bytes sent via IoAwaitable::result.
     virtual IoAwaitable submit_send(int fd, const void *buf, std::size_t len,
                                     int flags) = 0;
 

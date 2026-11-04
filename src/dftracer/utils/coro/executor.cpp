@@ -13,13 +13,13 @@
 
 namespace dftracer::utils::coro {
 
-static thread_local Executor* tls_current_executor = nullptr;
+static thread_local Executor* t_current_executor = nullptr;
 
-Executor* Executor::current() noexcept { return tls_current_executor; }
+Executor* Executor::current() noexcept { return t_current_executor; }
 
 Executor* Executor::set_current(Executor* e) noexcept {
-    auto* old = tls_current_executor;
-    tls_current_executor = e;
+    auto* old = t_current_executor;
+    t_current_executor = e;
     return old;
 }
 
@@ -36,12 +36,12 @@ struct PendingDestroys {
     dstd::Vector<std::coroutine_handle<>> overflow;
 };
 
-thread_local PendingDestroys tls_pending_destroys;
+thread_local PendingDestroys t_pending_destroys;
 
 }  // namespace
 
 void schedule_thread_local_destroy(std::coroutine_handle<> h) {
-    PendingDestroys& p = tls_pending_destroys;
+    PendingDestroys& p = t_pending_destroys;
     if (p.count < PendingDestroys::INLINE) {
         p.handles[p.count++] = h;
     } else {
@@ -50,7 +50,7 @@ void schedule_thread_local_destroy(std::coroutine_handle<> h) {
 }
 
 void drain_thread_local_destroys() {
-    PendingDestroys& p = tls_pending_destroys;
+    PendingDestroys& p = t_pending_destroys;
     // A destroy can schedule more, so both loops read the size each round.
     for (std::size_t i = 0; i < p.count; ++i) {
         if (auto h = p.handles[i]) h.destroy();

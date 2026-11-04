@@ -204,7 +204,7 @@ bool compress_file_to_gzip_multimember(const dstd::String& input_file,
 }
 
 TestEnvironment::TestEnvironment(std::size_t lines, Format format)
-    : num_lines(lines), format_(format) {
+    : num_lines_(lines), format_(format) {
     // @note: enable this for debugging
     // dftracer::utils::logger::init();
     const dstd::Path test_path = make_unique_test_path("dftracer_test");
@@ -213,21 +213,21 @@ TestEnvironment::TestEnvironment(std::size_t lines, Format format)
     const bool made = dstd::fs::create_directories(test_path).has_value();
     const auto is_dir = dstd::fs::is_directory(test_path);
     if (made && is_dir.has_value() && *is_dir)
-        test_dir = dstd::String(test_path.str());
+        test_dir_ = dstd::String(test_path.str());
 }
 
 TestEnvironment::~TestEnvironment() {
-    if (!test_dir.empty()) {
-        (void)dstd::fs::remove_all(dstd::PathView(test_dir)).has_value();
+    if (!test_dir_.empty()) {
+        (void)dstd::fs::remove_all(dstd::PathView(test_dir_)).has_value();
     }
 }
 
-const dstd::String& TestEnvironment::get_dir() const { return test_dir; }
-bool TestEnvironment::is_valid() const { return !test_dir.empty(); }
+const dstd::String& TestEnvironment::get_dir() const { return test_dir_; }
+bool TestEnvironment::is_valid() const { return !test_dir_.empty(); }
 
 dstd::String TestEnvironment::create_test_file() {
     switch (format_) {
-        case Format::GZIP:
+        case Format::Gzip:
             return create_test_gzip_file_impl();
         default:
             return "";
@@ -239,13 +239,13 @@ dstd::String TestEnvironment::create_test_gzip_file() {
 }
 
 dstd::String TestEnvironment::create_test_gzip_file_impl() {
-    if (test_dir.empty()) {
+    if (test_dir_.empty()) {
         return "";
     }
 
     // Create test file in the unique directory
-    dstd::String gz_file = test_dir + "/test_data.gz";
-    dstd::String txt_file = test_dir + "/test_data.txt";
+    dstd::String gz_file = test_dir_ + "/test_data.gz";
+    dstd::String txt_file = test_dir_ + "/test_data.txt";
 
     // Write test data to text file
     dftu_utils_test::FileOut f(txt_file);
@@ -253,7 +253,7 @@ dstd::String TestEnvironment::create_test_gzip_file_impl() {
         return "";
     }
 
-    for (std::size_t i = 1; i <= num_lines; ++i) {
+    for (std::size_t i = 1; i <= num_lines_; ++i) {
         f << "{\"id\": " << i << ", \"message\": \"Test message " << i
           << "\"}\n";
     }
@@ -278,7 +278,7 @@ dstd::String TestEnvironment::get_index_path(const dstd::String& gz_file) {
 dstd::String TestEnvironment::create_dft_test_file(int num_events) {
     static std::size_t file_counter = 0;
     dstd::String file_path =
-        test_dir + "/dftu_trace_" + dstd::to_string(file_counter++) + ".trace";
+        test_dir_ + "/dftu_trace_" + dstd::to_string(file_counter++) + ".trace";
 
     dftu_utils_test::FileOut ofs(file_path);
     if (!ofs.is_open()) {
@@ -316,7 +316,7 @@ dstd::String TestEnvironment::create_dft_test_file(int num_events) {
 dstd::String TestEnvironment::create_dft_multirun_gzip_file(
     int num_runs, std::uint64_t run_us, std::uint64_t gap_us) {
     static std::size_t multirun_counter = 0;
-    dstd::String plain_file = test_dir + "/dftu_multirun_" +
+    dstd::String plain_file = test_dir_ + "/dftu_multirun_" +
                               dstd::to_string(multirun_counter++) + ".trace";
     dftu_utils_test::FileOut ofs(plain_file);
     if (!ofs.is_open()) return "";
@@ -458,7 +458,7 @@ test_environment_handle_t test_environment_create_with_lines(
     std::size_t lines) {
     try {
         auto* env = new dftu_utils_test::TestEnvironment(
-            lines, dftu_utils_test::Format::GZIP);
+            lines, dftu_utils_test::Format::Gzip);
         if (env->is_valid()) {
             return reinterpret_cast<test_environment_handle_t>(env);
         } else {
@@ -543,7 +543,7 @@ char* test_environment_create_test_file_with_format(
     if (!env) return nullptr;
     auto* cpp_env = reinterpret_cast<dftu_utils_test::TestEnvironment*>(env);
 
-    dftu_utils_test::Format cpp_format = dftu_utils_test::Format::GZIP;
+    dftu_utils_test::Format cpp_format = dftu_utils_test::Format::Gzip;
 
     try {
         dftu_utils_test::TestEnvironment temp_env(

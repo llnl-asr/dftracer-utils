@@ -31,8 +31,8 @@ struct dftu_indexer_file_list {
 
 namespace {
 
-thread_local dstd::String handle_free_error;
-thread_local dstd::String schema_error;
+thread_local dstd::String t_handle_free_error;
+thread_local dstd::String t_schema_error;
 
 dftu_error fill_error(dstd::String& storage, Condition condition,
                       std::uint64_t domain, std::int32_t code,
@@ -81,7 +81,7 @@ template <class Fn>
 dftu_indexer_string_result string_call(dftu_indexer* ix, Fn fn) {
     dftu_indexer_string_result r{};
     if (!ix) {
-        r.u.err = invalid(handle_free_error, "indexer is NULL");
+        r.u.err = invalid(t_handle_free_error, "indexer is NULL");
         return r;
     }
     try {
@@ -101,7 +101,7 @@ template <class Fn>
 dftu_indexer_status_result status_call(dftu_indexer* ix, Fn fn) {
     dftu_indexer_status_result r{};
     if (!ix) {
-        r.u.err = invalid(handle_free_error, "indexer is NULL");
+        r.u.err = invalid(t_handle_free_error, "indexer is NULL");
         return r;
     }
     try {
@@ -113,7 +113,7 @@ dftu_indexer_status_result status_call(dftu_indexer* ix, Fn fn) {
     return r;
 }
 
-// A schema call: a string result or the error in schema_error.
+// A schema call: a string result or the error in t_schema_error.
 template <class Fn>
 dftu_indexer_string_result schema_call(Fn fn) {
     dftu_indexer_string_result r{};
@@ -125,14 +125,14 @@ dftu_indexer_string_result schema_call(Fn fn) {
         r.u.value = out;
         r.ok = 1;
     } catch (...) {
-        r.u.err = current_error(schema_error);
+        r.u.err = current_error(t_schema_error);
     }
     return r;
 }
 
 dftu_indexer_string_result null_argument(const char* what) {
     dftu_indexer_string_result r{};
-    r.u.err = invalid(schema_error, what);
+    r.u.err = invalid(t_schema_error, what);
     return r;
 }
 
@@ -166,7 +166,7 @@ dftu_indexer_open_result dftu_indexer_open(
     const char* const* paths, uint64_t n, const dftu_indexer_options* options) {
     dftu_indexer_open_result r{};
     if (!paths || n == 0) {
-        r.u.err = invalid(handle_free_error, "paths is NULL or empty");
+        r.u.err = invalid(t_handle_free_error, "paths is NULL or empty");
         return r;
     }
     try {
@@ -174,7 +174,7 @@ dftu_indexer_open_result dftu_indexer_open(
         list.reserve(n);
         for (uint64_t i = 0; i < n; ++i) {
             if (!paths[i]) {
-                r.u.err = invalid(handle_free_error, "a path is NULL");
+                r.u.err = invalid(t_handle_free_error, "a path is NULL");
                 return r;
             }
             list.emplace_back(paths[i]);
@@ -193,14 +193,14 @@ dftu_indexer_open_result dftu_indexer_open(
                 opts.bloom->path_budget = options->bloom_path_budget;
                 opts.bloom->stats_share = options->bloom_stats_share;
                 if (options->bloom_field_count && !options->bloom_fields) {
-                    r.u.err = invalid(handle_free_error,
+                    r.u.err = invalid(t_handle_free_error,
                                       "bloom_fields is NULL with a count");
                     return r;
                 }
                 for (uint32_t i = 0; i < options->bloom_field_count; ++i) {
                     if (!options->bloom_fields[i]) {
-                        r.u.err =
-                            invalid(handle_free_error, "a bloom field is NULL");
+                        r.u.err = invalid(t_handle_free_error,
+                                          "a bloom field is NULL");
                         return r;
                     }
                     opts.bloom->fields.emplace_back(options->bloom_fields[i]);
@@ -216,7 +216,7 @@ dftu_indexer_open_result dftu_indexer_open(
             if (options->aggregation_group_by_file)
                 opts.aggregation.group_by_file = true;
             if (options->extension_count && !options->extensions) {
-                r.u.err = invalid(handle_free_error,
+                r.u.err = invalid(t_handle_free_error,
                                   "extensions is NULL with a count");
                 return r;
             }
@@ -224,7 +224,7 @@ dftu_indexer_open_result dftu_indexer_open(
             for (uint32_t i = 0; i < options->extension_count; ++i) {
                 if (!options->extensions[i]) {
                     r.u.err =
-                        invalid(handle_free_error, "an extension is NULL");
+                        invalid(t_handle_free_error, "an extension is NULL");
                     return r;
                 }
                 opts.extensions.emplace_back(options->extensions[i]);
@@ -234,7 +234,7 @@ dftu_indexer_open_result dftu_indexer_open(
             Indexer::open(std::move(list), std::move(opts)), {}};
         r.ok = 1;
     } catch (...) {
-        r.u.err = current_error(handle_free_error);
+        r.u.err = current_error(t_handle_free_error);
     }
     return r;
 }
@@ -298,7 +298,7 @@ void dftu_indexer_string_free(char* s) { std::free(s); }
 dftu_indexer_files_result dftu_indexer_files(dftu_indexer* indexer) {
     dftu_indexer_files_result r{};
     if (!indexer) {
-        r.u.err = invalid(handle_free_error, "indexer is NULL");
+        r.u.err = invalid(t_handle_free_error, "indexer is NULL");
         return r;
     }
     try {
@@ -320,7 +320,7 @@ dftu_indexer_file_result dftu_indexer_file_list_get(
     const dftu_indexer_file_list* list, uint64_t i) {
     dftu_indexer_file_result r{};
     if (!list || i >= list->files.size()) {
-        r.u.err = invalid(handle_free_error, "file list index out of range");
+        r.u.err = invalid(t_handle_free_error, "file list index out of range");
         return r;
     }
     const auto& f = list->files[i];

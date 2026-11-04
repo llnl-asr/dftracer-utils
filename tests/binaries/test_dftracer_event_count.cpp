@@ -89,7 +89,7 @@ dstd::String mixed_fixture(bool no_phase_line) {
     return text;
 }
 
-constexpr int DFTRACER_FIXTURE_EVENTS = 6;
+constexpr int DFTRACER_UTILS_FIXTURE_EVENTS = 6;
 constexpr int PATH_FIXTURE_EVENTS = 9;
 
 bool dir_has_dftindex(const dstd::String& dir) {
@@ -260,8 +260,8 @@ TEST_SUITE("DFTracerEventCount") {
         }
 
         for (const bool no_phase_line : {false, true}) {
-            const int expected =
-                no_phase_line ? PATH_FIXTURE_EVENTS : DFTRACER_FIXTURE_EVENTS;
+            const int expected = no_phase_line ? PATH_FIXTURE_EVENTS
+                                               : DFTRACER_UTILS_FIXTURE_EVENTS;
             dftu_utils_test::ScopedTestDir dir("event_count_mixed");
             dftu_utils_test::write_gz_trace(dir.file("mixed.pfw.gz"),
                                             mixed_fixture(no_phase_line));
@@ -305,7 +305,7 @@ TEST_SUITE("DFTracerEventCount") {
         dftu_utils_test::write_gz_trace(dir.file("mixed.pfw.gz"),
                                         mixed_fixture(false));
         auto out = run_event_count_capture(binary, {dir.str()});
-        CHECK(parse_event_count(out) == DFTRACER_FIXTURE_EVENTS);
+        CHECK(parse_event_count(out) == DFTRACER_UTILS_FIXTURE_EVENTS);
         CHECK(!dir_has_dftindex(dir.str()));
     }
 

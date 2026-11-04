@@ -59,18 +59,18 @@ struct FireAndForget {
  */
 template <typename Awaitable>
 struct WhenAllVectorState : detail::WhenAllCompletionState {
-    dstd::Vector<Awaitable> awaitables_;
+    dstd::Vector<Awaitable> awaitables;
     /// dstd::Vector<bool> packs neighbours into one byte, so two wrappers
     /// writing them would race. Bool results take one byte each.
     using Stored = std::conditional_t<
         std::is_same_v<typename Awaitable::result_type, bool>, unsigned char,
         typename Awaitable::result_type>;
-    dstd::Vector<Stored> results_;
-    detail::ChildClaims claims_;
+    dstd::Vector<Stored> results;
+    detail::ChildClaims claims;
 
-    explicit WhenAllVectorState(dstd::Vector<Awaitable> awaitables)
-        : awaitables_(std::move(awaitables)), results_(awaitables_.size()) {
-        total_ = awaitables_.size();
+    explicit WhenAllVectorState(dstd::Vector<Awaitable> items)
+        : awaitables(std::move(items)), results(awaitables.size()) {
+        total = awaitables.size();
     }
 };
 
@@ -108,28 +108,28 @@ class WhenAllVectorAwaitable {
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
-        state_->awaiting_coroutine_ = h;
+        state_->awaiting_coroutine = h;
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            state_->executor_ = root->get_executor();
+            state_->executor = root->get_executor();
         }
 
-        if (state_->total_ == 0) {
+        if (state_->total == 0) {
             return false;
         }
 
-        while (!state_->claims_.exhausted(state_->total_)) launch_wrapper();
+        while (!state_->claims.exhausted(state_->total)) launch_wrapper();
 
         // Check if all completed synchronously
-        if (state_->completed_count_.load(std::memory_order_acquire) ==
-            state_->total_) {
+        if (state_->completed_count.load(std::memory_order_acquire) ==
+            state_->total) {
             return false;  // Don't suspend
         }
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            root->awaiting_async_ = true;
+            root->awaiting_async = true;
         }
 
         // We will suspend - mark it and double-check for completion.
@@ -141,14 +141,13 @@ class WhenAllVectorAwaitable {
 
     result_type await_resume() {
         state_->finish_wait();
-        if (state_->exception_) {
-            common::rethrow_and_clear(state_->exception_);
+        if (state_->exception) {
+            common::rethrow_and_clear(state_->exception);
         }
         if constexpr (std::is_same_v<typename Awaitable::result_type, bool>) {
-            return result_type(state_->results_.begin(),
-                               state_->results_.end());
+            return result_type(state_->results.begin(), state_->results.end());
         } else {
-            return std::move(state_->results_);
+            return std::move(state_->results);
         }
     }
 
@@ -156,12 +155,12 @@ class WhenAllVectorAwaitable {
     void launch_wrapper() {
         [](dstd::SharedPtr<WhenAllVectorState<Awaitable>> s) -> FireAndForget {
             for (;;) {
-                const std::size_t index = s->claims_.claim();
-                if (index >= s->total_) co_return;
+                const std::size_t index = s->claims.claim();
+                if (index >= s->total) co_return;
                 std::exception_ptr ex;
                 try {
-                    s->results_[index] =
-                        co_await std::move(s->awaitables_[index]);
+                    s->results[index] =
+                        co_await std::move(s->awaitables[index]);
                 } catch (...) {
                     ex = std::current_exception();
                 }
@@ -222,12 +221,12 @@ auto when_all(std::initializer_list<Awaitable> awaitables) {
 template <typename Awaitable>
     requires(std::is_void_v<typename Awaitable::result_type>)
 struct WhenAllVectorState<Awaitable> : detail::WhenAllCompletionState {
-    dstd::Vector<Awaitable> awaitables_;
-    detail::ChildClaims claims_;
+    dstd::Vector<Awaitable> awaitables;
+    detail::ChildClaims claims;
 
-    explicit WhenAllVectorState(dstd::Vector<Awaitable> awaitables)
-        : awaitables_(std::move(awaitables)) {
-        total_ = awaitables_.size();
+    explicit WhenAllVectorState(dstd::Vector<Awaitable> items)
+        : awaitables(std::move(items)) {
+        total = awaitables.size();
     }
 };
 
@@ -251,28 +250,28 @@ class WhenAllVectorAwaitable<Awaitable> {
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
-        state_->awaiting_coroutine_ = h;
+        state_->awaiting_coroutine = h;
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            state_->executor_ = root->get_executor();
+            state_->executor = root->get_executor();
         }
 
-        if (state_->total_ == 0) {
+        if (state_->total == 0) {
             return false;
         }
 
-        while (!state_->claims_.exhausted(state_->total_)) launch_wrapper();
+        while (!state_->claims.exhausted(state_->total)) launch_wrapper();
 
         // Check if all tasks completed synchronously during launch_wrapper
-        if (state_->completed_count_.load(std::memory_order_acquire) ==
-            state_->total_) {
+        if (state_->completed_count.load(std::memory_order_acquire) ==
+            state_->total) {
             return false;  // Don't suspend
         }
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            root->awaiting_async_ = true;
+            root->awaiting_async = true;
         }
 
         // We will suspend - mark it and double-check for completion.
@@ -284,8 +283,8 @@ class WhenAllVectorAwaitable<Awaitable> {
 
     void await_resume() {
         state_->finish_wait();
-        if (state_->exception_) {
-            common::rethrow_and_clear(state_->exception_);
+        if (state_->exception) {
+            common::rethrow_and_clear(state_->exception);
         }
     }
 
@@ -293,11 +292,11 @@ class WhenAllVectorAwaitable<Awaitable> {
     void launch_wrapper() {
         [](dstd::SharedPtr<WhenAllVectorState<Awaitable>> s) -> FireAndForget {
             for (;;) {
-                const std::size_t index = s->claims_.claim();
-                if (index >= s->total_) co_return;
+                const std::size_t index = s->claims.claim();
+                if (index >= s->total) co_return;
                 std::exception_ptr ex;
                 try {
-                    co_await std::move(s->awaitables_[index]);
+                    co_await std::move(s->awaitables[index]);
                 } catch (...) {
                     ex = std::current_exception();
                 }
@@ -330,14 +329,14 @@ using when_all_result_t =
  */
 template <typename... Awaitables>
 struct WhenAllTupleState : detail::WhenAllCompletionState {
-    dstd::Tuple<Awaitables...> awaitables_;
+    dstd::Tuple<Awaitables...> awaitables;
     dstd::Tuple<
         dstd::Optional<when_all_result_t<typename Awaitables::result_type>>...>
-        results_;
+        results;
 
-    explicit WhenAllTupleState(Awaitables&&... awaitables)
-        : awaitables_(std::forward<Awaitables>(awaitables)...) {
-        total_ = sizeof...(Awaitables);
+    explicit WhenAllTupleState(Awaitables&&... items)
+        : awaitables(std::forward<Awaitables>(items)...) {
+        total = sizeof...(Awaitables);
     }
 };
 
@@ -369,11 +368,11 @@ class WhenAllTupleAwaitable {
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
-        state_->awaiting_coroutine_ = h;
+        state_->awaiting_coroutine = h;
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            state_->executor_ = root->get_executor();
+            state_->executor = root->get_executor();
         }
 
         if constexpr (sizeof...(Awaitables) == 0) {
@@ -383,14 +382,14 @@ class WhenAllTupleAwaitable {
         launch_all(std::index_sequence_for<Awaitables...>{});
 
         // Check if all completed synchronously during launch
-        if (state_->completed_count_.load(std::memory_order_acquire) ==
-            state_->total_) {
+        if (state_->completed_count.load(std::memory_order_acquire) ==
+            state_->total) {
             return false;  // Don't suspend
         }
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            root->awaiting_async_ = true;
+            root->awaiting_async = true;
         }
 
         // We will suspend - mark it and double-check for completion.
@@ -402,8 +401,8 @@ class WhenAllTupleAwaitable {
 
     result_type await_resume() {
         state_->finish_wait();
-        if (state_->exception_) {
-            common::rethrow_and_clear(state_->exception_);
+        if (state_->exception) {
+            common::rethrow_and_clear(state_->exception);
         }
         return build_result(std::index_sequence_for<Awaitables...>{});
     }
@@ -413,7 +412,7 @@ class WhenAllTupleAwaitable {
 
     template <std::size_t... Is>
     result_type build_result(std::index_sequence<Is...>) {
-        return result_type{std::move(*std::get<Is>(state_->results_))...};
+        return result_type{std::move(*std::get<Is>(state_->results))...};
     }
 
     template <std::size_t I>
@@ -426,12 +425,12 @@ class WhenAllTupleAwaitable {
             std::exception_ptr ex;
             try {
                 if constexpr (std::is_void_v<R>) {
-                    co_await std::move(std::get<I>(s->awaitables_));
-                    std::get<I>(s->results_).emplace(dstd::Monostate{});
+                    co_await std::move(std::get<I>(s->awaitables));
+                    std::get<I>(s->results).emplace(dstd::Monostate{});
                 } else {
-                    std::get<I>(s->results_)
+                    std::get<I>(s->results)
                         .emplace(
-                            co_await std::move(std::get<I>(s->awaitables_)));
+                            co_await std::move(std::get<I>(s->awaitables)));
                 }
                 s->on_one_complete();
             } catch (...) {

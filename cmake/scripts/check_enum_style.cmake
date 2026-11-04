@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
-# Fails when an enum value in include/ or src/ is not CapitalCase.
+# Fails when an enum value in include/, src/, tests/ or benchmarks/ is not
+# CapitalCase.
 # Usage: cmake -DSOURCE_DIR=<repo root> -P check_enum_style.cmake
 #
 # CapitalCase: leading upper-case letter, no underscore, and not all upper-case
@@ -13,7 +14,10 @@ endif()
 file(GLOB_RECURSE SOURCES
   "${SOURCE_DIR}/include/*.h" "${SOURCE_DIR}/include/*.hpp"
   "${SOURCE_DIR}/src/*.h" "${SOURCE_DIR}/src/*.hpp" "${SOURCE_DIR}/src/*.cpp"
-  "${SOURCE_DIR}/src/*.c" "${SOURCE_DIR}/src/*.cc" "${SOURCE_DIR}/src/*.inl")
+  "${SOURCE_DIR}/src/*.c" "${SOURCE_DIR}/src/*.cc" "${SOURCE_DIR}/src/*.inl"
+  "${SOURCE_DIR}/tests/*.h" "${SOURCE_DIR}/tests/*.hpp" "${SOURCE_DIR}/tests/*.cpp"
+  "${SOURCE_DIR}/benchmarks/*.h" "${SOURCE_DIR}/benchmarks/*.hpp"
+  "${SOURCE_DIR}/benchmarks/*.cpp")
 # Vendored third-party text keeps upstream's spelling.
 list(FILTER SOURCES EXCLUDE REGEX "/dftracer/utils/dstd/vendor/")
 list(SORT SOURCES)

@@ -29,7 +29,7 @@ HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
 
-#define DF_DEFINE_BINOP(NAME, HWYOP, SCALAROP)                           \
+#define DFTRACER_UTILS_DEFINE_BINOP(NAME, HWYOP, SCALAROP)               \
     template <class T>                                                   \
     void NAME(const void* av, const void* bv, void* ov, std::size_t n) { \
         const T* a = static_cast<const T*>(av);                          \
@@ -46,11 +46,11 @@ namespace HWY_NAMESPACE {
         for (; i < n; ++i) out[i] = SCALAROP;                            \
     }
 
-DF_DEFINE_BINOP(AddImpl, hwy::HWY_NAMESPACE::Add, a[i] + b[i])
-DF_DEFINE_BINOP(SubImpl, hwy::HWY_NAMESPACE::Sub, a[i] - b[i])
-DF_DEFINE_BINOP(MulImpl, hwy::HWY_NAMESPACE::Mul, a[i] * b[i])
+DFTRACER_UTILS_DEFINE_BINOP(AddImpl, hwy::HWY_NAMESPACE::Add, a[i] + b[i])
+DFTRACER_UTILS_DEFINE_BINOP(SubImpl, hwy::HWY_NAMESPACE::Sub, a[i] - b[i])
+DFTRACER_UTILS_DEFINE_BINOP(MulImpl, hwy::HWY_NAMESPACE::Mul, a[i] * b[i])
 
-#undef DF_DEFINE_BINOP
+#undef DFTRACER_UTILS_DEFINE_BINOP
 
 // Division: floats use the SIMD hwy::HWY_NAMESPACE::Div; integers have no SIMD
 // divide, so a scalar loop with a divide-by-zero guard (result 0). The DSL
@@ -79,7 +79,7 @@ void DivImpl(const void* av, const void* bv, void* ov, std::size_t n) {
 
 // Broadcast a scalar across the column. The scalar is converted to the column
 // type T, so every numeric type is represented exactly (no double round-trip).
-#define DF_DEFINE_SCALAR(NAME, HWYOP, SCALAROP)                              \
+#define DFTRACER_UTILS_DEFINE_SCALAR(NAME, HWYOP, SCALAROP)                  \
     template <class T>                                                       \
     void NAME(const void* av, dftu_scalar sc, void* ov, std::size_t n) {     \
         const T* a = static_cast<const T*>(av);                              \
@@ -95,11 +95,11 @@ void DivImpl(const void* av, const void* bv, void* ov, std::size_t n) {
         for (; i < n; ++i) out[i] = SCALAROP;                                \
     }
 
-DF_DEFINE_SCALAR(AddSImpl, hwy::HWY_NAMESPACE::Add, a[i] + s)
-DF_DEFINE_SCALAR(SubSImpl, hwy::HWY_NAMESPACE::Sub, a[i] - s)
-DF_DEFINE_SCALAR(MulSImpl, hwy::HWY_NAMESPACE::Mul, a[i] * s)
+DFTRACER_UTILS_DEFINE_SCALAR(AddSImpl, hwy::HWY_NAMESPACE::Add, a[i] + s)
+DFTRACER_UTILS_DEFINE_SCALAR(SubSImpl, hwy::HWY_NAMESPACE::Sub, a[i] - s)
+DFTRACER_UTILS_DEFINE_SCALAR(MulSImpl, hwy::HWY_NAMESPACE::Mul, a[i] * s)
 
-#undef DF_DEFINE_SCALAR
+#undef DFTRACER_UTILS_DEFINE_SCALAR
 
 // Broadcast division: floats SIMD, integers scalar with a zero guard.
 template <class T>
@@ -147,36 +147,43 @@ void AddParallelImpl(const void* av, const void* bv, void* ov, std::size_t n) {
 
 void AddKernel(std::int32_t type, const void* a, const void* b, void* out,
                std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), AddParallelImpl, a, b, out,
-                        n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), AddParallelImpl,
+                                    a, b, out, n)
 }
 void SubKernel(std::int32_t type, const void* a, const void* b, void* out,
                std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), SubImpl, a, b, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), SubImpl, a, b,
+                                    out, n)
 }
 void MulKernel(std::int32_t type, const void* a, const void* b, void* out,
                std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), MulImpl, a, b, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), MulImpl, a, b,
+                                    out, n)
 }
 void AddScalarKernel(std::int32_t type, const void* a, dftu_scalar s, void* out,
                      std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), AddSImpl, a, s, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), AddSImpl, a, s,
+                                    out, n)
 }
 void SubScalarKernel(std::int32_t type, const void* a, dftu_scalar s, void* out,
                      std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), SubSImpl, a, s, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), SubSImpl, a, s,
+                                    out, n)
 }
 void MulScalarKernel(std::int32_t type, const void* a, dftu_scalar s, void* out,
                      std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), MulSImpl, a, s, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), MulSImpl, a, s,
+                                    out, n)
 }
 void DivKernel(std::int32_t type, const void* a, const void* b, void* out,
                std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), DivImpl, a, b, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), DivImpl, a, b,
+                                    out, n)
 }
 void DivScalarKernel(std::int32_t type, const void* a, dftu_scalar s, void* out,
                      std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), DivSImpl, a, s, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), DivSImpl, a, s,
+                                    out, n)
 }
 
 }  // namespace HWY_NAMESPACE
@@ -445,15 +452,15 @@ dftu_series* decimal_binop_exact(const dftu_series* a, const dftu_series* b,
     bool ok = true;
     if (!is256) {
         for (std::int64_t i = 0; i < n && ok; ++i) {
-            const i128 va = load_i128(pa + static_cast<std::size_t>(i) * 16);
-            const i128 vb = load_i128(pb + static_cast<std::size_t>(i) * 16);
-            dstd::Optional<i128> r;
+            const I128 va = load_i128(pa + static_cast<std::size_t>(i) * 16);
+            const I128 vb = load_i128(pb + static_cast<std::size_t>(i) * 16);
+            dstd::Optional<I128> r;
             if (op == BinOp::Add || op == BinOp::Sub) {
                 auto ra = rescale_up_i128(va, a->decimal_scale(), result_scale);
                 auto rb = rescale_up_i128(vb, b->decimal_scale(), result_scale);
                 if (ra && rb) {
-                    const i128 rhs = op == BinOp::Add ? *rb : -*rb;
-                    const i128 sum = *ra + rhs;
+                    const I128 rhs = op == BinOp::Add ? *rb : -*rb;
+                    const I128 sum = *ra + rhs;
                     const bool overflow = ((*ra ^ sum) & (rhs ^ sum)) < 0;
                     if (!overflow && i128_fits_precision(sum, result_precision))
                         r = sum;

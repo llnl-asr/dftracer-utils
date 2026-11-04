@@ -27,51 +27,50 @@ namespace detail {
 // ============================================================================
 
 template <typename T, typename = void>
-struct call_traits {
+struct CallTraits {
     static constexpr bool is_valid = false;
 };
 
 template <typename C, typename R, typename... Args>
-struct call_traits_base {
+struct CallTraitsBase {
     static constexpr bool is_valid = true;
     using return_type = R;
-    using args_tuple = dstd::Tuple<std::decay_t<Args>...>;
-    using raw_args_tuple = dstd::Tuple<Args...>;
+    using ArgsTuple = dstd::Tuple<std::decay_t<Args>...>;
+    using RawArgsTuple = dstd::Tuple<Args...>;
     static constexpr std::size_t arity = sizeof...(Args);
 };
 
 /// const member function (covers most lambdas)
 template <typename C, typename R, typename... Args>
-struct call_traits<R (C::*)(Args...) const> : call_traits_base<C, R, Args...> {
-};
+struct CallTraits<R (C::*)(Args...) const> : CallTraitsBase<C, R, Args...> {};
 
 /// non-const member function (mutable lambdas)
 template <typename C, typename R, typename... Args>
-struct call_traits<R (C::*)(Args...)> : call_traits_base<C, R, Args...> {};
+struct CallTraits<R (C::*)(Args...)> : CallTraitsBase<C, R, Args...> {};
 
 /// const noexcept member function (GCC 14 treats noexcept as part of type)
 template <typename C, typename R, typename... Args>
-struct call_traits<R (C::*)(Args...) const noexcept>
-    : call_traits_base<C, R, Args...> {};
+struct CallTraits<R (C::*)(Args...) const noexcept>
+    : CallTraitsBase<C, R, Args...> {};
 
 /// non-const noexcept member function
 template <typename C, typename R, typename... Args>
-struct call_traits<R (C::*)(Args...) noexcept>
-    : call_traits_base<C, R, Args...> {};
+struct CallTraits<R (C::*)(Args...) noexcept> : CallTraitsBase<C, R, Args...> {
+};
 
 /// Function pointer
 template <typename R, typename... Args>
-struct call_traits<R (*)(Args...)> : call_traits_base<void, R, Args...> {};
+struct CallTraits<R (*)(Args...)> : CallTraitsBase<void, R, Args...> {};
 
 /// Function pointer (noexcept)
 template <typename R, typename... Args>
-struct call_traits<R (*)(Args...) noexcept>
-    : call_traits_base<void, R, Args...> {};
+struct CallTraits<R (*)(Args...) noexcept> : CallTraitsBase<void, R, Args...> {
+};
 
 /// Callable objects: delegate to operator()
 template <typename F>
-struct call_traits<F, std::void_t<decltype(&std::decay_t<F>::operator())>>
-    : call_traits<decltype(&std::decay_t<F>::operator())> {};
+struct CallTraits<F, std::void_t<decltype(&std::decay_t<F>::operator())>>
+    : CallTraits<decltype(&std::decay_t<F>::operator())> {};
 
 // ============================================================================
 // Step 2: Analyze args tuple to extract context/input
@@ -153,20 +152,20 @@ struct make_std_function_from_tuple<RetType, dstd::Tuple<Args...>> {
 // ============================================================================
 
 template <typename Func>
-struct function_traits {
-    using CT = call_traits<std::decay_t<Func>>;
+struct FunctionTraits {
+    using CT = CallTraits<std::decay_t<Func>>;
     static_assert(CT::is_valid,
                   "make_task: callable must have a non-generic operator(). "
                   "Use concrete parameter types, not auto.");
 
-    using raw_return = typename CT::return_type;
-    using AA = analyze_args<typename CT::args_tuple>;
+    using RawReturn = typename CT::return_type;
+    using AA = analyze_args<typename CT::ArgsTuple>;
 
     static constexpr bool has_context = AA::has_context;
     using input_type = typename AA::input_type;
 
-    static constexpr bool is_coroutine = dstd::is_coro_task_v<raw_return>;
-    using output_type = dstd::unwrap_coro_task_t<raw_return>;
+    static constexpr bool is_coroutine = dstd::is_coro_task_v<RawReturn>;
+    using output_type = dstd::unwrap_coro_task_t<RawReturn>;
 
     static constexpr std::size_t arity = CT::arity;
     static constexpr bool is_generic = false;
@@ -174,8 +173,9 @@ struct function_traits {
     /// For with_combiner: builds std::function from raw args (preserving
     /// original qualifiers like const& -- NOT decayed)
     template <typename RetType>
-    using as_std_function = typename make_std_function_from_tuple<
-        RetType, typename CT::raw_args_tuple>::type;
+    using AsStdFunction =
+        typename make_std_function_from_tuple<RetType,
+                                              typename CT::RawArgsTuple>::type;
 };
 
 // ============================================================================
@@ -201,17 +201,17 @@ template <typename T>
 inline constexpr bool is_std_vector_v = is_std_vector<T>::value;
 
 template <typename T>
-struct vector_element_type {
+struct VectorElementType {
     using type = void;
 };
 
 template <typename T, typename Alloc>
-struct vector_element_type<std::vector<T, Alloc>> {
+struct VectorElementType<std::vector<T, Alloc>> {
     using type = T;
 };
 
 template <typename T>
-using vector_element_type_t = typename vector_element_type<T>::type;
+using vector_element_type_t = typename VectorElementType<T>::type;
 
 template <typename T>
 std::vector<T> vector_any_to_typed(const std::vector<std::any>& vec) {

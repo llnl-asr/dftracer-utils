@@ -15,7 +15,7 @@ using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftu_utils_test;
 
 TEST_CASE("Factory Pattern - Basic GZIP functionality") {
-    TestEnvironment env(100, Format::GZIP);
+    TestEnvironment env(100, Format::Gzip);
     REQUIRE(env.is_valid());
 
     dstd::String gz_file = env.create_test_file();
@@ -60,7 +60,7 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
 }
 
 TEST_CASE("Basic Reading Operations") {
-    TestEnvironment env(50, Format::GZIP);
+    TestEnvironment env(50, Format::Gzip);
     REQUIRE(env.is_valid());
 
     dstd::String gz_file = env.create_test_file();

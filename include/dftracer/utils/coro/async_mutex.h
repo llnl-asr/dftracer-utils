@@ -71,9 +71,11 @@ class AsyncMutex {
     /// unlock on this thread was still resuming one. The outer unlock resumes
     /// them in order after its waiter returns, so a chain of hand-offs keeps
     /// a fixed stack depth.
-    static inline thread_local AsyncMutexLockOperation* handoff_head_ = nullptr;
-    static inline thread_local AsyncMutexLockOperation* handoff_tail_ = nullptr;
-    static inline thread_local bool handing_off_ = false;
+    static inline thread_local AsyncMutexLockOperation* t_handoff_head =
+        nullptr;
+    static inline thread_local AsyncMutexLockOperation* t_handoff_tail =
+        nullptr;
+    static inline thread_local bool t_handing_off = false;
 
     void push_locked(AsyncMutexLockOperation* op) noexcept;
     void remove_locked(AsyncMutexLockOperation* op) noexcept;
@@ -275,29 +277,29 @@ void AsyncMutex::unlock_contended() {
         return;
     }
     // `next` is off the queue, so its links are free to chain the hand-offs.
-    if (handing_off_) {
+    if (t_handing_off) {
         next->next_ = nullptr;
-        if (handoff_tail_) {
-            handoff_tail_->next_ = next;
+        if (t_handoff_tail) {
+            t_handoff_tail->next_ = next;
         } else {
-            handoff_head_ = next;
+            t_handoff_head = next;
         }
-        handoff_tail_ = next;
+        t_handoff_tail = next;
         return;
     }
-    handing_off_ = true;
+    t_handing_off = true;
     memory::detail::Scope scope{memory::detail::Manager::get().general()};
     for (;;) {
         // Read the handle first: resuming may end the waiter's frame, which
         // holds `next`.
         std::coroutine_handle<> awaiter = next->awaiter_;
         awaiter.resume();
-        next = handoff_head_;
+        next = t_handoff_head;
         if (next == nullptr) break;
-        handoff_head_ = next->next_;
-        if (handoff_head_ == nullptr) handoff_tail_ = nullptr;
+        t_handoff_head = next->next_;
+        if (t_handoff_head == nullptr) t_handoff_tail = nullptr;
     }
-    handing_off_ = false;
+    t_handing_off = false;
 }
 
 }  // namespace dftracer::utils::coro

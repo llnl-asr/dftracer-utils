@@ -42,17 +42,16 @@ void restore_executor(void* saved) noexcept;
 /// for the current scope, forcing nested async I/O into the
 /// synchronous pread/pwrite fallback.  Used by CoroTask::get().
 struct SyncScope {
-    void* saved_exec_;
-    std::chrono::microseconds saved_ts_;
+    void* saved_exec;
+    std::chrono::microseconds saved_ts;
 
     SyncScope() noexcept
-        : saved_exec_(suppress_executor()),
-          saved_ts_(get_timeslice_duration()) {
+        : saved_exec(suppress_executor()), saved_ts(get_timeslice_duration()) {
         set_timeslice_duration(std::chrono::microseconds{0});
     }
     ~SyncScope() noexcept {
-        set_timeslice_duration(saved_ts_);
-        restore_executor(saved_exec_);
+        set_timeslice_duration(saved_ts);
+        restore_executor(saved_exec);
     }
     SyncScope(const SyncScope&) = delete;
     SyncScope& operator=(const SyncScope&) = delete;
@@ -93,7 +92,7 @@ bool park_driver(bool (*ready)(void*), void* arg,
 
 /// Tag type so await_transform can recognize and skip wrapping.
 struct YieldAwaitable {
-    bool force_ =
+    bool force =
         false;  ///< true = always suspend, false = only if timeslice exceeded
 
     bool await_ready() noexcept;
@@ -129,19 +128,19 @@ namespace detail {
 /// After a suspension the coroutine enters its context again.
 template <typename Inner>
 struct YieldCheckAwaitable {
-    Inner inner_;
-    const RunContext* context_;
-    bool yielding_ = false;
-    bool suspended_ = false;
+    Inner inner;
+    const RunContext* context;
+    bool yielding = false;
+    bool suspended = false;
     /// The task was cancelled: it ends here, as cancelled, and the inner
     /// awaitable is never touched.
-    bool cancelled_ = false;
+    bool cancelled = false;
 
-    bool await_ready() noexcept(noexcept(inner_.await_ready())) {
-        if (cancelled_) return false;
-        bool inner_ready = inner_.await_ready();
+    bool await_ready() noexcept(noexcept(inner.await_ready())) {
+        if (cancelled) return false;
+        bool inner_ready = inner.await_ready();
         if (inner_ready && timeslice_exceeded()) {
-            yielding_ = true;
+            yielding = true;
             return false;  // Force suspend to yield
         }
         return inner_ready;
@@ -151,10 +150,10 @@ struct YieldCheckAwaitable {
     // would be a symmetric transfer, which grows the stack without
     // sibling-call optimization (see CoroTask::await_suspend).
     template <typename Handle>
-    auto await_suspend(Handle h) noexcept(noexcept(inner_.await_suspend(h))) {
-        using R = decltype(inner_.await_suspend(h));
+    auto await_suspend(Handle h) noexcept(noexcept(inner.await_suspend(h))) {
+        using R = decltype(inner.await_suspend(h));
         if constexpr (requires { h.promise().finish_cancelled(); }) {
-            if (cancelled_) {
+            if (cancelled) {
                 h.promise().finish_cancelled();
                 if constexpr (std::is_void_v<R> || std::is_same_v<R, bool>) {
                     return true;
@@ -163,31 +162,31 @@ struct YieldCheckAwaitable {
                 }
             }
         }
-        suspended_ = true;
+        suspended = true;
         if constexpr (std::is_void_v<R> || std::is_same_v<R, bool>) {
-            if (yielding_) {
+            if (yielding) {
                 yield_to_executor(h);
                 return true;
             }
             if constexpr (std::is_void_v<R>) {
-                inner_.await_suspend(h);
+                inner.await_suspend(h);
                 return true;
             } else {
-                return inner_.await_suspend(h);
+                return inner.await_suspend(h);
             }
         } else {
-            if (yielding_) {
+            if (yielding) {
                 yield_to_executor(h);
                 return std::coroutine_handle<>{std::noop_coroutine()};
             }
-            return std::coroutine_handle<>{inner_.await_suspend(h)};
+            return std::coroutine_handle<>{inner.await_suspend(h)};
         }
     }
 
-    auto await_resume() noexcept(noexcept(inner_.await_resume()))
-        -> decltype(inner_.await_resume()) {
-        if (suspended_) context_->enter();
-        return inner_.await_resume();
+    auto await_resume() noexcept(noexcept(inner.await_resume()))
+        -> decltype(inner.await_resume()) {
+        if (suspended) context->enter();
+        return inner.await_resume();
     }
 };
 

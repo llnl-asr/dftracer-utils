@@ -562,10 +562,10 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
 }
 
 enum class Kind {
-    STREAMING,     // holds about one morsel
-    SPILLS,        // holds rows but writes them to disk past the budget
-    DEBT,          // buffers more than its bound today; must shrink
-    NOT_MEASURED,  // the harness has no recipe yet (reason in the table)
+    Streaming,    // holds about one morsel
+    Spills,       // holds rows but writes them to disk past the budget
+    Debt,         // buffers more than its bound today; must shrink
+    NotMeasured,  // the harness has no recipe yet (reason in the table)
 };
 
 struct Expect {
@@ -579,69 +579,69 @@ struct Expect {
 // Every op of exported_lazy_ops.def, in the table that says what it must do.
 const dstd::Map<dstd::String, Expect>& expectations() {
     static const dstd::Map<dstd::String, Expect> e = {
-        {"auto_spill", {Kind::NOT_MEASURED, "plan only"}},
-        {"memory_budget", {Kind::NOT_MEASURED, "plan only"}},
-        {"describe", {Kind::STREAMING, ""}},
-        {"drop_nulls", {Kind::STREAMING, ""}},
-        {"null_count", {Kind::STREAMING, ""}},
-        {"with_row_index", {Kind::STREAMING, ""}},
-        {"head", {Kind::STREAMING, ""}},
-        {"slice", {Kind::STREAMING, ""}},
-        {"select", {Kind::STREAMING, ""}},
-        {"rename", {Kind::STREAMING, ""}},
-        {"drop", {Kind::STREAMING, ""}},
-        {"concat", {Kind::STREAMING, ""}},
-        {"reduce", {Kind::STREAMING, "one aggregate state"}},
-        {"tail", {Kind::STREAMING, "bounded by n"}},
-        {"sample", {Kind::STREAMING, "bounded by n"}},
-        {"topk", {Kind::STREAMING, "bounded by k"}},
-        {"topk_wide", {Kind::SPILLS, "k past the budget"}},
-        {"join", {Kind::SPILLS, ""}},
-        {"cross_join", {Kind::SPILLS, "the right side is spooled"}},
+        {"auto_spill", {Kind::NotMeasured, "plan only"}},
+        {"memory_budget", {Kind::NotMeasured, "plan only"}},
+        {"describe", {Kind::Streaming, ""}},
+        {"drop_nulls", {Kind::Streaming, ""}},
+        {"null_count", {Kind::Streaming, ""}},
+        {"with_row_index", {Kind::Streaming, ""}},
+        {"head", {Kind::Streaming, ""}},
+        {"slice", {Kind::Streaming, ""}},
+        {"select", {Kind::Streaming, ""}},
+        {"rename", {Kind::Streaming, ""}},
+        {"drop", {Kind::Streaming, ""}},
+        {"concat", {Kind::Streaming, ""}},
+        {"reduce", {Kind::Streaming, "one aggregate state"}},
+        {"tail", {Kind::Streaming, "bounded by n"}},
+        {"sample", {Kind::Streaming, "bounded by n"}},
+        {"topk", {Kind::Streaming, "bounded by k"}},
+        {"topk_wide", {Kind::Spills, "k past the budget"}},
+        {"join", {Kind::Spills, ""}},
+        {"cross_join", {Kind::Spills, "the right side is spooled"}},
         // Spill triggers exist, but memory stays far above the budget.
-        {"sort_by", {Kind::SPILLS, ""}},
-        {"sort_by_multi", {Kind::SPILLS, ""}},
-        {"unique", {Kind::SPILLS, ""}},
-        {"drop_duplicates", {Kind::SPILLS, ""}},
-        {"unique_by", {Kind::SPILLS, ""}},
-        {"is_duplicated", {Kind::SPILLS, ""}},
-        {"is_unique", {Kind::SPILLS, ""}},
-        {"group_by", {Kind::SPILLS, ""}},
-        {"group_by_dyn", {Kind::SPILLS, ""}},
-        {"reverse", {Kind::SPILLS, ""}},
-        {"take", {Kind::STREAMING, "holds its result"}},
-        {"head_by", {Kind::SPILLS, ""}},
+        {"sort_by", {Kind::Spills, ""}},
+        {"sort_by_multi", {Kind::Spills, ""}},
+        {"unique", {Kind::Spills, ""}},
+        {"drop_duplicates", {Kind::Spills, ""}},
+        {"unique_by", {Kind::Spills, ""}},
+        {"is_duplicated", {Kind::Spills, ""}},
+        {"is_unique", {Kind::Spills, ""}},
+        {"group_by", {Kind::Spills, ""}},
+        {"group_by_dyn", {Kind::Spills, ""}},
+        {"reverse", {Kind::Spills, ""}},
+        {"take", {Kind::Streaming, "holds its result"}},
+        {"head_by", {Kind::Spills, ""}},
         // Needs operands the harness does not build yet.
-        {"explode", {Kind::STREAMING, ""}},
-        {"unnest", {Kind::STREAMING, ""}},
-        {"to_dummies", {Kind::STREAMING, "output is rows x distinct values"}},
-        {"filter_mask", {Kind::STREAMING, ""}},
-        {"fill_null", {Kind::STREAMING, ""}},
-        {"filter", {Kind::STREAMING, ""}},
-        {"with_column", {Kind::STREAMING, ""}},
-        {"unpivot", {Kind::STREAMING, ""}},
-        {"melt", {Kind::STREAMING, ""}},
-        {"pivot", {Kind::SPILLS, ""}},
-        {"group_by_dynamic", {Kind::STREAMING, "the open windows"}},
-        {"group_by_dynamic_many", {Kind::STREAMING, "the open windows"}},
-        {"sort_by_long_strings", {Kind::SPILLS, ""}},
-        {"join_skewed", {Kind::SPILLS, ""}},
-        {"join_lookup_skewed", {Kind::SPILLS, ""}},
-        {"group_by_dyn_wide", {Kind::SPILLS, ""}},
-        {"compare_agg", {Kind::SPILLS, "two group-bys, a join and a sort", 2}},
-        {"group_transform", {Kind::SPILLS, "two sorts and a window chunk", 2}},
-        {"window_whole", {Kind::SPILLS, "a sort, a spool and a window chunk"}},
-        {"window_end", {Kind::SPILLS, "a sort, two spool passes and a chunk"}},
+        {"explode", {Kind::Streaming, ""}},
+        {"unnest", {Kind::Streaming, ""}},
+        {"to_dummies", {Kind::Streaming, "output is rows x distinct values"}},
+        {"filter_mask", {Kind::Streaming, ""}},
+        {"fill_null", {Kind::Streaming, ""}},
+        {"filter", {Kind::Streaming, ""}},
+        {"with_column", {Kind::Streaming, ""}},
+        {"unpivot", {Kind::Streaming, ""}},
+        {"melt", {Kind::Streaming, ""}},
+        {"pivot", {Kind::Spills, ""}},
+        {"group_by_dynamic", {Kind::Streaming, "the open windows"}},
+        {"group_by_dynamic_many", {Kind::Streaming, "the open windows"}},
+        {"sort_by_long_strings", {Kind::Spills, ""}},
+        {"join_skewed", {Kind::Spills, ""}},
+        {"join_lookup_skewed", {Kind::Spills, ""}},
+        {"group_by_dyn_wide", {Kind::Spills, ""}},
+        {"compare_agg", {Kind::Spills, "two group-bys, a join and a sort", 2}},
+        {"group_transform", {Kind::Spills, "two sorts and a window chunk", 2}},
+        {"window_whole", {Kind::Spills, "a sort, a spool and a window chunk"}},
+        {"window_end", {Kind::Spills, "a sort, two spool passes and a chunk"}},
         {"window_suffix",
-         {Kind::SPILLS, "a sort, a spool read both ways and a chunk"}},
-        {"asof", {Kind::SPILLS, "two sorts and a merge window"}},
-        {"interval", {Kind::SPILLS, "two sorts and the open ranges"}},
+         {Kind::Spills, "a sort, a spool read both ways and a chunk"}},
+        {"asof", {Kind::Spills, "two sorts and a merge window"}},
+        {"interval", {Kind::Spills, "two sorts and the open ranges"}},
         // cumsum over an integer column runs one morsel at a time with the
         // running total carried over; no input or result is held whole.
-        {"column_op_whole", {Kind::STREAMING, ""}},
-        {"column_op_shift", {Kind::STREAMING, ""}},
-        {"sort_by_multi_per_col", {Kind::SPILLS, "the spilling sort"}},
-        {"rename_columns", {Kind::STREAMING, ""}},
+        {"column_op_whole", {Kind::Streaming, ""}},
+        {"column_op_shift", {Kind::Streaming, ""}},
+        {"sort_by_multi_per_col", {Kind::Spills, "the spilling sort"}},
+        {"rename_columns", {Kind::Streaming, ""}},
     };
     return e;
 }
@@ -852,9 +852,9 @@ TEST_CASE("each op stays within its bound at a small budget" *
         if (report) {
             std::printf("%-18s %6llu MiB %6.2f s  %s %s\n", name.c_str(),
                         static_cast<unsigned long long>(extra >> 20), r.seconds,
-                        want.kind == Kind::DEBT        ? "DEBT"
-                        : want.kind == Kind::SPILLS    ? "SPILLS"
-                        : want.kind == Kind::STREAMING ? "STREAMING"
+                        want.kind == Kind::Debt        ? "DEBT"
+                        : want.kind == Kind::Spills    ? "SPILLS"
+                        : want.kind == Kind::Streaming ? "STREAMING"
                                                        : "NOT_MEASURED",
                         want.note);
             continue;
@@ -865,7 +865,7 @@ TEST_CASE("each op stays within its bound at a small budget" *
         // finish.
         (void)extra;
 #else
-        if (want.kind == Kind::DEBT) {
+        if (want.kind == Kind::Debt) {
             CHECK_MESSAGE(extra > bound, name,
                           " now meets its bound; remove it from the debt "
                           "table (",

@@ -41,13 +41,13 @@ Timer::~Timer() {
 }
 
 void Timer::start() {
-    start_time = Clock::now();
+    start_time_ = Clock::now();
     running_ = true;
 }
 
 void Timer::stop() {
     if (running_) {
-        end_time = Clock::now();
+        end_time_ = Clock::now();
         running_ = false;
     }
 }
@@ -55,11 +55,11 @@ void Timer::stop() {
 std::int64_t Timer::elapsed() const {
     if (running_) {
         return std::chrono::duration_cast<std::chrono::nanoseconds>(
-                   Clock::now() - start_time)
+                   Clock::now() - start_time_)
             .count();
     } else {
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(end_time -
-                                                                    start_time)
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(end_time_ -
+                                                                    start_time_)
             .count();
     }
 }

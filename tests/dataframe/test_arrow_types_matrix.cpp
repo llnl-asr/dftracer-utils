@@ -35,20 +35,20 @@ enum class Support {
 };
 
 enum Op {
-    OP_ORDER,       // sort / argsort / is_sorted
-    OP_REDUCE,      // min / max / sum / mean / arg_min
-    OP_DISTINCT,    // nunique / unique / is_unique
-    OP_IS_IN,       //
-    OP_GROUP_ABI,   // dftu_series_group_by
-    OP_GROUP_AGG,   // DataFrame::group_by (AggState)
-    OP_SELECT,      // take / head / reverse
-    OP_CAST_I64,    // cast to Int64
-    OP_CAST_FROM,   // cast a Float64 column to this type
-    OP_HASH,        // fnv1a / dictionary_encode
-    OP_VALUE_COUNTS,
-    OP_ARITHMETIC,  // add
-    OP_COMPARE,     // dftu_series_compare against a scalar
-    OP_COUNT_,
+    OpOrder,       // sort / argsort / is_sorted
+    OpReduce,      // min / max / sum / mean / arg_min
+    OpDistinct,    // nunique / unique / is_unique
+    OpIsIn,        //
+    OpGroupAbi,    // dftu_series_group_by
+    OpGroupAgg,    // DataFrame::group_by (AggState)
+    OpSelect,      // take / head / reverse
+    OpCastI64,     // cast to Int64
+    OpCastFrom,    // cast a Float64 column to this type
+    OpHash,        // fnv1a / dictionary_encode
+    OpValueCounts,
+    OpArithmetic,  // add
+    OpCompare,     // dftu_series_compare against a scalar
+    OpCount,
 };
 
 // Every builder lays its rows out as {third, first, second, first} in the
@@ -59,7 +59,7 @@ struct TypeRow {
     TypeId id;
     Series (*build)();
     Series (*build_needle)();  // one row holding the value rows 1 and 3 share
-    Support ops[OP_COUNT_];
+    Support ops[OpCount];
     double expect_min;
     double expect_max;
     double expect_sum;
@@ -255,7 +255,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             REQUIRE(s.valid());
             Series order = s.argsort(false);
             Series sorted = s.sort(false);
-            if (row.ops[OP_ORDER] == Support::Refuses) {
+            if (row.ops[OpOrder] == Support::Refuses) {
                 CHECK_FALSE(order.valid());
                 CHECK_FALSE(sorted.valid());
                 CHECK_FALSE(s.is_sorted(false));
@@ -281,7 +281,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
-            if (row.ops[OP_REDUCE] == Support::Refuses) {
+            if (row.ops[OpReduce] == Support::Refuses) {
                 // A refused reduction throws; it never returns 0. A text
                 // column is the one partial case: min and max give its
                 // bytewise extremes, sum and mean are refused.
@@ -332,7 +332,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             REQUIRE(s.valid());
             Series uniq = s.unique();
             Series mask = s.is_unique();
-            if (row.ops[OP_DISTINCT] == Support::Refuses) {
+            if (row.ops[OpDistinct] == Support::Refuses) {
                 CHECK(s.nunique() == 0);
                 CHECK_FALSE(uniq.valid());
                 CHECK_FALSE(mask.valid());
@@ -356,7 +356,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
-            if (row.ops[OP_IS_IN] == Support::Refuses) {
+            if (row.ops[OpIsIn] == Support::Refuses) {
                 CHECK_FALSE(s.is_in(s.share()).valid());
                 continue;
             }
@@ -383,7 +383,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             const std::int32_t n = dftu_series_group_by(
                 s.handle(), values.handle(), DFTU_REDUCE_COUNT, &out_keys,
                 out_values, 5);
-            if (row.ops[OP_GROUP_ABI] == Support::Refuses) {
+            if (row.ops[OpGroupAbi] == Support::Refuses) {
                 CHECK(n == 0);
                 CHECK(out_keys == nullptr);
                 continue;
@@ -409,7 +409,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             Series s = row.build();
             REQUIRE(s.valid());
             DataFrame df = keyed_frame(s);
-            if (row.ops[OP_GROUP_AGG] == Support::Refuses) {
+            if (row.ops[OpGroupAgg] == Support::Refuses) {
                 CHECK_THROWS_AS(
                     df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}),
                     std::invalid_argument);
@@ -430,7 +430,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             Series taken = s.take(ix);
             Series first = s.head(1);
             Series flipped = s.reverse();
-            if (row.ops[OP_SELECT] == Support::Refuses) {
+            if (row.ops[OpSelect] == Support::Refuses) {
                 CHECK_FALSE(taken.valid());
                 CHECK_FALSE(first.valid());
                 CHECK_FALSE(flipped.valid());
@@ -452,7 +452,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             Series s = row.build();
             REQUIRE(s.valid());
             Series casted = s.cast(TypeId::Int64);
-            if (row.ops[OP_CAST_I64] == Support::Refuses) {
+            if (row.ops[OpCastI64] == Support::Refuses) {
                 CHECK_FALSE(casted.valid());
                 continue;
             }
@@ -481,7 +481,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
         for (const TypeRow& row : TYPE_ROWS) {
             INFO(dstd::String(type_name(row.id)));
             Series casted = a.cast(row.id);
-            if (row.ops[OP_CAST_FROM] == Support::Refuses) {
+            if (row.ops[OpCastFrom] == Support::Refuses) {
                 CHECK_FALSE(casted.valid());
                 continue;
             }
@@ -498,7 +498,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             REQUIRE(s.valid());
             Series hashed = s.fnv1a();
             Series dict = s.dictionary_encode();
-            if (row.ops[OP_HASH] == Support::Refuses) {
+            if (row.ops[OpHash] == Support::Refuses) {
                 CHECK_FALSE(hashed.valid());
                 CHECK_FALSE(dict.valid());
                 continue;
@@ -520,7 +520,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             Series s = row.build();
             REQUIRE(s.valid());
             dftu_series* h = s.handle();
-            if (row.ops[OP_VALUE_COUNTS] == Support::Refuses) {
+            if (row.ops[OpValueCounts] == Support::Refuses) {
                 CHECK(dftu_series_value_counts(h) == nullptr);
                 continue;
             }
@@ -538,7 +538,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             Series other = row.build();
             REQUIRE(s.valid());
             Series sum = s.add(other);
-            if (row.ops[OP_ARITHMETIC] == Support::Refuses) {
+            if (row.ops[OpArithmetic] == Support::Refuses) {
                 CHECK_FALSE(sum.valid());
                 continue;
             }
@@ -560,7 +560,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             REQUIRE(s.valid());
             dftu_series* mask =
                 dftu_series_compare(s.handle(), DFTU_CMP_GT, i64(0));
-            if (row.ops[OP_COMPARE] == Support::Refuses) {
+            if (row.ops[OpCompare] == Support::Refuses) {
                 CHECK(mask == nullptr);
                 continue;
             }

@@ -377,7 +377,7 @@ auto add_group_stage(TaskGraph& graph, const Probes& file_probes,
     const std::size_t executor_threads = settings.executor_threads;
     auto* split_files_ptr = &split_files;
     auto groups_task = graph.reduce<FileGroups>(
-        file_probes, split_every{input_count},
+        file_probes, SplitEvery{input_count},
         [chunk_size_bytes, executor_threads, split_files_ptr](
             CoroScope&, FileProbes probes) -> coro::CoroTask<FileGroups> {
             auto groups = group_files(

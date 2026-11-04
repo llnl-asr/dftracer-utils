@@ -100,11 +100,11 @@ class Runner {
     coro::CoroTask<void> run();
 
     void fail(std::exception_ptr e) {
-        std::lock_guard<std::mutex> lock(mu);
-        if (!error) error = std::move(e);
-        failed.store(true, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!error_) error_ = std::move(e);
+        failed_.store(true, std::memory_order_release);
     }
-    bool is_failed() const { return failed.load(std::memory_order_acquire); }
+    bool is_failed() const { return failed_.load(std::memory_order_acquire); }
     bool cancelled() const {
         return rules.q.cancelled && (*rules.q.cancelled)();
     }
@@ -171,10 +171,10 @@ class Runner {
                                     std::size_t sub,
                                     std::atomic<std::size_t>* dropped);
 
-    std::mutex mu;
-    std::array<Stripe, MERGE_STRIPES> stripes;
-    std::exception_ptr error;
-    std::atomic<bool> failed{false};
+    std::mutex mu_;
+    std::array<Stripe, MERGE_STRIPES> stripes_;
+    std::exception_ptr error_;
+    std::atomic<bool> failed_{false};
 };
 
 struct Permit {
@@ -370,7 +370,7 @@ void Runner::Stripe::drain(bool offset) {
 }
 
 coro::CoroTask<void> Runner::drain_task(std::size_t at) {
-    stripes[at].drain(rules.q.keep.offset);
+    stripes_[at].drain(rules.q.keep.offset);
     co_return;
 }
 
@@ -401,7 +401,7 @@ void Runner::submit(std::size_t seq, std::size_t sub,
     }
     for (std::size_t at = 0; at < MERGE_STRIPES; ++at) {
         if (parts[at].empty()) continue;
-        Stripe& stripe = stripes[at];
+        Stripe& stripe = stripes_[at];
         std::lock_guard<std::mutex> lock(stripe.mu);
         if (!moments[at].empty())
             stripe.moments.push_back(std::move(moments[at]));
@@ -413,7 +413,7 @@ void Runner::submit(std::size_t seq, std::size_t sub,
 }
 
 void Runner::take_stats(const AggQueryStats& t) {
-    std::lock_guard<std::mutex> lock(mu);
+    std::lock_guard<std::mutex> lock(mu_);
     auto& s = out.stats;
     s.files += t.files;
     s.files_without_partials += t.files_without_partials;
@@ -451,7 +451,7 @@ coro::CoroTask<void> Runner::run() {
                     [this, si, fi, seq]() { return file_task(si, fi, seq); });
         co_return;
     });
-    if (error) std::rethrow_exception(error);
+    if (error_) std::rethrow_exception(error_);
     if (rules.q.ordered) {
         co_await coro::with_scope(
             [&](coro::Scope& scope) -> coro::CoroTask<void> {
@@ -474,7 +474,7 @@ template <class Map>
 coro::CoroTask<void> Runner::join(Map Stripe::* member, Map& into) {
     using Values = typename Map::value_container_type;
     std::size_t total = 0;
-    for (const Stripe& stripe : stripes) total += (stripe.*member).size();
+    for (const Stripe& stripe : stripes_) total += (stripe.*member).size();
     if (total == 0) co_return;
     Values values;
     values.reserve(total);
@@ -484,7 +484,7 @@ coro::CoroTask<void> Runner::join(Map Stripe::* member, Map& into) {
         std::size_t end = values.size();
         for (std::size_t at = first; at < last; ++at) {
             offsets[at - first] = end;
-            end += (stripes[at].*member).size();
+            end += (stripes_[at].*member).size();
         }
         values.resize(end);
         co_await coro::with_scope(
@@ -504,7 +504,7 @@ template <class Map>
 coro::CoroTask<void> Runner::move_task(
     Map Stripe::* member, std::size_t at,
     typename Map::value_container_type* values, std::size_t offset) {
-    Map& rows = stripes[at].*member;
+    Map& rows = stripes_[at].*member;
     auto part = std::move(rows).extract();
     rows = Map();
     std::move(part.begin(), part.end(),

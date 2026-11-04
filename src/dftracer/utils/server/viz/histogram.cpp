@@ -52,8 +52,8 @@ struct HistBucket {
     std::uint64_t count;
 };
 
-template <typename builder_type>
-void tag_invoke(simdjson::serialize_tag, builder_type& b, const HistBucket& h) {
+template <typename BuilderType>
+void tag_invoke(simdjson::serialize_tag, BuilderType& b, const HistBucket& h) {
     b.start_object();
     b.append_key_value("lo", h.lo);
     b.append_comma();

@@ -210,32 +210,40 @@ void LogF64Impl(double* p, std::size_t n) {
 }
 
 void AbsKernel(std::int32_t type, const void* a, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), AbsImpl, a, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), AbsImpl, a, out,
+                                    n)
 }
 void CeilKernel(std::int32_t type, const void* a, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), CeilImpl, a, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), CeilImpl, a, out,
+                                    n)
 }
 void FloorKernel(std::int32_t type, const void* a, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), FloorImpl, a, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), FloorImpl, a,
+                                    out, n)
 }
 void TruncKernel(std::int32_t type, const void* a, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), TruncImpl, a, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), TruncImpl, a,
+                                    out, n)
 }
 void SignKernel(std::int32_t type, const void* a, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), SignImpl, a, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), SignImpl, a, out,
+                                    n)
 }
 void NegateKernel(std::int32_t type, const void* a, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), NegateImpl, a, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), NegateImpl, a,
+                                    out, n)
 }
 void SqrtKernel(double* p, std::size_t n) { SqrtF64Impl(p, n); }
 void ExpKernel(double* p, std::size_t n) { ExpF64Impl(p, n); }
 void LogKernel(double* p, std::size_t n) { LogF64Impl(p, n); }
 void ClipKernel(std::int32_t type, const void* a, dftu_scalar lo,
                 dftu_scalar hi, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), ClipImpl, a, lo, hi, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), ClipImpl, a, lo,
+                                    hi, out, n)
 }
 void RoundKernel(std::int32_t type, const void* a, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), RoundImpl, a, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), RoundImpl, a,
+                                    out, n)
 }
 
 // fillna: out[i] = valid(i) ? in[i] : fill. No validity means all-valid, a
@@ -369,27 +377,27 @@ void CumProdImpl(const void* av, void* ov, std::size_t n) {
     for (; i < n; ++i) out[i] = carry = static_cast<T>(carry * in[i]);
 }
 
-template <class T, bool IS_MAX>
+template <class T, bool IsMax>
 void CumExtremeImpl(const void* av, void* ov, std::size_t n) {
     const T* in = static_cast<const T*>(av);
     T* out = static_cast<T*>(ov);
     // 128-bit cap: see CumSumImpl (ShiftLeftLanes is per-128-bit-block).
     const hwy::HWY_NAMESPACE::CappedTag<T, 16 / sizeof(T)> d;
     const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
-    const T ident = IS_MAX ? std::numeric_limits<T>::lowest()
-                           : std::numeric_limits<T>::max();
+    const T ident = IsMax ? std::numeric_limits<T>::lowest()
+                          : std::numeric_limits<T>::max();
     if (lanes < SCAN_SIMD_MIN_LANES) {
         T carry = ident;
         for (std::size_t i = 0; i < n; ++i) {
-            carry = IS_MAX ? (in[i] > carry ? in[i] : carry)
-                           : (in[i] < carry ? in[i] : carry);
+            carry = IsMax ? (in[i] > carry ? in[i] : carry)
+                          : (in[i] < carry ? in[i] : carry);
             out[i] = carry;
         }
         return;
     }
     const auto op = [](auto a, auto b) {
-        return IS_MAX ? hwy::HWY_NAMESPACE::Max(a, b)
-                      : hwy::HWY_NAMESPACE::Min(a, b);
+        return IsMax ? hwy::HWY_NAMESPACE::Max(a, b)
+                     : hwy::HWY_NAMESPACE::Min(a, b);
     };
     const auto vid = hwy::HWY_NAMESPACE::Set(d, ident);
     T carry = ident;
@@ -397,15 +405,15 @@ void CumExtremeImpl(const void* av, void* ov, std::size_t n) {
     for (; i + lanes <= n; i += lanes) {
         auto v =
             inclusive_scan(d, hwy::HWY_NAMESPACE::LoadU(d, in + i), op, vid);
-        v = IS_MAX
+        v = IsMax
                 ? hwy::HWY_NAMESPACE::Max(v, hwy::HWY_NAMESPACE::Set(d, carry))
                 : hwy::HWY_NAMESPACE::Min(v, hwy::HWY_NAMESPACE::Set(d, carry));
         hwy::HWY_NAMESPACE::StoreU(v, d, out + i);
         carry = hwy::HWY_NAMESPACE::ExtractLane(v, lanes - 1);
     }
     for (; i < n; ++i) {
-        carry = IS_MAX ? (in[i] > carry ? in[i] : carry)
-                       : (in[i] < carry ? in[i] : carry);
+        carry = IsMax ? (in[i] > carry ? in[i] : carry)
+                      : (in[i] < carry ? in[i] : carry);
         out[i] = carry;
     }
 }
@@ -457,25 +465,25 @@ void CumProdParallel(const void* av, void* ov, std::size_t n) {
         [](T a, T b) { return static_cast<T>(a * b); });
 }
 
-template <class T, bool IS_MAX>
+template <class T, bool IsMax>
 void CumExtremeParallel(const void* av, void* ov, std::size_t n) {
     const T* in = static_cast<const T*>(av);
     T* out = static_cast<T*>(ov);
-    const T ident = IS_MAX ? std::numeric_limits<T>::lowest()
-                           : std::numeric_limits<T>::max();
+    const T ident = IsMax ? std::numeric_limits<T>::lowest()
+                          : std::numeric_limits<T>::max();
     parallel_prefix_scan<T>(
         static_cast<std::int64_t>(n), CUM_SCAN_GRAIN, ident,
         [&](std::int64_t b, std::int64_t e) -> T {
-            CumExtremeImpl<T, IS_MAX>(in + b, out + b,
-                                      static_cast<std::size_t>(e - b));
+            CumExtremeImpl<T, IsMax>(in + b, out + b,
+                                     static_cast<std::size_t>(e - b));
             return out[e - 1];
         },
         [&](std::int64_t b, std::int64_t e, T off) {
             for (std::int64_t i = b; i < e; ++i)
-                out[i] = IS_MAX ? (off > out[i] ? off : out[i])
-                                : (off < out[i] ? off : out[i]);
+                out[i] = IsMax ? (off > out[i] ? off : out[i])
+                               : (off < out[i] ? off : out[i]);
         },
-        [](T a, T b) { return IS_MAX ? (a > b ? a : b) : (a < b ? a : b); });
+        [](T a, T b) { return IsMax ? (a > b ? a : b) : (a < b ? a : b); });
 }
 template <class T>
 void CumMaxParallel(const void* av, void* ov, std::size_t n) {
@@ -487,22 +495,26 @@ void CumMinParallel(const void* av, void* ov, std::size_t n) {
 }
 
 void CumSumKernel(std::int32_t type, const void* a, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), CumSumParallel, a, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), CumSumParallel,
+                                    a, out, n)
 }
 void CumProdKernel(std::int32_t type, const void* a, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), CumProdParallel, a, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), CumProdParallel,
+                                    a, out, n)
 }
 void CumMaxKernel(std::int32_t type, const void* a, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), CumMaxParallel, a, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), CumMaxParallel,
+                                    a, out, n)
 }
 void CumMinKernel(std::int32_t type, const void* a, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), CumMinParallel, a, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), CumMinParallel,
+                                    a, out, n)
 }
 
 void FillKernel(std::int32_t type, const void* a, const std::uint8_t* valid,
                 dftu_scalar s, void* out, std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), FillImpl, a, valid, s, out,
-                        n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), FillImpl, a,
+                                    valid, s, out, n)
 }
 
 }  // namespace HWY_NAMESPACE
@@ -624,7 +636,7 @@ void cumsum_one(const dftu_series& a, void* ov) {
 
 // Running max/min: seed from the first valid value; a null row's slot holds
 // the carried acc (the output keeps the input's validity, so it reads null).
-template <class T, bool IS_MAX>
+template <class T, bool IsMax>
 void cumextreme_one(const dftu_series& a, void* ov) {
     T* out = static_cast<T*>(ov);
     const T* in = reinterpret_cast<const T*>(a.data.data());
@@ -635,7 +647,7 @@ void cumextreme_one(const dftu_series& a, void* ov) {
             if (!seen) {
                 acc = in[i];
                 seen = true;
-            } else if (IS_MAX) {
+            } else if (IsMax) {
                 if (in[i] > acc) acc = in[i];
             } else if (in[i] < acc) {
                 acc = in[i];
@@ -767,7 +779,7 @@ dftu_series* widen_to_f64(const dftu_series* a) {
     out->validity = a->validity;
     out->data = new_buffer(buffer_bytes(TypeId::Float64, a->length));
     auto* o = reinterpret_cast<double*>(writable(out->data));
-    DF_NUMERIC_DISPATCH(a->type, widen_f64, *a, o)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(a->type, widen_f64, *a, o)
     return out;
 }
 
@@ -954,7 +966,8 @@ dftu_series* dftu_series_cumsum(const dftu_series* a) {
         (static_cast<std::int32_t>(a->type), a->data.data(),
          writable(out->data), static_cast<std::size_t>(a->length));
     } else {
-        DF_NUMERIC_DISPATCH(a->type, cumsum_one, *a, writable(out->data))
+        DFTRACER_UTILS_NUMERIC_DISPATCH(a->type, cumsum_one, *a,
+                                        writable(out->data))
     }
     return out;
 }
@@ -972,7 +985,8 @@ dftu_series* dftu_series_cummax(const dftu_series* a) {
         (static_cast<std::int32_t>(a->type), a->data.data(),
          writable(out->data), static_cast<std::size_t>(a->length));
     } else {
-        DF_NUMERIC_DISPATCH(a->type, cummax_one, *a, writable(out->data))
+        DFTRACER_UTILS_NUMERIC_DISPATCH(a->type, cummax_one, *a,
+                                        writable(out->data))
     }
     return out;
 }
@@ -990,7 +1004,8 @@ dftu_series* dftu_series_cummin(const dftu_series* a) {
         (static_cast<std::int32_t>(a->type), a->data.data(),
          writable(out->data), static_cast<std::size_t>(a->length));
     } else {
-        DF_NUMERIC_DISPATCH(a->type, cummin_one, *a, writable(out->data))
+        DFTRACER_UTILS_NUMERIC_DISPATCH(a->type, cummin_one, *a,
+                                        writable(out->data))
     }
     return out;
 }
@@ -1008,7 +1023,8 @@ dftu_series* dftu_series_cum_prod(const dftu_series* a) {
         (static_cast<std::int32_t>(a->type), a->data.data(),
          writable(out->data), static_cast<std::size_t>(a->length));
     } else {
-        DF_NUMERIC_DISPATCH(a->type, cumprod_one, *a, writable(out->data))
+        DFTRACER_UTILS_NUMERIC_DISPATCH(a->type, cumprod_one, *a,
+                                        writable(out->data))
     }
     return out;
 }
@@ -1057,12 +1073,13 @@ dftu_series* dftu_series_diff(const dftu_series* a) {
         // Dense column: fill validity in bulk and let the branch-free data-only
         // diff auto-vectorize. null_count is exactly 1 (row 0).
         fill_valid_except_first(writable(vbuf), a->length);
-        DF_NUMERIC_DISPATCH(a->type, diff_data_one, *a, writable(out->data))
+        DFTRACER_UTILS_NUMERIC_DISPATCH(a->type, diff_data_one, *a,
+                                        writable(out->data))
         out->validity = std::move(vbuf);
         out->null_count = a->length > 0 ? 1 : 0;
     } else {
-        DF_NUMERIC_DISPATCH(a->type, diff_one, *a, writable(out->data),
-                            writable(vbuf))
+        DFTRACER_UTILS_NUMERIC_DISPATCH(a->type, diff_one, *a,
+                                        writable(out->data), writable(vbuf))
         attach_bitmap(out, std::move(vbuf));
     }
     return out;
@@ -1087,11 +1104,12 @@ dftu_series* dftu_series_pct_change(const dftu_series* a) {
         // Dense column: bulk validity + branch-free data-only pct_change (any
         // numeric type widens to double). null_count is exactly 1 (row 0).
         fill_valid_except_first(writable(vbuf), a->length);
-        DF_NUMERIC_DISPATCH(a->type, pctchange_data_one, *a, o)
+        DFTRACER_UTILS_NUMERIC_DISPATCH(a->type, pctchange_data_one, *a, o)
         out->validity = std::move(vbuf);
         out->null_count = a->length > 0 ? 1 : 0;
     } else {
-        DF_NUMERIC_DISPATCH(a->type, pctchange_one, *a, o, writable(vbuf))
+        DFTRACER_UTILS_NUMERIC_DISPATCH(a->type, pctchange_one, *a, o,
+                                        writable(vbuf))
         attach_bitmap(out, std::move(vbuf));
     }
     return out;

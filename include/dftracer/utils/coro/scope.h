@@ -72,7 +72,7 @@ class Scope {
             return SpawnFuture<T>(std::move(state));
         }
         bind(task.handle().promise());
-        task.handle().promise().cancel_source_ = &state->cancel_flag;
+        task.handle().promise().cancel_source = &state->cancel_flag;
         detail::Coro child = run_future_child(std::move(task), state);
         start(child);
         return SpawnFuture<T>(std::move(state));
@@ -104,7 +104,7 @@ class Scope {
         std::coroutine_handle<> await_suspend(
             std::coroutine_handle<Promise> awaiting) noexcept {
             if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
-                if (awaiting.promise().get_root_promise()->scope_ == scope) {
+                if (awaiting.promise().get_root_promise()->scope == scope) {
                     self_join = true;
                     return awaiting;
                 }
@@ -143,7 +143,7 @@ class Scope {
 
     void bind(PromiseBase& promise) const noexcept {
         promise.set_executor(executor_);
-        promise.scope_ = this;
+        promise.scope = this;
     }
 
     static detail::Coro run_child(CoroTask<void> task, Scope* scope);
@@ -188,7 +188,7 @@ class Scope {
         try {
             CoroTask<T> task = fn();
             scope->bind(task.handle().promise());
-            task.handle().promise().cancel_source_ = &state->cancel_flag;
+            task.handle().promise().cancel_source = &state->cancel_flag;
             if constexpr (std::is_void_v<T>) {
                 co_await std::move(task);
                 state->complete();

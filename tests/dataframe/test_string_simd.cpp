@@ -222,13 +222,13 @@ Series make_offset(const Rows& rows, std::size_t junk) {
 
 Rows corpus(unsigned seed, bool bytes) {
     std::mt19937_64 rng(seed);
-    static const dstd::String kAlphabet = "abcxyzABCXYZ0189 \t\n+-_,.|ab--,,";
+    static const dstd::String ALPHABET = "abcxyzABCXYZ0189 \t\n+-_,.|ab--,,";
     Rows rows;
     auto add = [&](std::size_t len) {
         dstd::String s;
         for (std::size_t k = 0; k < len; ++k)
             s.push_back(bytes ? static_cast<char>(rng() & 0xFF)
-                              : kAlphabet[rng() % kAlphabet.size()]);
+                              : ALPHABET[rng() % ALPHABET.size()]);
         rows.emplace_back(rng() % 7 == 0 ? Row{} : Row{std::move(s)});
     };
     for (std::size_t len = 0; len <= 130; ++len) add(len);  // 0..130 in a row

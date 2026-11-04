@@ -63,73 +63,74 @@ struct ExecutorQuery {
 }  // namespace detail
 
 struct PromiseBase : detail::FrameAllocation {
-    std::atomic<bool> awaiting_async_{false};
+    std::atomic<bool> awaiting_async{false};
     /// Set (release) when the coroutine reaches its final suspend, so a thread
     /// blocking on it sees its result through the matching acquire.
-    std::atomic<bool> finished_{false};
+    std::atomic<bool> finished{false};
     /// Set by the first of the awaiter (once the child returned to it) and
     /// the child's final suspend; the second one continues the awaiter.
-    std::atomic<bool> handoff_{false};
-    std::coroutine_handle<> continuation_{nullptr};
-    common::TaskIndex awaited_task_id_{-1};
-    Scheduler* scheduler_{nullptr};
-    Executor* executor_{nullptr};
+    std::atomic<bool> handoff{false};
+    std::coroutine_handle<> continuation{nullptr};
+    common::TaskIndex awaited_task_id{-1};
+    Scheduler* scheduler{nullptr};
+    Executor* executor{nullptr};
     /// The executor the awaiter runs on. A task that ends elsewhere posts the
     /// awaiter back to it instead of resuming it on this thread.
-    Executor* continuation_executor_{nullptr};
+    Executor* continuation_executor{nullptr};
     /// The @ref Scope that spawned this task, so the task cannot join it.
-    const Scope* scope_{nullptr};
+    const Scope* scope{nullptr};
     /// A flag outside the frame that cancels this task and those it awaits,
     /// set through the future of a @ref Scope spawn.
-    const std::atomic<bool>* cancel_source_{nullptr};
-    std::atomic<bool> cancel_requested_{false};
+    const std::atomic<bool>* cancel_source{nullptr};
+    std::atomic<bool> cancel_flag{false};
     /// Written before the awaiter is released and read after.
-    bool cancelled_{false};
-    bool started_{false};
+    bool cancelled{false};
+    bool started{false};
     /// A cancelled child does not end a frame that holds a scope, which must
     /// reach its join.
-    bool owns_scope_{false};
+    bool owns_scope{false};
     /// Ends the awaiter on this task's done path when it ended cancelled;
     /// false means the awaiter resumes instead.
-    bool (*parent_cancel_)(std::coroutine_handle<>) noexcept {nullptr};
-    PromiseBase* root_promise_{nullptr};
-    detail::RunContext context_;
+    bool (*parent_cancel)(std::coroutine_handle<>) noexcept {nullptr};
+    PromiseBase* root_promise{nullptr};
+    detail::RunContext context;
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
-    void* trace_handle_{nullptr};  ///< logging::coro_trace enter/leave handle
-    const char* trace_file_{nullptr};  ///< coroutine definition site
-    std::uint_least32_t trace_line_{0};
+    void* trace_handle{nullptr};  ///< logging::coro_trace enter/leave handle
+    const char* trace_file{nullptr};  ///< coroutine definition site
+    std::uint_least32_t trace_line{0};
 #endif
 
-    void set_scheduler(Scheduler* s) { scheduler_ = s; }
-    void set_executor(Executor* e) { executor_ = e; }
-    Executor* get_executor() const { return executor_; }
-    void set_root_promise(PromiseBase* p) { root_promise_ = p; }
+    void set_scheduler(Scheduler* s) { scheduler = s; }
+    void set_executor(Executor* e) { executor = e; }
+    Executor* get_executor() const { return executor; }
+    void set_root_promise(PromiseBase* p) { root_promise = p; }
     PromiseBase* get_root_promise() {
-        return root_promise_ ? root_promise_ : this;
+        return root_promise ? root_promise : this;
     }
 
     bool cancel_requested() const noexcept {
-        const PromiseBase* root = root_promise_ ? root_promise_ : this;
-        return cancel_requested_.load(std::memory_order_acquire) ||
-               root->cancel_requested_.load(std::memory_order_acquire) ||
-               (root->cancel_source_ &&
-                root->cancel_source_->load(std::memory_order_acquire));
+        const PromiseBase* root = root_promise ? root_promise : this;
+        return cancel_flag.load(std::memory_order_acquire) ||
+               root->cancel_flag.load(std::memory_order_acquire) ||
+               (root->cancel_source &&
+                root->cancel_source->load(std::memory_order_acquire));
     }
 
     /// Releases the awaiter of a task that ended. The frame must not be read
     /// afterwards, since the awaiter may destroy it.
     void complete() noexcept {
-        std::coroutine_handle<> next = continuation_;
-        Executor* const home = continuation_executor_;
-        const bool cancelled = cancelled_;
-        auto parent_cancel = parent_cancel_;
-        finished_.store(true, std::memory_order_release);
+        std::coroutine_handle<> next = continuation;
+        Executor* const home = continuation_executor;
+        const bool was_cancelled = cancelled;
+        auto parent_cancel_fn = parent_cancel;
+        finished.store(true, std::memory_order_release);
         if (!next) {
             notify_task_finished();
             return;
         }
-        if (handoff_.exchange(true, std::memory_order_acq_rel)) {
-            if (cancelled && parent_cancel != nullptr && parent_cancel(next))
+        if (handoff.exchange(true, std::memory_order_acq_rel)) {
+            if (was_cancelled && parent_cancel_fn != nullptr &&
+                parent_cancel_fn(next))
                 return;
             if (detail::runs_on(home)) {
                 next.resume();
@@ -143,7 +144,7 @@ struct PromiseBase : detail::FrameAllocation {
     /// scope and is cancelled, and returns true then. Call only while suspended
     /// on that child.
     bool propagate_cancel() noexcept {
-        if (owns_scope_ || !cancel_requested()) return false;
+        if (owns_scope || !cancel_requested()) return false;
         finish_cancelled();
         return true;
     }
@@ -151,7 +152,7 @@ struct PromiseBase : detail::FrameAllocation {
     /// Ends the task as cancelled with no exception. The owner destroys the
     /// frame. Call only from the await_suspend of this task's own frame.
     void finish_cancelled() noexcept {
-        cancelled_ = true;
+        cancelled = true;
         complete();
     }
 };
@@ -165,8 +166,8 @@ inline constexpr OwnsScopeTag OWNS_SCOPE{};
 /// return_value; void provides return_void instead.
 template <typename T>
 struct ResultHolder {
-    T result_;
-    void return_value(T value) { result_ = std::move(value); }
+    T result;
+    void return_value(T value) { result = std::move(value); }
 };
 
 template <>
@@ -176,24 +177,24 @@ struct ResultHolder<void> {
 
 /// Lazy invoke-result so std::invoke_result_t<Func, void> is never formed.
 template <typename F, typename U>
-struct invoke_res {
+struct InvokeRes {
     using type = std::invoke_result_t<F, U>;
 };
 
 template <typename F>
-struct invoke_res<F, void> {
+struct InvokeRes<F, void> {
     using type = std::invoke_result_t<F>;
 };
 
 /// Result element type for operator& (AND): tuple of both for non-void left,
 /// just the right's type when the left is void.
 template <typename A, typename B>
-struct and_value {
+struct AndValue {
     using type = dstd::Tuple<A, B>;
 };
 
 template <typename B>
-struct and_value<void, B> {
+struct AndValue<void, B> {
     using type = B;
 };
 
@@ -219,7 +220,7 @@ template <typename T = void>
 class CoroTask {
    public:
     struct promise_type : PromiseBase, detail::ResultHolder<T> {
-        std::exception_ptr exception_;
+        std::exception_ptr exception;
 
         CoroTask<T> get_return_object(
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
@@ -227,15 +228,15 @@ class CoroTask {
 #endif
         ) {
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
-            this->trace_file_ = loc.file_name();
-            this->trace_line_ = loc.line();
+            this->trace_file = loc.file_name();
+            this->trace_line = loc.line();
 #endif
             return CoroTask{
                 std::coroutine_handle<promise_type>::from_promise(*this)};
         }
 
         detail::EnterPoolOnStart initial_suspend() noexcept {
-            return {&this->context_};
+            return {&this->context};
         }
 
         struct FinalAwaiter {
@@ -248,7 +249,7 @@ class CoroTask {
 
         FinalAwaiter final_suspend() noexcept { return {}; }
 
-        void unhandled_exception() { exception_ = std::current_exception(); }
+        void unhandled_exception() { exception = std::current_exception(); }
 
         /// Awaiting a task or a join is not a cancel point. A scope must always
         /// reach its join.
@@ -266,19 +267,19 @@ class CoroTask {
         }
 
         std::suspend_never await_transform(detail::OwnsScopeTag) noexcept {
-            this->owns_scope_ = true;
+            this->owns_scope = true;
             return {};
         }
 
         detail::ExecutorQuery await_transform(this_coro::ExecutorTag) noexcept {
-            return {this->executor_ != nullptr ? this->executor_
-                                               : detail::current_executor()};
+            return {this->executor != nullptr ? this->executor
+                                              : detail::current_executor()};
         }
 
         /// @ref YieldAwaitable makes its own timeslice check.
         auto await_transform(coro::YieldAwaitable y) {
             return detail::InPool<coro::YieldAwaitable>{
-                y, &this->context_, false, this->cancel_requested()};
+                y, &this->context, false, this->cancel_requested()};
         }
 
         /// Wrap every other awaitable in a timeslice check.
@@ -287,18 +288,18 @@ class CoroTask {
         /// Lvalue awaitables and non-movable rvalues stay as refs.
         template <typename U>
         auto await_transform(U&& awaitable) {
-            const bool cancelled = at_cancel_point<U>();
+            const bool at_cancel = at_cancel_point<U>();
             if constexpr (std::is_lvalue_reference_v<U>) {
                 return coro::detail::YieldCheckAwaitable<U>{
-                    awaitable, &this->context_, false, false, cancelled};
+                    awaitable, &this->context, false, false, at_cancel};
             } else if constexpr (std::is_move_constructible_v<U>) {
                 return coro::detail::YieldCheckAwaitable<U>{
-                    std::move(awaitable), &this->context_, false, false,
-                    cancelled};
+                    std::move(awaitable), &this->context, false, false,
+                    at_cancel};
             } else {
                 return coro::detail::YieldCheckAwaitable<U&&>{
-                    static_cast<U&&>(awaitable), &this->context_, false, false,
-                    cancelled};
+                    static_cast<U&&>(awaitable), &this->context, false, false,
+                    at_cancel};
             }
         }
     };
@@ -367,7 +368,7 @@ class CoroTask {
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> awaiting_coro) noexcept {
         auto& p = coro_handle_.promise();
-        p.continuation_ = awaiting_coro;
+        p.continuation = awaiting_coro;
 
         Executor* awaiter_executor = nullptr;
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
@@ -377,8 +378,8 @@ class CoroTask {
         }
         if (awaiter_executor == nullptr)
             awaiter_executor = detail::current_executor();
-        p.continuation_executor_ = awaiter_executor;
-        if (p.executor_ == nullptr) p.executor_ = awaiter_executor;
+        p.continuation_executor = awaiter_executor;
+        if (p.executor == nullptr) p.executor = awaiter_executor;
 
         // Deep mode: capture this co_await'd child (run on the awaiter's
         // stack, so it never passes through the executor queue) and make it
@@ -393,15 +394,15 @@ class CoroTask {
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
         if (common::logger::detail::enabled(common::logger::Level::Trace))
             [[unlikely]] {
-            p.trace_handle_ = common::logger::detail::coro_trace_enter(
-                coro_handle_.address(), p.trace_file_, p.trace_line_);
+            p.trace_handle = common::logger::detail::coro_trace_enter(
+                coro_handle_.address(), p.trace_file, p.trace_line);
         }
 #endif
-        p.started_ = true;
+        p.started = true;
         if constexpr (requires {
                           awaiting_coro.promise().propagate_cancel();
                       }) {
-            p.parent_cancel_ = [](std::coroutine_handle<> h) noexcept {
+            p.parent_cancel = [](std::coroutine_handle<> h) noexcept {
                 return std::coroutine_handle<Promise>::from_address(h.address())
                     .promise()
                     .propagate_cancel();
@@ -411,10 +412,10 @@ class CoroTask {
         if constexpr (requires {
                           awaiting_coro.promise().propagate_cancel();
                       }) {
-            if (p.cancelled_ && awaiting_coro.promise().propagate_cancel())
+            if (p.cancelled && awaiting_coro.promise().propagate_cancel())
                 return true;
         }
-        return !p.handoff_.exchange(true, std::memory_order_acq_rel);
+        return !p.handoff.exchange(true, std::memory_order_acq_rel);
     }
 
     T await_resume() {
@@ -424,22 +425,22 @@ class CoroTask {
         if (!coro_handle_) __builtin_unreachable();
 #endif
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
-        if (coro_handle_.promise().trace_handle_) [[unlikely]] {
+        if (coro_handle_.promise().trace_handle) [[unlikely]] {
             common::logger::detail::coro_trace_leave(
-                coro_handle_.promise().trace_handle_);
+                coro_handle_.promise().trace_handle);
         }
 #endif
         if (detail::monitor_deep_enabled()) {
             detail::monitor_sync_complete(coro_handle_.address());
         }
-        if (coro_handle_.promise().cancelled_) {
+        if (coro_handle_.promise().cancelled) {
             throw_cancelled("task cancelled");
         }
-        if (coro_handle_.promise().exception_) {
-            common::rethrow_and_clear(coro_handle_.promise().exception_);
+        if (coro_handle_.promise().exception) {
+            common::rethrow_and_clear(coro_handle_.promise().exception);
         }
         if constexpr (!std::is_void_v<T>) {
-            return std::move(coro_handle_.promise().result_);
+            return std::move(coro_handle_.promise().result);
         }
     }
 
@@ -455,17 +456,17 @@ class CoroTask {
      */
     void cancel() noexcept {
         if (coro_handle_) {
-            coro_handle_.promise().cancel_requested_.store(
-                true, std::memory_order_release);
+            coro_handle_.promise().cancel_flag.store(true,
+                                                     std::memory_order_release);
         }
     }
 
     bool cancelled() const noexcept {
-        return coro_handle_ && coro_handle_.promise().cancelled_;
+        return coro_handle_ && coro_handle_.promise().cancelled;
     }
 
     bool started() const noexcept {
-        return coro_handle_ && coro_handle_.promise().started_;
+        return coro_handle_ && coro_handle_.promise().started;
     }
 
     /**
@@ -481,7 +482,7 @@ class CoroTask {
         if (coro_handle_ && !coro_handle_.done()) {
             memory::detail::Scope scope{
                 memory::detail::Manager::get().general()};
-            coro_handle_.promise().started_ = true;
+            coro_handle_.promise().started = true;
             coro_handle_.resume();
         }
     }
@@ -494,7 +495,7 @@ class CoroTask {
      * @throws Exception if coroutine threw
      */
     T get() {
-        drive_to_completion(coro_handle_, coro_handle_.promise().finished_);
+        drive_to_completion(coro_handle_, coro_handle_.promise().finished);
         return await_resume();
     }
 
@@ -502,7 +503,7 @@ class CoroTask {
      * Check if coroutine has pending exception
      */
     bool has_exception() const noexcept {
-        return coro_handle_ && coro_handle_.promise().exception_ != nullptr;
+        return coro_handle_ && coro_handle_.promise().exception != nullptr;
     }
 
     /**
@@ -529,14 +530,14 @@ class CoroTask {
      * @endcode
      */
     template <typename Func>
-    auto then(Func&& func) && -> CoroTask<
-        typename detail::invoke_res<Func, T>::type> {
+    auto then(
+        Func&& func) && -> CoroTask<typename detail::InvokeRes<Func, T>::type> {
         // Pass self as parameter to ensure capture before lazy coroutine
         // suspends
         return
             [](CoroTask<T> self, auto f)
-                -> CoroTask<typename detail::invoke_res<decltype(f), T>::type> {
-                using U = typename detail::invoke_res<decltype(f), T>::type;
+                -> CoroTask<typename detail::InvokeRes<decltype(f), T>::type> {
+                using U = typename detail::InvokeRes<decltype(f), T>::type;
                 if constexpr (std::is_void_v<T>) {
                     co_await std::move(self);
                     if constexpr (std::is_void_v<U>) {
@@ -597,8 +598,8 @@ class CoroTask {
      * @endcode
      */
     template <typename Func>
-    auto operator>(Func&& func) && -> CoroTask<
-        typename detail::invoke_res<Func, T>::type> {
+    auto operator>(
+        Func&& func) && -> CoroTask<typename detail::InvokeRes<Func, T>::type> {
         return std::move(*this).then(std::forward<Func>(func));
     }
 
@@ -615,7 +616,7 @@ class CoroTask {
      */
     template <typename Func>
     friend auto operator<(Func&& func, CoroTask<T>&& task)
-        -> CoroTask<typename detail::invoke_res<Func, T>::type> {
+        -> CoroTask<typename detail::InvokeRes<Func, T>::type> {
         return std::move(task).then(std::forward<Func>(func));
     }
 
@@ -635,9 +636,9 @@ class CoroTask {
      */
     template <typename U>
     friend auto operator&(CoroTask<T>&& lhs, CoroTask<U>&& rhs)
-        -> CoroTask<typename detail::and_value<T, U>::type> {
+        -> CoroTask<typename detail::AndValue<T, U>::type> {
         return [](CoroTask<T> left, CoroTask<U> right)
-                   -> CoroTask<typename detail::and_value<T, U>::type> {
+                   -> CoroTask<typename detail::AndValue<T, U>::type> {
             if constexpr (std::is_void_v<T>) {
                 co_await std::move(left);
                 co_return co_await std::move(right);

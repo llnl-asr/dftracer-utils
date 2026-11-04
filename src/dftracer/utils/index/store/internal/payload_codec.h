@@ -16,20 +16,20 @@
 namespace dftracer::utils::index::store::internal {
 
 inline constexpr std::size_t DECODE_CONTEXT_BUF_SIZE = 256;
-inline thread_local char g_decode_context[DECODE_CONTEXT_BUF_SIZE] = {};
+inline thread_local char t_decode_context[DECODE_CONTEXT_BUF_SIZE] = {};
 
 struct DecodeContextGuard {
     template <typename... Args>
     explicit DecodeContextGuard(const char* fmt, Args... args) {
-        std::memcpy(previous_, g_decode_context, DECODE_CONTEXT_BUF_SIZE);
+        std::memcpy(previous_, t_decode_context, DECODE_CONTEXT_BUF_SIZE);
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
-        std::snprintf(g_decode_context, DECODE_CONTEXT_BUF_SIZE, fmt, args...);
+        std::snprintf(t_decode_context, DECODE_CONTEXT_BUF_SIZE, fmt, args...);
 #pragma GCC diagnostic pop
     }
 
     ~DecodeContextGuard() {
-        std::memcpy(g_decode_context, previous_, DECODE_CONTEXT_BUF_SIZE);
+        std::memcpy(t_decode_context, previous_, DECODE_CONTEXT_BUF_SIZE);
     }
 
     DecodeContextGuard(const DecodeContextGuard&) = delete;
@@ -105,9 +105,9 @@ class Cursor {
     dstd::StringView take(std::size_t len) {
         if (offset_ + len > data_.size()) {
             char err[DECODE_CONTEXT_BUF_SIZE + 64];
-            if (g_decode_context[0] != '\0') {
+            if (t_decode_context[0] != '\0') {
                 std::snprintf(err, sizeof(err), "Corrupt index payload [%s]",
-                              g_decode_context);
+                              t_decode_context);
             } else {
                 std::snprintf(err, sizeof(err), "Corrupt index payload");
             }

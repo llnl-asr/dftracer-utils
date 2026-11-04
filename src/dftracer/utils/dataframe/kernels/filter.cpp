@@ -127,7 +127,7 @@ dftu_series* dftu_series_filter_gt(const dftu_series* v,
         }
         sel.clear();
     }
-    DF_NUMERIC_DISPATCH(v->type, select_gt, *v, threshold, sel)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(v->type, select_gt, *v, threshold, sel)
     return make_selection(*v, sel);
 }
 

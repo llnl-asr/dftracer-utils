@@ -28,7 +28,7 @@ namespace {
 constexpr std::int64_t I64_MAX = std::numeric_limits<std::int64_t>::max();
 constexpr std::int64_t I64_MIN = std::numeric_limits<std::int64_t>::min();
 constexpr std::uint64_t U64_MAX = std::numeric_limits<std::uint64_t>::max();
-const double NaN = std::numeric_limits<double>::quiet_NaN();
+const double na_n = std::numeric_limits<double>::quiet_NaN();
 
 template <class T>
 using Opt = dstd::Vector<dstd::Optional<T>>;
@@ -245,7 +245,7 @@ TEST_CASE("neg nulls INT64_MIN and a uint64 past it") {
 
 TEST_CASE("cmp_expr compares integers and doubles exactly") {
     const Series i = ints({9007199254740993, 2, 3, dstd::nullopt, 1});
-    const Series d = dbls({9007199254740992.0, 2.0, 2.5, 1.0, NaN});
+    const Series d = dbls({9007199254740992.0, 2.0, 2.5, 1.0, na_n});
     auto cmp = [&](CmpOp op, const Expr& a, const Expr& b) {
         return as_bools(run(dataframe::expr_cmp_expr(op, a, b), {&i, &d}));
     };
@@ -291,8 +291,8 @@ TEST_CASE("expr_cmp against a scalar is exact across integer and double") {
     CHECK(cmp_col(CmpOp::Ne, i, sf(2.5)) == Opt<bool>{true, true});
     CHECK(cmp_col(CmpOp::Lt, i, sf(1e300)) == Opt<bool>{true, true});
     CHECK(cmp_col(CmpOp::Gt, i, sf(-1e300)) == Opt<bool>{true, true});
-    CHECK(cmp_col(CmpOp::Ne, i, sf(NaN)) == Opt<bool>{true, true});
-    CHECK(cmp_col(CmpOp::Eq, i, sf(NaN)) == Opt<bool>{false, false});
+    CHECK(cmp_col(CmpOp::Ne, i, sf(na_n)) == Opt<bool>{true, true});
+    CHECK(cmp_col(CmpOp::Eq, i, sf(na_n)) == Opt<bool>{false, false});
 
     const Series d = dbls({9007199254740992.0});
     CHECK(cmp_col(CmpOp::Lt, d, si(9007199254740993)) == Opt<bool>{true});
@@ -364,7 +364,7 @@ TEST_CASE("least and greatest are null when any operand is null") {
     const Series d = dbls({9007199254740992.0});
     CHECK(as_dbls(run(dataframe::expr_extreme({c0(), c1()}, true),
                       {&big, &d})) == Opt<double>{9007199254740992.0});
-    const Series nan = dbls({NaN});
+    const Series nan = dbls({na_n});
     CHECK(as_dbls(run(dataframe::expr_extreme({c0(), c1()}, true),
                       {&d, &nan})) == Opt<double>{dstd::nullopt});
 
@@ -643,7 +643,7 @@ TEST_CASE("convert to int parses, truncates and nulls the unknown") {
     CHECK(as_ints(run(dataframe::expr_convert(ConvertOp::Int, c0()), {&s})) ==
           Opt<std::int64_t>{42, -7, 3, dstd::nullopt, 1000, dstd::nullopt,
                             dstd::nullopt, dstd::nullopt});
-    const Series d = dbls({2.9, -2.9, NaN, 1e300});
+    const Series d = dbls({2.9, -2.9, na_n, 1e300});
     CHECK(as_ints(run(dataframe::expr_convert(ConvertOp::Int, c0()), {&d})) ==
           Opt<std::int64_t>{2, -2, dstd::nullopt, dstd::nullopt});
     const Series b = bools({true, false, dstd::nullopt});
@@ -674,7 +674,7 @@ TEST_CASE("convert to string and json write duql's text forms") {
     CHECK(as_strs(run(dataframe::expr_convert(ConvertOp::Json, c0()), {&i})) ==
           Opt<dstd::String>{"-5", "null"});
 
-    const Series d = dbls({0.1, 1.0, 1e21, NaN});
+    const Series d = dbls({0.1, 1.0, 1e21, na_n});
     CHECK(
         as_strs(run(dataframe::expr_convert(ConvertOp::String, c0()), {&d})) ==
         Opt<dstd::String>{"0.1", "1", "1e+21", dstd::nullopt});
@@ -741,7 +741,7 @@ TEST_CASE("list functions") {
           Opt<std::int64_t>{dstd::nullopt});
 
     const Series fl =
-        make_list({0, 2, 3}, dbls({0.5, 0.25, NaN}), {true, true});
+        make_list({0, 2, 3}, dbls({0.5, 0.25, na_n}), {true, true});
     CHECK(as_dbls(run(dataframe::expr_list_sum(c0()), {&fl})) ==
           Opt<double>{0.75, dstd::nullopt});
 
@@ -931,7 +931,8 @@ TEST_CASE("date_part: sub-second fields, pre-epoch, leap days, ISO edges") {
 }
 
 TEST_CASE("date_part and format_time: nulls, Float64 floored, other types") {
-    const Series d = dbls({1'700'000'000'123'456.75, -0.5, NaN, dstd::nullopt});
+    const Series d =
+        dbls({1'700'000'000'123'456.75, -0.5, na_n, dstd::nullopt});
     CHECK(part(d, DFTU_DT_MICROSECOND, 1000) ==
           Opt<std::int64_t>{123456, 999999, dstd::nullopt, dstd::nullopt});
     CHECK(fmt(d, "%F %T.%f", 1000) ==

@@ -36,19 +36,19 @@ class ArgSpec {
     using Setter =
         dstd::Function<dstd::Optional<dstd::String>(dstd::StringView)>;
 
-    Kind kind = Kind::Value;
-    dstd::Vector<dstd::StringView> names;
-    dstd::StringView help;
-    dstd::String default_repr;
-    dstd::StringView default_view;
-    bool quote_default = false;
-    Setter set;
-    std::size_t group = 0;
-    bool has_default = false;
-    bool is_required = false;
-    bool is_append = false;
-    bool min_one = false;
-    bool used = false;
+    Kind kind_ = Kind::Value;
+    dstd::Vector<dstd::StringView> names_;
+    dstd::StringView help_;
+    dstd::String default_repr_;
+    dstd::StringView default_view_;
+    bool quote_default_ = false;
+    Setter set_;
+    std::size_t group_ = 0;
+    bool has_default_ = false;
+    bool is_required_ = false;
+    bool is_append_ = false;
+    bool min_one_ = false;
+    bool used_ = false;
 };
 
 /// What a parse ended in. When `exit_code` holds a value the caller prints
@@ -98,8 +98,8 @@ class ArgParser {
     ArgSpec& option(T& target, Names names, dstd::StringView help) {
         ArgSpec& spec =
             add_value(names, help, number_text(target), /*has_default=*/true);
-        spec.set = [&target, name = long_name(names)](
-                       dstd::StringView text) -> dstd::Optional<dstd::String> {
+        spec.set_ = [&target, name = long_name(names)](
+                        dstd::StringView text) -> dstd::Optional<dstd::String> {
             const auto parsed = dstd::from_chars<T>(text);
             if (!parsed) return number_error(name, text);
             target = *parsed;

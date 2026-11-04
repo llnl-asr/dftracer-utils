@@ -130,28 +130,28 @@ class GzipIndexer : public CheckpointIndexer {
     }
 
    private:
-    dstd::String gz_path;
-    dstd::String gz_path_logical_path;
-    dstd::String index_path;
-    std::uint64_t ckpt_size;
-    bool force_rebuild;
+    dstd::String gz_path_;
+    dstd::String gz_path_logical_path_;
+    dstd::String index_path_;
+    std::uint64_t ckpt_size_;
+    bool force_rebuild_;
     VisitorList visitors_;
 
     // Cached values (atomic for thread-safe lazy initialization)
-    mutable std::atomic<bool> cached_is_valid{false};
-    mutable std::atomic<std::uint64_t> cached_max_bytes{0};
-    mutable std::atomic<bool> cached_max_bytes_ready{false};
-    mutable std::atomic<std::uint64_t> cached_num_lines{0};
-    mutable std::atomic<bool> cached_num_lines_ready{false};
-    mutable std::atomic<std::uint64_t> cached_checkpoint_size{0};
-    mutable std::atomic<bool> cached_checkpoint_size_ready{false};
-    mutable dstd::Vector<GzipMemberRecord> cached_members;
-    mutable dstd::Vector<std::uint64_t> cached_heads;
+    mutable std::atomic<bool> cached_is_valid_{false};
+    mutable std::atomic<std::uint64_t> cached_max_bytes_{0};
+    mutable std::atomic<bool> cached_max_bytes_ready_{false};
+    mutable std::atomic<std::uint64_t> cached_num_lines_{0};
+    mutable std::atomic<bool> cached_num_lines_ready_{false};
+    mutable std::atomic<std::uint64_t> cached_checkpoint_size_{0};
+    mutable std::atomic<bool> cached_checkpoint_size_ready_{false};
+    mutable dstd::Vector<GzipMemberRecord> cached_members_;
+    mutable dstd::Vector<std::uint64_t> cached_heads_;
     // One snapshot per loaded indexer, so a restart read opens nothing.
     mutable dstd::Optional<index::Snapshot> snapshot_;
     mutable dstd::Optional<index::FileRef> file_ref_;
-    mutable std::mutex cached_members_mutex;
-    mutable std::atomic<bool> cached_loaded{false};
+    mutable std::mutex cached_members_mutex_;
+    mutable std::atomic<bool> cached_loaded_{false};
 
     // Internal methods
     void open();

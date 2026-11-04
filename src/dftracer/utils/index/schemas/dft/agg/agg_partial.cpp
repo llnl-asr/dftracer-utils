@@ -169,10 +169,10 @@ void DistinctIds::destroy() noexcept {
 
 void DistinctIds::to_sketch() {
     if (sketch_mode_) return;
-    auto sketch = dstd::make_unique<Sketch>();
-    for (std::uint64_t id : list_) sketch->add_hash(mix(id));
+    auto fresh = dstd::make_unique<Sketch>();
+    for (std::uint64_t id : list_) fresh->add_hash(mix(id));
     list_.~List();
-    new (&sketch_) SketchPtr(std::move(sketch));
+    new (&sketch_) SketchPtr(std::move(fresh));
     sketch_mode_ = true;
 }
 
@@ -289,7 +289,7 @@ bool DistinctIds::read_from(dstd::LeReader& r) {
         list_ = std::move(ids);
         return true;
     }
-    auto sketch = dstd::make_unique<Sketch>();
+    auto fresh = dstd::make_unique<Sketch>();
     if (tag == TAG_SPARSE) {
         std::uint64_t n = 0;
         if (!get_count(r, Sketch::SPARSE_LIMIT, n)) return false;
@@ -303,17 +303,17 @@ bool DistinctIds::read_from(dstd::LeReader& r) {
             prev += d;
             hashes.push_back(prev);
         }
-        sketch->set_sparse_hashes(std::move(hashes));
+        fresh->set_sparse_hashes(std::move(hashes));
     } else if (tag == TAG_DENSE) {
         const std::uint8_t* regs = r.take(Sketch::REGISTERS);
         if (regs == nullptr) return false;
-        sketch->set_dense_registers(
+        fresh->set_dense_registers(
             dstd::Vector<std::uint8_t>(regs, regs + Sketch::REGISTERS));
     } else {
         return false;
     }
     list_.~List();
-    new (&sketch_) SketchPtr(std::move(sketch));
+    new (&sketch_) SketchPtr(std::move(fresh));
     sketch_mode_ = true;
     return true;
 }

@@ -25,12 +25,12 @@ using namespace dftracer::utils::task_graph;
 // ============================================================================
 
 TEST_CASE("split_every - construction") {
-    split_every s{2};
+    SplitEvery s{2};
     CHECK(s.count == 2);
 }
 
 TEST_CASE("num_outputs - construction") {
-    num_outputs n{8};
+    NumOutputs n{8};
     CHECK(n.count == 8);
 }
 
@@ -287,7 +287,7 @@ TEST_CASE("TaskGraph - parallel + reduce integration") {
     CHECK(workers.size() == 8);
 
     auto reduced = graph.reduce<int>(
-        workers, split_every{2},
+        workers, SplitEvery{2},
         [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
@@ -341,7 +341,7 @@ TEST_CASE("TaskGraph - barebone task consumes graph output (after graph)") {
         {.name = "Worker"});
 
     auto reduced = graph.reduce<int>(
-        workers, split_every{2},
+        workers, SplitEvery{2},
         [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
@@ -378,7 +378,7 @@ TEST_CASE("TaskGraph - reduce with split_every > 2") {
     CHECK(workers.size() == 9);
 
     auto reduced = graph.reduce<int>(
-        workers, split_every{3},
+        workers, SplitEvery{3},
         [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
@@ -409,7 +409,7 @@ TEST_CASE("TaskGraph - fold with init value") {
     CHECK(workers.size() == 5);
 
     // Fold with init=0, binary op=add
-    auto folded = graph.fold<int>(workers, 0, split_every{2},
+    auto folded = graph.fold<int>(workers, 0, SplitEvery{2},
                                   [](int acc, int x) { return acc + x; },
                                   {.name = "Sum"});
 
@@ -434,7 +434,7 @@ TEST_CASE("TaskGraph - fold with product") {
         {.name = "Worker"});
 
     // Fold with init=1, binary op=multiply
-    auto folded = graph.fold<int>(workers, 1, split_every{2},
+    auto folded = graph.fold<int>(workers, 1, SplitEvery{2},
                                   [](int acc, int x) { return acc * x; },
                                   {.name = "Product"});
 
@@ -460,7 +460,7 @@ TEST_CASE("TaskGraph - aggregate (map + reduce)") {
     auto aggregated = graph.aggregate<int, int>(
         workers,
         [](CoroScope&, int x) -> coro::CoroTask<int> { co_return x* x; },
-        split_every{2},
+        SplitEvery{2},
         [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
@@ -492,7 +492,7 @@ TEST_CASE("TaskGraph - aggregate with type transformation") {
         [](CoroScope&, std::string s) -> coro::CoroTask<int> {
             co_return std::stoi(s);
         },
-        split_every{2},
+        SplitEvery{2},
         [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
@@ -517,14 +517,14 @@ TEST_CASE("TaskGraph - barebone tasks on both ends") {
     auto wrapped = graph.wrap<int>(source);
 
     auto fanned = graph.fan_out<int>(
-        wrapped, num_outputs{4},
+        wrapped, NumOutputs{4},
         [](CoroScope&, int input, std::size_t idx) -> coro::CoroTask<int> {
             co_return input* static_cast<int>(idx + 1);
         },
         {.name = "Multiply"});
 
     auto reduced = graph.reduce<int>(
-        fanned, split_every{2},
+        fanned, SplitEvery{2},
         [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
@@ -552,7 +552,7 @@ TEST_CASE("TaskGraph - barebone tasks on both ends") {
 // ============================================================================
 
 TEST_CASE("num_partitions - construction") {
-    num_partitions n{4};
+    NumPartitions n{4};
     CHECK(n.count == 4);
 }
 
@@ -560,7 +560,7 @@ TEST_CASE("TaskGraph - partition basic") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8};
 
     auto graph = TaskGraph::builder({.name = "PartitionBasic"});
-    auto parts = graph.partition<int>(data, num_partitions{4});
+    auto parts = graph.partition<int>(data, NumPartitions{4});
 
     CHECK(parts.size() == 4);
     CHECK(graph.tasks().size() == 4);
@@ -584,7 +584,7 @@ TEST_CASE("TaskGraph - partition uneven split") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7};
 
     auto graph = TaskGraph::builder({.name = "PartitionUneven"});
-    auto parts = graph.partition<int>(data, num_partitions{3});
+    auto parts = graph.partition<int>(data, NumPartitions{3});
 
     CHECK(parts.size() == 3);
 
@@ -605,7 +605,7 @@ TEST_CASE("TaskGraph - partition + map") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6};
 
     auto graph = TaskGraph::builder({.name = "PartitionMap"});
-    auto parts = graph.partition<int>(data, num_partitions{3});
+    auto parts = graph.partition<int>(data, NumPartitions{3});
 
     auto mapped = graph.map<int>(
         parts, [](CoroScope&, std::vector<int> chunk) -> coro::CoroTask<int> {
@@ -633,7 +633,7 @@ TEST_CASE("TaskGraph - partition + reduce") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8};
 
     auto graph = TaskGraph::builder({.name = "PartitionReduce"});
-    auto parts = graph.partition<int>(data, num_partitions{4});
+    auto parts = graph.partition<int>(data, NumPartitions{4});
 
     auto sums = graph.map<int>(
         parts, [](CoroScope&, std::vector<int> chunk) -> coro::CoroTask<int> {
@@ -643,7 +643,7 @@ TEST_CASE("TaskGraph - partition + reduce") {
         });
 
     auto total = graph.reduce<int>(
-        sums, split_every{2},
+        sums, SplitEvery{2},
         [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
@@ -662,7 +662,7 @@ TEST_CASE("TaskGraph - concat_partitions") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8};
 
     auto graph = TaskGraph::builder({.name = "ConcatPartitions"});
-    auto parts = graph.partition<int>(data, num_partitions{4});
+    auto parts = graph.partition<int>(data, NumPartitions{4});
 
     auto combined = graph.concat_partitions(parts);
 
@@ -680,7 +680,7 @@ TEST_CASE("TaskGraph - partition + map + concat_partitions") {
     std::vector<int> data = {1, 2, 3, 4};
 
     auto graph = TaskGraph::builder({.name = "PartitionMapConcat"});
-    auto parts = graph.partition<int>(data, num_partitions{2});
+    auto parts = graph.partition<int>(data, NumPartitions{2});
 
     auto doubled = graph.map<std::vector<int>>(
         parts,
@@ -704,7 +704,7 @@ TEST_CASE("TaskGraph - partition single element") {
     std::vector<int> data = {42};
 
     auto graph = TaskGraph::builder({.name = "PartitionSingle"});
-    auto parts = graph.partition<int>(data, num_partitions{1});
+    auto parts = graph.partition<int>(data, NumPartitions{1});
 
     CHECK(parts.size() == 1);
 
@@ -720,7 +720,7 @@ TEST_CASE("TaskGraph - partition empty data") {
     std::vector<int> data;
 
     auto graph = TaskGraph::builder({.name = "PartitionEmpty"});
-    auto parts = graph.partition<int>(data, num_partitions{2});
+    auto parts = graph.partition<int>(data, NumPartitions{2});
 
     CHECK(parts.size() == 2);
 
@@ -750,7 +750,7 @@ TEST_CASE("TaskGraph - reduce single element with type conversion") {
 
     // Reduce: string -> int (type conversion must happen even with 1 input)
     auto reduced = graph.reduce<int>(
-        workers, split_every{2},
+        workers, SplitEvery{2},
         [](CoroScope&, std::vector<std::string> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (const auto& s : items) sum += std::stoi(s);
@@ -780,7 +780,7 @@ TEST_CASE("TaskGraph - reduce single element same type") {
     CHECK(workers.size() == 1);
 
     auto reduced = graph.reduce<int>(
-        workers, split_every{2},
+        workers, SplitEvery{2},
         [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;

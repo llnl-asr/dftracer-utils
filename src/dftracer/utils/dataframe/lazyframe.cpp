@@ -2963,11 +2963,11 @@ struct TapOp {
 };
 
 template <class... Ts>
-struct overloaded : Ts... {
+struct Overloaded : Ts... {
     using Ts::operator()...;
 };
 template <class... Ts>
-overloaded(Ts...) -> overloaded<Ts...>;
+Overloaded(Ts...) -> Overloaded<Ts...>;
 
 }  // namespace
 
@@ -3139,7 +3139,7 @@ dstd::Vector<dstd::String> without_rest(dstd::Vector<dstd::String> names) {
 dstd::Vector<dstd::String> out_schema(const LazyOp& op,
                                       dstd::Vector<dstd::String> in) {
     return std::visit(
-        overloaded{
+        Overloaded{
             [&](const FilterOp&) { return in; },
             [&](const SliceOp&) { return in; },
             [&](const TailOp&) { return in; },
@@ -3275,7 +3275,7 @@ DataType unpivot_value_type(const Schema& in,
 
 Schema out_types(const LazyOp& op, Schema in) {
     return std::visit(
-        overloaded{
+        Overloaded{
             [&](const FilterOp&) { return in; },
             [&](const SliceOp&) { return in; },
             [&](const TailOp&) { return in; },
@@ -3466,7 +3466,7 @@ Schema out_types(const LazyOp& op, Schema in) {
 
 dstd::String describe_op(const LazyOp& op) {
     return std::visit(
-        overloaded{
+        Overloaded{
             [](const FilterOp&) { return dstd::String("filter"); },
             [](const SelectOp& o) {
                 return "select [" + join_names(o.names) + "]";
@@ -3546,7 +3546,7 @@ enum class RestRule : std::uint8_t { Moves, Keys, Omits, None };
 
 RestRule rest_rule(const LazyOp& op, const dstd::Vector<dstd::String>& in) {
     return std::visit(
-        overloaded{[](const FilterOp&) { return RestRule::Moves; },
+        Overloaded{[](const FilterOp&) { return RestRule::Moves; },
                    [](const SelectOp& o) {
                        return std::find(o.names.begin(), o.names.end(),
                                         REST_COLUMN) != o.names.end()
@@ -4191,7 +4191,7 @@ dstd::UniquePtr<Cursor> make_cursor(const LazyOp& op,
                                     const dstd::Vector<dstd::String>& sch,
                                     std::uint64_t budget, bool own_rest) {
     return std::visit(
-        overloaded{
+        Overloaded{
             [&](const FilterOp& o) -> dstd::UniquePtr<Cursor> {
                 return dstd::make_unique<FilterCursor>(std::move(in), o.pred);
             },
@@ -4467,7 +4467,7 @@ coro::CoroTask<DataFrame> LazyFrame::run_ops_in_memory(
     for (const auto& op : ops) {
         bool ok = true;
         DataFrame next = std::visit(
-            overloaded{
+            Overloaded{
                 [&](const FilterOp& o) {
                     return df.filter(eval(o.pred, column_ptrs(df.columns)));
                 },
@@ -6033,7 +6033,7 @@ void fingerprint_group_aggs(Fingerprint& fp,
 void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
     fp.pod(static_cast<std::uint64_t>(op.node.index()));
     std::visit(
-        overloaded{
+        Overloaded{
             [&](const FilterOp& o) { fp.pod(expr_fingerprint(o.pred)); },
             [&](const SelectOp& o) { fp.strs(o.names); },
             [&](const WithColumnOp& o) {

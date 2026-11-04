@@ -304,7 +304,7 @@ enum class NameList { Provides, Consumes, Reads };
 // which is the lifetime dftu_plugin::provides/consumes/reads require.
 template <class Slice, NameList Which>
 const char* const* name_list_thunk(void*) {
-    static const dstd::Vector<const char*> names = [] {
+    static const dstd::Vector<const char*> NAMES = [] {
         dstd::Vector<const char*> v;
         if constexpr (Which == NameList::Provides) {
             for (const char* n : Slice::provides()) v.push_back(n);
@@ -316,7 +316,7 @@ const char* const* name_list_thunk(void*) {
         v.push_back(nullptr);
         return v;
     }();
-    return names.data();
+    return NAMES.data();
 }
 
 /// A Slice declaring the config keys it reads via a static `config_keys()`
@@ -334,7 +334,7 @@ concept DeclaresConfigKeys = requires {
 // `query` an unknown one.
 template <class Slice>
 const dftu_config_key* config_key_thunk(void*) {
-    static const dstd::Vector<dftu_config_key> keys = [] {
+    static const dstd::Vector<dftu_config_key> KEYS = [] {
         dstd::Vector<dftu_config_key> v;
         for (const dftu_config_key& k : Slice::config_keys()) v.push_back(k);
         v.push_back({"duql", DFTU_VAL_STR, 0,
@@ -342,7 +342,7 @@ const dftu_config_key* config_key_thunk(void*) {
         v.push_back({nullptr, DFTU_CONFIG_ANY, 0, nullptr});
         return v;
     }();
-    return keys.data();
+    return KEYS.data();
 }
 
 }  // namespace detail

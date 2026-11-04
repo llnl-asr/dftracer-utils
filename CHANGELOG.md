@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Rename the trait structs `dstd::awaitable_result_type` and `dstd::unwrap_coro_task` to `AwaitableResultType` and `UnwrapCoroTask`, the macros `DF_*` of the dataframe kernels to `DFTRACER_UTILS_*`, and the public fields of coroutine promise and shared-state types (`coro::PromiseBase`, `coro::CoroTask<T>::promise_type`, `coro::detail` completion states) to names without a trailing underscore.
 - Build a plugin against the installed headers without nanoarrow: `plugins/owned_arrow.h` holds the Arrow C structs and releases them itself.
 - Add the ctests `public_headers` and `public_headers_compile`: the first checks `include/` against `cmake/public_headers.txt`, the second compiles each installed header alone, and the abi headers as C.
 - Read each event in `collect_events` once on demand, in place of a second DOM parse of the line.

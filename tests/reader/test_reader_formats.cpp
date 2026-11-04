@@ -47,7 +47,7 @@ class FormatTestFixture {
 // Helper function to get format name for test output
 dstd::String format_name(Format format) {
     switch (format) {
-        case Format::GZIP:
+        case Format::Gzip:
             return "gzip";
         default:
             return "unknown";
@@ -60,7 +60,7 @@ struct FormatWrapper {
     static constexpr Format value = F;
 };
 
-using GZIPFormat = FormatWrapper<Format::GZIP>;
+using GZIPFormat = FormatWrapper<Format::Gzip>;
 
 // Parameterized tests using doctest's approach
 TEST_CASE_TEMPLATE("Indexer creation and destruction", FormatType, GZIPFormat) {

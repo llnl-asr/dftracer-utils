@@ -97,7 +97,7 @@ void CastF64I64(const void* s, void* d, std::size_t n) {
 // Number -> Bool: one packed result bit per row, 64 rows a word (LSB first, as
 // the column's bit order). A float also writes a validity bit per row, so a NaN
 // is null and not silently true. `bits` and `valid` are zeroed by the caller.
-template <class T, bool kFloat>
+template <class T, bool IsFloat>
 void NonzeroBits(const void* sv, std::uint8_t* bits, std::uint8_t* valid,
                  std::size_t n) {
     const T* s = static_cast<const T*>(sv);
@@ -114,7 +114,7 @@ void NonzeroBits(const void* sv, std::uint8_t* bits, std::uint8_t* valid,
         for (std::size_t c = 0; c < 64; c += lanes) {
             const auto v = hwy::HWY_NAMESPACE::LoadU(d, s + i + c);
             auto nonzero = hwy::HWY_NAMESPACE::Ne(v, zero);
-            if constexpr (kFloat) {
+            if constexpr (IsFloat) {
                 const auto ordered = hwy::HWY_NAMESPACE::Eq(v, v);
                 std::uint8_t vb[8] = {};
                 hwy::HWY_NAMESPACE::StoreMaskBits(d, ordered, vb);
@@ -130,14 +130,14 @@ void NonzeroBits(const void* sv, std::uint8_t* bits, std::uint8_t* valid,
             data_word |= (dw & lane_bits) << c;
         }
         std::memcpy(bits + (i >> 3), &data_word, 8);
-        if constexpr (kFloat) std::memcpy(valid + (i >> 3), &valid_word, 8);
+        if constexpr (IsFloat) std::memcpy(valid + (i >> 3), &valid_word, 8);
     }
     for (; i < n; ++i) {
         const T x = s[i];
         bool ordered = true;
-        if constexpr (kFloat) ordered = (x == x);
+        if constexpr (IsFloat) ordered = (x == x);
         if (!ordered) continue;
-        if constexpr (kFloat)
+        if constexpr (IsFloat)
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         if (x != T{}) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     }

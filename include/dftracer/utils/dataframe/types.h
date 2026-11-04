@@ -474,11 +474,11 @@ constexpr bool is_arithmetic_type(TypeId t) noexcept {
     return false;
 }
 
-/// True for the exact set DF_NUMERIC_DISPATCH (internal/numeric_dispatch.h)
-/// has a case for: Int8-64, Uint8-64, Float32, Float64. A kernel that
-/// dispatches on physical_type(t) checks this first, so an opaque or
-/// unmapped type (Bool, Decimal128/256, FixedSizeBinary, ...) is refused
-/// instead of silently reaching the macro's default no-op.
+/// True for the exact set DFTRACER_UTILS_NUMERIC_DISPATCH
+/// (internal/numeric_dispatch.h) has a case for: Int8-64, Uint8-64, Float32,
+/// Float64. A kernel that dispatches on physical_type(t) checks this first, so
+/// an opaque or unmapped type (Bool, Decimal128/256, FixedSizeBinary, ...) is
+/// refused instead of silently reaching the macro's default no-op.
 constexpr bool is_numeric_dispatchable(TypeId t) noexcept {
     switch (t) {
         case TypeId::Int8:

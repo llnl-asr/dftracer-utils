@@ -134,7 +134,7 @@ struct Inputs {
     DataFrame right;
 };
 
-enum class TimeKind { INT, FLOAT };
+enum class TimeKind { Int, Float };
 
 // Left and right frames with times that tie, by keys with nulls, nulls (or NaN
 // for a float) in the times, a column both sides name `v`, and an input order
@@ -166,7 +166,7 @@ Inputs make_inputs(std::uint32_t seed, std::int64_t nl, std::int64_t nr,
         rv.push_back(I{i});
         rv2.push_back(pick(5) == 0 ? I{} : I{i * 10});
     }
-    const bool flt = kind == TimeKind::FLOAT;
+    const bool flt = kind == TimeKind::Float;
     const Series lts = flt ? f64s(lt) : i64s(lt);
     const Series rts = flt ? f64s(rt) : i64s(rt);
     const Series lkey = string_key ? strs(ls) : i64s(lg);
@@ -199,7 +199,7 @@ TEST_CASE("asof matches the eager op over groups, ties, nulls and any order") {
     const dstd::Vector<dstd::Vector<dstd::String>> bys = {{}, {"g"}};
     const dstd::Optional<double> tols[] = {dstd::nullopt, 0.0, 3.0, 6.5};
     std::uint32_t seed = 1;
-    for (const TimeKind kind : {TimeKind::INT, TimeKind::FLOAT}) {
+    for (const TimeKind kind : {TimeKind::Int, TimeKind::Float}) {
         for (const bool string_key : {false, true}) {
             const Inputs in = make_inputs(seed++, 300, 200, kind, string_key);
             for (const auto& by : bys)
@@ -220,7 +220,7 @@ TEST_CASE("asof matches the eager op over groups, ties, nulls and any order") {
 }
 
 TEST_CASE("asof leaves in several morsels cut by the budget") {
-    const Inputs in = make_inputs(99, 4000, 3000, TimeKind::INT, false);
+    const Inputs in = make_inputs(99, 4000, 3000, TimeKind::Int, false);
     const dstd::Vector<DataFrame> parts = run_asof(
         in, SMALL_BUDGET, {"g"}, AsofDirection::Backward, dstd::nullopt);
     // Collect-then-eager would hand the whole result over in one morsel.
@@ -231,7 +231,7 @@ TEST_CASE("asof leaves in several morsels cut by the budget") {
 }
 
 TEST_CASE("asof with an empty side") {
-    const Inputs in = make_inputs(5, 40, 30, TimeKind::INT, false);
+    const Inputs in = make_inputs(5, 40, 30, TimeKind::Int, false);
     const DataFrame none_l = in.left.slice(0, 0);
     const DataFrame none_r = in.right.slice(0, 0);
     for (const AsofDirection dir :
@@ -253,7 +253,7 @@ TEST_CASE("asof with an empty side") {
 }
 
 TEST_CASE("asof refuses what the eager op refuses") {
-    const Inputs in = make_inputs(3, 10, 10, TimeKind::INT, false);
+    const Inputs in = make_inputs(3, 10, 10, TimeKind::Int, false);
     const LazyFrame left = budgeted(in.left, SMALL_BUDGET);
     CHECK_THROWS_AS(
         left.asof(in.right.lazy(), "ts", {}, AsofDirection::Backward, -1.0),
@@ -261,11 +261,11 @@ TEST_CASE("asof refuses what the eager op refuses") {
     CHECK_THROWS_AS(
         left.asof(in.right.lazy(), "nope", {}, AsofDirection::Backward),
         std::out_of_range);
-    const Inputs fl = make_inputs(3, 10, 10, TimeKind::FLOAT, false);
+    const Inputs fl = make_inputs(3, 10, 10, TimeKind::Float, false);
     CHECK_THROWS_AS(
         left.asof(fl.right.lazy(), "ts", {}, AsofDirection::Backward),
         std::invalid_argument);
-    const Inputs text = make_inputs(3, 10, 10, TimeKind::INT, true);
+    const Inputs text = make_inputs(3, 10, 10, TimeKind::Int, true);
     CHECK_THROWS_AS(
         budgeted(text.left, SMALL_BUDGET)
             .asof(text.right.lazy(), "g", {}, AsofDirection::Backward),
@@ -395,7 +395,7 @@ TEST_CASE("interval with an empty side") {
 
 TEST_CASE(
     "without a budget both plans are collected and the rows are the same") {
-    const Inputs in = make_inputs(8, 120, 90, TimeKind::INT, false);
+    const Inputs in = make_inputs(8, 120, 90, TimeKind::Int, false);
     const DataFrame eager = dataframe::asof(in.left, in.right, "ts", {"g"},
                                             AsofDirection::Nearest, 4.0);
     expect_same(morsels(in.left.lazy().asof(in.right.lazy(), "ts", {"g"},

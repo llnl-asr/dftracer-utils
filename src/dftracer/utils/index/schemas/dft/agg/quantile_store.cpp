@@ -95,7 +95,7 @@ void QuantileStore::destroy() noexcept {
 
 void QuantileStore::to_sketch(const double* extra, std::size_t n) {
     if (sketch_mode_) return;
-    auto sketch = dstd::make_unique<dataframe::MergeSketch>(accuracy_);
+    auto fresh = dstd::make_unique<dataframe::MergeSketch>(accuracy_);
     // The exact values and the head of `extra` share one block, so the bins are
     // sized once.
     double head[BLOCK];
@@ -106,10 +106,10 @@ void QuantileStore::to_sketch(const double* extra, std::size_t n) {
         if (extra[used] == extra[used]) head[m++] = extra[used];
         ++used;
     }
-    feed_block(*sketch, head, m);
-    feed(*sketch, extra + used, n - used);
+    feed_block(*fresh, head, m);
+    feed(*fresh, extra + used, n - used);
     exact_.~ExactVec();
-    new (&sketch_) SketchPtr(std::move(sketch));
+    new (&sketch_) SketchPtr(std::move(fresh));
     sketch_mode_ = true;
 }
 

@@ -384,7 +384,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                 common::unwrap(dstd::fs::exists(dstd::PathView(
                     dftracer::utils::index::store_dir(trusted_index_path))))) {
                 if (summary_mode) {
-                    common::ScopedTimer _rt(stages, "root_summary_read");
+                    common::ScopedTimer rt(stages, "root_summary_read");
                     auto root_result =
                         co_await load_root_info_summary(trusted_index_path);
 
@@ -420,12 +420,12 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                 }
 
                 {
-                    common::ScopedTimer _lr(stages, "load_registry");
+                    common::ScopedTimer lr(stages, "load_registry");
                     load_cached_files(trusted_index_path, files,
                                       indexed_groups[trusted_index_path]);
                 }
             } else {
-                common::ScopedTimer _ds(stages, "scan_and_resolve");
+                common::ScopedTimer ds(stages, "scan_and_resolve");
                 Resolver resolver;
                 auto input = dstd::make_unique<ResolverInput>();
                 input->directory = directory;
@@ -439,7 +439,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                 files_needing_index = std::move(result.needs_checkpoint);
             }
         } else {
-            common::ScopedTimer _rs(stages, "resolve_index_state");
+            common::ScopedTimer rs(stages, "resolve_index_state");
             co_await ensure_indexes_fresh("", cli_files, index_dir,
                                           force_rebuild);
             Resolver resolver;
@@ -495,7 +495,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                                         indexed_groups);
 
         if (!indexed_groups.empty()) {
-            common::ScopedTimer _t2(stages, "newly_indexed_batch_read");
+            common::ScopedTimer t2(stages, "newly_indexed_batch_read");
             co_await coro::with_scope([&](coro::Scope& scope)
                                           -> coro::CoroTask<void> {
                 auto* all_results_ptr = &all_results;

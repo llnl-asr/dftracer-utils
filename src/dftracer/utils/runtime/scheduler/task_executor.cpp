@@ -7,12 +7,12 @@
 
 namespace dftracer::utils {
 
-static thread_local void* tls_current_worker_context = nullptr;
+static thread_local void* t_current_worker_context = nullptr;
 
-void* get_current_worker_context() { return tls_current_worker_context; }
+void* get_current_worker_context() { return t_current_worker_context; }
 
 void set_current_worker_context(void* context) {
-    tls_current_worker_context = context;
+    t_current_worker_context = context;
 }
 
 void TaskExecutor::set_current_backend(TaskExecutor* executor) noexcept {

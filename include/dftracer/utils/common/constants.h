@@ -142,7 +142,7 @@ static constexpr std::size_t INFLATE_BUFFER_SIZE = 262144;  ///< 256KB
 #endif
 static constexpr std::uint64_t DEFAULT_CHECKPOINT_SIZE =
     32 * 1024 * 1024;  ///< 32MB
-inline const char* EXTENSION = ".dftindex";
+inline constexpr const char* EXTENSION = ".dftindex";
 }  // namespace indexer
 
 namespace reader {

@@ -199,8 +199,8 @@ SchemaSpec schema_spec() {
     static_assert(std::is_aggregate_v<T>, "a schema class is an aggregate");
     SchemaSpec spec;
     spec.id = dstd::String(T::id);
-    if constexpr (requires { typename T::extends; })
-        spec.extends = dstd::String(T::extends::id);
+    if constexpr (requires { typename T::Extends; })
+        spec.extends = dstd::String(T::Extends::id);
     if constexpr (requires { T::SOURCE; })
         spec.source = dstd::String(T::SOURCE);
     detail::record_fields<T>(

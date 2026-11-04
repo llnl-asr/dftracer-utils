@@ -34,19 +34,19 @@ constexpr Support C = Support::Computes;
 constexpr Support R = Support::Refuses;
 
 enum Op {
-    OP_SORT_MULTI,
-    OP_UNIQUE,
-    OP_TO_DUMMIES,
-    OP_PIVOT,
-    OP_UNPIVOT_CONCAT,
-    OP_COUNT_,
+    OpSortMulti,
+    OpUnique,
+    OpToDummies,
+    OpPivot,
+    OpUnpivotConcat,
+    OpCount,
 };
 
 struct TypeRow {
     TypeId id;
     Series (*build)();         // {third, first, second, first}: 3 distinct
     Series (*build_needle)();  // the value rows 1 and 3 share
-    Support ops[OP_COUNT_];
+    Support ops[OpCount];
     double expect_sum;         // sum of build(), for the unpivot concat check
 };
 
@@ -193,7 +193,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
             dstd::Vector<std::int64_t> ids{0, 1, 2, 3};
             df.columns.push_back(Series::flat_i64(ids.data(), 4));
 
-            if (row.ops[OP_SORT_MULTI] == Support::Refuses) {
+            if (row.ops[OpSortMulti] == Support::Refuses) {
                 CHECK_THROWS_AS(df.sort_by_multi({"k"}, false),
                                 std::invalid_argument);
                 continue;
@@ -214,7 +214,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         for (const TypeRow& row : TYPE_ROWS) {
             INFO(dstd::String(type_name(row.id)));
             DataFrame df = frame_of("k", row.build());
-            if (row.ops[OP_UNIQUE] == Support::Refuses) {
+            if (row.ops[OpUnique] == Support::Refuses) {
                 CHECK_THROWS_AS(df.unique(), std::invalid_argument);
                 continue;
             }
@@ -235,7 +235,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         for (const TypeRow& row : TYPE_ROWS) {
             INFO(dstd::String(type_name(row.id)));
             DataFrame df = frame_of("k", row.build());
-            if (row.ops[OP_TO_DUMMIES] == Support::Refuses) {
+            if (row.ops[OpToDummies] == Support::Refuses) {
                 CHECK_THROWS_AS(df.to_dummies("k"), std::invalid_argument);
                 continue;
             }
@@ -267,7 +267,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
             df.columns.push_back(Series::flat_i64(on.data(), 4));
             df.columns.push_back(Series::flat_i64(val.data(), 4));
 
-            if (row.ops[OP_PIVOT] == Support::Refuses) {
+            if (row.ops[OpPivot] == Support::Refuses) {
                 CHECK_THROWS_AS(df.pivot("idx", "on", "val", "first"),
                                 std::invalid_argument);
                 continue;
@@ -305,7 +305,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
             df.columns.push_back(row.build().share());
             df.columns.push_back(row.build().share());
 
-            if (row.ops[OP_UNPIVOT_CONCAT] == Support::Refuses) {
+            if (row.ops[OpUnpivotConcat] == Support::Refuses) {
                 CHECK_THROWS_AS(df.unpivot({"id"}, {"v1", "v2"}),
                                 std::invalid_argument);
                 continue;

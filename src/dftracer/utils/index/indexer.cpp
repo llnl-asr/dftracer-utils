@@ -14,7 +14,6 @@
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/utilities/filesystem/types.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>
@@ -26,6 +25,7 @@
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/utilities/filesystem/types.h>
 
 #include <cstdio>
 #include <utility>

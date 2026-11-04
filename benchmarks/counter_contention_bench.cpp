@@ -96,10 +96,10 @@ constexpr std::array<std::size_t, 5> FULL_THREADS{1, 8, 32, 64, 128};
 constexpr std::array<std::size_t, 2> SMOKE_THREADS{1, 8};
 
 enum class Variant : std::uint8_t {
-    SHARED_ATOMIC,
-    PER_THREAD,
-    REMOTE_CAS_PER_FREE,
-    REMOTE_BUFFERED,
+    SharedAtomic,
+    PerThread,
+    RemoteCasPerFree,
+    RemoteBuffered,
 };
 
 struct VariantInfo {
@@ -108,10 +108,10 @@ struct VariantInfo {
 };
 
 constexpr VariantInfo VARIANTS[] = {
-    {Variant::SHARED_ATOMIC, "a shared atomic"},
-    {Variant::PER_THREAD, "b per-thread 64K"},
-    {Variant::REMOTE_CAS_PER_FREE, "c CAS per free"},
-    {Variant::REMOTE_BUFFERED, "c buffer of 64"},
+    {Variant::SharedAtomic, "a shared atomic"},
+    {Variant::PerThread, "b per-thread 64K"},
+    {Variant::RemoteCasPerFree, "c CAS per free"},
+    {Variant::RemoteBuffered, "c buffer of 64"},
 };
 
 struct alignas(CACHE_LINE) ThreadStats {
@@ -450,25 +450,25 @@ RunResult run_once(Variant v, std::size_t threads, const SizeTables& tables,
     RunResult r;
     double ns = 0;
     switch (v) {
-        case Variant::SHARED_ATOMIC:
+        case Variant::SharedAtomic:
             ns = time_threads(threads, [&](std::size_t t) {
                 counter_worker(SharedCounter(shared), tables.table[t], pairs,
                                stats[t]);
             });
             break;
-        case Variant::PER_THREAD:
+        case Variant::PerThread:
             ns = time_threads(threads, [&](std::size_t t) {
                 counter_worker(BatchedCounter(shared), tables.table[t], pairs,
                                stats[t]);
             });
             break;
-        case Variant::REMOTE_CAS_PER_FREE:
-        case Variant::REMOTE_BUFFERED: {
+        case Variant::RemoteCasPerFree:
+        case Variant::RemoteBuffered: {
             const std::size_t groups = std::min(threads, MAX_GROUPS);
             const std::size_t rounds = pairs / (SLICE * groups);
             RemoteShared sh(threads, SLICE * groups);
             ns = time_threads(threads, [&](std::size_t t) {
-                if (v == Variant::REMOTE_BUFFERED)
+                if (v == Variant::RemoteBuffered)
                     remote_worker<true>(sh, t, threads, groups, tables.table[t],
                                         rounds, stats[t]);
                 else
@@ -489,7 +489,7 @@ RunResult run_once(Variant v, std::size_t threads, const SizeTables& tables,
                            static_cast<double>(threads) /
                            static_cast<double>(pairs);
     const bool remote =
-        v == Variant::REMOTE_CAS_PER_FREE || v == Variant::REMOTE_BUFFERED;
+        v == Variant::RemoteCasPerFree || v == Variant::RemoteBuffered;
     r.counter_end = remote ? static_cast<std::int64_t>(r.allocated - r.freed)
                            : shared.value.load(std::memory_order_relaxed);
     return r;
@@ -533,8 +533,8 @@ int main(int argc, char** argv) {
                 tables.bytes_per_pass * sizes.tables_per_thread;
             for (std::size_t vi = 0; vi < std::size(VARIANTS); ++vi) {
                 const bool remote =
-                    VARIANTS[vi].id == Variant::REMOTE_CAS_PER_FREE ||
-                    VARIANTS[vi].id == Variant::REMOTE_BUFFERED;
+                    VARIANTS[vi].id == Variant::RemoteCasPerFree ||
+                    VARIANTS[vi].id == Variant::RemoteBuffered;
                 dstd::Vector<double> ns;
                 dstd::Vector<double> ns_round;
                 for (std::size_t run = 0; run < sizes.runs; ++run) {

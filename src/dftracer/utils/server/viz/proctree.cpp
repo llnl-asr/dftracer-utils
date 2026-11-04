@@ -70,8 +70,8 @@ struct ProcNode {
     const dstd::String* label;
 };
 
-template <typename builder_type>
-void tag_invoke(simdjson::serialize_tag, builder_type& b, const ProcNode& n) {
+template <typename BuilderType>
+void tag_invoke(simdjson::serialize_tag, BuilderType& b, const ProcNode& n) {
     b.start_object();
     b.append_key_value("pid", n.pid);
     b.append_comma();

@@ -25,8 +25,8 @@ struct ParkNode {
         : cancel(c),
           waiter(w),
           cancelled(false),
-          prev(nullptr),
-          next(nullptr) {}
+          prev_(nullptr),
+          next_(nullptr) {}
 
     ParkCancelFn cancel;
     void* waiter;
@@ -35,8 +35,8 @@ struct ParkNode {
 
    private:
     friend class ParkRegistry;
-    ParkNode* prev;
-    ParkNode* next;
+    ParkNode* prev_;
+    ParkNode* next_;
 };
 
 /// The waiters of one executor. Thread-safe.
@@ -53,8 +53,8 @@ class ParkRegistry {
         if (n == nullptr) return nullptr;
         Shard& s = shard_of(*n);
         std::lock_guard<std::mutex> lock(s.mutex);
-        n->next = s.head;
-        if (s.head) s.head->prev = n;
+        n->next_ = s.head;
+        if (s.head) s.head->prev_ = n;
         s.head = n;
         s.size.store(s.size.load(std::memory_order_relaxed) + 1,
                      std::memory_order_release);
@@ -68,12 +68,12 @@ class ParkRegistry {
         Shard& s = shard_of(*n);
         {
             std::lock_guard<std::mutex> lock(s.mutex);
-            if (n->prev) {
-                n->prev->next = n->next;
+            if (n->prev_) {
+                n->prev_->next_ = n->next_;
             } else {
-                s.head = n->next;
+                s.head = n->next_;
             }
-            if (n->next) n->next->prev = n->prev;
+            if (n->next_) n->next_->prev_ = n->prev_;
             s.size.store(s.size.load(std::memory_order_relaxed) - 1,
                          std::memory_order_release);
         }
@@ -86,7 +86,7 @@ class ParkRegistry {
         for (Shard& s : shards_) {
             if (s.size.load(std::memory_order_acquire) == 0) continue;
             std::lock_guard<std::mutex> lock(s.mutex);
-            for (ParkNode* n = s.head; n; n = n->next) {
+            for (ParkNode* n = s.head; n; n = n->next_) {
                 n->cancel(n->waiter);
             }
         }

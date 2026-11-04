@@ -29,8 +29,8 @@ struct Line {
     std::size_t line_number;  ///< 1-based line number
 
     Line() : line_number(0) {}
-    Line(dstd::StringView content_, std::size_t line_number_)
-        : content(content_), line_number(line_number_) {}
+    Line(dstd::StringView text, std::size_t number)
+        : content(text), line_number(number) {}
 
     bool empty() const { return content.empty(); }
     std::size_t size() const { return content.size(); }
@@ -59,12 +59,12 @@ struct LineReadInput {
 
     LineReadInput() : start_line(0), end_line(0) {}
 
-    LineReadInput(dstd::StringView file_path_, dstd::StringView idx_path_,
-                  std::size_t start_line_, std::size_t end_line_)
-        : file_path(file_path_),
-          index_path(idx_path_),
-          start_line(start_line_),
-          end_line(end_line_) {}
+    LineReadInput(dstd::StringView path, dstd::StringView idx_path,
+                  std::size_t first_line, std::size_t last_line)
+        : file_path(path),
+          index_path(idx_path),
+          start_line(first_line),
+          end_line(last_line) {}
 
     static LineReadInput from_file(dstd::StringView path) {
         LineReadInput input;

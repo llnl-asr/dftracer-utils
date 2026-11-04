@@ -186,16 +186,16 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                 return false;
             }
 
-            if constexpr (requires(Promise& p) { p.awaiting_async_ = true; }) {
-                h.promise().awaiting_async_ = true;
+            if constexpr (requires(Promise& p) { p.awaiting_async = true; }) {
+                h.promise().awaiting_async = true;
             }
 
             if constexpr (requires(Promise& p) {
                               p.get_root_promise();
-                              p.get_root_promise()->awaiting_async_ = true;
+                              p.get_root_promise()->awaiting_async = true;
                           }) {
                 auto* root = h.promise().get_root_promise();
-                if (root) root->awaiting_async_ = true;
+                if (root) root->awaiting_async = true;
                 waiter_.executor = detail::resume_executor_for(
                     root ? root->get_executor() : nullptr);
             } else {
@@ -236,14 +236,14 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                     sender_executor = sender_waiter->executor;
                 } else if (channel_->is_terminal_locked()) {
                     result_ = dstd::nullopt;
-                    h.promise().awaiting_async_ = false;
+                    h.promise().awaiting_async = false;
                     if constexpr (requires(Promise& p) {
                                       p.get_root_promise();
-                                      p.get_root_promise()->awaiting_async_ =
+                                      p.get_root_promise()->awaiting_async =
                                           false;
                                   }) {
                         if (auto* root = h.promise().get_root_promise()) {
-                            root->awaiting_async_ = false;
+                            root->awaiting_async = false;
                         }
                     }
                     return false;
@@ -274,25 +274,25 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                         channel_->cv_writable_.notify_one();
                     }
                 }
-                h.promise().awaiting_async_ = false;
+                h.promise().awaiting_async = false;
                 if constexpr (requires(Promise& p) {
                                   p.get_root_promise();
-                                  p.get_root_promise()->awaiting_async_ = false;
+                                  p.get_root_promise()->awaiting_async = false;
                               }) {
                     if (auto* root = h.promise().get_root_promise()) {
-                        root->awaiting_async_ = false;
+                        root->awaiting_async = false;
                     }
                 }
                 return false;
             }
 
-            h.promise().awaiting_async_ = false;
+            h.promise().awaiting_async = false;
             if constexpr (requires(Promise& p) {
                               p.get_root_promise();
-                              p.get_root_promise()->awaiting_async_ = false;
+                              p.get_root_promise()->awaiting_async = false;
                           }) {
                 if (auto* root = h.promise().get_root_promise()) {
-                    root->awaiting_async_ = false;
+                    root->awaiting_async = false;
                 }
             }
 
@@ -376,16 +376,16 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                 return false;
             }
 
-            if constexpr (requires(Promise& p) { p.awaiting_async_ = true; }) {
-                h.promise().awaiting_async_ = true;
+            if constexpr (requires(Promise& p) { p.awaiting_async = true; }) {
+                h.promise().awaiting_async = true;
             }
 
             if constexpr (requires(Promise& p) {
                               p.get_root_promise();
-                              p.get_root_promise()->awaiting_async_ = true;
+                              p.get_root_promise()->awaiting_async = true;
                           }) {
                 auto* root = h.promise().get_root_promise();
-                if (root) root->awaiting_async_ = true;
+                if (root) root->awaiting_async = true;
                 waiter_.executor = detail::resume_executor_for(
                     root ? root->get_executor() : nullptr);
             } else {
@@ -403,14 +403,14 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                     sent_ = false;
                     if constexpr (requires(Promise& p) {
                                       p.get_root_promise();
-                                      p.get_root_promise()->awaiting_async_ =
+                                      p.get_root_promise()->awaiting_async =
                                           false;
                                   }) {
                         if (auto* root = h.promise().get_root_promise()) {
-                            root->awaiting_async_ = false;
+                            root->awaiting_async = false;
                         }
                     }
-                    h.promise().awaiting_async_ = false;
+                    h.promise().awaiting_async = false;
                     return false;
                 }
 
@@ -426,14 +426,14 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
                     if constexpr (requires(Promise& p) {
                                       p.get_root_promise();
-                                      p.get_root_promise()->awaiting_async_ =
+                                      p.get_root_promise()->awaiting_async =
                                           false;
                                   }) {
                         if (auto* root = h.promise().get_root_promise()) {
-                            root->awaiting_async_ = false;
+                            root->awaiting_async = false;
                         }
                     }
-                    h.promise().awaiting_async_ = false;
+                    h.promise().awaiting_async = false;
                 } else {
                     if (channel_->capacity_ != SIZE_MAX &&
                         channel_->available_slots_ == 0) {
@@ -461,14 +461,14 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
                     if constexpr (requires(Promise& p) {
                                       p.get_root_promise();
-                                      p.get_root_promise()->awaiting_async_ =
+                                      p.get_root_promise()->awaiting_async =
                                           false;
                                   }) {
                         if (auto* root = h.promise().get_root_promise()) {
-                            root->awaiting_async_ = false;
+                            root->awaiting_async = false;
                         }
                     }
-                    h.promise().awaiting_async_ = false;
+                    h.promise().awaiting_async = false;
                 }
             }
 

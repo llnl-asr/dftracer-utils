@@ -250,8 +250,9 @@ int32_t dftu_series_group_by(const dftu_series* keys, const dftu_series* values,
     if (!g.keys) return 0;
     *out_keys = g.keys;
     std::int32_t n = 0;
-    DF_NUMERIC_DISPATCH(values->type, aggregate, *values, g.group_of,
-                        g.num_groups, op_mask, out_values, max_values, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(values->type, aggregate, *values,
+                                    g.group_of, g.num_groups, op_mask,
+                                    out_values, max_values, n)
     return n;
 }
 

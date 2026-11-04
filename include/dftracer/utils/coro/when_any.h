@@ -137,7 +137,7 @@ struct WhenAnySharedState : detail::WhenAnyCompletionState {
 
     explicit WhenAnySharedState(dstd::Vector<Awaitable> aws)
         : awaitables(std::move(aws)) {
-        wrappers_total_ = awaitables.size();
+        wrappers_total = awaitables.size();
         cancellation_tokens.reserve(awaitables.size());
 
         for (auto& awaitable : awaitables) {
@@ -210,18 +210,18 @@ class WhenAnyAwaitable {
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
-        state_->awaiting_coroutine_ = h;
+        state_->awaiting_coroutine = h;
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            state_->executor_ = root->get_executor();
+            state_->executor = root->get_executor();
         }
 
         if (state_->awaitables.empty()) {
             return false;
         }
 
-        while (!state_->claims.exhausted(state_->wrappers_total_)) {
+        while (!state_->claims.exhausted(state_->wrappers_total)) {
             launch_wrapper();
         }
 
@@ -234,7 +234,7 @@ class WhenAnyAwaitable {
         // this frame, so h.promise() must not be accessed afterward.
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            root->awaiting_async_ = true;
+            root->awaiting_async = true;
         }
 
         state_->mark_suspended_and_check_completion();
@@ -262,7 +262,7 @@ class WhenAnyAwaitable {
                 const std::size_t index = state->claims.claim();
                 // Not awaitables.size(): the awaiter clears the vector after
                 // the last child reports in.
-                if (index >= state->wrappers_total_) co_return;
+                if (index >= state->wrappers_total) co_return;
                 if (state->completed.load(std::memory_order_acquire) &&
                     detail::never_started(state->awaitables[index])) {
                     state->on_wrapper_finished();
@@ -310,7 +310,7 @@ class WhenAnyAwaitable {
 
         // Set executor on the Coro's promise so FinalAwaiter can
         // schedule deferred destruction via the worker's TLS list.
-        wrapper.handle().promise().executor = state_->executor_;
+        wrapper.handle().promise().executor = state_->executor;
         // Release ownership: the executor manages the frame from
         // now on.  FinalAwaiter will see released==true and schedule
         // deferred destruction when the wrapper completes.
@@ -455,9 +455,9 @@ struct WhenAnyTupleResult {
 
 template <typename... Awaitables>
 struct WhenAnyTupleState : detail::WhenAnyCompletionState {
-    static constexpr std::size_t total_ = sizeof...(Awaitables);
+    static constexpr std::size_t TOTAL = sizeof...(Awaitables);
 
-    dstd::Optional<dstd::Tuple<Awaitables...>> awaitables_;
+    dstd::Optional<dstd::Tuple<Awaitables...>> awaitables;
     std::atomic<bool> completed{false};
     WhenAnyTupleResult<Awaitables...> result;
     std::exception_ptr exception;
@@ -465,9 +465,9 @@ struct WhenAnyTupleState : detail::WhenAnyCompletionState {
     dstd::Vector<dstd::SharedPtr<std::atomic<bool>>> cancellation_tokens;
 
     explicit WhenAnyTupleState(Awaitables&&... aws)
-        : awaitables_(std::in_place, std::forward<Awaitables>(aws)...) {
-        wrappers_total_ = total_;
-        cancellation_tokens.reserve(total_);
+        : awaitables(std::in_place, std::forward<Awaitables>(aws)...) {
+        wrappers_total = TOTAL;
+        cancellation_tokens.reserve(TOTAL);
         std::apply(
             [this](auto&... a) {
                 (
@@ -483,7 +483,7 @@ struct WhenAnyTupleState : detail::WhenAnyCompletionState {
                     }(a),
                     ...);
             },
-            *awaitables_);
+            *awaitables);
     }
 
     /// True for the first wrapper to call, which then owns the result.
@@ -503,7 +503,7 @@ struct WhenAnyTupleState : detail::WhenAnyCompletionState {
     void record_winner() {
         result.index = I;
 
-        result.remaining_cancellation_tokens_.reserve(total_ - 1);
+        result.remaining_cancellation_tokens_.reserve(TOTAL - 1);
         for (std::size_t j = 0; j < cancellation_tokens.size(); ++j) {
             if (j != I && cancellation_tokens[j]) {
                 result.remaining_cancellation_tokens_.push_back(
@@ -516,7 +516,7 @@ struct WhenAnyTupleState : detail::WhenAnyCompletionState {
     template <std::size_t I>
     void finish_winner(std::exception_ptr* error) noexcept {
         if (error != nullptr) exception = std::move(*error);
-        cancel_losers(I, std::make_index_sequence<total_>{});
+        cancel_losers(I, std::make_index_sequence<TOTAL>{});
         on_first_complete();
     }
 
@@ -533,10 +533,10 @@ struct WhenAnyTupleState : detail::WhenAnyCompletionState {
                 }
                 if (Is != winner) {
                     if constexpr (requires {
-                                      std::get<Is>(*awaitables_).cancel();
+                                      std::get<Is>(*awaitables).cancel();
                                   }) {
                         try {
-                            std::get<Is>(*awaitables_).cancel();
+                            std::get<Is>(*awaitables).cancel();
                         } catch (...) {
                             if (!exception)
                                 exception = std::current_exception();
@@ -560,13 +560,13 @@ class WhenAnyTupleAwaitable {
         using A = std::tuple_element_t<I, dstd::Tuple<Awaitables...>>;
         auto wrapper = [](dstd::SharedPtr<State> state) -> coro::detail::Coro {
             if (state->completed.load(std::memory_order_acquire) &&
-                detail::never_started(std::get<I>(*state->awaitables_))) {
+                detail::never_started(std::get<I>(*state->awaitables))) {
                 state->on_wrapper_finished();
                 co_return;
             }
             bool won = false;
             try {
-                detail::CancelAware<A> aware{std::get<I>(*state->awaitables_)};
+                detail::CancelAware<A> aware{std::get<I>(*state->awaitables)};
                 auto outcome = co_await aware;
                 won = state->claim();
                 if (won) {
@@ -588,7 +588,7 @@ class WhenAnyTupleAwaitable {
             co_return;
         }(state_);
 
-        wrapper.handle().promise().executor = state_->executor_;
+        wrapper.handle().promise().executor = state_->executor;
         auto h = wrapper.release();
         h.resume();
     }
@@ -610,11 +610,11 @@ class WhenAnyTupleAwaitable {
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
-        state_->awaiting_coroutine_ = h;
+        state_->awaiting_coroutine = h;
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            state_->executor_ = root->get_executor();
+            state_->executor = root->get_executor();
         }
 
         launch_all(std::make_index_sequence<sizeof...(Awaitables)>{});
@@ -625,7 +625,7 @@ class WhenAnyTupleAwaitable {
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            root->awaiting_async_ = true;
+            root->awaiting_async = true;
         }
 
         state_->mark_suspended_and_check_completion();
@@ -635,7 +635,7 @@ class WhenAnyTupleAwaitable {
 
     result_type await_resume() {
         state_->finish_wait();
-        state_->awaitables_.reset();
+        state_->awaitables.reset();
         if (state_->exception) {
             common::rethrow_and_clear(state_->exception);
         }

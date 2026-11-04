@@ -175,8 +175,8 @@ struct NodeVt {
     static void destroy(void* self) { delete static_cast<NodeBox<N>*>(self); }
 
     static const dftu_node_vt* vt() {
-        static const dftu_node_vt v = {output_schema, open, destroy};
-        return &v;
+        static const dftu_node_vt VT = {output_schema, open, destroy};
+        return &VT;
     }
 };
 

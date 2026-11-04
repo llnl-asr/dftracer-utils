@@ -41,8 +41,8 @@ class Generator {
      * Promise type for coroutine
      */
     struct promise_type {
-        dstd::Optional<T> current_value_;
-        std::exception_ptr exception_;
+        dstd::Optional<T> current_value;
+        std::exception_ptr exception;
 
         /**
          * Create Generator from promise
@@ -66,7 +66,7 @@ class Generator {
          * Store yielded value
          */
         std::suspend_always yield_value(T value) {
-            current_value_ = std::move(value);
+            current_value = std::move(value);
             return {};
         }
 
@@ -78,7 +78,7 @@ class Generator {
         /**
          * Capture exception
          */
-        void unhandled_exception() { exception_ = std::current_exception(); }
+        void unhandled_exception() { exception = std::current_exception(); }
     };
 
     /**
@@ -107,8 +107,8 @@ class Generator {
         iterator& operator++() {
             if (handle_ && !handle_.done()) {
                 handle_.resume();
-                if (handle_.promise().exception_) {
-                    common::rethrow_and_clear(handle_.promise().exception_);
+                if (handle_.promise().exception) {
+                    common::rethrow_and_clear(handle_.promise().exception);
                 }
             }
             return *this;
@@ -127,12 +127,12 @@ class Generator {
          * Dereference iterator
          */
         reference operator*() const {
-            if (!handle_ || !handle_.promise().current_value_) {
+            if (!handle_ || !handle_.promise().current_value) {
                 throw common::DFTUtilsException(
                     common::ErrorCode::InvalidArgument,
                     "Generator iterator: no value available");
             }
-            return *handle_.promise().current_value_;
+            return *handle_.promise().current_value;
         }
 
         /**
@@ -206,8 +206,8 @@ class Generator {
 
         handle_.resume();
 
-        if (handle_.promise().exception_) {
-            common::rethrow_and_clear(handle_.promise().exception_);
+        if (handle_.promise().exception) {
+            common::rethrow_and_clear(handle_.promise().exception);
         }
 
         if (handle_.done()) {
@@ -233,8 +233,8 @@ class Generator {
 
         handle_.resume();
 
-        if (handle_.promise().exception_) {
-            common::rethrow_and_clear(handle_.promise().exception_);
+        if (handle_.promise().exception) {
+            common::rethrow_and_clear(handle_.promise().exception);
         }
 
         return !handle_.done();
@@ -245,11 +245,11 @@ class Generator {
      * @throws std::runtime_error if no value available
      */
     const T& value() const {
-        if (!handle_ || !handle_.promise().current_value_) {
+        if (!handle_ || !handle_.promise().current_value) {
             throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
                                             "Generator: no value available");
         }
-        return *handle_.promise().current_value_;
+        return *handle_.promise().current_value;
     }
 
     /**
@@ -261,15 +261,15 @@ class Generator {
      * Check if generator has pending exception
      */
     bool has_exception() const {
-        return handle_ && handle_.promise().exception_ != nullptr;
+        return handle_ && handle_.promise().exception != nullptr;
     }
 
     /**
      * Rethrow pending exception
      */
     void rethrow_if_exception() {
-        if (handle_ && handle_.promise().exception_) {
-            common::rethrow_and_clear(handle_.promise().exception_);
+        if (handle_ && handle_.promise().exception) {
+            common::rethrow_and_clear(handle_.promise().exception);
         }
     }
 };

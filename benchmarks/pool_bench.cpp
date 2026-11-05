@@ -150,8 +150,9 @@ Outcome relay(const Config& config, Runtime& rt) {
     std::atomic<std::uint64_t> counted{0};
     dstd::Vector<dstd::UniquePtr<coro::AsyncSemaphore>> gates;
     for (std::size_t i = 0; i < HOPS; ++i) {
-        gates.push_back(
-            dstd::make_unique<coro::AsyncSemaphore>(i == 0 ? 1 : 0));
+        gates.push_back(dstd::make_unique<coro::AsyncSemaphore>(1));
+        // A capacity of zero would clamp every acquire to nothing.
+        if (i != 0 && !gates.back()->try_acquire(1)) return {};
     }
     rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {

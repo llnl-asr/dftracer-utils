@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <coroutine>
+#include <cstdint>
 #include <exception>
 #include <mutex>
 #include <string>
@@ -93,6 +94,11 @@ void ThreadPoolExecutor::start() {
         auto worker = dstd::make_unique<WorkerContext>(
             next_worker_id_.fetch_add(1, std::memory_order_relaxed));
         worker->last_activity = std::chrono::steady_clock::now();
+        worker->owner = this;
+        {
+            std::lock_guard<std::mutex> lock(workers_mutex_);
+            worker->core = acquire_core();
+        }
         workers_.push_back(std::move(worker));
     }
     live_workers_.store(workers_.size(), std::memory_order_release);
@@ -164,11 +170,13 @@ void ThreadPoolExecutor::shutdown() {
         }
     }
 
+    // Every worker moved its queues here before it exited.
     {
-        RunQueueEntry orphan;
-        while (run_queue_.try_dequeue(orphan)) {
-            if (orphan.handle) {
-                orphan.handle.destroy();
+        void* orphans[INJECT_BATCH_MAX];
+        while (const std::size_t count =
+                   inject_.pop_batch(orphans, INJECT_BATCH_MAX)) {
+            for (std::size_t i = 0; i < count; ++i) {
+                std::coroutine_handle<>::from_address(orphans[i]).destroy();
             }
         }
     }
@@ -176,6 +184,11 @@ void ThreadPoolExecutor::shutdown() {
     {
         std::lock_guard<std::mutex> workers_lock(workers_mutex_);
         workers_.clear();
+        core_count_.store(0, std::memory_order_release);
+        core_list_.store(nullptr, std::memory_order_release);
+        free_cores_.clear();
+        cores_.clear();
+        core_lists_.clear();
     }
     live_workers_.store(0, std::memory_order_release);
     timer_service_.stop();
@@ -222,7 +235,7 @@ void ThreadPoolExecutor::quiesce() {
     for (;;) {
         if (live_workers_.load(std::memory_order_acquire) == 0) return;
         if (io_backend_) io_backend_->flush();
-        bool busy = run_queue_.size_approx() != 0;
+        bool busy = pending_tasks(true) != 0;
         if (!busy) {
             std::lock_guard<std::mutex> lock(workers_mutex_);
             for (const auto& worker : workers_) {
@@ -238,7 +251,7 @@ void ThreadPoolExecutor::quiesce() {
             // Counted before the queue is read again: a completion enqueues
             // before it stops counting.
             busy = busy || (io_backend_ && io_backend_->in_flight() != 0) ||
-                   run_queue_.size_approx() != 0;
+                   pending_tasks(true) != 0;
         }
         if (!busy) return;
         std::this_thread::sleep_for(std::chrono::microseconds(200));
@@ -257,6 +270,8 @@ bool ThreadPoolExecutor::spawn_worker(std::size_t cap, bool best_effort) {
     auto worker = dstd::make_unique<WorkerContext>(
         next_worker_id_.fetch_add(1, std::memory_order_relaxed));
     worker->last_activity = std::chrono::steady_clock::now();
+    worker->owner = this;
+    worker->core = acquire_core();
     WorkerContext* ptr = worker.get();
     workers_.push_back(std::move(worker));
     live_workers_.fetch_add(1, std::memory_order_acq_rel);
@@ -283,6 +298,8 @@ void ThreadPoolExecutor::retire_worker() {
     victim->retire.store(true, std::memory_order_release);
     wake_all_workers();  // wake it if parked so it observes retire
     if (victim->thread.joinable()) victim->thread.join();
+    std::lock_guard<std::mutex> lock(workers_mutex_);
+    free_cores_.push_back(victim->core);
     // victim (and its WorkerContext) is destroyed here, after the join.
 }
 
@@ -319,8 +336,8 @@ void ThreadPoolExecutor::release_permit(WorkerContext* ctx) {
 void ThreadPoolExecutor::ensure_running_worker() {
     // A permit-waiter will take the freed slot; no need to spawn.
     if (permit_waiters_.load(std::memory_order_acquire) > 0) return;
-    if (idle_workers_.load(std::memory_order_acquire) > 0) {
-        wake_one_worker();
+    if (idle_workers_.load(std::memory_order_acquire) > 0 &&
+        wake_sleeper(true)) {
         return;
     }
     const std::size_t justified =
@@ -335,6 +352,8 @@ void ThreadPoolExecutor::ensure_running_worker() {
 void ThreadPoolExecutor::enter_blocking() {
     auto* ctx = static_cast<WorkerContext*>(current_worker_context());
     if (!ctx || !ctx->holds_permit) return;
+    // No thief takes from the LIFO slot and this thread stops running it.
+    flush_lifo(*ctx->core);
     ctx->blocking_since_ns.store(common::steady_now_ns(),
                                  std::memory_order_relaxed);
     ctx->blk_state.store(BLK_SYSCALL, std::memory_order_release);
@@ -366,20 +385,27 @@ void ThreadPoolExecutor::exit_blocking() {
 void ThreadPoolExecutor::sysmon_loop() {
     while (running_.load(std::memory_order_acquire)) {
         {
+            // Asleep only with nothing to watch. A worker that stops being idle
+            // and one that enters a blocking region both wake it.
             std::unique_lock<std::mutex> lock(sysmon_mutex_);
-            if (blocked_workers_.load(std::memory_order_acquire) == 0) {
-                // Park until a worker enters a blocking region or we shut down;
-                // both notify under sysmon_mutex_, so there is no wakeup to
-                // miss and no need to poll.
-                sysmon_cv_.wait(lock, [this] {
-                    return blocked_workers_.load(std::memory_order_acquire) >
-                               0 ||
-                           !running_.load(std::memory_order_acquire);
-                });
-            }
+            sysmon_parked_.store(true, std::memory_order_seq_cst);
+            sysmon_cv_.wait(lock, [this] {
+                return blocked_workers_.load(std::memory_order_acquire) > 0 ||
+                       idle_workers_.load(std::memory_order_seq_cst) +
+                               parked_drivers_.load(std::memory_order_seq_cst) <
+                           live_workers_.load(std::memory_order_seq_cst) ||
+                       !running_.load(std::memory_order_acquire);
+            });
+            sysmon_parked_.store(false, std::memory_order_relaxed);
         }
         if (!running_.load(std::memory_order_acquire)) break;
-        if (blocked_workers_.load(std::memory_order_acquire) == 0) continue;
+
+        check_lifo_stalls();
+        if (blocked_workers_.load(std::memory_order_acquire) == 0) {
+            std::this_thread::sleep_for(
+                std::chrono::nanoseconds(LIFO_CHECK_NS));
+            continue;
+        }
 
         const std::int64_t now = common::steady_now_ns();
         int handed = 0;
@@ -408,6 +434,34 @@ void ThreadPoolExecutor::sysmon_loop() {
         for (int i = 0; i < handed; ++i) ensure_running_worker();
         std::this_thread::sleep_for(std::chrono::nanoseconds(BLOCK_HANDOFF_NS));
     }
+}
+
+void ThreadPoolExecutor::check_lifo_stalls() noexcept {
+    const std::size_t count = core_count_.load(std::memory_order_acquire);
+    Core* const* list = core_list_.load(std::memory_order_acquire);
+    bool moved = false;
+    for (std::size_t i = 0; i < count; ++i) {
+        Core& core = *list[i];
+        void* task = core.lifo.load(std::memory_order_acquire);
+        if (task != nullptr && task == core.lifo_seen) {
+            lifo_in_transit_.fetch_add(1, std::memory_order_seq_cst);
+            if (core.lifo.compare_exchange_strong(task, nullptr,
+                                                  std::memory_order_acq_rel)) {
+                inject_.push(task);
+                moved = true;
+                task = nullptr;
+            }
+            lifo_in_transit_.fetch_sub(1, std::memory_order_seq_cst);
+        }
+        core.lifo_seen = task;
+    }
+    if (moved) notify();
+}
+
+void ThreadPoolExecutor::wake_sysmon_if_parked() {
+    if (!sysmon_parked_.load(std::memory_order_seq_cst)) return;
+    std::lock_guard<std::mutex> lock(sysmon_mutex_);
+    sysmon_cv_.notify_one();
 }
 
 void ThreadPoolExecutor::set_threads(std::size_t threads,
@@ -485,14 +539,14 @@ void ThreadPoolExecutor::monitor_loop() {
             break;
         }
 
-        if (run_queue_.size_approx() > 0 ||
+        if (pending_tasks(false) > 0 ||
             idle_workers_.load(std::memory_order_acquire) <
                 live_workers_.load(std::memory_order_acquire)) {
             last_busy = Clock::now();
         }
         // Grow: spawn until the backlog is covered or we hit the cap - all at
         // once, so a burst reaches full parallelism in one wake.
-        while (run_queue_.size_approx() > 0 &&
+        while (pending_tasks(false) > 0 &&
                live_workers_.load(std::memory_order_acquire) <
                    thread_count_.load(std::memory_order_acquire)) {
             add_worker();
@@ -519,11 +573,10 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     coro::CurrentScope current_scope{*this};
     set_current_backend(this);
     coro::reset_timeslice();
-
-    // Grows while idle so the pool is not polling, resets on work found.
-    std::chrono::milliseconds idle_park = IDLE_PARK_MIN;
+    wake_sysmon_if_parked();
 
     memory::Pool& general = memory::detail::Manager::get().general();
+    Core& core = *context->core;
 
     // Fixed for the process lifetime; read once to keep the resume loop cheap.
     const bool monitor = coro::detail::monitoring_enabled();
@@ -531,11 +584,13 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
         coro::detail::monitor_set_worker(static_cast<int>(context->worker_id));
     }
 
+    bool marked_idle = false;
     while (running_ && !context->retire.load(std::memory_order_acquire)) {
         // A cap that shrank leaves the count below zero, so a holder gives its
         // permit back before its next task.
         if (context->holds_permit &&
             permits_.load(std::memory_order_relaxed) < 0) {
+            flush_lifo(core);
             release_permit(context);
         }
         // Hold a permit to run; a surplus thread (live > cap) parks for a slot.
@@ -544,110 +599,71 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
             context->holds_permit = true;
         }
 
-        RunQueueEntry pending_entry;
-
-        const std::uint64_t observed_signal =
-            work_signal_.load(std::memory_order_acquire);
-
-        // Run queue: coroutine handles from enqueue() and post().
-        // Busy before the dequeue, so quiesce() never sees an empty queue
-        // and an idle worker while this worker holds an entry.
-        context->is_idle.store(false, std::memory_order_seq_cst);
-        if (run_queue_.try_dequeue(pending_entry)) {
-            idle_park = IDLE_PARK_MIN;
-            coro::reset_timeslice();
-            context->resumes.store(
-                context->resumes.load(std::memory_order_relaxed) + 1,
-                std::memory_order_relaxed);
-            std::coroutine_handle<> pending_resume = pending_entry.handle;
-            if (pending_resume && !pending_resume.done()) {
-                // Id comes from the entry, not the promise: foreign promise
-                // types have no task_id field.
-                common::TaskIndex tid = pending_entry.task_id;
-                if (tid >= 0) {
-                    std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-                    auto it = task_registry_.find(tid);
-                    if (it != task_registry_.end() &&
-                        it->second.state == TaskState::Queued) {
-                        it->second.state = TaskState::Running;
-                        it->second.started_at =
-                            std::chrono::steady_clock::now();
-                        it->second.worker_id = context->worker_id;
-                        it->second.location = TaskLocation::Executing;
-                    }
-                }
-                DFTRACER_UTILS_TSAN_ACQUIRE(pending_resume.address());
-                if (monitor) {
-                    coro::detail::monitor_resume_begin(
-                        pending_entry.monitor_id);
-                }
-                {
-                    // Our coroutines enter their own pool. Anything else
-                    // charges the general pool.
-                    memory::detail::Scope scope{general, nullptr};
-                    coro::resume_on(*this, pending_resume);
-                }
-                if (monitor) {
-                    coro::detail::monitor_resume_end(pending_resume.address(),
-                                                     pending_resume.done());
-                }
-            }
-            // A batch held until this worker idles would wait behind a later
-            // slice that blocks, so ops submitted in this slice start now.
-            if (io_backend_) io_backend_->flush();
-            // Destroy coroutine frames that FinalAwaiter deferred to this
-            // thread.  Safe: resume() has fully returned, so the frame
-            // is suspended at final_suspend and no code references it.
-            coro::drain_thread_local_destroys();
+        // Busy before the dequeue, so quiesce() never sees an empty queue and
+        // an idle worker while this worker holds a task.
+        if (marked_idle) {
+            context->is_idle.store(false, std::memory_order_seq_cst);
+            marked_idle = false;
         }
-        // No work available -- sleep until signaled.
-        else {
-            context->is_idle.store(true, std::memory_order_relaxed);
-            // Flush any batched I/O operations before sleeping.
+
+        void* task = next_task(core);
+        if (task == nullptr) {
             if (io_backend_) {
                 io_backend_->flush();
-            }
-            // Opportunistic I/O polling before sleeping
-            if (io_backend_) {
-                auto reaped = io_backend_->poll(0);
-                if (reaped > 0) {
+                // A flush can complete an op inline, which posts to this core.
+                if (io_backend_->poll(0) > 0 ||
+                    core.lifo.load(std::memory_order_relaxed) != nullptr ||
+                    core.queue.size_approx() != 0) {
                     continue;
                 }
             }
-            if (!running_.load(std::memory_order_acquire) ||
-                context->retire.load(std::memory_order_acquire)) {
-                break;
-            }
-            // Give up the permit for a waiting/surplus thread, then park.
-            release_permit(context);
-            idle_workers_.fetch_add(1, std::memory_order_acq_rel);
-            // One idle worker at a time backs off from the short park. The rest
-            // re-check once after IDLE_PARK_MIN to cover a missed wakeup, then
-            // park long.
-            const bool poller =
-                !idle_poller_.exchange(true, std::memory_order_acq_rel);
-            bool idle_long = false;
-            {
-                std::unique_lock<std::mutex> lock(idle_mutex_);
-                if (work_signal_.load(std::memory_order_acquire) !=
-                        observed_signal ||
-                    idle_cv_.wait_for(lock, idle_park) !=
-                        std::cv_status::timeout) {
-                    idle_park = IDLE_PARK_MIN;
-                } else {
-                    idle_long = idle_park == IDLE_PARK_MAX;
-                    if (!poller)
-                        idle_park = IDLE_PARK_MAX;
-                    else if (idle_park < IDLE_PARK_MAX)
-                        idle_park *= 2;
+            if (try_start_searching(context)) task = steal_task(core);
+            if (task == nullptr) {
+                if (!running_.load(std::memory_order_acquire) ||
+                    context->retire.load(std::memory_order_acquire)) {
+                    break;
                 }
+                marked_idle = true;
+                park_worker(context);
+                continue;
             }
-            // Only this thread may purge its heap, so an idle worker gives its
-            // freed pages back itself.
-            if (idle_long) memory::detail::trim_thread();
-            if (poller) idle_poller_.store(false, std::memory_order_release);
-            idle_workers_.fetch_sub(1, std::memory_order_acq_rel);
         }
+        if (context->searching) stop_searching(context);
+
+        coro::reset_timeslice();
+        context->resumes.store(
+            context->resumes.load(std::memory_order_relaxed) + 1,
+            std::memory_order_relaxed);
+        const auto handle = std::coroutine_handle<>::from_address(task);
+        if (!handle.done()) {
+            DFTRACER_UTILS_TSAN_ACQUIRE(task);
+            if (monitor) {
+                coro::detail::monitor_resume_begin(
+                    coro::detail::monitor_enqueue(
+                        task, coro::detail::CoroKind::Spawn));
+            }
+            {
+                // Our coroutines enter their own pool. Anything else charges
+                // the general pool.
+                memory::detail::Scope scope{general, nullptr};
+                coro::resume_on(*this, handle);
+            }
+            if (monitor) {
+                coro::detail::monitor_resume_end(task, handle.done());
+            }
+        }
+        // A batch held until this worker idles would wait behind a later slice
+        // that blocks, so ops submitted in this slice start now.
+        if (io_backend_) io_backend_->flush();
+        // Destroy coroutine frames that FinalAwaiter deferred to this thread.
+        // Safe: resume() has fully returned, so the frame is suspended at
+        // final_suspend and no code references it.
+        coro::drain_thread_local_destroys();
+    }
+
+    if (context->searching) {
+        context->searching = false;
+        searching_.fetch_sub(1, std::memory_order_acq_rel);
     }
 
     // Release the permit if we broke out of the loop still holding it.
@@ -655,6 +671,10 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
 
     // Final drain: destroy any frames deferred during the last resume().
     coro::drain_thread_local_destroys();
+
+    flush_core(core);
+    // A task moved here while the other workers park has no one to run it.
+    notify();
 
     set_current_backend(nullptr);
     set_current_worker_context(nullptr);
@@ -664,22 +684,25 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
 
 bool ThreadPoolExecutor::drive_until(
     dftracer::utils::dstd::FunctionRef<bool()> done) {
+    // Only a worker has a core. @ref coro::drive_to_completion calls this on
+    // the executor of the calling thread, which for this pool is a worker.
+    WorkerContext* ctx = owned_context();
+    if (ctx == nullptr) return false;
+    Core& core = *ctx->core;
     memory::Pool& general = memory::detail::Manager::get().general();
-    // The timeout re-checks the queue for the enqueue that worker_thread's
-    // park comment describes.
+    // The timeout re-checks `done` for a predicate that nobody wakes.
     std::chrono::milliseconds park = IDLE_PARK_MIN;
 
     while (!done()) {
-        const std::uint64_t observed_signal =
-            work_signal_.load(std::memory_order_acquire);
-
-        RunQueueEntry entry;
-        if (run_queue_.try_dequeue(entry)) {
+        void* task = next_task(core);
+        if (task == nullptr) task = steal_task(core);
+        if (task != nullptr) {
             coro::reset_timeslice();
-            if (entry.handle && !entry.handle.done()) {
-                DFTRACER_UTILS_TSAN_ACQUIRE(entry.handle.address());
+            const auto handle = std::coroutine_handle<>::from_address(task);
+            if (!handle.done()) {
+                DFTRACER_UTILS_TSAN_ACQUIRE(task);
                 memory::detail::Scope scope{general, nullptr};
-                coro::resume_on(*this, entry.handle);
+                coro::resume_on(*this, handle);
             }
             coro::drain_thread_local_destroys();
             park = IDLE_PARK_MIN;
@@ -691,7 +714,9 @@ bool ThreadPoolExecutor::drive_until(
 
         if (io_backend_) {
             io_backend_->flush();
-            if (io_backend_->poll(0) > 0) {
+            if (io_backend_->poll(0) > 0 ||
+                core.lifo.load(std::memory_order_relaxed) != nullptr ||
+                core.queue.size_approx() != 0) {
                 park = IDLE_PARK_MIN;
                 continue;
             }
@@ -699,80 +724,302 @@ bool ThreadPoolExecutor::drive_until(
         struct Wait {
             dftracer::utils::dstd::FunctionRef<bool()> done;
             const ThreadPoolExecutor& self;
-            std::uint64_t observed_signal;
-        } wait{done, *this, observed_signal};
+        } wait{done, *this};
+        parked_drivers_.fetch_add(1, std::memory_order_seq_cst);
         const bool woke = coro::park_driver(
             [](void* arg) {
                 const auto& w = *static_cast<const Wait*>(arg);
                 return w.done() ||
                        !w.self.running_.load(std::memory_order_acquire) ||
-                       w.self.work_signal_.load(std::memory_order_acquire) !=
-                           w.observed_signal;
+                       w.self.pending_tasks(false) != 0;
             },
             &wait, park);
+        parked_drivers_.fetch_sub(1, std::memory_order_seq_cst);
+        wake_sysmon_if_parked();
         park = woke ? IDLE_PARK_MIN : std::min(park * 2, IDLE_PARK_MAX);
     }
     coro::drain_thread_local_destroys();
     return true;
 }
 
-void ThreadPoolExecutor::signal_global_work() {
-    work_signal_.fetch_add(1, std::memory_order_acq_rel);
-    wake_one_worker();
+ThreadPoolExecutor::WorkerContext* ThreadPoolExecutor::owned_context()
+    const noexcept {
+    auto* ctx = static_cast<WorkerContext*>(current_worker_context());
+    return ctx != nullptr && ctx->owner == this ? ctx : nullptr;
+}
+
+ThreadPoolExecutor::Core* ThreadPoolExecutor::acquire_core() {
+    if (!free_cores_.empty()) {
+        Core* core = free_cores_.back();
+        free_cores_.pop_back();
+        return core;
+    }
+    // Lives as long as the pool, past the pool scope of whoever made it grow.
+    memory::detail::Scope bookkeeping{memory::detail::Manager::get().general(),
+                                      nullptr};
+    auto core = dstd::make_unique<Core>();
+    core->steal_seed = static_cast<std::uint32_t>(cores_.size() + 1) *
+                       std::uint32_t{0x9E3779B1};
+    const std::size_t count = core_count_.load(std::memory_order_relaxed);
+    if (core_lists_.empty() || count == core_lists_.back().size()) {
+        dstd::Vector<Core*> larger(std::max(CORE_LIST_MIN, count * 2));
+        for (std::size_t i = 0; i < count; ++i) {
+            larger[i] = core_lists_.back()[i];
+        }
+        core_lists_.push_back(std::move(larger));
+        core_list_.store(core_lists_.back().data(), std::memory_order_release);
+    }
+    core_lists_.back()[count] = core.get();
+    core_count_.store(count + 1, std::memory_order_release);
+    cores_.push_back(std::move(core));
+    return cores_.back().get();
+}
+
+void* ThreadPoolExecutor::take_injected(Core& core) {
+    const std::size_t waiting = inject_.size_approx();
+    if (waiting == 0) return nullptr;
+    const std::size_t live =
+        std::max<std::size_t>(live_workers_.load(std::memory_order_relaxed), 1);
+    void* batch[INJECT_BATCH_MAX];
+    const std::size_t count = inject_.pop_batch(
+        batch, std::min(waiting / live + 1, INJECT_BATCH_MAX));
+    if (count == 0) return nullptr;
+    for (std::size_t i = 1; i < count; ++i) {
+        core.queue.push_back(batch[i], inject_);
+    }
+    if (count > 1) notify();
+    return batch[0];
+}
+
+void* ThreadPoolExecutor::next_task(Core& core) {
+    if (++core.tick % INJECT_CHECK_INTERVAL == 0) {
+        if (void* task = take_injected(core)) {
+            core.lifo_streak = 0;
+            return task;
+        }
+    }
+    if (core.lifo_streak < LIFO_STREAK_MAX &&
+        core.lifo.load(std::memory_order_relaxed) != nullptr) {
+        if (void* task =
+                core.lifo.exchange(nullptr, std::memory_order_acq_rel)) {
+            ++core.lifo_streak;
+            return task;
+        }
+    }
+    core.lifo_streak = 0;
+    if (void* task = core.queue.pop()) return task;
+    if (void* task = take_injected(core)) return task;
+    if (core.lifo.load(std::memory_order_relaxed) != nullptr) {
+        return core.lifo.exchange(nullptr, std::memory_order_acq_rel);
+    }
+    return nullptr;
+}
+
+void* ThreadPoolExecutor::steal_task(Core& core) {
+    const std::size_t count = core_count_.load(std::memory_order_acquire);
+    Core* const* list = core_list_.load(std::memory_order_acquire);
+    // xorshift32: a start point only, to spread thieves over the victims.
+    std::uint32_t seed = core.steal_seed;
+    seed ^= seed << 13;
+    seed ^= seed >> 17;
+    seed ^= seed << 5;
+    core.steal_seed = seed;
+    for (int round = 0; round < STEAL_ROUNDS; ++round) {
+        for (std::size_t i = 0; i < count; ++i) {
+            Core* victim = list[(seed + i) % count];
+            if (victim == &core) continue;
+            if (void* task = victim->queue.steal_into(core.queue)) return task;
+        }
+        if (void* task = take_injected(core)) return task;
+    }
+    return nullptr;
+}
+
+bool ThreadPoolExecutor::try_start_searching(WorkerContext* ctx) noexcept {
+    if (ctx->searching) return true;
+    // Half the pool searching finds work as fast as all of it and keeps the
+    // other half from hammering the same queues.
+    if (2 * searching_.load(std::memory_order_relaxed) >=
+        live_workers_.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    ctx->searching = true;
+    searching_.fetch_add(1, std::memory_order_acq_rel);
+    return true;
+}
+
+void ThreadPoolExecutor::stop_searching(WorkerContext* ctx) noexcept {
+    ctx->searching = false;
+    // The last searcher found work, so there may be more: pass the search on.
+    if (searching_.fetch_sub(1, std::memory_order_acq_rel) == 1) notify();
+}
+
+void ThreadPoolExecutor::flush_lifo(Core& core) {
+    if (core.lifo.load(std::memory_order_relaxed) == nullptr) return;
+    if (void* task = core.lifo.exchange(nullptr, std::memory_order_acq_rel)) {
+        core.queue.push_back(task, inject_);
+        notify();
+    }
+}
+
+void ThreadPoolExecutor::flush_core(Core& core) {
+    if (void* task = core.lifo.exchange(nullptr, std::memory_order_acq_rel)) {
+        inject_.push(task);
+    }
+    while (void* task = core.queue.pop()) inject_.push(task);
+}
+
+std::size_t ThreadPoolExecutor::pending_tasks(bool with_lifo) const noexcept {
+    // In the order a task from a LIFO slot moves, so a move cannot pass the
+    // reads unseen.
+    std::size_t total = 0;
+    const std::size_t count = core_count_.load(std::memory_order_acquire);
+    Core* const* list = core_list_.load(std::memory_order_acquire);
+    for (std::size_t i = 0; i < count; ++i) {
+        total += list[i]->queue.size_approx();
+        if (with_lifo && list[i]->lifo.load(std::memory_order_seq_cst)) ++total;
+    }
+    if (with_lifo) total += lifo_in_transit_.load(std::memory_order_seq_cst);
+    return total + inject_.size_approx();
+}
+
+void ThreadPoolExecutor::park_worker(WorkerContext* ctx) {
+    // Give up the permit for a waiting/surplus thread, then park.
+    release_permit(ctx);
+    ctx->is_idle.store(true, std::memory_order_seq_cst);
+    if (ctx->searching) {
+        ctx->searching = false;
+        searching_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    idle_workers_.fetch_add(1, std::memory_order_seq_cst);
+    {
+        memory::detail::Scope bookkeeping{
+            memory::detail::Manager::get().general(), nullptr};
+        std::lock_guard<std::mutex> lock(sleepers_mutex_);
+        ctx->notified = false;
+        sleepers_.push_back(ctx);
+    }
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    const bool work = pending_tasks(false) != 0;
+
+    bool timed_out = false;
+    {
+        std::unique_lock<std::mutex> lock(sleepers_mutex_);
+        const auto keep_waiting = [&] {
+            return !work && !ctx->notified &&
+                   running_.load(std::memory_order_acquire) &&
+                   !ctx->retire.load(std::memory_order_acquire);
+        };
+        while (keep_waiting()) {
+            if (ctx->park_cv.wait_for(lock, IDLE_PARK_MAX) ==
+                std::cv_status::timeout) {
+                timed_out = true;
+                break;
+            }
+        }
+        if (ctx->notified) {
+            ctx->searching = true;
+        } else {
+            auto it = std::find(sleepers_.begin(), sleepers_.end(), ctx);
+            if (it != sleepers_.end()) sleepers_.erase(it);
+        }
+    }
+    idle_workers_.fetch_sub(1, std::memory_order_seq_cst);
+    wake_sysmon_if_parked();
+    // Only this thread may purge its heap, so an idle worker gives its freed
+    // pages back itself.
+    if (timed_out) memory::detail::trim_thread();
+}
+
+bool ThreadPoolExecutor::wake_sleeper(bool force) noexcept {
+    std::lock_guard<std::mutex> lock(sleepers_mutex_);
+    if (sleepers_.empty()) return false;
+    if (!force && searching_.load(std::memory_order_relaxed) > 0) return false;
+    WorkerContext* ctx = sleepers_.back();
+    sleepers_.pop_back();
+    ctx->notified = true;
+    searching_.fetch_add(1, std::memory_order_acq_rel);
+    // Under the lock: past it the worker can exit and its context can go.
+    ctx->park_cv.notify_one();
+    return true;
+}
+
+void ThreadPoolExecutor::notify() noexcept {
+    // Pairs with the fence in park_worker.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    coro::wake_parked_drivers();
+    if (searching_.load(std::memory_order_relaxed) > 0) return;
+    if (idle_workers_.load(std::memory_order_relaxed) > 0) {
+        wake_sleeper(false);
+        return;
+    }
     const std::size_t cap = thread_count_.load(std::memory_order_relaxed);
     if (min_workers_.load(std::memory_order_relaxed) >= cap ||
         live_workers_.load(std::memory_order_relaxed) >= cap) {
         return;
     }
-    // A woken worker counts as idle until it runs, so a burst sent before it
-    // runs never sees zero idle workers; compare the backlog with them too.
-    const std::size_t idle = idle_workers_.load(std::memory_order_acquire);
-    if (idle == 0 || run_queue_.size_approx() > idle) {
-        {
-            std::lock_guard<std::mutex> lock(coord_mutex_);
-            grow_pending_ = true;
-        }
-        coord_cv_.notify_one();
+    {
+        std::lock_guard<std::mutex> lock(coord_mutex_);
+        grow_pending_ = true;
     }
-}
-
-void ThreadPoolExecutor::wake_one_worker() {
-    work_signal_.notify_one();
-    idle_cv_.notify_one();
-    coro::wake_parked_drivers();
+    coord_cv_.notify_one();
 }
 
 void ThreadPoolExecutor::wake_all_workers() {
-    work_signal_.fetch_add(1, std::memory_order_release);
-    work_signal_.notify_all();
-    idle_cv_.notify_all();
+    {
+        std::lock_guard<std::mutex> lock(sleepers_mutex_);
+        for (WorkerContext* ctx : sleepers_) {
+            ctx->notified = true;
+            searching_.fetch_add(1, std::memory_order_acq_rel);
+            ctx->park_cv.notify_one();
+        }
+        sleepers_.clear();
+    }
     coro::wake_parked_drivers();
     // Wake workers parked in acquire_permit so they re-check running_/retire.
     permits_.notify_all();
 }
 
-// Helper function for when_all.h (avoids circular dependency)
+void ThreadPoolExecutor::schedule_foreign(void* task) noexcept {
+    foreign_enqueues_.fetch_add(1, std::memory_order_acq_rel);
+    inject_.push(task);
+    notify();
+    foreign_enqueues_.fetch_sub(1, std::memory_order_release);
+}
 
-void ThreadPoolExecutor::enqueue(std::coroutine_handle<> handle,
-                                 common::TaskIndex task_id) {
-    if (!handle || handle.done()) {
-        return;  // Invalid or already completed
-    }
-
-    long long monitor_id = -1;
+void ThreadPoolExecutor::post(std::coroutine_handle<> handle) noexcept {
+    if (!handle || handle.done()) return;
     if (coro::detail::monitoring_enabled()) {
-        // task_id >= 0 marks a tracked submitted task; otherwise it is spawn
-        // fan-out (or a re-enqueue of an already-seen coroutine).
-        monitor_id = coro::detail::monitor_enqueue(
-            handle.address(), task_id >= 0 ? coro::detail::CoroKind::Task
-                                           : coro::detail::CoroKind::Spawn);
+        coro::detail::monitor_enqueue(handle.address(),
+                                      coro::detail::CoroKind::Spawn);
     }
-    const bool foreign = coro::Executor::current() != this;
-    if (foreign) foreign_enqueues_.fetch_add(1, std::memory_order_acq_rel);
-    DFTRACER_UTILS_TSAN_RELEASE(handle.address());
-    run_queue_.enqueue(RunQueueEntry{handle, task_id, monitor_id});
-    signal_global_work();
-    if (foreign) foreign_enqueues_.fetch_sub(1, std::memory_order_release);
+    void* task = handle.address();
+    DFTRACER_UTILS_TSAN_RELEASE(task);
+    WorkerContext* ctx = owned_context();
+    if (ctx == nullptr) {
+        schedule_foreign(task);
+        return;
+    }
+    Core& core = *ctx->core;
+    // Taken from a slot that was empty, nothing new is stealable, and this
+    // worker runs the task as soon as the running one suspends.
+    void* displaced = core.lifo.exchange(task, std::memory_order_acq_rel);
+    if (displaced == nullptr) return;
+    core.queue.push_back(displaced, inject_);
+    notify();
+}
+
+void ThreadPoolExecutor::post_yield(std::coroutine_handle<> handle) noexcept {
+    if (!handle || handle.done()) return;
+    void* task = handle.address();
+    DFTRACER_UTILS_TSAN_RELEASE(task);
+    WorkerContext* ctx = owned_context();
+    if (ctx == nullptr) {
+        schedule_foreign(task);
+        return;
+    }
+    ctx->core->queue.push_back(task, inject_);
+    notify();
 }
 
 bool ThreadPoolExecutor::is_responsive() const {
@@ -783,7 +1030,7 @@ bool ThreadPoolExecutor::is_responsive() const {
     // Deadlocked means work is pending and no worker has resumed anything for
     // deadlock_timeout_. A task may run for hours while its coroutines resume.
     std::uint64_t resumes = 0;
-    bool busy = run_queue_.size_approx() > 0;
+    bool busy = pending_tasks(true) > 0;
     {
         std::lock_guard<std::mutex> lock(workers_mutex_);
         for (const auto& worker : workers_) {
@@ -870,11 +1117,10 @@ ExecutorProgress ThreadPoolExecutor::progress() const {
                 status.current_task_name = worker->current_task_name;
             }
 
-            status.local_queue_depth = 0;
+            status.local_queue_depth = worker->core->queue.size_approx();
 
             progress.workers.push_back(status);
-            // No per-worker local queues anymore; report 0.
-            progress.worker_queue_depths.push_back(0);
+            progress.worker_queue_depths.push_back(status.local_queue_depth);
         }
     }
 
@@ -970,13 +1216,30 @@ common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
     }
 
     auto handle = coro.release();
-    enqueue(handle, id);
+    if (coro::detail::monitoring_enabled()) {
+        coro::detail::monitor_enqueue(handle.address(),
+                                      coro::detail::CoroKind::Task);
+    }
+    post(handle);
     return id;
 }
 
 common::TaskIndex ThreadPoolExecutor::current_worker_task_id() const {
     auto* ctx = static_cast<WorkerContext*>(current_worker_context());
     return ctx ? ctx->current_task_id.load() : -1;
+}
+
+void ThreadPoolExecutor::mark_coro_started(common::TaskIndex id) {
+    const WorkerContext* ctx = owned_context();
+    std::unique_lock<std::shared_mutex> lock(registry_mutex_);
+    auto it = task_registry_.find(id);
+    if (it == task_registry_.end() || it->second.state != TaskState::Queued) {
+        return;
+    }
+    it->second.state = TaskState::Running;
+    it->second.started_at = std::chrono::steady_clock::now();
+    it->second.location = TaskLocation::Executing;
+    if (ctx != nullptr) it->second.worker_id = ctx->worker_id;
 }
 
 void ThreadPoolExecutor::mark_coro_completed(common::TaskIndex id) {

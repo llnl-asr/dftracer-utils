@@ -9,6 +9,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
@@ -28,7 +29,6 @@ constexpr std::size_t BLOCK = 256;
 // and stands out from anything else the general pool holds.
 constexpr std::size_t BIG_BLOCK = std::size_t{3} << 19;
 constexpr std::size_t ALIGN = 16;
-constexpr int MAX_HOPS = 200;
 constexpr int ROUNDS = 16;
 
 // Resumes the coroutine from a plain thread that has a scope of its own, as an
@@ -38,6 +38,7 @@ struct Hops {
     memory::Pool* enqueuer_pool = nullptr;
     std::mutex mutex;
     std::vector<std::thread> threads;
+    std::atomic<bool> resumed{false};
 
     void join() {
         for (std::thread& t : threads) t.join();
@@ -73,11 +74,33 @@ struct Blocks {
     }
 };
 
+// Holds its worker until the coroutine resumes, so another worker must resume
+// it. A pool wakes the warmest worker, which is often this one.
+struct ResumeOnOtherWorker {
+    Hops& hops;
+
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) {
+        coro::Executor* exec = coro::Executor::current();
+        if (exec == nullptr) std::terminate();
+        Hops& shared = hops;
+        shared.resumed.store(false);
+        {
+            std::lock_guard<std::mutex> lock(shared.mutex);
+            shared.threads.emplace_back([exec, h, pool = shared.enqueuer_pool] {
+                memory::detail::Scope scope{*pool};
+                exec->post(h);
+            });
+        }
+        while (!shared.resumed.load()) std::this_thread::yield();
+    }
+    void await_resume() const noexcept { hops.resumed.store(true); }
+};
+
 CoroTask<void> allocate_across_workers(Blocks* out, Hops* hops) {
     out->held.push_back(memory::detail::allocate(out->size, ALIGN));
     const std::thread::id first = std::this_thread::get_id();
-    for (int i = 0; i < MAX_HOPS && std::this_thread::get_id() == first; ++i)
-        co_await ResumeFromThread{*hops};
+    co_await ResumeOnOtherWorker{*hops};
     out->moved = std::this_thread::get_id() != first;
     out->held.push_back(memory::detail::allocate(out->size, ALIGN));
 }

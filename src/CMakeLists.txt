@@ -128,6 +128,7 @@ set(DFTRACER_UTILS_CORO_SOURCES
 # -----------------------------------------
 
 set(DFTRACER_UTILS_RUNTIME_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/run_queues.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/thread_pool_executor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/task_executor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/watchdog.cpp

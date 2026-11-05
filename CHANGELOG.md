@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Run coroutines on one queue per worker, with stealing between workers, in place of one shared queue.
+  Scheduling is faster, most of all when one worker wakes another task, and an idle pool no longer wakes on a short timer.
 - List every `*.gz` file when a tool, an indexer or a viewer discovers the traces in a folder, and no longer list plain `.pfw`, `.jsonl` or `.ndjson` files, so gzip them first; the Python constant `TRACE_FILE_PATTERNS` becomes `INPUT_FILE_PATTERNS`.
 - Report a failed tool run with the error of the failed step, in place of `[EXECUTION] Pipeline execution failed`, and print `Run failed:` in place of `Pipeline failed:`.
 - Rename the `Pipeline` group of tool flags to `Runtime`. The flags stay.
@@ -310,6 +312,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `coro::Executor::post_yield`, which queues a coroutine that gives up its slice behind the other work of the thread.
 - Add coro stages and adaptors in `coro/stage.h`: the concepts `BatchStage` and `StreamStage`, the adaptors `then`, `recover`, `named`, `timeout`, `limit` and `maybe` that apply with `|`, `either` and `EitherStage`, and `erase` to `DynStage` and `DynStreamStage`.
   `co_await` on a `dstd::Either` of two `CoroTask` gives a `dstd::Either` of their values.
   On a stream, `timeout` bounds the wait for each item through `coro::with_item_timeout`.
@@ -398,6 +401,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove `TaskExecutor::enqueue`. Use `post`.
 - Remove the `--watchdog-idle-timeout` flag, which never had an effect.
 - Remove `runtime/compose.h` with `utilities::op`, `AsyncOpFor` and the `&&` and `||` operators. Use the stages and adaptors of `coro/stage.h`, and `coro::when_all` and `coro::when_any` to run two things at once or to race them.
 - Stop installing the C++ headers `runtime/io/io_backend.h`, `runtime/io/awaitable.h`, `utilities/filesystem/types.h`, `utilities/hash/*.h`, `common/input_stat.h`, `common/intern_table.h` and `dstd/hash/hash.h`, and remove `Indexer::open_scanned`. They are now private to the library.
@@ -453,6 +457,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a data race in `coro::when_any` between a winner that cancels a loser and the start of that loser.
 - Fix a false memory leak report and a failed exit check when a thread flushed its pool counts while a pool closed.
 - Link a static consumer through pkg-config: each library's `.pc` file now requires every library of ours it needs and lists the third-party archives of its `Libs.private`, where `dftracer_utils_utilities` required only the runtime.
 - Fix the row order of a `collect_all` or `TraceSession` plan that promises scan order (a duql pipeline with a stage after the scan, such as `select ... | where ...` or `derive`): it came back in worker order, and now reads on its own in scan order.

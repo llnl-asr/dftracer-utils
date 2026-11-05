@@ -152,7 +152,7 @@ void yield_to_executor(std::coroutine_handle<> h) noexcept {
     auto* exec = Executor::current();
     if (exec) {
         reset_timeslice();
-        exec->post(h);
+        exec->post_yield(h);
     }
 }
 
@@ -170,7 +170,7 @@ std::coroutine_handle<> YieldAwaitable::await_suspend(
     auto* exec = Executor::current();
     if (exec) {
         reset_timeslice();
-        exec->post(h);
+        exec->post_yield(h);
         return std::noop_coroutine();
     }
     // Not on a worker thread.

@@ -8,7 +8,6 @@
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/timer_service.h>
-#include <dftracer/utils/dstd/concurrent_queue.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -18,6 +17,7 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
+#include <dftracer/utils/runtime/scheduler/run_queues.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 
 #include <atomic>
@@ -33,11 +33,45 @@ namespace dftracer::utils {
 
 /// Executes queued coroutine work on a pool of worker threads. Pool size
 /// defaults to hardware_concurrency.
+///
+/// Scheduling design after the Go runtime scheduler,
+/// https://github.com/golang/go (BSD-3-Clause), file src/runtime/proc.go: the
+/// slot for the task woken last, the global queue check every 61 ticks, and a
+/// wake only when no worker is searching. Also after the Tokio multi-thread
+/// scheduler, https://github.com/tokio-rs/tokio (MIT): the inject queue and
+/// the limit of searching workers to half the pool.
 class ThreadPoolExecutor final : public TaskExecutor {
    private:
+    // The run queues of one worker. A retired worker's Core stays in the steal
+    // list and goes to the next worker, so a thief never reads freed memory.
+    struct alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) Core {
+        // The task this worker woke last, run next. Only the owner and the
+        // sysmon take it; thieves leave it, so a wake stays on the warm core.
+        alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) std::atomic<void*> lifo{
+            nullptr};
+        // Sysmon only: the slot's value at its last look.
+        void* lifo_seen = nullptr;
+        // Owner only.
+        std::uint32_t tick = 0;
+        std::uint32_t lifo_streak = 0;
+        std::uint32_t steal_seed = 0;
+        runtime::scheduler::LocalQueue queue;
+    };
+
     // Aligned to avoid false sharing between adjacent workers.
     struct alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) WorkerContext {
         std::size_t worker_id;
+        ThreadPoolExecutor* owner = nullptr;
+        Core* core = nullptr;
+
+        // Counted in searching_. Touched only by this worker's thread, except
+        // that a waker sets it for a parked worker through notified.
+        bool searching{false};
+
+        // Guarded by sleepers_mutex_. A waker sets it and counts this worker
+        // in searching_ when it takes it from sleepers_.
+        bool notified{false};
+        std::condition_variable park_cv;
 
         // Health monitoring for watchdog
         std::atomic<bool> is_idle{false};
@@ -124,8 +158,14 @@ class ThreadPoolExecutor final : public TaskExecutor {
     std::condition_variable coord_cv_;
     bool grow_pending_{false};
 
-    // Global tracking, padded to avoid false sharing between counters
-    // and with work_signal_ below.
+    // Workers parked in drive_until. Their LIFO slots are empty.
+    std::atomic<std::size_t> parked_drivers_{0};
+    // Sysmon asleep with every worker parked and nothing blocking.
+    std::atomic<bool> sysmon_parked_{false};
+    // Tasks the sysmon took from a LIFO slot and has not queued yet.
+    std::atomic<std::size_t> lifo_in_transit_{0};
+
+    // Global tracking, padded to avoid false sharing between counters.
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
         std::atomic<std::size_t> tasks_completed_{0};
     std::atomic<std::size_t> tasks_failed_{0};
@@ -163,35 +203,44 @@ class ThreadPoolExecutor final : public TaskExecutor {
     // Counter for tracked-coro IDs (negative to avoid collision with DAG IDs).
     std::atomic<common::TaskIndex> next_coro_task_id_{-1000000};
 
-    // Run queue entry. -1 means untracked.
-    struct RunQueueEntry {
-        std::coroutine_handle<> handle{};
-        common::TaskIndex task_id{-1};
-        long long monitor_id{-1};  // coroutine monitor id, -1 if untracked
-    };
+    // Every Core ever made, read by thieves without a lock: load the count
+    // first, then the list, which is at least that long. Appended to under
+    // workers_mutex_; a full list is copied to a larger one and stays alive
+    // until shutdown for a thief still reading it.
+    std::atomic<std::size_t> core_count_{0};
+    std::atomic<Core**> core_list_{nullptr};
+    dstd::Vector<dstd::Vector<Core*>> core_lists_;
+    dstd::Vector<dstd::UniquePtr<Core>> cores_;
+    dstd::Vector<Core*> free_cores_;
 
-    dstd::ConcurrentQueue<RunQueueEntry> run_queue_;
+    runtime::scheduler::InjectQueue inject_;
+    // Workers looking for work. A wake is skipped while one is, and the last
+    // one to find work wakes the next.
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
-        std::atomic<std::uint64_t> work_signal_{0};
+        std::atomic<std::size_t> searching_{0};
     // Enqueues from threads outside this pool still running. The handle they
     // queue can finish and let the owner destroy the executor before the
     // enqueue returns, so the destructor waits for this to reach zero.
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
         std::atomic<std::size_t> foreign_enqueues_{0};
 
-    // Idle park. run_queue_ is a moodycamel::ConcurrentQueue whose try_dequeue
-    // can report empty while another producer's item is still in flight, even
-    // after the worker observed that producer's work_signal_ bump, so a wakeup
-    // can be missed with the item already queued. The timeout is therefore
-    // load-bearing, not an optimization: it re-checks the queue so a missed
-    // wakeup self-heals. Do not replace wait_for with an untimed wait. Closing
-    // the race instead would need work_signal_ bumped under idle_mutex_ on the
-    // hot enqueue path, or a semaphore-backed queue.
-    std::mutex idle_mutex_;
-    std::condition_variable idle_cv_;
-    // Set while one idle worker parks on the short backoff. The others park
-    // for IDLE_PARK_MAX.
-    std::atomic<bool> idle_poller_{false};
+    // Parked workers, most recent last, so a wake finds warm caches. The park
+    // publishes itself here, then checks the queues again, and a post publishes
+    // its task, then reads idle_workers_. Each side has a seq_cst fence between
+    // the two, so at least one sees the other and no wake is lost. The timeout
+    // only lets a worker trim its heap.
+    std::mutex sleepers_mutex_;
+    dstd::Vector<WorkerContext*> sleepers_;
+
+    // The inject queue goes first every so many tasks, so tasks there do not
+    // starve behind a busy worker. The value is the one in Go.
+    static constexpr std::uint32_t INJECT_CHECK_INTERVAL = 61;
+    static constexpr std::uint32_t LIFO_STREAK_MAX = 3;
+    static constexpr std::size_t INJECT_BATCH_MAX = 128;
+    static constexpr int STEAL_ROUNDS = 4;
+    static constexpr std::size_t CORE_LIST_MIN = 64;
+    // How often the sysmon looks for a LIFO task behind a long computation.
+    static constexpr std::int64_t LIFO_CHECK_NS = 1000000;
     static constexpr std::chrono::milliseconds IDLE_PARK_MIN{1};
     static constexpr std::chrono::milliseconds IDLE_PARK_MAX{256};
 
@@ -301,16 +350,12 @@ class ThreadPoolExecutor final : public TaskExecutor {
 
     ExecutorProgress progress() const override;
 
-    /// Primary submission path; all lightweight work funnels through here,
-    /// the resume of a combinator included.
-    /// Work: a lock-free queue push and an atomic signal. task_id is a
-    /// tracked-task id for registry progress, or -1 if untracked.
-    void enqueue(std::coroutine_handle<> handle,
-                 common::TaskIndex task_id = -1) override;
+    /// From a worker of this pool the task runs next on that worker. From any
+    /// other thread it goes to the inject queue and wakes a worker.
+    void post(std::coroutine_handle<> handle) noexcept override;
 
-    void post(std::coroutine_handle<> handle) noexcept override {
-        enqueue(handle, -1);
-    }
+    /// Queues behind the other tasks of the calling worker.
+    void post_yield(std::coroutine_handle<> handle) noexcept override;
 
     /// Enqueue a Coro with progress tracking in task_registry_.
     common::TaskIndex enqueue_tracked(
@@ -318,6 +363,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
         dstd::SharedPtr<std::atomic<common::TaskIndex>> tid_out =
             nullptr) override;
 
+    void mark_coro_started(common::TaskIndex id) override;
     void mark_coro_completed(common::TaskIndex id) override;
     void mark_coro_failed(common::TaskIndex id,
                           dstd::StringView message) override;
@@ -343,7 +389,40 @@ class ThreadPoolExecutor final : public TaskExecutor {
 
     TaskProgress task_progress_of(const TaskInfo& info) const;
 
-    void signal_global_work();
+    /// The calling thread's context when it is a worker of this pool.
+    WorkerContext* owned_context() const noexcept;
+
+    void schedule_foreign(void* task) noexcept;
+
+    /// A task became stealable: wake a parked worker unless one is searching.
+    /// The caller has published the task.
+    void notify() noexcept;
+    /// Takes one parked worker and counts it as searching. Without @p force it
+    /// gives up when a worker is searching already.
+    bool wake_sleeper(bool force) noexcept;
+
+    Core* acquire_core();
+
+    /// The next task of @p core's own queues and the inject queue, or null.
+    void* next_task(Core& core);
+    void* take_injected(Core& core);
+    /// Tries every other core, then the inject queue.
+    void* steal_task(Core& core);
+    bool try_start_searching(WorkerContext* ctx) noexcept;
+    void stop_searching(WorkerContext* ctx) noexcept;
+    /// Moves the LIFO task to the local queue, where thieves can reach it.
+    void flush_lifo(Core& core);
+    /// Moves everything in @p core to the inject queue for a worker that exits.
+    void flush_core(Core& core);
+    /// Tasks in every queue, the LIFO slots too when @p with_lifo is set. May
+    /// be stale.
+    std::size_t pending_tasks(bool with_lifo) const noexcept;
+    /// Parks until woken, retired or stopped.
+    void park_worker(WorkerContext* ctx);
+    /// A LIFO task whose worker stayed in one resume for a whole tick goes to
+    /// the inject queue, for a worker that can run it.
+    void check_lifo_stalls() noexcept;
+    void wake_sysmon_if_parked();
 
     /// Acquire a run permit for `ctx`, parking on the permit futex until one is
     /// free. Returns false without a permit if the worker should exit (shutdown
@@ -359,8 +438,6 @@ class ThreadPoolExecutor final : public TaskExecutor {
     /// Spawn one worker if live < `cap`. Returns true if spawned. Takes
     /// workers_mutex_; best_effort uses try_lock and gives up on contention.
     bool spawn_worker(std::size_t cap, bool best_effort = false);
-
-    void wake_one_worker();
 
     void wake_all_workers();
 

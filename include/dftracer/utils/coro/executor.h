@@ -31,6 +31,10 @@ class Executor {
     /// inline and never fails.
     virtual void post(std::coroutine_handle<> h) noexcept = 0;
 
+    /// Queues @p h for a coroutine that gives up its time slice, so work
+    /// already waiting on this thread runs first. Default: @ref post.
+    virtual void post_yield(std::coroutine_handle<> h) noexcept { post(h); }
+
     /// Runs this executor's work on the calling thread until @p done holds.
     /// False when this executor cannot lend the calling thread.
     ///

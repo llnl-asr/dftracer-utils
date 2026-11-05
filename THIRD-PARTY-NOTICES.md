@@ -84,6 +84,13 @@ Copyright 2021 Datadog, Inc.
 This product includes software developed at Datadog (https://www.datadoghq.com/).
 ```
 
+The designs below were ported to C++ from the source of these projects. No file
+was copied.
+
+- `src/dftracer/utils/runtime/scheduler/run_queues.h` and `run_queues.cpp` take the algorithm of the work-stealing queue in [Tokio](https://github.com/tokio-rs/tokio) under `MIT`, Copyright (c) Tokio Contributors.
+- `src/dftracer/utils/runtime/scheduler/thread_pool_executor.cpp` takes its wake and fairness rules from the [Go](https://github.com/golang/go) runtime scheduler under `BSD-3-Clause`, Copyright 2009 The Go Authors, and from the Tokio scheduler.
+- `include/dftracer/utils/coro/detail/channel_queue.h` takes the bounded ring and its mark bit from [crossbeam-channel](https://github.com/crossbeam-rs/crossbeam) under `MIT OR Apache-2.0`, itself after the bounded MPMC queue of Dmitry Vyukov.
+
 ## Test-only dependencies
 
 Not linked into the distributed libraries or wheels; used only when building the

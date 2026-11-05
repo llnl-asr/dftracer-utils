@@ -134,20 +134,9 @@ class TaskExecutor : public coro::Executor {
     virtual void start() = 0;
     virtual void shutdown() = 0;
 
-    /// Queues @p handle as untracked work: the @ref coro::Executor::post of
-    /// this executor shape. A task the runtime tracks goes through
-    /// @ref enqueue with its task id. A final subclass overrides it to skip
-    /// the second virtual call.
-    void post(std::coroutine_handle<> handle) noexcept override {
-        enqueue(handle, -1);
-    }
-
-    /// Primary submission path; all lightweight work funnels through here.
-    /// Work: a queue push and an atomic signal. task_id is a tracked-task id
-    /// for registry progress, or -1 if untracked.
-    virtual void enqueue(std::coroutine_handle<> handle,
-                         common::TaskIndex task_id = -1) = 0;
-
+    /// Records tracked task @p id as running on the calling worker. Called
+    /// once, when the task first runs.
+    virtual void mark_coro_started(common::TaskIndex id) = 0;
     /// Records tracked task @p id as finished. Called once, from the worker
     /// that ends it.
     virtual void mark_coro_completed(common::TaskIndex id) = 0;

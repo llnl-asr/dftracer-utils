@@ -173,7 +173,7 @@ include = [
 ]
 
 [tool.ty.overrides.rules]
-unresolved-import = "ignore"
+import-not-found = "ignore"
 unresolved-attribute = "ignore"
 unused-ignore-comment = "ignore"
 

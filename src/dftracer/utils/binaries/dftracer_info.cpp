@@ -27,7 +27,6 @@
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <mutex>
 

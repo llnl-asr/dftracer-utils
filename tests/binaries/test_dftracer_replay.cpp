@@ -728,9 +728,12 @@ TEST_SUITE("DFTracerReplay") {
         dstd::Path trace_dir = temp_dir / "traces";
         REQUIRE(dstd::fs::create_directories(trace_dir).has_value());
 
-        create_sample_trace(dstd::String((trace_dir / "trace1.pfw").str()), 3);
-        create_sample_trace(dstd::String((trace_dir / "trace2.pfw").str()), 3);
-        create_sample_trace(dstd::String((trace_dir / "trace3.pfw").str()), 3);
+        create_sample_trace(dstd::String((trace_dir / "trace1.pfw.gz").str()),
+                            3);
+        create_sample_trace(dstd::String((trace_dir / "trace2.pfw.gz").str()),
+                            3);
+        create_sample_trace(dstd::String((trace_dir / "trace3.pfw.gz").str()),
+                            3);
 
         int rc =
             run_replay(binary, {"--dry-run", dstd::String(trace_dir.str())});

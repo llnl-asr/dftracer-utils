@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
@@ -7,22 +8,21 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_executor.h>
-#include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <sys/stat.h>
 #include <testing_utilities.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdio>
@@ -59,16 +59,25 @@ dstd::String write_small_trace(const dstd::String& dir, int n) {
     return dftu_utils_test::write_gz_trace(dir + name, out);
 }
 
-dstd::Vector<utilities::filesystem::FileEntry> scan_dir(dstd::StringView dir) {
-    dstd::Vector<utilities::filesystem::FileEntry> entries;
+runtime::fs::FindOptions input_options(bool with_stat) {
+    runtime::fs::FindOptions options;
+    options.patterns =
+        runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
+    options.with_stat = with_stat;
+    return options;
+}
+
+dstd::Vector<runtime::fs::FoundFile> scan_dir(dstd::StringView dir) {
+    dstd::Vector<runtime::fs::FoundFile> entries;
     Runtime rt(4);
-    auto task = coro::with_scope([&](coro::Scope& scope)
-                                     -> coro::CoroTask<void> {
-        utilities::filesystem::PatternDirectoryScannerUtility scanner;
-        const utilities::filesystem::PatternDirectoryScannerUtilityInput input(
-            dir, dstd::Vector<dstd::String>{".pfw"}, true);
-        entries = co_await scanner(scope, input);
-    });
+    auto task =
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            runtime::fs::FindOptions options = input_options(true);
+            auto found = co_await runtime::fs::find_all(
+                scope, dstd::PathView(dir), std::move(options));
+            REQUIRE(found.has_value());
+            entries = std::move(*found);
+        });
     rt.submit(std::move(task), "scan-dir").wait();
     rt.shutdown();
     return entries;
@@ -76,17 +85,15 @@ dstd::Vector<utilities::filesystem::FileEntry> scan_dir(dstd::StringView dir) {
 
 // The scan as the CLIs run it, from a coroutine that get() drives on the main
 // thread.
-coro::CoroTask<dstd::Vector<utilities::filesystem::FileEntry>> cli_scan_task(
+coro::CoroTask<dstd::Vector<runtime::fs::FoundFile>> cli_scan_task(
     dstd::String dir) {
-    auto entries = utilities::filesystem::scan_on_pool<
-        utilities::filesystem::PatternDirectoryScannerUtility>(
-        WORKERS, 2,
-        utilities::filesystem::PatternDirectoryScannerUtilityInput(
-            std::move(dir), dstd::Vector<dstd::String>{".pfw"}, true, false));
-    co_return entries;
+    auto found = runtime::fs::find_all_on_pool(WORKERS, 2, dstd::PathView(dir),
+                                               input_options(true));
+    REQUIRE(found.has_value());
+    co_return std::move(*found);
 }
 
-dstd::Vector<utilities::filesystem::FileEntry> cli_scan(dstd::StringView dir) {
+dstd::Vector<runtime::fs::FoundFile> cli_scan(dstd::StringView dir) {
     return cli_scan_task(dstd::String(dir)).get();
 }
 
@@ -151,34 +158,33 @@ TEST_SUITE("SerialStages") {
         const dstd::String dir = env.dir() + "/scan";
         REQUIRE(dstd::fs::create_directories(dir + "/sub").has_value());
         for (int i = 0; i < SCAN_FILES; ++i)
-            write_sized_file(dir + "/f" + dstd::to_string(i) + ".pfw",
+            write_sized_file(dir + "/f" + dstd::to_string(i) + ".pfw.gz",
                              static_cast<std::size_t>(i) * 7 + 1);
         for (int i = 0; i < NESTED_FILES; ++i)
-            write_sized_file(dir + "/sub/n" + dstd::to_string(i) + ".pfw",
+            write_sized_file(dir + "/sub/n" + dstd::to_string(i) + ".pfw.gz",
                              static_cast<std::size_t>(i) + 100);
         write_sized_file(dir + "/skip.txt", 5);
 
         dstd::Vector<dstd::String> expected;
         for (const auto& e : dftu_utils_test::list_dir(dir))
             if ((e.kind == dstd::fs::FileKind::File) &&
-                e.path.view().extension() == ".pfw")
+                e.path.view().extension() == ".gz")
                 expected.push_back(dstd::String(e.path.str()));
         for (const auto& e : dftu_utils_test::list_dir(dir + "/sub"))
             expected.push_back(dstd::String(e.path.str()));
+        std::sort(expected.begin(), expected.end());
 
-        const auto before = utilities::filesystem::scan_stat_batches().load();
+        const auto before = runtime::fs::stat_batch_count();
         const auto entries = scan_dir(dir);
-        const auto batches =
-            utilities::filesystem::scan_stat_batches().load() - before;
+        const auto batches = runtime::fs::stat_batch_count() - before;
 
         REQUIRE(entries.size() == expected.size());
         CHECK(entries.size() == SCAN_FILES + NESTED_FILES);
         for (std::size_t i = 0; i < entries.size(); ++i) {
             CHECK(entries[i].path.str() == expected[i]);
-            CHECK(entries[i].is_regular_file);
             CHECK(entries[i].size ==
                   dstd::fs::file_size(entries[i].path.c_str()).value());
-            CHECK(entries[i].mtime > 0);
+            CHECK(entries[i].mtime_ns > 0);
         }
         CHECK(batches > 2);
     }
@@ -189,19 +195,18 @@ TEST_SUITE("SerialStages") {
         REQUIRE(dstd::fs::create_directories(dir + "/a").has_value());
         REQUIRE(dstd::fs::create_directories(dir + "/b").has_value());
         for (int i = 0; i < SCAN_FILES; ++i)
-            write_sized_file(
-                dir + (i % 2 ? "/a/f" : "/b/f") + dstd::to_string(i) + ".pfw",
-                static_cast<std::size_t>(i) + 1);
+            write_sized_file(dir + (i % 2 ? "/a/f" : "/b/f") +
+                                 dstd::to_string(i) + ".pfw.gz",
+                             static_cast<std::size_t>(i) + 1);
 
-        utilities::filesystem::scan_stat_threads().clear();
+        runtime::fs::reset_stat_threads();
         // A CLI drives its run coroutine with get() on the main thread, with
         // no executor running there but the main run loop.
         const auto entries = cli_scan(dir);
 
         CHECK(entries.size() == SCAN_FILES);
-        CHECK(utilities::filesystem::scan_stat_threads().count() >= 1);
-        CHECK_FALSE(utilities::filesystem::scan_stat_threads().contains(
-            dstd::Thread::current_id()));
+        CHECK(runtime::fs::stat_thread_count() >= 1);
+        CHECK_FALSE(runtime::fs::has_run_stat_batch());
     }
 
     TEST_CASE("a bootstrap that fails midway marks only complete files") {

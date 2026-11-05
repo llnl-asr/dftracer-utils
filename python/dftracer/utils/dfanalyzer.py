@@ -13,6 +13,7 @@ freezes the set so a rename or removal is caught here. Everything else
 
 from __future__ import annotations
 
+import fnmatch
 import glob
 import json
 import os
@@ -42,7 +43,7 @@ from .dask import (
     distributed_index,
     register_auto_thread_plugin,
 )
-from .dftracer_utils_ext import TRACE_FILE_PATTERNS
+from .dftracer_utils_ext import INPUT_FILE_PATTERNS
 from .indexer import AggregationConfig, _open_readonly_indexer
 
 if TYPE_CHECKING:
@@ -477,7 +478,11 @@ def resolve_trace_inputs(
     """
     if not os.path.isdir(trace_path):
         matched = glob.glob(trace_path) if "*" in trace_path else [trace_path]
-        files = [f for f in matched if f.endswith(TRACE_FILE_PATTERNS)]
+        files = [
+            f
+            for f in matched
+            if any(fnmatch.fnmatchcase(os.path.basename(f), p) for p in INPUT_FILE_PATTERNS)
+        ]
         return "", files
 
     manifest_path = os.path.join(trace_path, "manifest.json")
@@ -505,8 +510,8 @@ def resolve_trace_inputs(
     files: List[str] = []
     for g in selected:
         subdir = os.path.join(trace_path, group_map[g])
-        for suffix in TRACE_FILE_PATTERNS:
-            files.extend(glob.glob(os.path.join(subdir, "*" + suffix)))
+        for pattern in INPUT_FILE_PATTERNS:
+            files.extend(glob.glob(os.path.join(subdir, pattern)))
     return "", files
 
 

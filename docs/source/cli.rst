@@ -171,7 +171,7 @@ dftracer_split
 **Options:**
 
 - ``--app-name <name>`` - Application name for output files (default: app)
-- ``<path>...`` - Positional inputs, trace files and a folder mixed. Input directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``), read with all of its subfolders (default: .)
+- ``<path>...`` - Positional inputs, trace files and a folder mixed. Input directory containing gzip trace files (every ``*.gz`` file), read with all of its subfolders (default: .)
 - ``-o, --output <dir>`` - Output directory for split files (default: ./split)
 - ``--chunk-size <bytes>`` - Output file size, approximate **compressed** on-disk size, with a unit (default: 4MB, e.g. ``512KB``, ``4MB``)
 - ``--compress`` - Compress output files with gzip (a value-less flag;
@@ -377,7 +377,7 @@ dftracer_stats
 
 **Options:**
 
-- ``<path>...`` - Positional inputs, trace files and a folder mixed. Directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``), read with all of its subfolders (default: .)
+- ``<path>...`` - Positional inputs, trace files and a folder mixed. Directory containing gzip trace files (every ``*.gz`` file), read with all of its subfolders (default: .)
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
 - ``--report <type>`` - Report type: summary, categories, names, pid_tids, time_range, duration, top-names, top-categories, detailed (default: summary)
 - ``--top-n <count>`` - Number of results for top-N queries (0=show all, default: 0)
@@ -421,7 +421,7 @@ dftracer_view
 
 **Options:**
 
-- ``<path>...`` - Positional inputs, trace files and a folder mixed. Directory scanned recursively for gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``)
+- ``<path>...`` - Positional inputs, trace files and a folder mixed. Directory scanned recursively for gzip trace files (every ``*.gz`` file)
 - ``--preset <name>`` - Predefined view: io, compute, dlio
 - ``--recipe <path>`` - Custom view JSON file path
 - ``--save-recipe <path>`` - Save the constructed view to a JSON file
@@ -515,7 +515,7 @@ dftracer_index
 
 **Options:**
 
-- ``<path>...`` - Positional inputs, trace files and a folder mixed. Input directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``), read with all of its subfolders (default: .)
+- ``<path>...`` - Positional inputs, trace files and a folder mixed. Input directory containing gzip trace files (every ``*.gz`` file), read with all of its subfolders (default: .)
 - ``--dimensions <dims>`` - Comma-separated args fields to index by name, nested ones included (e.g., level,mode,io.size)
 - ``--schema <id>`` - Record schema of every trace: a registered id, such as ``dftracer`` or ``generic`` (default: detected per file from its first lines)
 - ``--memory-budget <bytes>`` - Bytes the build may hold at once; a file starts when its expected bytes fit, so past the budget fewer files run at a time, and large files spill to disk; each worker holds at least 8 MiB of the output it has not committed, in half of the budget, so a budget of 64 MB or less runs at most 4 workers (default: 0 = about a third of available memory; accepts units such as 512MB)

@@ -283,7 +283,7 @@ TEST_SUITE("DFTracerIndex") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        const dstd::String plain = env.dir() + "/plain.pfw";
+        const dstd::String plain = env.dir() + "/plain.pfw.gz";
         write_plain_pfw(plain);
 
         dftu_utils_test::set_test_library_path(binary);
@@ -291,7 +291,7 @@ TEST_SUITE("DFTracerIndex") {
         const dstd::String out = dftu_utils_test::run_process_capture(
             binary, {env.dir(), "--force"}, true, &rc);
         CHECK(rc != 0);
-        CHECK(out.find("plain.pfw") != dstd::String::npos);
+        CHECK(out.find("plain.pfw.gz") != dstd::String::npos);
         CHECK(out.find("is not gzip") != dstd::String::npos);
     }
 
@@ -307,7 +307,7 @@ TEST_SUITE("DFTracerIndex") {
 
         auto good = create_pfw_gz(env, 100, 0);
         REQUIRE(!good.empty());
-        write_plain_pfw(env.dir() + "/plain.pfw");
+        write_plain_pfw(env.dir() + "/plain.pfw.gz");
 
         CHECK(run_index(binary, {env.dir(), "--force"}) != 0);
         CHECK(dstd::fs::exists(

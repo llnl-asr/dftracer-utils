@@ -411,7 +411,7 @@ TEST_SUITE("DFTracerSplit") {
         CHECK(count_gz_files(out_dir) == 0);
     }
 
-    TEST_CASE("a plain trace error names the file and says it is not gzip") {
+    TEST_CASE("a plain trace is not listed and the run reports no files") {
         auto binary = find_split_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_split binary not found, skipping.");
@@ -434,8 +434,7 @@ TEST_SUITE("DFTracerSplit") {
              "--disable-watchdog"},
             true, &rc);
         CHECK(rc != 0);
-        CHECK(out.find("plain.pfw") != dstd::String::npos);
-        CHECK(out.find("is not gzip") != dstd::String::npos);
+        CHECK(out.find("No trace files found") != dstd::String::npos);
         CHECK(out.find("0 chunk files") == dstd::String::npos);
     }
 }

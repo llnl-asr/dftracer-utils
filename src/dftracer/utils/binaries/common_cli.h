@@ -23,6 +23,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -31,10 +32,9 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/filesystem/types.h>
 #include <sys/resource.h>
 
 #include <algorithm>
@@ -501,8 +501,6 @@ auto run_on_pool(const char* name, const RuntimeArgs& runtime,
     }
 }
 
-using utilities::filesystem::is_trace_file;
-
 // Split a comma-separated list into views of `text`, dropping empty fields.
 inline dstd::Vector<dstd::StringView> split_csv(dstd::StringView text) {
     dstd::Vector<dstd::StringView> out;
@@ -555,32 +553,45 @@ inline dstd::Path absolute_path(dstd::StringView path) {
     return common::unwrap(dstd::fs::absolute(dstd::PathView(path)));
 }
 
-// The trace files under `directory`, scanned recursively on a pool of its own
-// (see scan_on_pool) with one I/O thread.
-inline dstd::Vector<utilities::filesystem::FileEntry> scan_trace_files_on_pool(
-    const RuntimeArgs& runtime, dstd::StringView directory,
-    bool populate_size = true) {
-    auto scanned = utilities::filesystem::scan_on_pool<
-        utilities::filesystem::PatternDirectoryScannerUtility>(
-        runtime.executor_threads, 1,
-        utilities::filesystem::PatternDirectoryScannerUtilityInput{
-            dstd::String(directory),
-            utilities::filesystem::trace_file_patterns(), true, populate_size});
-    return scanned;
+// The input traces below a folder, and no folder of index data, split output
+// or schemas. An unreadable folder is skipped in a recursive scan.
+inline runtime::fs::FindOptions trace_find_options(bool recursive,
+                                                   bool with_stat) {
+    runtime::fs::FindOptions options;
+    options.patterns =
+        runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
+    options.skip_dirs =
+        runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
+    options.recursive = recursive;
+    options.with_stat = with_stat;
+    options.skip_unreadable = recursive;
+    return options;
 }
 
-// Parallel per-subdirectory scan of `directory` for trace files via
-// ctx.spawn (context lets a recursive walk fan out per subdirectory); sizes
-// are not populated. Returns the matched paths.
+// The trace files under `directory`, scanned recursively on a pool of its own
+// (see runtime::fs::find_all_on_pool). Stats run on I/O threads, so it needs
+// as many of them as workers.
+inline dstd::Vector<runtime::fs::FoundFile> scan_trace_files_on_pool(
+    const RuntimeArgs& runtime, dstd::StringView directory,
+    bool with_stat = true) {
+    auto found = runtime::fs::find_all_on_pool(
+        runtime.executor_threads, runtime.executor_threads,
+        dstd::PathView(directory), trace_find_options(true, with_stat));
+    if (!found) throw common::DFTUtilsException(found.error());
+    return std::move(*found);
+}
+
+// Parallel per-subdirectory scan of `directory` for trace files over the
+// scope's executor; sizes are not populated. Returns the matched paths.
 inline coro::CoroTask<dstd::Vector<dstd::String>> scan_directory_trace_files(
     coro::Scope& ctx, dstd::StringView directory, bool recursive) {
-    utilities::filesystem::PatternDirectoryScannerUtility scanner;
-    utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
-        directory, utilities::filesystem::trace_file_patterns(), recursive};
-    auto matched = co_await scanner(ctx, scan_input);
+    auto options = trace_find_options(recursive, /*with_stat=*/false);
+    auto found = co_await runtime::fs::find_all(ctx, dstd::PathView(directory),
+                                                std::move(options));
+    if (!found) throw common::DFTUtilsException(found.error());
     dstd::Vector<dstd::String> files;
-    files.reserve(matched.size());
-    for (const auto& entry : matched) {
+    files.reserve(found->size());
+    for (const auto& entry : *found) {
         files.emplace_back(entry.path.str());
     }
     co_return files;
@@ -626,20 +637,33 @@ inline coro::CoroTask<dstd::Vector<dstd::String>> collect_input_trace_files(
 inline coro::CoroTask<int> ensure_indexes_fresh_task(
     coro::Scope& ctx, dstd::StringView directory,
     dstd::Vector<dstd::StringView> files, dstd::StringView index_dir,
-    bool force_rebuild, dstd::Vector<utilities::filesystem::FileEntry>* entries,
+    bool force_rebuild, dstd::Vector<runtime::fs::FoundFile>* entries,
     dftracer::utils::index::schemas::dft::agg::AggregationConfig aggregation =
         dftracer::utils::index::schemas::dft::agg::
             standard_aggregation_config(),
     std::size_t checkpoint_size = 0) {
     if (!directory.empty()) {
-        utilities::filesystem::PatternDirectoryScannerUtility scanner;
-        utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
-            directory, utilities::filesystem::trace_file_patterns(), true};
-        auto scanned = co_await scanner(ctx, scan_input);
-        entries->assign(std::make_move_iterator(scanned.begin()),
-                        std::make_move_iterator(scanned.end()));
+        auto options = trace_find_options(true, /*with_stat=*/true);
+        auto found = co_await runtime::fs::find_all(
+            ctx, dstd::PathView(directory), std::move(options));
+        if (!found) throw common::DFTUtilsException(found.error());
+        *entries = std::move(*found);
     } else {
-        for (const auto& f : files) entries->emplace_back(dstd::StringView(f));
+        dstd::Vector<dstd::Path> paths;
+        paths.reserve(files.size());
+        for (const auto& f : files) paths.emplace_back(f);
+        auto stat_task = runtime::fs::stat_many(
+            dstd::Span<const dstd::Path>(paths.data(), paths.size()));
+        auto stats = co_await std::move(stat_task);
+        for (std::size_t i = 0; i < paths.size(); ++i) {
+            runtime::fs::FoundFile entry;
+            entry.path = paths[i];
+            if (stats[i] && stats[i]->kind == dstd::fs::FileKind::File) {
+                entry.size = stats[i]->size;
+                entry.mtime_ns = stats[i]->mtime_ns;
+            }
+            entries->push_back(std::move(entry));
+        }
     }
     if (entries->empty()) co_return 0;
     dftracer::utils::index::IndexerOptions options;
@@ -656,8 +680,7 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     co_return 0;
 }
 
-inline dstd::Vector<utilities::filesystem::FileEntry>
-ensure_indexes_fresh_blocking(
+inline dstd::Vector<runtime::fs::FoundFile> ensure_indexes_fresh_blocking(
     const char* name, const RuntimeArgs& runtime, dstd::StringView directory,
     dstd::Vector<dstd::StringView> files, dstd::StringView index_dir,
     bool force_rebuild = false,
@@ -665,7 +688,7 @@ ensure_indexes_fresh_blocking(
         dftracer::utils::index::schemas::dft::agg::
             standard_aggregation_config(),
     std::size_t checkpoint_size = 0) {
-    dstd::Vector<utilities::filesystem::FileEntry> entries;
+    dstd::Vector<runtime::fs::FoundFile> entries;
     if (directory.empty() && files.empty()) return entries;
     run_on_pool(name, runtime, [&](coro::Scope& ctx) -> coro::CoroTask<int> {
         co_return co_await ensure_indexes_fresh_task(

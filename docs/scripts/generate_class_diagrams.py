@@ -169,7 +169,6 @@ COMPONENT_GROUPS = [
     (
         "utilities",
         [
-            "dftracer::utils::utilities::filesystem::",
             "dftracer::utils::utilities::hash::",
             "dftracer::utils::utilities::common::statistics::",
         ],

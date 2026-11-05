@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -20,10 +21,10 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 // Unconditional: the native-frame result path (OwnedDataFrame) needs the
 // DataFrame wrapper regardless of the Arrow build option.
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -114,13 +115,19 @@ coro::CoroTask<void> run_host_scan(
         const auto is_dir = dftracer::utils::dstd::fs::is_directory(
             dftracer::utils::dstd::PathView(p));
         if (is_dir && *is_dir) {
-            utilities::filesystem::PatternDirectoryScannerUtilityInput in(
-                p, utilities::filesystem::trace_file_patterns(),
-                /*recursive=*/true,
-                /*populate_size=*/false);
-            utilities::filesystem::PatternDirectoryScannerUtility scanner;
-            auto entries = co_await scanner(scope, in);
-            for (auto& e : entries) files.emplace_back(e.path.str());
+            dftracer::utils::runtime::fs::FindOptions options;
+            options.patterns = dftracer::utils::runtime::fs::names_of(
+                dftracer::utils::common::constants::indexer::
+                    INPUT_FILE_PATTERNS);
+            options.skip_dirs = dftracer::utils::runtime::fs::names_of(
+                dftracer::utils::common::constants::indexer::SCAN_SKIP_DIRS);
+            options.with_stat = false;
+            options.skip_unreadable = true;
+            auto found = co_await dftracer::utils::runtime::fs::find_all(
+                scope, dftracer::utils::dstd::PathView(p), std::move(options));
+            if (!found)
+                throw dftracer::utils::common::DFTUtilsException(found.error());
+            for (auto& e : *found) files.emplace_back(e.path.str());
         } else {
             files.push_back(p);
         }

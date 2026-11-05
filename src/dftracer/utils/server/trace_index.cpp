@@ -26,13 +26,13 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 
 #include <algorithm>
@@ -114,8 +114,6 @@ bool index_is_stale(dstd::StringView root,
 }  // namespace
 
 using namespace dftracer::utils::trace;
-
-using namespace dftracer::utils::utilities::filesystem;
 
 namespace {
 
@@ -518,10 +516,17 @@ TraceIndex::TraceIndex(const dstd::String& directory,
                            : checkpoint_size) {}
 
 coro::CoroTask<void> TraceIndex::initialize() {
-    PatternDirectoryScannerUtility scanner;
-    PatternDirectoryScannerUtilityInput scan_input{
-        directory_, trace_file_patterns(), false};
-    auto entries = co_await scanner(scan_input);
+    runtime::fs::FindOptions find_options;
+    find_options.patterns =
+        runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
+    find_options.recursive = false;
+    auto scoped = coro::with_scope([&](coro::Scope& scope) {
+        return runtime::fs::find_all(scope, dstd::PathView(directory_),
+                                     find_options);
+    });
+    auto found = co_await std::move(scoped);
+    if (!found) throw common::DFTUtilsException(found.error());
+    const auto& entries = *found;
 
     files_.clear();
     path_to_index_.clear();

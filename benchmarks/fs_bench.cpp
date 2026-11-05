@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 //
-// Time to list and stat one tree, and a hash of the files found, by method.
+// Time to list and stat one tree with find_all, and a hash of the files found.
 //
-//   fs_bench ROOT [--method scanner|find_all] [--threads N] [--io-threads N]
-//            [--reps N]
-//   fs_bench --smoke   (builds a small tree; exits nonzero when the methods
-//                       find different files)
+//   fs_bench ROOT [--threads N] [--io-threads N] [--reps N]
+//   fs_bench --smoke   (builds a small tree; exits nonzero when find_all and
+//                       a serial walk find different files or sizes)
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -14,7 +13,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
 #include <chrono>
@@ -32,22 +30,19 @@ struct Row {
     std::uint64_t bytes = 0;
 };
 
-Row scan_with_scanner(dstd::StringView root, std::size_t threads,
-                      std::size_t io_threads) {
-    using utilities::filesystem::PatternDirectoryScannerUtility;
-    using utilities::filesystem::PatternDirectoryScannerUtilityInput;
-    dstd::Vector<dstd::String> patterns;
-    patterns.push_back(dstd::String(".pfw.gz"));
-    PatternDirectoryScannerUtilityInput input(root, std::move(patterns), true,
-                                              true);
-    auto entries =
-        utilities::filesystem::scan_on_pool<PatternDirectoryScannerUtility>(
-            threads, io_threads, std::move(input));
+Row scan_serial(const dstd::Path& root) {
     Row row;
-    for (const auto& entry : entries) {
-        row.paths.push_back(dstd::String(entry.path.str()));
-        row.bytes += entry.size;
-    }
+    const auto walked =
+        dstd::fs::walk(root, [&](dstd::PathView path, dstd::fs::FileKind kind) {
+            if (kind == dstd::fs::FileKind::File &&
+                path.str().ends_with(".pfw.gz")) {
+                const auto size = dstd::fs::file_size(path);
+                row.paths.push_back(dstd::String(path.str()));
+                if (size) row.bytes += *size;
+            }
+            return dstd::fs::WalkAction::Continue;
+        });
+    if (!walked) std::exit(2);
     return row;
 }
 
@@ -106,13 +101,13 @@ int run_smoke() {
             if (!dstd::fs::write_file(file, "x")) return 2;
         }
     }
-    Row scanned = scan_with_scanner(root.str(), 4, 4);
+    Row serial = scan_serial(root);
     Row found = scan_with_find_all(root.str(), 4, 4);
-    const bool same = scanned.paths.size() == 400 &&
-                      hash_paths(scanned.paths) == hash_paths(found.paths) &&
-                      scanned.bytes == found.bytes;
+    const bool same = serial.paths.size() == 400 &&
+                      hash_paths(serial.paths) == hash_paths(found.paths) &&
+                      serial.bytes == found.bytes;
     (void)dstd::fs::remove_all(root);
-    if (!same) std::fprintf(stderr, "the methods found different files\n");
+    if (!same) std::fprintf(stderr, "find_all and the serial walk differ\n");
     return same ? 0 : 1;
 }
 
@@ -125,12 +120,10 @@ int main(int argc, char** argv) {
         return 2;
     }
     const char* root = argv[1];
-    const char* method = "find_all";
     std::size_t threads = 0;
     std::size_t io_threads = 0;
     int reps = 5;
     for (int i = 2; i + 1 < argc; i += 2) {
-        if (std::strcmp(argv[i], "--method") == 0) method = argv[i + 1];
         if (std::strcmp(argv[i], "--threads") == 0) {
             threads = static_cast<std::size_t>(std::atoi(argv[i + 1]));
         }
@@ -139,19 +132,17 @@ int main(int argc, char** argv) {
         }
         if (std::strcmp(argv[i], "--reps") == 0) reps = std::atoi(argv[i + 1]);
     }
-    const bool use_scanner = std::strcmp(method, "scanner") == 0;
     for (int rep = 0; rep < reps; ++rep) {
         const auto start = std::chrono::steady_clock::now();
-        Row row = use_scanner ? scan_with_scanner(root, threads, io_threads)
-                              : scan_with_find_all(root, threads, io_threads);
+        Row row = scan_with_find_all(root, threads, io_threads);
         const double ms = std::chrono::duration<double, std::milli>(
                               std::chrono::steady_clock::now() - start)
                               .count();
         const std::size_t count = row.paths.size();
-        std::printf("%s rep=%d files=%zu bytes=%llu hash=%016llx ms=%.1f\n",
-                    method, rep, count,
-                    static_cast<unsigned long long>(row.bytes),
-                    static_cast<unsigned long long>(hash_paths(row.paths)), ms);
+        std::printf(
+            "find_all rep=%d files=%zu bytes=%llu hash=%016llx ms=%.1f\n", rep,
+            count, static_cast<unsigned long long>(row.bytes),
+            static_cast<unsigned long long>(hash_paths(row.paths)), ms);
         std::fflush(stdout);
     }
     return 0;

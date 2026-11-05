@@ -8,12 +8,12 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <simdjson.h>
 
 #include <chrono>
@@ -55,9 +55,7 @@ coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
     coro::Scope& ctx, dstd::StringView directory,
     const dstd::Vector<dstd::StringView>* cli_files) {
     dstd::Vector<dstd::String> files;
-    for (const auto f : *cli_files) {
-        if (binaries::is_trace_file(f)) files.emplace_back(f);
-    }
+    for (const auto f : *cli_files) files.emplace_back(f);
     if (!directory.empty()) {
         auto scanned = co_await binaries::scan_directory_trace_files(
             ctx, directory, /*recursive=*/true);

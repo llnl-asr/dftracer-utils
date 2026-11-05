@@ -39,7 +39,6 @@
 #include <dftracer/utils/trace/statistics/statistics_query_utility.h>
 #include <dftracer/utils/trace/statistics/stats_view.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
 #include <array>
@@ -56,7 +55,6 @@ using namespace dftracer::utils::index::store;
 using namespace dftracer::utils::trace::statistics;
 using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::schemas::dft;
-using namespace dftracer::utils::utilities::filesystem;
 using dftracer::utils::index::schemas::dft::ChunkStatistics;
 using duql::Query;
 

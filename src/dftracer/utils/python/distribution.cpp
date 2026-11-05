@@ -24,9 +24,9 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -38,10 +38,7 @@ using dftracer::utils::index::build::IndexBuildBatchConfig;
 using dftracer::utils::index::build::IndexBuildBatchResult;
 using dftracer::utils::index::build::plan_lpt_partition;
 using dftracer::utils::python::parse_string_seq;
-using dftracer::utils::utilities::filesystem::FileEntry;
-using dftracer::utils::utilities::filesystem::PatternDirectoryScannerUtility;
-using dftracer::utils::utilities::filesystem::
-    PatternDirectoryScannerUtilityInput;
+using dftracer::utils::runtime::fs::FoundFile;
 
 // ---------------------------------------------------------------------------
 // scan_files: parallel directory scan with size info
@@ -87,19 +84,33 @@ static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
         rt = dftracer::utils::python::get_default_runtime();
     }
 
-    PatternDirectoryScannerUtilityInput input(directory, patterns,
-                                              recursive != 0, true);
-    dftracer::utils::dstd::Vector<FileEntry> entries;
+    dftracer::utils::runtime::fs::FindOptions options;
+    for (auto &pattern : patterns) {
+        if (!pattern.empty() && pattern.front() == '.')
+            pattern.insert(0, 1, '*');
+    }
+    options.patterns = std::move(patterns);
+    options.skip_dirs = dftracer::utils::runtime::fs::names_of(
+        dftracer::utils::common::constants::indexer::SCAN_SKIP_DIRS);
+    options.recursive = recursive != 0;
+    options.skip_unreadable = options.recursive;
+    dftracer::utils::dstd::Vector<FoundFile> entries;
     if (!run_blocking([&] {
-            rt->submit(dftracer::utils::coro::with_scope(
-                           [in = std::move(input),
-                            out = &entries](dftracer::utils::coro::Scope &scope)
-                               -> dftracer::utils::coro::CoroTask<void> {
-                               PatternDirectoryScannerUtility scanner;
-                               *out = co_await scanner(scope, in);
-                           }),
-                       "scan-files")
-                .get();
+            auto found =
+                rt->submit(
+                      dftracer::utils::coro::with_scope(
+                          [in = std::move(options),
+                           directory](dftracer::utils::coro::Scope &scope) {
+                              return dftracer::utils::runtime::fs::find_all(
+                                  scope,
+                                  dftracer::utils::dstd::PathView(directory),
+                                  in);
+                          }),
+                      "scan-files")
+                    .get();
+            if (!found)
+                throw dftracer::utils::common::DFTUtilsException(found.error());
+            entries = std::move(*found);
         })) {
         return NULL;
     }
@@ -128,7 +139,7 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
     if (!PyArg_ParseTuple(args, "On", &entries_obj, &worker_count)) return NULL;
     if (worker_count <= 0) worker_count = 1;
 
-    dftracer::utils::dstd::Vector<FileEntry> entries;
+    dftracer::utils::dstd::Vector<FoundFile> entries;
     PyObject *seq = PySequence_Fast(entries_obj,
                                     "entries must be a sequence of "
                                     "(path, size) tuples");
@@ -143,11 +154,10 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
             Py_DECREF(seq);
             return NULL;
         }
-        FileEntry fe;
+        FoundFile fe;
         fe.path = dftracer::utils::dstd::Path(
             dftracer::utils::dstd::StringView(path));
         fe.size = static_cast<std::size_t>(size);
-        fe.is_regular_file = true;
         entries.push_back(std::move(fe));
     }
     Py_DECREF(seq);

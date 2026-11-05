@@ -2,6 +2,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/memory_config.h>
@@ -28,7 +29,6 @@
 #include <dftracer/utils/python/task_handle.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/trace_viewer.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/python/arrow_stream_capsule.h>
 #endif
@@ -152,20 +152,20 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
         return NULL;
     {
         const auto& patterns =
-            dftracer::utils::utilities::filesystem::trace_file_patterns();
-        PyObject* t = PyTuple_New(static_cast<Py_ssize_t>(patterns.size()));
+            dftracer::utils::common::constants::indexer::INPUT_FILE_PATTERNS;
+        constexpr std::size_t pattern_count =
+            sizeof(patterns) / sizeof(patterns[0]);
+        PyObject* t = PyTuple_New(static_cast<Py_ssize_t>(pattern_count));
         if (!t) return NULL;
-        for (std::size_t i = 0; i < patterns.size(); ++i) {
-            PyObject* s = PyUnicode_FromStringAndSize(
-                patterns[i].data(),
-                static_cast<Py_ssize_t>(patterns[i].size()));
+        for (std::size_t i = 0; i < pattern_count; ++i) {
+            PyObject* s = PyUnicode_FromString(patterns[i]);
             if (!s) {
                 Py_DECREF(t);
                 return NULL;
             }
             PyTuple_SET_ITEM(t, static_cast<Py_ssize_t>(i), s);
         }
-        if (PyModule_AddObject(m, "TRACE_FILE_PATTERNS", t) < 0) {
+        if (PyModule_AddObject(m, "INPUT_FILE_PATTERNS", t) < 0) {
             Py_DECREF(t);
             return NULL;
         }

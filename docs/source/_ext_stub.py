@@ -504,7 +504,9 @@ def install_extension_stub() -> None:
         runtime: Runtime | object | None = None,
     ) -> list[tuple[str, int]]:
         """Parallel directory scan returning (path, size) tuples for regular
-        files matching the patterns."""
+        files whose name matches one of the patterns: ``*`` is any run of
+        characters and ``?`` is one character. A pattern that starts with ``.``
+        is a suffix, as ``*`` plus the pattern. No patterns lists every file."""
         return []
 
     def enable_aggregation_deterministic_ids() -> None:
@@ -653,6 +655,7 @@ def install_extension_stub() -> None:
     # Module constants accessed by name.
     ext.NUM_SHARDS = 0
     ext.PLUGIN_ABI_VERSION = 0
+    ext.INPUT_FILE_PATTERNS = ("*.gz",)
 
     # Fallback: any other native symbol (the _Native*/_TraceViewer handles, the
     # arrow ops _join/_window/..., future additions) resolves to a permissive

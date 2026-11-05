@@ -17,7 +17,6 @@
 #include <dftracer/utils/trace/chunk_verifier_utility.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -255,9 +254,6 @@ dstd::Vector<dstd::String> collect_inputs(const SplitArgParse& cli,
         return !text.empty() && text != ".." && !text.starts_with("../");
     };
     for (const auto& entry : matched) {
-        if (!utilities::filesystem::is_trace_file(entry.path.str())) {
-            continue;
-        }
         if (inside(entry.path.view(), out_canonical.view()) ||
             inside(entry.path.view(), out_walked.view()))
             continue;
@@ -266,25 +262,13 @@ dstd::Vector<dstd::String> collect_inputs(const SplitArgParse& cli,
     return input_files;
 }
 
-// False when there is nothing to split or an input is not gzip. Sorts the
-// inputs.
+// False when there is nothing to split. Sorts the inputs.
 bool check_inputs(dstd::Vector<dstd::String>& input_files,
                   const dstd::Path& log_dir) {
     if (input_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR("No trace files found in %s", log_dir.c_str());
         return false;
     }
-    bool plain_input = false;
-    for (const auto& path : input_files) {
-        if (!path.ends_with(".gz")) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "%s is not gzip; dftracer_split reads gzip traces only. Gzip "
-                "it first with dftracer_pgzip",
-                path.c_str());
-            plain_input = true;
-        }
-    }
-    if (plain_input) return false;
     std::sort(input_files.begin(), input_files.end());
     return true;
 }

@@ -16,9 +16,9 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::utilities::filesystem {
-struct FileEntry;
-}  // namespace dftracer::utils::utilities::filesystem
+namespace dftracer::utils::runtime::fs {
+struct FoundFile;
+}  // namespace dftracer::utils::runtime::fs
 
 namespace dftracer::utils::index {
 
@@ -152,7 +152,7 @@ namespace detail {
 /// scan read. The first status(), build() or rebuild() of the @ref Indexer
 /// uses them without stat'ing. Later calls stat the files. Throws
 /// INVALID_ARGUMENT when `files` is empty.
-Indexer open_scanned(dstd::Vector<utilities::filesystem::FileEntry> files,
+Indexer open_scanned(dstd::Vector<runtime::fs::FoundFile> files,
                      IndexerOptions options);
 }  // namespace detail
 
@@ -224,15 +224,13 @@ class Indexer {
 
    private:
     friend Indexer detail::open_scanned(
-        dstd::Vector<utilities::filesystem::FileEntry> files,
-        IndexerOptions options);
+        dstd::Vector<runtime::fs::FoundFile> files, IndexerOptions options);
     struct Impl;
     explicit Indexer(dstd::SharedPtr<Impl> impl);
     static void validate_options(Impl& impl);
     static Indexer finish_open(dstd::SharedPtr<Impl> impl);
     coro::CoroTask<IndexStatus> status_of(
-        coro::Scope& scope,
-        dstd::Vector<utilities::filesystem::FileEntry> entries) const;
+        coro::Scope& scope, dstd::Vector<runtime::fs::FoundFile> entries) const;
     dstd::SharedPtr<Impl> impl_;
 };
 

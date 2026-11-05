@@ -136,6 +136,7 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/task_abi.cpp
     # Async I/O
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/fs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs_on_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_awaitable.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_thread_pool.cpp

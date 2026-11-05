@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -11,8 +12,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -316,16 +317,18 @@ dstd::String run_id(const RunKeys& k) {
 coro::CoroTask<Discovery> discover(coro::Scope& ctx,
                                    dstd::Vector<dstd::String> roots) {
     Discovery out;
-    const utilities::filesystem::PatternDirectoryScannerUtility scan;
     for (const auto& r : roots) {
         const dstd::Path root =
             common::unwrap(dstd::fs::absolute(dstd::PathView(r)));
-        // A braced list inside the co_await expression crashes GCC 12.
-        const dstd::Vector<dstd::String> patterns{".pfw.gz", "summary.json",
-                                                  ".csv"};
-        utilities::filesystem::PatternDirectoryScannerUtilityInput input(
-            root.str(), patterns, true, true);
-        const auto entries = co_await scan(ctx, input);
+        runtime::fs::FindOptions options;
+        options.patterns = {"*.pfw.gz", "summary.json", "*.csv"};
+        options.skip_dirs =
+            runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
+        options.skip_unreadable = true;
+        auto found = co_await runtime::fs::find_all(ctx, root.view(),
+                                                    std::move(options));
+        if (!found) throw common::DFTUtilsException(found.error());
+        const auto& entries = *found;
         DirMap dirs;
         for (const auto& e : entries) {
             const dstd::PathView path = e.path.view();

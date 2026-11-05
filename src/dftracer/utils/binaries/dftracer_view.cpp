@@ -22,7 +22,6 @@
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_definition.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -46,7 +45,6 @@ using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::trace;
 using namespace dftracer::utils::index::store;
 using namespace dftracer::utils::trace::views;
-using namespace dftracer::utils::utilities::filesystem;
 
 #ifdef DFTRACER_UTILS_ENABLE_MPI
 // The files owned by `rank` of `size`: a deterministic round-robin split, so

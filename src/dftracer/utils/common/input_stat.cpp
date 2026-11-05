@@ -65,6 +65,16 @@ bool stat_input(dstd::CStringView path, InputFileStat& out) {
     return true;
 }
 
+bool cached_input(dstd::StringView path, InputFileStat& out) {
+    const dstd::SharedPtr<InputStatCache> cache = published();
+    return cache && cache->find(path, out);
+}
+
+void remember_input(dstd::StringView path, const InputFileStat& st) {
+    const dstd::SharedPtr<InputStatCache> cache = published();
+    if (cache) cache->insert(path, st);
+}
+
 void forget_input(dstd::StringView path) {
     const dstd::SharedPtr<InputStatCache> cache = published();
     if (cache) cache->erase(path);

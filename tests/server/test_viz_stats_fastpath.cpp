@@ -87,8 +87,8 @@ TEST_SUITE("viz_stats_fastpath") {
         const int n = 3000;
         auto dir = dftu_utils_test::make_unique_test_path("viz_stats_fast");
         REQUIRE(dstd::fs::create_directories(dir).has_value());
-        // Not *.pfw.gz: TraceIndex scans the dir and must see only the trace.
-        const dstd::String src = dstd::String((dir / "src.raw.gz").str());
+        // Not a .gz file: TraceIndex scans the dir and must see only the trace.
+        const dstd::String src = dstd::String((dir / "src.raw").str());
         const dstd::String gz = dstd::String((dir / "trace.pfw.gz").str());
         const dstd::String index_dir = dstd::String((dir / "idx").str());
 

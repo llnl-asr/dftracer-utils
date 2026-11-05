@@ -28,9 +28,8 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
-# The suffixes directory discovery lists as traces: .pfw, .jsonl and
-# .ndjson, plain or gzip. An index reads the gzip ones only.
-TRACE_FILE_PATTERNS: Tuple[str, ...]
+# The file name patterns directory discovery lists as input traces: gzip files.
+INPUT_FILE_PATTERNS: Tuple[str, ...]
 # The plugin ABI version this extension accepts: (major << 16) | (minor << 8) | patch.
 PLUGIN_ABI_VERSION: int
 
@@ -959,7 +958,9 @@ def scan_files(
     runtime: Optional[Union[Runtime, object]] = None,
 ) -> List[Tuple[str, int]]:
     """Parallel directory scan returning (path, size) tuples for regular
-    files matching the patterns."""
+    files whose name matches one of the patterns: ``*`` is any run of
+    characters and ``?`` is one character. A pattern that starts with ``.`` is
+    a suffix, as ``*`` plus the pattern. No patterns lists every file."""
     ...
 
 def enable_aggregation_deterministic_ids() -> None:

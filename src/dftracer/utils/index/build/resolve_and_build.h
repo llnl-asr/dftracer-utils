@@ -20,7 +20,7 @@ namespace dftracer::utils::index::build {
 struct ResolveAndBuildInput {
     dstd::String directory;
     dstd::Vector<dstd::String> files;
-    dstd::Vector<utilities::filesystem::FileEntry> entries;
+    dstd::Vector<runtime::fs::FoundFile> entries;
     dstd::String index_dir;
 
     std::size_t checkpoint_size =
@@ -69,7 +69,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
 /// size and mtime of `input.entries` when it holds them. An index in another
 /// format is removed first.
 struct IndexWork {
-    dstd::Vector<utilities::filesystem::FileEntry> files;
+    dstd::Vector<runtime::fs::FoundFile> files;
     /// Roots whose aggregation tier was built with other settings. The build
     /// clears each before it aggregates into it.
     dstd::Vector<dstd::String> stale_aggregation_roots;

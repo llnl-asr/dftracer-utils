@@ -31,7 +31,6 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
 #include <cstdint>

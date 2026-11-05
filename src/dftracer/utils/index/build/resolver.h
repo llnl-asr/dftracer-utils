@@ -9,7 +9,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -40,7 +40,7 @@ struct ResolverInput {
     /// Files already scanned, with the size and mtime that scan read. When not
     /// empty they replace `directory` and `files`: nothing is walked or
     /// stat'ed again.
-    dstd::Vector<utilities::filesystem::FileEntry> entries;
+    dstd::Vector<runtime::fs::FoundFile> entries;
 
     bool require_checkpoints = true;
     bool require_bloom = false;
@@ -102,9 +102,9 @@ struct ResolverResult {
 };
 
 /// The files of `result` as scanned, to resolve them again without a scan.
-dstd::Vector<utilities::filesystem::FileEntry> scanned_entries(
+dstd::Vector<runtime::fs::FoundFile> scanned_entries(
     const ResolverResult& result);
-dstd::Vector<utilities::filesystem::FileEntry> scanned_entries(
+dstd::Vector<runtime::fs::FoundFile> scanned_entries(
     const ResolverResult& result, const dstd::Vector<FileWorkItem>& items);
 
 class Resolver {
@@ -118,9 +118,6 @@ class Resolver {
         return coro::with_scope(
             [this, input](coro::Scope& s) { return (*this)(s, input); });
     }
-
-   private:
-    utilities::filesystem::PatternDirectoryScannerUtility scanner_;
 };
 
 }  // namespace dftracer::utils::index::build

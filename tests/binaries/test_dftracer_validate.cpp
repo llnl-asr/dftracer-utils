@@ -32,17 +32,16 @@ dstd::String make_valid_pfw(dftu_utils_test::TestEnvironment& env,
     return dstd::String(dest.str());
 }
 
-// Write a plain .pfw whose second event line is not valid JSON.
+// Write a gzip .pfw.gz whose second event line is not valid JSON.
 dstd::String make_bad_pfw(const dstd::Path& dir, int id) {
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    dstd::Path p = dir / ("bad_" + dstd::to_string(id) + ".pfw");
-    dftu_utils_test::FileOut ofs(p);
-    if (!ofs) return "";
-    ofs << "[\n";
-    ofs << "{\"name\":\"ok\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,\"ts\":1,"
-           "\"dur\":1,\"ph\":\"X\"}\n";
-    ofs << "{\"name\": this is not valid json\n";
-    return dstd::String(p.str());
+    dstd::Path p = dir / ("bad_" + dstd::to_string(id) + ".pfw.gz");
+    dstd::String content = "[\n";
+    content +=
+        "{\"name\":\"ok\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,\"ts\":1,"
+        "\"dur\":1,\"ph\":\"X\"}\n";
+    content += "{\"name\": this is not valid json\n";
+    return dftu_utils_test::write_gz_trace(dstd::String(p.str()), content);
 }
 
 dstd::String find_validate_binary() {
@@ -129,6 +128,23 @@ TEST_SUITE("dftracer_validate") {
 
         int rc = -1;
         auto out = run_validate_capture(binary, {bad}, &rc);
+        CHECK(rc == 1);
+        CHECK(contains(out, "1 failed"));
+    }
+
+    TEST_CASE("a plain file named on the command line is reported") {
+        auto binary = find_validate_binary();
+        if (binary.empty()) return;
+        dftu_utils_test::ScopedTestDir dir("dftu_test_validate_plain");
+        const dstd::Path plain = dir.path() / "plain.pfw";
+        {
+            dftu_utils_test::FileOut ofs(plain);
+            REQUIRE(static_cast<bool>(ofs));
+            ofs << "[\n";
+        }
+        int rc = -1;
+        auto out =
+            run_validate_capture(binary, {dstd::String(plain.str())}, &rc);
         CHECK(rc == 1);
         CHECK(contains(out, "1 failed"));
     }

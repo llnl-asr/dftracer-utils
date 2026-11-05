@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- List every `*.gz` file when a tool, an indexer or a viewer discovers the traces in a folder, and no longer list plain `.pfw`, `.jsonl` or `.ndjson` files, so gzip them first; the Python constant `TRACE_FILE_PATTERNS` becomes `INPUT_FILE_PATTERNS`.
 - Report a failed tool run with the error of the failed step, in place of `[EXECUTION] Pipeline execution failed`, and print `Run failed:` in place of `Pipeline failed:`.
 - Rename the `Pipeline` group of tool flags to `Runtime`. The flags stay.
 - Make `dftracer_split` and `dftracer_gen_fake_trace` stop the other jobs at the first failure, in place of letting them finish.

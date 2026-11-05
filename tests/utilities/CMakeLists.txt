@@ -37,10 +37,6 @@ set(UTILITIES_TEST_SOURCES
     compression/test_libdeflate_gzip.cpp
     compression/test_gzip_rechunker.cpp
 
-    # Filesystem
-    filesystem/test_directory_scanner.cpp
-    filesystem/test_pattern_directory_scanner.cpp
-
     # Hash
     hash/test_hasher_utility.cpp
 

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
@@ -7,6 +9,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -20,6 +23,7 @@
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
@@ -363,31 +367,31 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
 
 }  // namespace
 
-dstd::Vector<utilities::filesystem::FileEntry> scanned_entries(
+dstd::Vector<runtime::fs::FoundFile> scanned_entries(
     const ResolverResult& result) {
-    dstd::Vector<utilities::filesystem::FileEntry> out;
+    dstd::Vector<runtime::fs::FoundFile> out;
     out.reserve(result.all_files.size());
     for (std::size_t i = 0; i < result.all_files.size(); ++i) {
-        utilities::filesystem::FileEntry entry;
+        runtime::fs::FoundFile entry;
         entry.path = dstd::Path(result.all_files[i]);
         entry.size = result.all_file_sizes[i];
-        entry.mtime = result.all_file_mtimes[i];
-        entry.is_regular_file = true;
+        entry.mtime_ns =
+            result.all_file_mtimes[i] * runtime::fs::NANOS_PER_SECOND;
         out.push_back(std::move(entry));
     }
     return out;
 }
 
-dstd::Vector<utilities::filesystem::FileEntry> scanned_entries(
+dstd::Vector<runtime::fs::FoundFile> scanned_entries(
     const ResolverResult& result, const dstd::Vector<FileWorkItem>& items) {
-    dstd::Vector<utilities::filesystem::FileEntry> out;
+    dstd::Vector<runtime::fs::FoundFile> out;
     out.reserve(items.size());
     for (const auto& item : items) {
-        utilities::filesystem::FileEntry entry;
+        runtime::fs::FoundFile entry;
         entry.path = dstd::Path(item.file_path);
         entry.size = result.all_file_sizes[item.file_index];
-        entry.mtime = result.all_file_mtimes[item.file_index];
-        entry.is_regular_file = true;
+        entry.mtime_ns = result.all_file_mtimes[item.file_index] *
+                         runtime::fs::NANOS_PER_SECOND;
         out.push_back(std::move(entry));
     }
     return out;
@@ -405,30 +409,54 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
         for (const auto& entry : input.entries) {
             result.all_files.push_back(dstd::String(entry.path.str()));
             result.all_file_sizes.push_back(entry.size);
-            result.all_file_mtimes.push_back(entry.mtime);
+            result.all_file_mtimes.push_back(entry.mtime_seconds());
         }
     } else if (!input.directory.empty()) {
-        utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
-            input.directory, utilities::filesystem::trace_file_patterns(),
-            true};
-        dstd::Vector<utilities::filesystem::FileEntry> matched;
-        matched = co_await scanner_(ctx, scan_input);
+        runtime::fs::FindOptions options;
+        options.patterns = runtime::fs::names_of(
+            common::constants::indexer::INPUT_FILE_PATTERNS);
+        options.skip_dirs =
+            runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
+        options.skip_unreadable = true;
+        auto found = co_await runtime::fs::find_all(
+            ctx, dstd::PathView(input.directory), std::move(options));
+        if (!found) throw common::DFTUtilsException(found.error());
+        const dstd::Vector<runtime::fs::FoundFile>& matched = *found;
         result.all_files.reserve(matched.size());
         result.all_file_sizes.reserve(matched.size());
         result.all_file_mtimes.reserve(matched.size());
         for (const auto& entry : matched) {
             result.all_files.push_back(dstd::String(entry.path.str()));
             result.all_file_sizes.push_back(entry.size);
-            result.all_file_mtimes.push_back(entry.mtime);
+            result.all_file_mtimes.push_back(entry.mtime_seconds());
         }
     } else {
         result.all_files = input.files;
         result.all_file_sizes.assign(input.files.size(), 0);
         result.all_file_mtimes.assign(input.files.size(), 0);
+        dstd::Vector<dstd::Path> missed;
+        dstd::Vector<std::size_t> missed_at;
         for (std::size_t i = 0; i < input.files.size(); ++i) {
-            const utilities::filesystem::FileEntry entry(input.files[i]);
-            result.all_file_sizes[i] = entry.size;
-            result.all_file_mtimes[i] = entry.mtime;
+            common::InputFileStat kept;
+            if (!common::cached_input(input.files[i], kept)) {
+                missed.emplace_back(input.files[i]);
+                missed_at.push_back(i);
+            } else if (kept.is_regular_file) {
+                result.all_file_sizes[i] = kept.size;
+                result.all_file_mtimes[i] =
+                    static_cast<std::uint64_t>(kept.mtime);
+            }
+        }
+        auto stat_task = runtime::fs::stat_many(
+            dstd::Span<const dstd::Path>(missed.data(), missed.size()));
+        auto stats = co_await std::move(stat_task);
+        for (std::size_t j = 0; j < stats.size(); ++j) {
+            if (!stats[j] || stats[j]->kind != dstd::fs::FileKind::File)
+                continue;
+            const std::size_t i = missed_at[j];
+            result.all_file_sizes[i] = stats[j]->size;
+            result.all_file_mtimes[i] =
+                stats[j]->mtime_ns / runtime::fs::NANOS_PER_SECOND;
         }
     }
 

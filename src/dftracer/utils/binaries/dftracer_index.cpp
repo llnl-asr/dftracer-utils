@@ -17,7 +17,6 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
 #include <chrono>

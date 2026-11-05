@@ -1073,7 +1073,7 @@ def distributed_index(
     import logging as _logging
     import time as _time
 
-    from .dftracer_utils_ext import TRACE_FILE_PATTERNS
+    from .dftracer_utils_ext import INPUT_FILE_PATTERNS
     from .dftracer_utils_ext import (
         Index as _Index,
     )
@@ -1094,7 +1094,7 @@ def distributed_index(
         if not directory:
             raise ValueError("either directory or files is required")
         _log.info("distributed_index: scan_files(%s)", directory)
-        entries = _scan_files(directory, list(TRACE_FILE_PATTERNS), True, None)
+        entries = _scan_files(directory, list(INPUT_FILE_PATTERNS), True, None)
     else:
         _log.info("distributed_index: sizing %d pre-listed files", len(files))
         entries = [(p, os.path.getsize(p)) for p in files]

@@ -10,7 +10,6 @@
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <cstdio>
 #include <exception>
@@ -20,7 +19,6 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::views;
-using namespace dftracer::utils::utilities::filesystem;
 using dftracer::utils::plugins::ConfigTree;
 using dftracer::utils::plugins::Plugins;
 

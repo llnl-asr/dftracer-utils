@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -23,9 +25,8 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/json_escape.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/filesystem/types.h>
 
 #include <cstdio>
 #include <utility>
@@ -37,7 +38,7 @@ struct Indexer::Impl {
     /// The scan from open_scanned(), used by the first call that needs sizes
     /// and mtimes. Empty for open(), whose calls stat the files.
     mutable std::mutex opened_mutex;
-    mutable dstd::Vector<utilities::filesystem::FileEntry> opened;
+    mutable dstd::Vector<runtime::fs::FoundFile> opened;
     IndexerOptions options;
     store::ExtensionMask extensions;
 
@@ -69,19 +70,28 @@ struct Indexer::Impl {
         return out;
     }
 
-    dstd::Vector<utilities::filesystem::FileEntry> take_entries() const {
+    dstd::Vector<runtime::fs::FoundFile> take_entries() const {
         {
             std::lock_guard<std::mutex> lock(opened_mutex);
             if (!opened.empty()) return std::move(opened);
         }
-        dstd::Vector<utilities::filesystem::FileEntry> out;
+        dstd::Vector<runtime::fs::FoundFile> out;
         out.reserve(paths.size());
-        for (const auto& p : paths) out.emplace_back(dstd::StringView(p));
+        for (const auto& p : paths) {
+            runtime::fs::FoundFile entry;
+            entry.path = dstd::Path(p);
+            common::InputFileStat stat;
+            if (common::stat_input(entry.path, stat) && stat.is_regular_file) {
+                entry.size = stat.size;
+                entry.mtime_ns = static_cast<std::uint64_t>(stat.mtime_ns);
+            }
+            out.push_back(std::move(entry));
+        }
         return out;
     }
 
     build::ResolverInput resolver_input(
-        dstd::Vector<utilities::filesystem::FileEntry> entries) const {
+        dstd::Vector<runtime::fs::FoundFile> entries) const {
         build::ResolverInput in;
         in.files = paths;
         in.entries = std::move(entries);
@@ -96,8 +106,7 @@ struct Indexer::Impl {
     }
 
     build::ResolveAndBuildInput build_input(
-        bool force,
-        dstd::Vector<utilities::filesystem::FileEntry> entries) const {
+        bool force, dstd::Vector<runtime::fs::FoundFile> entries) const {
         build::ResolveAndBuildInput in;
         in.files = paths;
         in.entries = std::move(entries);
@@ -226,36 +235,39 @@ Indexer Indexer::open(dstd::Vector<dstd::String> paths,
     impl->options = std::move(options);
     validate_options(*impl);
     for (auto& p : paths) {
-        utilities::filesystem::FileEntry self{dstd::StringView(p)};
+        common::InputFileStat self;
+        const bool known = common::stat_input(p, self);
+        const bool is_directory = known && self.is_directory;
+        const bool is_regular_file = known && self.is_regular_file;
         const auto present = dstd::fs::exists(dstd::PathView(p));
-        if (!self.is_directory && !self.is_regular_file &&
-            !(present && *present))
+        if (!is_directory && !is_regular_file && !(present && *present))
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::NotFound,
                 "Indexer::open: no such path: ", p);
-        if (!self.is_directory) {
+        if (!is_directory) {
             impl->paths.push_back(std::move(p));
             continue;
         }
-        dstd::Vector<utilities::filesystem::FileEntry> matched;
-        impl->runtime().block_on(coro::named(
-            "indexer-open",
-            coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-                utilities::filesystem::PatternDirectoryScannerUtility scanner;
-                utilities::filesystem::PatternDirectoryScannerUtilityInput
-                    scan_input{p, utilities::filesystem::trace_file_patterns(),
-                               false, /*with_size=*/false};
-                matched = co_await scanner(scope, scan_input);
+        runtime::fs::FindOptions find_options;
+        find_options.patterns = runtime::fs::names_of(
+            common::constants::indexer::INPUT_FILE_PATTERNS);
+        find_options.recursive = false;
+        find_options.with_stat = false;
+        auto found = impl->runtime().block_on(coro::named(
+            "indexer-open", coro::with_scope([&](coro::Scope& scope) {
+                return runtime::fs::find_all(scope, dstd::PathView(p),
+                                             find_options);
             })));
-        for (auto& e : matched)
+        if (!found) throw common::DFTUtilsException(found.error());
+        const auto& matched = *found;
+        for (const auto& e : matched)
             impl->paths.push_back(dstd::String(e.path.str()));
     }
     return finish_open(std::move(impl));
 }
 
-Indexer detail::open_scanned(
-    dstd::Vector<utilities::filesystem::FileEntry> files,
-    IndexerOptions options) {
+Indexer detail::open_scanned(dstd::Vector<runtime::fs::FoundFile> files,
+                             IndexerOptions options) {
     if (files.empty())
         throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
                                         "open_scanned: no trace files given");
@@ -274,8 +286,7 @@ coro::CoroTask<IndexStatus> Indexer::status(coro::Scope& scope) const {
 }
 
 coro::CoroTask<IndexStatus> Indexer::status_of(
-    coro::Scope& scope,
-    dstd::Vector<utilities::filesystem::FileEntry> entries) const {
+    coro::Scope& scope, dstd::Vector<runtime::fs::FoundFile> entries) const {
     build::Resolver resolver;
     auto result =
         co_await resolver(scope, impl_->resolver_input(std::move(entries)));

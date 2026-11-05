@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
@@ -8,6 +10,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/span.h>
@@ -25,6 +28,7 @@
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric_event.h>
@@ -37,7 +41,6 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -341,20 +344,23 @@ ScanPlan from_file(dstd::String file_path, dstd::String index_path) {
 
 coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
                                         dstd::String index_path) {
-    utilities::filesystem::PatternDirectoryScannerUtility scanner;
-    utilities::filesystem::PatternDirectoryScannerUtilityInput input(
-        std::move(dir), utilities::filesystem::trace_file_patterns(),
-        /*recursive=*/true,
-        /*populate_size=*/false);
+    runtime::fs::FindOptions options;
+    options.patterns =
+        runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
+    options.skip_dirs =
+        runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
+    options.with_stat = false;
+    options.skip_unreadable = true;
 
-    dstd::Vector<utilities::filesystem::FileEntry> entries;
-    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        entries = co_await scanner(scope, input);
+    auto scoped = coro::with_scope([&](coro::Scope& scope) {
+        return runtime::fs::find_all(scope, dstd::PathView(dir), options);
     });
+    auto found = co_await std::move(scoped);
+    if (!found) throw common::DFTUtilsException(found.error());
 
     dstd::Vector<ViewFile> files;
-    files.reserve(entries.size());
-    for (auto& e : entries) {
+    files.reserve(found->size());
+    for (auto& e : *found) {
         dstd::String fp(e.path.str());
         const dstd::String index =
             internal::determine_index_path(fp, index_path);

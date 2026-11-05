@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/file_decompressor_utility.h>
-#include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/host_ops.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #endif
@@ -43,44 +44,54 @@ bool run_sync(const char* name, Fn body) {
     }
 }
 
-dftu_series* paths_column(const dstd::Vector<filesystem::FileEntry>& entries,
-                          bool files_only) {
-    dstd::Vector<dstd::StringView> paths;
-    paths.reserve(entries.size());
-    for (const filesystem::FileEntry& e : entries) {
-        if (files_only && !e.is_regular_file) continue;
-        paths.emplace_back(e.path.str());
-    }
-    return Series::strings(paths).release();
+dftu_series* paths_column(const dstd::Vector<dstd::Path>& paths) {
+    dstd::Vector<dstd::StringView> views;
+    views.reserve(paths.size());
+    for (const dstd::Path& path : paths) views.emplace_back(path.str());
+    return Series::strings(views).release();
 }
 
 dftu_series* scan_dir(const char* root, std::int32_t root_size) {
-    filesystem::DirectoryScannerUtilityInput input{
-        dstd::StringView(root, static_cast<std::size_t>(root_size))};
-    dstd::Vector<filesystem::FileEntry> entries;
-    if (!run_sync("dftu.fs.scan_dir",
-                  [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                      filesystem::DirectoryScannerUtility scanner;
-                      entries = co_await scanner(scope, input);
-                  })) {
+    const dstd::String dir = to_string(root, root_size);
+    dstd::Vector<dstd::Path> paths;
+    if (!run_sync(
+            "dftu.fs.scan_dir", [&](coro::Scope&) -> coro::CoroTask<void> {
+                auto listing_task = runtime::fs::list_dir(dstd::PathView(dir));
+                auto listing = co_await std::move(listing_task);
+                if (!listing) throw common::DFTUtilsException(listing.error());
+                for (auto& entry : *listing)
+                    paths.push_back(std::move(entry.path));
+            })) {
         return nullptr;
     }
-    return paths_column(entries, false);
+    return paths_column(paths);
 }
 
 dftu_series* scan_dir_pattern(const char* root, std::int32_t root_size,
                               const char* pattern, std::int32_t pattern_size) {
-    filesystem::PatternDirectoryScannerUtilityInput input(
-        to_string(root, root_size), {to_string(pattern, pattern_size)});
-    dstd::Vector<filesystem::FileEntry> entries;
+    const dstd::String dir = to_string(root, root_size);
+    runtime::fs::FindOptions options;
+    options.recursive = false;
+    options.with_stat = false;
+    dstd::String name = to_string(pattern, pattern_size);
+    if (!name.empty()) {
+        if (name.front() == '.') name.insert(0, 1, '*');
+        options.patterns.push_back(std::move(name));
+    }
+    dstd::Vector<dstd::Path> paths;
     if (!run_sync("dftu.fs.scan_dir_pattern",
                   [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                      filesystem::PatternDirectoryScannerUtility scanner;
-                      entries = co_await scanner(scope, input);
+                      auto found_task = runtime::fs::find_all(
+                          scope, dstd::PathView(dir), options);
+                      auto found = co_await std::move(found_task);
+                      if (!found)
+                          throw common::DFTUtilsException(found.error());
+                      for (auto& file : *found)
+                          paths.push_back(std::move(file.path));
                   })) {
         return nullptr;
     }
-    return paths_column(entries, true);
+    return paths_column(paths);
 }
 
 std::int32_t compress(const char* in, std::int32_t in_size, const char* out,

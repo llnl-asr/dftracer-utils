@@ -2,14 +2,24 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 namespace dftracer::utils::trace::internal {
 
 namespace {
+
+bool is_input_file_name(dstd::StringView path) {
+    const dstd::StringView name = dstd::PathView(path).filename();
+    for (const char* pattern :
+         dftracer::utils::common::constants::indexer::INPUT_FILE_PATTERNS) {
+        if (dstd::fs::match_name(pattern, name)) return true;
+    }
+    return false;
+}
 
 bool is_directory_input(dstd::CStringView path) {
     dftracer::utils::common::InputFileStat st;
@@ -24,8 +34,7 @@ dstd::String determine_index_path(dstd::CStringView cpath,
     // A trace file name needs no stat to tell it from a directory.
     dstd::StringView root = index_dir;
     if (index_dir.empty()) {
-        if (!utilities::filesystem::is_trace_file(path) &&
-            is_directory_input(cpath)) {
+        if (!is_input_file_name(path) && is_directory_input(cpath)) {
             root = path;
         } else if (!path.empty() && path.back() == '/') {
             // The parent of "a/b/" is "a/b", where PathView would give "a".

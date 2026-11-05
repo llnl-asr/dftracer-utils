@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/coro/adaptive_gate.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/combinators.h>
@@ -22,6 +24,21 @@ using dstd::fs::FileKind;
 constexpr std::size_t STAT_BATCH = 16;
 constexpr std::size_t STREAM_SLOTS = 256;
 
+#if DFTRACER_UTILS_TEST_PROBES
+std::atomic<std::size_t> g_stat_batches{0};
+std::atomic<std::size_t> g_stat_threads{0};
+std::atomic<std::size_t> g_stat_epoch{1};
+thread_local std::size_t t_stat_epoch = 0;
+
+void note_stat_batch() noexcept {
+    g_stat_batches.fetch_add(1, std::memory_order_relaxed);
+    const std::size_t epoch = g_stat_epoch.load(std::memory_order_relaxed);
+    if (t_stat_epoch == epoch) return;
+    t_stat_epoch = epoch;
+    g_stat_threads.fetch_add(1, std::memory_order_relaxed);
+}
+#endif
+
 struct Found {
     dstd::Path path;
     std::uint64_t size = 0;
@@ -32,6 +49,24 @@ struct Found {
 using Batch = dstd::Expected<dstd::Vector<Found>, dstd::Error>;
 using BatchChannel = coro::Channel<Batch>;
 using BatchProducer = decltype(std::declval<BatchChannel&>().producer());
+
+// A later layer that asks for this input through common::stat_input makes no
+// second syscall.
+dstd::Expected<dstd::fs::FileStat, dstd::Error> stat_and_keep(
+    dstd::PathView path) noexcept {
+    auto found = dstd::fs::stat(path);
+    if (found) {
+        common::InputFileStat kept;
+        kept.size = found->size;
+        kept.mtime =
+            static_cast<std::int64_t>(found->mtime_ns / NANOS_PER_SECOND);
+        kept.mtime_ns = static_cast<std::int64_t>(found->mtime_ns);
+        kept.is_directory = found->kind == FileKind::Directory;
+        kept.is_regular_file = found->kind == FileKind::File;
+        common::remember_input(path.str(), kept);
+    }
+    return found;
+}
 
 template <typename Fn>
 struct IoCall {
@@ -137,9 +172,12 @@ dstd::Optional<dstd::Error> stat_range(const WalkPlan& plan,
                                        dstd::Vector<Found>& items,
                                        std::size_t begin, std::size_t stop,
                                        dstd::Vector<Found>& out) noexcept {
+#if DFTRACER_UTILS_TEST_PROBES
+    note_stat_batch();
+#endif
     for (std::size_t i = begin; i < stop; ++i) {
         Found& item = items[i];
-        auto found = dstd::fs::stat(item.path.view());
+        auto found = stat_and_keep(item.path.view());
         if (!found) {
             if (found.error().is(dstd::Condition::NotFound) ||
                 plan.skip_unreadable) {
@@ -358,7 +396,7 @@ coro::CoroTask<dstd::Expected<dstd::Vector<Entry>, dstd::Error>> list_owned(
 
 coro::CoroTask<dstd::Expected<dstd::fs::FileStat, dstd::Error>> stat_owned(
     dstd::Path path) {
-    auto fn = [&path]() noexcept { return dstd::fs::stat(path.view()); };
+    auto fn = [&path]() noexcept { return stat_and_keep(path.view()); };
     auto call = on_io(fn);
     co_return co_await std::move(call);
 }
@@ -424,7 +462,7 @@ stat_many(dstd::Span<const dstd::Path> paths, std::size_t limit) {
     auto job = [paths, out](StatSlice slice) -> coro::CoroTask<void> {
         auto fn = [paths, out, slice]() noexcept {
             for (std::size_t i = slice.begin; i < slice.stop; ++i) {
-                out[i] = dstd::fs::stat(paths[i].view());
+                out[i] = stat_and_keep(paths[i].view());
             }
             return true;
         };
@@ -459,5 +497,24 @@ coro::CoroTask<dstd::Expected<dstd::Vector<FoundFile>, dstd::Error>> find_all(
     coro::Scope& scope, dstd::PathView root, FindOptions options) {
     return drain(StreamEnd(start_find(scope, root, std::move(options))));
 }
+
+#if DFTRACER_UTILS_TEST_PROBES
+std::size_t stat_batch_count() noexcept {
+    return g_stat_batches.load(std::memory_order_relaxed);
+}
+
+std::size_t stat_thread_count() noexcept {
+    return g_stat_threads.load(std::memory_order_relaxed);
+}
+
+bool has_run_stat_batch() noexcept {
+    return t_stat_epoch == g_stat_epoch.load(std::memory_order_relaxed);
+}
+
+void reset_stat_threads() noexcept {
+    g_stat_epoch.fetch_add(1, std::memory_order_relaxed);
+    g_stat_threads.store(0, std::memory_order_relaxed);
+}
+#endif
 
 }  // namespace dftracer::utils::runtime::fs

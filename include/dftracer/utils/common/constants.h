@@ -149,6 +149,13 @@ static constexpr std::size_t INFLATE_BUFFER_SIZE = 262144;  ///< 256KB
 static constexpr std::uint64_t DEFAULT_CHECKPOINT_SIZE =
     32 * 1024 * 1024;  ///< 32MB
 inline constexpr const char* EXTENSION = ".dftindex";
+/// File names directory discovery lists as input traces, in the syntax of
+/// dstd::fs::match_name.
+inline constexpr const char* INPUT_FILE_PATTERNS[] = {"*.gz"};
+/// Folders discovery does not enter: index data, the default output of
+/// dftracer_split and record schema specs, none of which hold input traces.
+inline constexpr const char* SCAN_SKIP_DIRS[] = {".dftindex*", "split",
+                                                 "schemas"};
 }  // namespace indexer
 
 namespace reader {

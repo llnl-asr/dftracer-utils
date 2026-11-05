@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_RUNTIME_FS_FS_H
 #define DFTRACER_UTILS_RUNTIME_FS_FS_H
 
+#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
@@ -18,6 +19,8 @@
 
 namespace dftracer::utils::runtime::fs {
 
+inline constexpr std::uint64_t NANOS_PER_SECOND = 1000000000;
+
 /// One name in a directory, with the kind readdir reported, or an lstat of the
 /// name when it reported none.
 struct Entry {
@@ -29,6 +32,11 @@ struct FoundFile {
     dstd::Path path;
     std::uint64_t size = 0;
     std::uint64_t mtime_ns = 0;
+
+    /// The mtime in whole seconds, which the index stores.
+    std::uint64_t mtime_seconds() const noexcept {
+        return mtime_ns / NANOS_PER_SECOND;
+    }
 };
 
 struct WalkOptions {
@@ -90,6 +98,32 @@ coro::AsyncGenerator<dstd::Expected<FoundFile, dstd::Error>> find(
 /// The results of @ref find, sorted by path.
 coro::CoroTask<dstd::Expected<dstd::Vector<FoundFile>, dstd::Error>> find_all(
     coro::Scope& scope, dstd::PathView root, FindOptions options = {});
+
+/// @ref find_all on a runtime of its own with @p threads workers and
+/// @p io_threads I/O threads, run to the end on the calling thread. For a tool
+/// whose main thread runs no executor, so the stat calls fan out over a pool.
+dstd::Expected<dstd::Vector<FoundFile>, dstd::Error> find_all_on_pool(
+    std::size_t threads, std::size_t io_threads, dstd::PathView root,
+    FindOptions options = {});
+
+/// A list of names for @ref FindOptions::patterns or @ref
+/// FindOptions::skip_dirs.
+template <std::size_t N>
+dstd::Vector<dstd::String> names_of(const char* const (&names)[N]) {
+    return dstd::Vector<dstd::String>(names, names + N);
+}
+
+#if DFTRACER_UTILS_TEST_PROBES
+/// The stat batches @ref find has run in this process. For tests.
+std::size_t stat_batch_count() noexcept;
+/// The threads that have run a stat batch since the last
+/// @ref reset_stat_threads. For tests.
+std::size_t stat_thread_count() noexcept;
+/// Whether the calling thread has run a stat batch since the last
+/// @ref reset_stat_threads. For tests.
+bool has_run_stat_batch() noexcept;
+void reset_stat_threads() noexcept;
+#endif
 
 }  // namespace dftracer::utils::runtime::fs
 

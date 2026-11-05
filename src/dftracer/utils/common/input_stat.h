@@ -90,6 +90,14 @@ class InputStatScope {
 /// published. A failed stat is not kept.
 bool stat_input(dstd::CStringView path, InputFileStat& out);
 
+/// The stat kept for `path` in the published cache, without a syscall. False
+/// when there is none or no cache is published.
+bool cached_input(dstd::StringView path, InputFileStat& out);
+
+/// Keeps a stat the caller read, so a later stat_input() of `path` makes no
+/// syscall. No-op without a published cache.
+void remember_input(dstd::StringView path, const InputFileStat& st);
+
 /// Drops `path` from the published cache. No-op without one. A caller that
 /// deletes a path it may have stat'ed through stat_input() calls it.
 void forget_input(dstd::StringView path);

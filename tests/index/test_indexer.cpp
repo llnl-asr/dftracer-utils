@@ -75,14 +75,15 @@ TEST_SUITE("Indexer") {
         const dstd::Path dir = dstd::Path(env.dir()) / "traces";
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         (void)dstd::fs::write_file(dstd::PathView(dir / "a.pfw.gz"), "x");
-        (void)dstd::fs::write_file(dstd::PathView(dir / "b.pfw"), "x");
+        (void)dstd::fs::write_file(dstd::PathView(dir / "b.ndjson.gz"), "x");
+        (void)dstd::fs::write_file(dstd::PathView(dir / "plain.pfw"), "x");
         (void)dstd::fs::write_file(dstd::PathView(dir / "notes.txt"), "x");
 
         auto ix = Indexer::open({dstd::String(dir.str())}, with_runtime(rt));
         dstd::Vector<dstd::String> names;
         for (const auto& p : ix.paths())
             names.emplace_back(dstd::PathView(p).filename());
-        CHECK(sorted(names) == names_of({"a.pfw.gz", "b.pfw"}));
+        CHECK(sorted(names) == names_of({"a.pfw.gz", "b.ndjson.gz"}));
         rt.shutdown();
     }
 

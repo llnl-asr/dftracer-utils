@@ -5,7 +5,7 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/queue.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/filesystem/types.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -21,13 +21,11 @@ namespace dftracer::utils::index::build {
 ///
 /// Complexity: O(N log N) for the initial sort + O(N log K) for the
 /// min-heap over K = worker_count. `files` is consumed.
-inline dstd::Vector<dstd::Vector<utilities::filesystem::FileEntry>>
-plan_lpt_partition(dstd::Vector<utilities::filesystem::FileEntry> files,
-                   std::size_t worker_count) {
+inline dstd::Vector<dstd::Vector<runtime::fs::FoundFile>> plan_lpt_partition(
+    dstd::Vector<runtime::fs::FoundFile> files, std::size_t worker_count) {
     if (worker_count == 0) worker_count = 1;
 
-    dstd::Vector<dstd::Vector<utilities::filesystem::FileEntry>> buckets(
-        worker_count);
+    dstd::Vector<dstd::Vector<runtime::fs::FoundFile>> buckets(worker_count);
     if (files.empty()) return buckets;
 
     std::sort(files.begin(), files.end(),

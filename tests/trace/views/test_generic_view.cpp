@@ -230,16 +230,17 @@ TEST_SUITE("GenericView") {
         CHECK(empty.collect().get().num_rows() == 0);
     }
 
-    TEST_CASE("from_directory reads plain files as an error, not as empty") {
+    TEST_CASE(
+        "from_directory reads a non-gzip .gz file as an error, not as empty") {
         TestEnvironment env(10);
-        dftu_utils_test::FileOut(env.dir() + "/plain.jsonl")
+        dftu_utils_test::FileOut(env.dir() + "/plain.jsonl.gz")
             << R"({"k":1})" << "\n";
         try {
             run(View::from_directory(dstd::String(env.dir()))).collect().get();
             FAIL("no error");
         } catch (const std::exception& e) {
             CAPTURE(e.what());
-            CHECK(dstd::String(e.what()).find("Not a gzip trace") !=
+            CHECK(dstd::String(e.what()).find("plain.jsonl.gz is not gzip") !=
                   dstd::String::npos);
         }
     }

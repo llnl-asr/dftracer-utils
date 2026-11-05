@@ -43,8 +43,7 @@ another registered record schema instead of the one detected from them.
          // One file, with an explicit index path (empty = sidecar convention).
          View v = View::from_file("trace.pfw.gz");
 
-         // Or scan a directory recursively for .pfw.gz, .jsonl.gz and
-         // .ndjson.gz files (a coroutine).
+         // Or scan a directory recursively for .gz files (a coroutine).
          View v = View::from_directory("traces/").get();
 
          // The unified F: filter() takes the expression directly (pushdown).

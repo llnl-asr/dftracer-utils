@@ -399,8 +399,10 @@ an error naming the row set when the schema's source defines none. Declare
 your format as a record schema to use them. A viewer reads
 files of one schema: mixing dftracer traces and generic files in one viewer
 raises an error naming both; an empty file, or one of metadata only, takes
-no vote. A directory viewer finds ``.jsonl.gz`` and ``.ndjson.gz``
-files next to ``.pfw.gz`` traces, and so does the indexer.
+no vote. A directory viewer lists every ``*.gz`` file, so ``.jsonl.gz`` and
+``.ndjson.gz`` files sit next to ``.pfw.gz`` traces, and so does the
+indexer. A plain ``.pfw``, ``.jsonl`` or ``.ndjson`` file is not listed;
+gzip it first.
 
 .. _describe-your-own-record-format:
 

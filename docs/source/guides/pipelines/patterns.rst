@@ -346,13 +346,35 @@ A task that computes without waits reads ``co_await coro::this_coro::stop_reques
 Shape a stream
 --------------
 
-``coro/stream.h`` works on ``coro::AsyncGenerator`` values:
+``coro/stream.h`` holds every operation on ``coro::AsyncGenerator``.
+Each one is a function and an adaptor, so ``filter(gen, pred)`` and ``gen | filter(pred)`` do the same.
 
-- ``map``, ``take_until``, ``chunks``, ``zip`` and ``fold`` read one item at a time.
-  ``filter``, ``take``, ``flat_map`` and ``concat`` are in ``coro/async_generator.h``.
+- ``map``, ``flat_map``, ``filter``, ``take``, ``take_until``, ``concat``, ``chunks``, ``zip`` and ``fold`` read one item at a time.
+  A function that they call may return a ``CoroTask``, which they await.
 - ``merge`` reads many generators at once and yields items as they come.
 - ``flat_map_merge`` does the same for the generators a function returns, with a limit on how many run.
 - ``buffer`` reads ahead of the reader by a bounded number of items.
+- ``with_item_timeout`` bounds the wait for each item.
+
+A sync ``coro::Generator`` has the same ``map``, ``flat_map``, ``filter``, ``take``, ``take_until``, ``concat``, ``chunks``, ``zip`` and ``fold``, and the same ``next``.
+Its functions give plain values, because it cannot wait, so ``merge``, ``flat_map_merge``, ``buffer`` and ``with_item_timeout`` are only on ``AsyncGenerator``.
+
+A stop or a cancel of the task that reads a generator also ends a wait inside the generator.
+The read then raises ``dstd::Condition::Cancelled``.
 
 ``merge``, ``flat_map_merge`` and ``buffer`` run their sources in the background, so a source must own what it uses.
 Each of them keeps the order of one source, and raises the first error from the next read.
+Dropping the stream ends those sources at their current wait.
+
+Run a range or a set of tasks
+-----------------------------
+
+``coro/parallel.h`` has ``parallel_for``, ``parallel_reduce`` and ``parallel_scan``, which wait without holding a thread.
+``Partition::Dynamic`` balances uneven work, and ``Partition::Static`` gives the same chunks on each run with the same ``max_in_flight``.
+
+``coro/join_set.h`` has ``with_join_set`` for tasks that are added as work comes, and ``as_completed`` for a known list.
+Both give outcomes as they finish, with errors as values.
+``JoinSet::next_within`` bounds a wait, and a result that comes at that moment stays for the next read.
+
+``stage | coro::ordered(n)`` and ``stage | coro::unordered(n)`` turn a batch stage into a stream stage that runs ``n`` items at once.
+The ordered form holds its output in input order, and ``n`` also bounds the results that wait for a slow item.

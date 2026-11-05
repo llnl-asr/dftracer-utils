@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/generator.h>
+#include <dftracer/utils/coro/stage.h>
+#include <dftracer/utils/coro/stream.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -196,4 +200,106 @@ TEST_CASE("Generator - Complex types") {
     CHECK(result[0] == (Point{0, 0}));
     CHECK(result[1] == (Point{1, 1}));
     CHECK(result[2] == (Point{2, 4}));
+}
+
+namespace {
+
+Generator<int> sync_numbers(int first, int count) {
+    for (int i = 0; i < count; ++i) co_yield first + i;
+}
+
+Generator<int> sync_fails_after(int count) {
+    for (int i = 0; i < count; ++i) co_yield i;
+    throw common::DFTUtilsException(
+        dstd::Error{dstd::Condition::Io, "planned failure"});
+}
+
+Generator<dstd::UniquePtr<int>> owned_numbers(int count) {
+    for (int i = 0; i < count; ++i) co_yield dstd::make_unique<int>(i);
+}
+
+template <typename T>
+dstd::Vector<T> drain(Generator<T> source) {
+    dstd::Vector<T> out;
+    for (;;) {
+        auto value = source.next();
+        if (!value) break;
+        out.push_back(std::move(*value));
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("Generator - every stream operation as a function") {
+    auto mapped = drain(map(sync_numbers(1, 3), [](int v) { return v * 2; }));
+    REQUIRE(mapped.size() == 3);
+    CHECK(mapped[2] == 6);
+
+    auto flat = drain(flat_map(sync_numbers(10, 2),
+                               [](int v) { return sync_numbers(v, 2); }));
+    REQUIRE(flat.size() == 4);
+    CHECK(flat[3] == 12);
+
+    auto kept = drain(
+        filter(sync_numbers(0, 6), [](const int& v) { return v % 2 == 0; }));
+    REQUIRE(kept.size() == 3);
+    CHECK(kept[2] == 4);
+
+    CHECK(drain(take(sync_numbers(0, 9), 2)).size() == 2);
+    CHECK(drain(take_until(sync_numbers(0, 9), [](const int& v) {
+              return v == 3;
+          })).size() == 3);
+
+    auto both = drain(concat(sync_numbers(0, 1), sync_numbers(5, 1)));
+    REQUIRE(both.size() == 2);
+    CHECK(both[1] == 5);
+    auto later =
+        drain(concat(sync_numbers(0, 1), []() { return sync_numbers(7, 1); }));
+    REQUIRE(later.size() == 2);
+    CHECK(later[1] == 7);
+
+    auto grouped = drain(chunks(sync_numbers(0, 5), 2));
+    REQUIRE(grouped.size() == 3);
+    CHECK(grouped[2].size() == 1);
+    CHECK_THROWS_AS(drain(chunks(sync_numbers(0, 1), 0)),
+                    common::DFTUtilsException);
+
+    auto pairs = drain(zip(sync_numbers(0, 2), sync_numbers(10, 9)));
+    REQUIRE(pairs.size() == 2);
+    CHECK(pairs[1].second == 11);
+
+    CHECK(fold(sync_numbers(1, 4), 0, [](int a, int v) { return a + v; }) ==
+          10);
+}
+
+TEST_CASE("Generator - the adaptors of AsyncGenerator apply") {
+    auto out = drain(sync_numbers(0, 20) | map([](int v) { return v + 1; }) |
+                     filter([](const int& v) { return v % 2 == 0; }) |
+                     take_until([](const int& v) { return v > 12; }) | take(5) |
+                     flat_map([](int v) { return sync_numbers(v, 1); }) |
+                     then([](int v) { return v * 10; }));
+    REQUIRE(out.size() == 5);
+    CHECK(out[4] == 100);
+    CHECK(drain(sync_numbers(0, 5) | chunks(2)).size() == 3);
+    CHECK(
+        drain(sync_numbers(0, 1) | concat([]() { return sync_numbers(5, 1); }))
+            .size() == 2);
+    CHECK((sync_numbers(1, 4) | fold(0, [](int a, int v) { return a + v; })) ==
+          10);
+}
+
+TEST_CASE("Generator - next moves a move-only item out") {
+    auto out = drain(map(owned_numbers(3), [](dstd::UniquePtr<int> v) {
+        *v += 1;
+        return v;
+    }));
+    REQUIRE(out.size() == 3);
+    CHECK(*out[2] == 3);
+}
+
+TEST_CASE("Generator - an error reaches the reader through an operation") {
+    auto stream = map(sync_fails_after(1), [](int v) { return v; });
+    CHECK(stream.next().has_value());
+    CHECK_THROWS_AS(stream.next(), common::DFTUtilsException);
 }

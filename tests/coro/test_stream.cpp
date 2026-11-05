@@ -293,3 +293,154 @@ TEST_CASE("a dropped stream stops its background sources") {
     }());
     settles(in_inner);
 }
+
+TEST_CASE("a timeout ends a wait inside a generator") {
+    Runtime runtime(2);
+    const auto start = std::chrono::steady_clock::now();
+    dstd::Condition condition = dstd::Condition::Unknown;
+    try {
+        runtime.block_on(with_timeout(collect(slow_numbers(0, 3, 30s)), 10ms));
+    } catch (const common::DFTUtilsException& e) {
+        condition = e.condition();
+    }
+    CHECK(condition == dstd::Condition::Timeout);
+    CHECK(std::chrono::steady_clock::now() - start < 5s);
+}
+
+TEST_CASE("a cancel reaches through generators and a task they await") {
+    Runtime runtime(2);
+    auto waits = []() -> CoroTask<int> {
+        co_await sleep(30s);
+        co_return 1;
+    };
+    const auto start = std::chrono::steady_clock::now();
+    dstd::Condition condition = dstd::Condition::Unknown;
+    try {
+        runtime.block_on(with_timeout(
+            collect(numbers(0, 1) | map([waits](int) { return waits(); }) |
+                    filter([](int) { return true; })),
+            10ms));
+    } catch (const common::DFTUtilsException& e) {
+        condition = e.condition();
+    }
+    CHECK(condition == dstd::Condition::Timeout);
+    CHECK(std::chrono::steady_clock::now() - start < 5s);
+}
+
+TEST_CASE("with_item_timeout gives items in time and ends a slow wait") {
+    Runtime runtime(2);
+    auto fast =
+        runtime.block_on(collect(with_item_timeout(numbers(0, 100), 5s)));
+    CHECK(fast.size() == 100);
+
+    const auto start = std::chrono::steady_clock::now();
+    dstd::Condition condition = dstd::Condition::Unknown;
+    try {
+        runtime.block_on(
+            collect(with_item_timeout(slow_numbers(0, 3, 30s), 10ms)));
+    } catch (const common::DFTUtilsException& e) {
+        condition = e.condition();
+    }
+    CHECK(condition == dstd::Condition::Timeout);
+    CHECK(std::chrono::steady_clock::now() - start < 5s);
+}
+
+TEST_CASE("a dropped stream ends a source blocked in a long wait") {
+    const auto start = std::chrono::steady_clock::now();
+    {
+        Runtime runtime(2);
+        runtime.block_on([]() -> CoroTask<void> {
+            dstd::Vector<AsyncGenerator<int>> sources;
+            sources.push_back(numbers(1, 1));
+            sources.push_back(slow_numbers(0, 3, 30s));
+            auto stream = merge(std::move(sources));
+            auto first = co_await stream.next();
+            CHECK(first.has_value());
+        }());
+        runtime.block_on([]() -> CoroTask<void> {
+            auto stream =
+                buffer(concat(numbers(1, 1), slow_numbers(0, 3, 30s)), 2);
+            auto first = co_await stream.next();
+            CHECK(first.has_value());
+        }());
+    }
+    CHECK(std::chrono::steady_clock::now() - start < 5s);
+}
+
+TEST_CASE("a generator can ask for its executor and for a stop") {
+    Runtime runtime(2);
+    auto asks = []() -> AsyncGenerator<int> {
+        Executor* executor = co_await this_coro::executor;
+        const bool stopped = co_await this_coro::stop_requested;
+        co_yield executor != nullptr ? 1 : 0;
+        co_yield stopped ? 1 : 0;
+    };
+    auto out = runtime.block_on(collect(asks()));
+    REQUIRE(out.size() == 2);
+    CHECK(out[0] == 1);
+    CHECK(out[1] == 0);
+}
+
+TEST_CASE("functions that return a task work in every operation") {
+    Runtime runtime(2);
+    auto evens = [](const int& v) -> CoroTask<bool> {
+        co_await sleep(0ms);
+        co_return v % 2 == 0;
+    };
+    auto kept = runtime.block_on(collect(filter(numbers(0, 6), evens)));
+    REQUIRE(kept.size() == 3);
+    CHECK(kept[2] == 4);
+
+    auto is_three = [](const int& v) -> CoroTask<bool> { co_return v == 3; };
+    auto until = runtime.block_on(collect(take_until(numbers(0, 9), is_three)));
+    CHECK(until.size() == 3);
+
+    auto add = [](int acc, int v) -> CoroTask<int> { co_return acc + v; };
+    CHECK(runtime.block_on(fold(numbers(1, 4), 0, add)) == 10);
+
+    auto later = [](int v) -> CoroTask<AsyncGenerator<int>> {
+        co_return numbers(v, 2);
+    };
+    auto flat = runtime.block_on(collect(flat_map(numbers(10, 2), later)));
+    REQUIRE(flat.size() == 4);
+    CHECK(flat[3] == 12);
+    auto merged =
+        runtime.block_on(collect(flat_map_merge(numbers(10, 2), later, 2)));
+    CHECK(merged.size() == 4);
+}
+
+TEST_CASE("each stream operation works as an adaptor") {
+    Runtime runtime(2);
+    auto out = runtime.block_on(
+        collect(numbers(0, 20) | map([](int v) { return v + 1; }) |
+                filter([](int v) { return v % 2 == 0; }) |
+                take_until([](int v) { return v > 12; }) | take(5) | buffer(2) |
+                flat_map([](int v) { return numbers(v, 1); }) |
+                flat_map_merge([](int v) { return numbers(v, 1); }, 1)));
+    REQUIRE(out.size() == 5);
+    CHECK(out[4] == 10);
+    auto grouped = runtime.block_on(collect(numbers(0, 5) | chunks(2)));
+    CHECK(grouped.size() == 3);
+    auto joined = runtime.block_on(
+        collect(numbers(0, 1) | concat([]() { return numbers(5, 1); })));
+    REQUIRE(joined.size() == 2);
+    CHECK(joined[1] == 5);
+    CHECK(runtime.block_on(numbers(1, 4) |
+                           fold(0, [](int a, int v) { return a + v; })) == 10);
+    auto pair = runtime.block_on(collect(concat(numbers(0, 1), numbers(9, 1))));
+    CHECK(pair[1] == 9);
+}
+
+TEST_CASE("a generator read by a task can move to a pump after the task ends") {
+    Runtime runtime(2);
+    auto source = slow_numbers(0, 3, 1ms);
+    auto first =
+        runtime.block_on([](AsyncGenerator<int>& gen) -> CoroTask<int> {
+            auto value = co_await gen.next();
+            co_return *value;
+        }(source));
+    CHECK(first == 0);
+    auto rest = runtime.block_on(collect(buffer(std::move(source), 2)));
+    REQUIRE(rest.size() == 2);
+    CHECK(rest[1] == 2);
+}

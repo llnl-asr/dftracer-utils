@@ -322,7 +322,7 @@ template <typename T, typename Fn, typename R = ParallelMapValue<T, Fn>>
     requires(!std::is_void_v<R>)
 AsyncGenerator<R> parallel_map_unordered(dstd::Vector<T> items, Fn fn,
                                          ParallelOptions options = {}) {
-    Executor* executor = Executor::current();
+    Executor* executor = co_await this_coro::executor;
     if (executor == nullptr) {
         throw common::DFTUtilsException(
             dstd::Error{dstd::Condition::InvalidArgument,

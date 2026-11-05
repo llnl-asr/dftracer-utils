@@ -331,6 +331,8 @@ set(TEST_CPP_SOURCES
     coro/test_channel_queue.cpp
     coro/test_combinators.cpp
     coro/test_stream.cpp
+    coro/test_parallel.cpp
+    coro/test_join_set.cpp
     coro/test_stage.cpp
     coro/test_generator.cpp
     coro/test_async_generator.cpp

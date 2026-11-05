@@ -9,6 +9,7 @@ dftracer/utils/common/platform_compat.h
 dftracer/utils/common/str_format.h
 dftracer/utils/common/typedefs.h
 dftracer/utils/coro/abi.h
+dftracer/utils/coro/adaptor.h
 dftracer/utils/coro/async_event.h
 dftracer/utils/coro/async_generator.h
 dftracer/utils/coro/async_latch.h
@@ -31,7 +32,9 @@ dftracer/utils/coro/detail/wake_batch.h
 dftracer/utils/coro/executor.h
 dftracer/utils/coro/generator.h
 dftracer/utils/coro/join_handle.h
+dftracer/utils/coro/join_set.h
 dftracer/utils/coro/named.h
+dftracer/utils/coro/parallel.h
 dftracer/utils/coro/retry.h
 dftracer/utils/coro/run_loop.h
 dftracer/utils/coro/run_on.h

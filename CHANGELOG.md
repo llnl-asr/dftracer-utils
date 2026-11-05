@@ -11,7 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Stop the children of a `coro::Scope` when one fails or when the task that holds the scope is cancelled, so they end at their next wait in place of running on.
   Pass `coro::ScopeMode::Supervisor` to keep the old behavior for a child error.
-- Add the stream operations `coro::map`, `take_until`, `chunks`, `zip`, `fold`, `merge`, `flat_map_merge` and `buffer`.
+- Add the stream operations `coro::take_until`, `chunks`, `zip`, `fold`, `merge`, `flat_map_merge` and `buffer`.
+  Each stream operation in `coro/stream.h` also comes as an adaptor, such as `gen | coro::filter(pred)`.
+- Make a stop or a cancel of a task end a wait inside an `AsyncGenerator` that it reads, and let `this_coro::executor` work in a generator.
+- Remove the `AsyncGenerator` methods `map`, `flat_map`, `filter`, `take` and `concat` and the operators `>`, `>>` and `|`.
+  Use the functions and adaptors in `coro/stream.h`.
+- Give the sync `coro::Generator` the same stream operations and adaptors, and make its `next` return the item, as on `AsyncGenerator`.
+  This replaces `Generator::value`.
+- Add the awaitable `coro::parallel_for`, `parallel_reduce` and `parallel_scan` with a choice of static or dynamic `Partition`.
+- Add `coro::JoinSet` with `with_join_set`, and `as_completed`.
+- Add `coro::map_ordered` and `map_unordered`, and the stage adaptors `ordered` and `unordered` with a token limit.
 - Add `coro::StopSource`, `StopToken`, `with_stop_token` and `this_coro::stop_requested`.
 - Wake a task parked on a channel, event, semaphore, mutex, sleep or future when the task is cancelled, so `when_any` and `SpawnFuture::cancel` no longer wait for the parked wait to end.
   The wait raises a cancelled error.

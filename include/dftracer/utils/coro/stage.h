@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/coro/adaptor.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/cancelled.h>
@@ -96,9 +97,6 @@ struct is_stage_either : std::false_type {};
 template <class A, class B>
 struct is_stage_either<dstd::Either<A, B>>
     : std::bool_constant<BatchPair<A, B> || StreamPair<A, B>> {};
-
-template <class T>
-struct is_adaptor : std::false_type {};
 
 template <class E, bool Left, class T>
 CoroTask<E> tag_task(CoroTask<T> task) {
@@ -211,42 +209,6 @@ auto as_stage(S&& stage) {
     } else {
         return std::remove_cvref_t<S>(std::forward<S>(stage));
     }
-}
-
-/// A callable that composes with the pipe: `x | adaptor` is `adaptor(x)`, and
-/// `a | b` is an adaptor that applies @p a and then @p b.
-template <class F>
-struct Adaptor {
-    F fn;
-
-    template <class X>
-    decltype(auto) operator()(X&& x) const {
-        return fn(std::forward<X>(x));
-    }
-};
-
-namespace detail {
-template <class F>
-struct is_adaptor<Adaptor<F>> : std::true_type {};
-
-template <class F>
-Adaptor<F> make_adaptor(F fn) {
-    return Adaptor<F>{std::move(fn)};
-}
-}  // namespace detail
-
-template <class X, class F>
-    requires(!detail::is_adaptor<std::remove_cvref_t<X>>::value)
-decltype(auto) operator|(X&& x, const Adaptor<F>& adaptor) {
-    return adaptor(std::forward<X>(x));
-}
-
-template <class F, class G>
-auto operator|(Adaptor<F> first, Adaptor<G> second) {
-    return detail::make_adaptor(
-        [first = std::move(first), second = std::move(second)](auto&& x) {
-            return second(first(std::forward<decltype(x)>(x)));
-        });
 }
 
 namespace detail {
@@ -439,6 +401,10 @@ auto apply_then(X&& x, const N& next) {
         } else {
             return coro::map(std::forward<X>(x), std::move(n));
         }
+    } else if constexpr (is_generator_v<XD>) {
+        static_assert(!AnyStage<ND>,
+                      "a sync Generator cannot wait: then needs a function");
+        return coro::map(std::forward<X>(x), std::move(n));
     } else if constexpr (AnyStage<XD> || StageEither<XD>) {
         auto first = as_stage(std::forward<X>(x));
         using A = decltype(first);
@@ -451,8 +417,7 @@ auto apply_then(X&& x, const N& next) {
         }
     } else {
         static_assert(AlwaysFalse<X>::value,
-                      "then applies to a CoroTask, an AsyncGenerator or a "
-                      "stage");
+                      "then applies to a CoroTask, a generator or a stage");
     }
 }
 
@@ -713,8 +678,7 @@ inline auto named(dstd::StringView label) {
  *
  * On a @ref CoroTask and a batch stage it bounds the run, as @ref with_timeout.
  * On an @ref AsyncGenerator and a stream stage it bounds the wait for each
- * item, as @ref with_item_timeout. A stream stage must then stay alive until
- * the wait of its source ends, which can be after the timeout.
+ * item, as @ref with_item_timeout.
  */
 template <class Rep, class Period>
 auto timeout(std::chrono::duration<Rep, Period> wait) {
@@ -741,6 +705,68 @@ inline auto limit(std::size_t runs) {
         return detail::apply_wrap(std::forward<decltype(x)>(x),
                                   detail::LimitPolicy{slots});
     });
+}
+
+namespace detail {
+
+template <class S, bool ORDERED>
+class ParallelStage {
+    static_assert(BatchStage<S>,
+                  "ordered and unordered apply to a batch stage");
+
+   public:
+    using Input = typename S::Input;
+    using Output = typename S::Output;
+
+    ParallelStage(S stage, std::size_t tokens)
+        : stage_(std::move(stage)), tokens_(tokens) {}
+
+    dstd::StringView name() const { return stage_.name(); }
+
+    AsyncGenerator<Output> run(AsyncGenerator<Input> in) const {
+        StageFn<SharedStage<S>> fn{stage_};
+        if constexpr (ORDERED) {
+            return map_ordered(std::move(in), std::move(fn), tokens_);
+        } else {
+            return map_unordered(std::move(in), std::move(fn), tokens_);
+        }
+    }
+
+   private:
+    SharedStage<S> stage_;
+    std::size_t tokens_;
+};
+
+template <bool ORDERED>
+auto parallel_adaptor(std::size_t tokens) {
+    if (tokens == 0) {
+        throw common::DFTUtilsException(
+            dstd::Error{dstd::Condition::InvalidArgument,
+                        "a stage needs at least 1 token"});
+    }
+    return make_adaptor([tokens](auto&& x) {
+        auto stage = as_stage(std::forward<decltype(x)>(x));
+        return ParallelStage<decltype(stage), ORDERED>(std::move(stage),
+                                                       tokens);
+    });
+}
+
+}  // namespace detail
+
+/**
+ * @brief Adaptor that turns a batch stage into a stream stage that runs it on
+ * up to @p tokens items at once and keeps the input order.
+ *
+ * @p tokens bounds the running items plus the results that wait for an earlier
+ * one. See @ref map_ordered. Raises dstd::Condition::InvalidArgument on 0.
+ */
+inline auto ordered(std::size_t tokens) {
+    return detail::parallel_adaptor<true>(tokens);
+}
+
+/// @ref ordered that yields results as they finish. See @ref map_unordered.
+inline auto unordered(std::size_t tokens) {
+    return detail::parallel_adaptor<false>(tokens);
 }
 
 /**

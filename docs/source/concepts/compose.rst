@@ -71,7 +71,7 @@ An adaptor works on a ``CoroTask``, on an ``AsyncGenerator`` and, where it says 
      - Report ``label`` as the name of a stage.
    * - ``timeout(d)``
      - End a task or batch stage with a ``Timeout`` error when ``d`` passes.
-       On a stream it bounds the wait for each item, and the source runs in the background and reads one item ahead.
+       On a stream it bounds the wait for each item.
    * - ``limit(n)``
      - At most ``n`` runs at once across every copy of the adaptor.
        A stream holds its slot until it ends, fails or is dropped.

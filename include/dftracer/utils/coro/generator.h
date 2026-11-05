@@ -4,18 +4,23 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/coro/detail/frame.h>
 #include <dftracer/utils/dstd/optional.h>
 
 #include <coroutine>
 #include <exception>
 #include <iterator>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace dftracer::utils::coro {
 
 /**
  * Generator<T> - Synchronous lazy sequence generator
+ *
+ * The operations on it are in `coro/stream.h`, with the names that
+ * @ref AsyncGenerator uses.
  *
  * Usage:
  * @code
@@ -35,12 +40,26 @@ namespace dftracer::utils::coro {
  * @endcode
  */
 template <typename T>
+class Generator;
+
+namespace detail {
+template <typename T>
+struct is_generator : std::false_type {};
+template <typename T>
+struct is_generator<Generator<T>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_generator_v = is_generator<T>::value;
+}  // namespace detail
+
+template <typename T>
 class Generator {
    public:
+    using value_type = T;
+
     /**
      * Promise type for coroutine
      */
-    struct promise_type {
+    struct promise_type : detail::FrameAllocation {
         dstd::Optional<T> current_value;
         std::exception_ptr exception;
 
@@ -66,7 +85,7 @@ class Generator {
          * Store yielded value
          */
         std::suspend_always yield_value(T value) {
-            current_value = std::move(value);
+            current_value.emplace(std::move(value));
             return {};
         }
 
@@ -222,39 +241,26 @@ class Generator {
      */
     iterator end() { return iterator{nullptr}; }
 
-    /**
-     * Manual control: advance to next value
-     * @return true if value available, false if done
-     */
-    bool next() {
+    /// The next item, or nothing at the end, as @ref AsyncGenerator gives it.
+    /// The item moves out, so a move-only type works. An error from the body is
+    /// raised here.
+    dstd::Optional<T> next() {
         if (!handle_ || handle_.done()) {
-            return false;
+            return dstd::nullopt;
         }
-
         handle_.resume();
-
         if (handle_.promise().exception) {
             common::rethrow_and_clear(handle_.promise().exception);
         }
-
-        return !handle_.done();
-    }
-
-    /**
-     * Get current value (call after next() returns true)
-     * @throws std::runtime_error if no value available
-     */
-    const T& value() const {
-        if (!handle_ || !handle_.promise().current_value) {
-            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                            "Generator: no value available");
+        if (handle_.done()) {
+            return dstd::nullopt;
         }
-        return *handle_.promise().current_value;
+        auto& current = handle_.promise().current_value;
+        dstd::Optional<T> out(std::move(*current));
+        current.reset();
+        return out;
     }
 
-    /**
-     * Check if generator is done
-     */
     bool done() const { return !handle_ || handle_.done(); }
 
     /**

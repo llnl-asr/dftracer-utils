@@ -205,14 +205,14 @@ struct ResultHolder {
     T take_result() { return std::move(result); }
 };
 
-/// An Either has no default state, so the result waits in an Optional.
-template <typename L, typename R>
-struct ResultHolder<dstd::Either<L, R>> {
-    dstd::Optional<dstd::Either<L, R>> result;
-    void return_value(dstd::Either<L, R> value) {
-        result.emplace(std::move(value));
-    }
-    dstd::Either<L, R> take_result() { return std::move(*result); }
+/// A type with no default state, such as an Either or a generator, waits in an
+/// Optional.
+template <typename T>
+    requires(!std::is_void_v<T> && !std::is_default_constructible_v<T>)
+struct ResultHolder<T> {
+    dstd::Optional<T> result;
+    void return_value(T value) { result.emplace(std::move(value)); }
+    T take_result() { return std::move(*result); }
 };
 
 template <>

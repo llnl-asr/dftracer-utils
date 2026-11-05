@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
@@ -192,4 +193,60 @@ TEST_CASE("pools opened and closed on many threads end with clean slots") {
     for (std::thread& th : threads) th.join();
     CHECK(failures.load() == 0);
     CHECK(root().live() == before);
+}
+
+// Blocks freed on another thread leave a charge in the cache of each thread.
+// The owners flush those charges while the pool closes, and the close must not
+// report a leak from a read that saw a charge neither in the cache nor in the
+// total.
+TEST_CASE("closing a pool while threads flush their charges reports no leak") {
+    constexpr int WORKERS = 6;
+    constexpr std::chrono::seconds RUN_FOR{5};
+    constexpr std::size_t EVICTORS = 64;
+    std::vector<PoolHandle> evictors;
+    for (std::size_t i = 0; i < EVICTORS; ++i) {
+        evictors.push_back(root().child("evictor", PoolKind::Results));
+    }
+    std::atomic<Pool*> current{nullptr};
+    std::atomic<int> round{0};
+    std::atomic<int> charged{0};
+    std::atomic<bool> stop{false};
+    std::vector<std::atomic<void*>> blocks(WORKERS);
+    std::vector<std::thread> workers;
+    for (int w = 0; w < WORKERS; ++w) {
+        workers.emplace_back([&, w] {
+            int seen = 0;
+            std::size_t next = static_cast<std::size_t>(w);
+            while (!stop.load(std::memory_order_acquire)) {
+                const int now = round.load(std::memory_order_acquire);
+                if (now != seen) {
+                    seen = now;
+                    Scope scope{*current.load(std::memory_order_acquire)};
+                    blocks[static_cast<std::size_t>(w)].store(
+                        allocate(64 + 64 * static_cast<std::size_t>(w), 16),
+                        std::memory_order_release);
+                    charged.fetch_add(1, std::memory_order_acq_rel);
+                }
+                Scope evict{*evictors[next++ % EVICTORS]};
+                deallocate(allocate(64, 16), 64);
+            }
+        });
+    }
+    const auto end = std::chrono::steady_clock::now() + RUN_FOR;
+    for (int r = 1; std::chrono::steady_clock::now() < end; ++r) {
+        PoolHandle pool = root().child("flushed");
+        current.store(pool.get(), std::memory_order_release);
+        charged.store(0, std::memory_order_release);
+        round.store(r, std::memory_order_release);
+        while (charged.load(std::memory_order_acquire) != WORKERS) {
+        }
+        for (std::size_t w = 0; w < WORKERS; ++w) {
+            deallocate(blocks[w].load(std::memory_order_acquire), 64 + 64 * w);
+        }
+        pool.close();
+    }
+    stop.store(true, std::memory_order_release);
+    for (auto& t : workers) t.join();
+    evictors.clear();
+    CHECK_FALSE(Manager::get().leaked());
 }

@@ -1144,6 +1144,11 @@ std::size_t PoolInternals::path(Manager& m, std::uint16_t id, char* out,
     return n;
 }
 
+namespace {
+constexpr int CLOSE_READS = 200;
+constexpr timespec CLOSE_READ_WAIT{0, 500000};
+}  // namespace
+
 void PoolInternals::close(Pool& p, std::uint32_t generation) noexcept {
     if (p.generation_.load(std::memory_order_relaxed) != generation) return;
     std::uint32_t expected = STATE_OPEN;
@@ -1164,6 +1169,15 @@ void PoolInternals::close(Pool& p, std::uint32_t generation) noexcept {
     std::ptrdiff_t bytes = 0;
     std::ptrdiff_t blocks = 0;
     own_totals(m, p.id_, bytes, blocks);
+    // A thread stopped inside a flush or a scope switch shows a charge twice or
+    // not at all for as long as it stays stopped, so equal reads prove nothing.
+    // A real leak never reaches zero, so it alone is left after the wait.
+    for (int read = 0; read < CLOSE_READS && (bytes != 0 || blocks != 0);
+         ++read) {
+        ::nanosleep(&CLOSE_READ_WAIT, nullptr);
+        full_fence();
+        own_totals(m, p.id_, bytes, blocks);
+    }
     if (p.kind_ == PoolKind::Scratch && (bytes != 0 || blocks != 0)) {
         int n = std::snprintf(
             text, sizeof(text),

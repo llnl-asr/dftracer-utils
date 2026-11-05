@@ -947,3 +947,30 @@ TEST_CASE("copy_tree keeps file and directory modes") {
     CHECK(mode_of("dst/private") == 0700);
     CHECK(mode_of("dst/private/inner.txt") == 0640);
 }
+
+TEST_CASE("match_name") {
+    using dstd::fs::match_name;
+    CHECK(match_name("*.gz", "a.pfw.gz"));
+    CHECK_FALSE(match_name("*.gz", "a.pfw"));
+    CHECK_FALSE(match_name("*.gz", "gz"));
+    CHECK(match_name("*.gz", ".gz"));
+    CHECK(match_name("*", ""));
+    CHECK(match_name("", ""));
+    CHECK_FALSE(match_name("", "a"));
+    CHECK_FALSE(match_name("?", ""));
+    CHECK(match_name("?", "a"));
+    CHECK(match_name("a?c", "abc"));
+    CHECK_FALSE(match_name("a?c", "ac"));
+    CHECK(match_name(".dftindex*", ".dftindex"));
+    CHECK(match_name(".dftindex*", ".dftindex-cache"));
+    CHECK_FALSE(match_name(".dftindex*", "x.dftindex"));
+    CHECK(match_name("split", "split"));
+    CHECK_FALSE(match_name("split", "splits"));
+    CHECK(match_name("a*b*c", "aXbYbZc"));
+    CHECK_FALSE(match_name("a*b*c", "aXbYbZ"));
+    CHECK(match_name("**", "abc"));
+    CHECK_FALSE(match_name("*", "a/b"));
+    CHECK_FALSE(match_name("a?b", "a/b"));
+    CHECK(match_name("a/b", "a/b"));
+    CHECK(match_name("*/b", "/b"));
+}

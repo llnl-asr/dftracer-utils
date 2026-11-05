@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Check the layering of runtime: a file includes only its own part or a part
 # of lower rank. Equal ranks do not include each other. There is no exception
-# and no allow list. Ranks: mpi, distributed 0; io 2; scheduler 3; top level 4.
+# and no allow list. Ranks: mpi, distributed 0; io 2; scheduler, fs 3; top level
+# 4.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -P check_runtime_layers.cmake
 #
@@ -16,6 +17,7 @@ set(RANK_mpi 0)
 set(RANK_distributed 0)
 set(RANK_io 2)
 set(RANK_scheduler 3)
+set(RANK_fs 3)
 set(RANK_top 4)
 
 if(DEFINED PLANT_DIR)

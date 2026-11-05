@@ -71,6 +71,7 @@ class IoUringBackend : public IoBackend {
     IoAwaitable submit_fsync(int fd) override;
     IoAwaitable submit_ftruncate(int fd, off_t length) override;
     IoAwaitable submit_fstat(int fd, struct stat* buf) override;
+    IoAwaitable submit_call(BlockingFn fn, void* context) override;
     IoAwaitable submit_accept(int listen_fd, struct sockaddr* addr,
                               socklen_t* addrlen) override;
     IoAwaitable submit_recv(int fd, void* buf, std::size_t len,
@@ -145,6 +146,7 @@ struct IoUringSubmitCtx : SubmitContext {
     int flags = 0;
     mode_t mode = 0;
     struct stat* stat_buf = nullptr;
+    BlockingFn call_fn = nullptr;
     struct sockaddr* addr = nullptr;
     socklen_t* addrlen = nullptr;
     int accept_flags = 0;

@@ -84,6 +84,10 @@ class IoBackend {
     /// Submit an async fstat operation.
     virtual IoAwaitable submit_fstat(int fd, struct stat *buf) = 0;
 
+    /// Runs @p fn with @p context on an I/O thread, or inline on a backend with
+    /// none, and completes with its result.
+    virtual IoAwaitable submit_call(BlockingFn fn, void *context) = 0;
+
     /// Scatter-gather sequential read. Works on any fd type.
     virtual IoAwaitable submit_readv(int fd, const struct iovec *iov,
                                      int iovcnt) = 0;

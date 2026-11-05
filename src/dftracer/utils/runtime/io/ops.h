@@ -38,8 +38,8 @@ IoAwaitable pwrite(dstd::NativeHandle fd, const void* buf, std::size_t len,
 IoAwaitable open(const char* path, int flags, mode_t mode = 0644) noexcept;
 
 /// Asynchronous open of a file as a @ref dstd::File. The error has the shape
-/// @ref dstd::File::open reports. @p path is copied, so it need not outlive
-/// the call or end with a NUL byte.
+/// @ref dstd::File::open reports. @p path need not end with a NUL byte and
+/// must stay valid until the task ends.
 coro::CoroTask<dstd::Expected<dstd::File, dstd::Error>> open_file(
     dstd::PathView path, dstd::OpenOptions options);
 
@@ -54,6 +54,12 @@ IoAwaitable ftruncate(dstd::NativeHandle fd, std::uint64_t length) noexcept;
 
 /// Asynchronous fstat.
 IoAwaitable fstat(dstd::NativeHandle fd, struct stat* buf) noexcept;
+
+/// Runs @p fn with @p context off the worker and gives its result: on an I/O
+/// thread, inline on a backend with none or outside an executor. For a blocking
+/// call that has no op of its own, such as a directory listing. @p context must
+/// stay valid until the await ends.
+IoAwaitable call(BlockingFn fn, void* context) noexcept;
 
 /// Accept a connection on a listening socket. Returns client fd.
 IoAwaitable accept(dstd::NativeHandle listen_fd,

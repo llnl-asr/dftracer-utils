@@ -551,6 +551,34 @@ Expected<void, Error> write_with_flags(PathView path, StringView data,
 
 }  // namespace
 
+bool match_name(StringView pattern, StringView name) noexcept {
+    std::size_t at = 0;
+    std::size_t in = 0;
+    std::size_t star = StringView::npos;
+    std::size_t resume = 0;
+    while (in < name.size()) {
+        if (at < pattern.size() && pattern[at] == '*') {
+            star = at++;
+            resume = in;
+        } else if (at < pattern.size() && name[in] != '/' &&
+                   (pattern[at] == '?' || pattern[at] == name[in])) {
+            ++at;
+            ++in;
+        } else if (at < pattern.size() && pattern[at] == '/' &&
+                   name[in] == '/') {
+            ++at;
+            ++in;
+        } else if (star != StringView::npos && name[resume] != '/') {
+            at = star + 1;
+            in = ++resume;
+        } else {
+            return false;
+        }
+    }
+    while (at < pattern.size() && pattern[at] == '*') ++at;
+    return at == pattern.size();
+}
+
 Expected<void, Error> write_file(PathView path, StringView data) {
     return write_with_flags(path, data, O_TRUNC);
 }

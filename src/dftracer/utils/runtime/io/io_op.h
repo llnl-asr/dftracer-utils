@@ -24,7 +24,8 @@ enum class IoOp {
     Preadv,
     Pwritev,
     Lseek,
-    Sendfile
+    Sendfile,
+    Call
 };
 
 }  // namespace dftracer::utils::runtime::io

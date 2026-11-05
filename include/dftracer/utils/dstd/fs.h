@@ -215,6 +215,11 @@ class Dir {
     ScopedFd fd_;
 };
 
+/// Whether one path component matches a pattern: `*` is any run of characters,
+/// `?` is one character, every other character is itself. Neither wildcard
+/// matches `/`, and `**` is the same as `*`.
+bool match_name(StringView pattern, StringView name) noexcept;
+
 /// Depth-first, pre-order walk of the tree at root. fn is called for root
 /// itself first, then for each descendant before its children. A symlinked
 /// directory is reported and not followed. The path handed to fn is built in

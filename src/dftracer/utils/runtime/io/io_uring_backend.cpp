@@ -362,6 +362,14 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
             }
             return;
         }
+        case IoOp::Call: {
+            ssize_t sync_result = uring_ctx->call_fn(uring_ctx->buf);
+            if (sync_result < 0) sync_result = -errno;
+            awaitable->result = sync_result;
+            delete uring_ctx;
+            awaitable->resume_through(backend->executor_);
+            return;
+        }
         case IoOp::Lseek: {
             ssize_t sync_result =
                 ::lseek(uring_ctx->fd, uring_ctx->offset, uring_ctx->whence);
@@ -469,6 +477,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
                 break;
             case IoOp::Ftruncate:
             case IoOp::Fstat:
+            case IoOp::Call:
             case IoOp::Lseek:
             case IoOp::Sendfile:
                 // Handled by early sync path; unreachable.
@@ -550,6 +559,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
             break;
         case IoOp::Ftruncate:
         case IoOp::Fstat:
+        case IoOp::Call:
             // Handled by early sync path above; unreachable.
             __builtin_unreachable();
         case IoOp::Accept:
@@ -693,6 +703,13 @@ IoAwaitable IoUringBackend::submit_fstat(int fd, struct stat* buf) {
         make_uring_request(IoOp::Fstat, fd, nullptr, 0, 0, nullptr, 0, 0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx);
     uring_ctx->stat_buf = buf;
+    return ctx;
+}
+
+IoAwaitable IoUringBackend::submit_call(BlockingFn fn, void* context) {
+    auto ctx =
+        make_uring_request(IoOp::Call, -1, context, 0, 0, nullptr, 0, 0, this);
+    static_cast<IoUringSubmitCtx*>(ctx.submit_ctx)->call_fn = fn;
     return ctx;
 }
 

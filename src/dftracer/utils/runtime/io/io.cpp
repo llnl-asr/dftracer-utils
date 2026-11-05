@@ -144,6 +144,11 @@ IoAwaitable fstat(dstd::NativeHandle fd, struct stat* buf) noexcept {
         [](int f, struct stat* b) { return ::fstat(f, b); }, fd, buf);
 }
 
+IoAwaitable call(BlockingFn fn, void* context) noexcept {
+    return io_dispatch<&IoBackend::submit_call>(
+        [](BlockingFn f, void* c) { return f(c); }, fn, context);
+}
+
 IoAwaitable accept(dstd::NativeHandle listen_fd, struct sockaddr* addr,
                    socklen_t* addrlen) noexcept {
     return io_dispatch<&IoBackend::submit_accept>(

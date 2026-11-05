@@ -285,6 +285,7 @@ set(TEST_CPP_SOURCES
     runtime/test_io_thread_pool.cpp
     runtime/test_watchdog.cpp
     runtime/test_executor_wakeups.cpp
+    runtime/test_fs.cpp
     runtime/test_timer_service.cpp
     common/test_logging.cpp
     common/test_error.cpp

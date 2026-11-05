@@ -200,6 +200,13 @@ IoAwaitable ThreadPoolFileOps::submit_fstat(int fd, struct stat* buf) {
     return req_awaitable;
 }
 
+IoAwaitable ThreadPoolFileOps::submit_call(BlockingFn fn, void* context) {
+    auto req_awaitable = make_request(IoOp::Call, -1, context, 0, 0, nullptr, 0,
+                                      0, &executor_, &pool_);
+    static_cast<IoRequest*>(req_awaitable.submit_ctx)->call_fn = fn;
+    return req_awaitable;
+}
+
 IoAwaitable ThreadPoolFileOps::submit_accept(int listen_fd,
                                              struct sockaddr* addr,
                                              socklen_t* addrlen) {
@@ -331,6 +338,9 @@ ssize_t run_syscall(const IoRequest* req) {
             break;
         case IoOp::Fstat:
             result = ::fstat(req->fd, req->stat_buf);
+            break;
+        case IoOp::Call:
+            result = req->call_fn(req->buf);
             break;
         case IoOp::Accept:
 #ifdef __linux__

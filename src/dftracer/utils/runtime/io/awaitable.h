@@ -16,6 +16,10 @@ namespace dftracer::utils::runtime::io {
 
 struct IoAwaitable;
 
+/// A blocking call for @ref call to run. It must not throw. A failure returns
+/// a negative result with errno set, as a system call does.
+using BlockingFn = ssize_t (*)(void* context) noexcept;
+
 /// Submission context -- base struct for backend-specific data.
 /// The first member is always a function pointer that await_suspend
 /// calls to trigger the actual I/O submission. Backends derive from

@@ -135,6 +135,7 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
     # Coro task ABI bridge
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/task_abi.cpp
     # Async I/O
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/fs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_awaitable.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_thread_pool.cpp
@@ -2422,6 +2423,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/heap_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/coro_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/channel_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/fs_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/string_intern_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/hash_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/quantile_store_bench.cpp
@@ -2474,6 +2476,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
 
     add_test(NAME bench_smoke/coro COMMAND coro_bench --smoke)
     add_test(NAME bench_smoke/channel COMMAND channel_bench --smoke)
+    add_test(NAME bench_smoke/fs COMMAND fs_bench --smoke)
     set_tests_properties(bench_smoke/coro PROPERTIES LABELS bench_smoke)
 
     add_test(NAME bench_smoke/string_intern COMMAND string_intern_bench --smoke)

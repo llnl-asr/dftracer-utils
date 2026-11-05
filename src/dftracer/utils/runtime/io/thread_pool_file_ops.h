@@ -43,6 +43,7 @@ struct IoRequest : SubmitContext {
     const struct iovec* iov = nullptr;
     int iovcnt = 0;
     int whence = 0;
+    BlockingFn call_fn = nullptr;
     int dest_fd = -1;
     IoAwaitable* awaitable = nullptr;
     IoCompletionFn completion = nullptr;
@@ -80,6 +81,7 @@ class ThreadPoolFileOps : public IoBackend {
     IoAwaitable submit_fsync(int fd) override;
     IoAwaitable submit_ftruncate(int fd, off_t length) override;
     IoAwaitable submit_fstat(int fd, struct stat* buf) override;
+    IoAwaitable submit_call(BlockingFn fn, void* context) override;
     IoAwaitable submit_accept(int listen_fd, struct sockaddr* addr,
                               socklen_t* addrlen) override;
     IoAwaitable submit_recv(int fd, void* buf, std::size_t len,

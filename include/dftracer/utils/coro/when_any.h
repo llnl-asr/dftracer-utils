@@ -220,6 +220,18 @@ class WhenAnyAwaitable {
             return false;
         }
 
+        // Before the first child starts: a winner on another worker reads a
+        // loser's executor in cancel(), so no child may bind one late.
+        Executor* executor = state_->executor != nullptr
+                                 ? state_->executor
+                                 : detail::current_executor();
+        for (auto& awaitable : state_->awaitables) {
+            if constexpr (requires { awaitable.handle().promise().executor; }) {
+                auto& promise = awaitable.handle().promise();
+                if (promise.executor == nullptr) promise.executor = executor;
+            }
+        }
+
         while (!state_->claims.exhausted(state_->wrappers_total)) {
             launch_wrapper();
         }

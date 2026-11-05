@@ -199,6 +199,33 @@ TEST_CASE("Runtime - progress starts at zero") {
     CHECK(p.recent_errors.empty());
 }
 
+TEST_CASE("Runtime - progress shows a task as running while it runs") {
+    Runtime rt(2);
+    std::atomic<bool> started{false};
+    std::atomic<bool> release{false};
+    auto body = [&]() -> coro::CoroTask<void> {
+        started.store(true);
+        while (!release.load()) std::this_thread::yield();
+        co_return;
+    };
+    TaskHandle handle = rt.submit(body(), "Busy");
+    while (!started.load()) std::this_thread::yield();
+
+    auto running = rt.progress();
+    CHECK(running.tasks_running == 1);
+    CHECK(running.tasks_queued == 0);
+    REQUIRE(running.root_tasks.size() == 1);
+    CHECK(running.root_tasks[0].state == TaskState::Running);
+    CHECK(running.root_tasks[0].location == TaskLocation::Executing);
+    CHECK(running.root_tasks[0].worker >= 0);
+
+    release.store(true);
+    handle.wait();
+    auto ended = rt.progress();
+    CHECK(ended.tasks_running == 0);
+    CHECK(ended.tasks_completed == 1);
+}
+
 TEST_CASE("Runtime - progress workers present") {
     Runtime rt(2);
     auto p = rt.progress();

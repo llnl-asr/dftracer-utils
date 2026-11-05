@@ -58,7 +58,7 @@ from .series import (
 )
 
 if TYPE_CHECKING:
-    import pyarrow as pa  # ty: ignore[unresolved-import]
+    import pyarrow as pa  # ty: ignore[import-not-found]
 
     from ._expr_ops import ColumnOp
     from .lazyframe import LazyFrame, LazyGroupBy

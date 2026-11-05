@@ -568,7 +568,7 @@ class _FramePandasMixin:
         return self.to_numpy()
 
     def to_numpy(self) -> Any:
-        import numpy as np  # ty: ignore[unresolved-import]
+        import numpy as np  # ty: ignore[import-not-found]
 
         return np.column_stack([self._col(c).to_numpy() for c in self.columns])
 
@@ -1101,12 +1101,12 @@ class _FramePandasMixin:
         return list(self.itertuples(index=False, name=None))
 
     def to_parquet(self, path: str, **kwargs: Any) -> None:
-        import pyarrow.parquet as pq  # ty: ignore[unresolved-import]
+        import pyarrow.parquet as pq  # ty: ignore[import-not-found]
 
         pq.write_table(self._frame()._arrow_for_parquet(), path, **kwargs)
 
     def to_feather(self, path: str) -> None:
-        import pyarrow.feather as feather  # ty: ignore[unresolved-import]
+        import pyarrow.feather as feather  # ty: ignore[import-not-found]
 
         feather.write_feather(self._frame().to_arrow(), path)
 

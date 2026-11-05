@@ -23,9 +23,9 @@ from typing import (
 # imports name the true types for annotations while the runtime `else` branch
 # provides real values (or None fallbacks for the optional deps).
 if TYPE_CHECKING:
-    import pyarrow as pa  # ty: ignore[unresolved-import]
-    from dask.distributed import Client, WorkerPlugin, get_client  # ty: ignore[unresolved-import]
-    from distributed import Future, Worker  # ty: ignore[unresolved-import]
+    import pyarrow as pa  # ty: ignore[import-not-found]
+    from dask.distributed import Client, WorkerPlugin, get_client  # ty: ignore[import-not-found]
+    from distributed import Future, Worker  # ty: ignore[import-not-found]
 
     from .indexer import AggregationConfig
 else:

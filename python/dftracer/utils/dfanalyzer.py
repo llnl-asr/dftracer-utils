@@ -47,8 +47,8 @@ from .dftracer_utils_ext import INPUT_FILE_PATTERNS
 from .indexer import AggregationConfig, _open_readonly_indexer
 
 if TYPE_CHECKING:
-    import dask.dataframe as dd  # ty: ignore[unresolved-import]
-    from dask.distributed import Client  # ty: ignore[unresolved-import]
+    import dask.dataframe as dd  # ty: ignore[import-not-found]
+    from dask.distributed import Client  # ty: ignore[import-not-found]
 
     from .dask import DaskTraceViewer
     from .trace_viewer import TraceViewer

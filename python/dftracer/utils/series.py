@@ -39,12 +39,12 @@ from .enums import _DTYPE_BY_NAME, DType
 if TYPE_CHECKING:
     from types import ModuleType
 
-    import numpy as np  # ty: ignore[unresolved-import]
-    import pandas as pd  # ty: ignore[unresolved-import]
-    import polars as pl  # ty: ignore[unresolved-import]
-    import pyarrow as pa  # ty: ignore[unresolved-import]
-    from pandas._libs.missing import NAType  # ty: ignore[unresolved-import]
-    from pandas.api.extensions import ExtensionArray  # ty: ignore[unresolved-import]
+    import numpy as np  # ty: ignore[import-not-found]
+    import pandas as pd  # ty: ignore[import-not-found]
+    import polars as pl  # ty: ignore[import-not-found]
+    import pyarrow as pa  # ty: ignore[import-not-found]
+    from pandas._libs.missing import NAType  # ty: ignore[import-not-found]
+    from pandas.api.extensions import ExtensionArray  # ty: ignore[import-not-found]
 
     from .dataframe import DataFrame
 
@@ -175,7 +175,7 @@ def _to_pandas(arrow_obj: Any, arrow: bool) -> Any:
     ``pd.ArrowDtype`` columns that share the Arrow buffers."""
     if not arrow:
         return arrow_obj.to_pandas()
-    import pandas as pd  # ty: ignore[unresolved-import]
+    import pandas as pd  # ty: ignore[import-not-found]
 
     return arrow_obj.to_pandas(types_mapper=pd.ArrowDtype)
 
@@ -241,7 +241,7 @@ _PYTHON_OBJECT_TYPES = (
 def _temporal_numpy(native: "_ext._Series", dtype: DType) -> "np.ndarray":
     """A date, timestamp or duration column as ``datetime64`` or ``timedelta64``
     (UTC values for a zoned timestamp), with ``NaT`` for null."""
-    import numpy as np  # ty: ignore[unresolved-import]
+    import numpy as np  # ty: ignore[import-not-found]
 
     unit = _TEMPORAL_KINDS[dtype] or _NUMPY_UNITS[native.time_unit]
     phys = native.physical()
@@ -254,7 +254,7 @@ def _temporal_numpy(native: "_ext._Series", dtype: DType) -> "np.ndarray":
 
 
 def _object_numpy(values: List[object]) -> "np.ndarray":
-    import numpy as np  # ty: ignore[unresolved-import]
+    import numpy as np  # ty: ignore[import-not-found]
 
     out = np.empty(len(values), dtype=object)
     for i, v in enumerate(values):
@@ -271,7 +271,7 @@ def _parts(
 
 
 def _frombuffer(data: Union[bytes, bytearray, memoryview], dtype: str) -> "np.ndarray":
-    import numpy as np  # ty: ignore[unresolved-import]
+    import numpy as np  # ty: ignore[import-not-found]
 
     return np.frombuffer(data, dtype=dtype)
 
@@ -279,7 +279,7 @@ def _frombuffer(data: Union[bytes, bytearray, memoryview], dtype: str) -> "np.nd
 def _native_numpy(native: "_ext._Series") -> "np.ndarray":
     """The native column as a NumPy array without pyarrow; TypeError for a
     type with no native conversion."""
-    import numpy as np  # ty: ignore[unresolved-import]
+    import numpy as np  # ty: ignore[import-not-found]
 
     try:
         # memoryview forces the native buffer protocol (a plain
@@ -339,7 +339,7 @@ def _polars_native(native: "_ext._Series", pl: Any) -> "pl.Series":
             out = out.dt.replace_time_zone("UTC").dt.convert_time_zone(native.timezone)
         return out
     if dtype == DType.FLOAT16:
-        import numpy as np  # ty: ignore[unresolved-import]
+        import numpy as np  # ty: ignore[import-not-found]
 
         return pl.Series(_native_numpy(native).astype(np.float32))  # type: ignore[union-attr]
     values: Any = native.to_pylist()
@@ -354,17 +354,17 @@ def _polars_native(native: "_ext._Series", pl: Any) -> "pl.Series":
 def _pandas_values(native: "_ext._Series") -> "Union[pd.Series, np.ndarray]":
     """The column as a pandas Series or NumPy array built without pyarrow: a
     zoned timestamp gets its zone, everything else its NumPy array."""
-    import pandas as pd  # ty: ignore[unresolved-import]
+    import pandas as pd  # ty: ignore[import-not-found]
 
     if DType(native.type) in (DType.STRING, DType.LARGE_STRING) and hasattr(
         native, "__arrow_c_array__"
     ):
-        import numpy as np  # ty: ignore[unresolved-import]
+        import numpy as np  # ty: ignore[import-not-found]
 
         string = pd.Series(np.array(["x"], dtype=object)).dtype
         if isinstance(string, pd.StringDtype) and string.storage == "pyarrow":
             try:
-                import pyarrow as pa  # ty: ignore[unresolved-import]
+                import pyarrow as pa  # ty: ignore[import-not-found]
             except ImportError:
                 pass
             else:
@@ -386,8 +386,8 @@ def _pandas_nullable(native: "_ext._Series") -> "Optional[ExtensionArray]":
     ``Float32``, ``Float64``, ``boolean``, ``string``), built without pyarrow; a
     null is ``pd.NA`` and a float NaN stays NaN. ``None`` for a type with no such
     dtype, which the caller converts as usual."""
-    import numpy as np  # ty: ignore[unresolved-import]
-    import pandas as pd  # ty: ignore[unresolved-import]
+    import numpy as np  # ty: ignore[import-not-found]
+    import pandas as pd  # ty: ignore[import-not-found]
 
     dtype = DType(native.type)
     if dtype in (DType.STRING, DType.LARGE_STRING):
@@ -448,7 +448,7 @@ def _arrow_native(name: str) -> Callable[..., Any]:
 
 def _require_pyarrow() -> "ModuleType":
     try:
-        import pyarrow as pa  # ty: ignore[unresolved-import]
+        import pyarrow as pa  # ty: ignore[import-not-found]
     except ImportError:
         raise ImportError(
             "pyarrow is required for Arrow conversion. Install with: pip install pyarrow"
@@ -677,7 +677,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
             raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
         if arrow:
             return _to_pandas(self.to_arrow(), arrow)
-        import pandas as pd  # ty: ignore[unresolved-import]
+        import pandas as pd  # ty: ignore[import-not-found]
 
         values = _pandas_nullable(self._native) if nullable else None
         if values is None:
@@ -705,7 +705,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         without Arrow, use the native conversion (Float16 becomes Float32, a
         decimal gets precision 38, a dictionary becomes String)."""
         try:
-            import polars as pl  # ty: ignore[unresolved-import]
+            import polars as pl  # ty: ignore[import-not-found]
         except ImportError:
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"
@@ -718,7 +718,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         self, dtype: "Optional[np.dtype]" = None, copy: Optional[bool] = None
     ) -> "np.ndarray":
         """NumPy array protocol, so ``np.asarray(series)`` works."""
-        import numpy as np  # ty: ignore[unresolved-import]
+        import numpy as np  # ty: ignore[import-not-found]
 
         return np.asarray(self.to_numpy(), dtype=dtype)
 

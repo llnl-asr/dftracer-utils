@@ -22,9 +22,9 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    import numpy as np  # ty: ignore[unresolved-import]
-    import pyarrow as pa  # ty: ignore[unresolved-import]
-    from pandas._libs.missing import NAType  # ty: ignore[unresolved-import]
+    import numpy as np  # ty: ignore[import-not-found]
+    import pyarrow as pa  # ty: ignore[import-not-found]
+    from pandas._libs.missing import NAType  # ty: ignore[import-not-found]
 
 _T = TypeVar("_T")
 

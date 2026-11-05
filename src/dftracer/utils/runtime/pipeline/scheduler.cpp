@@ -155,7 +155,8 @@ void Scheduler::schedule(dstd::SharedPtr<Task> source, const std::any& input) {
             std::chrono::milliseconds timeout = source->has_timeout()
                                                     ? source->timeout()
                                                     : default_task_timeout_;
-            watchdog_->register_task_start(source->id(), source, timeout);
+            watchdog_->register_task_start(source->id(), source->name(),
+                                           timeout);
         }
 
         submit_task_to_executor(source, src_input);
@@ -329,7 +330,8 @@ void Scheduler::on_task_completed(dstd::SharedPtr<Task> task) {
                     std::chrono::milliseconds timeout =
                         child->has_timeout() ? child->timeout()
                                              : default_task_timeout_;
-                    watchdog_->register_task_start(child->id(), child, timeout);
+                    watchdog_->register_task_start(child->id(), child->name(),
+                                                   timeout);
                 }
 
                 submit_task_to_executor(child, input);

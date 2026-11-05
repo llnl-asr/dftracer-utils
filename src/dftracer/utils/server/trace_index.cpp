@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
@@ -25,10 +27,7 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/pipeline/pipeline_config.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -597,17 +596,13 @@ coro::CoroTask<void> TraceIndex::initialize() {
     }
 
     if (!needs_build.empty() || !large_files.empty()) {
-        auto pipeline_config =
-            PipelineConfig()
-                .with_name("TraceIndex Init")
-                .with_compute_threads(max_concurrent_)
-                .with_watchdog(false)
-                .with_global_timeout(std::chrono::seconds(0))
-                .with_task_timeout(std::chrono::seconds(0))
-                .with_io_backend(io::IoBackendType::Threadpool)
-                .with_io_batch_size(1);
-
-        Pipeline pipeline(pipeline_config);
+        RuntimeSettings settings;
+        settings.threads = max_concurrent_;
+        settings.io_backend = io::IoBackendType::Threadpool;
+        settings.io_batch_threshold = 1;
+        settings.deadlock_timeout =
+            std::chrono::seconds(common::constants::executor_settings::
+                                     TOOL_DEADLOCK_TIMEOUT_SECONDS);
 
         auto* files_ptr = &files_;
         auto* needs_build_ptr = &needs_build;
@@ -619,88 +614,86 @@ coro::CoroTask<void> TraceIndex::initialize() {
         std::size_t max_concurrent = max_concurrent_;
         std::size_t checkpoint_size = checkpoint_size_;
 
-        auto init_task = make_task(
+        auto init_task =
             [files_ptr, needs_build_ptr, large_files_ptr, global_min_ts_ptr,
              global_max_ts_ptr, schemas_ptr, index_dir, max_concurrent,
-             checkpoint_size](CoroScope&) -> coro::CoroTask<void> {
-                if (!needs_build_ptr->empty()) {
-                    DFTRACER_UTILS_LOG_INFO(
-                        "TraceIndex: building index for %zu file(s) ...",
-                        needs_build_ptr->size());
+             checkpoint_size](coro::Scope&) -> coro::CoroTask<void> {
+            if (!needs_build_ptr->empty()) {
+                DFTRACER_UTILS_LOG_INFO(
+                    "TraceIndex: building index for %zu file(s) ...",
+                    needs_build_ptr->size());
 
-                    // One batch build per index root; the batch builder assigns
-                    // file ids itself, so no manual pre-assignment is needed.
-                    dstd::HashMap<dstd::String, dstd::Vector<std::size_t>>
-                        by_index;
-                    for (auto idx : *needs_build_ptr)
-                        by_index[(*files_ptr)[idx].index_path].push_back(idx);
+                // One batch build per index root; the batch builder assigns
+                // file ids itself, so no manual pre-assignment is needed.
+                dstd::HashMap<dstd::String, dstd::Vector<std::size_t>> by_index;
+                for (auto idx : *needs_build_ptr)
+                    by_index[(*files_ptr)[idx].index_path].push_back(idx);
 
-                    for (auto& [ipath, idxs] : by_index) {
-                        dstd::Vector<dstd::String> paths;
-                        paths.reserve(idxs.size());
-                        for (auto idx : idxs)
-                            paths.emplace_back(
-                                dstd::StringView((*files_ptr)[idx].path));
-                        dftracer::utils::index::IndexerOptions opts;
-                        opts.index_dir = index_dir;
-                        opts.checkpoint_size = checkpoint_size;
-                        opts.parallelism = max_concurrent;
-                        try {
-                            auto ix = dftracer::utils::index::Indexer::open(
-                                std::move(paths), std::move(opts));
-                            co_await coro::with_scope([&](coro::Scope& scope) {
-                                return ix.build(scope);
-                            });
-                        } catch (const std::exception& e) {
-                            DFTRACER_UTILS_LOG_WARN("TraceIndex: %s", e.what());
+                for (auto& [ipath, idxs] : by_index) {
+                    dstd::Vector<dstd::String> paths;
+                    paths.reserve(idxs.size());
+                    for (auto idx : idxs)
+                        paths.emplace_back(
+                            dstd::StringView((*files_ptr)[idx].path));
+                    dftracer::utils::index::IndexerOptions opts;
+                    opts.index_dir = index_dir;
+                    opts.checkpoint_size = checkpoint_size;
+                    opts.parallelism = max_concurrent;
+                    try {
+                        auto ix = dftracer::utils::index::Indexer::open(
+                            std::move(paths), std::move(opts));
+                        co_await coro::with_scope([&](coro::Scope& scope) {
+                            return ix.build(scope);
+                        });
+                    } catch (const std::exception& e) {
+                        DFTRACER_UTILS_LOG_WARN("TraceIndex: %s", e.what());
+                    }
+
+                    dstd::Optional<index::Snapshot> snapshot;
+                    try {
+                        snapshot.emplace(
+                            common::unwrap(index::plan::open_snapshot(ipath)));
+                    } catch (const std::exception&) {
+                    }
+
+                    for (auto idx : idxs) {
+                        auto* info = &(*files_ptr)[idx];
+                        bool bloom_ok = false;
+                        if (snapshot) {
+                            const auto file = snapshot->file(
+                                index::store::internal::get_logical_path(
+                                    info->path));
+                            bloom_ok = file &&
+                                       index::extension_current(
+                                           *snapshot, *file,
+                                           index::store::IndexExtension::Stats);
                         }
-
-                        dstd::Optional<index::Snapshot> snapshot;
-                        try {
-                            snapshot.emplace(common::unwrap(
-                                index::plan::open_snapshot(ipath)));
-                        } catch (const std::exception&) {
-                        }
-
-                        for (auto idx : idxs) {
-                            auto* info = &(*files_ptr)[idx];
-                            bool bloom_ok = false;
-                            if (snapshot) {
-                                const auto file = snapshot->file(
-                                    index::store::internal::get_logical_path(
-                                        info->path));
-                                bloom_ok =
-                                    file &&
-                                    index::extension_current(
-                                        *snapshot, *file,
-                                        index::store::IndexExtension::Stats);
-                            }
-                            if (bloom_ok) {
-                                info->index_path = ipath;
-                                info->has_bloom_data = true;
-                                info->has_checkpoint_index = common::unwrap(
-                                    dstd::fs::exists(dstd::PathView(ipath)));
-                                large_files_ptr->push_back(idx);
-                            } else {
-                                DFTRACER_UTILS_LOG_WARN(
-                                    "TraceIndex: failed to index %s",
-                                    info->path.c_str());
-                            }
+                        if (bloom_ok) {
+                            info->index_path = ipath;
+                            info->has_bloom_data = true;
+                            info->has_checkpoint_index = common::unwrap(
+                                dstd::fs::exists(dstd::PathView(ipath)));
+                            large_files_ptr->push_back(idx);
+                        } else {
+                            DFTRACER_UTILS_LOG_WARN(
+                                "TraceIndex: failed to index %s",
+                                info->path.c_str());
                         }
                     }
                 }
+            }
 
-                if (!large_files_ptr->empty()) {
-                    auto meta_chan =
-                        coro::make_channel<std::size_t>(max_concurrent * 2);
+            if (!large_files_ptr->empty()) {
+                auto meta_chan =
+                    coro::make_channel<std::size_t>(max_concurrent * 2);
 
-                    auto meta_scope =
-                        [&meta_chan, files_ptr, large_files_ptr, schemas_ptr,
-                         max_concurrent](
-                            coro::Scope& scope) -> coro::CoroTask<void> {
-                        scope.spawn([ch = meta_chan->producer(),
-                                     large_files_ptr]() mutable
-                                        -> coro::CoroTask<void> {
+                auto meta_scope =
+                    [&meta_chan, files_ptr, large_files_ptr, schemas_ptr,
+                     max_concurrent](
+                        coro::Scope& scope) -> coro::CoroTask<void> {
+                    scope.spawn(
+                        [ch = meta_chan->producer(),
+                         large_files_ptr]() mutable -> coro::CoroTask<void> {
                             auto guard = ch.guard();
                             for (auto idx : *large_files_ptr) {
                                 const auto send_ok = co_await ch.send(idx);
@@ -709,102 +702,94 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             co_return;
                         });
 
-                        for (std::size_t w = 0; w < max_concurrent; ++w) {
-                            scope.spawn([ch = meta_chan->consumer(), files_ptr,
-                                         schemas_ptr]()
-                                            -> coro::CoroTask<void> {
-                                for (;;) {
-                                    auto fi_opt = co_await ch.receive();
-                                    if (!fi_opt) break;
-                                    std::size_t fi = *fi_opt;
-                                    auto* info = &(*files_ptr)[fi];
+                    for (std::size_t w = 0; w < max_concurrent; ++w) {
+                        scope.spawn([ch = meta_chan->consumer(), files_ptr,
+                                     schemas_ptr]() -> coro::CoroTask<void> {
+                            for (;;) {
+                                auto fi_opt = co_await ch.receive();
+                                if (!fi_opt) break;
+                                std::size_t fi = *fi_opt;
+                                auto* info = &(*files_ptr)[fi];
 
-                                    if (info->has_bloom_data) {
-                                        try {
-                                            const auto snapshot =
-                                                common::unwrap(
-                                                    index::plan::open_snapshot(
-                                                        info->index_path));
-                                            const auto file = snapshot.file(
-                                                index::store::internal::
-                                                    get_logical_path(
-                                                        info->path));
-                                            if (file) {
-                                                index::load_index_schemas(
-                                                    info->index_path);
-                                                const auto* schema = index::
-                                                    plan::recorded_schema(
-                                                        snapshot, info->path);
-                                                if (!schema)
-                                                    schema =
-                                                        &index::
-                                                            detect_file_schema(
-                                                                info->path);
-                                                (*schemas_ptr)[fi] = schema;
-                                                auto bounds = timeline_bounds(
-                                                    snapshot, *file, *schema);
-                                                if (bounds.valid) {
-                                                    info->min_timestamp_us =
-                                                        bounds.min_timestamp_us;
-                                                    info->max_timestamp_us =
-                                                        bounds.max_timestamp_us;
-                                                }
+                                if (info->has_bloom_data) {
+                                    try {
+                                        const auto snapshot = common::unwrap(
+                                            index::plan::open_snapshot(
+                                                info->index_path));
+                                        const auto file = snapshot.file(
+                                            index::store::internal::
+                                                get_logical_path(info->path));
+                                        if (file) {
+                                            index::load_index_schemas(
+                                                info->index_path);
+                                            const auto* schema =
+                                                index::plan::recorded_schema(
+                                                    snapshot, info->path);
+                                            if (!schema)
+                                                schema =
+                                                    &index::detect_file_schema(
+                                                        info->path);
+                                            (*schemas_ptr)[fi] = schema;
+                                            auto bounds = timeline_bounds(
+                                                snapshot, *file, *schema);
+                                            if (bounds.valid) {
+                                                info->min_timestamp_us =
+                                                    bounds.min_timestamp_us;
+                                                info->max_timestamp_us =
+                                                    bounds.max_timestamp_us;
                                             }
-                                        } catch (const std::exception& e) {
-                                            DFTRACER_UTILS_LOG_WARN(
-                                                "TraceIndex: failed to "
-                                                "read time bounds from "
-                                                "%s: %s",
-                                                info->index_path.c_str(),
-                                                e.what());
                                         }
-                                    }
-
-                                    auto meta_input =
-                                        MetadataCollectorUtilityInput::
-                                            from_file(dstd::String(info->path))
-                                                .with_index(dstd::String(
-                                                    info->index_path));
-                                    MetadataCollectorUtility collector;
-                                    auto metadata =
-                                        co_await collector(meta_input);
-                                    if (metadata.success) {
-                                        info->uncompressed_size =
-                                            metadata.uncompressed_size;
-                                        info->checkpoint_count =
-                                            metadata.checkpoint_count;
-                                        info->checkpoint_size =
-                                            metadata.checkpoint_size;
-                                        info->compressed_size =
-                                            metadata.compressed_size;
-                                        info->line_count = metadata.line_count;
-                                        info->size_mb = metadata.size_mb;
+                                    } catch (const std::exception& e) {
+                                        DFTRACER_UTILS_LOG_WARN(
+                                            "TraceIndex: failed to "
+                                            "read time bounds from "
+                                            "%s: %s",
+                                            info->index_path.c_str(), e.what());
                                     }
                                 }
-                                co_return;
-                            });
-                        }
-                        co_return;
-                    };
-                    co_await coro::with_scope(meta_scope);
 
-                    for (auto fi : *large_files_ptr) {
-                        const auto& info = (*files_ptr)[fi];
-                        if (info.min_timestamp_us > 0 &&
-                            info.min_timestamp_us < *global_min_ts_ptr)
-                            *global_min_ts_ptr = info.min_timestamp_us;
-                        if (info.max_timestamp_us > *global_max_ts_ptr)
-                            *global_max_ts_ptr = info.max_timestamp_us;
+                                auto meta_input =
+                                    MetadataCollectorUtilityInput::from_file(
+                                        dstd::String(info->path))
+                                        .with_index(
+                                            dstd::String(info->index_path));
+                                MetadataCollectorUtility collector;
+                                auto metadata = co_await collector(meta_input);
+                                if (metadata.success) {
+                                    info->uncompressed_size =
+                                        metadata.uncompressed_size;
+                                    info->checkpoint_count =
+                                        metadata.checkpoint_count;
+                                    info->checkpoint_size =
+                                        metadata.checkpoint_size;
+                                    info->compressed_size =
+                                        metadata.compressed_size;
+                                    info->line_count = metadata.line_count;
+                                    info->size_mb = metadata.size_mb;
+                                }
+                            }
+                            co_return;
+                        });
                     }
+                    co_return;
+                };
+                co_await coro::with_scope(meta_scope);
+
+                for (auto fi : *large_files_ptr) {
+                    const auto& info = (*files_ptr)[fi];
+                    if (info.min_timestamp_us > 0 &&
+                        info.min_timestamp_us < *global_min_ts_ptr)
+                        *global_min_ts_ptr = info.min_timestamp_us;
+                    if (info.max_timestamp_us > *global_max_ts_ptr)
+                        *global_max_ts_ptr = info.max_timestamp_us;
                 }
+            }
 
-                co_return;
-            },
-            "TraceIndexInit");
+            co_return;
+        };
 
-        pipeline.set_source(init_task);
-        pipeline.set_destination(init_task);
-        pipeline.execute();
+        configure_default_runtime(settings).block_on(
+            coro::named("TraceIndexInit", coro::with_scope(init_task)));
     }
 
     // One time unit per trace: resolve it once from the first file's CM.

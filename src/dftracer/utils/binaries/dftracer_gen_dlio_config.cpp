@@ -35,7 +35,7 @@ class GenDlioConfigArgParse : public binaries::ArgParse {
     binaries::InputArgs inputs{
         binaries::DirMode::DefaultDot,
         "Folder of .pfw.gz traces (default: the current folder)"};
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
     binaries::IndexingArgs indexing;
 
     dstd::StringView output;
@@ -61,7 +61,7 @@ class GenDlioConfigArgParse : public binaries::ArgParse {
             "Directory to store index files (default: system temp directory)";
         indexing.force_help = "Force index recreation";
         inputs.folder_only = true;
-        schema(inputs, pipeline, indexing);
+        schema(inputs, runtime_args, indexing);
     }
 
    protected:
@@ -192,8 +192,8 @@ int main(int argc, char** argv) {
                 agg_config;
 
             const auto scanned = binaries::ensure_indexes_fresh_blocking(
-                "DLIO Config Generator", cli.pipeline, cli.inputs.directory, {},
-                cli.indexing.index_dir, cli.indexing.force, agg_config,
+                "DLIO Config Generator", cli.runtime_args, cli.inputs.directory,
+                {}, cli.indexing.index_dir, cli.indexing.force, agg_config,
                 cli.indexing.checkpoint_size);
             if (scanned.empty()) {
                 DFTRACER_UTILS_LOG_ERROR(

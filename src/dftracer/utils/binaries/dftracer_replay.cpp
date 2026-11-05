@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Pipeline-driven replay binary.
+// Replay binary.
 //
 // DAG:
 //   scan -> execute
@@ -24,9 +24,6 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/mpi/mpi_utils.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 
 #ifdef DFTRACER_UTILS_MPI_ENABLED
@@ -67,7 +64,7 @@ dstd::HashSet<std::uint32_t> parse_csv_uint32(dstd::StringView csv) {
 
 class ReplayArgParse : public binaries::ArgParse {
    public:
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
 
     dstd::Vector<dstd::StringView> inputs;
     bool no_timing = false;
@@ -99,7 +96,7 @@ class ReplayArgParse : public binaries::ArgParse {
     std::size_t channel_capacity = 4096;
 
     explicit ReplayArgParse(binaries::ArgParser& p) : ArgParse(p) {
-        schema(pipeline);
+        schema(runtime_args);
     }
 
    protected:
@@ -483,32 +480,20 @@ int run(int argc, char** argv) {
     c.sample_seed = cli.sample_seed;
     c.max_events = cli.max_events;
 
-    auto pipeline_config =
-        binaries::build_pipeline_config("DFTracer Replay", cli.pipeline);
-    Pipeline pipeline(pipeline_config);
-
     RunCtx* ctx_ptr = &ctx;
-    auto scan = make_task(
-        [ctx_ptr](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope(
-                [&](coro::Scope& scope) { return task_scan(ctx_ptr, scope); });
-        },
-        "scan");
-    auto execute = make_task(
-        [ctx_ptr](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope([&](coro::Scope& scope) {
-                return task_execute(ctx_ptr, &scope);
-            });
-        },
-        "execute");
-    execute->depends_on(scan);
-
-    pipeline.set_source(scan);
-    pipeline.set_destination(execute);
     try {
-        pipeline.execute();
+        binaries::run_on_pool(
+            "DFTracer Replay", cli.runtime_args,
+            [ctx_ptr](coro::Scope&) -> coro::CoroTask<void> {
+                co_await coro::with_scope([&](coro::Scope& scope) {
+                    return task_scan(ctx_ptr, scope);
+                });
+                co_await coro::with_scope([&](coro::Scope& scope) {
+                    return task_execute(ctx_ptr, &scope);
+                });
+            });
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Pipeline failed: %s", e.what());
+        DFTRACER_UTILS_LOG_ERROR("Run failed: %s", e.what());
         return 1;
     }
 

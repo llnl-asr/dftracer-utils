@@ -53,11 +53,11 @@ class GenDistArgParse : public binaries::ArgParse {
     std::size_t member_size = 0;
     dstd::StringView shard_text;
     Shard shard;
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
     binaries::MemoryArgs memory;
 
     explicit GenDistArgParse(binaries::ArgParser& p) : ArgParse(p) {
-        schema(pipeline);
+        schema(runtime_args);
         schema(memory);
     }
 
@@ -634,9 +634,10 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
     const std::uint64_t writer_budget = total / 8 - head_budget;
     const std::uint64_t budget = total - writer_budget - head_budget;
     const std::size_t threads = common::concurrent_spill_ways(
-        budget, std::min<std::size_t>(
-                    std::max<std::size_t>(1, cli->pipeline.executor_threads),
-                    std::max<std::size_t>(1, discovery.groups.size())));
+        budget,
+        std::min<std::size_t>(
+            std::max<std::size_t>(1, cli->runtime_args.executor_threads),
+            std::max<std::size_t>(1, discovery.groups.size())));
     const std::uint64_t base = common::share_spill_budget(budget, threads);
     // Every worker's producer fills a member from the half of the writer
     // budget kept for buffers being filled, and holds up to a member and a
@@ -653,7 +654,8 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
         -> coro::CoroTask<dstd::Optional<utilities::fileio::GzipLineWriter>> {
         utilities::fileio::GzipWriterOptions opts;
         opts.member_size = member_size_of(bytes);
-        opts.workers = std::max<std::size_t>(1, cli->pipeline.executor_threads);
+        opts.workers =
+            std::max<std::size_t>(1, cli->runtime_args.executor_threads);
         opts.memory_budget = bytes;
         opts.ordered = false;
         auto opened = co_await utilities::fileio::GzipLineWriter::open(
@@ -771,8 +773,8 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
 
 int run_local(GenDistArgParse& cli, Shard shard, dstd::StringView output,
               Report* report) {
-    return binaries::run_single_task(
-        "DFTracer Genesis Gen Dist", cli.pipeline,
+    return binaries::run_on_pool(
+        "DFTracer Genesis Gen Dist", cli.runtime_args,
         [&cli, shard, output, report](coro::Scope& ctx) {
             return run_gen_dist(ctx, &cli, shard, output, report);
         });

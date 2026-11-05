@@ -29,7 +29,7 @@ repeated in each tool's section.
    The same coercion is available from the Python API, whose byte/duration
    arguments accept either a number or a unit string.
 
-**Pipeline** (``PipelineArgs``)
+**Runtime** (``RuntimeArgs``)
 
 - ``--executor-threads <count>`` - Number of worker threads for parallel
   processing (default: number of CPU cores)
@@ -66,7 +66,6 @@ repeated in each tool's section.
   (default: 1)
 - ``--watchdog-warning-threshold <s>`` - Watchdog long-running task warning
   threshold in seconds (default: 300)
-- ``--watchdog-idle-timeout <s>`` - Watchdog idle timeout in seconds
   (0 = use default, default: 300)
 - ``--watchdog-deadlock-timeout <s>`` - Watchdog deadlock timeout in seconds
   (0 = use default, default: 600)
@@ -161,7 +160,7 @@ dftracer_info
 dftracer_split
 --------------
 
-**Description:** Split DFTracer traces into equal-sized chunks using pipeline processing
+**Description:** Split DFTracer traces into equal-sized chunks in parallel
 
 **Usage:**
 

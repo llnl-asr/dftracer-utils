@@ -18,9 +18,6 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -68,7 +65,7 @@ class ViewArgParse : public binaries::ArgParse {
     binaries::InputArgs inputs{
         binaries::DirMode::DefaultEmpty,
         "Trace files, a folder of trace files, or a shard set"};
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
     binaries::IndexingArgs indexing;
     binaries::DuqlArgs duql_args;
 
@@ -114,7 +111,7 @@ class ViewArgParse : public binaries::ArgParse {
         duql_args.help =
             "duql filter or pipeline (e.g., 'cat == \"POSIX\" | derive ms = "
             "dur / 1000 | sort -ms | take 5')";
-        schema(inputs, pipeline, indexing, duql_args);
+        schema(inputs, runtime_args, indexing, duql_args);
     }
 
    protected:
@@ -632,7 +629,7 @@ static bool collect_input_files(const ViewArgParse& cli,
         }
 
         auto matched =
-            binaries::scan_trace_files_on_pool(cli.pipeline, directory,
+            binaries::scan_trace_files_on_pool(cli.runtime_args, directory,
                                                /*populate_size=*/false);
 
         for (const auto& entry : matched) {
@@ -848,7 +845,7 @@ dstd::Optional<int> ViewRun::probe_duql() {
     // before the query compiles. A distributed aggregation builds its shards'
     // indexes itself.
     if (!no_auto_index && !aggregate && !counters && !fg_mode)
-        binaries::run_on_pool(cli->pipeline, "dftracer_view index",
+        binaries::run_on_pool("dftracer_view index", cli->runtime_args,
                               [&](coro::Scope&) -> coro::CoroTask<void> {
                                   co_await refresh_indexes(files,
                                                            index_dir_std);
@@ -980,7 +977,7 @@ coro::CoroTask<void> ViewRun::run_distributed_write(
     TraceWriteOptions topts;
     topts.output_path = rank_out;
     topts.member_size = member_size;
-    topts.worker_count = cli->pipeline.executor_threads;
+    topts.worker_count = cli->runtime_args.executor_threads;
     topts.compress = true;
     View shard_view =
         windowed(configure(View::from_files(std::move(shard_vf))));
@@ -1069,7 +1066,7 @@ coro::CoroTask<void> ViewRun::run_local() {
         TraceWriteOptions topts;
         topts.output_path = final_output;
         topts.member_size = member_size;
-        topts.worker_count = cli->pipeline.executor_threads;
+        topts.worker_count = cli->runtime_args.executor_threads;
         topts.compress = true;
         topts.build_index = !no_index;
         topts.index_path = index_dir;
@@ -1248,20 +1245,13 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     FileSink sink(run.out_target);
     run.sink = &sink;
 
-    auto pipeline_config =
-        binaries::build_pipeline_config("DFTracer View", cli->pipeline);
-    Pipeline pipeline(pipeline_config);
-
-    auto combined_task = make_task(
-        [&run](CoroScope&) -> coro::CoroTask<void> { co_await run.run(); },
-        "DFTracerView");
-
-    pipeline.set_source(combined_task);
-    pipeline.set_destination(combined_task);
     try {
-        pipeline.execute();
+        binaries::run_on_pool("DFTracer View", cli->runtime_args,
+                              [&run](coro::Scope&) -> coro::CoroTask<void> {
+                                  co_await run.run();
+                              });
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Pipeline failed: %s", e.what());
+        DFTRACER_UTILS_LOG_ERROR("Run failed: %s", e.what());
         co_return 1;
     }
 

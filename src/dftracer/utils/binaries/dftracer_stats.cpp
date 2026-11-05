@@ -32,8 +32,6 @@
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/statistics/detail_stats_view.h>
@@ -84,7 +82,7 @@ class StatsArgParse : public dftracer::utils::binaries::ArgParse {
     dftracer::utils::binaries::InputArgs inputs{
         dftracer::utils::binaries::DirMode::DefaultEmpty,
         "Trace files (.pfw.gz) or a folder of them"};
-    dftracer::utils::binaries::PipelineArgs pipeline;
+    dftracer::utils::binaries::RuntimeArgs runtime_args;
     dftracer::utils::binaries::IndexingArgs indexing;
     dftracer::utils::binaries::DuqlArgs duql_args;
 
@@ -101,7 +99,7 @@ class StatsArgParse : public dftracer::utils::binaries::ArgParse {
         indexing.with_force = false;
         indexing.index_dir_help =
             "Directory where .dftindex stores are created";
-        schema(inputs, pipeline, indexing, duql_args);
+        schema(inputs, runtime_args, indexing, duql_args);
     }
 
     bool to_config(StatsConfig& config) const {
@@ -113,7 +111,7 @@ class StatsArgParse : public dftracer::utils::binaries::ArgParse {
         config.top_n_pid_tid = top_n_pid_tid;
         config.no_auto_index = no_auto_index;
         config.checkpoint_size = indexing.checkpoint_size;
-        config.executor_threads = pipeline.executor_threads;
+        config.executor_threads = runtime_args.executor_threads;
         for (const auto name : filter_names)
             config.filter_names.emplace_back(name);
         for (const auto cat : filter_cats) config.filter_cats.emplace_back(cat);
@@ -1488,7 +1486,7 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
 
     common::Timer stages_storage("dftracer_stats");
     common::Timer* stages =
-        args->pipeline.time_profiling ? &stages_storage : nullptr;
+        args->runtime_args.time_profiling ? &stages_storage : nullptr;
     common::Timer overall(true);
 
     dstd::Vector<dstd::String> files;
@@ -1601,8 +1599,8 @@ int main(int argc, char** argv) {
         ".dftindex databases. Auto-builds indexes if missing. "
         "Zero-cost reads from index metadata, no decompression.",
         [](StatsArgParse& args) {
-            return dftracer::utils::binaries::run_single_task(
-                "DFTracer Stats Main", args.pipeline,
+            return dftracer::utils::binaries::run_on_pool(
+                "DFTracer Stats Main", args.runtime_args,
                 [&args](coro::Scope& ctx) -> coro::CoroTask<int> {
                     co_return co_await run_stats(ctx, &args);
                 });

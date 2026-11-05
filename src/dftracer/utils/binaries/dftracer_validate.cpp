@@ -12,9 +12,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/json/line.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <simdjson.h>
@@ -33,10 +30,10 @@ class ValidateArgParse : public binaries::ArgParse {
    public:
     binaries::InputArgs inputs{binaries::DirMode::Required,
                                "Trace files (.pfw.gz) or a folder of them"};
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
 
     explicit ValidateArgParse(binaries::ArgParser& p) : ArgParse(p) {
-        schema(inputs, pipeline);
+        schema(inputs, runtime_args);
     }
 };
 
@@ -124,53 +121,25 @@ coro::CoroTask<void> validate_file(dstd::String path, FileValResult* result) {
 static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
     auto files = dstd::make_shared<dstd::Vector<dstd::String>>();
     dstd::Vector<FileValResult> results;
-    const auto executor_threads = cli->pipeline.executor_threads;
-
-    auto config =
-        binaries::build_pipeline_config("DFTracer Validate", cli->pipeline);
-    Pipeline pipeline(config);
-
-    // Task 1: discover files (parallel per-subdirectory scan + explicit
-    // --files).
-    auto collect_task = make_task(
-        [cli, files](CoroScope&) -> coro::CoroTask<void> {
-            *files = co_await coro::with_scope([&](coro::Scope& ctx) {
-                return collect_files(ctx, cli->inputs.directory,
-                                     &cli->inputs.files);
-            });
-            co_return;
-        },
-        "Collect");
-
-    // Task 2: one worker per executor thread pulls file indices off a channel,
-    // so files are validated in parallel.
-    auto validate_task = make_task(
-        [files, &results,
-         executor_threads](CoroScope&) -> coro::CoroTask<void> {
-            if (files->empty()) co_return;
-            results.resize(files->size());
-            auto validate_scope =
-                [files, &results,
-                 executor_threads](coro::Scope& scope) -> coro::CoroTask<void> {
-                binaries::parallel_for_each(
-                    scope, std::views::iota(std::size_t{0}, files->size()),
-                    executor_threads,
-                    [files, &results](std::size_t idx) -> coro::CoroTask<void> {
-                        co_await validate_file((*files)[idx], &results[idx]);
-                    });
-                co_return;
-            };
-            co_await coro::with_scope(validate_scope);
-            co_return;
-        },
-        "Validate");
-
-    validate_task->depends_on(collect_task);
-    pipeline.set_source(collect_task);
-    pipeline.set_destination(validate_task);
+    const auto executor_threads = cli->runtime_args.executor_threads;
 
     auto start_time = std::chrono::high_resolution_clock::now();
-    pipeline.execute();
+    binaries::run_on_pool(
+        "DFTracer Validate", cli->runtime_args,
+        [cli, files, &results,
+         executor_threads](coro::Scope& scope) -> coro::CoroTask<void> {
+            *files = co_await collect_files(scope, cli->inputs.directory,
+                                            &cli->inputs.files);
+            if (files->empty()) co_return;
+            results.resize(files->size());
+            binaries::parallel_for_each(
+                scope, std::views::iota(std::size_t{0}, files->size()),
+                executor_threads,
+                [files, &results](std::size_t idx) -> coro::CoroTask<void> {
+                    co_await validate_file((*files)[idx], &results[idx]);
+                });
+            co_return;
+        });
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 

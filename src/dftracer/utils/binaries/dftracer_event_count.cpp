@@ -19,9 +19,6 @@
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/runtime/io/io.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/parse_inflated.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -42,7 +39,7 @@ class EventCountArgParse : public binaries::ArgParse {
    public:
     binaries::InputArgs inputs{binaries::DirMode::DefaultDot,
                                "Trace files or a folder of trace files"};
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
     binaries::IndexingArgs indexing;
 
     explicit EventCountArgParse(binaries::ArgParser& p) : ArgParse(p) {
@@ -52,7 +49,7 @@ class EventCountArgParse : public binaries::ArgParse {
         indexing.force_help =
             "Ignore any index and stream every file to count its events";
         indexing.with_checkpoint = false;
-        schema(inputs, pipeline, indexing);
+        schema(inputs, runtime_args, indexing);
     }
 };
 
@@ -221,7 +218,7 @@ int main(int argc, char** argv) {
     return binaries::cli_main<EventCountArgParse>(
         argc, argv, "dftracer_event_count",
         "Count valid events in DFTracer .pfw.gz files using composable "
-        "utilities and pipeline processing",
+        "utilities",
         [](EventCountArgParse& cli) { return run_event_count(&cli); });
 }
 
@@ -232,7 +229,7 @@ static int run_event_count(const EventCountArgParse* cli) {
             : binaries::absolute_path(cli->inputs.directory);
     const dstd::String index_dir(cli->indexing.index_dir);
     const auto force = cli->indexing.force;
-    const auto executor_threads = cli->pipeline.executor_threads;
+    const auto executor_threads = cli->runtime_args.executor_threads;
 
     Resolver resolver;
     ResolverInput resolve_input;
@@ -270,13 +267,10 @@ static int run_event_count(const EventCountArgParse* cli) {
     for (auto& item : resolve_result.needs_checkpoint)
         stream_items.push_back(std::move(item.file_path));
 
-    auto pipeline_config =
-        binaries::build_pipeline_config("DFTracer Event Count", cli->pipeline);
-    Pipeline pipeline(pipeline_config);
-
-    auto count_task = make_task(
+    binaries::run_on_pool(
+        "DFTracer Event Count", cli->runtime_args,
         [&index_groups, &stream_items, &total_events, &files_processed, &failed,
-         executor_threads](CoroScope&) -> coro::CoroTask<void> {
+         executor_threads](coro::Scope&) -> coro::CoroTask<void> {
             for (const auto& [index_path, entries] : index_groups) {
                 auto counts = count_from_index(index_path, entries);
                 total_events.fetch_add(counts.total_events,
@@ -311,12 +305,7 @@ static int run_event_count(const EventCountArgParse* cli) {
                 co_return;
             });
             co_return;
-        },
-        "Count");
-
-    pipeline.set_source(count_task);
-    pipeline.set_destination(count_task);
-    pipeline.execute();
+        });
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;

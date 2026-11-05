@@ -15,6 +15,7 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -30,11 +31,8 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
+#include <dftracer/utils/runtime/scheduler/watchdog.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
 #include <sys/resource.h>
@@ -47,6 +45,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
+#include <string>
 #include <type_traits>
 
 namespace dftracer::utils::binaries {
@@ -266,16 +265,16 @@ struct MemoryArgs : CliSchema {
     }
 };
 
-struct PipelineArgs : CliSchema {
+struct RuntimeArgs : CliSchema {
     std::size_t executor_threads = 0;
     std::size_t io_threads = 0;
     bool time_profiling = false;
     bool eager = false;
 
-    PipelineArgs() = default;
+    RuntimeArgs() = default;
 
     void register_on(ArgParser& p) override {
-        p.group("Pipeline");
+        p.group("Runtime");
         executor_threads = common::hardware_concurrency();
         io_threads = common::hardware_concurrency();
         p.option(executor_threads, {"--executor-threads"},
@@ -300,10 +299,13 @@ struct PipelineArgs : CliSchema {
         return true;
     }
 
-    void apply(PipelineConfig& config) const {
-        config.with_compute_threads(executor_threads);
-        config.with_io_threads(io_threads);
-        if (eager) config.with_eager();
+    void apply(RuntimeSettings& settings) const {
+        settings.threads = executor_threads;
+        settings.io_threads = io_threads;
+        if (eager) settings.eager = true;
+        settings.deadlock_timeout =
+            std::chrono::seconds(common::constants::executor_settings::
+                                     TOOL_DEADLOCK_TIMEOUT_SECONDS);
     }
 };
 
@@ -372,7 +374,6 @@ struct WatchdogArgs : CliSchema {
     int task_timeout = 0;
     int interval = 1;
     int warning_threshold = 300;
-    int idle_timeout = 300;
     int deadlock_timeout = 600;
 
     void register_on(ArgParser& p) override {
@@ -380,7 +381,7 @@ struct WatchdogArgs : CliSchema {
         p.flag(disable, {"--disable-watchdog"},
                "Disable watchdog for hang detection");
         p.seconds(global_timeout_, {"--watchdog-global-timeout"},
-                  "Watchdog global timeout for pipeline execution (0 = no "
+                  "Watchdog global timeout for the run (0 = no "
                   "timeout). Accepts units, e.g. 30s, 5m",
                   "0");
         p.seconds(task_timeout_, {"--watchdog-task-timeout"},
@@ -394,9 +395,6 @@ struct WatchdogArgs : CliSchema {
                   "Watchdog long-running task warning threshold. Accepts "
                   "units, e.g. 300s, 5m",
                   "300");
-        p.seconds(idle_timeout_, {"--watchdog-idle-timeout"},
-                  "Watchdog idle timeout (0 = use default). Accepts units",
-                  "300");
         p.seconds(deadlock_timeout_, {"--watchdog-deadlock-timeout"},
                   "Watchdog deadlock timeout (0 = use default). Accepts units",
                   "600");
@@ -407,19 +405,12 @@ struct WatchdogArgs : CliSchema {
         task_timeout = whole_seconds(task_timeout_);
         interval = whole_seconds(interval_);
         warning_threshold = whole_seconds(warning_threshold_);
-        idle_timeout = whole_seconds(idle_timeout_);
         deadlock_timeout = whole_seconds(deadlock_timeout_);
     }
 
-    void apply(PipelineConfig& config) const {
-        config.with_watchdog(!disable)
-            .with_global_timeout(std::chrono::seconds(global_timeout))
-            .with_task_timeout(std::chrono::seconds(task_timeout))
-            .with_watchdog_interval(std::chrono::seconds(interval))
-            .with_warning_threshold(std::chrono::seconds(warning_threshold))
-            .with_executor_idle_timeout(std::chrono::seconds(idle_timeout))
-            .with_executor_deadlock_timeout(
-                std::chrono::seconds(deadlock_timeout));
+    void apply(RuntimeSettings& settings) const {
+        if (deadlock_timeout > 0)
+            settings.deadlock_timeout = std::chrono::seconds(deadlock_timeout);
     }
 
    private:
@@ -431,37 +422,82 @@ struct WatchdogArgs : CliSchema {
     double task_timeout_ = 0;
     double interval_ = 1;
     double warning_threshold_ = 300;
-    double idle_timeout_ = 300;
     double deadlock_timeout_ = 600;
 };
 
 // A CLI's run coroutine runs on main's one-thread coro::RunLoop, so work
-// awaited outside a Pipeline is serial. A heavy step runs here instead, on the
-// process runtime, and blocks until done.
-template <typename Func>
-void run_on_pool(const PipelineArgs& pipeline, const char* name, Func&& func) {
+// awaited outside the runtime is serial. A tool runs here instead, as one named
+// task on the process runtime, and blocks until done. `body` takes a
+// coro::Scope& and returns a coro::CoroTask.
+template <class Body>
+auto run_on_pool(const char* name, const RuntimeArgs& runtime, Body&& body) {
     RuntimeSettings settings;
-    settings.threads = pipeline.executor_threads;
-    settings.io_threads = pipeline.io_threads;
-    if (pipeline.eager) settings.eager = true;
-    configure_default_runtime(settings).block_on(
-        coro::named(name, coro::with_scope(std::forward<Func>(func))));
+    runtime.apply(settings);
+    return configure_default_runtime(settings).block_on(
+        coro::named(name, coro::with_scope(std::forward<Body>(body))));
 }
 
-inline PipelineConfig build_pipeline_config(const char* name,
-                                            const PipelineArgs& pipeline) {
-    auto config = PipelineConfig().with_name(name).with_watchdog(false);
-    pipeline.apply(config);
-    return config;
-}
+// As above, with a watchdog that stops the task and raises a
+// dstd::Condition::Timeout error when a timeout passes.
+template <class Body>
+auto run_on_pool(const char* name, const RuntimeArgs& runtime,
+                 const WatchdogArgs& watchdog, Body&& body) {
+    using Result = typename std::invoke_result_t<std::decay_t<Body>&,
+                                                 coro::Scope&>::value_type;
+    RuntimeSettings settings;
+    runtime.apply(settings);
+    watchdog.apply(settings);
+    Runtime& rt = configure_default_runtime(settings);
+    if (watchdog.disable) {
+        return rt.block_on(
+            coro::named(name, coro::with_scope(std::forward<Body>(body))));
+    }
 
-inline PipelineConfig build_pipeline_config(const char* name,
-                                            const PipelineArgs& pipeline,
-                                            const WatchdogArgs& watchdog) {
-    auto config = PipelineConfig().with_name(name);
-    pipeline.apply(config);
-    watchdog.apply(config);
-    return config;
+    coro::StopSource source;
+    dstd::String reason;
+    Watchdog dog(std::chrono::seconds(watchdog.interval),
+                 std::chrono::seconds(watchdog.global_timeout),
+                 std::chrono::seconds(watchdog.task_timeout),
+                 std::chrono::seconds(watchdog.warning_threshold));
+    dog.set_executor(rt.executor());
+    dog.set_timeout_callback([&](const auto& why) {
+        DFTRACER_UTILS_LOG_ERROR("Watchdog timeout: %s", why.c_str());
+        reason.assign(why.data(), why.size());
+        source.request_stop(rt.executor());
+    });
+    dog.set_warning_callback(
+        [](const auto& task_name, std::int64_t elapsed_ms) {
+            DFTRACER_UTILS_LOG_WARN("Long-running task: %s (%lld ms)",
+                                    task_name.c_str(),
+                                    static_cast<long long>(elapsed_ms));
+        });
+    dog.mark_execution_start();
+    dog.start();
+    dog.register_task_start(0, name);
+
+    try {
+        auto task = coro::named(
+            name,
+            coro::with_stop_token(coro::with_scope(std::forward<Body>(body)),
+                                  source.token()));
+        // A timeout that fires after the task ended does not undo its result.
+        if constexpr (std::is_void_v<Result>) {
+            rt.block_on(std::move(task));
+            dog.stop();
+        } else {
+            Result value = rt.block_on(std::move(task));
+            dog.stop();
+            return value;
+        }
+    } catch (...) {
+        // The watchdog thread is joined before `reason` is read.
+        dog.stop();
+        if (!reason.empty()) {
+            throw common::DFTUtilsException(
+                dstd::Error{dstd::Condition::Timeout, "[TIMEOUT] " + reason});
+        }
+        throw;
+    }
 }
 
 using utilities::filesystem::is_trace_file;
@@ -521,11 +557,11 @@ inline dstd::Path absolute_path(dstd::StringView path) {
 // The trace files under `directory`, scanned recursively on a pool of its own
 // (see scan_on_pool) with one I/O thread.
 inline dstd::Vector<utilities::filesystem::FileEntry> scan_trace_files_on_pool(
-    const PipelineArgs& pipeline, dstd::StringView directory,
+    const RuntimeArgs& runtime, dstd::StringView directory,
     bool populate_size = true) {
     auto scanned = utilities::filesystem::scan_on_pool<
         utilities::filesystem::PatternDirectoryScannerUtility>(
-        pipeline.executor_threads, 1,
+        runtime.executor_threads, 1,
         utilities::filesystem::PatternDirectoryScannerUtilityInput{
             dstd::String(directory),
             utilities::filesystem::trace_file_patterns(), true, populate_size});
@@ -583,25 +619,8 @@ inline coro::CoroTask<dstd::Vector<dstd::String>> collect_input_trace_files(
                                                  [](dstd::StringView) {});
 }
 
-// Run `body` as a single-node pipeline and return its int result. `body` is a
-// template param (inlinable, no type erasure); it runs exactly once.
-template <class Body>
-int run_single_task(const char* name, const PipelineArgs& pipeline,
-                    Body&& body) {
-    Pipeline p(build_pipeline_config(name, pipeline));
-    auto task = make_task(
-        [body = std::forward<Body>(body)](CoroScope&) -> coro::CoroTask<int> {
-            co_return co_await coro::with_scope(body);
-        },
-        name);
-    p.set_source(task);
-    p.set_destination(task);
-    p.execute();
-    return task->template get<int>();
-}
-
-// Split out so the run_single_task lambda below holds no coroutine locals,
-// which ICEs GCC 12/13. Leaves the scan in `entries` so the caller resolves
+// Split out so the lambda that calls it holds no coroutine locals, which ICEs
+// GCC 12/13. Leaves the scan in `entries` so the caller resolves
 // again without scanning.
 inline coro::CoroTask<int> ensure_indexes_fresh_task(
     coro::Scope& ctx, dstd::StringView directory,
@@ -639,7 +658,7 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
 
 inline dstd::Vector<utilities::filesystem::FileEntry>
 ensure_indexes_fresh_blocking(
-    const char* name, const PipelineArgs& pipeline, dstd::StringView directory,
+    const char* name, const RuntimeArgs& runtime, dstd::StringView directory,
     dstd::Vector<dstd::StringView> files, dstd::StringView index_dir,
     bool force_rebuild = false,
     dftracer::utils::index::schemas::dft::agg::AggregationConfig aggregation =
@@ -648,12 +667,11 @@ ensure_indexes_fresh_blocking(
     std::size_t checkpoint_size = 0) {
     dstd::Vector<utilities::filesystem::FileEntry> entries;
     if (directory.empty() && files.empty()) return entries;
-    run_single_task(
-        name, pipeline, [&](coro::Scope& ctx) -> coro::CoroTask<int> {
-            co_return co_await ensure_indexes_fresh_task(
-                ctx, directory, std::move(files), index_dir, force_rebuild,
-                &entries, std::move(aggregation), checkpoint_size);
-        });
+    run_on_pool(name, runtime, [&](coro::Scope& ctx) -> coro::CoroTask<int> {
+        co_return co_await ensure_indexes_fresh_task(
+            ctx, directory, std::move(files), index_dir, force_rebuild,
+            &entries, std::move(aggregation), checkpoint_size);
+    });
     return entries;
 }
 

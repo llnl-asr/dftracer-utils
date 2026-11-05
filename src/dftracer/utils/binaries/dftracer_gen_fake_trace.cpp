@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
@@ -18,9 +19,6 @@
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
@@ -30,7 +28,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <random>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
@@ -298,7 +295,7 @@ static coro::CoroTask<int> run_verify(
 
 class GenFakeTraceArgParse : public binaries::ArgParse {
    public:
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
 
     dstd::StringView output;
     int rank_count = 8;
@@ -316,7 +313,7 @@ class GenFakeTraceArgParse : public binaries::ArgParse {
     std::size_t checkpoint_size = 2 * 1024 * 1024;
 
     explicit GenFakeTraceArgParse(binaries::ArgParser& p) : ArgParse(p) {
-        schema(pipeline);
+        schema(runtime_args);
     }
 
    protected:
@@ -898,85 +895,55 @@ struct RankTrace {
     }
 };
 
-// One file per rank, generated in parallel. The tasks keep pointers to every
-// argument, which must outlive the pipeline run.
-dstd::Vector<dstd::SharedPtr<Task>> add_rank_tasks(
-    const GenOptions& opts, const TraceNames& names,
-    const dstd::Vector<dstd::String>& generated_files,
-    dstd::Vector<std::size_t>& rank_event_counts) {
-    const auto* opts_ptr = &opts;
-    const auto* names_ptr = &names;
-    const auto* generated_files_ptr = &generated_files;
-    auto* rank_event_counts_ptr = &rank_event_counts;
-    dstd::Vector<dstd::SharedPtr<Task>> rank_tasks;
-    for (int rank = 0; rank < opts.rank_count; ++rank) {
-        auto task = make_task(
-            [rank, opts_ptr, names_ptr, generated_files_ptr,
-             rank_event_counts_ptr](CoroScope&) -> coro::CoroTask<void> {
-                RankTrace trace(*opts_ptr, *names_ptr, rank,
-                                (*generated_files_ptr)[rank]);
-                trace.run();
-                (*rank_event_counts_ptr)[rank] = trace.rank_events;
-                co_return;
-            },
-            "Rank-" + dstd::to_string(rank));
-        rank_tasks.push_back(task);
-    }
-    return rank_tasks;
+// One file per rank. The pointers must outlive the task.
+coro::CoroTask<void> generate_rank(const GenOptions* opts,
+                                   const TraceNames* names, int rank,
+                                   const dstd::String* file,
+                                   std::size_t* event_count) {
+    RankTrace trace(*opts, *names, rank, *file);
+    trace.run();
+    *event_count = trace.rank_events;
+    co_return;
 }
 
 // Prints the results after generation.
-dstd::SharedPtr<Task> make_summary_task(
-    const GenOptions& opts, const TraceNames& names,
-    const dstd::Vector<dstd::String>& generated_files,
-    const dstd::Vector<std::size_t>& rank_event_counts) {
-    const auto* names_ptr = &names;
-    const auto* rank_event_counts_for_summary = &rank_event_counts;
-    const auto* generated_files_for_summary = &generated_files;
-    return make_task(
-        [rank_count = opts.rank_count, checkpoint_every = opts.checkpoint_every,
-         validation_every = opts.validation_every, names_ptr,
-         rank_event_counts_for_summary,
-         generated_files_for_summary](CoroScope&) -> coro::CoroTask<void> {
-            std::size_t total_events = 0;
-            for (int rank = 0; rank < rank_count; ++rank) {
-                std::printf("  rank %d: %zu events -> %s\n", rank,
-                            (*rank_event_counts_for_summary)[rank],
-                            (*generated_files_for_summary)[rank].c_str());
-                total_events += (*rank_event_counts_for_summary)[rank];
-            }
+void print_summary(const GenOptions& opts, const TraceNames& names,
+                   const dstd::Vector<dstd::String>& generated_files,
+                   const dstd::Vector<std::size_t>& rank_event_counts) {
+    std::size_t total_events = 0;
+    for (int rank = 0; rank < opts.rank_count; ++rank) {
+        std::printf("  rank %d: %zu events -> %s\n", rank,
+                    rank_event_counts[rank], generated_files[rank].c_str());
+        total_events += rank_event_counts[rank];
+    }
 
-            std::printf("\n==========================================\n");
-            std::printf("Generation complete\n");
-            std::printf("==========================================\n");
-            std::printf("  Total events: %zu\n", total_events);
-            std::printf("  Total files:  %d\n", rank_count);
-            std::printf("\nInteresting queries for bloom filter testing:\n");
-            std::printf(
-                "  1. name=pwrite                   (checkpoint I/O, "
-                "~%d%% of "
-                "epochs)\n",
-                checkpoint_every > 0 ? 100 / checkpoint_every : 0);
-            std::printf("  2. fhash=%s  (validation data, ~%d%% of epochs)\n",
-                        names_ptr->val_file_hashes[0].c_str(),
-                        validation_every > 0 ? 100 / validation_every : 0);
-            if (!names_ptr->train_file_hashes.empty()) {
-                std::printf("  3. fhash=%s  (rank-specific train shard)\n",
-                            names_ptr->train_file_hashes[0].c_str());
-            }
-            std::printf("  4. hhash=%s  (host-specific, %s)\n",
-                        names_ptr->host_hashes[0].c_str(),
-                        names_ptr->host_names[0].c_str());
-            std::printf(
-                "  5. name=allreduce                (every step, "
-                "dense)\n");
-            std::printf(
-                "  6. name=fsync                    (checkpoint only, "
-                "sparse)\n");
-            std::printf("==========================================\n");
-            co_return;
-        },
-        "Summary");
+    std::printf("\n==========================================\n");
+    std::printf("Generation complete\n");
+    std::printf("==========================================\n");
+    std::printf("  Total events: %zu\n", total_events);
+    std::printf("  Total files:  %d\n", opts.rank_count);
+    std::printf("\nInteresting queries for bloom filter testing:\n");
+    std::printf(
+        "  1. name=pwrite                   (checkpoint I/O, "
+        "~%d%% of "
+        "epochs)\n",
+        opts.checkpoint_every > 0 ? 100 / opts.checkpoint_every : 0);
+    std::printf("  2. fhash=%s  (validation data, ~%d%% of epochs)\n",
+                names.val_file_hashes[0].c_str(),
+                opts.validation_every > 0 ? 100 / opts.validation_every : 0);
+    if (!names.train_file_hashes.empty()) {
+        std::printf("  3. fhash=%s  (rank-specific train shard)\n",
+                    names.train_file_hashes[0].c_str());
+    }
+    std::printf("  4. hhash=%s  (host-specific, %s)\n",
+                names.host_hashes[0].c_str(), names.host_names[0].c_str());
+    std::printf(
+        "  5. name=allreduce                (every step, "
+        "dense)\n");
+    std::printf(
+        "  6. name=fsync                    (checkpoint only, "
+        "sparse)\n");
+    std::printf("==========================================\n");
 }
 
 dstd::Vector<QuerySpec> make_test_queries(const TraceNames& names) {
@@ -1055,24 +1022,6 @@ dstd::Vector<QuerySpec> make_test_queries(const TraceNames& names) {
     return test_queries;
 }
 
-dstd::SharedPtr<Task> make_verify_task(
-    const GenOptions& opts, const TraceNames& names,
-    const dstd::Vector<dstd::String>& generated_files,
-    const dstd::SharedPtr<Task>& summary_task) {
-    auto* gf_ptr = &generated_files;
-    auto verify_task = make_task(
-        [gf_ptr, test_queries = make_test_queries(names),
-         checkpoint_size =
-             opts.checkpoint_size](CoroScope&) -> coro::CoroTask<int> {
-            co_return co_await run_verify(*gf_ptr, test_queries,
-                                          checkpoint_size);
-        },
-        "Verify");
-
-    verify_task->depends_on(summary_task);
-    return verify_task;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1093,36 +1042,28 @@ int main(int argc, char** argv) {
             dstd::Vector<dstd::String> generated_files = plan_files(opts);
             dstd::Vector<std::size_t> rank_event_counts(opts.rank_count, 0);
 
-            auto pipeline_config = binaries::build_pipeline_config(
-                "DFTracer Fake Trace Generator", cli.pipeline);
-            Pipeline pipeline(pipeline_config);
-
-            auto rank_tasks =
-                add_rank_tasks(opts, names, generated_files, rank_event_counts);
-            auto summary_task = make_summary_task(opts, names, generated_files,
-                                                  rank_event_counts);
-            for (const auto& rt : rank_tasks) {
-                summary_task->depends_on(rt);
-            }
-
-            dstd::SharedPtr<Task> final_task = summary_task;
-            dstd::SharedPtr<Task> verify_task;
-
-            if (opts.verify) {
-                verify_task = make_verify_task(opts, names, generated_files,
-                                               summary_task);
-                final_task = verify_task;
-            }
-
-            pipeline.set_source(std::vector<dstd::SharedPtr<Task>>(
-                rank_tasks.begin(), rank_tasks.end()));
-            pipeline.set_destination(final_task);
-            pipeline.execute();
-
-            if (opts.verify && verify_task) {
-                return verify_task->get<int>();
-            }
-
-            return 0;
+            const auto executor_threads = cli.runtime_args.executor_threads;
+            return binaries::run_on_pool(
+                "DFTracer Fake Trace Generator", cli.runtime_args,
+                [&](coro::Scope&) -> coro::CoroTask<int> {
+                    dstd::Vector<int> ranks;
+                    for (int rank = 0; rank < opts.rank_count; ++rank) {
+                        ranks.push_back(rank);
+                    }
+                    co_await coro::parallel_map(
+                        std::move(ranks),
+                        [&](int rank) {
+                            return generate_rank(&opts, &names, rank,
+                                                 &generated_files[rank],
+                                                 &rank_event_counts[rank]);
+                        },
+                        {.max_in_flight = executor_threads});
+                    print_summary(opts, names, generated_files,
+                                  rank_event_counts);
+                    if (!opts.verify) co_return 0;
+                    const auto test_queries = make_test_queries(names);
+                    co_return co_await run_verify(generated_files, test_queries,
+                                                  opts.checkpoint_size);
+                });
         });
 }

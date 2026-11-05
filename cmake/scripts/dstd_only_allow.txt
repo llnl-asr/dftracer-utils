@@ -54,8 +54,6 @@ tests/runtime/test_task_pool.cpp | set, thread, vector | a dstd container or thr
 include/dftracer/utils/runtime/scheduler/task_executor.h | any | Task API
 src/dftracer/utils/runtime/scheduler/thread_pool_executor.h | any | Task API
 src/dftracer/utils/runtime/scheduler/thread_pool_executor.cpp | any | Task API
-src/dftracer/utils/binaries/dftracer_gen_fake_trace.cpp | vector | Pipeline::set_source takes std::vector
-src/dftracer/utils/binaries/dftracer_split.cpp | vector | Task and TaskGraph::reduce take std::vector
 tests/coro/test_channel.cpp | vector | Pipeline::set_source takes std::vector
 tests/coro/test_coro_syntax.cpp | any, any_cast | the Task API passes std::any
 src/dftracer/utils/runtime/scheduler/watchdog.h | function, string | the pipeline callbacks take std::string

@@ -8,9 +8,6 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -133,7 +130,7 @@ class RunArgParse : public binaries::ArgParse {
    public:
     binaries::InputArgs inputs{binaries::DirMode::DefaultEmpty,
                                "Trace files or a folder of trace files"};
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
     binaries::IndexingArgs indexing;
     binaries::WatchdogArgs watchdog;
 
@@ -144,7 +141,7 @@ class RunArgParse : public binaries::ArgParse {
         indexing.with_force = false;
         indexing.index_dir_help =
             "Directory where .dftindex stores are created";
-        schema(inputs, pipeline, indexing, watchdog);
+        schema(inputs, runtime_args, indexing, watchdog);
     }
 
    protected:
@@ -278,7 +275,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     dstd::Vector<dstd::String> files;
     if (!directory.empty()) {
         auto matched =
-            binaries::scan_trace_files_on_pool(cli->pipeline, directory);
+            binaries::scan_trace_files_on_pool(cli->runtime_args, directory);
         for (const auto& entry : matched) files.emplace_back(entry.path.str());
     }
     for (const auto file : cli->inputs.files) files.emplace_back(file);
@@ -308,30 +305,25 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     }
 
     ExportStats stats;
-    auto pipeline_config = binaries::build_pipeline_config(
-        "DFTracer Run", cli->pipeline, cli->watchdog);
-    Pipeline pipeline(pipeline_config);
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            if (!no_auto_index)
-                co_await dftracer::utils::index::build::ensure_indexes_fresh(
-                    "", files, index_dir);
-            View view = View::from_files(view_files);
-            auto run = co_await plugins->run(view);
-            if (!run) {
-                DFTRACER_UTILS_LOG_ERROR("%s", run.error().format().c_str());
-                co_return;
-            }
-            stats = run->stats;
-            co_return;
-        },
-        "DFTracerRun");
-    pipeline.set_source(task);
-    pipeline.set_destination(task);
     try {
-        pipeline.execute();
+        binaries::run_on_pool("DFTracer Run", cli->runtime_args, cli->watchdog,
+                              [&](coro::Scope&) -> coro::CoroTask<void> {
+                                  if (!no_auto_index)
+                                      co_await dftracer::utils::index::build::
+                                          ensure_indexes_fresh("", files,
+                                                               index_dir);
+                                  View view = View::from_files(view_files);
+                                  auto run = co_await plugins->run(view);
+                                  if (!run) {
+                                      DFTRACER_UTILS_LOG_ERROR(
+                                          "%s", run.error().format().c_str());
+                                      co_return;
+                                  }
+                                  stats = run->stats;
+                                  co_return;
+                              });
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Pipeline failed: %s", e.what());
+        DFTRACER_UTILS_LOG_ERROR("Run failed: %s", e.what());
         co_return 1;
     }
 

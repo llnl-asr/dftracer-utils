@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 
 namespace dftracer::utils {
 
@@ -63,7 +63,7 @@ void Watchdog::mark_execution_start() {
 }
 
 void Watchdog::register_task_start(common::TaskIndex task_id,
-                                   dstd::SharedPtr<Task> task,
+                                   dstd::StringView name,
                                    std::chrono::milliseconds timeout) {
     std::lock_guard<std::mutex> lock(active_tasks_mutex_);
 
@@ -74,7 +74,7 @@ void Watchdog::register_task_start(common::TaskIndex task_id,
     }
 
     TaskExecution exec;
-    exec.task = task;
+    exec.name = dstd::String(name);
     exec.start_time = std::chrono::steady_clock::now();
     exec.timeout = effective_timeout;
     exec.warning_logged = false;
@@ -82,7 +82,7 @@ void Watchdog::register_task_start(common::TaskIndex task_id,
 
     DFTRACER_UTILS_LOG_DEBUG(
         "Watchdog: registered task '%s' (ID: %ld) with timeout: %lld ms",
-        task->name(), task_id,
+        exec.name.c_str(), task_id,
         static_cast<long long>(effective_timeout.count()));
 }
 
@@ -92,7 +92,7 @@ void Watchdog::unregister_task(common::TaskIndex task_id) {
     auto it = active_tasks_.find(task_id);
     if (it != active_tasks_.end()) {
         DFTRACER_UTILS_LOG_DEBUG("Watchdog: unregistered task '%s' (ID: %ld)",
-                                 it->second.task->name(), task_id);
+                                 it->second.name.c_str(), task_id);
 
         active_tasks_.erase(it);
     }
@@ -178,9 +178,9 @@ bool Watchdog::check_global_timeout() {
             static_cast<long long>(elapsed_ms.count()),
             static_cast<long long>(global_timeout_.count()));
 
-        trigger_timeout("Global pipeline timeout after " +
-                        dstd::to_string(elapsed_ms.count()) + " ms (limit: " +
-                        dstd::to_string(global_timeout_.count()) + " ms)");
+        trigger_timeout(
+            "Global timeout after " + dstd::to_string(elapsed_ms.count()) +
+            " ms (limit: " + dstd::to_string(global_timeout_.count()) + " ms)");
 
         return true;
     }
@@ -203,7 +203,7 @@ bool Watchdog::check_task_timeouts() {
             DFTRACER_UTILS_LOG_ERROR(
                 "Task timeout: '%s' (ID: %ld) ran for %lld ms (limit: %lld "
                 "ms)",
-                execution.task->name(), task_id,
+                execution.name.c_str(), task_id,
                 static_cast<long long>(elapsed_ms.count()),
                 static_cast<long long>(execution.timeout.count()));
 
@@ -212,7 +212,7 @@ bool Watchdog::check_task_timeouts() {
                 std::snprintf(
                     buf, sizeof(buf),
                     "Task '%s' timed out after %lld ms (limit: %lld ms)",
-                    execution.task->name(),
+                    execution.name.c_str(),
                     static_cast<long long>(elapsed_ms.count()),
                     static_cast<long long>(execution.timeout.count()));
                 trigger_timeout(buf);
@@ -229,10 +229,10 @@ bool Watchdog::check_task_timeouts() {
             DFTRACER_UTILS_LOG_WARN(
                 "Long-running task: '%s' (ID: %ld) has been running for %lld "
                 "ms",
-                execution.task->name(), task_id,
+                execution.name.c_str(), task_id,
                 static_cast<long long>(elapsed_ms.count()));
 
-            trigger_warning(execution.task->name(), elapsed_ms.count());
+            trigger_warning(execution.name.c_str(), elapsed_ms.count());
         }
     }
 

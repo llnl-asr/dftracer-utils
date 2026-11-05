@@ -17,7 +17,6 @@
 
 namespace dftracer::utils {
 
-class Task;
 class TaskExecutor;
 
 /**
@@ -52,7 +51,7 @@ class Watchdog {
      * Information about an active task execution
      */
     struct TaskExecution {
-        dstd::SharedPtr<Task> task;
+        dstd::String name;
         std::chrono::steady_clock::time_point start_time;
         std::chrono::milliseconds timeout;  // 0 = no timeout
         bool warning_logged{false};         // Track if warning already logged
@@ -129,11 +128,11 @@ class Watchdog {
     /**
      * Register a task as actively executing
      * @param task_id Task identifier
-     * @param task Shared pointer to the task
+     * @param name Task name, copied
      * @param timeout Task-specific timeout (0 = use default or no timeout)
      */
     void register_task_start(
-        common::TaskIndex task_id, dstd::SharedPtr<Task> task,
+        common::TaskIndex task_id, dstd::StringView name,
         std::chrono::milliseconds timeout = std::chrono::milliseconds(0));
 
     /**

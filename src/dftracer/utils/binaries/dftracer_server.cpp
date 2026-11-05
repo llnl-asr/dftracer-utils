@@ -9,9 +9,6 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/server/http_connection.h>
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/signal_handler.h>
@@ -38,7 +35,7 @@ class ServerArgParse : public binaries::ArgParse {
    public:
     binaries::InputArgs inputs{binaries::DirMode::Required,
                                "Folder of trace files to serve"};
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
 
     dstd::StringView index_dir;
     dstd::StringView bind_addr = "127.0.0.1";
@@ -52,7 +49,7 @@ class ServerArgParse : public binaries::ArgParse {
 
     explicit ServerArgParse(binaries::ArgParser& p) : ArgParse(p) {
         inputs.folder_only = true;
-        schema(inputs, pipeline);
+        schema(inputs, runtime_args);
     }
 
    protected:
@@ -110,7 +107,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
     auto port = cli->port;
     const dstd::String dir(cli->inputs.directory);
     dstd::String index_dir(cli->index_dir);
-    auto executor_threads = cli->pipeline.executor_threads;
+    auto executor_threads = cli->runtime_args.executor_threads;
 
     if (index_dir.empty()) {
         index_dir = dir;
@@ -127,18 +124,14 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
     std::fprintf(stderr, "Member decode cache: %zu bytes\n",
                  cli->member_cache_size);
 
-    auto pipeline_config =
-        binaries::build_pipeline_config("DFTracer Server", cli->pipeline);
     // Steady-load, latency-sensitive service: keep the full pool warm rather
     // than paying the elastic grow ramp on every request.
-    pipeline_config.with_io_backend(io::IoBackendType::Threadpool)
-        .with_io_batch_size(1)
-        .with_watchdog(false)
-        .with_eager()
-        .with_global_timeout(std::chrono::seconds(0))
-        .with_task_timeout(std::chrono::seconds(0));
-
-    Pipeline pipeline(pipeline_config);
+    RuntimeSettings settings;
+    cli->runtime_args.apply(settings);
+    settings.io_backend = io::IoBackendType::Threadpool;
+    settings.io_batch_threshold = 1;
+    settings.eager = true;
+    configure_default_runtime(settings);
 
     std::fprintf(stderr,
                  "Using %zu worker threads; auto-index checkpoint size %zu "
@@ -187,45 +180,35 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
         }).detach();
     }
 
-    auto server_task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope(
-                [&](coro::Scope& ctx) -> coro::CoroTask<void> {
-                    auto* router_ptr = &router;
+    binaries::run_on_pool(
+        "DFTracer Server", cli->runtime_args,
+        [&](coro::Scope& ctx) -> coro::CoroTask<void> {
+            auto* router_ptr = &router;
 #ifndef DFTRACER_UTILS_VALGRIND_MODE
-                    // Eager prewarm is a full pass over every file (gzip
-                    // decompress + scan). Skip it under Valgrind - the summary
-                    // still builds lazily on the first viz request, so the
-                    // instrumented server test does not pay this cost up front
-                    // and blow its time budget.
-                    auto* index_ptr = &trace_index;
-                    // The summary also builds on the first viz request, so a
-                    // failed prewarm is logged and the server keeps running.
-                    ctx.spawn([index_ptr]() -> coro::CoroTask<void> {
-                        try {
-                            co_await prewarm_viz_summary(*index_ptr);
-                        } catch (const std::exception& e) {
-                            DFTRACER_UTILS_LOG_ERROR("viz prewarm failed: %s",
-                                                     e.what());
-                        }
-                    });
+            // Eager prewarm is a full pass over every file (gzip
+            // decompress + scan). Skip it under Valgrind - the summary
+            // still builds lazily on the first viz request, so the
+            // instrumented server test does not pay this cost up front
+            // and blow its time budget.
+            auto* index_ptr = &trace_index;
+            // The summary also builds on the first viz request, so a
+            // failed prewarm is logged and the server keeps running.
+            ctx.spawn([index_ptr]() -> coro::CoroTask<void> {
+                try {
+                    co_await prewarm_viz_summary(*index_ptr);
+                } catch (const std::exception& e) {
+                    DFTRACER_UTILS_LOG_ERROR("viz prewarm failed: %s",
+                                             e.what());
+                }
+            });
 #endif
-                    auto on_connection =
-                        [router_ptr](
-                            int client_fd,
-                            struct sockaddr_in addr) -> coro::CoroTask<void> {
-                        co_await handle_connection(client_fd, addr,
-                                                   *router_ptr);
-                    };
-                    co_await listener.accept_loop(ctx, on_connection);
-                });
-        },
-        "Server");
-
-    pipeline.set_source(server_task);
-    pipeline.set_destination(server_task);
-
-    pipeline.execute();
+            auto on_connection =
+                [router_ptr](int client_fd,
+                             struct sockaddr_in addr) -> coro::CoroTask<void> {
+                co_await handle_connection(client_fd, addr, *router_ptr);
+            };
+            co_await listener.accept_loop(ctx, on_connection);
+        });
 
     std::fprintf(stderr, "Server shut down gracefully\n");
 

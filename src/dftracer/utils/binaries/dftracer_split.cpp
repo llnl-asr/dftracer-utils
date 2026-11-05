@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/stage.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -11,10 +13,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/io/io.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/task_graph/task_graph.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
 #include <dftracer/utils/trace/chunk_verifier_utility.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
@@ -31,20 +29,18 @@
 #include <ctime>
 #include <exception>
 #include <mutex>
-#include <vector>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::task_graph;
 using ExtractInput = trace::ChunkExtractorUtilityInput;
 using ExtractResult = trace::ChunkExtractorUtilityOutput;
-using ExtractChunksOutput = std::vector<ExtractResult>;
+using ExtractChunksOutput = dstd::Vector<ExtractResult>;
 
 class SplitArgParse : public binaries::ArgParse {
    public:
     binaries::InputArgs inputs{
         binaries::DirMode::DefaultDot,
         "Folder of trace files to split (default: the current folder)"};
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
     binaries::IndexingArgs member;
     binaries::MemoryArgs memory;
     binaries::WatchdogArgs watchdog;
@@ -69,7 +65,7 @@ class SplitArgParse : public binaries::ArgParse {
             "and one group always runs. 0 means a third of the available "
             "memory";
         inputs.folder_only = true;
-        schema(inputs, pipeline, member, memory, watchdog);
+        schema(inputs, runtime_args, member, memory, watchdog);
     }
 
    protected:
@@ -115,8 +111,8 @@ struct FileGroup {
     double ratio = 1.0;
 };
 
-using FileGroups = std::vector<FileGroup>;
-using FileProbes = std::vector<FileProbe>;
+using FileGroups = dstd::Vector<FileGroup>;
+using FileProbes = dstd::Vector<FileProbe>;
 
 constexpr std::uint64_t RATIO_SAMPLE_BYTES = 1 << 20;
 
@@ -222,7 +218,7 @@ void print_banner(const SplitSettings& settings, const dstd::Path& log_dir,
     const double chunk_size_mb =
         static_cast<double>(settings.chunk_size_bytes) / (1024.0 * 1024.0);
     std::printf("==========================================\n");
-    std::printf("DFTracer Split (Explicit Pipeline)\n");
+    std::printf("DFTracer Split\n");
     std::printf("==========================================\n");
     std::printf("Arguments:\n");
     std::printf("  App name: %s\n", settings.app_name.c_str());
@@ -241,7 +237,7 @@ dstd::Vector<dstd::String> collect_inputs(const SplitArgParse& cli,
                                           const dstd::Path& output_dir) {
     dstd::Vector<dstd::String> input_files;
     auto matched =
-        binaries::scan_trace_files_on_pool(cli.pipeline, log_dir.str());
+        binaries::scan_trace_files_on_pool(cli.runtime_args, log_dir.str());
     // Never read back this run's own output. A file is tested by its walked
     // path, so a symlink into the output directory from outside its
     // spelling is not caught.
@@ -294,284 +290,238 @@ bool check_inputs(dstd::Vector<dstd::String>& input_files,
 }
 
 // The read paths decode a whole member at once, so a single huge gzip
-// member is rechunked to bounded multi-member gzip first. The tasks keep
-// pointers to the arguments, which must outlive the pipeline run.
-auto add_probe_stage(TaskGraph& graph, const dstd::SharedPtr<Task>& start_task,
-                     dstd::Vector<dstd::String>& input_files,
-                     RechunkDir& rechunk_dir,
-                     std::atomic<std::size_t>& open_count,
-                     const SplitSettings& settings) {
-    const std::size_t member_size_bytes = settings.member_size_bytes;
-    auto* rechunk_dir_ptr = &rechunk_dir;
-    auto* input_files_ptr = &input_files;
-    auto* open_count_ptr = &open_count;
-    const std::size_t open_budget = binaries::open_file_budget();
-    auto file_probes = graph.parallel<FileProbe>(
-        input_files.size(),
-        [input_files_ptr, rechunk_dir_ptr, member_size_bytes, open_count_ptr,
-         open_budget](CoroScope&,
-                      std::size_t idx) -> coro::CoroTask<FileProbe> {
-            FileProbe probe;
-            probe.path = (*input_files_ptr)[idx];
-            ssize_t fd = co_await io::open(probe.path.c_str(), O_RDONLY);
-            if (fd < 0) {
-                DFTRACER_UTILS_LOG_ERROR("Cannot open %s", probe.path.c_str());
-                co_return probe;
-            }
-            dstd::ScopedFd sfd(static_cast<int>(fd));
-            struct stat st;
-            if (::fstat(sfd.get(), &st) != 0 || st.st_size == 0) {
-                co_return probe;
-            }
-            probe.bytes = static_cast<std::uint64_t>(st.st_size);
-            const utilities::fileio::compress::FirstMember first =
-                co_await utilities::fileio::compress::gzip_first_member(
-                    sfd.get(), probe.bytes,
-                    utilities::fileio::compress::RECHUNK_MEMBER_CAP,
-                    RATIO_SAMPLE_BYTES);
-            if (first.compressed > 0) {
-                probe.ratio =
-                    std::clamp(static_cast<double>(first.uncompressed) /
-                                   static_cast<double>(first.compressed),
-                               1.0, MAX_DEFLATE_RATIO);
-            }
-            if (!first.exceeds_cap &&
-                open_count_ptr->fetch_add(1, std::memory_order_relaxed) <
-                    open_budget) {
-                probe.fd = dstd::make_shared<dstd::ScopedFd>(std::move(sfd));
-            } else {
-                sfd.reset();
-            }
-            if (first.exceeds_cap) {
-                // (utilities step)
-                dstd::String out((rechunk_dir_ptr->get().view() /
-                                  dstd::PathView(probe.path).filename())
-                                     .str());
-                DFTRACER_UTILS_LOG_WARN(
-                    "Input %s is a single large gzip member; rechunking to "
-                    "bounded members at %s",
-                    probe.path.c_str(), out.c_str());
-                co_await utilities::fileio::compress::gzip_rechunk_to_members(
-                    dstd::String(probe.path), dstd::String(out),
-                    member_size_bytes, 6);
-                probe.path = out;
-                probe.bytes =
-                    common::unwrap(dstd::fs::file_size(dstd::PathView(out)));
-            }
-            probe.ok = true;
-            co_return probe;
-        },
-        {.name = "ProbeFile"});
+// member is rechunked to bounded multi-member gzip first. The stage keeps
+// pointers to `rechunk_dir` and `open_count`, which must outlive it.
+class ProbeStage {
+   public:
+    using Input = dstd::Vector<dstd::String>;
+    using Output = FileProbes;
+    static constexpr const char* NAME = "ProbeFile";
 
-    for (const auto& probe_task : file_probes.tasks()) {
-        probe_task->depends_on(start_task);
+    ProbeStage(const SplitSettings& settings, RechunkDir& rechunk_dir,
+               std::atomic<std::size_t>& open_count)
+        : member_size_bytes_(settings.member_size_bytes),
+          executor_threads_(settings.executor_threads),
+          open_budget_(binaries::open_file_budget()),
+          rechunk_dir_(&rechunk_dir),
+          open_count_(&open_count) {}
+
+    coro::CoroTask<Output> run(Input input_files) const {
+        co_return co_await coro::parallel_map(
+            std::move(input_files),
+            [this](dstd::String path) { return probe_file(std::move(path)); },
+            {.max_in_flight = executor_threads_});
     }
-    return file_probes;
-}
 
-template <class Probes>
-auto add_group_stage(TaskGraph& graph, const Probes& file_probes,
-                     std::size_t input_count, const SplitSettings& settings,
-                     dstd::Vector<dstd::String>& split_files) {
-    const std::size_t chunk_size_bytes = settings.chunk_size_bytes;
-    const std::size_t executor_threads = settings.executor_threads;
-    auto* split_files_ptr = &split_files;
-    auto groups_task = graph.reduce<FileGroups>(
-        file_probes, SplitEvery{input_count},
-        [chunk_size_bytes, executor_threads, split_files_ptr](
-            CoroScope&, FileProbes probes) -> coro::CoroTask<FileGroups> {
-            auto groups = group_files(
-                dstd::Span<const FileProbe>(probes.data(), probes.size()),
-                chunk_size_bytes, executor_threads);
-            for (const auto& group : groups) {
-                split_files_ptr->insert(split_files_ptr->end(),
-                                        group.files.begin(), group.files.end());
+   private:
+    coro::CoroTask<FileProbe> probe_file(dstd::String path) const {
+        FileProbe probe;
+        probe.path = std::move(path);
+        ssize_t fd = co_await io::open(probe.path.c_str(), O_RDONLY);
+        if (fd < 0) {
+            DFTRACER_UTILS_LOG_ERROR("Cannot open %s", probe.path.c_str());
+            co_return probe;
+        }
+        dstd::ScopedFd sfd(static_cast<int>(fd));
+        struct stat st;
+        if (::fstat(sfd.get(), &st) != 0 || st.st_size == 0) {
+            co_return probe;
+        }
+        probe.bytes = static_cast<std::uint64_t>(st.st_size);
+        const utilities::fileio::compress::FirstMember first =
+            co_await utilities::fileio::compress::gzip_first_member(
+                sfd.get(), probe.bytes,
+                utilities::fileio::compress::RECHUNK_MEMBER_CAP,
+                RATIO_SAMPLE_BYTES);
+        if (first.compressed > 0) {
+            probe.ratio = std::clamp(static_cast<double>(first.uncompressed) /
+                                         static_cast<double>(first.compressed),
+                                     1.0, MAX_DEFLATE_RATIO);
+        }
+        if (!first.exceeds_cap &&
+            open_count_->fetch_add(1, std::memory_order_relaxed) <
+                open_budget_) {
+            probe.fd = dstd::make_shared<dstd::ScopedFd>(std::move(sfd));
+        } else {
+            sfd.reset();
+        }
+        if (first.exceeds_cap) {
+            dstd::String out((rechunk_dir_->get().view() /
+                              dstd::PathView(probe.path).filename())
+                                 .str());
+            DFTRACER_UTILS_LOG_WARN(
+                "Input %s is a single large gzip member; rechunking to "
+                "bounded members at %s",
+                probe.path.c_str(), out.c_str());
+            co_await utilities::fileio::compress::gzip_rechunk_to_members(
+                dstd::String(probe.path), dstd::String(out), member_size_bytes_,
+                6);
+            probe.path = out;
+            probe.bytes =
+                common::unwrap(dstd::fs::file_size(dstd::PathView(out)));
+        }
+        probe.ok = true;
+        co_return probe;
+    }
+
+    std::size_t member_size_bytes_;
+    std::size_t executor_threads_;
+    std::size_t open_budget_;
+    RechunkDir* rechunk_dir_;
+    std::atomic<std::size_t>* open_count_;
+};
+
+class GroupStage {
+   public:
+    using Input = FileProbes;
+    using Output = FileGroups;
+    static constexpr const char* NAME = "GroupFiles";
+
+    explicit GroupStage(const SplitSettings& settings)
+        : chunk_size_bytes_(settings.chunk_size_bytes),
+          executor_threads_(settings.executor_threads) {}
+
+    coro::CoroTask<Output> run(Input probes) const {
+        auto groups = group_files(
+            dstd::Span<const FileProbe>(probes.data(), probes.size()),
+            chunk_size_bytes_, executor_threads_);
+        std::size_t file_count = 0;
+        for (const auto& group : groups) file_count += group.files.size();
+        DFTRACER_UTILS_LOG_INFO("Split %zu files in %zu groups", file_count,
+                                groups.size());
+        co_return groups;
+    }
+
+   private:
+    std::size_t chunk_size_bytes_;
+    std::size_t executor_threads_;
+};
+
+// `settings` and `output_dir` must outlive the stage.
+class ExtractStage {
+   public:
+    using Input = FileGroups;
+    using Output = ExtractChunksOutput;
+    static constexpr const char* NAME = "ExtractChunks";
+
+    ExtractStage(const SplitSettings& settings, const dstd::String& output_dir)
+        : settings_(&settings), output_dir_(&output_dir) {}
+
+    coro::CoroTask<Output> run(Input groups) const {
+        const auto& settings = *settings_;
+        DFTRACER_UTILS_LOG_INFO("Splitting %zu groups in parallel...",
+                                groups.size());
+
+        // A running group holds its writer's buffers and its compress workers
+        // use every core, so few groups run at once, within the memory budget.
+        const std::size_t max_parallel =
+            std::max<std::size_t>(2, settings.executor_threads / 4);
+        const auto extraction = trace::plan_extraction_budget(
+            settings.memory_budget, max_parallel, settings.executor_threads,
+            settings.member_size_bytes);
+        trace::ExtractionAdmission admission(
+            settings.memory_budget, extraction.reserve_bytes, max_parallel);
+        auto* admission_ptr = &admission;
+
+        dstd::Vector<ExtractInput> inputs;
+        inputs.reserve(groups.size());
+        for (std::size_t i = 0; i < groups.size(); ++i) {
+            // Chunk files are sized by compressed bytes and the writer counts
+            // uncompressed ones.
+            const double ratio = settings.compress ? groups[i].ratio : 1.0;
+            inputs.push_back(
+                ExtractInput::from_files(static_cast<int>(i + 1),
+                                         std::move(groups[i].files))
+                    .with_output_dir(*output_dir_)
+                    .with_open_files(std::move(groups[i].open_files))
+                    .with_app_name(settings.app_name)
+                    .with_compression(settings.compress)
+                    .with_compute_hash(settings.verify)
+                    .with_member_size(settings.member_size_bytes)
+                    .with_memory_budget(extraction.writer_bytes)
+                    .with_chunk_size(chunk_uncompressed_bytes(
+                        settings.chunk_size_bytes, ratio,
+                        settings.member_size_bytes)));
+        }
+
+        auto extract_one =
+            [admission_ptr](
+                ExtractInput input) -> coro::CoroTask<ExtractResult> {
+            co_await admission_ptr->enter();
+            try {
+                trace::ChunkExtractorUtility extractor;
+                auto result = co_await extractor(input);
+                admission_ptr->leave();
+                co_return result;
+            } catch (...) {
+                admission_ptr->leave();
+                throw;
             }
-            DFTRACER_UTILS_LOG_INFO("Split %zu files in %zu groups",
-                                    split_files_ptr->size(), groups.size());
-            co_return groups;
-        },
-        {.name = "GroupFiles"});
-    return groups_task;
-}
+        };
+        auto extracts =
+            coro::parallel_map(std::move(inputs), std::move(extract_one),
+                               {.max_in_flight = max_parallel});
+        auto results = co_await std::move(extracts);
 
-// `settings`, `output_dir_text` and `split_results` must outlive the pipeline
-// run: the task keeps pointers to them.
-template <class Groups>
-auto add_extract_stage(TaskGraph& graph, const Groups& groups_task,
-                       const SplitSettings& settings,
-                       const dstd::String& output_dir_text,
-                       ExtractChunksOutput& split_results) {
-    auto* app_name_ptr = &settings.app_name;
-    auto* output_dir_ptr = &output_dir_text;
-    auto* split_results_ptr = &split_results;
-    const bool compress = settings.compress;
-    const bool verify = settings.verify;
-    const std::size_t executor_threads = settings.executor_threads;
-    const std::size_t member_size_bytes = settings.member_size_bytes;
-    const std::size_t chunk_size_bytes = settings.chunk_size_bytes;
-    const std::uint64_t memory_budget = settings.memory_budget;
+        std::sort(results.begin(), results.end(),
+                  [](const ExtractResult& a, const ExtractResult& b) {
+                      return a.chunk_index < b.chunk_index;
+                  });
+        co_return results;
+    }
 
-    auto task_extract_chunks = make_task(
-        [app_name_ptr, output_dir_ptr, split_results_ptr, compress, verify,
-         executor_threads, member_size_bytes, chunk_size_bytes, memory_budget](
-            CoroScope&,
-            FileGroups groups) -> coro::CoroTask<ExtractChunksOutput> {
-            co_return co_await coro::with_scope(
-                [&](coro::Scope& scope) -> coro::CoroTask<ExtractChunksOutput> {
-                    DFTRACER_UTILS_LOG_INFO(
-                        "Splitting %zu groups in parallel...", groups.size());
+   private:
+    const SplitSettings* settings_;
+    const dstd::String* output_dir_;
+};
 
-                    // A running group holds its writer's buffers and its
-                    // compress workers use every core, so few groups run at
-                    // once, within the memory budget.
-                    const std::size_t max_parallel =
-                        std::max<std::size_t>(2, executor_threads / 4);
-                    const auto extraction = trace::plan_extraction_budget(
-                        memory_budget, max_parallel, executor_threads,
-                        member_size_bytes);
-                    trace::ExtractionAdmission admission(
-                        memory_budget, extraction.reserve_bytes, max_parallel);
-                    auto* admission_ptr = &admission;
+struct VerifyInput {
+    const ExtractChunksOutput* chunks;  ///< Must outlive the run
+    dstd::Vector<dstd::String> files;   ///< The split input files
+};
 
-                    dstd::Vector<coro::SpawnFuture<ExtractResult>> futures;
-                    futures.reserve(groups.size());
+class VerifyStage {
+   public:
+    using Input = VerifyInput;
+    using Output = trace::ChunkVerificationUtilityOutput;
+    static constexpr const char* NAME = "VerifyChunks";
 
-                    for (std::size_t i = 0; i < groups.size(); ++i) {
-                        // Chunk files are sized by compressed bytes and the
-                        // writer counts uncompressed ones.
-                        const double ratio = compress ? groups[i].ratio : 1.0;
-                        auto input =
-                            ExtractInput::from_files(static_cast<int>(i + 1),
-                                                     std::move(groups[i].files))
-                                .with_output_dir(*output_dir_ptr)
-                                .with_open_files(
-                                    std::move(groups[i].open_files))
-                                .with_app_name(*app_name_ptr)
-                                .with_compression(compress)
-                                .with_compute_hash(verify)
-                                .with_member_size(member_size_bytes)
-                                .with_memory_budget(extraction.writer_bytes)
-                                .with_chunk_size(chunk_uncompressed_bytes(
-                                    chunk_size_bytes, ratio,
-                                    member_size_bytes));
+    explicit VerifyStage(const SplitSettings& settings)
+        : executor_threads_(settings.executor_threads) {}
 
-                        futures.push_back(scope.spawn_future(
-                            [input = std::move(input),
-                             admission_ptr]() -> coro::CoroTask<ExtractResult> {
-                                co_await admission_ptr->enter();
-                                try {
-                                    trace::ChunkExtractorUtility extractor;
-                                    auto result = co_await extractor(input);
-                                    admission_ptr->leave();
-                                    co_return result;
-                                } catch (...) {
-                                    admission_ptr->leave();
-                                    throw;
-                                }
-                            }));
-                    }
+    coro::CoroTask<Output> run(Input input) const {
+        std::size_t output_hash = 0;
+        for (const auto& chunk : *input.chunks) {
+            output_hash += chunk.event_hash;
+        }
 
-                    // Every future is awaited before a raise, since the
-                    // children use `admission`, which dies with this frame.
-                    ExtractChunksOutput results;
-                    results.reserve(futures.size());
-                    std::exception_ptr error;
-                    for (auto& future : futures) {
-                        try {
-                            results.push_back(co_await future);
-                        } catch (...) {
-                            if (!error) error = std::current_exception();
-                        }
-                    }
-                    if (error) std::rethrow_exception(error);
+        auto file_hashes = co_await coro::parallel_map(
+            std::move(input.files),
+            [](dstd::String path) -> coro::CoroTask<std::size_t> {
+                co_return co_await hash_events(path);
+            },
+            {.max_in_flight = executor_threads_});
+        std::size_t input_hash = 0;
+        for (const std::size_t file_hash : file_hashes) input_hash += file_hash;
 
-                    std::sort(
-                        results.begin(), results.end(),
-                        [](const ExtractResult& a, const ExtractResult& b) {
-                            return a.chunk_index < b.chunk_index;
-                        });
+        co_return trace::ChunkVerificationUtilityOutput::success(
+            static_cast<std::uint64_t>(input_hash),
+            static_cast<std::uint64_t>(output_hash));
+    }
 
-                    *split_results_ptr = results;
-                    co_return results;
-                });
-        },
-        "ExtractChunks");
+   private:
+    std::size_t executor_threads_;
+};
 
-    task_extract_chunks->depends_on(groups_task.task());
-    graph.add(task_extract_chunks);
-    return task_extract_chunks;
-}
-
-// `split_files` must outlive the pipeline run.
-auto add_verify_stage(TaskGraph& graph,
-                      const dstd::SharedPtr<Task>& task_extract_chunks,
-                      const SplitSettings& settings,
-                      dstd::Vector<dstd::String>& split_files) {
-    auto* split_files_ptr = &split_files;
-    const std::size_t executor_threads = settings.executor_threads;
-    dstd::SharedPtr<Task> task_verify_chunks = make_task(
-        [split_files_ptr, executor_threads](CoroScope&,
-                                            const ExtractChunksOutput& chunks)
-            -> coro::CoroTask<trace::ChunkVerificationUtilityOutput> {
-            co_return co_await coro::with_scope(
-                [&](coro::Scope& scope)
-                    -> coro::CoroTask<trace::ChunkVerificationUtilityOutput> {
-                    std::size_t output_hash = 0;
-                    for (const auto& chunk : chunks) {
-                        output_hash += chunk.event_hash;
-                    }
-
-                    coro::AsyncSemaphore running(executor_threads);
-                    auto* running_ptr = &running;
-                    dstd::Vector<coro::SpawnFuture<std::size_t>> futures;
-                    futures.reserve(split_files_ptr->size());
-                    for (const auto& file : *split_files_ptr) {
-                        const dstd::String* path = &file;
-                        futures.push_back(scope.spawn_future(
-                            [path,
-                             running_ptr]() -> coro::CoroTask<std::size_t> {
-                                co_await running_ptr->acquire(1);
-                                try {
-                                    const std::size_t file_hash =
-                                        co_await hash_events(*path);
-                                    running_ptr->release(1);
-                                    co_return file_hash;
-                                } catch (...) {
-                                    running_ptr->release(1);
-                                    throw;
-                                }
-                            }));
-                    }
-
-                    // Every future is awaited before a raise, since the
-                    // children use `running`, which dies with this frame.
-                    std::size_t input_hash = 0;
-                    std::exception_ptr error;
-                    for (auto& future : futures) {
-                        try {
-                            input_hash += co_await future;
-                        } catch (...) {
-                            if (!error) error = std::current_exception();
-                        }
-                    }
-                    if (error) std::rethrow_exception(error);
-
-                    co_return trace::ChunkVerificationUtilityOutput::success(
-                        static_cast<std::uint64_t>(input_hash),
-                        static_cast<std::uint64_t>(output_hash));
-                });
-        },
-        "VerifyChunks");
-
-    task_verify_chunks->depends_on(task_extract_chunks);
-    graph.add(task_verify_chunks);
-    return task_verify_chunks;
-}
+static_assert(coro::BatchStage<ProbeStage>);
+static_assert(coro::BatchStage<GroupStage>);
+static_assert(coro::BatchStage<ExtractStage>);
+static_assert(coro::BatchStage<VerifyStage>);
 
 int print_report(const ExtractChunksOutput& split_results,
                  std::size_t input_count, double duration_ms,
-                 const dstd::SharedPtr<Task>& task_verify_chunks) {
+                 const dstd::Optional<trace::ChunkVerificationUtilityOutput>&
+                     verify_result) {
     std::printf("\n");
     std::printf("==========================================\n");
     std::printf("Split Results\n");
@@ -600,11 +550,8 @@ int print_report(const ExtractChunksOutput& split_results,
         exit_code = 1;
     }
 
-    if (task_verify_chunks) {
-        auto verify_result =
-            task_verify_chunks->get<trace::ChunkVerificationUtilityOutput>();
-
-        if (verify_result.input_hash == verify_result.output_hash) {
+    if (verify_result) {
+        if (verify_result->input_hash == verify_result->output_hash) {
             std::printf(
                 "  Verification: PASSED - all events present in output\n");
         } else {
@@ -612,9 +559,9 @@ int print_report(const ExtractChunksOutput& split_results,
             exit_code = 1;
         }
         std::printf("    Input hash:  0x%016" PRIx64 "\n",
-                    verify_result.input_hash);
+                    verify_result->input_hash);
         std::printf("    Output hash: 0x%016" PRIx64 "\n",
-                    verify_result.output_hash);
+                    verify_result->output_hash);
     }
 
     std::printf("==========================================\n");
@@ -632,7 +579,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     settings.compress = cli->compress;
     settings.verify = cli->verify;
     settings.member_size_bytes = cli->member.checkpoint_size;
-    settings.executor_threads = cli->pipeline.executor_threads;
+    settings.executor_threads = cli->runtime_args.executor_threads;
     settings.memory_budget =
         memory::resolve_spill_budget(cli->memory.memory_budget);
 
@@ -642,10 +589,6 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
         common::unwrap(
             dstd::fs::create_directories(dstd::PathView(output_dir)));
     }
-
-    auto pipeline_config = binaries::build_pipeline_config(
-        "DFTracer Split", cli->pipeline, cli->watchdog);
-    Pipeline pipeline(pipeline_config);
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -657,49 +600,44 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
 
-    auto graph =
-        TaskGraph::builder({.name = "DFTracerSplit",
-                            .max_concurrency = settings.executor_threads});
-
-    auto start_task = make_task(
-        [](CoroScope&) -> coro::CoroTask<void> { co_return; }, "Start");
-    graph.add(start_task);
-
+    const std::size_t input_count = input_files.size();
     RechunkDir rechunk_dir;
     std::atomic<std::size_t> open_count{0};
-    auto file_probes = add_probe_stage(graph, start_task, input_files,
-                                       rechunk_dir, open_count, settings);
-
-    dstd::Vector<dstd::String> split_files;
-    auto groups_task = add_group_stage(graph, file_probes, input_files.size(),
-                                       settings, split_files);
-
     const dstd::String output_dir_text(output_dir.str());
     ExtractChunksOutput split_results;
-    auto task_extract_chunks = add_extract_stage(
-        graph, groups_task, settings, output_dir_text, split_results);
+    dstd::Optional<trace::ChunkVerificationUtilityOutput> verification;
 
-    dstd::SharedPtr<Task> final_task = task_extract_chunks;
-    dstd::SharedPtr<Task> task_verify_chunks = nullptr;
+    const ProbeStage probe_stage(settings, rechunk_dir, open_count);
+    const GroupStage group_stage(settings);
+    const ExtractStage extract_stage(settings, output_dir_text);
+    const VerifyStage verify_stage(settings);
 
-    if (settings.verify) {
-        DFTRACER_UTILS_LOG_INFO("%s", "Configuring verification...");
-        task_verify_chunks =
-            add_verify_stage(graph, task_extract_chunks, settings, split_files);
-        final_task = task_verify_chunks;
-    }
+    DFTRACER_UTILS_LOG_INFO("%s", "Running...");
 
-    DFTRACER_UTILS_LOG_INFO("%s", "Executing pipeline...");
-
-    pipeline.set_source(start_task);
-    pipeline.set_destination(final_task);
-    pipeline.execute();
+    binaries::run_on_pool(
+        "DFTracer Split", cli->runtime_args, cli->watchdog,
+        [&](coro::Scope&) -> coro::CoroTask<void> {
+            auto probes = co_await probe_stage.run(std::move(input_files));
+            auto groups = co_await group_stage.run(std::move(probes));
+            dstd::Vector<dstd::String> split_files;
+            for (const auto& group : groups) {
+                split_files.insert(split_files.end(), group.files.begin(),
+                                   group.files.end());
+            }
+            split_results = co_await extract_stage.run(std::move(groups));
+            if (settings.verify) {
+                VerifyInput verify_input{&split_results,
+                                         std::move(split_files)};
+                auto verifying = verify_stage.run(std::move(verify_input));
+                verification = co_await std::move(verifying);
+            }
+        });
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
-    const int exit_code = print_report(split_results, input_files.size(),
-                                       duration.count(), task_verify_chunks);
+    const int exit_code = print_report(split_results, input_count,
+                                       duration.count(), verification);
 
     if (!rechunk_dir.path.empty() &&
         common::unwrap(dstd::fs::exists(rechunk_dir.path.view()))) {
@@ -714,7 +652,6 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 int main(int argc, char** argv) {
     return binaries::cli_main<SplitArgParse>(
         argc, argv, "dftracer_split",
-        "Split DFTracer traces into equal-sized chunks using explicit pipeline "
-        "with maximum parallelism",
+        "Split DFTracer traces into equal-sized chunks in parallel",
         [](SplitArgParse& cli) { return run_split(&cli).get(); });
 }

@@ -715,6 +715,7 @@ set(TEST_BINARY_SOURCES
     binaries/test_dftracer_comparator.cpp
     binaries/test_dftracer_run.cpp
     binaries/test_nested_inputs.cpp
+    binaries/test_run_on_pool.cpp
     )
 
 if(TARGET dftracer_utils_cli)

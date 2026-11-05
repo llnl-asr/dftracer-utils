@@ -16,9 +16,6 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/plugins/plugins.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
@@ -37,7 +34,7 @@ class IndexArgParse : public binaries::ArgParse {
     binaries::InputArgs inputs{
         binaries::DirMode::DefaultDot,
         "Folder of trace files to index (default: the current folder)"};
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
     binaries::IndexingArgs indexing;
 
     dstd::StringView dimensions;
@@ -55,7 +52,7 @@ class IndexArgParse : public binaries::ArgParse {
             "Directory where .dftindex stores are created";
         indexing.force_help = "Force index recreation even if already built";
         inputs.folder_only = true;
-        schema(inputs, pipeline, indexing);
+        schema(inputs, runtime_args, indexing);
     }
 
    protected:
@@ -120,8 +117,8 @@ class IndexArgParse : public binaries::ArgParse {
     }
 };
 
-// Split out so the run_single_task lambda holds no coroutine locals, which
-// ICEs GCC 12/13.
+// Split out so the lambda that calls it holds no coroutine locals, which ICEs
+// GCC 12/13.
 static coro::CoroTask<int> select_stale_task(ResolverInput input,
                                              IndexWork* stale) {
     *stale = co_await files_needing_index(std::move(input));
@@ -154,7 +151,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     const auto log_dir = binaries::absolute_path(cli->inputs.directory);
     const auto force_rebuild = cli->indexing.force;
     const auto checkpoint_size = cli->indexing.checkpoint_size;
-    const auto executor_threads = cli->pipeline.executor_threads;
+    const auto executor_threads = cli->runtime_args.executor_threads;
     // Without --index-dir the index goes next to the input data, where
     // determine_index_path(file, "") puts each file's index. The top-level
     // scanner is non-recursive, so all input files share log_dir.
@@ -239,7 +236,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     };
 
     auto matched_entries =
-        binaries::scan_trace_files_on_pool(cli->pipeline, log_dir.str());
+        binaries::scan_trace_files_on_pool(cli->runtime_args, log_dir.str());
 
     const auto start_time = std::chrono::high_resolution_clock::now();
     if (matched_entries.empty()) {
@@ -262,8 +259,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         resolve_input.bloom_config = indexer_config;
         resolve_input.schema = dstd::String(cli->record_schema);
         IndexWork stale;
-        binaries::run_single_task(
-            "DFTracer Bloom Indexer", cli->pipeline, [&](coro::Scope&) {
+        binaries::run_on_pool(
+            "DFTracer Bloom Indexer", cli->runtime_args, [&](coro::Scope&) {
                 return select_stale_task(std::move(resolve_input), &stale);
             });
         skipped_fresh = matched_entries.size() - stale.files.size();
@@ -320,11 +317,6 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         common::estimate_per_file_bytes(scanned_sizes) * scanned_sizes.size();
     binaries::warn_if_memory_tight(required_bytes);
 
-    auto pipeline_config = binaries::build_pipeline_config(
-        "DFTracer Bloom Indexer", cli->pipeline);
-
-    Pipeline pipeline(pipeline_config);
-
     const dstd::String agg_index =
         trace::internal::determine_index_path(input_files.front(), index_dir);
     if (force_rebuild &&
@@ -349,16 +341,12 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     batch_config->agg_fold_factory = std::move(agg_run.factory);
 
     IndexBuildBatchResult batch_result;
-    auto streaming_task = make_task(
-        [&batch_result, batch_config](CoroScope&) -> coro::CoroTask<void> {
+    binaries::run_on_pool(
+        "DFTracer Bloom Indexer", cli->runtime_args,
+        [&batch_result, batch_config](coro::Scope&) -> coro::CoroTask<void> {
             batch_result =
                 co_await BatchBuilder::process(std::move(batch_config));
-        },
-        "StreamingIndex");
-
-    pipeline.set_source(streaming_task);
-    pipeline.set_destination(streaming_task);
-    pipeline.execute();
+        });
     log_stage("build");
     finish_aggregation(agg_run, batch_result);
     log_stage("aggregate");

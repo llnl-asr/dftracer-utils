@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Report a failed tool run with the error of the failed step, in place of `[EXECUTION] Pipeline execution failed`, and print `Run failed:` in place of `Pipeline failed:`.
+- Rename the `Pipeline` group of tool flags to `Runtime`. The flags stay.
+- Make `dftracer_split` and `dftracer_gen_fake_trace` stop the other jobs at the first failure, in place of letting them finish.
+- Make `--watchdog-task-timeout` cover the whole run of a tool, since a tool now runs as one task.
 - Stop the children of a `coro::Scope` when one fails or when the task that holds the scope is cancelled, so they end at their next wait in place of running on.
   Pass `coro::ScopeMode::Supervisor` to keep the old behavior for a child error.
 - Add the stream operations `coro::take_until`, `chunks`, `zip`, `fold`, `merge`, `flat_map_merge` and `buffer`.
@@ -393,6 +397,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove the `--watchdog-idle-timeout` flag, which never had an effect.
 - Remove `runtime/compose.h` with `utilities::op`, `AsyncOpFor` and the `&&` and `||` operators. Use the stages and adaptors of `coro/stage.h`, and `coro::when_all` and `coro::when_any` to run two things at once or to race them.
 - Stop installing the C++ headers `runtime/io/io_backend.h`, `runtime/io/awaitable.h`, `utilities/filesystem/types.h`, `utilities/hash/*.h`, `common/input_stat.h`, `common/intern_table.h` and `dstd/hash/hash.h`, and remove `Indexer::open_scanned`. They are now private to the library.
 - Remove the Python `JsonDictValue` class. No reader returned it.

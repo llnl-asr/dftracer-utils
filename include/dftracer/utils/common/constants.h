@@ -57,6 +57,12 @@ namespace io_settings {
 inline constexpr const char* BACKEND_ENV = "DFTRACER_UTILS_IO_BACKEND";
 }  // namespace io_settings
 
+namespace executor_settings {
+/// Seconds without progress before the executor reports a stall, for a tool
+/// that runs one long task. The executor's own default is 10.
+inline constexpr std::uint32_t TOOL_DEADLOCK_TIMEOUT_SECONDS = 600;
+}  // namespace executor_settings
+
 namespace store {
 /// The raw bytes of a data extent of a new index store file. A Lustre file
 /// takes its largest stripe size, capped at STORE_MAX_EXTENT_BYTES, and

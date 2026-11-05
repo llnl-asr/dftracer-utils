@@ -8,8 +8,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -27,14 +25,14 @@ class PgzipArgParse : public binaries::ArgParse {
     binaries::InputArgs inputs{
         binaries::DirMode::DefaultDot,
         "Folder of .pfw files (default: the current folder) or .pfw files"};
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
     binaries::WatchdogArgs watchdog;
 
     int compression_level = 6;
     std::size_t chunk_size = 4 * 1024 * 1024;
 
     explicit PgzipArgParse(binaries::ArgParser& p) : ArgParse(p) {
-        schema(inputs, pipeline, watchdog);
+        schema(inputs, runtime_args, watchdog);
     }
 
    protected:
@@ -144,7 +142,7 @@ static coro::CoroTask<FileResult> compress_file_parallel(
 
 static int run_pgzip(const PgzipArgParse& cli) {
     const auto input_dir = binaries::absolute_path(cli.inputs.directory);
-    const auto executor_threads = cli.pipeline.executor_threads;
+    const auto executor_threads = cli.runtime_args.executor_threads;
     const auto compression_level = cli.compression_level;
     const auto chunk_size = cli.chunk_size;
 
@@ -184,10 +182,6 @@ static int run_pgzip(const PgzipArgParse& cli) {
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    auto pipeline_config = binaries::build_pipeline_config(
-        "DFTracer Parallel Gzip", cli.pipeline, cli.watchdog);
-    Pipeline pipeline(pipeline_config);
-
     dstd::Vector<FileResult> results;
     std::mutex results_mutex;
 
@@ -195,9 +189,10 @@ static int run_pgzip(const PgzipArgParse& cli) {
     auto* results_ptr = &results;
     auto* mutex_ptr = &results_mutex;
 
-    auto compress_task = make_task(
+    binaries::run_on_pool(
+        "DFTracer Parallel Gzip", cli.runtime_args, cli.watchdog,
         [files_ptr, results_ptr, mutex_ptr, compression_level, executor_threads,
-         chunk_size](CoroScope&) -> coro::CoroTask<void> {
+         chunk_size](coro::Scope&) -> coro::CoroTask<void> {
             auto file_chan =
                 coro::make_channel<std::size_t>(executor_threads * 2);
 
@@ -275,12 +270,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
             co_await coro::with_scope(compress_scope);
 
             co_return;
-        },
-        "ParallelGzip");
-
-    pipeline.set_source(compress_task);
-    pipeline.set_destination(compress_task);
-    pipeline.execute();
+        });
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;

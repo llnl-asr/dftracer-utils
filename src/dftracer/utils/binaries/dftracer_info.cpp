@@ -25,8 +25,6 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -46,7 +44,7 @@ class InfoArgParse : public binaries::ArgParse {
     binaries::InputArgs inputs{
         binaries::DirMode::DefaultEmpty,
         "Compressed files to inspect (GZIP, TAR.GZ) or a folder of them"};
-    binaries::PipelineArgs pipeline;
+    binaries::RuntimeArgs runtime_args;
     binaries::IndexingArgs indexing;
 
     dstd::StringView report = "summary";
@@ -54,7 +52,7 @@ class InfoArgParse : public binaries::ArgParse {
     explicit InfoArgParse(binaries::ArgParser& p) : ArgParse(p) {
         indexing.index_dir_help =
             "Directory to store index files (default: system temp directory)";
-        schema(inputs, pipeline, indexing);
+        schema(inputs, runtime_args, indexing);
     }
 
    protected:
@@ -351,12 +349,12 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
     const auto force_rebuild = cli->indexing.force;
     const auto checkpoint_size = cli->indexing.checkpoint_size;
     const dstd::String index_dir(cli->indexing.index_dir);
-    const auto executor_threads = cli->pipeline.executor_threads;
+    const auto executor_threads = cli->runtime_args.executor_threads;
     const bool summary_mode = (report != "detailed");
 
     common::Timer stages_storage("dftracer_info");
     common::Timer* stages =
-        cli->pipeline.time_profiling ? &stages_storage : nullptr;
+        cli->runtime_args.time_profiling ? &stages_storage : nullptr;
     common::Timer overall(true);
 
     dstd::Vector<dstd::String> files;
@@ -611,10 +609,10 @@ int main(int argc, char** argv) {
     return binaries::cli_main<InfoArgParse>(
         argc, argv, "dftracer_info",
         "Display metadata and index information for DFTracer compressed files "
-        "using composable utilities and pipeline processing",
+        "using composable utilities",
         [](InfoArgParse& cli) {
-            return binaries::run_single_task(
-                "DFTracer Info", cli.pipeline,
+            return binaries::run_on_pool(
+                "DFTracer Info", cli.runtime_args,
                 [&cli](coro::Scope&) -> coro::CoroTask<int> {
                     co_return co_await run_info(&cli);
                 });

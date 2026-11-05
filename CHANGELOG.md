@@ -312,6 +312,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `coro::CoroutineHooks`, which shows each enqueue, resume and suspend of a coroutine to your own callbacks, and `coro::CoroutineEventLog`, which records them for a reader on another thread.
+  With nothing installed, an event costs one load and a branch.
 - Add `coro::Executor::post_yield`, which queues a coroutine that gives up its slice behind the other work of the thread.
 - Add coro stages and adaptors in `coro/stage.h`: the concepts `BatchStage` and `StreamStage`, the adaptors `then`, `recover`, `named`, `timeout`, `limit` and `maybe` that apply with `|`, `either` and `EitherStage`, and `erase` to `DynStage` and `DynStreamStage`.
   `co_await` on a `dstd::Either` of two `CoroTask` gives a `dstd::Either` of their values.

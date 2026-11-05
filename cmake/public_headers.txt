@@ -24,13 +24,13 @@ dftracer/utils/coro/detail/channel_queue.h
 dftracer/utils/coro/detail/completion_state.h
 dftracer/utils/coro/detail/coro.h
 dftracer/utils/coro/detail/frame.h
-dftracer/utils/coro/detail/monitor.h
 dftracer/utils/coro/detail/parked.h
 dftracer/utils/coro/detail/pool_resume.h
 dftracer/utils/coro/detail/resumption_helper.h
 dftracer/utils/coro/detail/wake_batch.h
 dftracer/utils/coro/executor.h
 dftracer/utils/coro/generator.h
+dftracer/utils/coro/hooks.h
 dftracer/utils/coro/join_handle.h
 dftracer/utils/coro/join_set.h
 dftracer/utils/coro/named.h

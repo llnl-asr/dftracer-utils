@@ -332,6 +332,7 @@ set(TEST_CPP_SOURCES
     test_testing_utilities.cpp
     coro/test_coro_syntax.cpp
     coro/test_channel.cpp
+    coro/test_hooks.cpp
     coro/test_channel_queue.cpp
     coro/test_combinators.cpp
     coro/test_stream.cpp

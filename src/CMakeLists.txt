@@ -113,6 +113,7 @@ set(DFTRACER_UTILS_COMMON_SOURCES
 set(DFTRACER_UTILS_CORO_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/coro.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/hooks.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/monitor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/parallel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/process_timers.cpp

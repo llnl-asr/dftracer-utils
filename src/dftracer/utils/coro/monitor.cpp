@@ -2,7 +2,8 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/sharded_mutex.h>
 #include <dftracer/utils/common/symbolize.h>
-#include <dftracer/utils/coro/detail/monitor.h>
+#include <dftracer/utils/coro/hooks.h>
+#include <dftracer/utils/coro/monitor.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -23,8 +24,6 @@
 
 namespace dftracer::utils::coro::detail {
 
-bool g_monitor_deep = false;
-
 namespace {
 
 enum class Mode { Off, Summary, Tree, Trace, Deep };
@@ -38,7 +37,7 @@ struct Live {
     long long parent;
     const void* resume_fn;
     Clock::time_point start;
-    CoroKind kind;
+    CoroutineOrigin kind;
     int spawn_tid;  // worker that first registered it
 };
 
@@ -48,7 +47,7 @@ struct Done {
     long long parent;
     const void* resume_fn;
     long long wall_us;
-    CoroKind kind;
+    CoroutineOrigin kind;
     int spawn_tid;   // worker that registered it
     int finish_tid;  // worker of the final resume (-1 if never finished)
 };
@@ -81,9 +80,6 @@ std::size_t shard_key(const void* handle) { return dstd::PtrHash{}(handle); }
 // work it enqueues attributes as a child. -1 = none/untracked.
 thread_local long long t_current = -1;
 
-// This thread's executor worker id (set once per worker), -1 on other threads.
-thread_local int t_worker = -1;
-
 Mode parse_mode() {
     const auto v = common::Env::get<dstd::StringView>("DFTRACER_UTILS_MONITOR");
     const auto file =
@@ -107,15 +103,15 @@ dstd::String label(
     return cache.emplace(fn, common::symbolize_function(fn)).first->second;
 }
 
-const char* kind_str(CoroKind k) {
+const char* kind_str(CoroutineOrigin k) {
     switch (k) {
-        case CoroKind::Task:
+        case CoroutineOrigin::Task:
             return "task";
-        case CoroKind::Spawn:
+        case CoroutineOrigin::Spawn:
             return "spawn";
-        case CoroKind::Io:
+        case CoroutineOrigin::Io:
             return "io";
-        case CoroKind::Sync:
+        case CoroutineOrigin::Await:
             return "sync";
     }
     return "?";
@@ -245,38 +241,9 @@ void at_exit_render() {
 
 }  // namespace
 
-bool monitoring_enabled() {
-    static const bool enabled = [] {
-        const Mode mode = parse_mode();
-        if (mode == Mode::Off) return false;
-        Registry& r = registry();
-        r.mode = mode;
-        const auto file =
-            common::Env::get<dstd::StringView>("DFTRACER_UTILS_MONITOR_FILE");
-        if (file.has_value()) {
-            r.csv.reset(std::fopen(dstd::String(*file).c_str(), "w"));
-            if (r.csv) {
-                std::fprintf(
-                    r.csv.get(),
-                    "id,parent,kind,coroutine,spawn_tid,finish_tid,micros\n");
-            }
-        }
-        detail::g_monitor_deep = (r.mode == Mode::Deep);
-        const auto min =
-            common::Env::get<dstd::StringView>("DFTRACER_UTILS_MONITOR_MIN_US");
-        if (min.has_value()) {
-            r.min_us = std::strtoll(dstd::String(*min).c_str(), nullptr, 10);
-        }
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches,
-                                at_exit_render);
-        return true;
-    }();
-    return enabled;
-}
+namespace {
 
-void monitor_set_worker(int worker_id) { t_worker = worker_id; }
-
-long long monitor_enqueue(const void* handle, CoroKind kind) {
+long long monitor_enqueue(const void* handle, CoroutineOrigin kind) {
     Registry& r = registry();
     long long id = -1;
     r.shards.with_shard(shard_key(handle), [&](ShardData& s) {
@@ -291,12 +258,12 @@ long long monitor_enqueue(const void* handle, CoroKind kind) {
         const void* resume_fn = *reinterpret_cast<const void* const*>(handle);
         id = r.next_id.fetch_add(1, std::memory_order_relaxed);
         s.live->emplace(handle, Live{id, t_current, resume_fn, Clock::now(),
-                                     kind, t_worker});
+                                     kind, current_worker_index()});
     });
     return id;
 }
 
-void monitor_resume_begin(long long id) { t_current = id; }
+}  // namespace
 
 namespace {
 
@@ -328,28 +295,80 @@ long long record_and_erase(Registry& r, ShardData& s, It it, int finish_tid) {
 
 }  // namespace
 
-void monitor_resume_end(const void* handle, bool done) {
-    t_current = -1;
-    if (!done) return;
+static void monitor_finish(const void* handle) {
     Registry& r = registry();
     r.shards.with_shard(shard_key(handle), [&](ShardData& s) {
         if (!s.live) return;
         auto it = s.live->find(handle);
         if (it == s.live->end()) return;
-        record_and_erase(r, s, it, t_worker);
+        // monitor_sync_complete ends these, to restore the awaiter as current.
+        if (it->second.kind == CoroutineOrigin::Await) return;
+        record_and_erase(r, s, it, current_worker_index());
     });
 }
 
-void monitor_sync_complete(const void* handle) {
+static void monitor_sync_complete(const void* handle) {
     Registry& r = registry();
     long long parent = -1;
     r.shards.with_shard(shard_key(handle), [&](ShardData& s) {
         if (!s.live) return;
         auto it = s.live->find(handle);
         if (it == s.live->end()) return;  // already finalized
-        parent = record_and_erase(r, s, it, t_worker);
+        parent = record_and_erase(r, s, it, current_worker_index());
     });
     t_current = parent;  // restore the awaiting coroutine as current
+}
+
+void install_monitor_from_env() {
+    static const bool installed = [] {
+        const Mode mode = parse_mode();
+        if (mode == Mode::Off) return false;
+        Registry& r = registry();
+        r.mode = mode;
+        const auto file =
+            common::Env::get<dstd::StringView>("DFTRACER_UTILS_MONITOR_FILE");
+        if (file.has_value()) {
+            r.csv.reset(std::fopen(dstd::String(*file).c_str(), "w"));
+            if (r.csv) {
+                std::fprintf(
+                    r.csv.get(),
+                    "id,parent,kind,coroutine,spawn_tid,finish_tid,micros\n");
+            }
+        }
+        const auto min =
+            common::Env::get<dstd::StringView>("DFTRACER_UTILS_MONITOR_MIN_US");
+        if (min.has_value()) {
+            r.min_us = std::strtoll(dstd::String(*min).c_str(), nullptr, 10);
+        }
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches,
+                                at_exit_render);
+
+        static CoroutineHooks hooks;
+        hooks.enqueue = [](void*, const void* coroutine,
+                           CoroutineOrigin origin) {
+            monitor_enqueue(coroutine, origin);
+        };
+        hooks.resume = [](void*, const void* coroutine) {
+            t_current = monitor_enqueue(coroutine, CoroutineOrigin::Spawn);
+        };
+        hooks.suspend = [](void*, const void*) { t_current = -1; };
+        hooks.finish = [](void*, const void* coroutine) {
+            monitor_finish(coroutine);
+        };
+        // Deep mode also traces a co_await'd task that never suspends, so its
+        // own awaits nest under it.
+        if (r.mode == Mode::Deep) {
+            hooks.await_begin = [](void*, const void* coroutine) {
+                t_current = monitor_enqueue(coroutine, CoroutineOrigin::Await);
+            };
+            hooks.await_end = [](void*, const void* coroutine) {
+                monitor_sync_complete(coroutine);
+            };
+        }
+        set_coroutine_hooks(&hooks);
+        return true;
+    }();
+    (void)installed;
 }
 
 }  // namespace dftracer::utils::coro::detail

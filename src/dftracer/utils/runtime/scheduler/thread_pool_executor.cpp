@@ -2,7 +2,8 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/timer.h>
-#include <dftracer/utils/coro/detail/monitor.h>
+#include <dftracer/utils/coro/hooks.h>
+#include <dftracer/utils/coro/monitor.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
@@ -67,6 +68,7 @@ void ThreadPoolExecutor::start() {
         DFTRACER_UTILS_LOG_WARN("%s", "Executor already running");
         return;
     }
+    coro::detail::install_monitor_from_env();
 
     std::lock_guard<std::mutex> resize(resize_mutex_);
     running_ = true;
@@ -578,11 +580,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     memory::Pool& general = memory::detail::Manager::get().general();
     Core& core = *context->core;
 
-    // Fixed for the process lifetime; read once to keep the resume loop cheap.
-    const bool monitor = coro::detail::monitoring_enabled();
-    if (monitor) {
-        coro::detail::monitor_set_worker(static_cast<int>(context->worker_id));
-    }
+    coro::set_current_worker_index(static_cast<int>(context->worker_id));
 
     bool marked_idle = false;
     while (running_ && !context->retire.load(std::memory_order_acquire)) {
@@ -623,6 +621,10 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                     context->retire.load(std::memory_order_acquire)) {
                     break;
                 }
+                if (const coro::CoroutineHooks* hooks = coro::coroutine_hooks();
+                    hooks != nullptr && hooks->idle != nullptr) [[unlikely]] {
+                    hooks->idle(hooks->user);
+                }
                 marked_idle = true;
                 park_worker(context);
                 continue;
@@ -637,10 +639,10 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
         const auto handle = std::coroutine_handle<>::from_address(task);
         if (!handle.done()) {
             DFTRACER_UTILS_TSAN_ACQUIRE(task);
-            if (monitor) {
-                coro::detail::monitor_resume_begin(
-                    coro::detail::monitor_enqueue(
-                        task, coro::detail::CoroKind::Spawn));
+            // Read once: resume and suspend must reach the same table.
+            const coro::CoroutineHooks* hooks = coro::coroutine_hooks();
+            if (hooks != nullptr) [[unlikely]] {
+                hooks->resume(hooks->user, task);
             }
             {
                 // Our coroutines enter their own pool. Anything else charges
@@ -648,8 +650,8 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                 memory::detail::Scope scope{general, nullptr};
                 coro::resume_on(*this, handle);
             }
-            if (monitor) {
-                coro::detail::monitor_resume_end(task, handle.done());
+            if (hooks != nullptr) [[unlikely]] {
+                hooks->suspend(hooks->user, task);
             }
         }
         // A batch held until this worker idles would wait behind a later slice
@@ -671,6 +673,12 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
 
     // Final drain: destroy any frames deferred during the last resume().
     coro::drain_thread_local_destroys();
+
+    if (const coro::CoroutineHooks* hooks = coro::coroutine_hooks();
+        hooks != nullptr && hooks->idle != nullptr) {
+        hooks->idle(hooks->user);
+    }
+    coro::set_current_worker_index(-1);
 
     flush_core(core);
     // A task moved here while the other workers park has no one to run it.
@@ -701,8 +709,17 @@ bool ThreadPoolExecutor::drive_until(
             const auto handle = std::coroutine_handle<>::from_address(task);
             if (!handle.done()) {
                 DFTRACER_UTILS_TSAN_ACQUIRE(task);
-                memory::detail::Scope scope{general, nullptr};
-                coro::resume_on(*this, handle);
+                const coro::CoroutineHooks* hooks = coro::coroutine_hooks();
+                if (hooks != nullptr) [[unlikely]] {
+                    hooks->resume(hooks->user, task);
+                }
+                {
+                    memory::detail::Scope scope{general, nullptr};
+                    coro::resume_on(*this, handle);
+                }
+                if (hooks != nullptr) [[unlikely]] {
+                    hooks->suspend(hooks->user, task);
+                }
             }
             coro::drain_thread_local_destroys();
             park = IDLE_PARK_MIN;
@@ -989,11 +1006,11 @@ void ThreadPoolExecutor::schedule_foreign(void* task) noexcept {
 
 void ThreadPoolExecutor::post(std::coroutine_handle<> handle) noexcept {
     if (!handle || handle.done()) return;
-    if (coro::detail::monitoring_enabled()) {
-        coro::detail::monitor_enqueue(handle.address(),
-                                      coro::detail::CoroKind::Spawn);
-    }
     void* task = handle.address();
+    if (const coro::CoroutineHooks* hooks = coro::coroutine_hooks())
+        [[unlikely]] {
+        hooks->enqueue(hooks->user, task, coro::CoroutineOrigin::Spawn);
+    }
     DFTRACER_UTILS_TSAN_RELEASE(task);
     WorkerContext* ctx = owned_context();
     if (ctx == nullptr) {
@@ -1216,9 +1233,9 @@ common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
     }
 
     auto handle = coro.release();
-    if (coro::detail::monitoring_enabled()) {
-        coro::detail::monitor_enqueue(handle.address(),
-                                      coro::detail::CoroKind::Task);
+    if (const coro::CoroutineHooks* hooks = coro::coroutine_hooks()) {
+        hooks->enqueue(hooks->user, handle.address(),
+                       coro::CoroutineOrigin::Task);
     }
     post(handle);
     return id;

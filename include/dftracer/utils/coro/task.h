@@ -8,8 +8,8 @@
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/detail/frame.h>
-#include <dftracer/utils/coro/detail/monitor.h>
 #include <dftracer/utils/coro/detail/pool_resume.h>
+#include <dftracer/utils/coro/hooks.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/either.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -280,6 +280,7 @@ class CoroTask {
         struct FinalAwaiter {
             bool await_ready() noexcept { return false; }
             void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+                detail::report_finish(h.address());
                 h.promise().complete();
             }
             void await_resume() noexcept {}
@@ -435,12 +436,11 @@ class CoroTask {
         p.continuation_executor = awaiter_executor;
         if (p.executor == nullptr) p.executor = awaiter_executor;
 
-        // Deep mode: capture this co_await'd child (run on the awaiter's
-        // stack, so it never passes through the executor queue) and make it
-        // the current coroutine so its own awaits nest under it.
-        if (detail::monitor_deep_enabled()) {
-            detail::monitor_resume_begin(detail::monitor_enqueue(
-                coro_handle_.address(), detail::CoroKind::Sync));
+        // A child that runs on the awaiter's stack never passes through a
+        // queue.
+        if (const CoroutineHooks* hooks = coroutine_hooks();
+            hooks != nullptr && hooks->await_begin != nullptr) [[unlikely]] {
+            hooks->await_begin(hooks->user, coro_handle_.address());
         }
 
         if (coro_handle_.done()) return false;
@@ -484,8 +484,9 @@ class CoroTask {
                 coro_handle_.promise().trace_handle);
         }
 #endif
-        if (detail::monitor_deep_enabled()) {
-            detail::monitor_sync_complete(coro_handle_.address());
+        if (const CoroutineHooks* hooks = coroutine_hooks();
+            hooks != nullptr && hooks->await_end != nullptr) [[unlikely]] {
+            hooks->await_end(hooks->user, coro_handle_.address());
         }
         if (coro_handle_.promise().cancelled) {
             throw_cancelled("task cancelled");

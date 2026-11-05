@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/intern_table.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/hooks.h>
 
 namespace dftracer::utils::coro::detail {
 
@@ -15,6 +16,7 @@ RunContext::~RunContext() {
 
 std::coroutine_handle<> CoroPromise::FinalAwaiter::await_suspend(
     std::coroutine_handle<CoroPromise> h) noexcept {
+    report_finish(h.address());
     auto& p = h.promise();
 
     // Snapshot ALL promise fields we need BEFORE any atomic

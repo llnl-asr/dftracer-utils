@@ -627,6 +627,9 @@ auto apply_wrap(X&& x, W policy) {
                       "stages");
         return WrappedStage<XD, W>(std::forward<X>(x), std::move(policy));
     } else {
+        static_assert(!is_generator_v<XD>,
+                      "this adaptor needs an AsyncGenerator: use "
+                      "coro::to_async");
         static_assert(!is_async_generator_v<XD> || W::STREAMS,
                       "this adaptor does not apply to an AsyncGenerator");
         return policy.direct(std::forward<X>(x));

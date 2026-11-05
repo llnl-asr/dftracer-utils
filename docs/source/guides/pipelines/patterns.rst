@@ -357,7 +357,8 @@ Each one is a function and an adaptor, so ``filter(gen, pred)`` and ``gen | filt
 - ``with_item_timeout`` bounds the wait for each item.
 
 A sync ``coro::Generator`` has the same ``map``, ``flat_map``, ``filter``, ``take``, ``take_until``, ``concat``, ``chunks``, ``zip`` and ``fold``, and the same ``next``.
-Its functions give plain values, because it cannot wait, so ``merge``, ``flat_map_merge``, ``buffer`` and ``with_item_timeout`` are only on ``AsyncGenerator``.
+Its functions give plain values, because it cannot wait, so ``merge``, ``flat_map_merge``, ``map_ordered``, ``map_unordered``, ``buffer`` and ``with_item_timeout`` are only on ``AsyncGenerator``.
+``coro::to_async(std::move(gen))`` turns a ``Generator`` into an ``AsyncGenerator`` for those.
 
 A stop or a cancel of the task that reads a generator also ends a wait inside the generator.
 The read then raises ``dstd::Condition::Cancelled``.

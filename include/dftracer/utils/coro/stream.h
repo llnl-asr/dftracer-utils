@@ -785,6 +785,66 @@ Acc fold(Generator<T> source, Acc init, F fn) {
     return accumulator;
 }
 
+/**
+ * @brief The items of a sync @ref Generator as an @ref AsyncGenerator, so the
+ * operations that need an executor apply.
+ *
+ * The body runs on the thread that reads, and it cannot wait, so a slow step
+ * holds that thread and a timeout fires only after the step ends.
+ */
+template <typename T>
+AsyncGenerator<T> to_async(Generator<T> source) {
+    for (;;) {
+        auto value = source.next();
+        if (!value) break;
+        co_yield std::move(*value);
+    }
+}
+
+namespace detail {
+
+template <typename T>
+inline constexpr bool NEEDS_TO_ASYNC_V = false;
+
+}  // namespace detail
+
+template <typename T>
+void merge(dstd::Vector<Generator<T>>) {
+    static_assert(detail::NEEDS_TO_ASYNC_V<T>,
+                  "merge needs an AsyncGenerator: use coro::to_async");
+}
+
+template <typename T, typename... Args>
+void buffer(Generator<T>, Args&&...) {
+    static_assert(detail::NEEDS_TO_ASYNC_V<T>,
+                  "buffer needs an AsyncGenerator: use coro::to_async");
+}
+
+template <typename T, typename... Args>
+void flat_map_merge(Generator<T>, Args&&...) {
+    static_assert(detail::NEEDS_TO_ASYNC_V<T>,
+                  "flat_map_merge needs an AsyncGenerator: use coro::to_async");
+}
+
+template <typename T, typename... Args>
+void map_ordered(Generator<T>, Args&&...) {
+    static_assert(detail::NEEDS_TO_ASYNC_V<T>,
+                  "map_ordered needs an AsyncGenerator: use coro::to_async");
+}
+
+template <typename T, typename... Args>
+void map_unordered(Generator<T>, Args&&...) {
+    static_assert(detail::NEEDS_TO_ASYNC_V<T>,
+                  "map_unordered needs an AsyncGenerator: use coro::to_async");
+}
+
+template <typename T, typename... Args>
+void with_item_timeout(Generator<T>, Args&&...) {
+    static_assert(detail::NEEDS_TO_ASYNC_V<T>,
+                  "with_item_timeout needs an AsyncGenerator: use "
+                  "coro::to_async");
+}
+
 /// @ref map as an adaptor.
 template <typename F>
 auto map(F fn) {
@@ -853,6 +913,24 @@ auto fold(Acc init, F fn) {
         [init = std::move(init), fn = std::move(fn)](auto&& source) {
             return coro::fold(std::forward<decltype(source)>(source), init, fn);
         });
+}
+
+/// @ref map_ordered as an adaptor.
+template <typename F>
+auto map_ordered(F fn, std::size_t limit) {
+    return detail::make_adaptor([fn = std::move(fn), limit](auto&& source) {
+        return coro::map_ordered(std::forward<decltype(source)>(source), fn,
+                                 limit);
+    });
+}
+
+/// @ref map_unordered as an adaptor.
+template <typename F>
+auto map_unordered(F fn, std::size_t limit) {
+    return detail::make_adaptor([fn = std::move(fn), limit](auto&& source) {
+        return coro::map_unordered(std::forward<decltype(source)>(source), fn,
+                                   limit);
+    });
 }
 
 /// @ref flat_map_merge as an adaptor.

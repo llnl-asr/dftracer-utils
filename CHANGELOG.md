@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Use the functions and adaptors in `coro/stream.h`.
 - Give the sync `coro::Generator` the same stream operations and adaptors, and make its `next` return the item, as on `AsyncGenerator`.
   This replaces `Generator::value`.
+- Add `coro::to_async`, which turns a `Generator` into an `AsyncGenerator`.
 - Add the awaitable `coro::parallel_for`, `parallel_reduce` and `parallel_scan` with a choice of static or dynamic `Partition`.
 - Add `coro::JoinSet` with `with_join_set`, and `as_completed`.
 - Add `coro::map_ordered` and `map_unordered`, and the stage adaptors `ordered` and `unordered` with a token limit.

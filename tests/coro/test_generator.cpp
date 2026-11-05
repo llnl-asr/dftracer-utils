@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils;
@@ -302,4 +303,29 @@ TEST_CASE("Generator - an error reaches the reader through an operation") {
     auto stream = map(sync_fails_after(1), [](int v) { return v; });
     CHECK(stream.next().has_value());
     CHECK_THROWS_AS(stream.next(), common::DFTUtilsException);
+}
+
+TEST_CASE("Generator - to_async gives the operations that need an executor") {
+    Runtime runtime(4);
+    auto collect =
+        [](AsyncGenerator<int> source) -> CoroTask<dstd::Vector<int>> {
+        dstd::Vector<int> out;
+        for (;;) {
+            auto value = co_await source.next();
+            if (!value) break;
+            out.push_back(*value);
+        }
+        co_return out;
+    };
+    auto ordered =
+        runtime.block_on(collect(to_async(sync_numbers(0, 50)) |
+                                 map_ordered([](int v) { return v * 2; }, 4)));
+    REQUIRE(ordered.size() == 50);
+    CHECK(ordered[49] == 98);
+    auto loose =
+        runtime.block_on(collect(to_async(sync_numbers(0, 50)) |
+                                 map_unordered([](int v) { return v; }, 4)));
+    CHECK(loose.size() == 50);
+    CHECK_THROWS_AS(runtime.block_on(collect(to_async(sync_fails_after(1)))),
+                    common::DFTUtilsException);
 }

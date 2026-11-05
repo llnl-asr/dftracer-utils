@@ -17,8 +17,8 @@ void set_current_worker_context(void* context) {
 
 void TaskExecutor::set_current_backend(TaskExecutor* executor) noexcept {
     const bool has_backend = executor != nullptr && executor->has_io_backend();
-    io::set_current_backend(executor,
-                            has_backend ? &executor->io_backend() : nullptr);
+    runtime::io::set_current_backend(
+        executor, has_backend ? &executor->io_backend() : nullptr);
 }
 
 void mark_coro_failed(TaskExecutor& executor, common::TaskIndex id,

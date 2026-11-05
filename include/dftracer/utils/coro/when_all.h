@@ -84,7 +84,7 @@ struct WhenAllVectorState : detail::WhenAllCompletionState {
  * @code
  * CoroTask<Data> read_ops;
  * for (int i = 0; i < 16000; i++) {
- *     read_ops.push_back(io::async_read(fds[i], bufs[i], lens[i]));
+ *     read_ops.push_back(runtime::io::pread(fds[i], bufs[i], lens[i], 0));
  * }
  * auto results = co_await when_all(read_ops);  // Vector<Data>
  * @endcode

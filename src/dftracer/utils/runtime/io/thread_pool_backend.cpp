@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/runtime/io/thread_pool_backend.h>
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 ThreadPoolBackend::ThreadPoolBackend(coro::Executor& executor,
                                      std::size_t pool_size,
@@ -14,4 +14,4 @@ void ThreadPoolBackend::stop() { pool_.stop(); }
 
 dstd::String ThreadPoolBackend::name() const { return "threadpool"; }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io

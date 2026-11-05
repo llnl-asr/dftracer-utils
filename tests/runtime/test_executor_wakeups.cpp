@@ -155,7 +155,7 @@ TEST_SUITE("ExecutorWakeups") {
             "io_flush",
             coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
                 s.spawn([fd]() -> coro::CoroTask<void> {
-                    co_await io::pwrite(fd, &BYTE, 1, 0);
+                    co_await runtime::io::pwrite(fd, &BYTE, 1, 0);
                 });
                 co_await coro::yield();
                 const auto until = std::chrono::steady_clock::now() + DEADLINE;

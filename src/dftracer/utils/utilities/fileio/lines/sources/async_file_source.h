@@ -15,8 +15,8 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
 /// failure. Returns an owning @ref dftracer::utils::dstd::ScopedFd "ScopedFd".
 inline coro::CoroTask<dstd::ScopedFd> async_open_read(
     dstd::StringView file_path) {
-    ssize_t fd =
-        co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
+    ssize_t fd = co_await ::dftracer::utils::runtime::io::open(
+        file_path.c_str(), O_RDONLY);
     if (fd < 0) {
         throw common::DFTUtilsException(common::ErrorCode::Io,
                                         "Cannot open file: " + file_path);
@@ -25,7 +25,7 @@ inline coro::CoroTask<dstd::ScopedFd> async_open_read(
 }
 
 /// Build the IO read-error for a failed pread. neg_errno is the negated errno
-/// returned by io::pread (bytes_read < 0).
+/// returned by runtime::io::pread (bytes_read < 0).
 inline common::DFTUtilsException make_read_error(dstd::StringView file_path,
                                                  ssize_t neg_errno) {
     return common::DFTUtilsException(

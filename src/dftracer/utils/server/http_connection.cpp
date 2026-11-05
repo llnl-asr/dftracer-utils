@@ -29,8 +29,8 @@ coro::CoroTask<void> handle_connection(int client_fd,
 
     while (true) {
         // Read data from socket.
-        ssize_t n = co_await io::recv(client_fd, buf + buf_used,
-                                      BUF_SIZE - buf_used, 0);
+        ssize_t n = co_await runtime::io::recv(client_fd, buf + buf_used,
+                                               BUF_SIZE - buf_used, 0);
         if (n <= 0) break;  // Connection closed or error
         buf_used += static_cast<std::size_t>(n);
 
@@ -43,7 +43,8 @@ coro::CoroTask<void> handle_connection(int client_fd,
                 // Buffer full but still no complete request.
                 auto resp = HttpResponse::bad_request("Request too large");
                 auto out = resp.serialize();
-                co_await io::send(client_fd, out.data(), out.size(), 0);
+                co_await runtime::io::send(client_fd, out.data(), out.size(),
+                                           0);
                 break;
             }
             continue;
@@ -51,7 +52,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
         if (parsed < 0) {
             auto resp = HttpResponse::bad_request("Malformed HTTP request");
             auto out = resp.serialize();
-            co_await io::send(client_fd, out.data(), out.size(), 0);
+            co_await runtime::io::send(client_fd, out.data(), out.size(), 0);
             break;
         }
 
@@ -80,8 +81,8 @@ coro::CoroTask<void> handle_connection(int client_fd,
         }
         if (resp.is_streaming()) {
             auto hdrs = resp.serialize_headers();
-            auto hdr_rc =
-                co_await io::send(client_fd, hdrs.data(), hdrs.size(), 0);
+            auto hdr_rc = co_await runtime::io::send(client_fd, hdrs.data(),
+                                                     hdrs.size(), 0);
             if (hdr_rc < 0) goto stream_done;
 
             {
@@ -113,7 +114,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
                     }
                     iovs.push_back({const_cast<char*>(crlf), 2});
 
-                    auto rc = co_await io::writev_all(
+                    auto rc = co_await runtime::io::writev_all(
                         client_fd, iovs.data(), static_cast<int>(iovs.size()));
                     if (rc < 0) {
                         DFTRACER_UTILS_LOG_ERROR(
@@ -123,11 +124,11 @@ coro::CoroTask<void> handle_connection(int client_fd,
                     }
                 }
             }
-            co_await io::send(client_fd, "0\r\n\r\n", 5, 0);
+            co_await runtime::io::send(client_fd, "0\r\n\r\n", 5, 0);
         stream_done:;
         } else {
             auto out = resp.serialize();
-            co_await io::send(client_fd, out.data(), out.size(), 0);
+            co_await runtime::io::send(client_fd, out.data(), out.size(), 0);
         }
 
         // Consume parsed bytes; shift any remaining data.
@@ -146,7 +147,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
     }
 
     // Note: the caller (tcp_listener) is responsible for closing
-    // client_fd via io::close() after this coroutine returns.
+    // client_fd via runtime::io::close() after this coroutine returns.
 
 #ifdef __linux__
     // Return freed heap pages to the OS.  Each request may decompress

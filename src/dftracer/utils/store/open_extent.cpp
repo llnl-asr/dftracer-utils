@@ -154,7 +154,8 @@ struct ExtentWriter::PendingWrite : dstd::HeapObject {
     std::size_t written_bytes = 0;
 };
 
-ExtentWriter::ExtentWriter(DataFileWriter& file, io::IoBackend& backend,
+ExtentWriter::ExtentWriter(DataFileWriter& file,
+                           runtime::io::IoBackend& backend,
                            coro::Executor& executor, std::uint32_t extent_size,
                            WrittenExtentFn on_written, void* context,
                            DiscardedContextFn on_discarded, IdleFn on_idle)

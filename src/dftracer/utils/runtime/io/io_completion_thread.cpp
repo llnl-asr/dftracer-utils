@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/runtime/io/io_completion_thread.h>
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 IoCompletionThread::~IoCompletionThread() {
     if (running_.load(std::memory_order_relaxed)) {
@@ -34,4 +34,4 @@ void IoCompletionThread::stop() {
     join();
 }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io

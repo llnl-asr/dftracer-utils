@@ -122,7 +122,7 @@ struct PaddedStripedImpl {
     coro::CoroTask<void> join_and_clean() {
         co_await drain_packer();
         if (fd >= 0) {
-            co_await ::dftracer::utils::io::close(fd);
+            co_await ::dftracer::utils::runtime::io::close(fd);
             fd = -1;
         }
     }
@@ -279,7 +279,7 @@ class PaddedStripedWriter : public ParallelWriter {
                              coro::Scope* /*scope*/) override {
         PaddedStripedImpl& s = *impl_;
         s.path = std::move(path);
-        ssize_t fd = co_await ::dftracer::utils::io::open(
+        ssize_t fd = co_await ::dftracer::utils::runtime::io::open(
             s.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0) {
             DFTRACER_UTILS_LOG_ERROR("Failed to open padded output: %s",
@@ -378,13 +378,13 @@ class PaddedStripedWriter : public ParallelWriter {
         const auto drain_packer_rc = co_await s.drain_packer();
         if (drain_packer_rc != 0) {
             if (s.fd >= 0) {
-                co_await ::dftracer::utils::io::close(s.fd);
+                co_await ::dftracer::utils::runtime::io::close(s.fd);
                 s.fd = -1;
             }
             co_return -1;
         }
         if (s.fd < 0) co_return 0;
-        auto rc = co_await ::dftracer::utils::io::close(s.fd);
+        auto rc = co_await ::dftracer::utils::runtime::io::close(s.fd);
         s.fd = -1;
         co_return static_cast<int>(rc);
     }

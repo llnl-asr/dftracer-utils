@@ -598,7 +598,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
     if (!needs_build.empty() || !large_files.empty()) {
         RuntimeSettings settings;
         settings.threads = max_concurrent_;
-        settings.io_backend = io::IoBackendType::Threadpool;
+        settings.io_backend = runtime::io::IoBackendType::Threadpool;
         settings.io_batch_threshold = 1;
         settings.deadlock_timeout =
             std::chrono::seconds(common::constants::executor_settings::

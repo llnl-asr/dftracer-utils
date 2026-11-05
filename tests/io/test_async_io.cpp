@@ -33,7 +33,8 @@ static dstd::String create_temp_file(const dstd::String& content) {
 }
 
 // ============================================================================
-// Sync fallback tests (no executor) — sequential io::read / io::write
+// Sync fallback tests (no executor) — sequential runtime::io::read /
+// runtime::io::write
 // ============================================================================
 
 TEST_CASE("AsyncIO - sync fallback: read without executor") {
@@ -45,7 +46,7 @@ TEST_CASE("AsyncIO - sync fallback: read without executor") {
 
     // No executor -- falls back to synchronous ::read()
     char buf[64] = {};
-    auto awaitable = io::read(fd, buf, data.size());
+    auto awaitable = runtime::io::read(fd, buf, data.size());
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == static_cast<ssize_t>(data.size()));
     CHECK(dstd::String(buf, static_cast<std::size_t>(awaitable.result)) ==
@@ -61,7 +62,7 @@ TEST_CASE("AsyncIO - sync fallback: write without executor") {
     REQUIRE(fd >= 0);
 
     dstd::String data = "write test data";
-    auto awaitable = io::write(fd, data.data(), data.size());
+    auto awaitable = runtime::io::write(fd, data.data(), data.size());
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == static_cast<ssize_t>(data.size()));
 
@@ -80,12 +81,12 @@ TEST_CASE("AsyncIO - sync fallback: open/close without executor") {
     dstd::String data = "open test";
     auto path = create_temp_file(data);
 
-    auto open_result = io::open(path.c_str(), O_RDONLY);
+    auto open_result = runtime::io::open(path.c_str(), O_RDONLY);
     CHECK(open_result.is_ready);
     CHECK(open_result.result >= 0);
 
     int fd = static_cast<int>(open_result.result);
-    auto close_result = io::close(fd);
+    auto close_result = runtime::io::close(fd);
     CHECK(close_result.is_ready);
     CHECK(close_result.result == 0);
 
@@ -93,7 +94,7 @@ TEST_CASE("AsyncIO - sync fallback: open/close without executor") {
 }
 
 // ============================================================================
-// Sync fallback tests — positional io::pread / io::pwrite
+// Sync fallback tests — positional runtime::io::pread / runtime::io::pwrite
 // ============================================================================
 
 TEST_CASE("AsyncIO - sync fallback: pread without executor") {
@@ -105,7 +106,7 @@ TEST_CASE("AsyncIO - sync fallback: pread without executor") {
 
     // Read from offset 7
     char buf[64] = {};
-    auto awaitable = io::pread(fd, buf, 15, 7);
+    auto awaitable = runtime::io::pread(fd, buf, 15, 7);
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == 15);
     CHECK(dstd::String(buf, 15) == "positional I/O!");
@@ -126,7 +127,7 @@ TEST_CASE("AsyncIO - sync fallback: pwrite without executor") {
 
     // Positional write at offset 3
     dstd::String patch = "BBB";
-    auto awaitable = io::pwrite(fd, patch.data(), patch.size(), 3);
+    auto awaitable = runtime::io::pwrite(fd, patch.data(), patch.size(), 3);
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == static_cast<ssize_t>(patch.size()));
 
@@ -151,9 +152,9 @@ TEST_CASE("AsyncIO - sync fallback: write to pipe (non-seekable fd)") {
 
     dstd::String data = "pipe write test";
 
-    // io::write should use ::write() which works on pipes.
+    // runtime::io::write should use ::write() which works on pipes.
     // Previously used ::pwrite() which fails with ESPIPE on pipes.
-    auto awaitable = io::write(pipefd[1], data.data(), data.size());
+    auto awaitable = runtime::io::write(pipefd[1], data.data(), data.size());
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == static_cast<ssize_t>(data.size()));
 
@@ -176,9 +177,9 @@ TEST_CASE("AsyncIO - sync fallback: read from pipe (non-seekable fd)") {
     REQUIRE(written == static_cast<ssize_t>(data.size()));
     ::close(pipefd[1]);  // close write end so read sees EOF after data
 
-    // io::read should use ::read() which works on pipes.
+    // runtime::io::read should use ::read() which works on pipes.
     char buf[64] = {};
-    auto awaitable = io::read(pipefd[0], buf, data.size());
+    auto awaitable = runtime::io::read(pipefd[0], buf, data.size());
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == static_cast<ssize_t>(data.size()));
     CHECK(dstd::String(buf, static_cast<std::size_t>(awaitable.result)) ==
@@ -193,7 +194,8 @@ TEST_CASE("AsyncIO - pwrite fails on pipe (expected ESPIPE)") {
 
     // pwrite on a pipe should fail with -ESPIPE
     dstd::String data = "should fail";
-    auto awaitable = io::pwrite(pipefd[1], data.data(), data.size(), 0);
+    auto awaitable =
+        runtime::io::pwrite(pipefd[1], data.data(), data.size(), 0);
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == -ESPIPE);
 
@@ -206,7 +208,7 @@ TEST_CASE("AsyncIO - pread fails on pipe (expected ESPIPE)") {
     REQUIRE(::pipe(pipefd) == 0);
 
     char buf[16] = {};
-    auto awaitable = io::pread(pipefd[0], buf, sizeof(buf), 0);
+    auto awaitable = runtime::io::pread(pipefd[0], buf, sizeof(buf), 0);
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == -ESPIPE);
 
@@ -226,11 +228,11 @@ TEST_CASE("AsyncIO - sequential writes advance file position") {
     // Two sequential writes should append
     dstd::String part1 = "Hello, ";
     dstd::String part2 = "World!";
-    auto a1 = io::write(fd, part1.data(), part1.size());
+    auto a1 = runtime::io::write(fd, part1.data(), part1.size());
     CHECK(a1.is_ready);
     CHECK(a1.result == static_cast<ssize_t>(part1.size()));
 
-    auto a2 = io::write(fd, part2.data(), part2.size());
+    auto a2 = runtime::io::write(fd, part2.data(), part2.size());
     CHECK(a2.is_ready);
     CHECK(a2.result == static_cast<ssize_t>(part2.size()));
 
@@ -254,13 +256,13 @@ TEST_CASE("AsyncIO - sequential reads advance file position") {
 
     // Two sequential reads should advance position
     char buf1[5] = {};
-    auto a1 = io::read(fd, buf1, 5);
+    auto a1 = runtime::io::read(fd, buf1, 5);
     CHECK(a1.is_ready);
     CHECK(a1.result == 5);
     CHECK(dstd::String(buf1, 5) == "ABCDE");
 
     char buf2[5] = {};
-    auto a2 = io::read(fd, buf2, 5);
+    auto a2 = runtime::io::read(fd, buf2, 5);
     CHECK(a2.is_ready);
     CHECK(a2.result == 5);
     CHECK(dstd::String(buf2, 5) == "FGHIJ");
@@ -282,13 +284,13 @@ TEST_CASE("AsyncIO - pread does not change file position") {
 
     // pread at offset 5
     char buf1[5] = {};
-    auto a1 = io::pread(fd, buf1, 5, 5);
+    auto a1 = runtime::io::pread(fd, buf1, 5, 5);
     CHECK(a1.result == 5);
     CHECK(dstd::String(buf1, 5) == "FGHIJ");
 
     // File position should still be 0 — sequential read should get "ABCDE"
     char buf2[5] = {};
-    auto a2 = io::read(fd, buf2, 5);
+    auto a2 = runtime::io::read(fd, buf2, 5);
     CHECK(a2.result == 5);
     CHECK(dstd::String(buf2, 5) == "ABCDE");
 
@@ -310,12 +312,12 @@ TEST_CASE("AsyncIO - pwrite does not change file position") {
 
     // pwrite at offset 5 — should NOT change current position
     dstd::String patch = "BBB";
-    auto a1 = io::pwrite(fd, patch.data(), patch.size(), 5);
+    auto a1 = runtime::io::pwrite(fd, patch.data(), patch.size(), 5);
     CHECK(a1.result == static_cast<ssize_t>(patch.size()));
 
     // Sequential write at current position (0) should overwrite start
     dstd::String seq = "CC";
-    auto a2 = io::write(fd, seq.data(), seq.size());
+    auto a2 = runtime::io::write(fd, seq.data(), seq.size());
     CHECK(a2.result == static_cast<ssize_t>(seq.size()));
 
     // Read back — expect "CCAAABBBAA"
@@ -347,7 +349,7 @@ TEST_CASE("AsyncIO - async read with executor") {
         REQUIRE(fd >= 0);
 
         char buf[128] = {};
-        ssize_t n = co_await io::pread(fd, buf, data.size(), 0);
+        ssize_t n = co_await runtime::io::pread(fd, buf, data.size(), 0);
         if (n == static_cast<ssize_t>(data.size())) {
             read_data.assign(buf, static_cast<std::size_t>(n));
             success.store(true);
@@ -380,7 +382,7 @@ TEST_CASE("AsyncIO - async write with executor") {
         int fd = ::open(path, O_WRONLY | O_TRUNC);
         REQUIRE(fd >= 0);
 
-        ssize_t n = co_await io::write(fd, data.data(), data.size());
+        ssize_t n = co_await runtime::io::write(fd, data.data(), data.size());
         if (n == static_cast<ssize_t>(data.size())) {
             success.store(true);
         }
@@ -419,7 +421,7 @@ TEST_CASE("AsyncIO - async pread with executor") {
 
         // Read 5 bytes from offset 4
         char buf[16] = {};
-        ssize_t n = co_await io::pread(fd, buf, 5, 4);
+        ssize_t n = co_await runtime::io::pread(fd, buf, 5, 4);
         if (n == 5) {
             read_data.assign(buf, 5);
             success.store(true);
@@ -454,7 +456,8 @@ TEST_CASE("AsyncIO - async pwrite with executor") {
         REQUIRE(fd >= 0);
 
         dstd::String patch = "BBB";
-        ssize_t n = co_await io::pwrite(fd, patch.data(), patch.size(), 3);
+        ssize_t n =
+            co_await runtime::io::pwrite(fd, patch.data(), patch.size(), 3);
         if (n == static_cast<ssize_t>(patch.size())) {
             success.store(true);
         }
@@ -488,7 +491,8 @@ TEST_CASE("AsyncIO - async write to pipe with executor") {
     std::atomic<bool> success{false};
 
     auto body = [&]() -> coro::CoroTask<void> {
-        ssize_t n = co_await io::write(pipefd[1], data.data(), data.size());
+        ssize_t n =
+            co_await runtime::io::write(pipefd[1], data.data(), data.size());
         if (n == static_cast<ssize_t>(data.size())) {
             success.store(true);
         }
@@ -518,17 +522,17 @@ TEST_CASE("AsyncIO - async open + pread + close lifecycle") {
     dstd::String read_data;
 
     auto body = [&]() -> coro::CoroTask<void> {
-        ssize_t fd_result = co_await io::open(path.c_str(), O_RDONLY);
+        ssize_t fd_result = co_await runtime::io::open(path.c_str(), O_RDONLY);
         REQUIRE(fd_result >= 0);
         int fd = static_cast<int>(fd_result);
 
         char buf[128] = {};
-        ssize_t n = co_await io::pread(fd, buf, data.size(), 0);
+        ssize_t n = co_await runtime::io::pread(fd, buf, data.size(), 0);
         if (n == static_cast<ssize_t>(data.size())) {
             read_data.assign(buf, static_cast<std::size_t>(n));
         }
 
-        ssize_t close_result = co_await io::close(fd);
+        ssize_t close_result = co_await runtime::io::close(fd);
         if (close_result == 0 && n == static_cast<ssize_t>(data.size())) {
             success.store(true);
         }
@@ -575,8 +579,8 @@ TEST_CASE("AsyncIO - multiple concurrent async reads") {
                         if (fd < 0) co_return;
 
                         char buf[256] = {};
-                        ssize_t n = co_await io::pread(fd, buf,
-                                                       expected_ptr->size(), 0);
+                        ssize_t n = co_await runtime::io::pread(
+                            fd, buf, expected_ptr->size(), 0);
                         if (n > 0) {
                             result_ptr->assign(buf,
                                                static_cast<std::size_t>(n));
@@ -603,7 +607,7 @@ TEST_CASE("AsyncIO - multiple concurrent async reads") {
 }
 
 TEST_CASE("AsyncIO - read error handling (invalid fd)") {
-    auto awaitable = io::read(-1, nullptr, 0);
+    auto awaitable = runtime::io::read(-1, nullptr, 0);
     // With no executor, sync fallback calls read(-1, ...) which fails
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result < 0);
@@ -616,7 +620,7 @@ TEST_CASE("AsyncIO - IoBackend::name() reports backend type") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         REQUIRE(coro::Executor::current() != nullptr);
-        auto* backend = io::current_backend();
+        auto* backend = runtime::io::current_backend();
         REQUIRE(backend != nullptr);
         backend_name = backend->name();
         co_return;
@@ -637,7 +641,7 @@ TEST_CASE("AsyncIO - async read error handling with executor (invalid fd)") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         char buf[16] = {};
-        ssize_t n = co_await io::read(-1, buf, 16);
+        ssize_t n = co_await runtime::io::read(-1, buf, 16);
         result.store(n);
         co_return;
     };
@@ -664,7 +668,7 @@ TEST_CASE("AsyncIO - large pread with executor") {
         REQUIRE(fd >= 0);
 
         dstd::Vector<char> buf(SIZE);
-        ssize_t n = co_await io::pread(fd, buf.data(), SIZE, 0);
+        ssize_t n = co_await runtime::io::pread(fd, buf.data(), SIZE, 0);
         if (n == static_cast<ssize_t>(SIZE) &&
             std::memcmp(buf.data(), data.data(), SIZE) == 0) {
             success.store(true);
@@ -685,7 +689,7 @@ TEST_CASE("AsyncIO - large pread with executor") {
 // ============================================================================
 
 /// Helper: run the open+pread+close lifecycle on a forced backend.
-static void run_lifecycle_on_backend(io::IoBackendType type,
+static void run_lifecycle_on_backend(runtime::io::IoBackendType type,
                                      const char* type_name) {
     dstd::String data = dstd::String("backend test: ") + type_name;
     auto path = create_temp_file(data);
@@ -698,21 +702,21 @@ static void run_lifecycle_on_backend(io::IoBackendType type,
 
     auto body = [&]() -> coro::CoroTask<void> {
         REQUIRE(coro::Executor::current() != nullptr);
-        auto* backend = io::current_backend();
+        auto* backend = runtime::io::current_backend();
         REQUIRE(backend != nullptr);
         backend_name = backend->name();
 
-        ssize_t fd_result = co_await io::open(path.c_str(), O_RDONLY);
+        ssize_t fd_result = co_await runtime::io::open(path.c_str(), O_RDONLY);
         REQUIRE(fd_result >= 0);
         int fd = static_cast<int>(fd_result);
 
         char buf[128] = {};
-        ssize_t n = co_await io::pread(fd, buf, data.size(), 0);
+        ssize_t n = co_await runtime::io::pread(fd, buf, data.size(), 0);
         if (n == static_cast<ssize_t>(data.size())) {
             read_data.assign(buf, static_cast<std::size_t>(n));
         }
 
-        ssize_t close_result = co_await io::close(fd);
+        ssize_t close_result = co_await runtime::io::close(fd);
         if (close_result == 0 && n == static_cast<ssize_t>(data.size())) {
             success.store(true);
         }
@@ -729,7 +733,7 @@ static void run_lifecycle_on_backend(io::IoBackendType type,
 }
 
 /// Helper: run write to pipe on a forced backend (regression test).
-static void run_pipe_write_on_backend(io::IoBackendType type,
+static void run_pipe_write_on_backend(runtime::io::IoBackendType type,
                                       const char* type_name) {
     int pipefd[2];
     REQUIRE(::pipe(pipefd) == 0);
@@ -740,7 +744,8 @@ static void run_pipe_write_on_backend(io::IoBackendType type,
     std::atomic<bool> success{false};
 
     auto body = [&]() -> coro::CoroTask<void> {
-        ssize_t n = co_await io::write(pipefd[1], data.data(), data.size());
+        ssize_t n =
+            co_await runtime::io::write(pipefd[1], data.data(), data.size());
         if (n == static_cast<ssize_t>(data.size())) {
             success.store(true);
         }
@@ -761,44 +766,46 @@ static void run_pipe_write_on_backend(io::IoBackendType type,
 }
 
 TEST_CASE("AsyncIO - lifecycle on threadpool backend (forced)") {
-    run_lifecycle_on_backend(io::IoBackendType::Threadpool, "threadpool");
+    run_lifecycle_on_backend(runtime::io::IoBackendType::Threadpool,
+                             "threadpool");
 }
 
 TEST_CASE("AsyncIO - pipe write on threadpool backend (forced)") {
-    run_pipe_write_on_backend(io::IoBackendType::Threadpool, "threadpool");
+    run_pipe_write_on_backend(runtime::io::IoBackendType::Threadpool,
+                              "threadpool");
 }
 
 #ifdef __linux__
 TEST_CASE("AsyncIO - lifecycle on epoll+threadpool backend (forced)") {
-    run_lifecycle_on_backend(io::IoBackendType::EpollThreadpool,
+    run_lifecycle_on_backend(runtime::io::IoBackendType::EpollThreadpool,
                              "epoll+threadpool");
 }
 
 TEST_CASE("AsyncIO - pipe write on epoll+threadpool backend (forced)") {
-    run_pipe_write_on_backend(io::IoBackendType::EpollThreadpool,
+    run_pipe_write_on_backend(runtime::io::IoBackendType::EpollThreadpool,
                               "epoll+threadpool");
 }
 #endif
 
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 TEST_CASE("AsyncIO - lifecycle on io_uring backend (forced)") {
-    run_lifecycle_on_backend(io::IoBackendType::IoUring, "io_uring");
+    run_lifecycle_on_backend(runtime::io::IoBackendType::IoUring, "io_uring");
 }
 
 TEST_CASE("AsyncIO - pipe write on io_uring backend (forced)") {
-    run_pipe_write_on_backend(io::IoBackendType::IoUring, "io_uring");
+    run_pipe_write_on_backend(runtime::io::IoBackendType::IoUring, "io_uring");
 }
 #endif
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__) || defined(__DragonFly__)
 TEST_CASE("AsyncIO - lifecycle on kqueue+threadpool backend (forced)") {
-    run_lifecycle_on_backend(io::IoBackendType::KqueueThreadpool,
+    run_lifecycle_on_backend(runtime::io::IoBackendType::KqueueThreadpool,
                              "kqueue+threadpool");
 }
 
 TEST_CASE("AsyncIO - pipe write on kqueue+threadpool backend (forced)") {
-    run_pipe_write_on_backend(io::IoBackendType::KqueueThreadpool,
+    run_pipe_write_on_backend(runtime::io::IoBackendType::KqueueThreadpool,
                               "kqueue+threadpool");
 }
 #endif
@@ -820,7 +827,7 @@ TEST_CASE("AsyncIO - sync fallback: writev without executor") {
     iov[1].iov_base = const_cast<char*>(p2.data());
     iov[1].iov_len = p2.size();
 
-    auto awaitable = io::writev(fd, iov, 2);
+    auto awaitable = runtime::io::writev(fd, iov, 2);
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == static_cast<ssize_t>(p1.size() + p2.size()));
 
@@ -849,7 +856,7 @@ TEST_CASE("AsyncIO - sync fallback: readv without executor") {
     iov[1].iov_base = buf2;
     iov[1].iov_len = 5;
 
-    auto awaitable = io::readv(fd, iov, 2);
+    auto awaitable = runtime::io::readv(fd, iov, 2);
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == 10);
     CHECK(dstd::String(buf1, 5) == "ABCDE");
@@ -880,7 +887,7 @@ TEST_CASE("AsyncIO - sync fallback: pwritev without executor") {
     iov[1].iov_base = const_cast<char*>(p2.data());
     iov[1].iov_len = p2.size();
 
-    auto awaitable = io::pwritev(fd, iov, 2, 3);
+    auto awaitable = runtime::io::pwritev(fd, iov, 2, 3);
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == 4);
 
@@ -908,7 +915,7 @@ TEST_CASE("AsyncIO - sync fallback: preadv without executor") {
     iov[1].iov_base = buf2;
     iov[1].iov_len = 4;
 
-    auto awaitable = io::preadv(fd, iov, 2, 2);
+    auto awaitable = runtime::io::preadv(fd, iov, 2, 2);
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == 7);
     CHECK(dstd::String(buf1, 3) == "CDE");
@@ -935,7 +942,7 @@ TEST_CASE("AsyncIO - writev to pipe (non-seekable fd)") {
     iov[1].iov_base = const_cast<char*>(p2.data());
     iov[1].iov_len = p2.size();
 
-    auto awaitable = io::writev(pipefd[1], iov, 2);
+    auto awaitable = runtime::io::writev(pipefd[1], iov, 2);
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == static_cast<ssize_t>(p1.size() + p2.size()));
 
@@ -959,7 +966,7 @@ TEST_CASE("AsyncIO - sync fallback: lseek without executor") {
     REQUIRE(fd >= 0);
 
     // Seek to offset 5
-    auto awaitable = io::lseek(fd, 5, SEEK_SET);
+    auto awaitable = runtime::io::lseek(fd, 5, SEEK_SET);
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == 5);
 
@@ -969,12 +976,12 @@ TEST_CASE("AsyncIO - sync fallback: lseek without executor") {
     CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == "FGHIJ");
 
     // Seek relative
-    auto a2 = io::lseek(fd, -3, SEEK_CUR);
+    auto a2 = runtime::io::lseek(fd, -3, SEEK_CUR);
     CHECK(a2.is_ready);
     CHECK(a2.result == 7);
 
     // Seek to end
-    auto a3 = io::lseek(fd, 0, SEEK_END);
+    auto a3 = runtime::io::lseek(fd, 0, SEEK_END);
     CHECK(a3.is_ready);
     CHECK(a3.result == static_cast<ssize_t>(data.size()));
 
@@ -986,7 +993,7 @@ TEST_CASE("AsyncIO - lseek on pipe fails (expected ESPIPE)") {
     int pipefd[2];
     REQUIRE(::pipe(pipefd) == 0);
 
-    auto awaitable = io::lseek(pipefd[0], 0, SEEK_SET);
+    auto awaitable = runtime::io::lseek(pipefd[0], 0, SEEK_SET);
     CHECK(awaitable.is_ready);
     CHECK(awaitable.result == -ESPIPE);
 
@@ -1009,7 +1016,7 @@ TEST_CASE("AsyncIO - sync fallback: sendfile without executor") {
     int pipefd[2];
     REQUIRE(::pipe(pipefd) == 0);
 
-    auto awaitable = io::sendfile(pipefd[1], in_fd, 0, data.size());
+    auto awaitable = runtime::io::sendfile(pipefd[1], in_fd, 0, data.size());
     CHECK(awaitable.is_ready);
 
     // Close write end so read won't block if sendfile failed
@@ -1038,7 +1045,7 @@ TEST_CASE("AsyncIO - sendfile with offset") {
     REQUIRE(::pipe(pipefd) == 0);
 
     // Send 6 bytes starting at offset 10
-    auto awaitable = io::sendfile(pipefd[1], in_fd, 10, 6);
+    auto awaitable = runtime::io::sendfile(pipefd[1], in_fd, 10, 6);
     CHECK(awaitable.is_ready);
 
     // Close write end so read won't block if sendfile failed.
@@ -1082,7 +1089,7 @@ TEST_CASE("AsyncIO - async readv/writev with executor") {
         wv[1].iov_base = const_cast<char*>(p2.data());
         wv[1].iov_len = p2.size();
 
-        ssize_t wn = co_await io::writev(fd, wv, 2);
+        ssize_t wn = co_await runtime::io::writev(fd, wv, 2);
         REQUIRE(wn == static_cast<ssize_t>(p1.size() + p2.size()));
 
         // preadv at offset 0
@@ -1094,7 +1101,7 @@ TEST_CASE("AsyncIO - async readv/writev with executor") {
         rv[1].iov_base = b2;
         rv[1].iov_len = 6;
 
-        ssize_t rn = co_await io::preadv(fd, rv, 2, 0);
+        ssize_t rn = co_await runtime::io::preadv(fd, rv, 2, 0);
         if (rn == 13 && dstd::String(b1, 7) == "Hello, " &&
             dstd::String(b2, 6) == "World!") {
             success.store(true);
@@ -1122,11 +1129,11 @@ TEST_CASE("AsyncIO - async lseek + read with executor") {
         int fd = ::open(path.c_str(), O_RDONLY);
         REQUIRE(fd >= 0);
 
-        ssize_t pos = co_await io::lseek(fd, 5, SEEK_SET);
+        ssize_t pos = co_await runtime::io::lseek(fd, 5, SEEK_SET);
         REQUIRE(pos == 5);
 
         char buf[5] = {};
-        ssize_t n = co_await io::read(fd, buf, 5);
+        ssize_t n = co_await runtime::io::read(fd, buf, 5);
         if (n == 5 && dstd::String(buf, 5) == "FGHIJ") {
             success.store(true);
         }
@@ -1156,7 +1163,8 @@ TEST_CASE("AsyncIO - async sendfile with executor") {
         int in_fd = ::open(path.c_str(), O_RDONLY);
         REQUIRE(in_fd >= 0);
 
-        ssize_t n = co_await io::sendfile(pipefd[1], in_fd, 0, data.size());
+        ssize_t n =
+            co_await runtime::io::sendfile(pipefd[1], in_fd, 0, data.size());
         if (n == static_cast<ssize_t>(data.size())) {
             success.store(true);
         }

@@ -50,9 +50,8 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
     std::size_t out_cap = INIT_OUT;
     if (file_size >= 18) {
         unsigned char trailer[4];
-        const auto trailer_read = co_await dftracer::utils::io::pread(
-            fd, trailer, sizeof trailer,
-            static_cast<off_t>(file_size - sizeof trailer));
+        const auto trailer_read = co_await dftracer::utils::runtime::io::pread(
+            fd, trailer, sizeof trailer, file_size - sizeof trailer);
         if (trailer_read == static_cast<ssize_t>(sizeof trailer)) {
             const std::size_t isize =
                 static_cast<std::size_t>(trailer[0]) |
@@ -140,8 +139,8 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
                 head = 0;
                 tail = held;
             }
-            const ssize_t n = co_await dftracer::utils::io::pread(
-                fd, comp.get() + tail, want, static_cast<off_t>(next_read));
+            const ssize_t n = co_await dftracer::utils::runtime::io::pread(
+                fd, comp.get() + tail, want, next_read);
             if (n <= 0) {
                 throw common::DFTUtilsException(
                     common::ErrorCode::Io,
@@ -172,8 +171,9 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
                     const std::size_t want =
                         static_cast<std::size_t>(std::min<std::uint64_t>(
                             READ_CHUNK, file_size - stream_read));
-                    const ssize_t n = co_await dftracer::utils::io::pread(
-                        fd, in.get(), want, static_cast<off_t>(stream_read));
+                    const ssize_t n =
+                        co_await dftracer::utils::runtime::io::pread(
+                            fd, in.get(), want, stream_read);
                     if (n <= 0) {
                         throw common::DFTUtilsException(
                             common::ErrorCode::Io,

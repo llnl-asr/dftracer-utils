@@ -11,7 +11,7 @@ namespace dftracer::utils::coro {
 class Executor;
 }  // namespace dftracer::utils::coro
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 /// Pure thread pool I/O backend -- universal fallback.
 /// Runs every I/O operation on a small dedicated thread pool. All submit_*
@@ -29,6 +29,6 @@ class ThreadPoolBackend : public ThreadPoolFileOps {
     dstd::String name() const override;
 };
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // DFTRACER_UTILS_RUNTIME_IO_THREAD_POOL_BACKEND_H

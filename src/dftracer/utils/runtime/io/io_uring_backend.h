@@ -21,7 +21,7 @@ namespace dftracer::utils::coro {
 class Executor;
 }  // namespace dftracer::utils::coro
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 /// io_uring request. Stored in the SQE's user_data so we can
 /// recover the IoAwaitable pointer on completion.
@@ -158,7 +158,7 @@ struct IoUringSubmitCtx : SubmitContext {
     void* completion_ctx = nullptr;
 };
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // DFTRACER_UTILS_HAVE_IO_URING
 #endif  // DFTRACER_UTILS_RUNTIME_IO_IO_URING_BACKEND_H

@@ -14,7 +14,7 @@
 #include <cerrno>
 #include <climits>
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 namespace {
 
@@ -72,33 +72,35 @@ void set_current_backend(const coro::Executor* owner,
     t_backend.backend = backend;
 }
 
-IoAwaitable read(int fd, void* buf, std::size_t len) noexcept {
+IoAwaitable read(dstd::NativeHandle fd, void* buf, std::size_t len) noexcept {
     return io_dispatch<&IoBackend::submit_read>(
         [](int f, void* b, std::size_t n) { return ::read(f, b, n); }, fd, buf,
         len);
 }
 
-IoAwaitable write(int fd, const void* buf, std::size_t len) noexcept {
+IoAwaitable write(dstd::NativeHandle fd, const void* buf,
+                  std::size_t len) noexcept {
     return io_dispatch<&IoBackend::submit_write>(
         [](int f, const void* b, std::size_t n) { return ::write(f, b, n); },
         fd, buf, len);
 }
 
-IoAwaitable pread(int fd, void* buf, std::size_t len, off_t offset) noexcept {
+IoAwaitable pread(dstd::NativeHandle fd, void* buf, std::size_t len,
+                  std::uint64_t offset) noexcept {
     return io_dispatch<&IoBackend::submit_pread>(
         [](int f, void* b, std::size_t n, off_t o) {
             return ::pread(f, b, n, o);
         },
-        fd, buf, len, offset);
+        fd, buf, len, static_cast<off_t>(offset));
 }
 
-IoAwaitable pwrite(int fd, const void* buf, std::size_t len,
-                   off_t offset) noexcept {
+IoAwaitable pwrite(dstd::NativeHandle fd, const void* buf, std::size_t len,
+                   std::uint64_t offset) noexcept {
     return io_dispatch<&IoBackend::submit_pwrite>(
         [](int f, const void* b, std::size_t n, off_t o) {
             return ::pwrite(f, b, n, o);
         },
-        fd, buf, len, offset);
+        fd, buf, len, static_cast<off_t>(offset));
 }
 
 IoAwaitable open(const char* path, int flags, mode_t mode) noexcept {
@@ -107,27 +109,27 @@ IoAwaitable open(const char* path, int flags, mode_t mode) noexcept {
         flags, mode);
 }
 
-IoAwaitable close(int fd) noexcept {
+IoAwaitable close(dstd::NativeHandle fd) noexcept {
     return io_dispatch<&IoBackend::submit_close>(
         [](int f) { return ::close(f); }, fd);
 }
 
-IoAwaitable fsync(int fd) noexcept {
+IoAwaitable fsync(dstd::NativeHandle fd) noexcept {
     return io_dispatch<&IoBackend::submit_fsync>(
         [](int f) { return ::fsync(f); }, fd);
 }
 
-IoAwaitable ftruncate(int fd, off_t length) noexcept {
+IoAwaitable ftruncate(dstd::NativeHandle fd, std::uint64_t length) noexcept {
     return io_dispatch<&IoBackend::submit_ftruncate>(
         [](int f, off_t l) { return ::ftruncate(f, l); }, fd, length);
 }
 
-IoAwaitable fstat(int fd, struct stat* buf) noexcept {
+IoAwaitable fstat(dstd::NativeHandle fd, struct stat* buf) noexcept {
     return io_dispatch<&IoBackend::submit_fstat>(
         [](int f, struct stat* b) { return ::fstat(f, b); }, fd, buf);
 }
 
-IoAwaitable accept(int listen_fd, struct sockaddr* addr,
+IoAwaitable accept(dstd::NativeHandle listen_fd, struct sockaddr* addr,
                    socklen_t* addrlen) noexcept {
     return io_dispatch<&IoBackend::submit_accept>(
         [](int lf, struct sockaddr* a, socklen_t* al) {
@@ -136,7 +138,8 @@ IoAwaitable accept(int listen_fd, struct sockaddr* addr,
         listen_fd, addr, addrlen);
 }
 
-IoAwaitable recv(int fd, void* buf, std::size_t len, int flags) noexcept {
+IoAwaitable recv(dstd::NativeHandle fd, void* buf, std::size_t len,
+                 int flags) noexcept {
     return io_dispatch<&IoBackend::submit_recv>(
         [](int f, void* b, std::size_t n, int fl) {
             return ::recv(f, b, n, fl);
@@ -144,7 +147,8 @@ IoAwaitable recv(int fd, void* buf, std::size_t len, int flags) noexcept {
         fd, buf, len, flags);
 }
 
-IoAwaitable send(int fd, const void* buf, std::size_t len, int flags) noexcept {
+IoAwaitable send(dstd::NativeHandle fd, const void* buf, std::size_t len,
+                 int flags) noexcept {
     return io_dispatch<&IoBackend::submit_send>(
         [](int f, const void* b, std::size_t n, int fl) {
             return ::send(f, b, n, fl);
@@ -152,24 +156,27 @@ IoAwaitable send(int fd, const void* buf, std::size_t len, int flags) noexcept {
         fd, buf, len, flags);
 }
 
-IoAwaitable readv(int fd, const struct iovec* iov, int iovcnt) noexcept {
+IoAwaitable readv(dstd::NativeHandle fd, const struct iovec* iov,
+                  int iovcnt) noexcept {
     return io_dispatch<&IoBackend::submit_readv>(
         [](int f, const struct iovec* v, int c) { return ::readv(f, v, c); },
         fd, iov, iovcnt);
 }
 
-IoAwaitable writev(int fd, const struct iovec* iov, int iovcnt) noexcept {
+IoAwaitable writev(dstd::NativeHandle fd, const struct iovec* iov,
+                   int iovcnt) noexcept {
     return io_dispatch<&IoBackend::submit_writev>(
         [](int f, const struct iovec* v, int c) { return ::writev(f, v, c); },
         fd, iov, iovcnt);
 }
 
-coro::CoroTask<ssize_t> writev_all(int fd, struct iovec* iov, int iovcnt) {
+coro::CoroTask<ssize_t> writev_all(dstd::NativeHandle fd, struct iovec* iov,
+                                   int iovcnt) {
     ssize_t total = 0;
     int i = 0;
     while (i < iovcnt) {
         int n = std::min(iovcnt - i, iov_max_entries());
-        ssize_t rc = co_await io::writev(fd, iov + i, n);
+        ssize_t rc = co_await runtime::io::writev(fd, iov + i, n);
         if (rc < 0) co_return rc;
         if (rc == 0) co_return -EIO;  // no progress; avoid spinning
         total += rc;
@@ -189,37 +196,38 @@ coro::CoroTask<ssize_t> writev_all(int fd, struct iovec* iov, int iovcnt) {
     co_return total;
 }
 
-IoAwaitable preadv(int fd, const struct iovec* iov, int iovcnt,
-                   off_t offset) noexcept {
+IoAwaitable preadv(dstd::NativeHandle fd, const struct iovec* iov, int iovcnt,
+                   std::uint64_t offset) noexcept {
     return io_dispatch<&IoBackend::submit_preadv>(
         [](int f, const struct iovec* v, int c, off_t o) {
             return ::preadv(f, v, c, o);
         },
-        fd, iov, iovcnt, offset);
+        fd, iov, iovcnt, static_cast<off_t>(offset));
 }
 
-IoAwaitable pwritev(int fd, const struct iovec* iov, int iovcnt,
-                    off_t offset) noexcept {
+IoAwaitable pwritev(dstd::NativeHandle fd, const struct iovec* iov, int iovcnt,
+                    std::uint64_t offset) noexcept {
     return io_dispatch<&IoBackend::submit_pwritev>(
         [](int f, const struct iovec* v, int c, off_t o) {
             return ::pwritev(f, v, c, o);
         },
-        fd, iov, iovcnt, offset);
+        fd, iov, iovcnt, static_cast<off_t>(offset));
 }
 
-IoAwaitable lseek(int fd, off_t offset, int whence) noexcept {
+IoAwaitable lseek(dstd::NativeHandle fd, std::int64_t offset,
+                  int whence) noexcept {
     return io_dispatch<&IoBackend::submit_lseek>(
-        [](int f, off_t o, int w) { return ::lseek(f, o, w); }, fd, offset,
-        whence);
+        [](int f, off_t o, int w) { return ::lseek(f, o, w); }, fd,
+        static_cast<off_t>(offset), whence);
 }
 
-IoAwaitable sendfile(int out_fd, int in_fd, off_t offset,
-                     std::size_t count) noexcept {
+IoAwaitable sendfile(dstd::NativeHandle out_fd, dstd::NativeHandle in_fd,
+                     std::uint64_t offset, std::size_t count) noexcept {
     return io_dispatch<&IoBackend::submit_sendfile>(
         [](int of, int inf, off_t o, std::size_t c) {
             return platform_sendfile(of, inf, o, c);
         },
-        out_fd, in_fd, offset, count);
+        out_fd, in_fd, static_cast<off_t>(offset), count);
 }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io

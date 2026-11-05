@@ -16,7 +16,7 @@ namespace dftracer::utils::coro {
 class Executor;
 }  // namespace dftracer::utils::coro
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 /// Request descriptor that doubles as SubmitContext.
 /// Heap-allocated per I/O operation, freed after completion.
@@ -136,6 +136,6 @@ class ThreadPoolFileOps : public IoBackend {
     IoThreadPool pool_;
 };
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // DFTRACER_UTILS_RUNTIME_IO_THREAD_POOL_FILE_OPS_H

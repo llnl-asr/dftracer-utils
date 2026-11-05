@@ -32,8 +32,8 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
         open_file = nullptr) {
     dftracer::utils::dstd::ScopedFd owned;
     if (!open_file) {
-        ssize_t fd_result =
-            co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
+        ssize_t fd_result = co_await ::dftracer::utils::runtime::io::open(
+            file_path.c_str(), O_RDONLY);
         if (fd_result < 0) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Io,

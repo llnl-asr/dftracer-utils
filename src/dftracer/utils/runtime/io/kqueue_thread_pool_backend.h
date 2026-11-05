@@ -16,7 +16,7 @@ namespace dftracer::utils::coro {
 class Executor;
 }  // namespace dftracer::utils::coro
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 /// kqueue + thread pool I/O backend (macOS, FreeBSD, etc.).
 /// File I/O is handled by the thread pool via ThreadPoolFileOps (kqueue cannot
@@ -47,7 +47,7 @@ class KqueueThreadPoolBackend : public ThreadPoolFileOps {
     static constexpr uintptr_t SHUTDOWN_IDENT = 0xDEAD;
 };
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // kqueue platforms
 #endif  // DFTRACER_UTILS_RUNTIME_IO_KQUEUE_THREAD_POOL_BACKEND_H

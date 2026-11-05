@@ -7,7 +7,7 @@
 
 #include <atomic>
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 /// Reusable completion thread that repeatedly calls a user-provided
 /// poll function. The poll function should block until work is
@@ -47,6 +47,6 @@ class IoCompletionThread {
     dstd::Function<void()> poll_fn_;
 };
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // DFTRACER_UTILS_RUNTIME_IO_IO_COMPLETION_THREAD_H

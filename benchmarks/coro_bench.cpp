@@ -287,10 +287,9 @@ Result read_loop(std::size_t n) {
         std::size_t good = 0;
         Meter start = begin_meter();
         for (std::size_t i = 0; i < n; ++i) {
-            auto offset =
-                static_cast<off_t>((i % READ_FILE_BLOCKS) * READ_BLOCK);
+            auto offset = (i % READ_FILE_BLOCKS) * READ_BLOCK;
             ssize_t got =
-                co_await io::pread(fd, buf.data(), READ_BLOCK, offset);
+                co_await runtime::io::pread(fd, buf.data(), READ_BLOCK, offset);
             if (got == static_cast<ssize_t>(READ_BLOCK)) ++good;
         }
         finish_meter(start, r);

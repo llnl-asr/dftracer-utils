@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <chrono>
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 namespace {
 // How long an I/O thread waits for work before it gives back its idle pages.
@@ -198,4 +198,4 @@ void IoThreadPool::worker_loop() {
     }
 }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io

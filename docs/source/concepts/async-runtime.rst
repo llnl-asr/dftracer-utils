@@ -23,11 +23,11 @@ thread back to the runtime instead of blocking it.
 .. code-block:: cpp
 
    coro::CoroTask<Result> process(int fd, char* buf, std::size_t len) {
-       auto n = co_await io::read(fd, buf, len);  // thread freed here
+       auto n = co_await runtime::io::read(fd, buf, len);  // thread freed here
        co_return parse(buf, n);
    }
 
-When ``io::read`` has no data ready, the coroutine's frame is parked and the
+When ``runtime::io::read`` has no data ready, the coroutine's frame is parked and the
 worker thread picks up other runnable work. When the read completes, the
 frame is resumed, possibly on a different worker thread. The caller never
 sees a callback; it sees a function that looks like it blocked.
@@ -60,7 +60,7 @@ This is what makes concurrency structured rather than fire-and-forget:
   ``spawn`` child.
   A scope that spawned and is destroyed without a join ends the process.
   ``with_scope`` joins also when its body raises.
-- ``dftracer::utils::io::read``/``write``/``open``/``close``
+- ``dftracer::utils::runtime::io::read``/``write``/``open``/``close``
   are the async I/O surface: free functions that submit to the executor's io
   backend and suspend, rather than blocking. They need no ``Scope``
   argument - inside an executor worker they suspend on the configured
@@ -87,7 +87,7 @@ concrete implementation (``IoBackendType`` in ``runtime/io/backend_type.h``):
   is usable.
 
 ``AUTO`` picks the best available backend at runtime. Domain code never talks
-to a backend directly; it goes through the ``io::read``/``write``/``open``/
+to a backend directly; it goes through the ``runtime::io::read``/``write``/``open``/
 ``close`` free functions and stays oblivious to which backend is underneath.
 That is the same layering ``architecture`` describes for the whole codebase,
 applied at the I/O boundary: one abstraction, several platform-specific

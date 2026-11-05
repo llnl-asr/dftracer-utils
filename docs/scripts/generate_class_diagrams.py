@@ -152,7 +152,7 @@ COMPONENT_GROUPS = [
         ],
         "Executor and Runtime",
     ),
-    ("io", ["dftracer::utils::io::"], "I/O Backends"),
+    ("io", ["dftracer::utils::runtime::io::"], "I/O Backends"),
     ("duql", ["dftracer::utils::duql::"], "duql"),
     (
         "dataframe",

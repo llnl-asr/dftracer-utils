@@ -13,7 +13,7 @@
 #include <cerrno>
 #include <cstdint>
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 namespace {
 // A socket call may wait on a peer indefinitely, so it is not tracked.
@@ -413,4 +413,4 @@ std::size_t ThreadPoolFileOps::poll(int /*timeout_ms*/) {
 
 int ThreadPoolFileOps::flush() { return static_cast<int>(pool_.flush()); }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io

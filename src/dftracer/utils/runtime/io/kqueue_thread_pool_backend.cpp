@@ -13,7 +13,7 @@
 #include <cerrno>
 #include <cstring>
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 KqueueThreadPoolBackend::KqueueThreadPoolBackend(coro::Executor& executor,
                                                  std::size_t pool_size,
@@ -93,6 +93,6 @@ void KqueueThreadPoolBackend::kqueue_loop() {
     }
 }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // kqueue platforms

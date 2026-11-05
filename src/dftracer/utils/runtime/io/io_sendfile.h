@@ -15,7 +15,7 @@
 #include <sys/uio.h>
 #endif
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 /// Copy `count` bytes from `in_fd` at `offset` to `out_fd`, using the
 /// platform's native sendfile where available and a portable pread+write loop
@@ -56,6 +56,6 @@ inline ssize_t platform_sendfile(int out_fd, int in_fd, off_t offset,
 #endif
 }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // DFTRACER_UTILS_RUNTIME_IO_IO_SENDFILE_H

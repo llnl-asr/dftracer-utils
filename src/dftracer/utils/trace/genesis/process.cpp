@@ -1292,7 +1292,7 @@ coro::CoroTask<ReaderSize> reader_size(const dstd::String& file) {
     ReaderSize out;
     co_await probe_slots().acquire(1);
     SlotGuard probe(probe_slots(), 1);
-    const ssize_t fd = co_await io::open(file.c_str(), O_RDONLY);
+    const ssize_t fd = co_await runtime::io::open(file.c_str(), O_RDONLY);
     if (fd < 0) co_return out;
     dstd::ScopedFd guard(static_cast<int>(fd));
     struct stat st{};
@@ -1303,9 +1303,9 @@ coro::CoroTask<ReaderSize> reader_size(const dstd::String& file) {
         co_return out;
     }
     unsigned char trailer[4];
-    const auto trailer_read =
-        co_await io::pread(guard.get(), trailer, sizeof trailer,
-                           st.st_size - static_cast<off_t>(sizeof trailer));
+    const auto trailer_read = co_await runtime::io::pread(
+        guard.get(), trailer, sizeof trailer,
+        static_cast<std::uint64_t>(st.st_size) - sizeof trailer);
     if (trailer_read != static_cast<ssize_t>(sizeof trailer)) co_return out;
     const std::uint64_t isize = static_cast<std::uint64_t>(trailer[0]) |
                                 static_cast<std::uint64_t>(trailer[1]) << 8 |

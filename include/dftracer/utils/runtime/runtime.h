@@ -68,7 +68,7 @@ struct RuntimeSettings {
     dstd::Optional<std::chrono::seconds> deadlock_timeout;
     /// Fixed when the runtime is made: a later different value keeps the
     /// runtime's and logs a warning.
-    io::IoBackendType io_backend = io::IoBackendType::Auto;
+    runtime::io::IoBackendType io_backend = runtime::io::IoBackendType::Auto;
     /// Fixed when the runtime is made, as io_backend; 0 is the default.
     unsigned io_batch_threshold = 0;
 };
@@ -224,7 +224,7 @@ class Runtime {
     dstd::UniquePtr<TaskExecutor> executor_;
     dstd::UniquePtr<Watchdog> watchdog_;
     std::atomic<std::size_t> threads_;
-    io::IoBackendType io_backend_ = io::IoBackendType::Auto;
+    runtime::io::IoBackendType io_backend_ = runtime::io::IoBackendType::Auto;
     unsigned io_batch_threshold_ = 0;
     bool process_runtime_ = false;
     std::atomic<bool> shutdown_called_{false};

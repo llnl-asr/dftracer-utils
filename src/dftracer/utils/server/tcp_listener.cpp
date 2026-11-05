@@ -92,7 +92,7 @@ coro::CoroTask<void> TcpListener::accept_loop(coro::Scope& scope,
         struct sockaddr_in client_addr{};
         socklen_t addrlen = sizeof(client_addr);
 
-        ssize_t client_fd = co_await io::accept(
+        ssize_t client_fd = co_await runtime::io::accept(
             listen_fd_, reinterpret_cast<struct sockaddr*>(&client_addr),
             &addrlen);
 
@@ -123,7 +123,7 @@ coro::CoroTask<void> TcpListener::accept_loop(coro::Scope& scope,
             } catch (...) {
                 DFTRACER_UTILS_LOG_ERROR("%s", "connection handler failed");
             }
-            co_await io::close(fd);
+            co_await runtime::io::close(fd);
             untrack_active(fd);
         });
     }

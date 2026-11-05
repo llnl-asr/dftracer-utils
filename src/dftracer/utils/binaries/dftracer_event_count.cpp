@@ -182,7 +182,7 @@ coro::CoroTask<std::size_t> stream_count(dstd::String path) {
     StreamCounter counter(schema.decoder == index::Decoder::Path);
 
     unsigned char magic[2] = {0, 0};
-    const auto magic_read = co_await io::pread(fd.get(), magic, 2, 0);
+    const auto magic_read = co_await runtime::io::pread(fd.get(), magic, 2, 0);
     if (magic_read == 2 && magic[0] == 0x1f && magic[1] == 0x8b) {
         auto members = utilities::fileio::compress::decode_gzip_members(
             fd.get(), size, INFLATE_STEP_BYTES);
@@ -195,8 +195,8 @@ coro::CoroTask<std::size_t> stream_count(dstd::String path) {
         dstd::String buf(PLAIN_READ_BYTES, '\0');
         std::uint64_t offset = 0;
         while (offset < size) {
-            const auto got = co_await io::pread(
-                fd.get(), buf.data(), buf.size(), static_cast<off_t>(offset));
+            const auto got = co_await runtime::io::pread(fd.get(), buf.data(),
+                                                         buf.size(), offset);
             if (got < 0)
                 throw common::DFTUtilsException::cat(common::ErrorCode::Io,
                                                      "cannot read ", path);

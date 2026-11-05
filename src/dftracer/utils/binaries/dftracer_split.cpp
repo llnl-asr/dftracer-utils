@@ -317,7 +317,7 @@ class ProbeStage {
     coro::CoroTask<FileProbe> probe_file(dstd::String path) const {
         FileProbe probe;
         probe.path = std::move(path);
-        ssize_t fd = co_await io::open(probe.path.c_str(), O_RDONLY);
+        ssize_t fd = co_await runtime::io::open(probe.path.c_str(), O_RDONLY);
         if (fd < 0) {
             DFTRACER_UTILS_LOG_ERROR("Cannot open %s", probe.path.c_str());
             co_return probe;

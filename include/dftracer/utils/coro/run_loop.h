@@ -26,7 +26,7 @@ namespace dftracer::utils::coro {
  * a driver is the only thread that resumes work, @ref runs_remote_wakeups is
  * false, and an awaitable that would wait for a wake-up from another thread
  * takes another path. The io layer finds no I/O backend under this loop, so
- * `io::` calls take their blocking-syscall path rather than waiting on
+ * `runtime::io::` calls take their blocking-syscall path rather than waiting on
  * completions nothing would poll.
  */
 class RunLoop final : public Executor {

@@ -256,7 +256,7 @@ def parse_doxygen_xml(xml_dir: Path) -> list[APIItem]:
 
 
 def _ns_suffix_from_full(ns_full: str) -> str:
-    """Namespace suffix after ROOT_NS, dotted. ``dftracer::utils::io`` -> ``io``."""
+    """Namespace suffix after ROOT_NS, dotted. ``dftracer::utils::runtime::io`` -> ``runtime.io``."""
     if ns_full == ROOT_NS:
         return ""
     suffix = ns_full[len(ROOT_NS) :]

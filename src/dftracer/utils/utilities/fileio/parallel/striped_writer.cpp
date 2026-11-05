@@ -25,7 +25,7 @@ class StripedWriter final : public ParallelWriter {
                              bool /*gzip_extension*/,
                              coro::Scope* /*scope*/) override {
         path_ = std::move(path);
-        ssize_t fd = co_await ::dftracer::utils::io::open(
+        ssize_t fd = co_await ::dftracer::utils::runtime::io::open(
             path_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0) {
             DFTRACER_UTILS_LOG_ERROR("Failed to open striped output: %s",
@@ -67,7 +67,7 @@ class StripedWriter final : public ParallelWriter {
 
     coro::CoroTask<int> close() override {
         if (fd_ < 0) co_return 0;
-        auto rc = co_await ::dftracer::utils::io::close(fd_);
+        auto rc = co_await ::dftracer::utils::runtime::io::close(fd_);
         fd_ = -1;
         co_return static_cast<int>(rc);
     }

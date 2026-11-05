@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_RUNTIME_IO_IO_OP_H
 #define DFTRACER_UTILS_RUNTIME_IO_IO_OP_H
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 /// I/O operation types, shared by every backend (thread pool, epoll, kqueue,
 /// io_uring) so the op set is maintained in one place.
@@ -27,6 +27,6 @@ enum class IoOp {
     Sendfile
 };
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // DFTRACER_UTILS_RUNTIME_IO_IO_OP_H

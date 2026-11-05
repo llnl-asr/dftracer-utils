@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_RUNTIME_IO_BACKEND_TYPE_H
 #define DFTRACER_UTILS_RUNTIME_IO_BACKEND_TYPE_H
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 /// Backend selection preference.
 enum class IoBackendType {
@@ -14,6 +14,6 @@ enum class IoBackendType {
     Threadpool         ///< Force pure thread pool
 };
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // DFTRACER_UTILS_RUNTIME_IO_BACKEND_TYPE_H

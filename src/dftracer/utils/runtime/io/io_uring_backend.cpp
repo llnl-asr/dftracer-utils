@@ -26,7 +26,7 @@
 #endif
 #endif
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 namespace {
 constexpr int CANCEL_SQE_RETRIES = 1000;
@@ -789,6 +789,6 @@ std::size_t IoUringBackend::poll(int /*timeout_ms*/) {
     return 0;
 }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // DFTRACER_UTILS_HAVE_IO_URING

@@ -19,7 +19,7 @@ inline coro::CoroTask<int> pwrite_fully(int fd, const char* path,
                                         std::size_t size, off_t offset) {
     std::size_t written = 0;
     while (written < size) {
-        auto n = co_await ::dftracer::utils::io::pwrite(
+        auto n = co_await ::dftracer::utils::runtime::io::pwrite(
             fd, bytes + written, size - written,
             offset + static_cast<off_t>(written));
         if (n <= 0) {

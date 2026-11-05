@@ -275,9 +275,9 @@ coro::CoroTask<int> IpcWriter::open(dstd::CStringView path,
     compression_ = compression;
     buffer_pool_ = BufferPool(pool_slots);
 
-    // Async open via io::open (auto-detects executor context)
-    auto result =
-        co_await io::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    // Async open via runtime::io::open (auto-detects executor context)
+    auto result = co_await runtime::io::open(
+        path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
     if (result < 0) {
         reset_state();
@@ -289,9 +289,9 @@ coro::CoroTask<int> IpcWriter::open(dstd::CStringView path,
 
     // Write Arrow IPC file magic "ARROW1" + padding
     constexpr char MAGIC[] = "ARROW1\0\0";
-    auto write_result = co_await io::pwrite(fd_, MAGIC, 8, 0);
+    auto write_result = co_await runtime::io::pwrite(fd_, MAGIC, 8, 0);
     if (write_result < 0) {
-        co_await io::close(fd_);
+        co_await runtime::io::close(fd_);
         reset_state();
         co_return static_cast<int>(write_result);
     }
@@ -336,8 +336,8 @@ coro::CoroTask<int> IpcWriter::write_schema(ArrowExportResult& batch) {
     }
 
     // Write schema message
-    auto result = co_await io::pwrite(fd_, msg_buf.data, msg_buf.size_bytes,
-                                      write_offset_);
+    auto result = co_await runtime::io::pwrite(
+        fd_, msg_buf.data, msg_buf.size_bytes, write_offset_);
 
     if (result < 0) {
         ArrowBufferReset(&msg_buf);
@@ -508,7 +508,7 @@ coro::CoroTask<int> IpcWriter::write_compressed(CompressedBatch& cb) {
     iov[1].iov_base = cb.body.data().data();
     iov[1].iov_len = cb.body_size;
 
-    auto result = co_await io::pwritev(fd_, iov, 2, write_offset_);
+    auto result = co_await runtime::io::pwritev(fd_, iov, 2, write_offset_);
 
     // Release pooled buffer
     cb.body.reset();
@@ -613,8 +613,8 @@ coro::CoroTask<int> IpcWriter::write_footer() {
     ArrowIpcFooterReset(&footer);
 
     // Write footer
-    auto result = co_await io::pwrite(fd_, footer_data.data(),
-                                      footer_data.size(), write_offset_);
+    auto result = co_await runtime::io::pwrite(
+        fd_, footer_data.data(), footer_data.size(), write_offset_);
 
     if (result < 0) {
         co_return static_cast<int>(result);
@@ -651,8 +651,8 @@ coro::CoroTask<int> IpcWriter::close() {
     }
 
     // Fsync and close
-    co_await io::fsync(fd_);
-    co_await io::close(fd_);
+    co_await runtime::io::fsync(fd_);
+    co_await runtime::io::close(fd_);
 
     reset_state();
     co_return rc;

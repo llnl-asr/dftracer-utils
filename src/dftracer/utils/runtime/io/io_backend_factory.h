@@ -13,7 +13,7 @@ namespace dftracer::utils::coro {
 class Executor;
 }  // namespace dftracer::utils::coro
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 /// Create the best available I/O backend for this system.
 /// @param executor          The executor that owns this backend.
@@ -27,6 +27,6 @@ dstd::UniquePtr<IoBackend> make_io_backend(
     IoBackendType backend_type = IoBackendType::Auto,
     unsigned batch_threshold = 16, IoPoolOptions pool_options = {});
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // DFTRACER_UTILS_RUNTIME_IO_IO_BACKEND_FACTORY_H

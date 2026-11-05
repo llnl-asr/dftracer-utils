@@ -81,9 +81,9 @@ void ThreadPoolExecutor::start() {
 
     // Create and start I/O backend before workers so workers
     // can use it immediately.
-    io_backend_ =
-        io::make_io_backend(*this, io_pool_size_.load(), io_backend_type_,
-                            io_batch_threshold_, {eager_.load(), keepalive_});
+    io_backend_ = runtime::io::make_io_backend(
+        *this, io_pool_size_.load(), io_backend_type_, io_batch_threshold_,
+        {eager_.load(), keepalive_});
     io_backend_->start();
 
     // Spawn the floor (== the cap in eager mode). The elastic monitor grows the

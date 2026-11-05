@@ -69,7 +69,7 @@ using IdleFn = void (*)(void* context);
 /// discarded.
 class ExtentWriter {
    public:
-    ExtentWriter(DataFileWriter& file, io::IoBackend& backend,
+    ExtentWriter(DataFileWriter& file, runtime::io::IoBackend& backend,
                  coro::Executor& executor, std::uint32_t extent_size,
                  WrittenExtentFn on_written, void* context,
                  DiscardedContextFn on_discarded = nullptr,
@@ -169,7 +169,7 @@ class ExtentWriter {
     static void on_write_done(void* context, ssize_t result) noexcept;
 
     DataFileWriter& file_;
-    io::IoBackend& backend_;
+    runtime::io::IoBackend& backend_;
     coro::Executor& executor_;
     std::uint32_t extent_size_ = 0;
     WrittenExtentFn on_written_ = nullptr;

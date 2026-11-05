@@ -21,7 +21,7 @@
 #include <dftracer/utils/runtime/io/io_uring_backend.h>
 #endif
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 namespace {
 
@@ -187,4 +187,4 @@ dstd::UniquePtr<IoBackend> make_io_backend(coro::Executor& executor,
 #endif
 }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io

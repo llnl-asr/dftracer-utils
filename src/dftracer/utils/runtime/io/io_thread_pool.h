@@ -15,7 +15,7 @@
 #include <mutex>
 #include <thread>
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 /// How the pool sizes itself. An eager pool starts its whole cap. Any other
 /// pool starts one thread, adds one when work queues with no idle thread, and
@@ -121,6 +121,6 @@ class IoThreadPool {
     std::atomic<bool> cancelling_{false};
 };
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // DFTRACER_UTILS_RUNTIME_IO_IO_THREAD_POOL_H

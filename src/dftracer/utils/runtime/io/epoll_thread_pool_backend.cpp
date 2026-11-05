@@ -11,7 +11,7 @@
 #include <cerrno>
 #include <cstring>
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 EpollThreadPoolBackend::EpollThreadPoolBackend(coro::Executor& executor,
                                                std::size_t pool_size,
@@ -98,6 +98,6 @@ void EpollThreadPoolBackend::epoll_loop() {
     }
 }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // __linux__

@@ -21,7 +21,7 @@ class Executor;
 
 }  // namespace dftracer::utils
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 using IoCompletionFn = void (*)(void *context, ssize_t result) noexcept;
 
@@ -185,6 +185,6 @@ IoBackend *current_backend() noexcept;
 void set_current_backend(const coro::Executor *owner,
                          IoBackend *backend) noexcept;
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // DFTRACER_UTILS_RUNTIME_IO_IO_BACKEND_H

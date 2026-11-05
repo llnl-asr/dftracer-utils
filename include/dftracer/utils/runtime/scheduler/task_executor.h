@@ -21,9 +21,9 @@
 
 namespace dftracer::utils {
 
-namespace io {
+namespace runtime::io {
 class IoBackend;
-}  // namespace io
+}  // namespace runtime::io
 
 struct ExecutorConfig {
     std::size_t thread_count =
@@ -40,7 +40,8 @@ struct ExecutorConfig {
     std::chrono::seconds idle_timeout{5};
     std::chrono::seconds deadlock_timeout{10};
     std::size_t io_pool_size = 0;  ///< 0 = one per worker
-    io::IoBackendType io_backend_type = io::IoBackendType::Auto;
+    runtime::io::IoBackendType io_backend_type =
+        runtime::io::IoBackendType::Auto;
     unsigned io_batch_threshold = 16;
     /// Finished tasks kept for progress. The oldest are dropped first.
     std::size_t task_history = common::constants::TASK_HISTORY_LIMIT;
@@ -188,7 +189,7 @@ class TaskExecutor : public coro::Executor {
     /// Without a backend the io layer falls back to blocking syscalls.
     virtual bool has_io_backend() const noexcept = 0;
     /// Must check @ref has_io_backend first.
-    virtual io::IoBackend& io_backend() = 0;
+    virtual runtime::io::IoBackend& io_backend() = 0;
     virtual std::size_t io_pool_size() const = 0;
 
     /// Records `executor` as the I/O backend owner of the calling thread, or

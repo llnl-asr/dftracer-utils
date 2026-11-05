@@ -116,8 +116,9 @@ class ReaderInflater {
         if (window.empty() || member.bits > 7) co_return false;
         unsigned char prime = 0;
         if (member.bits > 0) {
-            const auto prime_read = co_await dftracer::utils::io::pread(
-                fd, &prime, 1, static_cast<off_t>(member.c_offset - 1));
+            const auto prime_read =
+                co_await dftracer::utils::runtime::io::pread(
+                    fd, &prime, 1, member.c_offset - 1);
             if (prime_read != 1) {
                 co_return false;
             }
@@ -262,8 +263,8 @@ class ReaderInflater {
                 const std::size_t want =
                     static_cast<std::size_t>(std::min<std::uint64_t>(
                         READ_CHUNK, file_size_ - next_read_));
-                const ssize_t n = co_await dftracer::utils::io::pread(
-                    fd, comp_.data(), want, static_cast<off_t>(next_read_));
+                const ssize_t n = co_await dftracer::utils::runtime::io::pread(
+                    fd, comp_.data(), want, next_read_);
                 if (n <= 0) co_return false;
                 zs_.set_input(comp_.data(), static_cast<std::size_t>(n));
                 next_read_ += static_cast<std::uint64_t>(n);
@@ -446,8 +447,8 @@ class ReaderInflater {
                                         file_size_ - next_read_));
             const std::size_t old = comp_.size();
             comp_.resize(old + want);
-            const ssize_t n = co_await dftracer::utils::io::pread(
-                fd, comp_.data() + old, want, static_cast<off_t>(next_read_));
+            const ssize_t n = co_await dftracer::utils::runtime::io::pread(
+                fd, comp_.data() + old, want, next_read_);
             if (n <= 0) co_return false;
             comp_.resize(old + static_cast<std::size_t>(n));
             next_read_ += static_cast<std::uint64_t>(n);
@@ -509,8 +510,8 @@ class ReaderInflater {
                     std::max(READ_CHUNK, comp.size()), file_size - next_read));
             const std::size_t old = comp.size();
             comp.resize(old + want);
-            const ssize_t n = co_await dftracer::utils::io::pread(
-                fd, comp.data() + old, want, static_cast<off_t>(next_read));
+            const ssize_t n = co_await dftracer::utils::runtime::io::pread(
+                fd, comp.data() + old, want, next_read);
             if (n <= 0) co_return dstd::nullopt;
             comp.resize(old + static_cast<std::size_t>(n));
             next_read += static_cast<std::uint64_t>(n);

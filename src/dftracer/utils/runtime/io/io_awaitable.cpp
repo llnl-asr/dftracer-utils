@@ -3,7 +3,7 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/runtime/io/awaitable.h>
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 void IoAwaitable::await_suspend(std::coroutine_handle<> h) noexcept {
     handle = h;
@@ -26,4 +26,4 @@ void IoAwaitable::resume_through(coro::Executor& fallback) noexcept {
     target->post(handle);
 }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io

@@ -5,7 +5,7 @@
 
 #include <cerrno>
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 ssize_t IoBackend::submit_read_sync(int fd, void *buf, std::size_t len,
                                     off_t offset) {
@@ -43,4 +43,4 @@ int IoBackend::submit_fstat_sync(int fd, struct stat *buf) {
     return result;
 }
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io

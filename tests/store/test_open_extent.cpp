@@ -103,12 +103,12 @@ void count_discarded(void* context) {
 /// An I/O backend that queues a positional write and runs it on the thread
 /// that calls flush(), the way the thread pool runs a short batch, and that can
 /// inject a short write, one -EINTR or one zero result.
-class FaultBackend : public io::ThreadPoolBackend {
+class FaultBackend : public runtime::io::ThreadPoolBackend {
    public:
     enum class Fault { None, ShortWrite, EintrOnce, ZeroOnce };
 
     FaultBackend(coro::Executor& executor, Fault fault)
-        : io::ThreadPoolBackend(executor, 1, 0),
+        : runtime::io::ThreadPoolBackend(executor, 1, 0),
           fault_(fault),
           eintr_pending_(fault == Fault::EintrOnce),
           zero_pending_(fault == Fault::ZeroOnce) {}
@@ -116,7 +116,8 @@ class FaultBackend : public io::ThreadPoolBackend {
     dstd::String name() const override { return "fault"; }
 
     void submit_pwrite_callback(int fd, const void* buf, std::size_t len,
-                                off_t offset, io::IoCompletionFn completion,
+                                off_t offset,
+                                runtime::io::IoCompletionFn completion,
                                 void* context) override {
         std::lock_guard<std::mutex> lock(mutex_);
         pending_.push_back(Op{fd, buf, len, offset, completion, context});
@@ -142,7 +143,7 @@ class FaultBackend : public io::ThreadPoolBackend {
         const void* buf;
         std::size_t len;
         off_t offset;
-        io::IoCompletionFn completion;
+        runtime::io::IoCompletionFn completion;
         void* context;
     };
 

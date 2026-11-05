@@ -128,7 +128,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
     // than paying the elastic grow ramp on every request.
     RuntimeSettings settings;
     cli->runtime_args.apply(settings);
-    settings.io_backend = io::IoBackendType::Threadpool;
+    settings.io_backend = runtime::io::IoBackendType::Threadpool;
     settings.io_batch_threshold = 1;
     settings.eager = true;
     configure_default_runtime(settings);

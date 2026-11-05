@@ -142,7 +142,7 @@ class FileDecompressorUtility {
             compressed_size = static_cast<std::size_t>(*compressed);
 
             ssize_t fd_result =
-                co_await io::open(input.input_path.c_str(), O_RDONLY);
+                co_await runtime::io::open(input.input_path.c_str(), O_RDONLY);
             if (fd_result < 0) {
                 co_return common::make_error(
                     common::ErrorCode::Io,

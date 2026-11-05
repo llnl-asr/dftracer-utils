@@ -505,13 +505,13 @@ AggQuery make_query(const Fixture& fx, const Ask& ask,
     return q;
 }
 
-Runtime& runtime() {
+Runtime& shared_runtime() {
     static Runtime rt;
     return rt;
 }
 
 AggQueryResult run(const AggQuery& q) {
-    Runtime& rt = runtime();
+    Runtime& rt = shared_runtime();
     AggQueryResult out;
     dstd::String error;
     rt.block_on(
@@ -753,7 +753,7 @@ TEST_SUITE("AggQuery") {
         dstd::StringIntern strings;
         trace::comparator::SideAggregate side;
         dstd::String error;
-        runtime().block_on(coro::named(
+        shared_runtime().block_on(coro::named(
             "comparator-side",
             coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                 auto r = co_await trace::comparator::aggregate_side(
@@ -1117,7 +1117,7 @@ TEST_SUITE("AggQuery") {
 
         auto indexer = dstd::make_shared<index::gzip::GzipIndexer>(
             fx->files[0], fx->index_path, std::size_t{512} << 10, true);
-        runtime().block_on(
+        shared_runtime().block_on(
             coro::named("reindex", coro::with_scope([&](coro::Scope&) {
                             return indexer->build_async();
                         })));

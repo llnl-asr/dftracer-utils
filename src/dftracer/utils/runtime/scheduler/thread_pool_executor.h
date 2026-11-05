@@ -196,7 +196,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     static constexpr std::chrono::milliseconds IDLE_PARK_MAX{256};
 
     // I/O backend (owned by executor, created by factory)
-    dstd::UniquePtr<io::IoBackend> io_backend_;
+    dstd::UniquePtr<runtime::io::IoBackend> io_backend_;
 
     // Waiters that only another party can finish, and the token scopes watch.
     coro::detail::ParkRegistry park_registry_;
@@ -205,7 +205,8 @@ class ThreadPoolExecutor final : public TaskExecutor {
 
     // Configuration (stored from ExecutorConfig)
     std::atomic<std::size_t> io_pool_size_{0};
-    io::IoBackendType io_backend_type_ = io::IoBackendType::Auto;
+    runtime::io::IoBackendType io_backend_type_ =
+        runtime::io::IoBackendType::Auto;
     unsigned io_batch_threshold_ = 16;
 
    public:
@@ -291,8 +292,8 @@ class ThreadPoolExecutor final : public TaskExecutor {
     }
 
     /// Must check has_io_backend() first.
-    io::IoBackend& io_backend() override { return *io_backend_; }
-    const io::IoBackend& io_backend() const { return *io_backend_; }
+    runtime::io::IoBackend& io_backend() override { return *io_backend_; }
+    const runtime::io::IoBackend& io_backend() const { return *io_backend_; }
 
     /// Whether the executor is making progress; false if it appears hung.
     /// Used by the watchdog.

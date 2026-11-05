@@ -14,7 +14,7 @@ namespace dftracer::utils::coro {
 class Executor;
 }  // namespace dftracer::utils::coro
 
-namespace dftracer::utils::io {
+namespace dftracer::utils::runtime::io {
 
 /// epoll + thread pool I/O backend.
 /// File I/O is handled by the thread pool via ThreadPoolFileOps (epoll cannot
@@ -43,7 +43,7 @@ class EpollThreadPoolBackend : public ThreadPoolFileOps {
     dstd::ScopedFd event_fd_;
 };
 
-}  // namespace dftracer::utils::io
+}  // namespace dftracer::utils::runtime::io
 
 #endif  // __linux__
 #endif  // DFTRACER_UTILS_RUNTIME_IO_EPOLL_THREAD_POOL_BACKEND_H

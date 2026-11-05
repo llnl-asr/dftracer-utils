@@ -142,8 +142,8 @@ decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
                 std::max(READ_CHUNK, comp.size()), file_size - next_read));
         const std::size_t old = comp.size();
         comp.resize(old + want);
-        const ssize_t n = co_await dftracer::utils::io::pread(
-            fd, comp.data() + old, want, static_cast<off_t>(next_read));
+        const ssize_t n = co_await dftracer::utils::runtime::io::pread(
+            fd, comp.data() + old, want, next_read);
         if (n <= 0) co_return dstd::nullopt;
         comp.resize(old + static_cast<std::size_t>(n));
         next_read += static_cast<std::uint64_t>(n);
@@ -203,8 +203,8 @@ static dftracer::utils::coro::CoroTask<std::uint64_t> next_member_start(
     if (to == end || to - end > MAX_ZERO_GAP) co_return end;
     unsigned char gap[MAX_ZERO_GAP];
     const std::size_t len = static_cast<std::size_t>(to - end);
-    const ssize_t n = co_await dftracer::utils::io::pread(
-        fd, gap, len, static_cast<off_t>(end));
+    const ssize_t n =
+        co_await dftracer::utils::runtime::io::pread(fd, gap, len, end);
     if (n != static_cast<ssize_t>(len)) co_return end;
     for (std::size_t i = 0; i < len; ++i)
         if (gap[i] != 0) co_return end;
@@ -323,8 +323,8 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
         if (gz.avail_in() == 0 && next_read < file_size) {
             const std::size_t want = static_cast<std::size_t>(
                 std::min<std::uint64_t>(READ_CHUNK, file_size - next_read));
-            const ssize_t n = co_await dftracer::utils::io::pread(
-                fd, in.data(), want, static_cast<off_t>(next_read));
+            const ssize_t n = co_await dftracer::utils::runtime::io::pread(
+                fd, in.data(), want, next_read);
             if (n <= 0) co_return false;
             gz.set_input(in.data(), static_cast<std::size_t>(n));
             next_read += static_cast<std::uint64_t>(n);

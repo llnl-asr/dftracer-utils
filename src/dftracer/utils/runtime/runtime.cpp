@@ -228,7 +228,7 @@ void Runtime::shutdown() {
 }
 
 void Runtime::configure(const RuntimeSettings& settings) {
-    if (settings.io_backend != io::IoBackendType::Auto &&
+    if (settings.io_backend != runtime::io::IoBackendType::Auto &&
         settings.io_backend != io_backend_) {
         DFTRACER_UTILS_LOG_WARN("%s",
                                 "runtime: the I/O backend is fixed when the "

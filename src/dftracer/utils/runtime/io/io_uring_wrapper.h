@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace dftracer::utils::io::uring {
+namespace dftracer::utils::runtime::io::uring {
 
 // ============================================================================
 // Raw syscall wrappers
@@ -247,7 +247,7 @@ inline void* cqe_get_data(struct io_uring_cqe* cqe) {
     return reinterpret_cast<void*>(cqe->user_data);
 }
 
-}  // namespace dftracer::utils::io::uring
+}  // namespace dftracer::utils::runtime::io::uring
 
 #endif  // DFTRACER_UTILS_HAVE_IO_URING
 #endif  // DFTRACER_UTILS_RUNTIME_IO_IO_URING_WRAPPER_H

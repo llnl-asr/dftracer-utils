@@ -1,146 +1,142 @@
-:description: How async ops are authored and combined: the Op<F> wrapper and the ranges-style | && || operators that replaced the old Utility base class.
+:description: How async work is composed: stages, the | adaptors of coro/stage.h, and why they replaced the Op wrapper and the old Utility base class.
 
 The compose model
 ==================
 
-What this explains: how async operations are authored and combined in
-``dftracer_utils_runtime`` - the ``Op<F>`` wrapper and the ranges-style ``|`` /
-``&&`` / ``||`` operators in ``runtime/compose.h`` - and why it replaced
-the older ``Utility`` base-class pattern.
+What this explains: how async work is authored and combined in
+``dftracer_utils_coro`` - the stage concepts and the ``|`` adaptors in
+``coro/stage.h`` - and why they replaced the ``Op<F>`` wrapper with its
+``&&`` / ``||`` operators and, before that, the ``Utility`` base-class pattern.
 
-The contract: a callable, nothing more
----------------------------------------
+The contract: a stage is a type with a ``run``
+------------------------------------------------
 
-An async op is any callable of shape ``I -> coro::CoroTask<O>``:
-
-.. code-block:: cpp
-
-   template <typename F, typename I>
-   concept AsyncOpFor = requires(F& f, I in) {
-       typename detail::coro_value<std::invoke_result_t<F&, I>>::type;
-   };
-
-That is the entire authoring surface. A free function, a lambda, or a struct
-with ``operator()`` all satisfy it - there is no base class to derive from, no
-virtual dispatch, and no registration step. ``dftracer::utils::utilities::op(f)``
-wraps such a callable in ``Op<F>``, a thin value type that stores ``f`` by
-value and adds the composition operators below:
+A stage is a small type that names its input and output and has a ``run``.
+Two shapes exist.
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/runtime/compose.h>
-   namespace u = dftracer::utils::utilities;
+   #include <dftracer/utils/coro/stage.h>
+   namespace coro = dftracer::utils::coro;
 
-   struct Doubler {
-       coro::CoroTask<int> operator()(int x) const { co_return x * 2; }
+   struct Doubler {                        // BatchStage: one value in, one value out
+       using Input = int;
+       using Output = int;
+       static constexpr const char* NAME = "doubler";
+       coro::CoroTask<int> run(int x) const { co_return x * 2; }
    };
-   auto stringify = [](int x) -> coro::CoroTask<std::string> {
-       co_return std::to_string(x);
+
+   struct Positive {                       // StreamStage: a stream in, a stream out
+       using Input = int;
+       using Output = int;
+       static constexpr const char* NAME = "positive";
+       coro::AsyncGenerator<int> run(coro::AsyncGenerator<int> in) const;
    };
 
-   auto pipeline = u::op(Doubler{}) | u::op(stringify);   // int -> CoroTask<string>
+``BatchStage`` takes ``run(Input) const -> CoroTask<Output>``.
+``StreamStage`` takes ``run(AsyncGenerator<Input>) const -> AsyncGenerator<Output>``.
+The name is a static ``NAME`` or, for a wrapper with a runtime name, a member ``name()``.
+``coro::stage_name(s)`` reads either.
+``run`` is const, takes its input by value and is safe to call from several tasks at once.
+A stage must outlive every run it started.
 
-Because a composed op is itself just a nested ``Op<F>`` built at compile time,
-``a | b`` produces a new value with no type erasure beyond the coroutine frame
-each leaf op already allocates. The whole chain inlines.
+There is no base class, no registration step and no virtual dispatch.
+A stage is a plain value, so a chain of stages is a nested type that the compiler can inline.
 
-The operators
--------------
+Adaptors: ``|`` applies an adaptor
+-------------------------------------
 
-Four combinators cover fan-out, fan-in, and racing, mirroring C++20 ranges'
-pipe style:
+``|`` always applies an adaptor, as it does in C++20 ranges and in ``std::execution``.
+``x | a`` is ``a(x)``.
+``a | b`` joins two adaptors into one, and ``x | (a | b)`` is ``(x | a) | b``.
+There is no ``&&`` or ``||``: to run two things at once or to race them, use ``coro::when_all`` and ``coro::when_any``.
+
+An adaptor works on a ``CoroTask``, on an ``AsyncGenerator`` and, where it says so, on a stage.
 
 .. list-table::
    :header-rows: 1
-   :widths: 20 80
+   :widths: 28 72
 
-   * - Operator
+   * - Adaptor
      - Meaning
-   * - ``a | b``
-     - Pipe: run ``a``, feed its result into ``b``.
-   * - ``a && b``
-     - All: run both on the same input concurrently (``when_all``), yield a
-       ``std::tuple`` of both results.
-   * - ``a || b``
-     - Any: race both on the same input (``when_any``), yield whichever
-       finishes first. Both ops must yield the same output type.
-   * - ``u::map(f)``
-     - Lift ``Item -> CoroTask<O>`` to ``vector<Item> -> CoroTask<vector<O>>``,
-       running every element concurrently.
-   * - ``u::fold(init, combine)``
-     - Collapse a ``vector<Item>`` into one value with a synchronous,
-       left-to-right ``combine``.
-
-``map`` and ``fold`` compose with ``|`` like any other op, so a parallel
-map-reduce is one pipe:
+   * - ``then(next)``
+     - Feed the result into ``next``, a stage or a callable that returns a value or a ``CoroTask``.
+       On a task it gives a task.
+       On a generator it runs a batch stage or callable per item, or a stream stage on the whole stream.
+       On a stage it gives a composed stage named after the first.
+   * - ``recover(f)``
+     - Run ``f(dstd::Error)`` when a task or batch stage fails.
+       A cancelled task stays cancelled and never reaches ``f``.
+   * - ``named(label)``
+     - Report ``label`` as the name of a stage.
+   * - ``timeout(d)``
+     - End a task or batch stage with a ``Timeout`` error when ``d`` passes.
+       On a stream it bounds the wait for each item, and the source runs in the background and reads one item ahead.
+   * - ``limit(n)``
+     - At most ``n`` runs at once across every copy of the adaptor.
+       A stream holds its slot until it ends, fails or is dropped.
+   * - ``maybe(cond, a)``
+     - Apply ``a`` when ``cond`` is true, else pass the value through.
+       ``a`` must give back the type it is given.
 
 .. code-block:: cpp
 
-   auto sum_of_doubles =
-       u::map(Doubler{}) | u::fold(0, [](int acc, int x) { return acc + x; });
+   auto stage = Doubler{} | coro::then(Tripler{}) | coro::named("scale")
+                          | coro::timeout(5s) | coro::limit(4);
+   int six_times = co_await stage.run(7);              // 42
 
-   int total = co_await sum_of_doubles(std::vector<int>{1, 2, 3, 4});  // 20
+   auto rescued = fetch_value() | coro::recover([](dstd::Error) { return 0; });
+
+Wrappers keep the kind and the types of the stage they wrap.
+The outermost wrapper decides the name.
+``then`` on two stages gives batch for batch then batch, stream for stream then stream, and stream for stream then batch (per item).
+Batch then stream does not compile.
+
+Choosing between stages
+-------------------------
+
+``coro::either(cond, a, b)`` holds only the chosen side.
+An ``Either`` of two stages of the same kind and input works wherever a stage is taken, through ``EitherStage``.
+Its output is the common type when both agree and a ``dstd::Either`` of the two outputs when not.
+``co_await`` on an ``Either`` of two tasks gives an ``Either`` of their values.
+
+Type erasure, when you want it
+--------------------------------
+
+``coro::erase(stage)`` gives a ``DynStage<In, Out>`` or a ``DynStreamStage<In, Out>``.
+It is move-only, models the same concept and forwards ``name()``.
+Use it where one type must hold many different stages, such as a table of stages chosen at run time.
+Nothing else in the model erases a type.
 
 Context is optional, not structural
-------------------------------------
+-------------------------------------
 
-An op that needs a :doc:`CoroScope <async-runtime>` (to spawn children, reach
-the I/O backend, or read cancellation) takes it as a leading parameter rather
-than through a base-class hook. A struct can offer both a scope-injected and a
-scope-less overload, so it composes either as a standalone op or as a node fed
-a caller-owned scope:
-
-.. code-block:: cpp
-
-   struct ScopedSum {
-       coro::CoroTask<int> operator()(CoroScope& scope, int x) const {
-           auto a = scope.spawn([x](CoroScope&) -> coro::CoroTask<int> { co_return x; });
-           auto b = scope.spawn([x](CoroScope&) -> coro::CoroTask<int> { co_return x * 10; });
-           co_return (co_await a) + (co_await b);
-       }
-       coro::CoroTask<int> operator()(int x) const {
-           return dftracer::utils::with_scope(*this, x);   // provides its own scope
-       }
-   };
-
-``dftracer::utils::with_scope`` is the seam that lets the same op run either
-injected (a caller already inside a scope passes it through) or standalone
-(the op opens one for itself). Neither path needs a tag or a behavior wrapper
-to opt in.
+A stage that needs a :doc:`Scope <async-runtime>` to spawn children opens one inside its ``run`` with ``coro::with_scope``.
+No base-class hook injects it.
 
 Why this replaced ``Utility``
 -------------------------------
 
-The codebase previously organized domain logic as ``Utility<Input, Output,
-Tags...>`` subclasses: a base class with a ``process(const Input&)`` coroutine
-method, opt-in cross-cutting behavior via marker tags (``Parallelizable``,
-``Cacheable``, ``Monitored``, ``Retryable``), and a behavior-chain wrapper
-(``UtilityExecutor``) that interpreted the tags at each call site. That
-machinery has been deleted from the codebase.
+The codebase previously organized domain logic as ``Utility<Input, Output, Tags...>`` subclasses: a base class with a ``process(const Input&)`` coroutine method, opt-in cross-cutting behavior via marker tags (``Parallelizable``, ``Cacheable``, ``Monitored``, ``Retryable``), and a behavior-chain wrapper (``UtilityExecutor``) that interpreted the tags at each call site.
+That machinery has been deleted from the codebase.
 
 The reason it was removed:
 
-- **The tag/behavior chain was indirection with no matching payoff.** Every
-  cross-cutting concern (retry, caching, monitoring) had to be threaded
-  through a shared executor that inspected tags at runtime, when the same
-  concern is just another op a caller wraps around the one it modifies. A
-  plain function composes with ``|`` the same way a tagged ``Utility`` did,
-  without the base class or the tag vocabulary.
+- **The tag/behavior chain was indirection with no matching payoff.**
+  Every cross-cutting concern (retry, caching, monitoring) had to be threaded through a shared executor that inspected tags at runtime, when the same concern is just another adaptor a caller wraps around the stage it modifies.
 
-With the base class gone, an op is exactly what its signature says it is: a
-callable from ``I`` to ``CoroTask<O>``, composed with the same four operators
-whether it is a leaf, a pipeline, or a whole subsystem's entry point.
+The ``Op<F>`` wrapper that followed it composed bare callables and used ``&&`` and ``||`` to run two ops at once or to race them.
+It is gone too.
+A callable has no name and no declared input or output, so a pipeline of them could not be named in a progress report, wrapped by a timeout that keeps its kind, or erased.
+A stage has all three, and the operators that hid a ``when_all`` or a ``when_any`` behind ``&&`` and ``||`` are now written as the calls they are.
 
 Static submission
 ------------------
 
-Because there is no virtual dispatch, an op (composed or not) can be submitted
-to the :doc:`Runtime <async-runtime>` directly - ``rt.submit(op(x))`` - or
-awaited inline inside another coroutine. There is no erasure boundary an op
-must cross to run.
+Because there is no virtual dispatch, a stage run (composed or not) can be submitted to the :doc:`Runtime <async-runtime>` directly - ``rt.submit(stage.run(x))`` - or awaited inline inside another coroutine.
 
 See also
 --------
 
-- :doc:`async-runtime` for ``CoroTask``, ``CoroScope``, and the runtime that
-  drives both.
+- :doc:`async-runtime` for ``CoroTask``, ``Scope``, and the runtime that drives both.
+- :doc:`../guides/plugins/compose-ops` for writing a stage, and for composing ops in a plugin.

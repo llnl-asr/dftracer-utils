@@ -194,9 +194,9 @@ Coro unordered_worker(dstd::SharedPtr<UnorderedState<T, Fn, R>> state,
 template <typename T>
 CoroTask<dstd::Vector<dstd::Expected<T, dstd::Error>>> when_all_settled(
     dstd::Vector<CoroTask<T>> tasks) {
-    co_await detail::OWNS_SCOPE;
+    const PromiseBase* owner = co_await detail::OWNS_SCOPE;
     Executor* executor = co_await this_coro::executor;
-    Scope scope(executor);
+    Scope scope(executor, owner);
     dstd::Vector<SpawnFuture<T>> futures;
     futures.reserve(tasks.size());
     for (auto& task : tasks) {
@@ -233,11 +233,11 @@ CoroTask<T> first_success(dstd::Vector<CoroTask<T>> tasks) {
             dstd::Error{dstd::Condition::InvalidArgument,
                         "first_success needs at least one task"});
     }
-    co_await detail::OWNS_SCOPE;
+    const PromiseBase* owner = co_await detail::OWNS_SCOPE;
     Executor* executor = co_await this_coro::executor;
     const std::size_t total = tasks.size();
     Channel<detail::FirstSuccessOutcome<T>> outcomes(total);
-    Scope scope(executor);
+    Scope scope(executor, owner);
     dstd::Vector<SpawnFuture<void>> futures;
     futures.reserve(total);
     for (auto& task : tasks) {
@@ -278,28 +278,30 @@ using ParallelMapResult =
  * @brief Runs `fn(item)` for each item, at most `max_in_flight` at a time, and
  * gives the results in item order.
  *
- * Fails fast: the first error stops new jobs, running jobs finish, and that
- * error is raised. Jobs that do not start are never called.
+ * Fails fast: the first error ends running jobs as cancelled at their next
+ * wait, and that error is raised. Jobs that do not start are never called.
  */
 template <typename T, typename Fn, typename R = ParallelMapValue<T, Fn>>
 CoroTask<ParallelMapResult<R>> parallel_map(dstd::Vector<T> items, Fn fn,
                                             ParallelOptions options = {}) {
-    co_await detail::OWNS_SCOPE;
+    const PromiseBase* owner = co_await detail::OWNS_SCOPE;
     Executor* executor = co_await this_coro::executor;
     const std::size_t workers = detail::parallel_worker_count(
         options.max_in_flight, items.size(), executor);
     detail::ParallelMapState<T, Fn, R> state(std::move(items), std::move(fn));
-    Scope scope(executor);
+    Scope scope(executor, owner);
     for (std::size_t i = 0; i < workers; ++i) {
         scope.spawn(detail::parallel_map_worker(state, scope));
     }
     co_await scope.join();
+    // A worker stops without an error on a stop from outside.
+    if (state.next.load(std::memory_order_relaxed) < state.items.size()) {
+        throw_cancelled("parallel_map stopped");
+    }
     if constexpr (!std::is_void_v<R>) {
         dstd::Vector<R> results;
         results.reserve(state.results.size());
         for (auto& result : state.results) {
-            // A worker stops without an error when the executor shuts down.
-            if (!result) throw_cancelled("parallel_map stopped");
             results.push_back(std::move(*result));
         }
         co_return results;

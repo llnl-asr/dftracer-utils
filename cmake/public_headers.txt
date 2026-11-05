@@ -37,6 +37,9 @@ dftracer/utils/coro/run_loop.h
 dftracer/utils/coro/run_on.h
 dftracer/utils/coro/scope.h
 dftracer/utils/coro/spawn_future.h
+dftracer/utils/coro/stage.h
+dftracer/utils/coro/stop_token.h
+dftracer/utils/coro/stream.h
 dftracer/utils/coro/sync_wait.h
 dftracer/utils/coro/task.h
 dftracer/utils/coro/time.h
@@ -178,7 +181,6 @@ dftracer/utils/plugins/plugin/source.h
 dftracer/utils/plugins/plugin/types.h
 dftracer/utils/plugins/prims.h
 dftracer/utils/plugins/result_registry.h
-dftracer/utils/runtime/compose.h
 dftracer/utils/runtime/io/backend_type.h
 dftracer/utils/runtime/runtime.h
 dftracer/utils/runtime/scheduler/task_executor.h

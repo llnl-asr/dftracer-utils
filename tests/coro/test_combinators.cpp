@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/coro/retry.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -18,6 +19,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -44,6 +46,30 @@ CoroTask<int> fails_after(std::chrono::milliseconds delay) {
 
 CoroTask<void> nothing_after(std::chrono::milliseconds delay) {
     co_await sleep(delay);
+}
+
+CoroTask<void> failing_void(std::chrono::milliseconds delay) {
+    co_await sleep(delay);
+    throw common::DFTUtilsException(
+        dstd::Error{dstd::Condition::Io, "planned failure"});
+}
+
+CoroTask<void> count_after(std::atomic<int>& finished,
+                           std::chrono::milliseconds delay) {
+    co_await sleep(delay);
+    finished.fetch_add(1);
+}
+
+CoroTask<void> nested_scopes() {
+    co_await with_scope([](Scope& outer) -> CoroTask<void> {
+        outer.spawn([]() -> CoroTask<void> {
+            co_await with_scope([](Scope& inner) -> CoroTask<void> {
+                inner.spawn(nothing_after(30s));
+                co_return;
+            });
+        });
+        co_return;
+    });
 }
 
 CoroTask<void> latch_arrive(AsyncLatch& latch) {
@@ -433,6 +459,160 @@ TEST_CASE("parallel_map_unordered raises a job error from the read") {
         }
     }());
     CHECK(condition == dstd::Condition::Io);
+}
+
+TEST_CASE("a child error wakes a parked sibling and join raises that error") {
+    Runtime runtime(2);
+    const auto start = std::chrono::steady_clock::now();
+    dstd::Condition condition = dstd::Condition::Unknown;
+    try {
+        runtime.block_on(with_scope([](Scope& scope) -> CoroTask<void> {
+            scope.spawn(nothing_after(30s));
+            scope.spawn(nothing_after(30s));
+            scope.spawn(failing_void(1ms));
+            co_return;
+        }));
+    } catch (const common::DFTUtilsException& e) {
+        condition = e.condition();
+    }
+    CHECK(condition == dstd::Condition::Io);
+    CHECK(std::chrono::steady_clock::now() - start < 10s);
+}
+
+TEST_CASE("a child that was only cancelled does not stop its siblings") {
+    Runtime runtime(2);
+    std::atomic<int> finished{0};
+    dstd::Condition condition = dstd::Condition::Unknown;
+    try {
+        runtime.block_on(with_scope([&](Scope& scope) -> CoroTask<void> {
+            scope.spawn([]() -> CoroTask<void> {
+                co_await sleep(1ms);
+                throw_cancelled("from outside");
+            });
+            scope.spawn(count_after(finished, 30ms));
+            co_return;
+        }));
+    } catch (const common::DFTUtilsException& e) {
+        condition = e.condition();
+    }
+    CHECK(condition == dstd::Condition::Cancelled);
+    CHECK(finished.load() == 1);
+}
+
+TEST_CASE(
+    "a supervisor scope lets siblings finish and raises the first error") {
+    Runtime runtime(2);
+    std::atomic<int> finished{0};
+    dstd::Condition condition = dstd::Condition::Unknown;
+    try {
+        runtime.block_on(with_scope(
+            [&](Scope& scope) -> CoroTask<void> {
+                scope.spawn(failing_void(1ms));
+                scope.spawn(count_after(finished, 30ms));
+                co_return;
+            },
+            ScopeMode::Supervisor));
+    } catch (const common::DFTUtilsException& e) {
+        condition = e.condition();
+    }
+    CHECK(condition == dstd::Condition::Io);
+    CHECK(finished.load() == 1);
+}
+
+TEST_CASE("request_stop ends parked children and join raises nothing") {
+    Runtime runtime(2);
+    const auto start = std::chrono::steady_clock::now();
+    runtime.block_on(with_scope([](Scope& scope) -> CoroTask<void> {
+        scope.spawn(nothing_after(30s));
+        co_await sleep(1ms);
+        scope.request_stop();
+    }));
+    CHECK(std::chrono::steady_clock::now() - start < 10s);
+}
+
+TEST_CASE("cancelling a task reaches the scopes nested under it") {
+    Runtime runtime(2);
+    const auto start = std::chrono::steady_clock::now();
+    CHECK_THROWS(runtime.block_on(with_timeout(nested_scopes(), 10ms)));
+    CHECK(std::chrono::steady_clock::now() - start < 10s);
+}
+
+TEST_CASE("cancelling parallel_map wakes its running jobs") {
+    Runtime runtime(2);
+    dstd::Vector<int> items;
+    for (int i = 0; i < 8; ++i) items.push_back(i);
+    auto job = [](int) -> CoroTask<void> { co_await sleep(30s); };
+    const auto start = std::chrono::steady_clock::now();
+    CHECK_THROWS(runtime.block_on(
+        with_timeout(parallel_map(std::move(items), job), 10ms)));
+    CHECK(std::chrono::steady_clock::now() - start < 10s);
+}
+
+TEST_CASE("a cancelled parallel_map with no results still reports the cancel") {
+    Runtime runtime(2);
+    dstd::Vector<int> items;
+    for (int i = 0; i < 4000; ++i) items.push_back(i);
+    ParallelOptions options;
+    options.max_in_flight = 1;
+    auto job = [](int) -> CoroTask<void> { co_await sleep(1ms); };
+    CHECK_THROWS(runtime.block_on(
+        with_timeout(parallel_map(std::move(items), job, options), 5ms)));
+}
+
+TEST_CASE("a dropped child source does not stay in its parent") {
+    StopSource parent;
+    for (int i = 0; i < 1000; ++i) {
+        StopSource child(parent.token());
+        CHECK_FALSE(child.token().stop_requested());
+    }
+    StopSource kept(parent.token());
+    parent.request_stop();
+    CHECK(kept.token().stop_requested());
+}
+
+TEST_CASE("a stop token stops a linked task and every source below it") {
+    Runtime runtime(2);
+    StopSource root;
+    StopSource child(root.token());
+    StopSource late(root.token());
+    runtime.block_on([&]() -> CoroTask<void> {
+        Scope scope;
+        auto waiting = scope.spawn_future(
+            with_stop_token(nothing_after(30s), child.token()));
+        co_await sleep(5ms);
+        CHECK_FALSE(child.token().stop_requested());
+        root.request_stop();
+        bool stopped = false;
+        try {
+            co_await waiting;
+        } catch (const common::DFTUtilsException& e) {
+            stopped = is_cancelled(e);
+        }
+        CHECK(stopped);
+        co_await scope.join();
+    }());
+    CHECK(late.token().stop_requested());
+    StopSource after_stop(root.token());
+    CHECK(after_stop.token().stop_requested());
+    CHECK_FALSE(StopToken{}.stop_requested());
+}
+
+TEST_CASE("this_coro::stop_requested lets a computing task see the stop") {
+    Runtime runtime(2);
+    std::atomic<std::uint64_t> spins{0};
+    auto spin = [&]() -> CoroTask<void> {
+        for (;;) {
+            const bool stop = co_await this_coro::stop_requested;
+            if (stop) co_return;
+            spins.fetch_add(1);
+        }
+    };
+    runtime.block_on(with_scope([&](Scope& scope) -> CoroTask<void> {
+        scope.spawn(spin());
+        co_await sleep(2ms);
+        scope.request_stop();
+    }));
+    CHECK(spins.load() > 0);
 }
 
 TEST_CASE("AsyncEvent wakes every waiter and later waits pass at once") {

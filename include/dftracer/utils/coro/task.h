@@ -11,6 +11,8 @@
 #include <dftracer/utils/coro/detail/monitor.h>
 #include <dftracer/utils/coro/detail/pool_resume.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/either.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/memory/detail/manager.h>
@@ -36,6 +38,15 @@ namespace dftracer::utils::coro {
 class Executor;
 class Scope;
 
+template <typename T>
+class CoroTask;
+
+namespace detail {
+template <typename L, typename R>
+CoroTask<dstd::Either<L, R>> either_task(
+    dstd::Either<CoroTask<L>, CoroTask<R>> pair);
+}  // namespace detail
+
 namespace detail {
 /// True when a task that finished may resume the awaiter on this thread,
 /// because the thread runs the awaiter's executor, runs no executor, or the
@@ -53,6 +64,10 @@ namespace this_coro {
 struct ExecutorTag {};
 /// `co_await this_coro::executor` gives the executor the task runs on.
 inline constexpr ExecutorTag executor{};
+struct StopRequestedTag {};
+/// `co_await this_coro::stop_requested` is true when the next wait of this task
+/// would end it as cancelled, for a loop that computes without waits.
+inline constexpr StopRequestedTag stop_requested{};
 }  // namespace this_coro
 
 namespace detail {
@@ -61,6 +76,22 @@ struct ExecutorQuery {
     bool await_ready() const noexcept { return true; }
     void await_suspend(std::coroutine_handle<>) const noexcept {}
     Executor* await_resume() const noexcept { return value; }
+};
+}  // namespace detail
+
+class Scope;
+struct PromiseBase;
+
+namespace detail {
+/// True when the scope was asked to stop or its owning task is cancelled.
+bool scope_stopping(const Scope& scope) noexcept;
+
+template <typename T>
+struct ValueQuery {
+    T value;
+    bool await_ready() const noexcept { return true; }
+    void await_suspend(std::coroutine_handle<>) const noexcept {}
+    T await_resume() const noexcept { return value; }
 };
 }  // namespace detail
 
@@ -115,7 +146,8 @@ struct PromiseBase : detail::FrameAllocation {
         return cancel_flag.load(std::memory_order_acquire) ||
                root->cancel_flag.load(std::memory_order_acquire) ||
                (root->cancel_source &&
-                root->cancel_source->load(std::memory_order_acquire));
+                root->cancel_source->load(std::memory_order_acquire)) ||
+               (root->scope && detail::scope_stopping(*root->scope));
     }
 
     /// Releases the awaiter of a task that ended. The frame must not be read
@@ -170,6 +202,17 @@ template <typename T>
 struct ResultHolder {
     T result;
     void return_value(T value) { result = std::move(value); }
+    T take_result() { return std::move(result); }
+};
+
+/// An Either has no default state, so the result waits in an Optional.
+template <typename L, typename R>
+struct ResultHolder<dstd::Either<L, R>> {
+    dstd::Optional<dstd::Either<L, R>> result;
+    void return_value(dstd::Either<L, R> value) {
+        result.emplace(std::move(value));
+    }
+    dstd::Either<L, R> take_result() { return std::move(*result); }
 };
 
 template <>
@@ -268,14 +311,30 @@ class CoroTask {
             }
         }
 
-        std::suspend_never await_transform(detail::OwnsScopeTag) noexcept {
+        /// Gives the promise, so a @ref Scope in this frame can name its owner.
+        detail::ValueQuery<const PromiseBase*> await_transform(
+            detail::OwnsScopeTag) noexcept {
             this->owns_scope = true;
-            return {};
+            return {this};
+        }
+
+        detail::ValueQuery<bool> await_transform(
+            this_coro::StopRequestedTag) noexcept {
+            return {this->cancel_requested()};
         }
 
         detail::ExecutorQuery await_transform(this_coro::ExecutorTag) noexcept {
             return {this->executor != nullptr ? this->executor
                                               : detail::current_executor()};
+        }
+
+        /// `co_await` on one of two tasks gives the value of the one held, on
+        /// the same side.
+        template <typename L, typename R>
+        auto await_transform(dstd::Either<CoroTask<L>, CoroTask<R>>&& pair) {
+            static_assert(!std::is_void_v<L> && !std::is_void_v<R>,
+                          "an Either of tasks needs a value from each side");
+            return await_transform(detail::either_task(std::move(pair)));
         }
 
         /// @ref YieldAwaitable makes its own timeslice check.
@@ -442,7 +501,7 @@ class CoroTask {
             common::rethrow_and_clear(coro_handle_.promise().exception);
         }
         if constexpr (!std::is_void_v<T>) {
-            return std::move(coro_handle_.promise().result);
+            return coro_handle_.promise().take_result();
         }
     }
 
@@ -693,6 +752,19 @@ class CoroTask {
         }(std::move(*this), std::move(fallback));
     }
 };
+
+namespace detail {
+template <typename L, typename R>
+CoroTask<dstd::Either<L, R>> either_task(
+    dstd::Either<CoroTask<L>, CoroTask<R>> pair) {
+    if (pair.is_left()) {
+        L value = co_await std::move(pair.left());
+        co_return dstd::Either<L, R>::left(std::move(value));
+    }
+    R value = co_await std::move(pair.right());
+    co_return dstd::Either<L, R>::right(std::move(value));
+}
+}  // namespace detail
 
 }  // namespace dftracer::utils::coro
 

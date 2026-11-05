@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_CORO_RETRY_H
 
 #include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/dstd/function.h>
@@ -29,7 +30,6 @@ struct RetryPolicy {
 };
 
 namespace detail {
-bool is_cancelled_error(const std::exception_ptr& error) noexcept;
 std::chrono::milliseconds retry_backoff(const RetryPolicy& policy,
                                         std::size_t attempt);
 }  // namespace detail

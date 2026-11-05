@@ -21,6 +21,9 @@
 namespace dftracer::utils::coro {
 
 template <typename T>
+class CoroTask;
+
+template <typename T>
 class AsyncGenerator;
 
 // ============================================================================
@@ -65,6 +68,22 @@ struct is_flat_map_fn<
 template <typename F, typename T>
 inline constexpr bool is_flat_map_fn_v = is_flat_map_fn<F, T>::value;
 
+template <typename T>
+struct is_coro_task : std::false_type {};
+template <typename T>
+struct is_coro_task<CoroTask<T>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_coro_task_v = is_coro_task<T>::value;
+
+template <typename R>
+struct UnwrapTask {
+    using type = R;
+};
+template <typename T>
+struct UnwrapTask<CoroTask<T>> {
+    using type = T;
+};
+
 /// F(T) -> U where U is NOT an @ref AsyncGenerator (one-arg, returns plain
 /// value)
 template <typename F, typename T, typename = void>
@@ -83,14 +102,24 @@ inline constexpr bool is_map_fn_v = is_map_fn<F, T>::value;
 // Free combinator functions
 // ============================================================================
 
+/**
+ * @brief Yields `func(item)` for each item. `func` returns a value or a
+ * @ref CoroTask of a value, which is awaited, so one item runs at a time.
+ */
 template <typename T, typename F,
-          std::enable_if_t<detail::is_map_fn_v<F, T>, int> = 0>
-AsyncGenerator<std::invoke_result_t<F, T>> map(AsyncGenerator<T> source,
-                                               F func) {
+          std::enable_if_t<detail::is_map_fn_v<F, T>, int> = 0,
+          typename R = std::invoke_result_t<F, T>,
+          typename U = typename detail::UnwrapTask<R>::type>
+AsyncGenerator<U> map(AsyncGenerator<T> source, F func) {
     for (;;) {
         auto val = co_await source.next();
         if (!val) break;
-        co_yield std::invoke(func, std::move(*val));
+        if constexpr (detail::is_coro_task_v<R>) {
+            U mapped = co_await std::invoke(func, std::move(*val));
+            co_yield std::move(mapped);
+        } else {
+            co_yield std::invoke(func, std::move(*val));
+        }
     }
 }
 

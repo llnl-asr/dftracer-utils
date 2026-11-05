@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/common/error.h>
 
+#include <exception>
+
 namespace dftracer::utils::coro {
 
 /// Throws the error a cancelled wait or cancelled task ends with. Its
@@ -16,6 +18,10 @@ namespace dftracer::utils::coro {
 inline bool is_cancelled(const common::DFTUtilsException& e) noexcept {
     return e.condition() == dstd::Condition::Cancelled;
 }
+
+namespace detail {
+bool is_cancelled_error(const std::exception_ptr& error) noexcept;
+}  // namespace detail
 
 }  // namespace dftracer::utils::coro
 

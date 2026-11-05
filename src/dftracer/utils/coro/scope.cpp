@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/scope.h>
 
 #include <cstdlib>
@@ -24,8 +25,21 @@ void Scope::spawn(CoroTask<void> task) {
     start(child);
 }
 
+namespace detail {
+bool scope_stopping(const Scope& scope) noexcept {
+    return scope.stop_.load(std::memory_order_acquire) ||
+           scope.linked_.stop_requested() ||
+           (scope.owner_ && scope.owner_->cancel_requested());
+}
+}  // namespace detail
+
+void Scope::request_stop() noexcept {
+    stop_.store(true, std::memory_order_release);
+    if (executor_) executor_->wake_cancelled();
+}
+
 bool Scope::stop_requested() const noexcept {
-    if (stop_.load(std::memory_order_acquire)) return true;
+    if (detail::scope_stopping(*this)) return true;
     if (executor_ == nullptr) return false;
     auto token = executor_->shutdown_token();
     return token && token->load(std::memory_order_acquire);
@@ -64,7 +78,23 @@ void Scope::fail(std::exception_ptr error) noexcept {
     if (!failed_.exchange(true, std::memory_order_acq_rel)) {
         error_ = std::move(error);
     }
-    request_stop();
+    if (mode_ == ScopeMode::FailFast) request_stop();
+}
+
+void Scope::child_failed(std::exception_ptr error) noexcept {
+    if (!detail::is_cancelled_error(error)) {
+        fail(std::move(error));
+        return;
+    }
+    // The stop that ended this child is not its error, or a sibling's error
+    // would lose to it and a plain request_stop would fail the join.
+    if (stop_.load(std::memory_order_acquire)) return;
+    // Cancelled from outside, such as at shutdown. Join still reports it, but
+    // the siblings get their own cancel, and a stop here would also end the
+    // ones that are not parked and would have finished.
+    if (!failed_.exchange(true, std::memory_order_acq_rel)) {
+        error_ = std::move(error);
+    }
 }
 
 void Scope::start(detail::Coro& child) {
@@ -92,7 +122,7 @@ detail::Coro Scope::run_child(CoroTask<void> task, Scope* scope) {
     } catch (...) {
         error = std::current_exception();
     }
-    if (error) scope->fail(std::move(error));
+    if (error) scope->child_failed(std::move(error));
 }
 
 }  // namespace dftracer::utils::coro

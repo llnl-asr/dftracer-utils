@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/join_handle.h>
 #include <dftracer/utils/coro/spawn_future.h>
+#include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -20,6 +21,15 @@
 
 namespace dftracer::utils::coro {
 
+/// What a child error does to its siblings. Both raise the first error from
+/// @ref Scope::join.
+enum class ScopeMode : std::uint8_t {
+    /// Asks the siblings to stop, as @ref Scope::request_stop does.
+    FailFast,
+    /// Leaves the siblings running.
+    Supervisor,
+};
+
 /**
  * @brief A counting scope (P3149) that runs tasks on one executor and joins
  * them.
@@ -27,9 +37,14 @@ namespace dftracer::utils::coro {
  * A scope that spawned must be joined with `co_await scope.join()` before it
  * is destroyed, or the process terminates. Code that can raise between a
  * spawn and the join uses @ref with_scope, which always joins. The first error
- * of a @ref spawn child is raised by @ref join and requests stop. The error of
- * a @ref spawn_future child goes only to its future, and cancelling that
- * future ends the child as cancelled at its next wait.
+ * of a @ref spawn child is raised by @ref join and, in the default mode and
+ * unless the child was only cancelled, requests stop. The error of a @ref
+ * spawn_future child goes only to its future, and cancelling that future ends
+ * the child as cancelled at its next wait.
+ *
+ * A stop ends every child as cancelled at its next wait, and wakes one that is
+ * parked. A scope made by @ref with_scope also stops when the task that holds
+ * it is cancelled, so scopes and tasks form a tree.
  *
  * Locals of a @ref with_scope body die when the body raises, before the join.
  * A child that uses one must end first, so the body awaits such children
@@ -42,8 +57,12 @@ namespace dftracer::utils::coro {
  */
 class Scope {
    public:
-    explicit Scope(Executor* executor = Executor::current()) noexcept
-        : executor_(executor) {}
+    /// @param owner The promise of the frame that holds this scope, which must
+    ///        reach the join. A cancel of that task stops the children.
+    explicit Scope(Executor* executor = Executor::current(),
+                   const PromiseBase* owner = nullptr,
+                   ScopeMode mode = ScopeMode::FailFast) noexcept
+        : executor_(executor), owner_(owner), mode_(mode) {}
     ~Scope();
 
     Scope(const Scope&) = delete;
@@ -123,10 +142,12 @@ class Scope {
     /// Refuses later spawns. Children already spawned keep running.
     void close() noexcept { closed_.store(true, std::memory_order_release); }
 
-    /// Sets the stop flag that children read through @ref stop_requested.
-    void request_stop() noexcept {
-        stop_.store(true, std::memory_order_release);
-    }
+    /// Ends the children as cancelled at their next wait, and wakes those that
+    /// are parked. A child ended by this is not an error of @ref join.
+    void request_stop() noexcept;
+
+    /// Stops the children too when @p token stops. Call before the first spawn.
+    void link_stop(StopToken token) noexcept { linked_ = std::move(token); }
 
     /// True after @ref request_stop, a child error, or once the executor
     /// begins to shut down.
@@ -135,9 +156,12 @@ class Scope {
     Executor* executor() const noexcept { return executor_; }
 
    private:
+    friend bool detail::scope_stopping(const Scope& scope) noexcept;
+
     bool admit();
     std::exception_ptr refusal() const;
     void fail(std::exception_ptr error) noexcept;
+    void child_failed(std::exception_ptr error) noexcept;
     void finish_join(bool self_join);
     void start(detail::Coro& child);
 
@@ -158,7 +182,7 @@ class Scope {
         } catch (...) {
             error = std::current_exception();
         }
-        if (error) scope->fail(std::move(error));
+        if (error) scope->child_failed(std::move(error));
     }
 
     // Publishes an error only after the handler ends, since the awaiter may
@@ -203,6 +227,9 @@ class Scope {
     }
 
     Executor* executor_;
+    const PromiseBase* owner_;
+    StopToken linked_;
+    ScopeMode mode_;
     JoinHandle join_;
     std::exception_ptr error_;
     std::atomic<bool> failed_{false};
@@ -232,10 +259,10 @@ struct ScopeResult<void> {};
  */
 template <class Fn,
           class R = typename std::invoke_result_t<Fn&, Scope&>::value_type>
-CoroTask<R> with_scope(Fn fn) {
-    co_await detail::OWNS_SCOPE;
+CoroTask<R> with_scope(Fn fn, ScopeMode mode = ScopeMode::FailFast) {
+    const PromiseBase* owner = co_await detail::OWNS_SCOPE;
     Executor* executor = co_await this_coro::executor;
-    Scope scope(executor);
+    Scope scope(executor, owner, mode);
     detail::ScopeResult<R> result;
     std::exception_ptr error;
     try {
@@ -258,6 +285,33 @@ CoroTask<R> with_scope(Fn fn) {
     if (error) common::rethrow_and_clear(error);
     if (join_error) common::rethrow_and_clear(join_error);
     if constexpr (!std::is_void_v<R>) co_return result.take();
+}
+
+/// Runs @p task and ends it as cancelled at its next wait when @p token stops.
+/// Anything it awaits or spawns in a @ref with_scope stops with it.
+template <class T>
+CoroTask<T> with_stop_token(CoroTask<T> task, StopToken token) {
+    const PromiseBase* owner = co_await detail::OWNS_SCOPE;
+    Executor* executor = co_await this_coro::executor;
+    Scope scope(executor, owner);
+    scope.link_stop(std::move(token));
+    SpawnFuture<T> future = scope.spawn_future(std::move(task));
+    detail::ScopeResult<T> result;
+    std::exception_ptr error;
+    try {
+        if constexpr (std::is_void_v<T>) {
+            co_await future;
+        } else {
+            T value = co_await future;
+            result.set(std::move(value));
+        }
+    } catch (...) {
+        error = std::current_exception();
+    }
+    if (error) future.cancel();
+    co_await scope.join();
+    if (error) common::rethrow_and_clear(error);
+    if constexpr (!std::is_void_v<T>) co_return result.take();
 }
 
 }  // namespace dftracer::utils::coro

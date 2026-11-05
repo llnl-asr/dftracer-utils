@@ -1,4 +1,4 @@
-:description: Write a small reusable async transform and pipe it with | && ||, either as a core C++ callable or as a Python op.
+:description: Write a small reusable async transform and compose it with stages and | adaptors in C++, or as a Python op.
 
 Author a compose op
 =====================
@@ -7,35 +7,40 @@ Author a compose op
    :class: goal
 
    Write a small, reusable async transform and pipe it with others, either
-   inside the core library (a plain C++ callable) or in Python (``@jit.op``). This
+   inside the core library (a C++ stage) or in Python (``@jit.op``). This
    is the how-to for the model :doc:`../../concepts/compose` explains; read that
    first for why the model looks like this.
 
-In the core library: a plain callable
--------------------------------------------
+In the core library: a stage
+-----------------------------
 
-An async op is any callable of shape ``I -> coro::CoroTask<O>`` - no base
-class, no registration. Write it as a lambda, a free function, or a struct
-with ``operator()``, then wrap it with
-``dftracer::utils::utilities::op`` (``dftracer/utils/runtime/compose.h``)
-to get the ``|`` / ``&&`` / ``||`` composition operators:
+A stage is a small type with an ``Input``, an ``Output``, a name and a const ``run``.
+There is no base class and no registration.
+Join stages and wrap them with the ``|`` adaptors of ``dftracer/utils/coro/stage.h``:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/runtime/compose.h>
-   namespace u = dftracer::utils::utilities;
+   #include <dftracer/utils/coro/stage.h>
+   namespace coro = dftracer::utils::coro;
 
-   auto doubler = u::op([](int x) -> coro::CoroTask<int> { co_return x * 2; });
-   auto plus10  = u::op([](int x) -> coro::CoroTask<int> { co_return x + 10; });
+   struct Doubler {
+       using Input = int;
+       using Output = int;
+       static constexpr const char* NAME = "doubler";
+       coro::CoroTask<int> run(int x) const { co_return x * 2; }
+   };
 
-   auto pipeline = doubler | plus10;               // int -> CoroTask<int>
-   int result = co_await pipeline(5);               // 20
+   auto pipeline = Doubler{}
+                   | coro::then([](int x) { return x + 10; })
+                   | coro::named("scale")
+                   | coro::timeout(std::chrono::seconds(5));
 
-Compose it further with ``u::map``/``u::fold`` for a parallel map-reduce, or
-submit it straight to a :doc:`Runtime <../../concepts/async-runtime>` -
-``rt.submit(pipeline(5))`` - since there is no virtual dispatch to cross. See
-:doc:`../../concepts/compose` for ``&&``/``||`` and the scope-injection
-pattern for an op that needs a ``CoroScope``.
+   int result = co_await pipeline.run(5);            // 20
+
+A callable works as the next step of ``then``, so a small step needs no type.
+``then`` also takes a ``CoroTask`` or an ``AsyncGenerator`` on its left, to run a step on one value or on each item of a stream.
+Use ``coro::when_all`` to run two things at once and ``coro::when_any`` to race them.
+See :doc:`../../concepts/compose` for every adaptor, ``either`` and ``erase``.
 
 In a plugin: a host op
 -----------------------
@@ -111,8 +116,8 @@ plan.
 See also
 --------
 
-- :doc:`../../concepts/compose` for the ``AsyncOpFor`` contract and the full
-  operator set (``&&``, ``||``, ``map``, ``fold``).
+- :doc:`../../concepts/compose` for the stage contract and the full adaptor
+  set (``then``, ``recover``, ``named``, ``timeout``, ``limit``, ``maybe``).
 - :doc:`../../plugins` for the plugin lifecycle (``step``/``merge``/``finalize``)
   a compose op runs inside.
 - :doc:`../../jit` for ``@jit.plugin`` and ``@jit.each_event``, the Python

@@ -41,5 +41,5 @@ CheckOptions:
   readability-identifier-naming.TypeAliasIgnoredRegexp: "^(dftu_[a-z0-9_]+|(is|has)_[a-z0-9_]+|[a-z][a-z0-9_]*_(t|type|category|concept)|type|value|iterator|const_iterator|reverse_iterator|const_reverse_iterator|pointer|const_pointer|reference|const_reference|propagate_on_container_[a-z_]+)$"
   readability-identifier-naming.FunctionIgnoredRegexp: "^case_$"
   readability-identifier-naming.GlobalVariableIgnoredRegexp: "^t_[a-z0-9_]+$"
-  readability-identifier-naming.ConstexprVariableIgnoredRegexp: "^(value|nullopt|executor|(is|has)_[a-z0-9_]+_v)$"
+  readability-identifier-naming.ConstexprVariableIgnoredRegexp: "^(value|nullopt|executor|stop_requested|(is|has)_[a-z0-9_]+_v)$"
   readability-identifier-naming.MacroDefinitionIgnoredRegexp: "^(DFTU_[A-Z0-9_]+|DFTRACER_INC_METADATA|_[A-Z][A-Z0-9_]+|XXH_[A-Z0-9_]+|ARROW_[A-Z0-9_]+|DOCTEST_[A-Z0-9_]+)$"

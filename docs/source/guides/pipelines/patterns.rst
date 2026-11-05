@@ -310,7 +310,49 @@ Run many jobs with a limit:
    auto sizes = co_await coro::parallel_map(std::move(paths), measure, options);
 
 ``parallel_map`` gives results in item order.
-The first error stops new jobs, lets running jobs finish and is then raised.
+The first error ends running jobs as cancelled at their next wait and is then raised.
 ``parallel_map_unordered`` returns an ``AsyncGenerator`` that yields each result as it finishes.
 
 Use ``when_all_settled`` to get each outcome as a ``dstd::Expected``, and ``first_success`` to take the first task that does not fail and cancel the others.
+
+Stop a tree of tasks
+--------------------
+
+A ``coro::Scope`` stops its children when one fails, when ``request_stop`` runs or when the task that holds it is cancelled.
+A stopped child ends as cancelled at its next wait, and a parked child wakes at once.
+``with_scope`` links the scope to its task, so nested scopes stop together.
+
+.. code-block:: cpp
+
+   co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+       scope.spawn(read_all());
+       scope.spawn(write_all());
+       co_return;
+   });
+
+Pass ``coro::ScopeMode::Supervisor`` to ``with_scope`` when a failure must not stop the siblings.
+``join`` then waits for all of them and raises the first error.
+
+Use a ``coro::StopSource`` to stop work from code that holds no scope:
+
+.. code-block:: cpp
+
+   coro::StopSource source;
+   co_await coro::with_stop_token(run_server(), source.token());
+   // elsewhere: source.request_stop();
+
+A task that computes without waits reads ``co_await coro::this_coro::stop_requested``.
+
+Shape a stream
+--------------
+
+``coro/stream.h`` works on ``coro::AsyncGenerator`` values:
+
+- ``map``, ``take_until``, ``chunks``, ``zip`` and ``fold`` read one item at a time.
+  ``filter``, ``take``, ``flat_map`` and ``concat`` are in ``coro/async_generator.h``.
+- ``merge`` reads many generators at once and yields items as they come.
+- ``flat_map_merge`` does the same for the generators a function returns, with a limit on how many run.
+- ``buffer`` reads ahead of the reader by a bounded number of items.
+
+``merge``, ``flat_map_merge`` and ``buffer`` run their sources in the background, so a source must own what it uses.
+Each of them keeps the order of one source, and raises the first error from the next read.

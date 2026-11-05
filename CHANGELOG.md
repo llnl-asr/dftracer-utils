@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Stop the children of a `coro::Scope` when one fails or when the task that holds the scope is cancelled, so they end at their next wait in place of running on.
+  Pass `coro::ScopeMode::Supervisor` to keep the old behavior for a child error.
+- Add the stream operations `coro::map`, `take_until`, `chunks`, `zip`, `fold`, `merge`, `flat_map_merge` and `buffer`.
+- Add `coro::StopSource`, `StopToken`, `with_stop_token` and `this_coro::stop_requested`.
 - Wake a task parked on a channel, event, semaphore, mutex, sleep or future when the task is cancelled, so `when_any` and `SpawnFuture::cancel` no longer wait for the parked wait to end.
   The wait raises a cancelled error.
 - Rename `coro::CoroSemaphore` to `coro::AsyncSemaphore`, and add `permit()`, which gives the units back on destruction.
@@ -291,6 +295,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add coro stages and adaptors in `coro/stage.h`: the concepts `BatchStage` and `StreamStage`, the adaptors `then`, `recover`, `named`, `timeout`, `limit` and `maybe` that apply with `|`, `either` and `EitherStage`, and `erase` to `DynStage` and `DynStreamStage`.
+  `co_await` on a `dstd::Either` of two `CoroTask` gives a `dstd::Either` of their values.
+  On a stream, `timeout` bounds the wait for each item through `coro::with_item_timeout`.
 - Add the library `libdftracer_utils_trace`: the index, the views and folds, the trace reader and the Arrow interchange.
   It links every library below it and none of `dftracer_utils_utilities`, which now links it. The `dftracer_utils` target links it, so a program that links `dftracer_utils` needs no change.
 - Add the library `libdftracer_utils_io`: gzip readers and writers, the parallel writers, hashing, directory scanning, text filters and the file helpers (logical path, modification time, sampled file hash).
@@ -376,6 +383,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove `runtime/compose.h` with `utilities::op`, `AsyncOpFor` and the `&&` and `||` operators. Use the stages and adaptors of `coro/stage.h`, and `coro::when_all` and `coro::when_any` to run two things at once or to race them.
 - Stop installing the C++ headers `runtime/io/io_backend.h`, `runtime/io/awaitable.h`, `utilities/filesystem/types.h`, `utilities/hash/*.h`, `common/input_stat.h`, `common/intern_table.h` and `dstd/hash/hash.h`, and remove `Indexer::open_scanned`. They are now private to the library.
 - Remove the Python `JsonDictValue` class. No reader returned it.
 - Remove the C++ `dlio::write_dlio_yaml(std::ostream&, ...)`. Use `render_dlio_yaml` and write the string to a file.

@@ -3842,17 +3842,17 @@ DataType infer_type(const Expr& root,
 
 // ---- C ABI ----------------------------------------------------------------
 
-struct dftu_expr {
+struct dftu_expr : dftracer::utils::dstd::HeapObject {
     dftracer::utils::dataframe::Expr e;
 };
 
 namespace dftracer::utils::dataframe {
 const Expr& expr_handle_unwrap(const dftu_expr* h) { return h->e; }
-dftu_expr* expr_handle_wrap(Expr e) { return new dftu_expr{std::move(e)}; }
+dftu_expr* expr_handle_wrap(Expr e) { return new dftu_expr{{}, std::move(e)}; }
 }  // namespace dftracer::utils::dataframe
 
 namespace {
-dftu_expr* wrap(dataframe::Expr e) { return new dftu_expr{std::move(e)}; }
+dftu_expr* wrap(dataframe::Expr e) { return new dftu_expr{{}, std::move(e)}; }
 const dataframe::Expr& unwrap(const dftu_expr* e) { return e->e; }
 }  // namespace
 

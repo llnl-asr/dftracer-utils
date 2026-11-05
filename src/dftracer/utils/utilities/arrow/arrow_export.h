@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_ARROW_ARROW_EXPORT_H
 
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/memory.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <cstdint>
@@ -16,7 +17,7 @@ namespace dftracer::utils::utilities::arrow {
  * Holds ownership of both the @ref ArrowArray and @ref ArrowSchema produced by
  * RecordBatchBuilder::finish(). Safe to move across threads/channels.
  */
-class ArrowExportResult {
+class ArrowExportResult : public dstd::HeapObject {
    public:
     ArrowExportResult() = default;
 

@@ -6,6 +6,7 @@
 // not plugin-scoped: a non-plugin C caller, or a future language binding,
 // registers and reads it the same way a plugin does.
 
+#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
@@ -208,10 +209,9 @@ class ProviderCursor final : public Cursor {
         std::int64_t max_rows) override {
         dftracer::utils::dstd::Optional<Morsel> out;
         if (try_next(max_rows, out)) co_return out;
-        auto* task = reinterpret_cast<coro::CoroTask<void>*>(pending_task_);
+        auto task = task_from_abi(pending_task_);
         pending_task_ = nullptr;
         co_await *task;
-        delete task;
         co_return finish(pending_result_);
     }
 
@@ -242,9 +242,8 @@ class ProviderCursor final : public Cursor {
         ::dftu_expr* h = expr_handle_wrap(predicate);
         ::dftu_task* t = vt_->narrow(self_, h, &applied);
         if (t) {
-            auto* task = reinterpret_cast<coro::CoroTask<void>*>(t);
+            auto task = task_from_abi(t);
             co_await *task;
-            delete task;
         }
         ::dftu_expr_free(h);
         co_return applied != 0;

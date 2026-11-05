@@ -20,7 +20,7 @@ static void release_arrow_schema(PyObject *capsule) {
     if (schema && schema->release) {
         schema->release(schema);
     }
-    delete schema;
+    dftracer::utils::dstd::UniquePtr<ArrowSchema>(schema).reset();
 }
 
 static void release_arrow_array(PyObject *capsule) {
@@ -29,7 +29,7 @@ static void release_arrow_array(PyObject *capsule) {
     if (array && array->release) {
         array->release(array);
     }
-    delete array;
+    dftracer::utils::dstd::UniquePtr<ArrowArray>(array).reset();
 }
 
 static PyObject *ArrowBatchCapsule_arrow_c_array(ArrowBatchCapsuleObject *self,
@@ -44,8 +44,8 @@ static PyObject *ArrowBatchCapsule_arrow_c_array(ArrowBatchCapsuleObject *self,
         return NULL;
     }
 
-    auto *schema = new ArrowSchema;
-    auto *array = new ArrowArray;
+    auto *schema = dftracer::utils::dstd::make_unique<ArrowSchema>().release();
+    auto *array = dftracer::utils::dstd::make_unique<ArrowArray>().release();
 
     self->result->release_schema().move(schema);
     self->result->release_array().move(array);
@@ -54,9 +54,9 @@ static PyObject *ArrowBatchCapsule_arrow_c_array(ArrowBatchCapsuleObject *self,
         PyCapsule_New(schema, "arrow_schema", release_arrow_schema);
     if (!schema_capsule) {
         if (schema->release) schema->release(schema);
-        delete schema;
+        dftracer::utils::dstd::UniquePtr<ArrowSchema>(schema).reset();
         if (array->release) array->release(array);
-        delete array;
+        dftracer::utils::dstd::UniquePtr<ArrowArray>(array).reset();
         return NULL;
     }
 
@@ -65,7 +65,7 @@ static PyObject *ArrowBatchCapsule_arrow_c_array(ArrowBatchCapsuleObject *self,
     if (!array_capsule) {
         Py_DECREF(schema_capsule);
         if (array->release) array->release(array);
-        delete array;
+        dftracer::utils::dstd::UniquePtr<ArrowArray>(array).reset();
         return NULL;
     }
 

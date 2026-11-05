@@ -86,7 +86,7 @@ PyObject* make_viewer(View&& t) {
     auto* self = reinterpret_cast<TraceViewerObject*>(
         TraceViewerType.tp_alloc(&TraceViewerType, 0));
     if (!self) return nullptr;
-    self->tv = new View(std::move(t));
+    self->tv = dftracer::utils::dstd::make_unique<View>(std::move(t)).release();
     return reinterpret_cast<PyObject*>(self);
 }
 
@@ -366,7 +366,7 @@ PyObject* tv_new(PyTypeObject* type, PyObject*, PyObject*) {
 }
 
 void tv_dealloc(TraceViewerObject* self) {
-    delete self->tv;
+    dftracer::utils::dstd::UniquePtr<View>(self->tv).reset();
     Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
 }
 
@@ -421,8 +421,9 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
         if (!run_blocking([&] { tv = View::from_files(std::move(vfiles)); }))
             return -1;
     }
-    delete self->tv;
-    self->tv = new View(std::move(tv));
+    dftracer::utils::dstd::UniquePtr<View>(self->tv).reset();
+    self->tv =
+        dftracer::utils::dstd::make_unique<View>(std::move(tv)).release();
     return 0;
 }
 

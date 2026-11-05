@@ -16,7 +16,7 @@
 
 namespace dftracer::utils::python {
 
-struct MemoryViewBatchData {
+struct MemoryViewBatchData : dstd::HeapObject {
     dstd::Vector<char> buffer;
     dstd::Vector<Py_ssize_t> offsets;
     dstd::Vector<Py_ssize_t> lengths;

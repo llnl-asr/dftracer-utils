@@ -20,12 +20,12 @@ using dftracer::utils::index::Indexer;
 using dftracer::utils::index::IndexerOptions;
 using dftracer::utils::index::IndexStatus;
 
-struct dftu_indexer {
+struct dftu_indexer : dftracer::utils::dstd::HeapObject {
     Indexer indexer;
     dstd::String error;
 };
 
-struct dftu_indexer_file_list {
+struct dftu_indexer_file_list : dftracer::utils::dstd::HeapObject {
     dstd::Vector<IndexedFile> files;
 };
 
@@ -231,7 +231,7 @@ dftu_indexer_open_result dftu_indexer_open(
             }
         }
         r.u.value = new dftu_indexer{
-            Indexer::open(std::move(list), std::move(opts)), {}};
+            {}, Indexer::open(std::move(list), std::move(opts)), {}};
         r.ok = 1;
     } catch (...) {
         r.u.err = current_error(t_handle_free_error);
@@ -302,7 +302,7 @@ dftu_indexer_files_result dftu_indexer_files(dftu_indexer* indexer) {
         return r;
     }
     try {
-        r.u.value = new dftu_indexer_file_list{indexer->indexer.files()};
+        r.u.value = new dftu_indexer_file_list{{}, indexer->indexer.files()};
         r.ok = 1;
     } catch (...) {
         r.u.err = current_error(indexer->error);

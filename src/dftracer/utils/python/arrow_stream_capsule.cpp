@@ -28,7 +28,7 @@ namespace {
 constexpr int STABLE_BATCHES = 5;
 constexpr int MAX_DRAIN = 128;
 
-struct StreamPrivate {
+struct StreamPrivate : dftracer::utils::dstd::HeapObject {
     dftracer::utils::dstd::SharedPtr<ArrowIteratorState> state;
     dftracer::utils::python::SchemaReconciler reconciler;
     // Drained during discovery, emitted first from get_next.
@@ -191,7 +191,7 @@ static void release_stream_capsule(PyObject *capsule) {
     if (stream && stream->release) {
         stream->release(stream);
     }
-    delete stream;
+    dftracer::utils::dstd::UniquePtr<ArrowArrayStream>(stream).reset();
 }
 
 static PyObject *ArrowBatchStream_arrow_c_stream(ArrowBatchStreamObject *self,
@@ -224,7 +224,8 @@ static PyObject *ArrowBatchStream_arrow_c_stream(ArrowBatchStreamObject *self,
     self->consumed = true;
     self->state.reset();
 
-    auto *stream = new ArrowArrayStream;
+    auto *stream =
+        dftracer::utils::dstd::make_unique<ArrowArrayStream>().release();
     std::memset(stream, 0, sizeof(*stream));
     stream->get_schema = stream_get_schema;
     stream->get_next = stream_get_next;
@@ -236,7 +237,7 @@ static PyObject *ArrowBatchStream_arrow_c_stream(ArrowBatchStreamObject *self,
         PyCapsule_New(stream, "arrow_array_stream", release_stream_capsule);
     if (!capsule) {
         stream->release(stream);
-        delete stream;
+        dftracer::utils::dstd::UniquePtr<ArrowArrayStream>(stream).reset();
         return NULL;
     }
     return capsule;

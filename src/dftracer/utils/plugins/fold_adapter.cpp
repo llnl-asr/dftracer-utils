@@ -453,7 +453,7 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
 }
 
 // DDSketch lacks a mean, so the box tracks the running weighted sum.
-struct SketchBox {
+struct SketchBox : dstd::HeapObject {
     dataframe::DDSketch sketch;
     double sum = 0.0;
 };

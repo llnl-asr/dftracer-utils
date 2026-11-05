@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 
@@ -16,7 +17,12 @@ namespace dftracer::utils {
 
 dftu_task* task_to_abi(coro::CoroTask<void>&& task) {
     return reinterpret_cast<dftu_task*>(
-        new coro::CoroTask<void>(std::move(task)));
+        dstd::make_unique<coro::CoroTask<void>>(std::move(task)).release());
+}
+
+dstd::UniquePtr<coro::CoroTask<void>> task_from_abi(dftu_task* task) noexcept {
+    return dstd::UniquePtr<coro::CoroTask<void>>(
+        reinterpret_cast<coro::CoroTask<void>*>(task));
 }
 
 namespace {
@@ -25,9 +31,7 @@ dstd::Vector<coro::CoroTask<void>> take(dftu_task* const* ts, std::uint32_t n) {
     dstd::Vector<coro::CoroTask<void>> out;
     out.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i) {
-        auto* p = reinterpret_cast<coro::CoroTask<void>*>(ts[i]);
-        out.push_back(std::move(*p));
-        delete p;
+        out.push_back(std::move(*task_from_abi(ts[i])));
     }
     return out;
 }
@@ -93,7 +97,7 @@ int dftu_task_run(dftu_runtime* rt, dftu_task* t) {
     } catch (...) {
         rc = -1;
     }
-    delete task;
+    dstd::UniquePtr<coro::CoroTask<void>>(task).reset();
     return rc;
 }
 

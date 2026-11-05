@@ -54,7 +54,7 @@ inline dftracer::utils::dstd::SharedPtr<dftu_series> adopt_series(
 /// Layout behind the opaque dftu_series handle. Private to the dataframe
 /// sources; the public headers only forward-declare it. Members that only
 /// some types use share storage keyed by `type` and `encoding`.
-struct dftu_series {
+struct dftu_series : dftracer::utils::dstd::HeapObject {
     dftracer::utils::dataframe::TypeId type =
         dftracer::utils::dataframe::TypeId::Int64;
     dftracer::utils::dataframe::Encoding encoding =

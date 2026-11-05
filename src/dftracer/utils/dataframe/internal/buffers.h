@@ -36,18 +36,18 @@ inline std::uint8_t* writable(BufferView& view) noexcept {
 /// std::bad_alloc, and then the copy is dropped at once.
 inline BufferView borrow_buffer(const void* data, std::size_t bytes,
                                 dstd::SharedPtr<const void> owner) {
-    auto* held = new dstd::SharedPtr<const void>(std::move(owner));
-    try {
-        return BufferView(memory::Block::borrow(
-            const_cast<void*>(data), bytes,
-            [](void* context) {
-                delete static_cast<dstd::SharedPtr<const void>*>(context);
-            },
-            held));
-    } catch (...) {
-        delete held;
-        throw;
-    }
+    auto held =
+        dstd::make_unique<dstd::SharedPtr<const void>>(std::move(owner));
+    BufferView view(memory::Block::borrow(
+        const_cast<void*>(data), bytes,
+        [](void* context) {
+            dstd::UniquePtr<dstd::SharedPtr<const void>>(
+                static_cast<dstd::SharedPtr<const void>*>(context))
+                .reset();
+        },
+        held.get()));
+    held.release();
+    return view;
 }
 
 /// A scratch array of trivially copyable T in one owned block with no value

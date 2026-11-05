@@ -14,6 +14,31 @@
 
 namespace dftracer::utils::dstd {
 
+/// Base of a type that is made with a plain `new` and freed with a plain
+/// `delete`. Its objects come from this library's heap and are charged to the
+/// pool current at the `new`, also in a shared library or a build without the
+/// global operator new. An empty base adds no size. A type with a virtual
+/// destructor is fine only if every `delete` goes through that destructor, so
+/// the size passed to operator delete is the size of the whole object. The
+/// `new (std::nothrow)` form returns null when the heap refuses.
+struct HeapObject {
+    static void* operator new(std::size_t size) {
+        return memory::detail::allocate(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
+    }
+    static void operator delete(void* ptr, std::size_t size) noexcept {
+        memory::detail::deallocate(ptr, size);
+    }
+    static void* operator new(std::size_t size,
+                              const std::nothrow_t& /*tag*/) noexcept {
+        return memory::detail::try_allocate(size,
+                                            __STDCPP_DEFAULT_NEW_ALIGNMENT__);
+    }
+    static void operator delete(void* ptr,
+                                const std::nothrow_t& /*tag*/) noexcept {
+        memory::detail::deallocate(ptr);
+    }
+};
+
 /// Destroys and frees with the size of T. A T with a virtual destructor is
 /// freed unsized at the start of the whole object instead, so a
 /// UniquePtr<Derived> converts to a UniquePtr<Base> of such a base.

@@ -82,7 +82,7 @@ void IpcReader::reset_state() noexcept {
 void IpcReader::close() {
     if (decoder_) {
         ArrowIpcDecoderReset(as_decoder(decoder_));
-        delete as_decoder(decoder_);
+        dstd::UniquePtr<ArrowIpcDecoder>(as_decoder(decoder_)).reset();
         decoder_ = nullptr;
     }
 
@@ -207,16 +207,18 @@ int IpcReader::read_footer() {
     }
 
     // Initialize decoder
-    auto* decoder = new (std::nothrow) ArrowIpcDecoder;
-    if (!decoder) return -1;
+    dstd::UniquePtr<ArrowIpcDecoder> decoder_owner;
+    try {
+        decoder_owner = dstd::make_unique<ArrowIpcDecoder>();
+    } catch (const std::bad_alloc&) {
+        return -1;
+    }
+    auto* decoder = decoder_owner.get();
     std::memset(decoder, 0, sizeof(ArrowIpcDecoder));
 
     int rc = ArrowIpcDecoderInit(decoder);
-    if (rc != NANOARROW_OK) {
-        delete decoder;
-        return rc;
-    }
-    decoder_ = decoder;
+    if (rc != NANOARROW_OK) return rc;
+    decoder_ = decoder_owner.release();
 
     // Decode footer directly from mmap'd memory (zero-copy)
     ArrowBufferView footer_view;
@@ -250,21 +252,24 @@ int IpcReader::read_footer() {
     }
 
     // Create shared schema - deep copy once, share for all batches
-    auto* schema = new (std::nothrow) ArrowSchema;
-    if (!schema) return -1;
+    dstd::UniquePtr<ArrowSchema> schema_owner;
+    try {
+        schema_owner = dstd::make_unique<ArrowSchema>();
+    } catch (const std::bad_alloc&) {
+        return -1;
+    }
+    auto* schema = schema_owner.get();
     std::memset(schema, 0, sizeof(ArrowSchema));
     rc = ArrowSchemaDeepCopy(&footer->schema, schema);
-    if (rc != NANOARROW_OK) {
-        delete schema;
-        return rc;
-    }
+    if (rc != NANOARROW_OK) return rc;
+    schema_owner.release();
 
     // Wrap in shared_ptr with custom deleter
     shared_schema_ =
         dstd::adopt_shared_ptr(static_cast<void*>(schema), [](void* p) {
             auto* s = static_cast<ArrowSchema*>(p);
             if (s->release) s->release(s);
-            delete s;
+            dstd::UniquePtr<ArrowSchema>(s).reset();
         });
 
     // Set decoder's expected schema

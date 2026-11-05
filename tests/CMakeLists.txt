@@ -227,6 +227,12 @@ add_test(NAME dstd_only
 add_test(NAME dstd_only_self
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_dstd_only.cmake)
+add_test(NAME no_raw_new
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_raw_new.cmake)
+add_test(NAME no_raw_new_self
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_raw_new.cmake)
 add_test(
   NAME public_third_party_headers
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P

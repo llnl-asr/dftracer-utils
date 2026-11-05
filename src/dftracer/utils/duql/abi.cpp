@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/abi.h>
@@ -9,7 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 
-struct dftu_duql {
+struct dftu_duql : dftracer::utils::dstd::HeapObject {
     dftracer::utils::duql::Query q;
 };
 
@@ -27,13 +28,13 @@ using dftracer::utils::duql::Query;
 dftu_duql* wrap_expr(const Expr& e) {
     auto q = e.build();
     if (!q) return nullptr;
-    return new dftu_duql{std::move(*q)};
+    return new dftu_duql{{}, std::move(*q)};
 }
 
 dftu_duql* wrap_string(const dftracer::utils::dstd::String& s) {
     auto q = Query::from_string(s);
     if (!q) return nullptr;
-    return new dftu_duql{std::move(*q)};
+    return new dftu_duql{{}, std::move(*q)};
 }
 
 dftu_duql* build_in_i64(const char* field, const int64_t* values, int32_t n,
@@ -67,7 +68,7 @@ dftu_duql* dftu_duql_parse(const char* text) {
     if (!text) return nullptr;
     auto r = dftracer::utils::duql::Query::from_string(text);
     if (!r) return nullptr;
-    return new dftu_duql{std::move(*r)};
+    return new dftu_duql{{}, std::move(*r)};
 }
 
 void dftu_duql_free(dftu_duql* q) { delete q; }

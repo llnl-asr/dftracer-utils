@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/symbolize.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <unistd.h>
 
@@ -97,7 +98,7 @@ void make_timestamp(char* out, std::size_t n) {
 }
 
 // Per-scope state, heap-allocated so it follows a coroutine across threads.
-struct ScopeFrame {
+struct ScopeFrame : dstd::HeapObject {
     dstd::String label;
     const char* file;
     int line;
@@ -218,7 +219,7 @@ void write(Level lvl, const char* file, int line, const char* fmt, ...) {
 
 void* scope_open(const char* file, int line, const char* label) {
     write(Level::Trace, file, line, "-> %s", label);
-    return new ScopeFrame{dstd::String(label), file, line, steady_now_ns()};
+    return new ScopeFrame{{}, dstd::String(label), file, line, steady_now_ns()};
 }
 
 void scope_close(void* handle) {

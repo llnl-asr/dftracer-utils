@@ -18,7 +18,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory>
 
 namespace dftracer::utils {
 
@@ -123,11 +122,11 @@ struct ExecutorProgress {
 };
 
 /**
- * TaskExecutor - a @ref coro::Executor that also runs DAG tasks and owns its
- * lifecycle, and the one executor shape that names an I/O backend.
+ * TaskExecutor - a @ref coro::Executor that owns its lifecycle, and the one
+ * executor shape that names an I/O backend.
  *
- * What Pipeline, Scheduler and Watchdog require. Implement this to run the
- * pipeline on something other than the bundled thread pool.
+ * What @ref Runtime requires. Implement this to run tasks on something other
+ * than the bundled thread pool.
  */
 class TaskExecutor : public coro::Executor {
    public:

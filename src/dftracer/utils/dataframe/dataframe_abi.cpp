@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -20,22 +21,22 @@
 #include <optional>
 
 // The opaque dftu_dataframe handle owns a C++ DataFrame.
-struct dftu_dataframe {
+struct dftu_dataframe : dftracer::utils::dstd::HeapObject {
     dftracer::utils::dataframe::DataFrame df;
 };
 
 // The opaque dftu_lazyframe handle owns a C++ LazyFrame.
-struct dftu_lazyframe {
+struct dftu_lazyframe : dftracer::utils::dstd::HeapObject {
     dftracer::utils::dataframe::LazyFrame lf;
 };
 
 namespace dftracer::utils::dataframe {
 LazyFrame& lazyframe_handle_unwrap(dftu_lazyframe* h) { return h->lf; }
 dftu_lazyframe* lazyframe_handle_wrap(LazyFrame&& lf) {
-    return new dftu_lazyframe{std::move(lf)};
+    return new dftu_lazyframe{{}, std::move(lf)};
 }
 dftu_dataframe* dataframe_handle_wrap(DataFrame&& df) {
-    return new dftu_dataframe{std::move(df)};
+    return new dftu_dataframe{{}, std::move(df)};
 }
 DataFrame dataframe_handle_take(dftu_dataframe* h) {
     DataFrame df = std::move(h->df);
@@ -54,11 +55,11 @@ using dftracer::utils::dataframe::LazyFrame;
 using dftracer::utils::dataframe::Series;
 
 dftu_dataframe* wrap(DataFrame&& df) {
-    return new dftu_dataframe{std::move(df)};
+    return new dftu_dataframe{{}, std::move(df)};
 }
 
 dftu_lazyframe* wrap_lazy(LazyFrame&& lf) {
-    return new dftu_lazyframe{std::move(lf)};
+    return new dftu_lazyframe{{}, std::move(lf)};
 }
 
 dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> key_names(

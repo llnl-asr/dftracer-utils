@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# Raw `new` that stays. Read by check_no_raw_new.cmake.
+# One row per kind:
+#   <type> | <reason>                  the type may be made with new anywhere
+#   <path glob> | <reason>             the files are not checked
+#   <path glob> | <type> | <reason>    the type may be made with new in the files
+# A row that matches no file or that no site uses fails the check.
+
+# Types whose objects come from the heap through a base or a class operator new.
+dftu_series | derives dstd::HeapObject
+dftu_dataframe | derives dstd::HeapObject
+dftu_lazyframe | derives dstd::HeapObject
+dftu_expr | derives dstd::HeapObject
+dftu_duql | derives dstd::HeapObject
+dftu_indexer | derives dstd::HeapObject
+dftu_indexer_file_list | derives dstd::HeapObject
+dftu_view | derives dstd::HeapObject
+src/dftracer/utils/dataframe/agg/seed.cpp | AggState | derives dstd::HeapObject
+src/dftracer/utils/dataframe/agg/serialize.cpp | AggState | derives dstd::HeapObject
+src/dftracer/utils/dataframe/agg/state.cpp | AggState | derives dstd::HeapObject
+src/dftracer/utils/dataframe/arrow_bridge.cpp | ExportedArray | derives dstd::HeapObject
+src/dftracer/utils/dataframe/spill.cpp | Mapping | derives dstd::HeapObject
+src/dftracer/utils/common/logging.cpp | ScopeFrame | derives dstd::HeapObject
+src/dftracer/utils/store/writer.cpp | PendingBatch | derives dstd::HeapObject
+src/dftracer/utils/store/open_extent.cpp | NamespaceSlot | derives dstd::HeapObject
+src/dftracer/utils/store/open_extent.cpp | OpenExtent | derives dstd::HeapObject
+src/dftracer/utils/store/open_extent.cpp | SlotBlock | derives dstd::HeapObject
+src/dftracer/utils/store/open_extent.cpp | PendingWrite | derives dstd::HeapObject
+src/dftracer/utils/python/arrow_stream_capsule.cpp | StreamPrivate | derives dstd::HeapObject
+ArrowExportResult | derives dstd::HeapObject
+MemoryViewBatchData | derives dstd::HeapObject
+PluginHostState | derives dstd::HeapObject
+ArrowStreamingIteratorState | derives dstd::HeapObject
+src/dftracer/utils/plugins/fold_adapter.cpp | SketchBox | derives dstd::HeapObject
+ParkNode | derives dstd::HeapObject
+IoUringRequest | has a class operator new on the heap
+IoUringSubmitCtx | has a class operator new on the heap
+src/dftracer/utils/runtime/io/thread_pool_file_ops.cpp | IoRequest | has a class operator new on the heap
+
+# The heap itself, and code that compiles in a plugin on the plugin's allocator.
+src/dftracer/utils/memory/* | the heap
+include/dftracer/utils/memory/* | the heap
+include/dftracer/utils/plugins/plugin/* | compiles in the plugin
+src/dftracer/utils/plugins/compose.h | compiles in the plugin
+include/dftracer/utils/dataframe/series.h | from_borrowed: new and delete both compile in the plugin
+include/dftracer/utils/dstd/vendor/* | vendored upstream text
+
+# Immortal on purpose.
+src/dftracer/utils/runtime/runtime.cpp | Vector | holds the runtime a fork child inherited and is never destroyed

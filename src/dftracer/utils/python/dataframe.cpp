@@ -22,6 +22,7 @@
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/plan.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -39,6 +40,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <new>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <nanoarrow/nanoarrow.hpp>
 #endif
@@ -1210,7 +1212,7 @@ void schema_capsule_destructor(PyObject* cap) {
         static_cast<ArrowSchema*>(PyCapsule_GetPointer(cap, "arrow_schema"));
     if (s) {
         if (s->release) s->release(s);
-        delete s;
+        dftracer::utils::dstd::UniquePtr<ArrowSchema>(s).reset();
     }
 }
 void array_capsule_destructor(PyObject* cap) {
@@ -1218,45 +1220,43 @@ void array_capsule_destructor(PyObject* cap) {
         static_cast<ArrowArray*>(PyCapsule_GetPointer(cap, "arrow_array"));
     if (a) {
         if (a->release) a->release(a);
-        delete a;
+        dftracer::utils::dstd::UniquePtr<ArrowArray>(a).reset();
     }
 }
 
 PyObject* DataFrame_arrow_c_array(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    auto* schema = new (std::nothrow) ArrowSchema{};
-    auto* array = new (std::nothrow) ArrowArray{};
-    if (!schema || !array) {
-        delete schema;
-        delete array;
+    dftracer::utils::dstd::UniquePtr<ArrowSchema> schema;
+    dftracer::utils::dstd::UniquePtr<ArrowArray> array;
+    try {
+        schema = dftracer::utils::dstd::make_unique<ArrowSchema>();
+        array = dftracer::utils::dstd::make_unique<ArrowArray>();
+    } catch (const std::bad_alloc&) {
         return PyErr_NoMemory();
     }
     try {
-        dataframe::to_arrow(b->st, schema, array);
+        dataframe::to_arrow(b->st, schema.get(), array.get());
     } catch (const std::exception& e) {
-        delete schema;
-        delete array;
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
     PyObject* scap =
-        PyCapsule_New(schema, "arrow_schema", schema_capsule_destructor);
+        PyCapsule_New(schema.get(), "arrow_schema", schema_capsule_destructor);
     if (!scap) {
-        if (schema->release) schema->release(schema);
-        delete schema;
-        if (array->release) array->release(array);
-        delete array;
+        if (schema->release) schema->release(schema.get());
+        if (array->release) array->release(array.get());
         return nullptr;
     }
+    schema.release();
     PyObject* acap =
-        PyCapsule_New(array, "arrow_array", array_capsule_destructor);
+        PyCapsule_New(array.get(), "arrow_array", array_capsule_destructor);
     if (!acap) {
         Py_DECREF(scap);
-        if (array->release) array->release(array);
-        delete array;
+        if (array->release) array->release(array.get());
         return nullptr;
     }
+    array.release();
     PyObject* result = PyTuple_Pack(2, scap, acap);
     Py_DECREF(scap);
     Py_DECREF(acap);
@@ -1268,7 +1268,7 @@ void array_stream_capsule_destructor(PyObject* cap) {
         PyCapsule_GetPointer(cap, "arrow_array_stream"));
     if (s) {
         if (s->release) s->release(s);
-        delete s;
+        dftracer::utils::dstd::UniquePtr<ArrowArrayStream>(s).reset();
     }
 }
 
@@ -1293,16 +1293,18 @@ PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject*) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
-    auto* stream = new (std::nothrow) ArrowArrayStream{};
-    if (!stream) {
+    dftracer::utils::dstd::UniquePtr<ArrowArrayStream> stream_owner;
+    try {
+        stream_owner = dftracer::utils::dstd::make_unique<ArrowArrayStream>();
+    } catch (const std::bad_alloc&) {
         drop();
         return PyErr_NoMemory();
     }
+    ArrowArrayStream* stream = stream_owner.get();
     if (ArrowBasicArrayStreamInit(stream, &schema,
                                   static_cast<std::int64_t>(arrays.size())) !=
         NANOARROW_OK) {
         drop();
-        delete stream;
         PyErr_SetString(PyExc_RuntimeError,
                         "failed to init arrow array stream");
         return nullptr;
@@ -1314,9 +1316,9 @@ PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject*) {
                                   array_stream_capsule_destructor);
     if (!cap) {
         if (stream->release) stream->release(stream);
-        delete stream;
         return nullptr;
     }
+    stream_owner.release();
     return cap;
 }
 

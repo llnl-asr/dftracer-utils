@@ -574,8 +574,11 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
             PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
             return nullptr;
         }
-        indexer->handle = new dftracer::utils::dstd::SharedPtr<
-            dftracer::utils::index::gzip::CheckpointIndexer>(std::move(native));
+        indexer->handle =
+            dftracer::utils::dstd::make_unique<dftracer::utils::dstd::SharedPtr<
+                dftracer::utils::index::gzip::CheckpointIndexer>>(
+                std::move(native))
+                .release();
     } catch (const std::exception& e) {
         Py_DECREF((PyObject*)indexer);
         PyErr_SetString(PyExc_RuntimeError, e.what());

@@ -1699,9 +1699,8 @@ class NodeCursor final : public Cursor {
         std::int64_t max_rows) override {
         ::dftu_result_frame out{};
         if (::dftu_task* t = out_vt_->next(out_self_, max_rows, &out)) {
-            auto* task = reinterpret_cast<coro::CoroTask<void>*>(t);
+            auto task = task_from_abi(t);
             co_await *task;
-            delete task;
         }
         if (!DFTU_RESULT_OK(out))
             throw std::runtime_error(
@@ -1734,9 +1733,8 @@ class NodeCursor final : public Cursor {
         ::dftu_expr* h = expr_handle_wrap(predicate);
         ::dftu_task* t = out_vt_->narrow(out_self_, h, &applied);
         if (t) {
-            auto* task = reinterpret_cast<coro::CoroTask<void>*>(t);
+            auto task = task_from_abi(t);
             co_await *task;
-            delete task;
         }
         ::dftu_expr_free(h);
         co_return applied != 0;

@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_CORO_DETAIL_PARKED_H
 #define DFTRACER_UTILS_CORO_DETAIL_PARKED_H
 
+#include <dftracer/utils/dstd/memory.h>
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -67,7 +69,7 @@ ParkOwner park_owner_of(Handle h) noexcept {
 /// The registry entry of a coroutine suspended on an awaitable that only
 /// another party can finish. Shutdown wakes the waiter with a cancelled status
 /// through it.
-struct ParkNode {
+struct ParkNode : dstd::HeapObject {
     ParkNode(ParkCancelFn c, void* w) noexcept
         : cancel(c),
           waiter(w),

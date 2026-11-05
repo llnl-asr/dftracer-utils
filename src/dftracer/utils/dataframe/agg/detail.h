@@ -305,7 +305,7 @@ inline const DDSketch* dyn_find_sketch(const dstd::Vector<DynSketchCell>& cells,
 // Groups fold by distinct value column, not by spec: sum(dur), mean(dur) and
 // var(dur) share one FieldStat per group (accumulated once). Count is
 // field-independent (group rows).
-class AggState {
+class AggState : public dstd::HeapObject {
    public:
     dstd::Vector<AggSpec> specs;
     dstd::Vector<int> spec_field;         // spec -> field index, or -1 (Count)

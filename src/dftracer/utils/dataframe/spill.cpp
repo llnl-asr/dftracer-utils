@@ -494,7 +494,7 @@ namespace {
 
 constexpr std::size_t REGION_ALIGN = 64;
 
-struct Mapping {
+struct Mapping : dftracer::utils::dstd::HeapObject {
     void* addr;
     std::size_t bytes;
 };
@@ -605,7 +605,7 @@ dstd::Vector<Series> PartFile::append(const dstd::Vector<Series>& cols) {
     Mapping* mapping = nullptr;
     memory::BlockRef region;
     try {
-        mapping = new Mapping{map, region_bytes};
+        mapping = new Mapping{{}, map, region_bytes};
         region = memory::Block::borrow(map, region_bytes, unmap, mapping);
     } catch (...) {
         delete mapping;

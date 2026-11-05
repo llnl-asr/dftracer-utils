@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -70,7 +71,7 @@ namespace dftracer::utils::python {
 
 // A host object's mutable side: the built set (immutable once constructed) and
 // the named results of the most recent run or session.
-struct PluginHostState {
+struct PluginHostState : dftracer::utils::dstd::HeapObject {
     dftracer::utils::dstd::Optional<Plugins> set;
     NamedResultRegistry results;
     // wire id -> attribute name, so a caller indexes results[...] with the

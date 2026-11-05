@@ -298,7 +298,7 @@ coro::CoroTask<int> IpcWriter::open(dstd::CStringView path,
     write_offset_ = 8;
 
     // Initialize block tracking
-    batch_blocks_ = new dstd::Vector<FileBlock>();
+    batch_blocks_ = dstd::make_unique<dstd::Vector<FileBlock>>().release();
 
     co_return 0;
 }
@@ -311,7 +311,7 @@ coro::CoroTask<int> IpcWriter::write_schema(ArrowExportResult& batch) {
     ArrowSchema* schema = batch.schema();
 
     // Deep copy schema for footer
-    auto* schema_cp = new ArrowSchema;
+    auto* schema_cp = dstd::make_unique<ArrowSchema>().release();
     ArrowSchemaDeepCopy(schema, schema_cp);
     schema_copy_ = schema_cp;
 
@@ -642,10 +642,12 @@ coro::CoroTask<int> IpcWriter::close() {
     if (schema_copy_) {
         auto* schema = static_cast<ArrowSchema*>(schema_copy_);
         if (schema->release) schema->release(schema);
-        delete schema;
+        dstd::UniquePtr<ArrowSchema>(schema).reset();
     }
     if (batch_blocks_) {
-        delete static_cast<dstd::Vector<FileBlock>*>(batch_blocks_);
+        dstd::UniquePtr<dstd::Vector<FileBlock>>(
+            static_cast<dstd::Vector<FileBlock>*>(batch_blocks_))
+            .reset();
     }
 
     // Fsync and close

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -72,7 +73,7 @@ StaleCheck stale_check(
 }
 
 void Index_dealloc(IndexObject *self) {
-    delete self->index;
+    dftracer::utils::dstd::UniquePtr<index::Index>(self->index).reset();
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -92,8 +93,10 @@ int Index_init(IndexObject *self, PyObject *args, PyObject *kwds) {
     try {
         auto opened = dftracer::utils::common::unwrap(
             index::Index::open(index::normalize_index_root(index_path)));
-        delete self->index;
-        self->index = new index::Index(std::move(opened));
+        dftracer::utils::dstd::UniquePtr<index::Index>(self->index).reset();
+        self->index =
+            dftracer::utils::dstd::make_unique<index::Index>(std::move(opened))
+                .release();
     } catch (const std::exception &e) {
         python::set_typed_py_error(e);
         return -1;

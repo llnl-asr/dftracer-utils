@@ -22,7 +22,7 @@ using namespace dftracer::utils;
 
 // The opaque dftu_view handle owns one immutable scan plan; each builder call
 // returns a handle to a new plan.
-struct dftu_view {
+struct dftu_view : dftracer::utils::dstd::HeapObject {
     dftracer::utils::trace::views::detail::scan::ScanPlan p;
 };
 
@@ -41,7 +41,7 @@ using dftracer::utils::trace::views::ViewFile;
 using dftracer::utils::trace::views::ViewSource;
 
 dftu_view* wrap(trace::views::detail::scan::ScanPlan p) {
-    return new dftu_view{std::move(p)};
+    return new dftu_view{{}, std::move(p)};
 }
 
 using dftracer::utils::trace::views::View;

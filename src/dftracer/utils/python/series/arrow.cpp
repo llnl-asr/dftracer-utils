@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/series_detail.h>
 
@@ -24,7 +25,7 @@ void schema_capsule_destructor(PyObject* cap) {
         static_cast<ArrowSchema*>(PyCapsule_GetPointer(cap, "arrow_schema"));
     if (s) {
         if (s->release) s->release(s);
-        delete s;
+        dftracer::utils::dstd::UniquePtr<ArrowSchema>(s).reset();
     }
 }
 void array_capsule_destructor(PyObject* cap) {
@@ -32,7 +33,7 @@ void array_capsule_destructor(PyObject* cap) {
         static_cast<ArrowArray*>(PyCapsule_GetPointer(cap, "arrow_array"));
     if (a) {
         if (a->release) a->release(a);
-        delete a;
+        dftracer::utils::dstd::UniquePtr<ArrowArray>(a).reset();
     }
 }
 
@@ -41,38 +42,36 @@ void array_capsule_destructor(PyObject* cap) {
 PyObject* Series_arrow_c_array(PyObject* self, PyObject* /*args*/) {
     Series* a = as_series(self);
     if (!a) return nullptr;
-    auto* schema = new (std::nothrow) ArrowSchema{};
-    auto* array = new (std::nothrow) ArrowArray{};
-    if (!schema || !array) {
-        delete schema;
-        delete array;
+    dftracer::utils::dstd::UniquePtr<ArrowSchema> schema;
+    dftracer::utils::dstd::UniquePtr<ArrowArray> array;
+    try {
+        schema = dftracer::utils::dstd::make_unique<ArrowSchema>();
+        array = dftracer::utils::dstd::make_unique<ArrowArray>();
+    } catch (const std::bad_alloc&) {
         return PyErr_NoMemory();
     }
     try {
-        dataframe::to_arrow(*a, schema, array);
+        dataframe::to_arrow(*a, schema.get(), array.get());
     } catch (const std::exception& e) {
-        delete schema;
-        delete array;
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
     PyObject* scap =
-        PyCapsule_New(schema, "arrow_schema", schema_capsule_destructor);
+        PyCapsule_New(schema.get(), "arrow_schema", schema_capsule_destructor);
     if (!scap) {
-        if (schema->release) schema->release(schema);
-        delete schema;
-        if (array->release) array->release(array);
-        delete array;
+        if (schema->release) schema->release(schema.get());
+        if (array->release) array->release(array.get());
         return nullptr;
     }
+    schema.release();
     PyObject* acap =
-        PyCapsule_New(array, "arrow_array", array_capsule_destructor);
+        PyCapsule_New(array.get(), "arrow_array", array_capsule_destructor);
     if (!acap) {
         Py_DECREF(scap);  // releases + frees the schema
-        if (array->release) array->release(array);
-        delete array;
+        if (array->release) array->release(array.get());
         return nullptr;
     }
+    array.release();
     PyObject* result = PyTuple_Pack(2, scap, acap);
     Py_DECREF(scap);
     Py_DECREF(acap);
@@ -193,7 +192,7 @@ void numpy_buffer_release(void* ctx) {
     PyGILState_STATE gil = PyGILState_Ensure();
     PyBuffer_Release(view);
     PyGILState_Release(gil);
-    delete view;
+    dftracer::utils::dstd::UniquePtr<Py_buffer>(view).reset();
 }
 
 }  // namespace
@@ -207,11 +206,15 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
     PyObject* obj = nullptr;
     PyObject* mask_obj = Py_None;
     if (!PyArg_ParseTuple(call_args, "O|O", &obj, &mask_obj)) return nullptr;
-    auto* view = new (std::nothrow) Py_buffer{};
-    if (!view) return PyErr_NoMemory();
+    dftracer::utils::dstd::UniquePtr<Py_buffer> view_owner;
+    try {
+        view_owner = dftracer::utils::dstd::make_unique<Py_buffer>();
+    } catch (const std::bad_alloc&) {
+        return PyErr_NoMemory();
+    }
+    Py_buffer* view = view_owner.get();
     if (PyObject_GetBuffer(obj, view,
                            PyBUF_FORMAT | PyBUF_ND | PyBUF_STRIDES) != 0) {
-        delete view;
         return nullptr;  // no buffer protocol; error already set
     }
     TypeId type = TypeId::Int64;
@@ -221,7 +224,6 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
         !numpy_format_type(view->format, view->itemsize, &type) ||
         !contiguous) {
         PyBuffer_Release(view);
-        delete view;
         PyErr_SetString(
             PyExc_TypeError,
             "_series_from_numpy needs a 1-D C-contiguous fixed-width "
@@ -236,13 +238,11 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
         Py_buffer m{};
         if (PyObject_GetBuffer(mask_obj, &m, PyBUF_SIMPLE) != 0) {
             PyBuffer_Release(view);
-            delete view;
             return nullptr;
         }
         if (m.len != n) {
             PyBuffer_Release(&m);
             PyBuffer_Release(view);
-            delete view;
             PyErr_SetString(PyExc_ValueError,
                             "mask and array differ in length");
             return nullptr;
@@ -266,7 +266,6 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
                 packed[static_cast<std::size_t>(i >> 3)] |=
                     static_cast<std::uint8_t>(1U << (i & 7));
         PyBuffer_Release(view);
-        delete view;
         return make_series(Series::flat(TypeId::Bool, packed.data(), n, valid));
     }
     // An empty array has no memory to borrow (the release would not run on a
@@ -274,7 +273,6 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
     if (n == 0 || view->buf == nullptr) {
         Series col = Series::flat(type, view->buf, n, nullptr);
         PyBuffer_Release(view);
-        delete view;
         if (!col.valid()) {
             PyErr_SetString(PyExc_RuntimeError,
                             "failed to build an empty column");
@@ -282,6 +280,7 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
         }
         return make_series(std::move(col));
     }
+    view_owner.release();
     dftu_series* h =
         dftu_series_new_flat_borrowed(static_cast<dftu_dtype>(type), view->buf,
                                       n, valid, numpy_buffer_release, view);

@@ -139,7 +139,7 @@ using utilities::arrow::ArrowExportResult;
 
 /// Internal C++ state for ArrowStreamingIterator.
 /// Stored as a pointer to avoid C++ object layout issues with Python.
-struct ArrowStreamingIteratorState {
+struct ArrowStreamingIteratorState : dstd::HeapObject {
     dstd::SharedPtr<void> state;
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     dstd::Function<dstd::Optional<ArrowExportResult>()> pull_next;

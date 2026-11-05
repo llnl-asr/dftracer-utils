@@ -187,13 +187,29 @@ bool from_arrow_type(const ArrowSchemaView& view, TypeId& out) {
 
 /// Keeps a column's buffers (and, for a selection, its base) alive for as long
 /// as an exported ArrowArray references them, and owns the array's buffer list.
-struct ExportedArray {
+struct ExportedArray : dstd::HeapObject {
     dstd::Vector<BufferView> keep;
     dstd::SharedPtr<dftu_series> child_keep;
     dstd::Vector<dstd::SharedPtr<dftu_series>> children_keep;
     const void* buffers[3];
     dstd::Vector<const void*> view_buffers;
     dstd::Vector<std::int64_t> view_sizes;
+    /// The exported dictionary or child arrays, and pointers to the children.
+    dstd::Vector<ArrowArray> arrays;
+    dstd::Vector<ArrowArray*> child_ptrs;
+
+    /// Sets aside @p n zeroed arrays; call once.
+    ArrowArray* reserve_arrays(std::size_t n) {
+        arrays.resize(n);
+        return arrays.data();
+    }
+    void set_children(ArrowArray* array, std::size_t n) {
+        reserve_arrays(n);
+        child_ptrs.resize(n);
+        for (std::size_t i = 0; i < n; ++i) child_ptrs[i] = &arrays[i];
+        array->n_children = static_cast<std::int64_t>(n);
+        array->children = child_ptrs.data();
+    }
 };
 
 bool is_varwidth(TypeId t) {
@@ -210,15 +226,12 @@ void release_exported(ArrowArray* array) {
     if (array->dictionary != nullptr) {
         if (array->dictionary->release != nullptr)
             array->dictionary->release(array->dictionary);
-        delete array->dictionary;
         array->dictionary = nullptr;
     }
     for (std::int64_t i = 0; i < array->n_children; ++i) {
         if (array->children[i]->release != nullptr)
             array->children[i]->release(array->children[i]);
-        delete array->children[i];
     }
-    delete[] array->children;
     array->children = nullptr;
     delete static_cast<ExportedArray*>(array->private_data);
     array->private_data = nullptr;
@@ -316,7 +329,7 @@ void export_dict(const dftu_series& col, ArrowArray* array) {
     array->buffers = h->buffers;
     array->private_data = h;
     array->release = release_exported;
-    array->dictionary = new ArrowArray();
+    array->dictionary = h->reserve_arrays(1);
     export_array(*col.child(), array->dictionary);
 }
 
@@ -366,10 +379,8 @@ void export_struct(const dftu_series& col, ArrowArray* array) {
     array->offset = 0;
     array->n_buffers = 1;
     array->buffers = h->buffers;
-    array->n_children = static_cast<std::int64_t>(col.num_fields());
-    array->children = new ArrowArray*[col.num_fields()];
+    h->set_children(array, col.num_fields());
     for (std::size_t i = 0; i < col.num_fields(); ++i) {
-        array->children[i] = new ArrowArray();
         export_array(*col.nested[i].series, array->children[i]);
         h->children_keep.push_back(col.nested[i].series);
     }
@@ -392,9 +403,7 @@ void export_list(const dftu_series& col, ArrowArray* array) {
     array->offset = 0;
     array->n_buffers = 2;
     array->buffers = h->buffers;
-    array->n_children = 1;
-    array->children = new ArrowArray*[1];
-    array->children[0] = new ArrowArray();
+    h->set_children(array, 1);
     export_array(*col.child(), array->children[0]);
     array->private_data = h;
     array->release = release_exported;
@@ -413,9 +422,7 @@ void export_list_large(const dftu_series& col, ArrowArray* array) {
     array->offset = 0;
     array->n_buffers = 2;
     array->buffers = h->buffers;
-    array->n_children = 1;
-    array->children = new ArrowArray*[1];
-    array->children[0] = new ArrowArray();
+    h->set_children(array, 1);
     export_array(*col.child(), array->children[0]);
     array->private_data = h;
     array->release = release_exported;
@@ -433,9 +440,7 @@ void export_fixed_size_list(const dftu_series& col, ArrowArray* array) {
     array->offset = 0;
     array->n_buffers = 1;
     array->buffers = h->buffers;
-    array->n_children = 1;
-    array->children = new ArrowArray*[1];
-    array->children[0] = new ArrowArray();
+    h->set_children(array, 1);
     export_array(*col.child(), array->children[0]);
     array->private_data = h;
     array->release = release_exported;
@@ -1002,11 +1007,11 @@ Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
 // Move `array` into a shared owner that runs its release once the last wrapped
 // buffer is dropped; the caller's array is marked released.
 dstd::SharedPtr<ArrowArray> adopt_array(ArrowArray* array) {
-    auto* moved = new ArrowArray(*array);
+    auto* moved = dstd::make_unique<ArrowArray>(*array).release();
     array->release = nullptr;
     return dstd::adopt_shared_ptr(moved, [](ArrowArray* a) {
         if (a->release != nullptr) a->release(a);
-        delete a;
+        dstd::UniquePtr<ArrowArray>(a).reset();
     });
 }
 

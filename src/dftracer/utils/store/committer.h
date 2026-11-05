@@ -36,7 +36,7 @@ class WriterExtents;
 /// data must be on disk before its commit returns. The writer fills it,
 /// ExtentWriter::append carries it as the segment context, and the committer
 /// deletes it once the record naming it is written.
-struct PendingBatch {
+struct PendingBatch : dstd::HeapObject {
     PendingBatch();
     ~PendingBatch();
     PendingBatch(const PendingBatch&) = delete;

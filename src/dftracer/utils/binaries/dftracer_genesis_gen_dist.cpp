@@ -584,7 +584,7 @@ constexpr std::size_t COPY_BYTES = 8 * 1024 * 1024;
 bool copy_into(const dstd::String& from, int to, std::uint64_t offset) {
     const int in = ::open(from.c_str(), O_RDONLY);
     if (in < 0) return false;
-    auto buf = std::make_unique_for_overwrite<char[]>(COPY_BYTES);
+    auto buf = dstd::make_unique_for_overwrite<char[]>(COPY_BYTES);
     bool ok = true;
     for (;;) {
         const ssize_t n = ::read(in, buf.get(), COPY_BYTES);

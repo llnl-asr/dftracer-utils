@@ -22,7 +22,9 @@
 
 static void CheckpointIndexer_dealloc(CheckpointIndexerObject *self) {
     if (self->handle) {
-        delete self->handle;
+        dftracer::utils::dstd::UniquePtr<dftracer::utils::dstd::SharedPtr<
+            dftracer::utils::index::gzip::CheckpointIndexer>>(self->handle)
+            .reset();
         self->handle = NULL;
     }
     Py_XDECREF(self->gz_path);
@@ -34,7 +36,9 @@ static void CheckpointIndexer_dealloc(CheckpointIndexerObject *self) {
 static void CheckpointIndexer_release_handle(CheckpointIndexerObject *self) {
     if (self->handle) {
         // Releasing the handle drops this wrapper's native indexer state only.
-        delete self->handle;
+        dftracer::utils::dstd::UniquePtr<dftracer::utils::dstd::SharedPtr<
+            dftracer::utils::index::gzip::CheckpointIndexer>>(self->handle)
+            .reset();
         self->handle = NULL;
     }
 }
@@ -129,9 +133,11 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
             PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
             return -1;
         }
-        self->handle = new dftracer::utils::dstd::SharedPtr<
-            dftracer::utils::index::gzip::CheckpointIndexer>(
-            std::move(indexer));
+        self->handle =
+            dftracer::utils::dstd::make_unique<dftracer::utils::dstd::SharedPtr<
+                dftracer::utils::index::gzip::CheckpointIndexer>>(
+                std::move(indexer))
+                .release();
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return -1;

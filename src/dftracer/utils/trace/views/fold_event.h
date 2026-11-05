@@ -221,7 +221,9 @@ class ArenaVec {
             return;
         }
         T* fresh =
-            arena_ != nullptr ? arena_->allocate(capacity) : new T[capacity];
+            arena_ != nullptr
+                ? arena_->allocate(capacity)
+                : dstd::make_unique_for_overwrite<T[]>(capacity).release();
         std::copy(data_, data_ + size_, fresh);
         free_owned();
         data_ = fresh;
@@ -233,7 +235,7 @@ class ArenaVec {
         size_ = static_cast<std::uint32_t>(n);
     }
     void free_owned() {
-        if (arena_ == nullptr) delete[] data_;
+        if (arena_ == nullptr) dstd::UniquePtr<T[]>(data_).reset();
     }
 
     T* data_ = nullptr;

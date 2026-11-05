@@ -108,8 +108,8 @@ struct ExtentWriter::OpenSegment {
     void* context = nullptr;
 };
 
-struct ExtentWriter::OpenExtent {
-    struct SlotBlock {
+struct ExtentWriter::OpenExtent : dstd::HeapObject {
+    struct SlotBlock : dstd::HeapObject {
         OpenSegment slots[OPEN_EXTENT_SLOT_BLOCK];
     };
 
@@ -131,7 +131,7 @@ struct ExtentWriter::OpenExtent {
     dstd::Vector<OpenSegment> segments;
 };
 
-struct ExtentWriter::NamespaceSlot {
+struct ExtentWriter::NamespaceSlot : dstd::HeapObject {
     std::uint32_t id = 0;
     PageCodec codec = PageCodec::Zstd;
     std::atomic<OpenExtent*> extent{nullptr};
@@ -147,7 +147,7 @@ struct ExtentWriter::NamespaceSlot {
     std::uint64_t sealed_while_training = 0;
 };
 
-struct ExtentWriter::PendingWrite {
+struct ExtentWriter::PendingWrite : dstd::HeapObject {
     ExtentWriter* owner = nullptr;
     WrittenExtent written;
     dstd::Vector<std::uint8_t> buffer;

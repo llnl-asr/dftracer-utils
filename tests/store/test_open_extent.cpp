@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/path.h>
@@ -37,8 +38,8 @@ namespace dftracer::utils::store::engine {
 struct DataFileWriterTestHook {
     static void reopen_read_only(engine::DataFileWriter& writer,
                                  const dstd::String& path) {
-        if (writer.fd_ >= 0) ::close(writer.fd_);
-        writer.fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        auto file = dstd::File::open(dstd::PathView(path), {});
+        if (file) writer.fd_ = std::move(*file);
     }
 };
 
@@ -354,14 +355,14 @@ TEST_CASE("store open extent: one thread fills one namespace") {
     REQUIRE(!extents.empty());
     check_extent_layout(extents, SIXTY_FOUR_KIB);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     dstd::Vector<int> seen(SEGMENTS, 0);
     check_extents_on_disk(fd, extents, seen);
     for (std::uint32_t id = 0; id < SEGMENTS; ++id) {
         CHECK(seen[id] == 1);
     }
-    ::close(fd);
 }
 
 TEST_CASE("store open extent: many threads across three namespaces") {
@@ -409,15 +410,15 @@ TEST_CASE("store open extent: many threads across three namespaces") {
     REQUIRE(!extents.empty());
     check_extent_layout(extents, SIXTY_FOUR_KIB);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     const std::uint32_t total = THREADS * PER_THREAD;
     dstd::Vector<int> seen(total, 0);
     check_extents_on_disk(fd, extents, seen);
     for (std::uint32_t id = 0; id < total; ++id) {
         CHECK(seen[id] == 1);
     }
-    ::close(fd);
 
     for (const engine::WrittenExtent& extent : extents) {
         const std::uint32_t namespace_id = extent.segments.front().copy_id - 1;
@@ -463,11 +464,11 @@ TEST_CASE("store open extent: a segment of three extents is written alone") {
     CHECK(extent.segments.front().length == length);
     CHECK(extent.segments.front().entry_count == 5);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     const dstd::Vector<std::uint8_t> bytes = read_extent_raw(fd, extent);
     CHECK(bytes == payload);
-    ::close(fd);
 }
 
 TEST_CASE(
@@ -536,15 +537,15 @@ TEST_CASE(
     REQUIRE(rest.contexts.size() == 1);
     CHECK(rest.contexts[0] == &context_c);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     dstd::Vector<std::uint8_t> expected = a;
     expected.insert(expected.end(), b.begin(), b.end());
     const dstd::Vector<std::uint8_t> full_bytes = read_extent_raw(fd, full);
     CHECK(full_bytes == expected);
     const dstd::Vector<std::uint8_t> rest_bytes = read_extent_raw(fd, rest);
     CHECK(rest_bytes == c);
-    ::close(fd);
 }
 
 TEST_CASE("store open extent: a failed write latches and reports no extent") {
@@ -691,15 +692,15 @@ TEST_CASE("store open extent: stress a small extent from many threads") {
     REQUIRE(!extents.empty());
     check_extent_layout(extents, EIGHT_KIB);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     const std::uint32_t total = THREADS * PER_THREAD;
     dstd::Vector<int> seen(total, 0);
     check_extents_on_disk(fd, extents, seen);
     for (std::uint32_t id = 0; id < total; ++id) {
         CHECK(seen[id] == 1);
     }
-    ::close(fd);
 }
 
 TEST_CASE("store open extent: a short write is finished with resubmissions") {
@@ -729,12 +730,12 @@ TEST_CASE("store open extent: a short write is finished with resubmissions") {
     REQUIRE(extents.size() == 1);
     CHECK(extents.front().length == FOUR_KIB);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     dstd::Vector<int> seen(4, 0);
     check_extents_on_disk(fd, extents, seen);
     CHECK(seen[3] == 1);
-    ::close(fd);
 }
 
 TEST_CASE("store open extent: an interrupted write is retried in full") {
@@ -763,12 +764,12 @@ TEST_CASE("store open extent: an interrupted write is retried in full") {
     dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     dstd::Vector<int> seen(5, 0);
     check_extents_on_disk(fd, extents, seen);
     CHECK(seen[4] == 1);
-    ::close(fd);
 }
 
 TEST_CASE("store open extent: a zero write result latches an Io error") {
@@ -825,12 +826,12 @@ TEST_CASE("store open extent: an extent write needs the backend flush") {
     REQUIRE(extents.size() == 1);
     CHECK(extents.front().length == FOUR_KIB);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     dstd::Vector<int> seen(7, 0);
     check_extents_on_disk(fd, extents, seen);
     CHECK(seen[6] == 1);
-    ::close(fd);
 }
 
 TEST_CASE(
@@ -868,11 +869,11 @@ TEST_CASE(
     CHECK(extent.segments.front().length == EIGHT_KIB);
     CHECK(extent.segments.front().entry_count == 5);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     const dstd::Vector<std::uint8_t> bytes = read_extent_raw(fd, extent);
     CHECK(bytes == payload);
-    ::close(fd);
 }
 
 TEST_CASE("store open extent: appends concurrent with seal_all land once") {
@@ -931,15 +932,15 @@ TEST_CASE("store open extent: appends concurrent with seal_all land once") {
     REQUIRE(!extents.empty());
     check_extent_layout(extents, EIGHT_KIB);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     const std::uint32_t total = APPENDERS * PER_THREAD;
     dstd::Vector<int> seen(total, 0);
     check_extents_on_disk(fd, extents, seen);
     for (std::uint32_t id = 0; id < total; ++id) {
         CHECK(seen[id] == 1);
     }
-    ::close(fd);
 }
 
 TEST_CASE(
@@ -979,15 +980,15 @@ TEST_CASE(
     REQUIRE(extents[0].segments.size() == 1);
     REQUIRE(extents[1].segments.size() == 1);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     const dstd::Vector<std::uint8_t> first_bytes =
         read_extent_raw(fd, extents[0]);
     CHECK(first_bytes == first);
     const dstd::Vector<std::uint8_t> second_bytes =
         read_extent_raw(fd, extents[1]);
     CHECK(second_bytes == second);
-    ::close(fd);
 }
 
 TEST_CASE("store open extent: sealing an empty extent holds no buffer") {
@@ -1024,10 +1025,10 @@ TEST_CASE("store open extent: sealing an empty extent holds no buffer") {
     dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
 
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(file_path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     dstd::Vector<int> seen(8, 0);
     check_extents_on_disk(fd, extents, seen);
     CHECK(seen[7] == 1);
-    ::close(fd);
 }

@@ -6,9 +6,9 @@
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -53,7 +53,7 @@ struct PreparedFile {
     std::int64_t file_mtime_ns = 0;
     std::uint64_t file_size = 0;
     /// The parse worker takes the caller's open descriptor, if it passed one.
-    dstd::SharedPtr<dstd::ScopedFd> input_fd;
+    dstd::SharedPtr<dstd::File> input_fd;
 };
 
 struct ParsedBloomJob {
@@ -180,7 +180,7 @@ static coro::CoroTask<void> parse_and_write_worker(
 
         for (std::size_t idx = block_begin; idx < block_end; ++idx) {
             auto& pf = (*prepared_ptr)[idx];
-            dstd::SharedPtr<dstd::ScopedFd> input_fd = std::move(pf.input_fd);
+            dstd::SharedPtr<dstd::File> input_fd = std::move(pf.input_fd);
             struct stat input_stat{};
             FileAdmission::Ticket ticket;
             bool admitted = false;
@@ -189,10 +189,13 @@ static coro::CoroTask<void> parse_and_write_worker(
                     FileAdmission::plaintext_estimate(0, (*costs_ptr)[idx]));
                 admitted = true;
             }
-            if (!input_fd)
-                input_fd = dstd::make_shared<dstd::ScopedFd>(
-                    ::open(pf.file_path.c_str(), O_RDONLY));
-            const int fd = input_fd->get();
+            if (!input_fd) {
+                auto opened = dstd::File::open(pf.file_path, {});
+                if (opened)
+                    input_fd =
+                        dstd::make_shared<dstd::File>(std::move(*opened));
+            }
+            const int fd = input_fd ? input_fd->native_handle() : -1;
             if (fd >= 0 && ::fstat(fd, &input_stat) == 0) {
                 pf.file_size = static_cast<std::uint64_t>(input_stat.st_size);
                 pf.file_mtime = static_cast<std::uint64_t>(input_stat.st_mtime);

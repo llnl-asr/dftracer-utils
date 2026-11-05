@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -40,8 +41,8 @@ namespace dftracer::utils::store::engine {
 struct DataFileWriterTestHook {
     static void reopen_read_only(DataFileWriter& writer,
                                  const dstd::String& path) {
-        if (writer.fd_ >= 0) ::close(writer.fd_);
-        writer.fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        auto file = dstd::File::open(dstd::PathView(path), {});
+        if (file) writer.fd_ = std::move(*file);
     }
 };
 

@@ -4,8 +4,8 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 
 #include <atomic>
 #include <cstddef>
@@ -40,7 +40,7 @@ class SpillFile {
                                 std::size_t n);
 
     /// The descriptor, for a caller that maps the file.
-    int fd() const noexcept { return fd_.get(); }
+    int fd() const noexcept { return fd_.native_handle(); }
 
     /// Reads exactly `n` bytes at `offset`. IO error on a short read.
     dstd::Result<void> read(std::uint64_t offset, void* out,
@@ -57,7 +57,7 @@ class SpillFile {
     SpillFile(Key, bool in_memory) : charge_(in_memory) {}
 
    private:
-    dstd::ScopedFd fd_;
+    dstd::File fd_;
     std::atomic<std::uint64_t> end_{0};
     SpillCharge charge_;
 };

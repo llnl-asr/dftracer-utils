@@ -15,7 +15,36 @@ namespace {
 constexpr std::uint64_t MAX_OFFSET =
     static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
 
-Expected<int, Error> open_flags(OpenOptions options) {
+Expected<off_t, Error> to_offset(std::uint64_t offset, std::size_t len,
+                                 const char* what) {
+    if (offset > MAX_OFFSET || len > MAX_OFFSET - offset) {
+        return Unexpected(Error(
+            Condition::InvalidArgument,
+            internal::make_message(what, {}, "offset past the largest file")));
+    }
+    return static_cast<off_t>(offset);
+}
+
+}  // namespace
+
+File::~File() {
+    if (handle_ >= 0) ::close(handle_);
+}
+
+File::File(File&& other) noexcept : handle_(other.handle_) {
+    other.handle_ = -1;
+}
+
+File& File::operator=(File&& other) noexcept {
+    if (this != &other) {
+        if (handle_ >= 0) ::close(handle_);
+        handle_ = other.handle_;
+        other.handle_ = -1;
+    }
+    return *this;
+}
+
+Expected<int, Error> File::native_open_flags(OpenOptions options) {
     int flags = O_CLOEXEC;
     switch (options.access) {
         case Access::Read:
@@ -52,37 +81,8 @@ Expected<int, Error> open_flags(OpenOptions options) {
     return flags;
 }
 
-Expected<off_t, Error> to_offset(std::uint64_t offset, std::size_t len,
-                                 const char* what) {
-    if (offset > MAX_OFFSET || len > MAX_OFFSET - offset) {
-        return Unexpected(Error(
-            Condition::InvalidArgument,
-            internal::make_message(what, {}, "offset past the largest file")));
-    }
-    return static_cast<off_t>(offset);
-}
-
-}  // namespace
-
-File::~File() {
-    if (handle_ >= 0) ::close(handle_);
-}
-
-File::File(File&& other) noexcept : handle_(other.handle_) {
-    other.handle_ = -1;
-}
-
-File& File::operator=(File&& other) noexcept {
-    if (this != &other) {
-        if (handle_ >= 0) ::close(handle_);
-        handle_ = other.handle_;
-        other.handle_ = -1;
-    }
-    return *this;
-}
-
 Expected<File, Error> File::open(PathView path, OpenOptions options) {
-    auto flags = open_flags(options);
+    auto flags = native_open_flags(options);
     if (!flags) return Unexpected(flags.error());
     const internal::PathCString c_path(path.str());
     int fd = -1;

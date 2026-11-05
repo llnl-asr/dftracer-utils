@@ -45,7 +45,7 @@ INCLUDE_ROOT = "dftracer/utils"
 # Map namespace prefixes to related guide pages (for cross-references)
 GUIDE_PAGES: dict[str, str] = {
     "coro": "coro",
-    "io": "io",
+    "runtime.io": "io",
     "index": "indexer",
     "utilities.composites.dft.aggregators": "dft_aggregators",
     "utilities.composites.dft.indexing": "dft_indexing",
@@ -64,7 +64,7 @@ TITLE_OVERRIDES: dict[str, str] = {
     "json": "JSON",
     "hash": "Hashing",
     "coro": "Coroutine Primitives",
-    "io": "Async I/O",
+    "runtime.io": "Async I/O",
     "server": "HTTP Server",
     "mpi": "MPI Utilities",
     "utilities.common.statistics": "Statistics (DDSketch, Histogram)",

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -277,13 +278,13 @@ TEST_SUITE("IndexBuilder") {
 
         dstd::Vector<dftracer::utils::index::gzip::GzipMember> found;
         bool ok = false;
-        const int fd = ::open(gz_file.c_str(), O_RDONLY);
-        REQUIRE(fd >= 0);
+        auto fd_file = dstd::File::open(gz_file, {});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             ok = co_await dftracer::utils::index::gzip::
                 enumerate_gzip_member_candidates(fd, file_size, found);
         });
-        ::close(fd);
         REQUIRE(ok);
         REQUIRE(found.size() == c_offsets.size());
         for (std::size_t i = 0; i < found.size(); ++i) {

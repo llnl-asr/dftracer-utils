@@ -37,8 +37,7 @@ namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
     static void close_fd(engine::DataFileWriter& writer) {
-        if (writer.fd_ >= 0) ::close(writer.fd_);
-        writer.fd_ = -1;
+        (void)writer.fd_.close();
     }
 };
 

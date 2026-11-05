@@ -5,9 +5,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
@@ -141,17 +141,17 @@ class FileDecompressorUtility {
                 throw common::DFTUtilsException(compressed.error());
             compressed_size = static_cast<std::size_t>(*compressed);
 
-            ssize_t fd_result =
-                co_await runtime::io::open(input.input_path.c_str(), O_RDONLY);
-            if (fd_result < 0) {
+            auto opened = co_await runtime::io::open_file(input.input_path, {});
+            if (!opened) {
                 co_return common::make_error(
                     common::ErrorCode::Io,
                     "Cannot open file: " + input.input_path);
             }
-            dstd::ScopedFd fd(static_cast<int>(fd_result));
+            const dstd::File fd_file = std::move(*opened);
+            const int fd = fd_file.native_handle();
 
             struct stat st;
-            if (::fstat(fd.get(), &st) != 0) {
+            if (::fstat(fd, &st) != 0) {
                 co_return common::make_error(
                     common::ErrorCode::Io,
                     "Cannot stat file: " + input.input_path);
@@ -160,7 +160,7 @@ class FileDecompressorUtility {
             fileio::StreamingFileWriterUtility writer(
                 dstd::PathView(input.output_path));
             auto gen = fileio::compress::decode_gzip_members(
-                fd.get(), static_cast<std::uint64_t>(st.st_size));
+                fd, static_cast<std::uint64_t>(st.st_size));
             for (;;) {
                 auto chunk = co_await gen.next();
                 if (!chunk) break;

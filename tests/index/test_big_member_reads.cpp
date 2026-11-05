@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -179,8 +180,9 @@ std::size_t inflate_mismatches(
     const dstd::String& path, const dstd::String& expected,
     utilities::reader::internal::MemberDecodeCache* cache = nullptr,
     const dstd::Vector<std::uint64_t>* heads = nullptr) {
-    const int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     std::size_t at = 0, bad = 0;
     bool ok = false;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -203,14 +205,14 @@ std::size_t inflate_mismatches(
         }
         ok = true;
     });
-    ::close(fd);
     REQUIRE(ok);
     return bad + (at == expected.size() ? 0 : 1);
 }
 
 std::size_t members_lines(const dstd::String& path) {
-    const int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     const auto size = static_cast<std::uint64_t>(::lseek(fd, 0, SEEK_END));
     std::size_t lines = 0;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -220,7 +222,6 @@ std::size_t members_lines(const dstd::String& path) {
             lines += static_cast<std::size_t>(
                 std::count(part->begin(), part->end(), '\n'));
     });
-    ::close(fd);
     return lines;
 }
 

@@ -5,9 +5,9 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -168,24 +168,25 @@ class StreamCounter {
 };
 
 coro::CoroTask<std::size_t> stream_count(dstd::String path) {
-    dstd::ScopedFd fd(::open(path.c_str(), O_RDONLY));
-    if (fd.get() < 0)
+    auto file = dstd::File::open(path, {});
+    if (!file)
         throw common::DFTUtilsException::cat(common::ErrorCode::Io,
                                              "cannot open ", path);
+    const int fd = file->native_handle();
     struct stat st;
-    if (::fstat(fd.get(), &st) != 0)
+    if (::fstat(fd, &st) != 0)
         throw common::DFTUtilsException::cat(common::ErrorCode::Io,
                                              "cannot stat ", path);
     const auto size = static_cast<std::uint64_t>(st.st_size);
-    const auto& schema = index::detect_file_schema(path, fd.get(), size,
-                                                   common::stat_mtime_ns(st));
+    const auto& schema =
+        index::detect_file_schema(path, fd, size, common::stat_mtime_ns(st));
     StreamCounter counter(schema.decoder == index::Decoder::Path);
 
     unsigned char magic[2] = {0, 0};
-    const auto magic_read = co_await runtime::io::pread(fd.get(), magic, 2, 0);
+    const auto magic_read = co_await runtime::io::pread(fd, magic, 2, 0);
     if (magic_read == 2 && magic[0] == 0x1f && magic[1] == 0x8b) {
         auto members = utilities::fileio::compress::decode_gzip_members(
-            fd.get(), size, INFLATE_STEP_BYTES);
+            fd, size, INFLATE_STEP_BYTES);
         for (;;) {
             auto chunk = co_await members.next();
             if (!chunk) break;
@@ -195,8 +196,8 @@ coro::CoroTask<std::size_t> stream_count(dstd::String path) {
         dstd::String buf(PLAIN_READ_BYTES, '\0');
         std::uint64_t offset = 0;
         while (offset < size) {
-            const auto got = co_await runtime::io::pread(fd.get(), buf.data(),
-                                                         buf.size(), offset);
+            const auto got =
+                co_await runtime::io::pread(fd, buf.data(), buf.size(), offset);
             if (got < 0)
                 throw common::DFTUtilsException::cat(common::ErrorCode::Io,
                                                      "cannot read ", path);

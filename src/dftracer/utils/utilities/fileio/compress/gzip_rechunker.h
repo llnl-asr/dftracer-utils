@@ -5,7 +5,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -112,23 +112,23 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
         member_size = common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     if (level < 0) level = 6;
 
-    ssize_t in_fd_res = co_await runtime::io::open(in_path.c_str(), O_RDONLY);
-    if (in_fd_res < 0) {
+    auto opened = co_await runtime::io::open_file(in_path, {});
+    if (!opened) {
         throw common::DFTUtilsException(common::ErrorCode::Io,
                                         "Cannot open file: " + in_path);
     }
-    dstd::ScopedFd in_fd(static_cast<int>(in_fd_res));
+    const dstd::File in_file = std::move(*opened);
+    const int in_fd = in_file.native_handle();
 
     struct stat st;
-    if (::fstat(in_fd.get(), &st) != 0) {
+    if (::fstat(in_fd, &st) != 0) {
         throw common::DFTUtilsException(common::ErrorCode::Io,
                                         "Cannot stat file: " + in_path);
     }
     const auto file_size = static_cast<std::uint64_t>(st.st_size);
     unsigned char magic[2] = {0, 0};
-    const bool plain =
-        co_await runtime::io::pread(in_fd.get(), magic, 2, 0) != 2 ||
-        magic[0] != 0x1f || magic[1] != 0x8b;
+    const bool plain = co_await runtime::io::pread(in_fd, magic, 2, 0) != 2 ||
+                       magic[0] != 0x1f || magic[1] != 0x8b;
 
     GzipStreamInflater gz;
     if (!plain && !gz.init(15 + 16)) {
@@ -167,7 +167,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
             const std::size_t want = static_cast<std::size_t>(
                 std::min<std::uint64_t>(in.size(), file_size - off));
             const ssize_t n =
-                co_await runtime::io::pread(in_fd.get(), in.data(), want, off);
+                co_await runtime::io::pread(in_fd, in.data(), want, off);
             if (n <= 0) break;
             off += static_cast<std::uint64_t>(n);
             co_await feed(
@@ -180,7 +180,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
             const std::size_t want = static_cast<std::size_t>(
                 std::min<std::uint64_t>(in.size(), file_size - off));
             const ssize_t n =
-                co_await runtime::io::pread(in_fd.get(), in.data(), want, off);
+                co_await runtime::io::pread(in_fd, in.data(), want, off);
             if (n <= 0) break;
             off += static_cast<std::uint64_t>(n);
             gz.set_input(in.data(), static_cast<std::size_t>(n));

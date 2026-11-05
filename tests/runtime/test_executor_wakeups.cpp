@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/ops.h>
@@ -145,8 +146,11 @@ TEST_SUITE("ExecutorWakeups") {
         constexpr auto DEADLINE = 3s;
         const auto path =
             dftu_utils_test::make_unique_test_path("io_flush_per_slice");
-        const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        REQUIRE(fd >= 0);
+        auto file = dstd::File::open(dstd::PathView(path),
+                                     {.access = dstd::Access::Write,
+                                      .creation = dstd::Creation::AlwaysNew});
+        REQUIRE(file);
+        const int fd = file->native_handle();
         static const char BYTE = 'x';
 
         Runtime rt(1);
@@ -170,7 +174,6 @@ TEST_SUITE("ExecutorWakeups") {
                 co_return;
             })));
         rt.shutdown();
-        ::close(fd);
         (void)dstd::fs::remove(path);
         CHECK(landed);
     }

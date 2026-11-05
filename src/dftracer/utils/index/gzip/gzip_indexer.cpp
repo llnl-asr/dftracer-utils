@@ -8,13 +8,13 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/index_visitor.h>
@@ -981,13 +981,13 @@ build_gzip_index_artifacts(dstd::CStringView gz_path, std::uint64_t ckpt_size,
                            const CheckpointIndexer::VisitorList& visitors,
                            coro::Scope* scope, const GzipMemberSlice* slice,
                            std::size_t ways) {
-    int fd = ::open(gz_path.c_str(), O_RDONLY);
-    if (fd < 0) {
+    auto file = dstd::File::open(dstd::PathView(gz_path), {});
+    if (!file) {
         co_return dstd::nullopt;
     }
-    dstd::ScopedFd owner(fd);
-    co_return co_await build_gzip_index_artifacts(fd, gz_path, ckpt_size,
-                                                  visitors, scope, slice, ways);
+    co_return co_await build_gzip_index_artifacts(file->native_handle(),
+                                                  gz_path, ckpt_size, visitors,
+                                                  scope, slice, ways);
 }
 
 dftracer::utils::coro::CoroTask<dstd::Optional<GzipBuildArtifacts>>

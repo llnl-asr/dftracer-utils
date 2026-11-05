@@ -61,7 +61,7 @@ class GzipByteStream : public GzipStream {
             read_size, current_position_);
 
         bool result = co_await inflater_.read(
-            fd_, file_offset_,
+            fd_.native_handle(), file_offset_,
             reinterpret_cast<unsigned char *>(buffer_.data()), read_size,
             bytes_read);
 

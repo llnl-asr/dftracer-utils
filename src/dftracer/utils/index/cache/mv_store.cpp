@@ -337,11 +337,12 @@ void evict_views(dstd::StringView root, dstd::StringView keep) {
               });
     auto drop = [&](const Entry& e) {
         // The caller wrote `keep` and may hold its lock.
-        const int fd = e.dir == keep ? -1 : lock_view_dir(e.dir);
-        if (fd < 0 && e.dir != keep) return;
+        dstd::File lock;
+        if (e.dir != keep) lock = lock_view_dir(e.dir);
+        if (!lock.is_open() && e.dir != keep) return;
         release_root(e.dir);
         const auto removed = dstd::fs::remove_all(dstd::PathView(e.dir));
-        unlock_view_dir(fd);
+        unlock_view_dir(lock);
         if (removed) total -= e.bytes;
     };
     for (const auto& e : entries) {
@@ -483,21 +484,21 @@ bool view_is_fresh(const trace::views::detail::ViewPlan& plan) {
            !gather_view_files(dstd::String(dir.str())).empty();
 }
 
-int lock_view_dir(dstd::StringView dir) {
+dstd::File lock_view_dir(dstd::StringView dir) {
     const dstd::Path path = dstd::PathView(dir) / ".lock";
-    const int fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0644);
-    if (fd < 0) return -1;
-    if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {  // another builder holds it
-        ::close(fd);
-        return -1;
-    }
-    return fd;  // released (and the advisory lock dropped) by unlock_view_dir
+    auto file =
+        dstd::File::open(path.view(), {.access = dstd::Access::ReadWrite,
+                                       .creation = dstd::Creation::IfNeeded});
+    if (!file) return {};
+    if (::flock(file->native_handle(), LOCK_EX | LOCK_NB) != 0)
+        return {};            // another builder holds it
+    return std::move(*file);  // released by unlock_view_dir
 }
 
-void unlock_view_dir(int fd) {
-    if (fd < 0) return;
-    ::flock(fd, LOCK_UN);
-    ::close(fd);
+void unlock_view_dir(dstd::File& lock) {
+    if (!lock.is_open()) return;
+    ::flock(lock.native_handle(), LOCK_UN);
+    (void)lock.close();
 }
 
 dstd::String materialize_view_dir(const trace::views::detail::ViewPlan& plan) {

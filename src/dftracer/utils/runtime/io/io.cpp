@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/os.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/io/io_sendfile.h>
 #include <dftracer/utils/runtime/io/ops.h>
@@ -107,6 +108,20 @@ IoAwaitable open(const char* path, int flags, mode_t mode) noexcept {
     return io_dispatch<&IoBackend::submit_open>(
         [](const char* p, int fl, mode_t m) { return ::open(p, fl, m); }, path,
         flags, mode);
+}
+
+coro::CoroTask<dstd::Expected<dstd::File, dstd::Error>> open_file(
+    dstd::PathView path, dstd::OpenOptions options) {
+    auto flags = dstd::File::native_open_flags(options);
+    if (!flags) co_return dstd::Unexpected(flags.error());
+    const dstd::internal::PathCString c_path(path.str());
+    const ssize_t fd = co_await open(c_path.c_str(), *flags,
+                                     static_cast<mode_t>(options.mode));
+    if (fd < 0) {
+        co_return dstd::Unexpected(
+            dstd::internal::errno_error(static_cast<int>(-fd), path.str()));
+    }
+    co_return dstd::File::from_native_handle(static_cast<int>(fd));
 }
 
 IoAwaitable close(dstd::NativeHandle fd) noexcept {

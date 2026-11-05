@@ -4,9 +4,9 @@
 
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -110,7 +110,7 @@ struct IndexBuildBatchConfig {
     /// each file, used instead of opening it. The build takes each one out of
     /// this vector and closes it once the file is parsed. A null entry opens
     /// the file as usual.
-    dstd::Vector<dstd::SharedPtr<dstd::ScopedFd>> input_fds;
+    dstd::Vector<dstd::SharedPtr<dstd::File>> input_fds;
 
     /// If non-empty, parallel to `file_paths`: the relative work of each file,
     /// such as its size in bytes. Runs of consecutive files are cut to equal

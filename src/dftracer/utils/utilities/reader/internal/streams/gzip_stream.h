@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/span.h>
@@ -21,7 +22,7 @@ namespace dftracer::utils::utilities::reader::internal {
 
 class GzipStream : public StreamBase {
    protected:
-    int fd_ = -1;
+    dstd::File fd_;
     mutable off_t file_offset_ = 0;
     mutable ReaderInflater inflater_;
     std::size_t current_position_;
@@ -51,7 +52,6 @@ class GzipStream : public StreamBase {
    public:
     explicit GzipStream(std::size_t buffer_size = DEFAULT_BUFFER_SIZE)
         : StreamBase(),
-          fd_(-1),
           file_offset_(0),
           current_position_(0),
           target_end_bytes_(0),
@@ -132,10 +132,7 @@ class GzipStream : public StreamBase {
         max_file_bytes_ = 0;
         is_active_ = false;
         is_finished_ = false;
-        if (fd_ >= 0) {
-            ::close(fd_);
-            fd_ = -1;
-        }
+        (void)fd_.close();
         file_offset_ = 0;
         inflater_.reset();
         member_ = dftracer::utils::index::gzip::GzipMemberRecord();
@@ -145,16 +142,16 @@ class GzipStream : public StreamBase {
     }
 
    protected:
-    int open_file(const dstd::String &path) {
-        int fd = ::open(path.c_str(), O_RDONLY);
-        if (fd < 0) {
+    dstd::File open_file(const dstd::String &path) {
+        auto file = dstd::File::open(dstd::PathView(path), {});
+        if (!file) {
             throw ReaderError(ReaderError::FileIoError,
                               "Failed to open file: " + path);
         }
 #ifdef __linux__
-        posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+        posix_fadvise(file->native_handle(), 0, 0, POSIX_FADV_SEQUENTIAL);
 #endif
-        return fd;
+        return std::move(*file);
     }
 
     /// Records the request only. Opening and seeking happen on the first
@@ -210,7 +207,7 @@ class GzipStream : public StreamBase {
         use_member_ = false;
         if (indexer_ && indexer_->find_member(start_bytes_, member_)) {
             use_member_ = co_await inflater_.seek_to_member(
-                fd_, file_offset_, member_, member_window(),
+                fd_.native_handle(), file_offset_, member_, member_window(),
                 expected_out_bytes());
             mid_line_start_ = use_member_ && piece_starts_mid_line();
             if (use_member_)
@@ -229,7 +226,7 @@ class GzipStream : public StreamBase {
         }
         if (!use_member_) {
             const auto initialize_ok = co_await inflater_.initialize(
-                fd_, file_offset_, 0,
+                fd_.native_handle(), file_offset_, 0,
                 common::constants::indexer::ZLIB_GZIP_WINDOW_BITS,
                 expected_out_bytes());
             if (!initialize_ok) {
@@ -254,7 +251,7 @@ class GzipStream : public StreamBase {
     coro::CoroTask<void> skip(std::size_t target_position) {
         std::size_t current_pos = seek_anchor_offset();
         if (target_position > current_pos) {
-            co_await inflater_.skip_bytes(fd_, file_offset_,
+            co_await inflater_.skip_bytes(fd_.native_handle(), file_offset_,
                                           target_position - current_pos);
         }
     }
@@ -296,7 +293,7 @@ class GzipStream : public StreamBase {
             // actor when a temporary lives in the condition of an `if` across
             // the co_await, so the result goes through a local.
             const bool restarted = co_await inflater_.seek_to_member(
-                fd_, file_offset_, member_, member_window(),
+                fd_.native_handle(), file_offset_, member_, member_window(),
                 expected_out_bytes());
             if (!restarted) {
                 throw ReaderError(ReaderError::CompressionError,
@@ -304,7 +301,7 @@ class GzipStream : public StreamBase {
             }
         } else {
             const auto initialize_ok = co_await inflater_.initialize(
-                fd_, file_offset_, 0,
+                fd_.native_handle(), file_offset_, 0,
                 common::constants::indexer::ZLIB_GZIP_WINDOW_BITS,
                 expected_out_bytes());
             if (!initialize_ok) {

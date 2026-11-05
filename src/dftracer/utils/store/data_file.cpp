@@ -539,18 +539,15 @@ dstd::Expected<dstd::Vector<SummaryEntry>, dstd::Error> read_summary(
     dstd::Vector<SummaryEntry> entries;
     const dstd::String path =
         summary_path(dstd::String(dir.data(), dir.size()));
-    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
-        if (errno == ENOENT) return entries;
+    auto file = dstd::File::open(dstd::PathView(path), {});
+    if (!file) {
+        if (file.error().is(dstd::Condition::NotFound)) return entries;
         return io_error();
     }
+    const int fd = file->native_handle();
     struct stat st{};
-    if (::fstat(fd, &st) != 0 || st.st_size < 0) {
-        ::close(fd);
-        return io_error();
-    }
+    if (::fstat(fd, &st) != 0 || st.st_size < 0) return io_error();
     auto bytes = pread_all(fd, 0, static_cast<std::size_t>(st.st_size));
-    ::close(fd);
     if (!bytes) {
         if (bytes.error().is(dstd::Condition::Io)) {
             return dstd::Unexpected<dstd::Error>(bytes.error());
@@ -603,12 +600,13 @@ dstd::Expected<DataFileWriter, dstd::Error> DataFileWriter::create(
     if (host.size() > 255 || label.size() > 255) return invalid_error();
 
     const dstd::String path_std = path_string(path);
-    const int fd =
-        ::open(path_std.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
-    if (fd < 0) return io_error();
+    auto file = dstd::File::open(
+        dstd::PathView(path_std),
+        {.access = dstd::Access::Write, .creation = dstd::Creation::OnlyIfNew});
+    if (!file) return io_error();
 
     DataFileWriter writer;
-    writer.fd_ = fd;
+    writer.fd_ = std::move(*file);
     writer.path_.assign(path.data(), path.size());
     writer.extent_size_ = extent_size;
     writer.host_.assign(host.data(), host.size());
@@ -623,7 +621,7 @@ dstd::Expected<DataFileWriter, dstd::Error> DataFileWriter::create(
 }
 
 DataFileWriter::DataFileWriter(DataFileWriter&& other) noexcept
-    : fd_(other.fd_),
+    : fd_(std::move(other.fd_)),
       path_(std::move(other.path_)),
       extent_size_(other.extent_size_),
       next_offset_(other.next_offset_.load(std::memory_order_relaxed)),
@@ -642,14 +640,11 @@ DataFileWriter::DataFileWriter(DataFileWriter&& other) noexcept
       committed_extents_(std::move(other.committed_extents_)),
       closed_(other.closed_.load(std::memory_order_relaxed)),
       latched_(other.latched_.load(std::memory_order_relaxed)),
-      latched_error_(std::move(other.latched_error_)) {
-    other.fd_ = -1;
-}
+      latched_error_(std::move(other.latched_error_)) {}
 
 DataFileWriter& DataFileWriter::operator=(DataFileWriter&& other) noexcept {
     if (this == &other) return *this;
-    if (fd_ >= 0) ::close(fd_);
-    fd_ = other.fd_;
+    fd_ = std::move(other.fd_);
     path_ = std::move(other.path_);
     extent_size_ = other.extent_size_;
     next_offset_.store(other.next_offset_.load(std::memory_order_relaxed),
@@ -672,13 +667,10 @@ DataFileWriter& DataFileWriter::operator=(DataFileWriter&& other) noexcept {
     latched_.store(other.latched_.load(std::memory_order_relaxed),
                    std::memory_order_relaxed);
     latched_error_ = std::move(other.latched_error_);
-    other.fd_ = -1;
     return *this;
 }
 
-DataFileWriter::~DataFileWriter() {
-    if (fd_ >= 0) ::close(fd_);
-}
+DataFileWriter::~DataFileWriter() = default;
 
 void DataFileWriter::latch(const dstd::Error& error) {
     std::lock_guard<std::mutex> lock(error_mutex_);
@@ -716,10 +708,11 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_header() {
 
     const std::uint32_t crc = crc32(0, header.data(), header.size());
     dstd::write_u32_le(header.data() + 12, crc);
-    auto written = pwrite_all(fd_, header.data(), header.size(), 0);
+    auto written =
+        pwrite_all(fd_.native_handle(), header.data(), header.size(), 0);
     if (written) {
-        io_fault::on_write(fd_, io_fault::WriteKind::Header, 0, header.data(),
-                           header.size());
+        io_fault::on_write(fd_.native_handle(), io_fault::WriteKind::Header, 0,
+                           header.data(), header.size());
     } else {
         latch(written.error());
     }
@@ -742,7 +735,8 @@ dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_extent(
         stored->size(), EXTENT_ALIGN_BYTES, io_fault::WriteKind::Extent);
     ExtentRef ref{offset, static_cast<std::uint32_t>(stored->size()), 0};
     ref.crc = crc32(0, stored->data(), stored->size());
-    auto written = pwrite_all(fd_, stored->data(), stored->size(), offset);
+    auto written =
+        pwrite_all(fd_.native_handle(), stored->data(), stored->size(), offset);
     if (!written) {
         latch(written.error());
         return dstd::Unexpected<dstd::Error>(written.error());
@@ -764,7 +758,8 @@ dstd::Expected<DictRef, dstd::Error> DataFileWriter::append_dict(
                                io_fault::WriteKind::Extent);
     ref.length = static_cast<std::uint32_t>(bytes.size());
     ref.crc = crc32(0, padded.data(), bytes.size());
-    auto written = pwrite_all(fd_, padded.data(), padded.size(), ref.offset);
+    auto written = pwrite_all(fd_.native_handle(), padded.data(), padded.size(),
+                              ref.offset);
     if (!written) {
         latch(written.error());
         return dstd::Unexpected<dstd::Error>(written.error());
@@ -789,12 +784,13 @@ dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_big(
     ExtentRef ref{offset, static_cast<std::uint32_t>(length), 0};
     const auto write = [this](const std::uint8_t* data, std::size_t size,
                               std::uint64_t at) {
-        auto written = pwrite_all(fd_, data, size, at);
+        auto written = pwrite_all(fd_.native_handle(), data, size, at);
         if (!written) {
             latch(written.error());
             return written;
         }
-        io_fault::on_write(fd_, io_fault::WriteKind::Big, at, data, size);
+        io_fault::on_write(fd_.native_handle(), io_fault::WriteKind::Big, at,
+                           data, size);
         return written;
     };
     if (compressed) {
@@ -822,7 +818,8 @@ std::uint64_t DataFileWriter::reserve_range(std::uint64_t length,
                                                std::memory_order_acq_rel,
                                                std::memory_order_relaxed)) {
             if (kind == io_fault::WriteKind::Extent) {
-                io_fault::on_write(fd_, kind, start, nullptr, length);
+                io_fault::on_write(fd_.native_handle(), kind, start, nullptr,
+                                   length);
             }
             return start;
         }
@@ -1167,13 +1164,14 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_record(
     dstd::Vector<std::uint8_t> encoded = std::move(*probe);
     if (offset != FILE_HEADER_BYTES) set_record_offset(encoded, offset);
 
-    auto written = pwrite_all(fd_, encoded.data(), encoded.size(), offset);
+    auto written =
+        pwrite_all(fd_.native_handle(), encoded.data(), encoded.size(), offset);
     if (!written) {
         latch(written.error());
         return written;
     }
-    io_fault::on_write(fd_, fault_kind_of(actual_kind), offset, encoded.data(),
-                       encoded.size());
+    io_fault::on_write(fd_.native_handle(), fault_kind_of(actual_kind), offset,
+                       encoded.data(), encoded.size());
 
     const std::uint32_t body_size = dstd::read_u32_le(encoded.data() + 12);
     tail_offset_ = offset;
@@ -1228,13 +1226,14 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
         }
     }
     if (!blocks.empty()) {
-        auto written = pwrite_all(fd_, blocks.data(), blocks.size(), base);
+        auto written =
+            pwrite_all(fd_.native_handle(), blocks.data(), blocks.size(), base);
         if (!written) {
             latch(written.error());
             return written;
         }
-        io_fault::on_write(fd_, io_fault::WriteKind::Footer, base,
-                           blocks.data(), blocks.size());
+        io_fault::on_write(fd_.native_handle(), io_fault::WriteKind::Footer,
+                           base, blocks.data(), blocks.size());
     }
     // Every extent is synced before the footer, so a reader trusts the extents
     // of a closed file one by one.
@@ -1263,20 +1262,19 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     dstd::write_u32_le(trailer.data() + 16, footer_size);
     const std::uint32_t trailer_crc = crc32(0, trailer.data(), 20);
     dstd::write_u32_le(trailer.data() + 20, trailer_crc);
-    auto written =
-        pwrite_all(fd_, trailer.data(), trailer.size(), trailer_offset);
+    auto written = pwrite_all(fd_.native_handle(), trailer.data(),
+                              trailer.size(), trailer_offset);
     if (!written) {
         latch(written.error());
         return written;
     }
-    io_fault::on_write(fd_, io_fault::WriteKind::Trailer, trailer_offset,
-                       trailer.data(), trailer.size());
+    io_fault::on_write(fd_.native_handle(), io_fault::WriteKind::Trailer,
+                       trailer_offset, trailer.data(), trailer.size());
 
     // No sync after the footer: a footer lost to a crash leaves a file that
     // reads as not closed, whose commits are checked whole.
     auto header = write_header();
-    ::close(fd_);
-    fd_ = -1;
+    (void)fd_.close();
     closed_.store(true, std::memory_order_release);
     if (!header) return header;
     // A failed append only leaves the file for readers to open as before.
@@ -1288,12 +1286,12 @@ dstd::Expected<void, dstd::Error> DataFileWriter::sync_data() {
     int sync_result = -1;
     do {
 #if defined(__APPLE__)
-        sync_result = ::fsync(fd_);
+        sync_result = ::fsync(fd_.native_handle());
 #else
-        sync_result = ::fdatasync(fd_);
+        sync_result = ::fdatasync(fd_.native_handle());
 #endif
     } while (sync_result != 0 && errno == EINTR);
-    io_fault::on_sync(fd_);
+    io_fault::on_sync(fd_.native_handle());
     if (sync_result != 0) {
         return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Io));
     }

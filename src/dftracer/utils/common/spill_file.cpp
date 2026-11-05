@@ -19,8 +19,8 @@ dstd::Result<dstd::UniquePtr<SpillFile>> SpillFile::create() {
     if (!dir) return dstd::Unexpected(dir.error());
     dstd::String path((dir->view() / "dftu_spill_XXXXXX").str());
     auto f = dstd::make_unique<SpillFile>(Key{}, spill_dir_in_memory(*dir));
-    f->fd_ = dstd::ScopedFd(::mkostemp(path.data(), O_CLOEXEC));
-    if (f->fd_.get() < 0)
+    f->fd_ = dstd::File::from_native_handle(::mkostemp(path.data(), O_CLOEXEC));
+    if (!f->fd_.is_open())
         return make_error(
             ErrorCode::Io,
             str_cat("spill: cannot create a spill file in '", dir->str(), "' (",
@@ -48,7 +48,7 @@ dstd::Result<void> SpillFile::write_at(std::uint64_t offset, const void* data,
     const char* p = static_cast<const char*>(data);
     std::size_t done = 0;
     while (done < n) {
-        const ssize_t w = ::pwrite(fd_.get(), p + done, n - done,
+        const ssize_t w = ::pwrite(fd_.native_handle(), p + done, n - done,
                                    static_cast<off_t>(offset + done));
         if (w < 0) {
             if (errno == EINTR) continue;
@@ -76,7 +76,7 @@ dstd::Result<void> SpillFile::read(std::uint64_t offset, void* out,
     char* p = static_cast<char*>(out);
     std::size_t done = 0;
     while (done < n) {
-        const ssize_t r = ::pread(fd_.get(), p + done, n - done,
+        const ssize_t r = ::pread(fd_.native_handle(), p + done, n - done,
                                   static_cast<off_t>(offset + done));
         if (r < 0 && errno == EINTR) continue;
         if (r <= 0)

@@ -5,8 +5,8 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -28,9 +28,9 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
 inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     dstd::String file_path, std::size_t start_line = 0,
     std::size_t end_line = 0, bool recover_truncated = true,
-    dftracer::utils::dstd::SharedPtr<dftracer::utils::dstd::ScopedFd>
-        open_file = nullptr) {
-    dftracer::utils::dstd::ScopedFd owned;
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::dstd::File> open_file =
+        nullptr) {
+    dftracer::utils::dstd::File owned;
     if (!open_file) {
         ssize_t fd_result = co_await ::dftracer::utils::runtime::io::open(
             file_path.c_str(), O_RDONLY);
@@ -40,12 +40,13 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
                 "Cannot open compressed file: " + file_path + " (errno=" +
                     dstd::to_string(static_cast<int>(-fd_result)) + ")");
         }
-        owned = dftracer::utils::dstd::ScopedFd(static_cast<int>(fd_result));
+        owned = dftracer::utils::dstd::File::from_native_handle(
+            static_cast<int>(fd_result));
     }
-    dftracer::utils::dstd::ScopedFd& fd = open_file ? *open_file : owned;
+    dftracer::utils::dstd::File& fd = open_file ? *open_file : owned;
 
     struct stat st;
-    if (::fstat(fd.get(), &st) != 0) {
+    if (::fstat(fd.native_handle(), &st) != 0) {
         throw common::DFTUtilsException(
             common::ErrorCode::Io, "Cannot stat compressed file: " + file_path);
     }
@@ -57,7 +58,8 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
 
     try {
         auto bytes = compress::decode_gzip_members(
-            fd.get(), file_size, std::size_t{32} << 20, recover_truncated);
+            fd.native_handle(), file_size, std::size_t{32} << 20,
+            recover_truncated);
         for (;;) {
             auto chunk = co_await bytes.next();
             if (!chunk) break;
@@ -82,7 +84,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
                         co_yield Line(line, current_line);
                     }
                     if (end_line > 0 && current_line >= end_line) {
-                        owned.reset();
+                        (void)owned.close();
                         co_return;
                     }
                     line_buffer.clear();

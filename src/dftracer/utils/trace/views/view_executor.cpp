@@ -9,6 +9,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -985,13 +986,13 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
 // single-flight lock is dropped on every path including a throw from the build.
 class ViewDirLock {
    public:
-    explicit ViewDirLock(int fd) noexcept : fd_(fd) {}
-    ~ViewDirLock() { dftracer::utils::index::cache::unlock_view_dir(fd_); }
+    explicit ViewDirLock(dstd::File file) noexcept : file_(std::move(file)) {}
+    ~ViewDirLock() { dftracer::utils::index::cache::unlock_view_dir(file_); }
     ViewDirLock(const ViewDirLock&) = delete;
     ViewDirLock& operator=(const ViewDirLock&) = delete;
 
    private:
-    int fd_;
+    dstd::File file_;
 };
 
 }  // namespace
@@ -1014,9 +1015,9 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         // Single-flight: one builder per view root. A loser skips - the winner
         // produces the MV. Re-check freshness under the lock in case the winner
         // just finished.
-        const int lock = dftracer::utils::index::cache::lock_view_dir(dir);
-        if (lock < 0) co_return ExportStats{};
-        ViewDirLock lock_guard(lock);
+        dstd::File lock = dftracer::utils::index::cache::lock_view_dir(dir);
+        if (!lock.is_open()) co_return ExportStats{};
+        ViewDirLock lock_guard(std::move(lock));
         if (dftracer::utils::index::cache::view_is_fresh(plan))
             co_return ExportStats{};
         constexpr std::uint64_t DEFAULT_PART_SIZE = 128ull * 1024 * 1024;

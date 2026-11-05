@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/dstd/string.h>
@@ -104,20 +105,20 @@ int run_view_capture(const dstd::String& binary,
     argv.push_back(binary.c_str());
     for (const auto& arg : args) argv.push_back(arg.c_str());
     argv.push_back(nullptr);
-    int fd = ::open(capture_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -1;
+    auto capture = dstd::File::open(
+        dstd::PathView(capture_path),
+        {.access = dstd::Access::Write, .creation = dstd::Creation::AlwaysNew});
+    if (!capture) return -1;
+    const int fd = capture->native_handle();
     pid_t pid = ::fork();
-    if (pid < 0) {
-        ::close(fd);
-        return -1;
-    }
+    if (pid < 0) return -1;
     if (pid == 0) {
         ::dup2(fd, STDOUT_FILENO);
         ::close(fd);
         ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
         ::_exit(127);
     }
-    ::close(fd);
+    (void)capture->close();
     int status = 0;
     ::waitpid(pid, &status, 0);
     out = dftu_utils_test::read_text(capture_path);

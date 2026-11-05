@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
@@ -174,8 +175,9 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
         return std::min(S, align_down(max_chk, window));
     }
 
-    int fd = ::open(path.c_str(), O_RDONLY);
-    if (fd >= 0) {
+    auto file = dstd::File::open(dstd::PathView(path), {});
+    if (file) {
+        const int fd = file->native_handle();
         if (read_gzip_magic(fd)) {
             uint32_t isize = 0;
             bool has_isize = read_isize_last4(fd, isize);
@@ -203,7 +205,6 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
             // uncompressed file
             U = comp_bytes;
         }
-        ::close(fd);
     } else {
         // The size only picks a checkpoint size, never the results.
         DFTRACER_UTILS_LOG_DEBUG(

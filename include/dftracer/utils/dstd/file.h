@@ -67,6 +67,16 @@ class File {
 
     static Expected<File, Error> open(PathView path, OpenOptions options);
 
+    /// Takes ownership of @p handle, which must be an open file descriptor
+    /// that nothing else closes. The File closes it.
+    static File from_native_handle(NativeHandle handle) noexcept {
+        return File(handle);
+    }
+
+    /// The open(2) flags @ref open uses for @p options, with the same
+    /// failure for an invalid combination.
+    static Expected<int, Error> native_open_flags(OpenOptions options);
+
     /// Closes the file. A second call does nothing and succeeds.
     Expected<void, Error> close() noexcept;
 

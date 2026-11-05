@@ -11,13 +11,13 @@
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -1292,11 +1292,11 @@ coro::CoroTask<ReaderSize> reader_size(const dstd::String& file) {
     ReaderSize out;
     co_await probe_slots().acquire(1);
     SlotGuard probe(probe_slots(), 1);
-    const ssize_t fd = co_await runtime::io::open(file.c_str(), O_RDONLY);
-    if (fd < 0) co_return out;
-    dstd::ScopedFd guard(static_cast<int>(fd));
+    auto opened = co_await runtime::io::open_file(file, {});
+    if (!opened) co_return out;
+    const dstd::File guard = std::move(*opened);
     struct stat st{};
-    if (::fstat(guard.get(), &st) != 0) co_return out;
+    if (::fstat(guard.native_handle(), &st) != 0) co_return out;
     out.file_bytes = static_cast<std::uint64_t>(st.st_size);
     if (st.st_size < 18) {
         out.slots = 1;
@@ -1304,7 +1304,7 @@ coro::CoroTask<ReaderSize> reader_size(const dstd::String& file) {
     }
     unsigned char trailer[4];
     const auto trailer_read = co_await runtime::io::pread(
-        guard.get(), trailer, sizeof trailer,
+        guard.native_handle(), trailer, sizeof trailer,
         static_cast<std::uint64_t>(st.st_size) - sizeof trailer);
     if (trailer_read != static_cast<ssize_t>(sizeof trailer)) co_return out;
     const std::uint64_t isize = static_cast<std::uint64_t>(trailer[0]) |

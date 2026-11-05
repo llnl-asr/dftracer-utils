@@ -4,9 +4,9 @@
 #include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/stage.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -100,13 +100,13 @@ struct FileProbe {
     bool ok = false;
     /// The probe's open descriptor of `path`, kept for the extraction when the
     /// open-file budget allows, else null.
-    dstd::SharedPtr<dstd::ScopedFd> fd;
+    dstd::SharedPtr<dstd::File> fd;
 };
 
 struct FileGroup {
     dstd::Vector<dstd::String> files;
     // use std types (tasks step)
-    dstd::Vector<dstd::SharedPtr<dstd::ScopedFd>> open_files;
+    dstd::Vector<dstd::SharedPtr<dstd::File>> open_files;
     // (tasks step)
     double ratio = 1.0;
 };
@@ -317,20 +317,20 @@ class ProbeStage {
     coro::CoroTask<FileProbe> probe_file(dstd::String path) const {
         FileProbe probe;
         probe.path = std::move(path);
-        ssize_t fd = co_await runtime::io::open(probe.path.c_str(), O_RDONLY);
-        if (fd < 0) {
+        auto opened = co_await runtime::io::open_file(probe.path, {});
+        if (!opened) {
             DFTRACER_UTILS_LOG_ERROR("Cannot open %s", probe.path.c_str());
             co_return probe;
         }
-        dstd::ScopedFd sfd(static_cast<int>(fd));
+        dstd::File sfd = std::move(*opened);
         struct stat st;
-        if (::fstat(sfd.get(), &st) != 0 || st.st_size == 0) {
+        if (::fstat(sfd.native_handle(), &st) != 0 || st.st_size == 0) {
             co_return probe;
         }
         probe.bytes = static_cast<std::uint64_t>(st.st_size);
         const utilities::fileio::compress::FirstMember first =
             co_await utilities::fileio::compress::gzip_first_member(
-                sfd.get(), probe.bytes,
+                sfd.native_handle(), probe.bytes,
                 utilities::fileio::compress::RECHUNK_MEMBER_CAP,
                 RATIO_SAMPLE_BYTES);
         if (first.compressed > 0) {
@@ -341,9 +341,9 @@ class ProbeStage {
         if (!first.exceeds_cap &&
             open_count_->fetch_add(1, std::memory_order_relaxed) <
                 open_budget_) {
-            probe.fd = dstd::make_shared<dstd::ScopedFd>(std::move(sfd));
+            probe.fd = dstd::make_shared<dstd::File>(std::move(sfd));
         } else {
-            sfd.reset();
+            (void)sfd.close();
         }
         if (first.exceeds_cap) {
             dstd::String out((rechunk_dir_->get().view() /

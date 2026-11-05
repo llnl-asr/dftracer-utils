@@ -11,6 +11,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -581,9 +582,11 @@ coro::CoroTask<void> group_worker(
 constexpr std::size_t COPY_BYTES = 8 * 1024 * 1024;
 
 // Copies all of `from` into `to` at `offset`.
-bool copy_into(const dstd::String& from, int to, std::uint64_t offset) {
-    const int in = ::open(from.c_str(), O_RDONLY);
-    if (in < 0) return false;
+bool copy_into(const dstd::String& from, const dstd::File& to,
+               std::uint64_t offset) {
+    auto source = dstd::File::open(dstd::PathView(from), {});
+    if (!source) return false;
+    const int in = source->native_handle();
     auto buf = dstd::make_unique_for_overwrite<char[]>(COPY_BYTES);
     bool ok = true;
     for (;;) {
@@ -594,7 +597,7 @@ bool copy_into(const dstd::String& from, int to, std::uint64_t offset) {
         }
         if (n == 0) break;
         for (ssize_t done = 0; done < n;) {
-            const ssize_t w = ::pwrite(to, buf.get() + done,
+            const ssize_t w = ::pwrite(to.native_handle(), buf.get() + done,
                                        static_cast<std::size_t>(n - done),
                                        static_cast<off_t>(offset));
             if (w <= 0) {
@@ -606,7 +609,6 @@ bool copy_into(const dstd::String& from, int to, std::uint64_t offset) {
         }
         if (!ok) break;
     }
-    ::close(in);
     return ok;
 }
 
@@ -748,9 +750,12 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
     bool appended = false;
     if (!io_error && closed) {
         const auto end = dstd::fs::file_size(dstd::PathView(output));
-        const int fd = end ? ::open(binaries::c_str(output), O_WRONLY) : -1;
-        appended = fd >= 0 && copy_into(head_path, fd, *end);
-        if (fd >= 0 && ::close(fd) != 0) appended = false;
+        if (end) {
+            auto target = dstd::File::open(dstd::PathView(output),
+                                           {.access = dstd::Access::Write});
+            appended = target && copy_into(head_path, *target, *end);
+            if (target && !target->close()) appended = false;
+        }
     }
     (void)dstd::fs::remove(dstd::PathView(head_path));
     if (io_error || !closed || !appended) {
@@ -817,16 +822,17 @@ int join_parts(dstd::StringView output, const dstd::String& part, int rank,
     }
     bool made = true;
     if (rank == 0) {
-        const int fd =
-            ::open(binaries::c_str(output), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        made = fd >= 0 && ::ftruncate(fd, static_cast<off_t>(total)) == 0;
-        if (fd >= 0) ::close(fd);
+        auto file = dstd::File::open(dstd::PathView(output),
+                                     {.access = dstd::Access::Write,
+                                      .creation = dstd::Creation::AlwaysNew});
+        made = file && file->resize(total);
     }
     bool copied = all_ranks(made);
     if (copied) {
-        const int fd = ::open(binaries::c_str(output), O_WRONLY);
-        copied = fd >= 0 && copy_into(part, fd, offset);
-        if (fd >= 0 && ::close(fd) != 0) copied = false;
+        auto file = dstd::File::open(dstd::PathView(output),
+                                     {.access = dstd::Access::Write});
+        copied = file && copy_into(part, *file, offset);
+        if (file && !file->close()) copied = false;
     }
     (void)dstd::fs::remove(dstd::PathView(part));
     copied = all_ranks(copied);

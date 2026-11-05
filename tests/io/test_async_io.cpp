@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -28,12 +29,11 @@ static dstd::String create_temp_file(const dstd::String& content) {
     REQUIRE(fd >= 0);
     ssize_t written = ::write(fd, content.data(), content.size());
     REQUIRE(written == static_cast<ssize_t>(content.size()));
-    ::close(fd);
     return dstd::String(path);
 }
 
 // ============================================================================
-// Sync fallback tests (no executor) — sequential runtime::io::read /
+// Sync fallback tests (no executor), sequential runtime::io::read /
 // runtime::io::write
 // ============================================================================
 
@@ -41,8 +41,9 @@ TEST_CASE("AsyncIO - sync fallback: read without executor") {
     dstd::String data = "Hello, async I/O world!";
     auto path = create_temp_file(data);
 
-    int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
 
     // No executor -- falls back to synchronous ::read()
     char buf[64] = {};
@@ -52,7 +53,6 @@ TEST_CASE("AsyncIO - sync fallback: read without executor") {
     CHECK(dstd::String(buf, static_cast<std::size_t>(awaitable.result)) ==
           data);
 
-    ::close(fd);
     ::unlink(path.c_str());
 }
 
@@ -73,7 +73,6 @@ TEST_CASE("AsyncIO - sync fallback: write without executor") {
     CHECK(n == static_cast<ssize_t>(data.size()));
     CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == data);
 
-    ::close(fd);
     ::unlink(path);
 }
 
@@ -94,15 +93,16 @@ TEST_CASE("AsyncIO - sync fallback: open/close without executor") {
 }
 
 // ============================================================================
-// Sync fallback tests — positional runtime::io::pread / runtime::io::pwrite
+// Sync fallback tests, positional runtime::io::pread / runtime::io::pwrite
 // ============================================================================
 
 TEST_CASE("AsyncIO - sync fallback: pread without executor") {
     dstd::String data = "Hello, positional I/O!";
     auto path = create_temp_file(data);
 
-    int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
 
     // Read from offset 7
     char buf[64] = {};
@@ -111,7 +111,6 @@ TEST_CASE("AsyncIO - sync fallback: pread without executor") {
     CHECK(awaitable.result == 15);
     CHECK(dstd::String(buf, 15) == "positional I/O!");
 
-    ::close(fd);
     ::unlink(path.c_str());
 }
 
@@ -138,7 +137,6 @@ TEST_CASE("AsyncIO - sync fallback: pwrite without executor") {
     CHECK(n == static_cast<ssize_t>(initial.size()));
     CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == "AAABBBAAAA");
 
-    ::close(fd);
     ::unlink(path);
 }
 
@@ -243,7 +241,6 @@ TEST_CASE("AsyncIO - sequential writes advance file position") {
     CHECK(n == static_cast<ssize_t>(part1.size() + part2.size()));
     CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == "Hello, World!");
 
-    ::close(fd);
     ::unlink(path);
 }
 
@@ -251,8 +248,9 @@ TEST_CASE("AsyncIO - sequential reads advance file position") {
     dstd::String data = "ABCDEFGHIJ";
     auto path = create_temp_file(data);
 
-    int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
 
     // Two sequential reads should advance position
     char buf1[5] = {};
@@ -267,7 +265,6 @@ TEST_CASE("AsyncIO - sequential reads advance file position") {
     CHECK(a2.result == 5);
     CHECK(dstd::String(buf2, 5) == "FGHIJ");
 
-    ::close(fd);
     ::unlink(path.c_str());
 }
 
@@ -279,8 +276,9 @@ TEST_CASE("AsyncIO - pread does not change file position") {
     dstd::String data = "ABCDEFGHIJ";
     auto path = create_temp_file(data);
 
-    int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
 
     // pread at offset 5
     char buf1[5] = {};
@@ -288,13 +286,12 @@ TEST_CASE("AsyncIO - pread does not change file position") {
     CHECK(a1.result == 5);
     CHECK(dstd::String(buf1, 5) == "FGHIJ");
 
-    // File position should still be 0 — sequential read should get "ABCDE"
+    // File position should still be 0, sequential read should get "ABCDE"
     char buf2[5] = {};
     auto a2 = runtime::io::read(fd, buf2, 5);
     CHECK(a2.result == 5);
     CHECK(dstd::String(buf2, 5) == "ABCDE");
 
-    ::close(fd);
     ::unlink(path.c_str());
 }
 
@@ -310,7 +307,7 @@ TEST_CASE("AsyncIO - pwrite does not change file position") {
     // Seek to position 0
     ::lseek(fd, 0, SEEK_SET);
 
-    // pwrite at offset 5 — should NOT change current position
+    // pwrite at offset 5; should NOT change current position
     dstd::String patch = "BBB";
     auto a1 = runtime::io::pwrite(fd, patch.data(), patch.size(), 5);
     CHECK(a1.result == static_cast<ssize_t>(patch.size()));
@@ -320,14 +317,13 @@ TEST_CASE("AsyncIO - pwrite does not change file position") {
     auto a2 = runtime::io::write(fd, seq.data(), seq.size());
     CHECK(a2.result == static_cast<ssize_t>(seq.size()));
 
-    // Read back — expect "CCAAABBBAA"
+    // Read back; expect "CCAAABBBAA"
     char buf[64] = {};
     ::lseek(fd, 0, SEEK_SET);
     ssize_t n = ::read(fd, buf, sizeof(buf));
     CHECK(n == static_cast<ssize_t>(initial.size()));
     CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == "CCAAABBBAA");
 
-    ::close(fd);
     ::unlink(path);
 }
 
@@ -345,8 +341,9 @@ TEST_CASE("AsyncIO - async read with executor") {
     dstd::String read_data;
 
     auto body = [&]() -> coro::CoroTask<void> {
-        int fd = ::open(path.c_str(), O_RDONLY);
-        REQUIRE(fd >= 0);
+        auto fd_file = dstd::File::open(path, {});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
 
         char buf[128] = {};
         ssize_t n = co_await runtime::io::pread(fd, buf, data.size(), 0);
@@ -355,7 +352,6 @@ TEST_CASE("AsyncIO - async read with executor") {
             success.store(true);
         }
 
-        ::close(fd);
         co_return;
     };
 
@@ -379,15 +375,17 @@ TEST_CASE("AsyncIO - async write with executor") {
     std::atomic<bool> success{false};
 
     auto body = [&]() -> coro::CoroTask<void> {
-        int fd = ::open(path, O_WRONLY | O_TRUNC);
-        REQUIRE(fd >= 0);
+        auto fd_file = dstd::File::open(
+            path, {.access = dstd::Access::Write,
+                   .creation = dstd::Creation::TruncateExisting});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
 
         ssize_t n = co_await runtime::io::write(fd, data.data(), data.size());
         if (n == static_cast<ssize_t>(data.size())) {
             success.store(true);
         }
 
-        ::close(fd);
         co_return;
     };
 
@@ -396,12 +394,12 @@ TEST_CASE("AsyncIO - async write with executor") {
 
     // Read back and verify
     char buf[128] = {};
-    int rfd = ::open(path, O_RDONLY);
-    REQUIRE(rfd >= 0);
+    auto rfd_file = dstd::File::open(path, {});
+    REQUIRE(rfd_file);
+    const int rfd = rfd_file->native_handle();
     ssize_t n = ::read(rfd, buf, sizeof(buf));
     CHECK(n == static_cast<ssize_t>(data.size()));
     CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == data);
-    ::close(rfd);
 
     ::unlink(path);
 }
@@ -416,8 +414,9 @@ TEST_CASE("AsyncIO - async pread with executor") {
     dstd::String read_data;
 
     auto body = [&]() -> coro::CoroTask<void> {
-        int fd = ::open(path.c_str(), O_RDONLY);
-        REQUIRE(fd >= 0);
+        auto fd_file = dstd::File::open(path, {});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
 
         // Read 5 bytes from offset 4
         char buf[16] = {};
@@ -427,7 +426,6 @@ TEST_CASE("AsyncIO - async pread with executor") {
             success.store(true);
         }
 
-        ::close(fd);
         co_return;
     };
 
@@ -452,8 +450,9 @@ TEST_CASE("AsyncIO - async pwrite with executor") {
     std::atomic<bool> success{false};
 
     auto body = [&]() -> coro::CoroTask<void> {
-        int fd = ::open(path, O_WRONLY);
-        REQUIRE(fd >= 0);
+        auto fd_file = dstd::File::open(path, {.access = dstd::Access::Write});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
 
         dstd::String patch = "BBB";
         ssize_t n =
@@ -462,7 +461,6 @@ TEST_CASE("AsyncIO - async pwrite with executor") {
             success.store(true);
         }
 
-        ::close(fd);
         co_return;
     };
 
@@ -471,12 +469,12 @@ TEST_CASE("AsyncIO - async pwrite with executor") {
 
     // Read back and verify
     char buf[64] = {};
-    int rfd = ::open(path, O_RDONLY);
-    REQUIRE(rfd >= 0);
+    auto rfd_file = dstd::File::open(path, {});
+    REQUIRE(rfd_file);
+    const int rfd = rfd_file->native_handle();
     ssize_t n = ::read(rfd, buf, sizeof(buf));
     CHECK(n == static_cast<ssize_t>(initial.size()));
     CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == "AAABBBAAAA");
-    ::close(rfd);
 
     ::unlink(path);
 }
@@ -575,8 +573,9 @@ TEST_CASE("AsyncIO - multiple concurrent async reads") {
 
                     scope.spawn([path_ptr, expected_ptr, result_ptr,
                                  completed_ptr]() -> coro::CoroTask<void> {
-                        int fd = ::open(path_ptr->c_str(), O_RDONLY);
-                        if (fd < 0) co_return;
+                        auto file = dstd::File::open(*path_ptr, {});
+                        if (!file) co_return;
+                        const int fd = file->native_handle();
 
                         char buf[256] = {};
                         ssize_t n = co_await runtime::io::pread(
@@ -586,7 +585,6 @@ TEST_CASE("AsyncIO - multiple concurrent async reads") {
                                                static_cast<std::size_t>(n));
                         }
 
-                        ::close(fd);
                         completed_ptr->fetch_add(1);
                         co_return;
                     });
@@ -664,8 +662,9 @@ TEST_CASE("AsyncIO - large pread with executor") {
     std::atomic<bool> success{false};
 
     auto body = [&]() -> coro::CoroTask<void> {
-        int fd = ::open(path.c_str(), O_RDONLY);
-        REQUIRE(fd >= 0);
+        auto fd_file = dstd::File::open(path, {});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
 
         dstd::Vector<char> buf(SIZE);
         ssize_t n = co_await runtime::io::pread(fd, buf.data(), SIZE, 0);
@@ -674,7 +673,6 @@ TEST_CASE("AsyncIO - large pread with executor") {
             success.store(true);
         }
 
-        ::close(fd);
         co_return;
     };
 
@@ -837,7 +835,6 @@ TEST_CASE("AsyncIO - sync fallback: writev without executor") {
     ssize_t n = ::read(fd, buf, sizeof(buf));
     CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == "Hello, World!");
 
-    ::close(fd);
     ::unlink(path);
 }
 
@@ -845,8 +842,9 @@ TEST_CASE("AsyncIO - sync fallback: readv without executor") {
     dstd::String data = "ABCDEFGHIJ";
     auto path = create_temp_file(data);
 
-    int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
 
     char buf1[5] = {};
     char buf2[5] = {};
@@ -862,7 +860,6 @@ TEST_CASE("AsyncIO - sync fallback: readv without executor") {
     CHECK(dstd::String(buf1, 5) == "ABCDE");
     CHECK(dstd::String(buf2, 5) == "FGHIJ");
 
-    ::close(fd);
     ::unlink(path.c_str());
 }
 
@@ -896,7 +893,6 @@ TEST_CASE("AsyncIO - sync fallback: pwritev without executor") {
     ssize_t n = ::read(fd, buf, sizeof(buf));
     CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == "AAABBCCAAA");
 
-    ::close(fd);
     ::unlink(path);
 }
 
@@ -904,8 +900,9 @@ TEST_CASE("AsyncIO - sync fallback: preadv without executor") {
     dstd::String data = "ABCDEFGHIJ";
     auto path = create_temp_file(data);
 
-    int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
 
     char buf1[3] = {};
     char buf2[4] = {};
@@ -926,7 +923,6 @@ TEST_CASE("AsyncIO - sync fallback: preadv without executor") {
     ssize_t n = ::read(fd, pos_buf, 5);
     CHECK(dstd::String(pos_buf, static_cast<std::size_t>(n)) == "ABCDE");
 
-    ::close(fd);
     ::unlink(path.c_str());
 }
 
@@ -962,8 +958,9 @@ TEST_CASE("AsyncIO - sync fallback: lseek without executor") {
     dstd::String data = "ABCDEFGHIJ";
     auto path = create_temp_file(data);
 
-    int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
 
     // Seek to offset 5
     auto awaitable = runtime::io::lseek(fd, 5, SEEK_SET);
@@ -985,7 +982,6 @@ TEST_CASE("AsyncIO - sync fallback: lseek without executor") {
     CHECK(a3.is_ready);
     CHECK(a3.result == static_cast<ssize_t>(data.size()));
 
-    ::close(fd);
     ::unlink(path.c_str());
 }
 
@@ -1009,8 +1005,9 @@ TEST_CASE("AsyncIO - sync fallback: sendfile without executor") {
     dstd::String data = "sendfile test data for zero-copy";
     auto path = create_temp_file(data);
 
-    int in_fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(in_fd >= 0);
+    auto in_fd_file = dstd::File::open(path, {});
+    REQUIRE(in_fd_file);
+    const int in_fd = in_fd_file->native_handle();
 
     // Create output pipe to receive the data
     int pipefd[2];
@@ -1029,7 +1026,6 @@ TEST_CASE("AsyncIO - sync fallback: sendfile without executor") {
         CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == data);
     }
 
-    ::close(in_fd);
     ::close(pipefd[0]);
     ::unlink(path.c_str());
 }
@@ -1038,8 +1034,9 @@ TEST_CASE("AsyncIO - sendfile with offset") {
     dstd::String data = "0123456789ABCDEF";
     auto path = create_temp_file(data);
 
-    int in_fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(in_fd >= 0);
+    auto in_fd_file = dstd::File::open(path, {});
+    REQUIRE(in_fd_file);
+    const int in_fd = in_fd_file->native_handle();
 
     int pipefd[2];
     REQUIRE(::pipe(pipefd) == 0);
@@ -1057,7 +1054,6 @@ TEST_CASE("AsyncIO - sendfile with offset") {
         CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == "ABCDEF");
     }
 
-    ::close(in_fd);
     ::close(pipefd[0]);
     ::unlink(path.c_str());
 }
@@ -1077,8 +1073,11 @@ TEST_CASE("AsyncIO - async readv/writev with executor") {
     std::atomic<bool> success{false};
 
     auto body = [&]() -> coro::CoroTask<void> {
-        int fd = ::open(path, O_RDWR | O_TRUNC);
-        REQUIRE(fd >= 0);
+        auto fd_file = dstd::File::open(
+            path, {.access = dstd::Access::ReadWrite,
+                   .creation = dstd::Creation::TruncateExisting});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
 
         // writev
         dstd::String p1 = "Hello, ";
@@ -1107,7 +1106,6 @@ TEST_CASE("AsyncIO - async readv/writev with executor") {
             success.store(true);
         }
 
-        ::close(fd);
         co_return;
     };
 
@@ -1126,8 +1124,9 @@ TEST_CASE("AsyncIO - async lseek + read with executor") {
     std::atomic<bool> success{false};
 
     auto body = [&]() -> coro::CoroTask<void> {
-        int fd = ::open(path.c_str(), O_RDONLY);
-        REQUIRE(fd >= 0);
+        auto fd_file = dstd::File::open(path, {});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
 
         ssize_t pos = co_await runtime::io::lseek(fd, 5, SEEK_SET);
         REQUIRE(pos == 5);
@@ -1138,7 +1137,6 @@ TEST_CASE("AsyncIO - async lseek + read with executor") {
             success.store(true);
         }
 
-        ::close(fd);
         co_return;
     };
 
@@ -1160,8 +1158,9 @@ TEST_CASE("AsyncIO - async sendfile with executor") {
     std::atomic<bool> success{false};
 
     auto body = [&]() -> coro::CoroTask<void> {
-        int in_fd = ::open(path.c_str(), O_RDONLY);
-        REQUIRE(in_fd >= 0);
+        auto in_fd_file = dstd::File::open(path, {});
+        REQUIRE(in_fd_file);
+        const int in_fd = in_fd_file->native_handle();
 
         ssize_t n =
             co_await runtime::io::sendfile(pipefd[1], in_fd, 0, data.size());
@@ -1169,7 +1168,6 @@ TEST_CASE("AsyncIO - async sendfile with executor") {
             success.store(true);
         }
 
-        ::close(in_fd);
         co_return;
     };
 
@@ -1187,4 +1185,45 @@ TEST_CASE("AsyncIO - async sendfile with executor") {
 
     ::close(pipefd[0]);
     ::unlink(path.c_str());
+}
+TEST_CASE("AsyncIO - open_file opens a file for async pread") {
+    dstd::String data = "open_file test data";
+    auto path = create_temp_file(data);
+
+    Runtime rt(2);
+
+    dstd::String read_data;
+
+    auto body = [&]() -> coro::CoroTask<void> {
+        auto file = co_await runtime::io::open_file(path, {});
+        REQUIRE(file);
+        char buf[64] = {};
+        ssize_t n = co_await runtime::io::pread(file->native_handle(), buf,
+                                                data.size(), 0);
+        REQUIRE(n == static_cast<ssize_t>(data.size()));
+        read_data.assign(buf, static_cast<std::size_t>(n));
+        co_return;
+    };
+
+    rt.block_on(body());
+    CHECK(read_data == data);
+
+    ::unlink(path.c_str());
+}
+
+TEST_CASE("AsyncIO - open_file reports NotFound for a missing file") {
+    Runtime rt(2);
+
+    bool is_not_found = false;
+
+    auto body = [&]() -> coro::CoroTask<void> {
+        auto file = co_await runtime::io::open_file(
+            "/tmp/dftracer_io_open_file_missing_path", {});
+        is_not_found =
+            !file && file.error().condition() == dstd::Condition::NotFound;
+        co_return;
+    };
+
+    rt.block_on(body());
+    CHECK(is_not_found);
 }

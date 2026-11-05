@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -54,14 +55,14 @@ struct TempFile {
         path = tmpl;
         REQUIRE(::write(fd, bytes.data(), bytes.size()) ==
                 static_cast<ssize_t>(bytes.size()));
-        ::close(fd);
     }
     ~TempFile() { std::remove(path.c_str()); }
 };
 
 dstd::String read_all(const dstd::String& path) {
-    const int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     dstd::String out;
     bool ok = false;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -78,21 +79,20 @@ dstd::String read_all(const dstd::String& path) {
         }
         ok = true;
     });
-    ::close(fd);
     REQUIRE(ok);
     return out;
 }
 
 dstd::String read_members(const dstd::String& path) {
-    const int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     const auto size = static_cast<std::uint64_t>(::lseek(fd, 0, SEEK_END));
     dstd::String out;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto gen = fileio::compress::decode_gzip_members(fd, size);
         while (auto part = co_await gen.next()) out.append(*part);
     });
-    ::close(fd);
     return out;
 }
 

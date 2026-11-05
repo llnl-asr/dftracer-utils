@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -158,8 +159,9 @@ using PathResult = dstd::Optional<dstd::String>;
 
 PathResult read_with_inflater(const dstd::String& path,
                               index::gzip::GzipRecordKind kind) {
-    const int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     dstd::String out;
     bool ok = false;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -178,7 +180,6 @@ PathResult read_with_inflater(const dstd::String& path,
             out.append(reinterpret_cast<char*>(buf.data()), got);
         }
     });
-    ::close(fd);
     if (!ok) return dstd::nullopt;
     return out;
 }

@@ -4,7 +4,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -79,8 +79,8 @@ static coro::CoroTask<FileResult> compress_file_parallel(
             co_return result;
         }
 
-        dstd::ScopedFd input(::open(file_path.c_str(), O_RDONLY));
-        if (input.get() < 0) {
+        auto input = dstd::File::open(dstd::PathView(file_path), {});
+        if (!input) {
             result.error_message = "Cannot open file: " + file_path;
             co_return result;
         }
@@ -97,14 +97,19 @@ static coro::CoroTask<FileResult> compress_file_parallel(
         dstd::String carry;
         buf.resize(std::max<std::size_t>(chunk_size, 1 << 20));
         bool read_failed = false;
+        std::uint64_t read_offset = 0;
         for (;;) {
-            const ssize_t got = ::read(input.get(), buf.data(), buf.size());
-            if (got < 0) {
+            auto got = input->read_at(
+                read_offset,
+                dstd::Span<std::uint8_t>(
+                    reinterpret_cast<std::uint8_t*>(buf.data()), buf.size()));
+            if (!got) {
                 read_failed = true;
                 break;
             }
-            auto n = static_cast<std::size_t>(got);
+            const std::size_t n = *got;
             if (n == 0) break;
+            read_offset += n;
             dstd::StringView block(buf.data(), n);
             auto nl = block.rfind('\n');
             if (nl == dstd::StringView::npos) {

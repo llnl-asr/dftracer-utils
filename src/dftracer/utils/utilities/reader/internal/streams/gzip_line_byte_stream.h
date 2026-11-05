@@ -87,7 +87,7 @@ class GzipLineByteStream : public GzipStream {
             while (current_pos < target_start) {
                 std::size_t got = 0;
                 const bool read_ok = co_await inflater_.read(
-                    fd_, file_offset_,
+                    fd_.native_handle(), file_offset_,
                     reinterpret_cast<unsigned char *>(buffer_.data()),
                     std::min(buffer_.size(), target_start - current_pos), got);
                 if (!read_ok) {
@@ -135,8 +135,8 @@ class GzipLineByteStream : public GzipStream {
             chunk[SEARCH_BUFFER_SIZE];
         while (pos < max_file_bytes_) {
             std::size_t got = 0;
-            const bool ok = co_await inflater_.read(fd_, file_offset_, chunk,
-                                                    sizeof(chunk), got);
+            const bool ok = co_await inflater_.read(
+                fd_.native_handle(), file_offset_, chunk, sizeof(chunk), got);
             if (!ok || got == 0) break;
             const void *nl = std::memchr(chunk, '\n', got);
             if (nl) {
@@ -172,7 +172,7 @@ class GzipLineByteStream : public GzipStream {
                     std::size_t to_read = std::min(buffer_.size() - total, cap);
                     std::size_t got = 0;
                     bool ok = co_await inflater_.read(
-                        fd_, file_offset_,
+                        fd_.native_handle(), file_offset_,
                         reinterpret_cast<unsigned char *>(buffer_.data() +
                                                           total),
                         to_read, got);
@@ -217,7 +217,7 @@ class GzipLineByteStream : public GzipStream {
         std::size_t bytes_read = 0;
         if (bytes_to_read > 0) {
             bool status =
-                co_await inflater_.read(fd_, file_offset_,
+                co_await inflater_.read(fd_.native_handle(), file_offset_,
                                         reinterpret_cast<unsigned char *>(
                                             buffer_.data() + partial_size),
                                         bytes_to_read, bytes_read);

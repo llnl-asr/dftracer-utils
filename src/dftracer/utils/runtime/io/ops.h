@@ -37,6 +37,12 @@ IoAwaitable pwrite(dstd::NativeHandle fd, const void* buf, std::size_t len,
 /// Asynchronous open. Returns fd (>= 0) or negative errno.
 IoAwaitable open(const char* path, int flags, mode_t mode = 0644) noexcept;
 
+/// Asynchronous open of a file as a @ref dstd::File. The error has the shape
+/// @ref dstd::File::open reports. @p path is copied, so it need not outlive
+/// the call or end with a NUL byte.
+coro::CoroTask<dstd::Expected<dstd::File, dstd::Error>> open_file(
+    dstd::PathView path, dstd::OpenOptions options);
+
 /// Asynchronous close.
 IoAwaitable close(dstd::NativeHandle fd) noexcept;
 

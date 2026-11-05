@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -11,7 +12,6 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/span.h>
@@ -1133,13 +1133,14 @@ SchemaDetection explain_file_schema(dstd::CStringView file_path) {
                                              file_path);
     if (const auto hit = cached_detection(file_path, st.size, st.mtime_ns))
         return *hit;
-    dstd::ScopedFd fd(::open(file_path.c_str(), O_RDONLY));
-    if (fd.get() < 0)
+    auto file = dstd::File::open(dstd::PathView(file_path), {});
+    if (!file)
         throw common::DFTUtilsException::cat(common::ErrorCode::Io,
                                              "cannot read trace for schema "
                                              "detection: ",
                                              file_path);
-    return explain_file_schema(file_path, fd.get(), st.size, st.mtime_ns);
+    return explain_file_schema(file_path, file->native_handle(), st.size,
+                               st.mtime_ns);
 }
 
 dstd::String to_json(const SchemaDetection& d) {

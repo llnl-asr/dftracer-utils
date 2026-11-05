@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
@@ -44,17 +45,17 @@ dstd::String write_single_member_gz(const dstd::String& path,
 // Decode every member; returns (concatenated bytes, per-member last byte).
 dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
     const dstd::String& path) {
-    int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
-    dstd::ScopedFd sfd(fd);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     struct stat st;
-    REQUIRE(::fstat(sfd.get(), &st) == 0);
+    REQUIRE(::fstat(fd, &st) == 0);
     const auto size = static_cast<std::uint64_t>(st.st_size);
 
     dstd::String out;
     dstd::Vector<char> last_bytes;
     [&]() -> dftracer::utils::coro::CoroTask<void> {
-        auto gen = fileio::compress::decode_gzip_members(sfd.get(), size);
+        auto gen = fileio::compress::decode_gzip_members(fd, size);
         while (auto chunk = co_await gen.next()) {
             last_bytes.push_back(chunk->empty() ? '\0' : chunk->back());
             out.append(chunk->data(), chunk->size());
@@ -70,13 +71,13 @@ dstd::Pair<dstd::String, int> decode_all(const dstd::String& path) {
 }
 
 bool needs_rechunk(const dstd::String& path, std::size_t cap) {
-    int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
-    dstd::ScopedFd sfd(fd);
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     struct stat st;
-    REQUIRE(::fstat(sfd.get(), &st) == 0);
+    REQUIRE(::fstat(fd, &st) == 0);
     return fileio::compress::gzip_first_member(
-               sfd.get(), static_cast<std::uint64_t>(st.st_size), cap)
+               fd, static_cast<std::uint64_t>(st.st_size), cap)
         .get()
         .exceeds_cap;
 }
@@ -116,25 +117,23 @@ TEST_SUITE("gzip_rechunker") {
             (void)dstd::fs::write_file(dstd::PathView(gz), ofs);
         }
 
-        int fd = ::open(gz.c_str(), O_RDONLY);
-        REQUIRE(fd >= 0);
-        dstd::ScopedFd sfd(fd);
+        auto fd_file = dstd::File::open(gz, {});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
         struct stat st;
-        REQUIRE(::fstat(sfd.get(), &st) == 0);
+        REQUIRE(::fstat(fd, &st) == 0);
         const auto size = static_cast<std::uint64_t>(st.st_size);
         constexpr std::size_t CAP = 10 * 1024 * 1024;
 
         // Without a sample only the "[" member is read.
-        auto first =
-            fileio::compress::gzip_first_member(sfd.get(), size, CAP).get();
+        auto first = fileio::compress::gzip_first_member(fd, size, CAP).get();
         CHECK(first.uncompressed == 2);
         CHECK_FALSE(first.exceeds_cap);
 
         // With one, the next member counts too, and the cap still applies to
         // the first member only.
         auto sampled =
-            fileio::compress::gzip_first_member(sfd.get(), size, 16, 1 << 20)
-                .get();
+            fileio::compress::gzip_first_member(fd, size, 16, 1 << 20).get();
         CHECK(sampled.uncompressed == 2 + payload.size());
         CHECK(sampled.compressed == size);
         CHECK_FALSE(sampled.exceeds_cap);

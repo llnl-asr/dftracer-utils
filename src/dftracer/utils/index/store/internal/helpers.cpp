@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -37,22 +38,17 @@ time_t get_file_modification_time(dstd::CStringView file_path) {
 }
 
 std::uint64_t calculate_file_hash(dstd::CStringView file_path) {
-    int fd = ::open(file_path.c_str(), O_RDONLY);
-    if (fd < 0) {
+    auto file = dstd::File::open(dstd::PathView(file_path), {});
+    if (!file) {
         DFTRACER_UTILS_LOG_ERROR("Cannot open file for hash calculation: %s",
                                  file_path.c_str());
         return 0;
     }
 
     struct stat st{};
-    if (::fstat(fd, &st) != 0) {
-        ::close(fd);
-        return 0;
-    }
-    const auto hash =
-        calculate_file_hash(fd, static_cast<std::uint64_t>(st.st_size));
-    ::close(fd);
-    return hash;
+    if (::fstat(file->native_handle(), &st) != 0) return 0;
+    return calculate_file_hash(file->native_handle(),
+                               static_cast<std::uint64_t>(st.st_size));
 }
 
 std::uint64_t calculate_file_hash(int fd, std::uint64_t file_size_u64) {
@@ -98,10 +94,9 @@ std::uint64_t file_size_bytes(dstd::CStringView path) {
     if (dftracer::utils::common::stat_input(path, st) && st.is_regular_file)
         return st.size;
 
-    int fd = ::open(path.c_str(), O_RDONLY);
-    if (fd < 0) return 0;
-    off_t pos = ::lseek(fd, 0, SEEK_END);
-    ::close(fd);
+    auto file = dstd::File::open(dstd::PathView(path), {});
+    if (!file) return 0;
+    off_t pos = ::lseek(file->native_handle(), 0, SEEK_END);
     if (pos < 0) return 0;
     return static_cast<std::uint64_t>(pos);
 }

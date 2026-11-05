@@ -5,8 +5,8 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
@@ -28,7 +28,7 @@ struct ChunkExtractorUtilityInput {
     dstd::Vector<dstd::String> files;
     /// If not empty, parallel to `files`: an open descriptor of each file, read
     /// instead of opening it. A null entry opens the file.
-    dstd::Vector<dstd::SharedPtr<dstd::ScopedFd>> open_files;
+    dstd::Vector<dstd::SharedPtr<dstd::File>> open_files;
     dstd::String output_dir;
     dstd::String app_name;
     bool compress = false;
@@ -51,7 +51,7 @@ struct ChunkExtractorUtilityInput {
     }
 
     ChunkExtractorUtilityInput& with_open_files(
-        dstd::Vector<dstd::SharedPtr<dstd::ScopedFd>> fds) {
+        dstd::Vector<dstd::SharedPtr<dstd::File>> fds) {
         open_files = std::move(fds);
         return *this;
     }

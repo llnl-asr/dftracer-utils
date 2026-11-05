@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -170,7 +171,7 @@ class DataFileWriter {
         io_fault::WriteKind kind = io_fault::WriteKind::Extent);
 
     /// The descriptor this writer appends to, -1 once closed.
-    int fd() const noexcept { return fd_; }
+    int fd() const noexcept { return fd_.native_handle(); }
     void add(RecordItem item);
     dstd::Expected<void, dstd::Error> commit();
     dstd::Expected<void, dstd::Error> close();
@@ -198,7 +199,7 @@ class DataFileWriter {
     }
     dstd::Error latched_result() const;
 
-    int fd_ = -1;
+    dstd::File fd_;
     dstd::String path_;
     std::uint32_t extent_size_ = 0;
     std::atomic<std::uint64_t> next_offset_{FILE_HEADER_BYTES};

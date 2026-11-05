@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_CACHE_MV_STORE_H
 #define DFTRACER_UTILS_INDEX_CACHE_MV_STORE_H
 
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -33,12 +34,12 @@ bool view_is_fresh(const trace::views::detail::ViewPlan& plan);
 dstd::String materialize_view_dir(const trace::views::detail::ViewPlan& plan);
 
 /// Single-flight guard for one view root: an advisory, non-blocking exclusive
-/// lock on `<view root>/.lock`. Returns an fd to pass to unlock_view_dir on
-/// success, or -1 if another builder holds it (the caller should skip and let
-/// the winner finish). The lock is released on unlock and, on a crash, by the
-/// OS.
-int lock_view_dir(dstd::StringView dir);
-void unlock_view_dir(int fd);
+/// lock on `<view root>/.lock`. Returns the open lock file to pass to
+/// unlock_view_dir on success, or a closed File if another builder holds it
+/// (the caller should skip and let the winner finish). The lock is released on
+/// unlock and, on a crash, by the OS.
+dstd::File lock_view_dir(dstd::StringView dir);
+void unlock_view_dir(dstd::File& lock);
 
 /// Record the manifest (predicate, phase, window, base-file identities) for an
 /// MV materialized at `dir`, so a later query can match and reuse it.

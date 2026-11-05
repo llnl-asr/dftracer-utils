@@ -457,6 +457,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `Runtime.progress` that showed a running task as queued, with no running tasks and no worker.
 - Fix a data race in `coro::when_any` between a winner that cancels a loser and the start of that loser.
 - Fix a false memory leak report and a failed exit check when a thread flushed its pool counts while a pool closed.
 - Link a static consumer through pkg-config: each library's `.pc` file now requires every library of ours it needs and lists the third-party archives of its `Libs.private`, where `dftracer_utils_utilities` required only the runtime.

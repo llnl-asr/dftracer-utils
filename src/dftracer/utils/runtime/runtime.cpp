@@ -134,6 +134,7 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
                       TaskExecutor* exec,
                       dstd::SharedPtr<std::atomic<common::TaskIndex>> task_id)
         -> coro::detail::Coro {
+        exec->mark_coro_started(task_id->load(std::memory_order_acquire));
         try {
             co_await std::move(t);
             t = coro::CoroTask<void>{

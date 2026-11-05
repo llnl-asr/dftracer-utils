@@ -287,6 +287,7 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task,
                       TaskExecutor* exec,
                       dstd::SharedPtr<std::atomic<common::TaskIndex>> task_id)
         -> coro::detail::Coro {
+        exec->mark_coro_started(task_id->load(std::memory_order_acquire));
         try {
             T val = co_await std::move(t);
             t = coro::CoroTask<T>{std::coroutine_handle<

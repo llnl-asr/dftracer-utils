@@ -43,15 +43,16 @@ std::uint64_t morsel_bytes(const dataframe::Morsel& m);
 /// that seq, so the consumer can hand rows out in unit order.
 class StreamRowFold : public Fold {
    public:
-    StreamRowFold(dstd::SharedPtr<coro::Channel<dataframe::Morsel>> channel,
-                  dstd::SharedPtr<coro::CoroSemaphore> budget,
-                  dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern,
-                  dstd::Vector<dstd::String> select, double time_scale = 1.0,
-                  bool keep_metadata = false, bool emit_dyn = false,
-                  dstd::SharedPtr<const ViewPlan> branch = nullptr,
-                  dstd::SharedPtr<const std::atomic<bool>> dropped = nullptr,
-                  bool by_path = false, bool ordered = false,
-                  dstd::SharedPtr<const JsonColumns> json = nullptr)
+    StreamRowFold(
+        dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel,
+        dstd::SharedPtr<coro::CoroSemaphore> budget,
+        dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern,
+        dstd::Vector<dstd::String> select, double time_scale = 1.0,
+        bool keep_metadata = false, bool emit_dyn = false,
+        dstd::SharedPtr<const ViewPlan> branch = nullptr,
+        dstd::SharedPtr<const std::atomic<bool>> dropped = nullptr,
+        bool by_path = false, bool ordered = false,
+        dstd::SharedPtr<const JsonColumns> json = nullptr)
         : channel_(std::move(channel)),
           budget_(std::move(budget)),
           intern_(std::move(intern)),
@@ -112,7 +113,7 @@ class StreamRowFold : public Fold {
         if (!sent) budget_->release(bytes);
     }
 
-    dstd::SharedPtr<coro::Channel<dataframe::Morsel>> channel_;
+    dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel_;
     dstd::SharedPtr<coro::CoroSemaphore> budget_;
     dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_;
     dstd::Vector<dstd::String> select_;
@@ -126,7 +127,7 @@ class StreamRowFold : public Fold {
     bool ordered_;
     dstd::SharedPtr<const JsonColumns> json_;
     duql::ValueMap qmap_;
-    coro::Channel<dataframe::Morsel>::ProducerGuard guard_;
+    coro::UnboundedChannel<dataframe::Morsel>::ProducerGuard guard_;
 
     // Indices of the batch events the filter keeps, reused across step() calls
     // so a batch costs no vector allocation and no FoldEvent copy.

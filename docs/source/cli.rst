@@ -733,7 +733,7 @@ dftracer_replay
 - ``--sample-rate <rate>`` - Sample rate for replay (0.0-1.0, 1.0=all events, 0.1=10%)
 - ``--sample-seed <seed>`` - Random seed for sampling (for reproducibility)
 - ``--max-events <count>`` - Maximum number of events to replay (0=unlimited)
-- ``--channel-capacity <n>`` - Bounded ``Channel<Trace>`` capacity between the
+- ``--channel-capacity <n>`` - Bounded ``Channel<Trace>`` capacity, at least 1, between the
   read/parse producer and the dispatch consumer (default: 4096)
 
 **Example:**

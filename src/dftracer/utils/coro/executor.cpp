@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/coro/detail/channel_queue.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/task.h>
@@ -78,6 +79,12 @@ void post_resumption(Executor* executor, std::coroutine_handle<> handle) {
     // the resume would strand the coroutine as a hang far from the cause.
     DFTRACER_UTILS_LOG_ERROR(
         "%s", "Coroutine resumption has no executor to resume through");
+    std::abort();
+}
+
+void abort_zero_channel_capacity() {
+    DFTRACER_UTILS_LOG_ERROR(
+        "%s", "Channel capacity must be at least 1; use UnboundedChannel");
     std::abort();
 }
 

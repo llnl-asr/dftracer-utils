@@ -20,6 +20,36 @@ void post_resumption(Executor* executor, std::coroutine_handle<> handle);
 /// Parking a waiter with neither means it can never be woken.
 Executor* resume_executor_for(Executor* preferred) noexcept;
 
+/// Marks a suspending coroutine and its root as waiting on another party, so
+/// the executor does not resume them itself.
+template <typename Promise>
+void set_awaiting_async(std::coroutine_handle<Promise> h, bool value) {
+    if constexpr (requires(Promise& p) { p.awaiting_async = value; }) {
+        h.promise().awaiting_async = value;
+    }
+    if constexpr (requires(Promise& p) {
+                      p.get_root_promise();
+                      p.get_root_promise()->awaiting_async = value;
+                  }) {
+        if (auto* root = h.promise().get_root_promise()) {
+            root->awaiting_async = value;
+        }
+    }
+}
+
+template <typename Promise>
+Executor* executor_for(std::coroutine_handle<Promise> h) {
+    if constexpr (requires(Promise& p) {
+                      p.get_root_promise();
+                      p.get_root_promise()->get_executor();
+                  }) {
+        auto* root = h.promise().get_root_promise();
+        return resume_executor_for(root ? root->get_executor() : nullptr);
+    } else {
+        return resume_executor_for(nullptr);
+    }
+}
+
 }  // namespace dftracer::utils::coro::detail
 
 #endif  // DFTRACER_UTILS_CORO_DETAIL_RESUMPTION_HELPER_H

@@ -205,6 +205,7 @@
         "group_transform_bench",
         "slice_bench",
         "spill_harness",
+        "channel_bench",
         "dftracer_utils_ext"
       ],
       "jobs": 0

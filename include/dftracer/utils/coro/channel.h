@@ -2,83 +2,118 @@
 #ifndef DFTRACER_UTILS_CORO_CHANNEL_H
 #define DFTRACER_UTILS_CORO_CHANNEL_H
 
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/cancelled.h>
+#include <dftracer/utils/coro/detail/channel_queue.h>
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/dstd/concurrent_queue.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <atomic>
-#include <cassert>
 #include <condition_variable>
 #include <coroutine>
 #include <cstddef>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <utility>
 
 namespace dftracer::utils::coro {
 
-template <typename T>
-class ChannelProducer;
+namespace detail {
 
-template <typename T>
-class ChannelConsumer;
+/// Resumes collected under the channel lock and posted after it. A posted
+/// coroutine can run and free its awaitable at once, so this copies out of the
+/// waiter nodes and never reads them again.
+class WakeBatch {
+   public:
+    void add(std::coroutine_handle<> handle, Executor* executor) {
+        if (count_ < INLINE_WAKES) {
+            inline_[count_++] = {handle, executor};
+        } else {
+            overflow_.push_back({handle, executor});
+        }
+    }
+
+    void post() {
+        for (std::size_t i = 0; i < count_; ++i) {
+            post_resumption(inline_[i].executor, inline_[i].handle);
+        }
+        for (const Wake& wake : overflow_) {
+            post_resumption(wake.executor, wake.handle);
+        }
+    }
+
+   private:
+    struct Wake {
+        std::coroutine_handle<> handle;
+        Executor* executor{nullptr};
+    };
+
+    static constexpr std::size_t INLINE_WAKES = 16;
+
+    Wake inline_[INLINE_WAKES];
+    std::size_t count_{0};
+    dstd::Vector<Wake> overflow_;
+};
+
+}  // namespace detail
+
+template <typename Queue>
+class BasicChannelProducer;
+
+template <typename Queue>
+class BasicChannelConsumer;
 
 /**
- * Channel<T> - Producer-consumer queue for streaming data
+ * @brief Many-producer, many-consumer queue between coroutines.
  *
- * Usage:
+ * Use it through @ref Channel, which is bounded, or @ref UnboundedChannel.
+ *
+ * Send and receive take no lock on the fast path. A coroutine that cannot go on
+ * parks under the lock and an opposite operation resumes it. Items from one
+ * producer arrive in order on @ref Channel. @ref UnboundedChannel keeps that
+ * order only per thread, so a producer that moves between threads can see its
+ * items reordered.
+ *
+ * The stream ends for receivers after @ref close or after the last registered
+ * producer leaves, and only when every sent item is received.
+ *
  * @code
  * auto channel = make_channel<Chunk>(1000);
  *
- * // channel->producer() increments the producer count immediately,
- * // so the channel never transiently sees zero producers while
- * // coroutines are still being scheduled.
+ * // producer() counts the producer now, so the channel never sees zero
+ * // producers while coroutines are still being scheduled.
  * auto task = make_task(
  *     [ch = channel->producer()](CoroScope& ctx) mutable
  *         -> CoroTask<void> {
- *         auto guard = ch.guard();  // adopts slot, RAII release
+ *         auto guard = ch.guard();
  *         for (auto chunk : read_chunks())
  *             co_await ch.send(std::move(chunk));
- *         // ~ProducerGuard auto-releases; channel closes when last exits
  *     });
  * @endcode
  */
-template <typename T>
-class Channel : public std::enable_shared_from_this<Channel<T>> {
+template <typename Queue>
+class BasicChannel : public std::enable_shared_from_this<BasicChannel<Queue>> {
    public:
-    struct ReceiveWaiterNode {
-        std::coroutine_handle<> handle;
-        dstd::Optional<T>* result{nullptr};
-        Executor* executor{nullptr};
-        ReceiveWaiterNode* next{nullptr};
-    };
-    struct SendWaiterNode {
-        std::coroutine_handle<> handle;
-        dstd::Optional<T>* item{nullptr};
-        bool* sent{nullptr};
-        Executor* executor{nullptr};
-        SendWaiterNode* next{nullptr};
-    };
+    using value_type = typename Queue::value_type;
+    using T = value_type;
+
     class ReceiveAwaitable;
     class SendAwaitable;
 
-    /**
-     * RAII guard for producer tracking
-     * Automatically closes channel when last producer exits
-     */
+    /// Releases a producer slot on destruction. The stream ends when the last
+    /// slot is released.
     class ProducerGuard {
        public:
         /// Tag type: adopt an already-registered producer slot (no increment).
         struct Adopt {};
 
        private:
-        Channel* channel_;
-        dstd::SharedPtr<Channel> shared_;
+        BasicChannel* channel_;
+        dstd::SharedPtr<BasicChannel> shared_;
 
         void release() {
             if (channel_) {
@@ -89,27 +124,23 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
 
        public:
-        /// Register a new producer slot.
-        explicit ProducerGuard(Channel* ch) : channel_(ch) {
+        explicit ProducerGuard(BasicChannel* ch) : channel_(ch) {
             if (channel_) {
                 channel_->register_producer();
             }
         }
 
-        /// Adopt an existing producer registration (no increment).
-        ProducerGuard(Channel* ch, Adopt) : channel_(ch) {}
+        ProducerGuard(BasicChannel* ch, Adopt) : channel_(ch) {}
 
-        /// Adopt with shared_ptr to extend channel lifetime.
-        ProducerGuard(Channel* ch, dstd::SharedPtr<Channel> shared, Adopt)
+        ProducerGuard(BasicChannel* ch, dstd::SharedPtr<BasicChannel> shared,
+                      Adopt)
             : channel_(ch), shared_(std::move(shared)) {}
 
         ~ProducerGuard() { release(); }
 
-        /// Non-copyable
         ProducerGuard(const ProducerGuard&) = delete;
         ProducerGuard& operator=(const ProducerGuard&) = delete;
 
-        /// Movable
         ProducerGuard(ProducerGuard&& other) noexcept
             : channel_(other.channel_), shared_(std::move(other.shared_)) {
             other.channel_ = nullptr;
@@ -126,11 +157,28 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
     };
 
+   private:
+    struct ReceiveWaiterNode {
+        std::coroutine_handle<> handle;
+        dstd::Optional<T>* result{nullptr};
+        Executor* executor{nullptr};
+        ReceiveWaiterNode* next{nullptr};
+    };
+
+    struct SendWaiterNode {
+        std::coroutine_handle<> handle;
+        dstd::Optional<T>* item{nullptr};
+        bool* sent{nullptr};
+        Executor* executor{nullptr};
+        SendWaiterNode* next{nullptr};
+    };
+
+   public:
     /// co_await throws a cancelled error (see coro::is_cancelled) when the
     /// executor shuts down while it waits.
     class ReceiveAwaitable {
        private:
-        Channel* channel_;
+        BasicChannel* channel_;
         dstd::Optional<T> result_;
         ReceiveWaiterNode waiter_{};
         bool suspended_{false};
@@ -138,7 +186,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         detail::ParkNode* park_{nullptr};
 
        public:
-        explicit ReceiveAwaitable(Channel* channel) : channel_(channel) {}
+        explicit ReceiveAwaitable(BasicChannel* channel) : channel_(channel) {}
 
         ReceiveAwaitable(const ReceiveAwaitable&) = delete;
         ReceiveAwaitable& operator=(const ReceiveAwaitable&) = delete;
@@ -146,156 +194,51 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         ReceiveAwaitable& operator=(ReceiveAwaitable&&) = delete;
 
         bool await_ready() {
-            if (!channel_) {
-                result_ = dstd::nullopt;
-                return true;
+            if (!channel_) return true;
+            if (channel_->queue_.try_pop(result_) != detail::PopStatus::Ok) {
+                return false;
             }
-
-            T item;
-            if (channel_->try_receive(item)) {
-                result_ = dstd::Optional<T>(std::move(item));
-                return true;
-            }
-
-            bool consumed = false;
-            {
-                std::lock_guard<std::mutex> lock(channel_->state_mutex_);
-                if (channel_->try_receive_locked(item)) {
-                    result_ = dstd::Optional<T>(std::move(item));
-                    consumed = true;
-                } else if (channel_->is_terminal_locked()) {
-                    result_ = dstd::nullopt;
-                    return true;
-                }
-            }
-
-            if (consumed) {
-                if (!channel_->wake_one_send_waiter_after_receive()) {
-                    channel_->cv_writable_.notify_one();
-                }
-                return true;
-            }
-
-            return false;
+            channel_->after_pop();
+            return true;
         }
 
         template <typename Promise>
         bool await_suspend(std::coroutine_handle<Promise> h) {
-            if (!channel_) {
-                result_ = dstd::nullopt;
-                return false;
-            }
+            detail::set_awaiting_async(h, true);
+            waiter_.executor = detail::executor_for(h);
 
-            if constexpr (requires(Promise& p) { p.awaiting_async = true; }) {
-                h.promise().awaiting_async = true;
-            }
-
-            if constexpr (requires(Promise& p) {
-                              p.get_root_promise();
-                              p.get_root_promise()->awaiting_async = true;
-                          }) {
-                auto* root = h.promise().get_root_promise();
-                if (root) root->awaiting_async = true;
-                waiter_.executor = detail::resume_executor_for(
-                    root ? root->get_executor() : nullptr);
-            } else {
-                waiter_.executor = detail::resume_executor_for(nullptr);
-            }
-
-            T item;
-            bool consumed = false;
-            bool consumed_from_queue = false;
-            std::coroutine_handle<> sender_handle;
-            Executor* sender_executor = nullptr;
+            BasicChannel* channel = channel_;
+            detail::WakeBatch wakes;
+            bool parked = false;
             {
-                std::lock_guard<std::mutex> lock(channel_->state_mutex_);
-                if (channel_->try_receive_locked(item)) {
-                    result_ = dstd::Optional<T>(std::move(item));
-                    consumed = true;
-                    consumed_from_queue = true;
-                } else if (SendWaiterNode* sender_waiter =
-                               channel_->pop_send_waiter_locked()) {
-                    if (channel_->user_closed_.load(
-                            std::memory_order_acquire)) {
-                        if (sender_waiter->sent) {
-                            *(sender_waiter->sent) = false;
-                        }
-                    } else {
-                        if (sender_waiter->item &&
-                            sender_waiter->item->has_value()) {
-                            result_ = std::move(*(sender_waiter->item));
-                            consumed = true;
-                        } else {
-                            result_ = dstd::nullopt;
-                        }
-                        if (sender_waiter->sent) {
-                            *(sender_waiter->sent) = true;
-                        }
-                    }
-                    sender_handle = sender_waiter->handle;
-                    sender_executor = sender_waiter->executor;
-                } else if (channel_->is_terminal_locked()) {
-                    result_ = dstd::nullopt;
-                    h.promise().awaiting_async = false;
-                    if constexpr (requires(Promise& p) {
-                                      p.get_root_promise();
-                                      p.get_root_promise()->awaiting_async =
-                                          false;
-                                  }) {
-                        if (auto* root = h.promise().get_root_promise()) {
-                            root->awaiting_async = false;
-                        }
-                    }
-                    return false;
+                std::lock_guard<std::mutex> lock(channel->state_mutex_);
+                channel->recv_waiting_.fetch_add(1, std::memory_order_seq_cst);
+                if (channel->send_head_) channel->transfer_locked(wakes);
+                detail::PopStatus status = detail::PopStatus::Empty;
+                if (!channel->recv_head_) {
+                    status = channel->queue_.try_pop(result_);
+                }
+                if (status == detail::PopStatus::Ok ||
+                    channel->is_closed_for_receive_locked()) {
+                    channel->recv_waiting_.fetch_sub(1,
+                                                     std::memory_order_relaxed);
+                    if (channel->send_head_) channel->transfer_locked(wakes);
                 } else {
                     waiter_.handle = h;
                     waiter_.result = &result_;
-                    waiter_.next = nullptr;
-                    channel_->enqueue_receive_waiter_locked(&waiter_);
+                    channel->enqueue_receive_waiter_locked(&waiter_);
                     suspended_ = true;
                     if (waiter_.executor) {
                         park_ = waiter_.executor->park(
                             this, &ReceiveAwaitable::cancel_thunk);
                     }
-                    return true;
+                    parked = true;
                 }
             }
-
-            if (sender_handle) {
-                detail::post_resumption(sender_executor, sender_handle);
-                if (!consumed) {
-                    result_ = dstd::nullopt;
-                }
-            }
-
-            if (consumed) {
-                if (consumed_from_queue) {
-                    if (!channel_->wake_one_send_waiter_after_receive()) {
-                        channel_->cv_writable_.notify_one();
-                    }
-                }
-                h.promise().awaiting_async = false;
-                if constexpr (requires(Promise& p) {
-                                  p.get_root_promise();
-                                  p.get_root_promise()->awaiting_async = false;
-                              }) {
-                    if (auto* root = h.promise().get_root_promise()) {
-                        root->awaiting_async = false;
-                    }
-                }
-                return false;
-            }
-
-            h.promise().awaiting_async = false;
-            if constexpr (requires(Promise& p) {
-                              p.get_root_promise();
-                              p.get_root_promise()->awaiting_async = false;
-                          }) {
-                if (auto* root = h.promise().get_root_promise()) {
-                    root->awaiting_async = false;
-                }
-            }
-
+            // A parked coroutine can run from here on, so only locals are safe.
+            wakes.post();
+            if (parked) return true;
+            detail::set_awaiting_async(h, false);
             return false;
         }
 
@@ -335,11 +278,13 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
     };
 
-    /// co_await throws a cancelled error (see coro::is_cancelled) when the
-    /// executor shuts down while it waits for room.
+    /// co_await returns false when the channel is closed, and the item is then
+    /// dropped with the awaitable. It throws a cancelled error (see
+    /// coro::is_cancelled) when the executor shuts down while it waits for
+    /// room.
     class SendAwaitable {
        private:
-        Channel* channel_;
+        BasicChannel* channel_;
         dstd::Optional<T> item_;
         bool sent_{false};
         SendWaiterNode waiter_{};
@@ -348,10 +293,10 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         detail::ParkNode* park_{nullptr};
 
        public:
-        SendAwaitable(Channel* channel, const T& item)
+        SendAwaitable(BasicChannel* channel, const T& item)
             : channel_(channel), item_(item) {}
 
-        SendAwaitable(Channel* channel, T&& item)
+        SendAwaitable(BasicChannel* channel, T&& item)
             : channel_(channel), item_(std::move(item)) {}
 
         SendAwaitable(const SendAwaitable&) = delete;
@@ -360,124 +305,57 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         SendAwaitable& operator=(SendAwaitable&&) = delete;
 
         bool await_ready() {
-            if (!channel_ ||
-                channel_->user_closed_.load(std::memory_order_acquire)) {
-                sent_ = false;
-                return true;
+            if (!channel_) return true;
+            if (channel_->send_waiting_.load(std::memory_order_relaxed) != 0) {
+                return false;
             }
-            return false;
+            const detail::PushStatus status = channel_->queue_.try_push(*item_);
+            if (status == detail::PushStatus::Full) return false;
+            sent_ = status == detail::PushStatus::Ok;
+            if (sent_) channel_->after_push();
+            return true;
         }
 
         template <typename Promise>
         bool await_suspend(std::coroutine_handle<Promise> h) {
-            if (!channel_ ||
-                channel_->user_closed_.load(std::memory_order_acquire)) {
-                sent_ = false;
-                return false;
-            }
+            detail::set_awaiting_async(h, true);
+            waiter_.executor = detail::executor_for(h);
 
-            if constexpr (requires(Promise& p) { p.awaiting_async = true; }) {
-                h.promise().awaiting_async = true;
-            }
-
-            if constexpr (requires(Promise& p) {
-                              p.get_root_promise();
-                              p.get_root_promise()->awaiting_async = true;
-                          }) {
-                auto* root = h.promise().get_root_promise();
-                if (root) root->awaiting_async = true;
-                waiter_.executor = detail::resume_executor_for(
-                    root ? root->get_executor() : nullptr);
-            } else {
-                waiter_.executor = detail::resume_executor_for(nullptr);
-            }
-
-            std::coroutine_handle<> receive_handle;
-            Executor* receive_executor = nullptr;
-            bool notify_readable = false;
-
+            BasicChannel* channel = channel_;
+            detail::WakeBatch wakes;
+            bool parked = false;
             {
-                std::lock_guard<std::mutex> lock(channel_->state_mutex_);
-
-                if (channel_->user_closed_.load(std::memory_order_acquire)) {
-                    sent_ = false;
-                    if constexpr (requires(Promise& p) {
-                                      p.get_root_promise();
-                                      p.get_root_promise()->awaiting_async =
-                                          false;
-                                  }) {
-                        if (auto* root = h.promise().get_root_promise()) {
-                            root->awaiting_async = false;
-                        }
-                    }
-                    h.promise().awaiting_async = false;
-                    return false;
+                std::lock_guard<std::mutex> lock(channel->state_mutex_);
+                channel->send_waiting_.fetch_add(1, std::memory_order_seq_cst);
+                if (channel->send_head_) channel->transfer_locked(wakes);
+                detail::PushStatus status = detail::PushStatus::Full;
+                if (!channel->send_head_) {
+                    status = channel->queue_.try_push(*item_);
                 }
-
-                ReceiveWaiterNode* waiter =
-                    channel_->pop_receive_waiter_locked();
-                if (waiter) {
-                    if (waiter->result) {
-                        *(waiter->result) = std::move(item_);
+                if (status == detail::PushStatus::Full) {
+                    waiter_.handle = h;
+                    waiter_.item = &item_;
+                    waiter_.sent = &sent_;
+                    channel->enqueue_send_waiter_locked(&waiter_);
+                    suspended_ = true;
+                    if (waiter_.executor) {
+                        park_ = waiter_.executor->park(
+                            this, &SendAwaitable::cancel_thunk);
                     }
-                    sent_ = true;
-                    receive_handle = waiter->handle;
-                    receive_executor = waiter->executor;
-
-                    if constexpr (requires(Promise& p) {
-                                      p.get_root_promise();
-                                      p.get_root_promise()->awaiting_async =
-                                          false;
-                                  }) {
-                        if (auto* root = h.promise().get_root_promise()) {
-                            root->awaiting_async = false;
-                        }
-                    }
-                    h.promise().awaiting_async = false;
+                    parked = true;
                 } else {
-                    if (channel_->capacity_ != SIZE_MAX &&
-                        channel_->available_slots_ == 0) {
-                        waiter_.handle = h;
-                        waiter_.item = &item_;
-                        waiter_.sent = &sent_;
-                        waiter_.next = nullptr;
-                        channel_->enqueue_send_waiter_locked(&waiter_);
-                        suspended_ = true;
-                        if (waiter_.executor) {
-                            park_ = waiter_.executor->park(
-                                this, &SendAwaitable::cancel_thunk);
-                        }
-                        return true;
+                    channel->send_waiting_.fetch_sub(1,
+                                                     std::memory_order_relaxed);
+                    sent_ = status == detail::PushStatus::Ok;
+                    if (channel->recv_head_ || channel->blocking_waiters_ > 0) {
+                        channel->transfer_locked(wakes);
                     }
-
-                    if (channel_->capacity_ != SIZE_MAX) {
-                        --channel_->available_slots_;
-                    }
-                    channel_->pending_items_.fetch_add(
-                        1, std::memory_order_acq_rel);
-                    channel_->queue_.enqueue(std::move(*item_));
-                    sent_ = true;
-                    notify_readable = true;
-
-                    if constexpr (requires(Promise& p) {
-                                      p.get_root_promise();
-                                      p.get_root_promise()->awaiting_async =
-                                          false;
-                                  }) {
-                        if (auto* root = h.promise().get_root_promise()) {
-                            root->awaiting_async = false;
-                        }
-                    }
-                    h.promise().awaiting_async = false;
                 }
             }
-
-            if (receive_handle) {
-                detail::post_resumption(receive_executor, receive_handle);
-            } else if (notify_readable) {
-                channel_->cv_readable_.notify_one();
-            }
-
+            // A parked coroutine can run from here on, so only locals are safe.
+            wakes.post();
+            if (parked) return true;
+            detail::set_awaiting_async(h, false);
             return false;
         }
 
@@ -518,98 +396,120 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     };
 
    private:
-    dstd::ConcurrentQueue<T> queue_;
+    friend class BasicChannelProducer<Queue>;
+    friend class BasicChannelConsumer<Queue>;
 
-    std::size_t capacity_;
-    std::size_t available_slots_;
-    mutable std::mutex state_mutex_;
+    Queue queue_;
+
+    // A push or pop writes its queue index, then reads the opposite counter. A
+    // waiter raises its counter, then retries the queue. Both orders are
+    // seq_cst, so one of the two sides always sees the other and no wake is
+    // lost.
+    alignas(DFTRACER_UTILS_CACHE_LINE_SIZE)
+        std::atomic<std::size_t> send_waiting_{0};
+    std::atomic<std::size_t> recv_waiting_{0};
+
+    alignas(DFTRACER_UTILS_CACHE_LINE_SIZE) mutable std::mutex state_mutex_;
     std::condition_variable cv_readable_;
-    std::condition_variable cv_writable_;
+    std::size_t blocking_waiters_{0};
+    ReceiveWaiterNode* recv_head_{nullptr};
+    ReceiveWaiterNode* recv_tail_{nullptr};
+    SendWaiterNode* send_head_{nullptr};
+    SendWaiterNode* send_tail_{nullptr};
     std::atomic<std::size_t> producer_count_{0};
-    std::atomic<bool> had_producers_{false};
-    std::atomic<std::size_t> active_sends_{0};
-    std::atomic<std::size_t> pending_items_{0};
-    std::atomic<bool> user_closed_{false};
+    bool had_producers_{false};
+    bool user_closed_{false};
     std::atomic<bool> closed_{false};
-    ReceiveWaiterNode* recv_waiters_head_{nullptr};
-    ReceiveWaiterNode* recv_waiters_tail_{nullptr};
-    SendWaiterNode* send_waiters_head_{nullptr};
-    SendWaiterNode* send_waiters_tail_{nullptr};
 
-    bool is_terminal_locked() const {
-        const bool no_producers =
-            producer_count_.load(std::memory_order_acquire) == 0;
-        const bool had_producers =
-            had_producers_.load(std::memory_order_acquire);
-        const bool no_active_sends =
-            active_sends_.load(std::memory_order_acquire) == 0;
-        const bool no_pending =
-            pending_items_.load(std::memory_order_acquire) == 0;
-        const bool user_closed = user_closed_.load(std::memory_order_acquire);
-        return (user_closed || (had_producers && no_producers)) &&
-               no_active_sends && no_pending;
+    bool is_closed_for_receive_locked() const {
+        return user_closed_ ||
+               (had_producers_ &&
+                producer_count_.load(std::memory_order_relaxed) == 0);
     }
 
-    void mark_item_consumed() {
-        [[maybe_unused]] const std::size_t prev =
-            pending_items_.fetch_sub(1, std::memory_order_acq_rel);
-        assert(prev > 0 && "Channel pending_items underflow");
+    void after_push() {
+        if (recv_waiting_.load(std::memory_order_seq_cst) > 0) service();
     }
 
-    void release_slot_if_bounded_locked() {
-        if (capacity_ != SIZE_MAX) {
-            ++available_slots_;
+    void after_pop() {
+        if (send_waiting_.load(std::memory_order_seq_cst) > 0) service();
+    }
+
+    void service() {
+        detail::WakeBatch wakes;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            transfer_locked(wakes);
         }
+        wakes.post();
     }
 
-    bool try_receive_locked(T& item) {
-        const bool ok = queue_.try_dequeue(item);
-        if (ok) {
-            mark_item_consumed();
+    // Parked items always go through the queue, never straight to a receiver,
+    // so the order of one producer holds. Runs until neither side can move.
+    void transfer_locked(detail::WakeBatch& wakes) {
+        bool progress = true;
+        while (progress) {
+            progress = false;
+            while (send_head_) {
+                const detail::PushStatus status =
+                    queue_.try_push(**send_head_->item);
+                if (status == detail::PushStatus::Full) break;
+                SendWaiterNode* node = pop_send_waiter_locked();
+                *node->sent = status == detail::PushStatus::Ok;
+                wakes.add(node->handle, node->executor);
+                progress = true;
+            }
+            while (recv_head_) {
+                if (queue_.try_pop(*recv_head_->result) !=
+                    detail::PopStatus::Ok) {
+                    break;
+                }
+                ReceiveWaiterNode* node = pop_receive_waiter_locked();
+                wakes.add(node->handle, node->executor);
+                progress = true;
+            }
         }
-        return ok;
+        if (is_closed_for_receive_locked()) {
+            while (ReceiveWaiterNode* node = pop_receive_waiter_locked()) {
+                wakes.add(node->handle, node->executor);
+            }
+        }
+        if (blocking_waiters_ > 0) cv_readable_.notify_all();
     }
 
     void enqueue_receive_waiter_locked(ReceiveWaiterNode* node) {
         node->next = nullptr;
-        if (recv_waiters_tail_) {
-            recv_waiters_tail_->next = node;
+        if (recv_tail_) {
+            recv_tail_->next = node;
         } else {
-            recv_waiters_head_ = node;
+            recv_head_ = node;
         }
-        recv_waiters_tail_ = node;
+        recv_tail_ = node;
     }
 
     void enqueue_send_waiter_locked(SendWaiterNode* node) {
         node->next = nullptr;
-        if (send_waiters_tail_) {
-            send_waiters_tail_->next = node;
+        if (send_tail_) {
+            send_tail_->next = node;
         } else {
-            send_waiters_head_ = node;
+            send_head_ = node;
         }
-        send_waiters_tail_ = node;
-    }
-
-    void enqueue_send_waiter_front_locked(SendWaiterNode* node) {
-        node->next = send_waiters_head_;
-        send_waiters_head_ = node;
-        if (!send_waiters_tail_) {
-            send_waiters_tail_ = node;
-        }
+        send_tail_ = node;
     }
 
     bool remove_receive_waiter_locked(ReceiveWaiterNode* node) {
         ReceiveWaiterNode* prev = nullptr;
-        for (ReceiveWaiterNode* curr = recv_waiters_head_; curr;
+        for (ReceiveWaiterNode* curr = recv_head_; curr;
              prev = curr, curr = curr->next) {
             if (curr != node) continue;
             if (prev) {
                 prev->next = curr->next;
             } else {
-                recv_waiters_head_ = curr->next;
+                recv_head_ = curr->next;
             }
-            if (recv_waiters_tail_ == curr) recv_waiters_tail_ = prev;
+            if (recv_tail_ == curr) recv_tail_ = prev;
             node->next = nullptr;
+            recv_waiting_.fetch_sub(1, std::memory_order_relaxed);
             return true;
         }
         return false;
@@ -617,434 +517,156 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
     bool remove_send_waiter_locked(SendWaiterNode* node) {
         SendWaiterNode* prev = nullptr;
-        for (SendWaiterNode* curr = send_waiters_head_; curr;
+        for (SendWaiterNode* curr = send_head_; curr;
              prev = curr, curr = curr->next) {
             if (curr != node) continue;
             if (prev) {
                 prev->next = curr->next;
             } else {
-                send_waiters_head_ = curr->next;
+                send_head_ = curr->next;
             }
-            if (send_waiters_tail_ == curr) send_waiters_tail_ = prev;
+            if (send_tail_ == curr) send_tail_ = prev;
             node->next = nullptr;
+            send_waiting_.fetch_sub(1, std::memory_order_relaxed);
             return true;
         }
         return false;
     }
 
     SendWaiterNode* pop_send_waiter_locked() {
-        SendWaiterNode* node = send_waiters_head_;
+        SendWaiterNode* node = send_head_;
         if (!node) return nullptr;
-        send_waiters_head_ = node->next;
-        if (!send_waiters_head_) send_waiters_tail_ = nullptr;
+        send_head_ = node->next;
+        if (!send_head_) send_tail_ = nullptr;
         node->next = nullptr;
+        send_waiting_.fetch_sub(1, std::memory_order_relaxed);
         return node;
     }
 
     ReceiveWaiterNode* pop_receive_waiter_locked() {
-        ReceiveWaiterNode* node = recv_waiters_head_;
+        ReceiveWaiterNode* node = recv_head_;
         if (!node) return nullptr;
-        recv_waiters_head_ = node->next;
-        if (!recv_waiters_head_) recv_waiters_tail_ = nullptr;
+        recv_head_ = node->next;
+        if (!recv_head_) recv_tail_ = nullptr;
         node->next = nullptr;
+        recv_waiting_.fetch_sub(1, std::memory_order_relaxed);
         return node;
     }
-
-    void wake_all_receive_waiters_terminal() {
-        for (;;) {
-            ReceiveWaiterNode* waiter = nullptr;
-            std::coroutine_handle<> handle;
-            Executor* executor = nullptr;
-            {
-                std::lock_guard<std::mutex> lock(state_mutex_);
-                waiter = pop_receive_waiter_locked();
-                if (!waiter) {
-                    return;
-                }
-
-                T item;
-                if (waiter->result) {
-                    if (queue_.try_dequeue(item)) {
-                        mark_item_consumed();
-                        release_slot_if_bounded_locked();
-                        *(waiter->result) = dstd::Optional<T>(std::move(item));
-                    } else {
-                        *(waiter->result) = dstd::nullopt;
-                    }
-                }
-                handle = waiter->handle;
-                executor = waiter->executor;
-            }
-
-            if (handle) {
-                detail::post_resumption(executor, handle);
-            }
-        }
-    }
-
-    void wake_all_send_waiters_closed() {
-        for (;;) {
-            SendWaiterNode* waiter = nullptr;
-            std::coroutine_handle<> handle;
-            Executor* executor = nullptr;
-            {
-                std::lock_guard<std::mutex> lock(state_mutex_);
-                waiter = pop_send_waiter_locked();
-                if (!waiter) {
-                    return;
-                }
-                if (waiter->sent) {
-                    *(waiter->sent) = false;
-                }
-                handle = waiter->handle;
-                executor = waiter->executor;
-            }
-
-            if (handle) {
-                detail::post_resumption(executor, handle);
-            }
-        }
-    }
-
-    bool wake_one_send_waiter_after_receive() {
-        std::coroutine_handle<> sender_handle;
-        std::coroutine_handle<> receiver_handle;
-        Executor* sender_executor = nullptr;
-        Executor* receiver_executor = nullptr;
-        bool notify_readable = false;
-
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            release_slot_if_bounded_locked();
-
-            SendWaiterNode* sender_waiter = pop_send_waiter_locked();
-            if (!sender_waiter) {
-                return false;
-            }
-
-            if (user_closed_.load(std::memory_order_acquire)) {
-                if (sender_waiter->sent) {
-                    *(sender_waiter->sent) = false;
-                }
-                sender_handle = sender_waiter->handle;
-                sender_executor = sender_waiter->executor;
-            } else {
-                ReceiveWaiterNode* recv_waiter = pop_receive_waiter_locked();
-                if (recv_waiter) {
-                    if (recv_waiter->result) {
-                        if (sender_waiter->item) {
-                            *(recv_waiter->result) =
-                                std::move(*(sender_waiter->item));
-                        } else {
-                            *(recv_waiter->result) = dstd::nullopt;
-                        }
-                    }
-                    receiver_handle = recv_waiter->handle;
-                    receiver_executor = recv_waiter->executor;
-                } else {
-                    if (capacity_ != SIZE_MAX && available_slots_ == 0) {
-                        enqueue_send_waiter_front_locked(sender_waiter);
-                        return false;
-                    }
-                    if (capacity_ != SIZE_MAX) {
-                        --available_slots_;
-                    }
-                    if (sender_waiter->item &&
-                        sender_waiter->item->has_value()) {
-                        pending_items_.fetch_add(1, std::memory_order_acq_rel);
-                        queue_.enqueue(std::move(*(*sender_waiter->item)));
-                    }
-                    notify_readable = true;
-                }
-
-                if (sender_waiter->sent) {
-                    *(sender_waiter->sent) = true;
-                }
-                sender_handle = sender_waiter->handle;
-                sender_executor = sender_waiter->executor;
-            }
-        }
-
-        if (receiver_handle) {
-            detail::post_resumption(receiver_executor, receiver_handle);
-        } else if (notify_readable) {
-            cv_readable_.notify_one();
-        }
-
-        if (sender_handle) {
-            detail::post_resumption(sender_executor, sender_handle);
-        }
-
-        return true;
-    }
-
-    void notify_all_waiters() {
-        cv_readable_.notify_all();
-        cv_writable_.notify_all();
-
-        bool terminal = false;
-        bool closed_for_receive = false;
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            terminal = is_terminal_locked();
-            const bool user_closed =
-                user_closed_.load(std::memory_order_acquire);
-            const bool had_producers =
-                had_producers_.load(std::memory_order_acquire);
-            const bool no_producers =
-                producer_count_.load(std::memory_order_acquire) == 0;
-            closed_for_receive = user_closed || (had_producers && no_producers);
-        }
-
-        if (terminal || closed_for_receive) {
-            wake_all_receive_waiters_terminal();
-        }
-
-        if (terminal || user_closed_.load(std::memory_order_acquire)) {
-            wake_all_send_waiters_closed();
-        }
-    }
-
-    void maybe_notify_terminal() {
-        if (producer_count_.load(std::memory_order_acquire) == 0 &&
-            active_sends_.load(std::memory_order_acquire) == 0 &&
-            pending_items_.load(std::memory_order_acquire) == 0) {
-            cv_readable_.notify_all();
-            wake_all_receive_waiters_terminal();
-        }
-    }
-
-   public:
-    /**
-     * Constructor
-     * @param capacity Maximum number of items in queue (0 = unlimited)
-     */
-    explicit Channel(std::size_t capacity = 0)
-        : queue_(capacity == 0 ? 1024 : capacity),
-          capacity_(capacity == 0 ? SIZE_MAX : capacity),
-          available_slots_(capacity_ == SIZE_MAX ? SIZE_MAX : capacity_) {}
-
-    ~Channel() { close(); }
-
-    /// Non-copyable, non-movable (moodycamel queue is non-movable)
-    Channel(const Channel&) = delete;
-    Channel& operator=(const Channel&) = delete;
-    Channel(Channel&&) = delete;
-    Channel& operator=(Channel&&) = delete;
-
-    /**
-     * Helper to create shared_ptr Channel<T>
-     */
-    static dstd::SharedPtr<Channel<T>> make(std::size_t capacity = 0) {
-        return dstd::make_shared<Channel<T>>(capacity);
-    }
-
-    /**
-     * Get a send-side handle with a pre-registered producer slot.
-     * Use this when capturing a channel into a coroutine lambda:
-     * @code
-     *   [ch = channel->producer()](...) mutable -> CoroTask<...> {
-     *       auto guard = ch.guard();
-     *       co_await ch.send(...);
-     *   }
-     * @endcode
-     * The producer count is incremented immediately (on the caller's
-     * thread), not when the coroutine starts.
-     */
-    ChannelProducer<T> producer() {
-        // Try to obtain a shared_ptr if this channel is managed by one.
-        // For stack-allocated channels, weak_from_this().lock() returns
-        // nullptr, and we fall back to the raw-pointer constructor.
-        auto sp = this->weak_from_this().lock();
-        if (sp) {
-            return ChannelProducer<T>(std::move(sp));
-        }
-        return ChannelProducer<T>(this);
-    }
-
-    /**
-     * Get a receive-side handle for capturing into a coroutine lambda:
-     * @code
-     *   [ch = channel->consumer()](...) -> CoroTask<...> {
-     *       for (;;) {
-     *           auto item = co_await ch.receive();
-     *           if (!item) break;
-     *           ...
-     *       }
-     *   }
-     * @endcode
-     */
-    ChannelConsumer<T> consumer() {
-        auto sp = this->weak_from_this().lock();
-        if (sp) {
-            return ChannelConsumer<T>(std::move(sp));
-        }
-        return ChannelConsumer<T>(this);
-    }
-
-   private:
-    friend class ChannelProducer<T>;
-    friend class ChannelConsumer<T>;
 
     ProducerGuard adopt_producer() {
         return ProducerGuard(this, typename ProducerGuard::Adopt{});
     }
 
-    ProducerGuard adopt_producer(dstd::SharedPtr<Channel> shared) {
+    ProducerGuard adopt_producer(dstd::SharedPtr<BasicChannel> shared) {
         return ProducerGuard(this, std::move(shared),
                              typename ProducerGuard::Adopt{});
     }
 
     void register_producer() {
-        // Under state_mutex_ so a consumer's is_terminal_locked (also holding
-        // it) never observes the had_producers_=true / producer_count_=0 window
-        // a separate-store registration would expose - that combination reads
-        // as "all producers finished" and ends the stream before the first
-        // send.
         std::lock_guard<std::mutex> lock(state_mutex_);
-        had_producers_.store(true, std::memory_order_release);
-        producer_count_.fetch_add(1, std::memory_order_release);
+        had_producers_ = true;
+        producer_count_.fetch_add(1, std::memory_order_relaxed);
     }
 
     void release_producer() {
-        // Termination state must change under state_mutex_ or a blocking
-        // receiver can lose the wakeup.
-        bool was_last = false;
+        detail::WakeBatch wakes;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            std::size_t prev =
-                producer_count_.fetch_sub(1, std::memory_order_acq_rel);
-            if (prev == 1) {
-                was_last = true;
-                if (!user_closed_.load(std::memory_order_acquire)) {
-                    closed_.store(true, std::memory_order_release);
-                }
+            if (producer_count_.fetch_sub(1, std::memory_order_relaxed) == 1) {
+                closed_.store(true, std::memory_order_release);
+                transfer_locked(wakes);
             }
         }
-        if (was_last) {
-            notify_all_waiters();
-        }
+        wakes.post();
     }
 
    public:
-    /**
-     * Try to send without blocking
-     *
-     * @param item Item to send
-     * @return true if sent, false if queue full or closed
-     */
-    bool try_send(const T& item) { return try_send_impl(item); }
+    /// @param capacity The exact capacity of a @ref Channel, at least 1 (0 logs
+    ///        and aborts), or the first block size of an @ref UnboundedChannel.
+    explicit BasicChannel(std::size_t capacity) : queue_(capacity) {}
 
-    bool try_send(T&& item) { return try_send_impl(std::move(item)); }
+    ~BasicChannel() { close(); }
 
-   private:
-    template <typename U>
-    bool try_send_impl(U&& item) {
-        if (user_closed_.load(std::memory_order_acquire)) return false;
-        active_sends_.fetch_add(1, std::memory_order_acq_rel);
+    BasicChannel(const BasicChannel&) = delete;
+    BasicChannel& operator=(const BasicChannel&) = delete;
+    BasicChannel(BasicChannel&&) = delete;
+    BasicChannel& operator=(BasicChannel&&) = delete;
 
-        std::coroutine_handle<> resume_handle;
-        Executor* resume_executor = nullptr;
-        bool enqueued = false;
-
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            if (user_closed_.load(std::memory_order_acquire)) {
-                active_sends_.fetch_sub(1, std::memory_order_acq_rel);
-                maybe_notify_terminal();
-                return false;
-            }
-
-            ReceiveWaiterNode* waiter = pop_receive_waiter_locked();
-            if (waiter) {
-                if (waiter->result) {
-                    *(waiter->result) =
-                        dstd::Optional<T>(std::forward<U>(item));
-                }
-                resume_handle = waiter->handle;
-                resume_executor = waiter->executor;
-            } else {
-                if (capacity_ != SIZE_MAX) {
-                    if (available_slots_ == 0) {
-                        active_sends_.fetch_sub(1, std::memory_order_acq_rel);
-                        maybe_notify_terminal();
-                        return false;
-                    }
-                    --available_slots_;
-                }
-
-                pending_items_.fetch_add(1, std::memory_order_acq_rel);
-                enqueued = queue_.try_enqueue(std::forward<U>(item));
-                if (enqueued) {
-                } else if (capacity_ != SIZE_MAX) {
-                    pending_items_.fetch_sub(1, std::memory_order_acq_rel);
-                    ++available_slots_;
-                } else {
-                    pending_items_.fetch_sub(1, std::memory_order_acq_rel);
-                }
-            }
-        }
-
-        active_sends_.fetch_sub(1, std::memory_order_acq_rel);
-
-        if (resume_handle) {
-            detail::post_resumption(resume_executor, resume_handle);
-        } else if (enqueued) {
-            cv_readable_.notify_one();
-        }
-
-        maybe_notify_terminal();
-        return resume_handle || enqueued;
+    static dstd::SharedPtr<BasicChannel> make(std::size_t capacity) {
+        return dstd::make_shared<BasicChannel>(capacity);
     }
 
-   public:
-    /**
-     * Try to receive without blocking
-     *
-     * @param item Output parameter for received item
-     * @return true if received, false if queue empty
-     */
+    /// Returns a send handle with a producer slot already counted. Take it
+    /// before the coroutine starts and capture it by value.
+    BasicChannelProducer<Queue> producer() {
+        auto sp = this->weak_from_this().lock();
+        if (sp) {
+            return BasicChannelProducer<Queue>(std::move(sp));
+        }
+        return BasicChannelProducer<Queue>(this);
+    }
+
+    /// Returns a receive handle that keeps a shared channel alive.
+    BasicChannelConsumer<Queue> consumer() {
+        auto sp = this->weak_from_this().lock();
+        if (sp) {
+            return BasicChannelConsumer<Queue>(std::move(sp));
+        }
+        return BasicChannelConsumer<Queue>(this);
+    }
+
+    /// Returns false when the channel is full or closed.
+    bool try_send(const T& item) {
+        T copy(item);
+        return try_send(std::move(copy));
+    }
+
+    /// Returns false when the channel is full or closed, and `item` then keeps
+    /// its value.
+    bool try_send(T&& item) {
+        if (queue_.try_push(item) != detail::PushStatus::Ok) return false;
+        after_push();
+        return true;
+    }
+
+    /// Returns false when the channel is empty.
     bool try_receive(T& item) {
-        const bool ok = queue_.try_dequeue(item);
-        if (ok) {
-            mark_item_consumed();
-            if (!wake_one_send_waiter_after_receive()) {
-                cv_writable_.notify_one();
-            }
-            maybe_notify_terminal();
-        }
-        return ok;
+        dstd::Optional<T> out;
+        if (queue_.try_pop(out) != detail::PopStatus::Ok) return false;
+        item = std::move(*out);
+        after_pop();
+        return true;
     }
 
     ReceiveAwaitable receive() { return ReceiveAwaitable(this); }
 
+    /// Blocks this thread. Never call it from an executor worker.
     dstd::Optional<T> blocking_receive() {
-        T item;
-        if (queue_.try_dequeue(item)) {
-            mark_item_consumed();
-            if (!wake_one_send_waiter_after_receive()) {
-                cv_writable_.notify_one();
-            }
-            maybe_notify_terminal();
-            return dstd::Optional<T>(std::move(item));
+        dstd::Optional<T> out;
+        if (queue_.try_pop(out) == detail::PopStatus::Ok) {
+            after_pop();
+            return out;
         }
 
-        std::unique_lock<std::mutex> lock(state_mutex_);
-        while (true) {
-            if (try_receive_locked(item)) {
-                release_slot_if_bounded_locked();
-                lock.unlock();
-                if (!wake_one_send_waiter_after_receive()) {
-                    cv_writable_.notify_one();
+        detail::WakeBatch wakes;
+        {
+            std::unique_lock<std::mutex> lock(state_mutex_);
+            ++blocking_waiters_;
+            recv_waiting_.fetch_add(1, std::memory_order_seq_cst);
+            for (;;) {
+                if (send_head_) transfer_locked(wakes);
+                if (queue_.try_pop(out) == detail::PopStatus::Ok ||
+                    is_closed_for_receive_locked()) {
+                    break;
                 }
-                maybe_notify_terminal();
-                return dstd::Optional<T>(std::move(item));
+                cv_readable_.wait(lock);
             }
-            if (is_terminal_locked()) {
-                return dstd::nullopt;
-            }
-            cv_readable_.wait(lock);
+            recv_waiting_.fetch_sub(1, std::memory_order_relaxed);
+            --blocking_waiters_;
+            if (send_head_) transfer_locked(wakes);
         }
+        wakes.post();
+        return out;
     }
 
     SendAwaitable send(const T& item) { return SendAwaitable(this, item); }
@@ -1053,119 +675,78 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         return SendAwaitable(this, std::move(item));
     }
 
-    /**
-     * Close channel
-     * No more items can be sent after this
-     */
+    /// No send succeeds after this returns. Sent items stay readable.
     void close() {
-        // Close flags must change under state_mutex_ or a blocking receiver
-        // can lose the wakeup.
+        detail::WakeBatch wakes;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            user_closed_.store(true, std::memory_order_release);
+            user_closed_ = true;
             closed_.store(true, std::memory_order_release);
+            queue_.mark_closed();
+            transfer_locked(wakes);
         }
-        notify_all_waiters();
+        wakes.post();
     }
 
-    /**
-     * Check if channel is closed
-     */
     bool is_closed() const { return closed_.load(std::memory_order_acquire); }
 
-    /**
-     * Check if channel is closed and no producers remain
-     */
     bool is_closed_and_done() const {
         return is_closed() &&
                producer_count_.load(std::memory_order_acquire) == 0 &&
-               pending_items_.load(std::memory_order_acquire) == 0;
+               queue_.size() == 0;
     }
 
-    /**
-     * Get number of active producers
-     */
     std::size_t producer_count() const {
         return producer_count_.load(std::memory_order_acquire);
     }
 
-    /**
-     * Get current queue size (approximate, lock-free)
-     */
-    std::size_t size() const { return queue_.size_approx(); }
+    std::size_t size() const { return queue_.size(); }
 
-    /**
-     * Get channel capacity
-     */
-    std::size_t capacity() const { return capacity_; }
+    std::size_t capacity() const { return queue_.capacity(); }
 
-    /**
-     * Check if queue is empty (approximate)
-     */
-    bool empty() const { return queue_.size_approx() == 0; }
+    bool empty() const { return queue_.size() == 0; }
 
-    /**
-     * Check if queue is full (approximate)
-     */
-    bool full() const { return queue_.size_approx() >= capacity_; }
+    bool full() const { return queue_.size() >= queue_.capacity(); }
 };
 
 /**
- * Send-side handle that pre-registers a producer slot on construction.
+ * @brief Send handle that counts a producer slot on construction.
  *
- * Create via channel->producer() or channel.producer() *before*
- * spawning a coroutine, then capture by value into the lambda.
- * The producer count is incremented eagerly (on the caller's thread),
- * so the channel never transiently sees zero producers while
- * coroutines are still being scheduled.
- *
- * Inside the coroutine, call guard() to get an RAII @ref
- * coro::Channel::ProducerGuard "ProducerGuard" that decrements
- * the count when the coroutine finishes.  If the
- * @ref ChannelProducer is destroyed without calling guard() (e.g. the
- * task was never scheduled), it decrements automatically.
- *
- * Usage:
- * @code
- * auto channel = make_channel<Batch>(100);
- * auto task = make_task(
- *     [ch = channel->producer()](CoroScope& ctx) mutable
- *         -> CoroTask<void> {
- *         auto guard = ch.guard();
- *         co_await ch.send(Batch{...});
- *     });
- * @endcode
+ * Make one with BasicChannel::producer() before you spawn a coroutine, then
+ * capture it by value. Inside the coroutine, guard() returns the RAII guard
+ * that releases the slot. A handle destroyed without guard() releases the slot
+ * itself, such as when the task never ran.
  */
-template <typename T>
-class ChannelProducer {
-    Channel<T>* raw_{nullptr};
-    dstd::SharedPtr<Channel<T>> shared_;
+template <typename Queue>
+class BasicChannelProducer {
+    using ChannelType = BasicChannel<Queue>;
+    using T = typename Queue::value_type;
+
+    ChannelType* raw_{nullptr};
+    dstd::SharedPtr<ChannelType> shared_;
     bool adopted_{false};
 
    public:
-    /// Construct from raw pointer (stack-allocated channels).
-    explicit ChannelProducer(Channel<T>* ch) : raw_(ch) {
+    explicit BasicChannelProducer(ChannelType* ch) : raw_(ch) {
         if (raw_) {
             raw_->register_producer();
         }
     }
 
-    /// Construct from shared_ptr (heap-allocated channels).
-    explicit ChannelProducer(dstd::SharedPtr<Channel<T>> ch)
+    explicit BasicChannelProducer(dstd::SharedPtr<ChannelType> ch)
         : raw_(ch.get()), shared_(std::move(ch)) {
         if (raw_) {
             raw_->register_producer();
         }
     }
 
-    ~ChannelProducer() {
+    ~BasicChannelProducer() {
         if (raw_ && !adopted_) {
             raw_->release_producer();
         }
     }
 
-    /// Movable
-    ChannelProducer(ChannelProducer&& other) noexcept
+    BasicChannelProducer(BasicChannelProducer&& other) noexcept
         : raw_(other.raw_),
           shared_(std::move(other.shared_)),
           adopted_(other.adopted_) {
@@ -1173,7 +754,7 @@ class ChannelProducer {
         other.adopted_ = true;
     }
 
-    ChannelProducer& operator=(ChannelProducer&& other) noexcept {
+    BasicChannelProducer& operator=(BasicChannelProducer&& other) noexcept {
         if (this != &other) {
             if (raw_ && !adopted_) {
                 raw_->release_producer();
@@ -1187,13 +768,11 @@ class ChannelProducer {
         return *this;
     }
 
-    /// Non-copyable
-    ChannelProducer(const ChannelProducer&) = delete;
-    ChannelProducer& operator=(const ChannelProducer&) = delete;
+    BasicChannelProducer(const BasicChannelProducer&) = delete;
+    BasicChannelProducer& operator=(const BasicChannelProducer&) = delete;
 
-    /// Adopt the pre-registered slot as an RAII guard.
-    /// Call this once inside the coroutine body.
-    typename Channel<T>::ProducerGuard guard() {
+    /// Call once inside the coroutine body.
+    typename ChannelType::ProducerGuard guard() {
         adopted_ = true;
         if (shared_) {
             return raw_->adopt_producer(shared_);
@@ -1201,50 +780,34 @@ class ChannelProducer {
         return raw_->adopt_producer();
     }
 
-    /// Send an item through the channel.
     auto send(const T& item) { return raw_->send(item); }
 
-    /// Send an item through the channel (move).
     auto send(T&& item) { return raw_->send(std::move(item)); }
 };
 
-/**
- * ChannelConsumer<T> - Receive-side handle for Channel<T>
- *
- * Holds a raw pointer for operations and optionally a shared_ptr to keep
- * the channel alive when created from a shared_ptr channel.
- *
- * Usage:
- * @code
- *     [ch = channel->consumer()](CoroScope& ctx)
- *         -> CoroTask<void> {
- *         for (;;) {
- *             auto item = co_await ch.receive();
- *             if (!item) break;
- *             process(*item);
- *         }
- *     }
- * @endcode
- */
-template <typename T>
-class ChannelConsumer {
-    Channel<T>* raw_{nullptr};
-    dstd::SharedPtr<Channel<T>> shared_;
+/// Receive handle. It keeps the channel alive when it comes from a shared one.
+template <typename Queue>
+class BasicChannelConsumer {
+    using ChannelType = BasicChannel<Queue>;
+    using T = typename Queue::value_type;
+
+    ChannelType* raw_{nullptr};
+    dstd::SharedPtr<ChannelType> shared_;
 
    public:
-    explicit ChannelConsumer(Channel<T>* ch) : raw_(ch) {}
+    explicit BasicChannelConsumer(ChannelType* ch) : raw_(ch) {}
 
-    explicit ChannelConsumer(dstd::SharedPtr<Channel<T>> ch)
+    explicit BasicChannelConsumer(dstd::SharedPtr<ChannelType> ch)
         : raw_(ch.get()), shared_(std::move(ch)) {}
 
-    ~ChannelConsumer() = default;
+    ~BasicChannelConsumer() = default;
 
-    ChannelConsumer(ChannelConsumer&& other) noexcept
+    BasicChannelConsumer(BasicChannelConsumer&& other) noexcept
         : raw_(other.raw_), shared_(std::move(other.shared_)) {
         other.raw_ = nullptr;
     }
 
-    ChannelConsumer& operator=(ChannelConsumer&& other) noexcept {
+    BasicChannelConsumer& operator=(BasicChannelConsumer&& other) noexcept {
         if (this != &other) {
             raw_ = other.raw_;
             shared_ = std::move(other.shared_);
@@ -1253,10 +816,10 @@ class ChannelConsumer {
         return *this;
     }
 
-    ChannelConsumer(const ChannelConsumer& other)
+    BasicChannelConsumer(const BasicChannelConsumer& other)
         : raw_(other.raw_), shared_(other.shared_) {}
 
-    ChannelConsumer& operator=(const ChannelConsumer& other) {
+    BasicChannelConsumer& operator=(const BasicChannelConsumer& other) {
         if (this != &other) {
             raw_ = other.raw_;
             shared_ = other.shared_;
@@ -1273,13 +836,33 @@ class ChannelConsumer {
     bool is_closed() const { return raw_->is_closed(); }
 };
 
-/**
- * Helper to create shared_ptr Channel<T>
- */
+/// Bounded channel on a ring with exactly the capacity asked for.
+template <typename T>
+using Channel = BasicChannel<detail::RingQueue<T>>;
+
+template <typename T>
+using ChannelProducer = BasicChannelProducer<detail::RingQueue<T>>;
+
+template <typename T>
+using ChannelConsumer = BasicChannelConsumer<detail::RingQueue<T>>;
+
+/// Channel that is never full, so a send never waits. The caller bounds the
+/// memory, such as with a semaphore of bytes.
+template <typename T>
+using UnboundedChannel = BasicChannel<detail::UnboundedQueue<T>>;
+
+/// @param capacity At least 1. Zero logs and aborts.
 template <typename T>
 dstd::SharedPtr<Channel<T>> make_channel(std::size_t capacity) {
     return Channel<T>::make(capacity);
 }
+
+template <typename T>
+dstd::SharedPtr<UnboundedChannel<T>> make_unbounded_channel(
+    std::size_t initial_size = 1024) {
+    return UnboundedChannel<T>::make(initial_size);
+}
+
 }  // namespace dftracer::utils::coro
 
 #endif  // DFTRACER_UTILS_CORO_CHANNEL_H

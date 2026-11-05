@@ -261,7 +261,7 @@ void add_branch(ViewSessionState& state, BranchHooks hooks);
 /// set, the branch stops sending.
 void add_stream_branch(
     ViewSessionState& state, dstd::SharedPtr<const ViewPlan> plan,
-    dstd::SharedPtr<coro::Channel<dataframe::Morsel>> channel,
+    dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel,
     dstd::SharedPtr<coro::CoroSemaphore> budget,
     dstd::SharedPtr<const std::atomic<bool>> dropped);
 

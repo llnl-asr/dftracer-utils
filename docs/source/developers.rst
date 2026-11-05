@@ -508,7 +508,7 @@ Use bounded channels for backpressure control:
     coro::Channel<Event> bounded_ch(1000);
     
     // Unbounded channel: send() never blocks (use carefully)
-    coro::Channel<Event> unbounded_ch(0);
+    auto unbounded_ch = coro::make_unbounded_channel<Event>();
 
 HasherUtility Pattern
 ~~~~~~~~~~~~~~~~~~~~~

@@ -16,6 +16,7 @@ dftracer/utils/coro/async_semaphore.h
 dftracer/utils/coro/cancelled.h
 dftracer/utils/coro/channel.h
 dftracer/utils/coro/completion_latch.h
+dftracer/utils/coro/detail/channel_queue.h
 dftracer/utils/coro/detail/completion_state.h
 dftracer/utils/coro/detail/coro.h
 dftracer/utils/coro/detail/frame.h

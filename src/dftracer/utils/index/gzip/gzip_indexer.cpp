@@ -9,7 +9,6 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -61,7 +60,6 @@ struct ParallelInflateMsg {
     // Per-worker monotonic sequence. Load-bearing: moodycamel (our channel
     // backend) does not guarantee strict FIFO without producer tokens, so
     // the dispatcher reorders by this before handing chunks to visitors.
-    std::uint64_t seq = 0;
     std::uint64_t lines = 0;
     // Absolute compressed offset just past the member this chunk ended.
     bool member_ended = false;
@@ -256,7 +254,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
     std::uint64_t range_c_end, bool strip_leading_partial, bool ship_bytes,
     InflateBuffers& buffers,
     dftracer::utils::coro::ChannelProducer<ParallelInflateMsg>& producer,
-    std::uint64_t& seq, std::uint64_t& in_bytes, bool& stop) {
+    std::uint64_t& in_bytes, bool& stop) {
     constexpr std::size_t READ_CHUNK = 1u << 20;
     constexpr std::size_t OUT_STEP = 1u << 20;
     const std::size_t split_at = static_cast<std::size_t>(
@@ -306,7 +304,6 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
                 }
             }
         }
-        msg.seq = seq++;
         msg.lines = count_newlines(data.data() + start, data.size() - start);
         std::size_t last = data.size();
         while (last > start && data[last - 1] != '\n') --last;
@@ -394,7 +391,6 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
         std::size_t keep = piece.size();
         while (keep > 0 && piece[keep - 1] != '\n') --keep;
         if (keep == 0) {
-            msg.seq = seq++;
             msg.truncated = true;
             msg.drop_tail = since_newline;
             co_await producer.send(std::move(msg));
@@ -436,7 +432,6 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
     InflateBuffer buf = buffers.take();
     Bytes comp;
     std::uint64_t c_off = range_c_start;
-    std::uint64_t seq = 0;
     bool first = true;
 
     while (c_off < range_c_end) {
@@ -492,7 +487,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
             const auto stream_member_ok = co_await stream_member(
                 fd, c_off, file_size, ckpt_size, candidates, range_c_end,
                 strip_leading_partial && first, ship_bytes, buffers, producer,
-                seq, consumed, stop);
+                consumed, stop);
             if (!stream_member_ok) {
                 co_return false;
             }
@@ -504,7 +499,6 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         }
         if (truncated && out_size == 0) {
             ParallelInflateMsg msg;
-            msg.seq = seq++;
             msg.truncated = true;
             co_await producer.send(std::move(msg));
             co_return true;
@@ -527,7 +521,6 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
 
         const std::size_t emit_size = out_size - emit_start;
         ParallelInflateMsg msg;
-        msg.seq = seq++;
         msg.lines = count_newlines(out.data() + emit_start, emit_size);
         msg.data_size = emit_size;
         if (ship_bytes) {
@@ -565,7 +558,6 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
             }
         }
         ParallelInflateMsg msg;
-        msg.seq = seq++;
         msg.lines = count_newlines(out.data(), take);
         msg.data_size = take;
         if (ship_bytes) {
@@ -608,6 +600,10 @@ static dstd::Vector<InflateRange> plan_ranges(
     return ranges;
 }
 
+// A message without bytes is small, so a worker may run far ahead of the
+// dispatcher when nothing reads the text.
+constexpr std::size_t UNSHIPPED_MESSAGES = 1024;
+
 struct RangeSlot {
     dstd::SharedPtr<ParallelChan> chan;
     dstd::Optional<dftracer::utils::coro::ChannelProducer<ParallelInflateMsg>>
@@ -637,7 +633,7 @@ struct InflatePlan {
 
     dstd::SharedPtr<ParallelChan> channel(std::size_t r) const {
         return dftracer::utils::coro::make_channel<ParallelInflateMsg>(
-            ship_bytes ? ranges[r].messages + 1 : 0);
+            ship_bytes ? ranges[r].messages + 1 : UNSHIPPED_MESSAGES);
     }
     void open(std::size_t r) {
         RangeSlot& slot = ring[r % ring.size()];
@@ -787,24 +783,14 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
         }
     };
 
-    // moodycamel::ConcurrentQueue (backing coro::Channel) does not guarantee
-    // FIFO without producer tokens, so messages are put back in `seq` order.
     auto consume =
         [&](ParallelChan& chan) -> dftracer::utils::coro::CoroTask<void> {
-        std::uint64_t expected_seq = 0;
-        dstd::Map<std::uint64_t, ParallelInflateMsg> pending;
         for (;;) {
             auto msg_opt = co_await chan.receive();
             if (!msg_opt) break;
-            pending.emplace(msg_opt->seq, std::move(*msg_opt));
-            auto it = pending.begin();
-            while (it != pending.end() && it->first == expected_seq) {
-                co_await process_msg(it->second);
-                plan->buffers.give(std::move(it->second.data));
-                co_await drain_visitors();
-                it = pending.erase(it);
-                ++expected_seq;
-            }
+            co_await process_msg(*msg_opt);
+            plan->buffers.give(std::move(msg_opt->data));
+            co_await drain_visitors();
         }
     };
     auto discard =

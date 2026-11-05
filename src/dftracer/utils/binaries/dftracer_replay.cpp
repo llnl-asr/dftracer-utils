@@ -175,7 +175,7 @@ class ReplayArgParse : public binaries::ArgParse {
                  "Maximum number of events to replay (0=unlimited)");
         p.option(channel_capacity, {"--channel-capacity"},
                  "Bounded Channel<Trace> capacity between read/parse producer "
-                 "and dispatch consumer (default 4096)");
+                 "and dispatch consumer, at least 1 (default 4096)");
     }
 
     void post_parse() override {
@@ -188,6 +188,11 @@ class ReplayArgParse : public binaries::ArgParse {
     }
 
     bool validate() override {
+        if (channel_capacity == 0) {
+            std::fprintf(stderr,
+                         "Error: --channel-capacity must be at least 1\n");
+            return false;
+        }
         if (no_sleep && !dftracer_mode) {
             std::fprintf(stderr,
                          "Error: --no-sleep can only be used with "

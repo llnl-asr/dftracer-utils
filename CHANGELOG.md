@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make `coro::Channel` a lock-free ring on the send and receive fast paths, 3 to 60 times faster in `channel_bench` at 48 and 96 threads.
+  Items of one producer now arrive in order.
+- Require a capacity of at least 1 for `coro::Channel`, where 0 meant unbounded, and add `coro::UnboundedChannel` with `make_unbounded_channel` for that case.
+  `dftracer_replay --channel-capacity 0` is now an error.
 - Install only our own `include/` tree: the headers of nanoarrow, flatcc, zstd, libdeflate, pcre2, yaml-cpp and doctest no longer reach the install prefix, nor do their pkg-config files, man pages and documentation.
   A static build still installs their archives and CMake configs, so a static consumer links as before.
 - Rename the trait structs `dstd::awaitable_result_type` and `dstd::unwrap_coro_task` to `AwaitableResultType` and `UnwrapCoroTask`, the macros `DF_*` of the dataframe kernels to `DFTRACER_UTILS_*`, and the public fields of coroutine promise and shared-state types (`coro::PromiseBase`, `coro::CoroTask<T>::promise_type`, `coro::detail` completion states) to names without a trailing underscore.

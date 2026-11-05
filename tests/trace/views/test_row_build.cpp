@@ -60,7 +60,8 @@ coro::CoroTask<Built> run_step(dstd::StringIntern& intern_ref,
                                dstd::SharedPtr<dstd::StringIntern> intern,
                                dstd::Vector<views::detail::FoldEvent> events) {
     (void)intern_ref;
-    auto channel = dstd::make_shared<coro::Channel<dataframe::Morsel>>(4);
+    auto channel =
+        dstd::make_shared<coro::UnboundedChannel<dataframe::Morsel>>(4);
     auto budget = dstd::make_shared<coro::CoroSemaphore>(1ull << 30);
     views::detail::StreamRowFold fold(channel, budget, intern, {}, 1.0, false,
                                       false, nullptr, nullptr, true);

@@ -328,6 +328,7 @@ set(TEST_CPP_SOURCES
     test_testing_utilities.cpp
     coro/test_coro_syntax.cpp
     coro/test_channel.cpp
+    coro/test_channel_queue.cpp
     coro/test_generator.cpp
     coro/test_async_generator.cpp
     coro/test_coro.cpp
@@ -493,7 +494,8 @@ foreach(test_file ${TEST_CPP_SOURCES})
   if(bin_exec STREQUAL "runtime/test_runtime"
      OR bin_exec STREQUAL "pipeline/test_task_scope"
      OR bin_exec STREQUAL "pipeline/test_pipeline"
-     OR bin_exec STREQUAL "coro/test_channel")
+     OR bin_exec STREQUAL "coro/test_channel"
+     OR bin_exec STREQUAL "coro/test_channel_queue")
     set(heavy_thread_timeout 180)
     if(DFTRACER_UTILS_ENABLE_TSAN OR DFTRACER_UTILS_COVERAGE
        OR DFTRACER_UTILS_ENABLE_ASAN)

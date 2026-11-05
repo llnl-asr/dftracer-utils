@@ -408,7 +408,8 @@ dftracer::utils::dataframe::Morsel slice_morsel(
 class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
    public:
     StreamViewCursor(
-        dstd::SharedPtr<coro::Channel<dftracer::utils::dataframe::Morsel>>
+        dstd::SharedPtr<
+            coro::UnboundedChannel<dftracer::utils::dataframe::Morsel>>
             channel,
         dstd::SharedPtr<coro::CoroSemaphore> budget,
         dstd::SharedFuture<void> producer,
@@ -602,7 +603,8 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         }
     }
 
-    dstd::SharedPtr<coro::Channel<dftracer::utils::dataframe::Morsel>> channel_;
+    dstd::SharedPtr<coro::UnboundedChannel<dftracer::utils::dataframe::Morsel>>
+        channel_;
     dstd::SharedPtr<coro::CoroSemaphore> budget_;
     dstd::SharedFuture<void> producer_;
     dstd::SharedPtr<std::atomic<bool>> stop_;
@@ -1080,15 +1082,17 @@ coro::CoroTask<void> run_open_batch(
     dstd::Vector<dstd::Function<dataframe::DataFrame(const ExportStats&)>>
         frames,
     dstd::Vector<dataframe::Schema> schemas,
-    dstd::Vector<dstd::SharedPtr<coro::Channel<dataframe::Morsel>>> channels,
+    dstd::Vector<dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>>>
+        channels,
     dstd::Vector<dstd::SharedPtr<coro::CoroSemaphore>> budgets) {
-    dstd::Vector<
-        dstd::UniquePtr<coro::Channel<dataframe::Morsel>::ProducerGuard>>
+    dstd::Vector<dstd::UniquePtr<
+        coro::UnboundedChannel<dataframe::Morsel>::ProducerGuard>>
         guards;
     guards.reserve(channels.size());
     for (auto& ch : channels)
         guards.push_back(
-            dstd::make_unique<coro::Channel<dataframe::Morsel>::ProducerGuard>(
+            dstd::make_unique<
+                coro::UnboundedChannel<dataframe::Morsel>::ProducerGuard>(
                 ch.get()));
     const ExportStats stats = co_await session->execute();
     for (std::size_t i = 0; i < frames.size(); ++i) {
@@ -1124,12 +1128,13 @@ ViewSource::open_batch(
 
     auto session =
         dstd::make_shared<ViewSession>(base_session(*views.front()->plan_));
-    dstd::Vector<dstd::SharedPtr<coro::Channel<dataframe::Morsel>>> channels;
+    dstd::Vector<dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>>>
+        channels;
     dstd::Vector<dstd::SharedPtr<coro::CoroSemaphore>> budgets;
     dstd::Vector<dstd::SharedPtr<std::atomic<bool>>> dropped;
     dstd::Vector<bool> streamed(views.size(), false);
     for (std::size_t i = 0; i < views.size(); ++i) {
-        channels.push_back(coro::make_channel<dataframe::Morsel>(0));
+        channels.push_back(coro::make_unbounded_channel<dataframe::Morsel>());
         budgets.push_back(
             dstd::make_shared<coro::CoroSemaphore>(memory_budget));
         dropped.push_back(dstd::make_shared<std::atomic<bool>>(false));
@@ -1398,10 +1403,10 @@ const dftracer::utils::dataframe::DataFrame* ViewSource::as_frame() const {
 dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     const detail::ScanPlan& v, std::uint64_t memory_budget,
     dstd::Vector<dstd::String> fnames) const {
-    // Capacity 0 = an effectively unbounded ring (see Channel's ctor); the
-    // shared budget semaphore is the sole backpressure, acquired before send
-    // and released once the cursor hands a morsel off.
-    auto channel = coro::make_channel<dftracer::utils::dataframe::Morsel>(0);
+    // The shared budget semaphore is the sole backpressure, acquired before
+    // send and released once the cursor hands a morsel off.
+    auto channel =
+        coro::make_unbounded_channel<dftracer::utils::dataframe::Morsel>();
     auto budget = dstd::make_shared<coro::CoroSemaphore>(memory_budget);
     auto intern = dstd::make_shared<dftracer::utils::dstd::StringIntern>();
     const double time_scale = v->time_scale;
@@ -1433,7 +1438,8 @@ dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
             : nullptr;
     auto task =
         [](detail::ScanPlan vv, double ts,
-           dstd::SharedPtr<coro::Channel<dftracer::utils::dataframe::Morsel>>
+           dstd::SharedPtr<
+               coro::UnboundedChannel<dftracer::utils::dataframe::Morsel>>
                ch,
            dstd::SharedPtr<coro::CoroSemaphore> sem,
            dstd::SharedPtr<dftracer::utils::dstd::StringIntern> iv,

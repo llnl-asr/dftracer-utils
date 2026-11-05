@@ -169,7 +169,7 @@ class AdaptiveGate {
 
     mutable std::mutex mutex_;
     AdaptiveLimit limit_;
-    CoroSemaphore sem_;
+    AsyncSemaphore sem_;
     std::size_t in_flight_ = 0;
     std::size_t owed_ = 0;
 };

@@ -134,7 +134,7 @@ Result run_on_executor(Body body) {
     return result;
 }
 
-coro::CoroTask<void> semaphore_worker(coro::CoroSemaphore &sem,
+coro::CoroTask<void> semaphore_worker(coro::AsyncSemaphore &sem,
                                       std::size_t iters) {
     for (std::size_t i = 0; i < iters; ++i) {
         co_await sem.acquire(1);
@@ -144,7 +144,7 @@ coro::CoroTask<void> semaphore_worker(coro::CoroSemaphore &sem,
 
 Result semaphore_uncontended(std::size_t n) {
     return run_on_executor([n](Result &r) -> coro::CoroTask<void> {
-        coro::CoroSemaphore sem(1 << 20);
+        coro::AsyncSemaphore sem(1 << 20);
         Meter start = begin_meter();
         co_await semaphore_worker(sem, n);
         finish_meter(start, r);
@@ -154,7 +154,7 @@ Result semaphore_uncontended(std::size_t n) {
 Result semaphore_contended(std::size_t n) {
     return run_on_executor([n](Result &r) -> coro::CoroTask<void> {
         constexpr std::size_t workers = 2 * THREADS;
-        coro::CoroSemaphore sem(THREADS / 2);
+        coro::AsyncSemaphore sem(THREADS / 2);
         dstd::Vector<coro::CoroTask<void>> tasks;
         for (std::size_t i = 0; i < workers; ++i) {
             tasks.push_back(semaphore_worker(sem, n / workers));

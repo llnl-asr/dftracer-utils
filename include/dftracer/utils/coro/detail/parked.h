@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <mutex>
 #include <new>
+#include <thread>
+#include <type_traits>
 
 namespace dftracer::utils::coro::detail {
 
@@ -16,6 +18,51 @@ namespace dftracer::utils::coro::detail {
 /// awaitable's lock and return if busy (shutdown calls again), and not call
 /// park()/unpark().
 using ParkCancelFn = void (*)(void* waiter) noexcept;
+
+/// The task that is suspending now, so a registry can tell later that it was
+/// cancelled. Valid while its node is registered.
+struct ParkOwner {
+    const void* promise{nullptr};
+    bool (*cancel_requested)(const void*) noexcept {nullptr};
+};
+
+template <typename Promise>
+bool promise_cancel_requested(const void* promise) noexcept {
+    return static_cast<const Promise*>(promise)->cancel_requested();
+}
+
+/// The owner of the suspend running on this thread. In a source file, so every
+/// library sees one thread local.
+ParkOwner current_park_owner() noexcept;
+
+/// Notes that a waiter parked after its task was cancelled.
+void note_park_after_cancel() noexcept;
+
+/// Names the owner of a suspend. An empty owner keeps a waiter out of the
+/// cancel sweep, for a wait that ignores cancels. A cancel can come after the
+/// wait checked for it and before the park, and no sweep then sees the waiter.
+/// So the end of this scope sweeps again. It reads only thread locals, since
+/// the frame can run by then.
+class ParkOwnerScope {
+   public:
+    explicit ParkOwnerScope(ParkOwner owner) noexcept;
+    ~ParkOwnerScope();
+    ParkOwnerScope(const ParkOwnerScope&) = delete;
+    ParkOwnerScope& operator=(const ParkOwnerScope&) = delete;
+
+   private:
+    ParkOwner saved_;
+};
+
+template <typename Handle>
+ParkOwner park_owner_of(Handle h) noexcept {
+    if constexpr (requires { h.promise().cancel_requested(); }) {
+        using Promise = std::remove_reference_t<decltype(h.promise())>;
+        return {&h.promise(), &promise_cancel_requested<Promise>};
+    } else {
+        return {};
+    }
+}
 
 /// The registry entry of a coroutine suspended on an awaitable that only
 /// another party can finish. Shutdown wakes the waiter with a cancelled status
@@ -30,6 +77,7 @@ struct ParkNode {
 
     ParkCancelFn cancel;
     void* waiter;
+    ParkOwner owner;
     /// Free for the awaitable to use. Set by its cancel callback.
     bool cancelled;
 
@@ -58,6 +106,10 @@ class ParkRegistry {
         s.head = n;
         s.size.store(s.size.load(std::memory_order_relaxed) + 1,
                      std::memory_order_release);
+        n->owner = current_park_owner();
+        if (n->owner.promise && n->owner.cancel_requested(n->owner.promise)) {
+            note_park_after_cancel();
+        }
         return n;
     }
 
@@ -92,6 +144,17 @@ class ParkRegistry {
         }
     }
 
+    /// Wakes the waiters of cancelled tasks. The cancel callback only
+    /// try-locks, so it can miss one, and this goes over them again until they
+    /// leave. A callback that ignores cancels keeps its waiter, so the passes
+    /// are bounded.
+    void cancel_requested_waiters() noexcept {
+        for (int pass = 0; pass < 64; ++pass) {
+            if (!cancel_requested_pass()) return;
+            std::this_thread::yield();
+        }
+    }
+
     /// Waiters registered now. Takes no lock.
     std::size_t size() const noexcept {
         std::size_t n = 0;
@@ -103,6 +166,23 @@ class ParkRegistry {
 
    private:
     static constexpr std::size_t SHARDS = 16;
+
+    bool cancel_requested_pass() noexcept {
+        bool found = false;
+        for (Shard& s : shards_) {
+            if (s.size.load(std::memory_order_acquire) == 0) continue;
+            std::lock_guard<std::mutex> lock(s.mutex);
+            for (ParkNode* n = s.head; n; n = n->next_) {
+                if (n->owner.promise == nullptr ||
+                    !n->owner.cancel_requested(n->owner.promise)) {
+                    continue;
+                }
+                n->cancel(n->waiter);
+                found = true;
+            }
+        }
+        return found;
+    }
 
     struct alignas(64) Shard {
         std::mutex mutex;

@@ -1215,7 +1215,7 @@ dataframe::DataFrame merge_flamegraph_partials(
 coro::CoroTask<ExportStats> run_folds(
     ScanPlan plan, dstd::Span<detail::Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern,
-    detail::DynamicPrune* dyn_prune, coro::CoroSemaphore* gate) {
+    detail::DynamicPrune* dyn_prune, coro::AsyncSemaphore* gate) {
     co_return co_await detail::run_folds(*plan, folds, intern, dyn_prune, gate);
 }
 

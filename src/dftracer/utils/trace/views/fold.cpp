@@ -63,9 +63,9 @@ bool DynamicPrune::is_excluded(const dstd::String& file_path,
 namespace {
 
 struct ScanPermit {
-    coro::CoroSemaphore& sem;
+    coro::AsyncSemaphore& sem;
     std::uint64_t bytes;
-    ScanPermit(coro::CoroSemaphore& s, std::uint64_t n) : sem(s), bytes(n) {}
+    ScanPermit(coro::AsyncSemaphore& s, std::uint64_t n) : sem(s), bytes(n) {}
     ~ScanPermit() { sem.release(bytes); }
     ScanPermit(const ScanPermit&) = delete;
     ScanPermit& operator=(const ScanPermit&) = delete;
@@ -3013,7 +3013,7 @@ struct FuseWorkerCtx {
     const ViewDefinition& vdef;
     dftracer::utils::dstd::StringIntern& intern;
     const CoverageSet* covered;
-    coro::CoroSemaphore& budget_sem;
+    coro::AsyncSemaphore& budget_sem;
     dstd::Vector<ScanCounts>& counts_v;
     dstd::Vector<CoverageSet>& covered_v;
     const dstd::Vector<dstd::String>& extra_fields;
@@ -3023,7 +3023,7 @@ struct FuseWorkerCtx {
     bool any_wants_schema;
     bool skip_never_indexed;
     DynamicPrune* dyn_prune;
-    coro::CoroSemaphore* gate;
+    coro::AsyncSemaphore* gate;
 };
 
 // Runs `hook` on every slice, awaiting the task each one leaves.
@@ -3152,7 +3152,7 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
                                  dftracer::utils::dstd::StringIntern& intern,
                                  const CoverageSet* covered,
                                  std::uint64_t limit, DynamicPrune* dyn_prune,
-                                 coro::CoroSemaphore* gate) {
+                                 coro::AsyncSemaphore* gate) {
     // Folds that all drop metadata records need no chunk read for them.
     ViewDefinition vdef = vdef_in;
     if (std::none_of(folds.begin(), folds.end(),
@@ -3217,7 +3217,7 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
     // Bound bytes decoded concurrently so a scan cannot OOM the box. Always on:
     // an explicit memory_budget() or a RAM-fraction default. Workers park when
     // full, so a generous budget never throttles.
-    coro::CoroSemaphore budget_sem(
+    coro::AsyncSemaphore budget_sem(
         common::compute_memory_budget(plan.memory_budget));
     std::atomic<std::size_t> next_unit{0};
     dstd::Vector<ScanCounts> counts_v(nworkers);

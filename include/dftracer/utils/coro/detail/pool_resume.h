@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_CORO_DETAIL_POOL_RESUME_H
 #define DFTRACER_UTILS_CORO_DETAIL_POOL_RESUME_H
 
+#include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
 #include <coroutine>
@@ -75,6 +76,7 @@ struct InPool {
             if (cancelled) return end_cancelled<R>(h);
         }
         suspended = true;
+        ParkOwnerScope owner(park_owner_of(h));
         return inner.await_suspend(h);
     }
 

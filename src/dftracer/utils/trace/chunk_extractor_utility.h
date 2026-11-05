@@ -143,7 +143,7 @@ class ExtractionAdmission {
     }
 
    private:
-    coro::CoroSemaphore semaphore_;
+    coro::AsyncSemaphore semaphore_;
     std::uint64_t held_;  ///< Bytes one extraction takes, after the clamp
     std::atomic<std::size_t> in_flight_{0};
     std::atomic<std::size_t> peak_in_flight_{0};

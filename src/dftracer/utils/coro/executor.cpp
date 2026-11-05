@@ -82,6 +82,34 @@ void post_resumption(Executor* executor, std::coroutine_handle<> handle) {
     std::abort();
 }
 
+namespace {
+struct ParkThreadState {
+    ParkOwner owner;
+    bool parked_after_cancel{false};
+};
+thread_local ParkThreadState t_park;
+}  // namespace
+
+void wake_cancelled_on(Executor* executor) noexcept {
+    executor->wake_cancelled();
+}
+
+ParkOwner current_park_owner() noexcept { return t_park.owner; }
+
+void note_park_after_cancel() noexcept { t_park.parked_after_cancel = true; }
+
+ParkOwnerScope::ParkOwnerScope(ParkOwner owner) noexcept
+    : saved_(t_park.owner) {
+    t_park.owner = owner;
+}
+
+ParkOwnerScope::~ParkOwnerScope() {
+    t_park.owner = saved_;
+    if (!t_park.parked_after_cancel) return;
+    t_park.parked_after_cancel = false;
+    if (Executor* executor = Executor::current()) executor->wake_cancelled();
+}
+
 void abort_zero_channel_capacity() {
     DFTRACER_UTILS_LOG_ERROR(
         "%s", "Channel capacity must be at least 1; use UnboundedChannel");

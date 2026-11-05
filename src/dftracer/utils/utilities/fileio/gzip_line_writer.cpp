@@ -96,11 +96,11 @@ struct GzipLineWriter::Impl {
         prod_cap = std::max<std::size_t>(2 * member_units, total - job_cap);
         const std::size_t max_jobs =
             std::min<std::size_t>(w + EXTRA_IN_FLIGHT, job_cap / job_unit);
-        slots = dstd::make_unique<coro::CoroSemaphore>(
+        slots = dstd::make_unique<coro::AsyncSemaphore>(
             std::max<std::size_t>(1, max_jobs));
         prod_mem =
-            dstd::make_unique<coro::CoroSemaphore>(prod_cap - member_units);
-        job_mem = dstd::make_unique<coro::CoroSemaphore>(job_cap);
+            dstd::make_unique<coro::AsyncSemaphore>(prod_cap - member_units);
+        job_mem = dstd::make_unique<coro::AsyncSemaphore>(job_cap);
         // The shared buffer (ordered mode, unordered append) is one member.
         held.store(member_units, std::memory_order_relaxed);
         peak_held.store(member_units, std::memory_order_relaxed);
@@ -111,7 +111,7 @@ struct GzipLineWriter::Impl {
     }
 
     std::size_t member_units = 0, job_cap = 0, prod_cap = 0;
-    dstd::UniquePtr<coro::CoroSemaphore> prod_mem, job_mem;
+    dstd::UniquePtr<coro::AsyncSemaphore> prod_mem, job_mem;
     std::atomic<std::uint64_t> held{0}, peak_held{0}, prod_held{0};
 
     void note_held(std::int64_t delta) {
@@ -125,7 +125,7 @@ struct GzipLineWriter::Impl {
     }
 
     // Waits for `units` (clamped to the pool) and returns what it took.
-    coro::CoroTask<std::size_t> reserve(coro::CoroSemaphore& sem,
+    coro::CoroTask<std::size_t> reserve(coro::AsyncSemaphore& sem,
                                         std::size_t cap, std::size_t units) {
         units = std::min(units, cap);
         if (units == 0) co_return 0;
@@ -136,7 +136,7 @@ struct GzipLineWriter::Impl {
         co_return units;
     }
 
-    void unreserve(coro::CoroSemaphore& sem, std::size_t units) {
+    void unreserve(coro::AsyncSemaphore& sem, std::size_t units) {
         if (units == 0) return;
         if (&sem == prod_mem.get())
             prod_held.fetch_sub(units, std::memory_order_relaxed);
@@ -148,8 +148,8 @@ struct GzipLineWriter::Impl {
     GzipWriterOptions opts;
     std::size_t workers;
     coro::Scope scope;
-    dstd::UniquePtr<coro::CoroSemaphore> slots;
-    coro::CoroSemaphore compute;
+    dstd::UniquePtr<coro::AsyncSemaphore> slots;
+    coro::AsyncSemaphore compute;
     coro::AsyncMutex drain_mu;
 
     std::mutex buf_mu;

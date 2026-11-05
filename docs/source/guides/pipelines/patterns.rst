@@ -263,3 +263,54 @@ To put a time limit on an operation, race it against ``coro::timeout`` with
    }
 
 See :doc:`../../cpp_api/coro` for ``timeout`` and the cancellation details.
+
+Bound the time and the fan-out of coroutines
+--------------------------------------------
+
+These combinators take ``coro::CoroTask`` values and run on the current executor.
+
+Limit how long a task runs:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/coro/time.h>
+
+   using namespace std::chrono_literals;
+
+   co_await coro::sleep(10ms);
+   int value = co_await coro::with_timeout(read_value(), 5s);
+
+``with_timeout`` raises an error whose condition is ``dstd::Condition::Timeout``.
+It wakes the task if the task is parked on a channel, an event, a semaphore, a mutex, a sleep or a spawned future.
+A task that computes without a wait, or that waits on I/O, ends only when it reaches its next wait.
+
+Retry a failing task:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/coro/retry.h>
+
+   coro::RetryPolicy policy;
+   policy.max_attempts = 5;
+   policy.initial_backoff = 50ms;
+   policy.jitter = 0.2;
+   auto data = co_await coro::retry([&]() { return fetch(path); }, std::move(policy));
+
+``retry`` takes a function, since a task runs once.
+It never retries a cancelled error.
+
+Run many jobs with a limit:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/coro/combinators.h>
+
+   coro::ParallelOptions options;
+   options.max_in_flight = 8;
+   auto sizes = co_await coro::parallel_map(std::move(paths), measure, options);
+
+``parallel_map`` gives results in item order.
+The first error stops new jobs, lets running jobs finish and is then raised.
+``parallel_map_unordered`` returns an ``AsyncGenerator`` that yields each result as it finishes.
+
+Use ``when_all_settled`` to get each outcome as a ``dstd::Expected``, and ``first_success`` to take the first task that does not fail and cancel the others.

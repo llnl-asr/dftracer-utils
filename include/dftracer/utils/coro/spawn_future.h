@@ -199,6 +199,7 @@ class SpawnFuture {
         if (state_->cancel_token) {
             state_->cancel_token->store(true, std::memory_order_release);
         }
+        if (state_->executor) state_->executor->wake_cancelled();
     }
 
    private:

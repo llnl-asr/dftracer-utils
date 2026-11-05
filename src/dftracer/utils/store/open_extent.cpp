@@ -445,6 +445,7 @@ struct ExtentWriter::IdleWait {
         executor = coro::Executor::current();
         if (executor == nullptr) executor = &writer.executor_;
         writer.idle_waiters_.push_back(this);
+        coro::detail::ParkOwnerScope no_owner({});
         park = executor->park(this, &IdleWait::ignore_cancel);
         return true;
     }

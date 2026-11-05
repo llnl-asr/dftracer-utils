@@ -6,7 +6,7 @@
 using namespace dftracer::utils;
 
 TEST_CASE("try_acquire takes free permits and never waits") {
-    coro::CoroSemaphore sem(10);
+    coro::AsyncSemaphore sem(10);
     CHECK(sem.try_acquire(6));
     CHECK_FALSE(sem.try_acquire(5));
     CHECK(sem.try_acquire(4));
@@ -18,7 +18,7 @@ TEST_CASE("try_acquire takes free permits and never waits") {
 TEST_CASE("a release above the capacity returns the capacity") {
     // An acquire of more than the capacity takes the capacity, so the release
     // of the same request must not add permits past it.
-    coro::CoroSemaphore sem(10);
+    coro::AsyncSemaphore sem(10);
     CHECK(sem.try_acquire(10));
     sem.release(25);
     CHECK(sem.try_acquire(10));

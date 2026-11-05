@@ -59,6 +59,10 @@ class Executor {
     }
     virtual void unpark(detail::ParkNode*) noexcept {}
 
+    /// Wakes the parked waiters of tasks that were cancelled, as a cancelled
+    /// wait. Call it after the cancel flag is set.
+    virtual void wake_cancelled() noexcept {}
+
     /// Timers this executor runs, or null to use @ref process_timers, the
     /// process-wide one.
     virtual TimerService* timers() noexcept { return nullptr; }

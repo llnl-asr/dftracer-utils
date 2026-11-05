@@ -117,7 +117,7 @@ class Runner {
     bool has_time = false;
     bool reread_only = false;
 
-    dstd::UniquePtr<coro::CoroSemaphore> permits;
+    dstd::UniquePtr<coro::AsyncSemaphore> permits;
     dstd::Vector<dstd::UniquePtr<Source>> sources;
 
    private:
@@ -178,11 +178,11 @@ class Runner {
 };
 
 struct Permit {
-    explicit Permit(coro::CoroSemaphore& s) : sem(s) {}
+    explicit Permit(coro::AsyncSemaphore& s) : sem(s) {}
     Permit(const Permit&) = delete;
     Permit& operator=(const Permit&) = delete;
     ~Permit() { sem.release(1); }
-    coro::CoroSemaphore& sem;
+    coro::AsyncSemaphore& sem;
 };
 
 class Task {
@@ -437,7 +437,7 @@ coro::CoroTask<void> Runner::run() {
         workers =
             ex != nullptr ? std::max<std::size_t>(1, ex->concurrency()) : 1;
     }
-    permits = dstd::make_unique<coro::CoroSemaphore>(workers);
+    permits = dstd::make_unique<coro::AsyncSemaphore>(workers);
     const std::uint64_t default_params_hash = rules.q.config.params_hash();
     for (const auto& s : rules.q.sources)
         sources.push_back(dstd::make_unique<Source>(s, default_params_hash));

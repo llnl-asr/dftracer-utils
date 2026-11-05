@@ -67,6 +67,9 @@ class RunLoop final : public Executor {
         return parked_.park(waiter, cancel);
     }
     void unpark(detail::ParkNode* n) noexcept override { parked_.unpark(n); }
+    void wake_cancelled() noexcept override {
+        parked_.cancel_requested_waiters();
+    }
 
    private:
     bool run_one();

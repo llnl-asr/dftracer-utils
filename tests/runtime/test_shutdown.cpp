@@ -125,7 +125,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
     Probe probe;
 
     SUBCASE("semaphore") {
-        coro::CoroSemaphore semaphore(1);
+        coro::AsyncSemaphore semaphore(1);
         REQUIRE(semaphore.try_acquire(1));
         auto frame = [&]() -> coro::CoroTask<void> {
             probe.entered.store(true);
@@ -323,14 +323,14 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
     SUBCASE("join handle") {
         // A join ends when the tracked frames end, so shutdown wakes the one
         // they wait on and the join follows.
-        coro::CoroSemaphore semaphore(1);
+        coro::AsyncSemaphore semaphore(1);
         REQUIRE(semaphore.try_acquire(1));
         std::atomic<bool> child_cancelled{false};
         auto frame = [&]() -> coro::CoroTask<void> {
             probe.entered.store(true);
             coro::JoinHandle join;
             auto child =
-                [](coro::CoroSemaphore* sem,
+                [](coro::AsyncSemaphore* sem,
                    std::atomic<bool>* cancelled) -> coro::detail::Coro {
                 try {
                     co_await sem->acquire(1);

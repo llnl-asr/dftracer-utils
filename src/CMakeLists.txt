@@ -116,6 +116,8 @@ set(DFTRACER_UTILS_CORO_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/monitor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/process_timers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/run_loop.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/async_event.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/combinators.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/scope.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/yield.cpp)
 

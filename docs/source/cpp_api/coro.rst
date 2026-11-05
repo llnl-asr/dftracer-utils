@@ -10,7 +10,9 @@ Coroutines
 
 The C++20 coroutine primitives in ``dftracer::utils::coro``: ``CoroTask``, the
 ``Channel`` and ``Generator`` types, ``CoroScope`` for structured concurrency,
-and the ``when_all`` / ``when_any`` / ``timeout`` combinators.
+the ``when_all`` / ``when_any`` / ``first_success`` / ``parallel_map`` combinators,
+the time operations ``sleep`` / ``with_timeout`` / ``with_deadline`` / ``retry``,
+and the waits ``AsyncEvent`` / ``AsyncLatch`` / ``AsyncSemaphore``.
 
 Type relationships
 ------------------

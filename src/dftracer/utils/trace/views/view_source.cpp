@@ -411,13 +411,13 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         dstd::SharedPtr<
             coro::UnboundedChannel<dftracer::utils::dataframe::Morsel>>
             channel,
-        dstd::SharedPtr<coro::CoroSemaphore> budget,
+        dstd::SharedPtr<coro::AsyncSemaphore> budget,
         dstd::SharedFuture<void> producer,
         dstd::SharedPtr<std::atomic<bool>> stop,
         dstd::SharedPtr<detail::DynamicPrune> dyn_prune,
         dstd::Vector<ViewFile> files, double time_scale,
         dstd::Vector<dstd::String> fnames, bool metadata_rows,
-        dstd::SharedPtr<coro::CoroSemaphore> gate)
+        dstd::SharedPtr<coro::AsyncSemaphore> gate)
         : channel_(std::move(channel)),
           budget_(std::move(budget)),
           producer_(std::move(producer)),
@@ -605,7 +605,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
 
     dstd::SharedPtr<coro::UnboundedChannel<dftracer::utils::dataframe::Morsel>>
         channel_;
-    dstd::SharedPtr<coro::CoroSemaphore> budget_;
+    dstd::SharedPtr<coro::AsyncSemaphore> budget_;
     dstd::SharedFuture<void> producer_;
     dstd::SharedPtr<std::atomic<bool>> stop_;
     dstd::SharedPtr<detail::DynamicPrune> dyn_prune_;
@@ -618,7 +618,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     std::int64_t offset_ = 0;
     std::uint64_t pending_bytes_ = 0;
     std::int64_t next_index_ = 0;
-    dstd::SharedPtr<coro::CoroSemaphore> gate_;
+    dstd::SharedPtr<coro::AsyncSemaphore> gate_;
     std::size_t head_ = 0;
     dstd::Map<std::size_t, dstd::Deque<Morsel>> held_;
     dstd::Set<std::size_t> ended_;
@@ -1084,7 +1084,7 @@ coro::CoroTask<void> run_open_batch(
     dstd::Vector<dataframe::Schema> schemas,
     dstd::Vector<dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>>>
         channels,
-    dstd::Vector<dstd::SharedPtr<coro::CoroSemaphore>> budgets) {
+    dstd::Vector<dstd::SharedPtr<coro::AsyncSemaphore>> budgets) {
     dstd::Vector<dstd::UniquePtr<
         coro::UnboundedChannel<dataframe::Morsel>::ProducerGuard>>
         guards;
@@ -1130,13 +1130,13 @@ ViewSource::open_batch(
         dstd::make_shared<ViewSession>(base_session(*views.front()->plan_));
     dstd::Vector<dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>>>
         channels;
-    dstd::Vector<dstd::SharedPtr<coro::CoroSemaphore>> budgets;
+    dstd::Vector<dstd::SharedPtr<coro::AsyncSemaphore>> budgets;
     dstd::Vector<dstd::SharedPtr<std::atomic<bool>>> dropped;
     dstd::Vector<bool> streamed(views.size(), false);
     for (std::size_t i = 0; i < views.size(); ++i) {
         channels.push_back(coro::make_unbounded_channel<dataframe::Morsel>());
         budgets.push_back(
-            dstd::make_shared<coro::CoroSemaphore>(memory_budget));
+            dstd::make_shared<coro::AsyncSemaphore>(memory_budget));
         dropped.push_back(dstd::make_shared<std::atomic<bool>>(false));
         const ViewSource& v = *views[i];
         if (v.can_stream_rows()) {
@@ -1407,7 +1407,7 @@ dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     // send and released once the cursor hands a morsel off.
     auto channel =
         coro::make_unbounded_channel<dftracer::utils::dataframe::Morsel>();
-    auto budget = dstd::make_shared<coro::CoroSemaphore>(memory_budget);
+    auto budget = dstd::make_shared<coro::AsyncSemaphore>(memory_budget);
     auto intern = dstd::make_shared<dftracer::utils::dstd::StringIntern>();
     const double time_scale = v->time_scale;
     // Backing state for Cursor::narrow(): fuse() polls it per unit for as
@@ -1433,7 +1433,7 @@ dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     // oldest unit the cursor has not finished.
     auto gate =
         v->ordered
-            ? dstd::make_shared<coro::CoroSemaphore>(
+            ? dstd::make_shared<coro::AsyncSemaphore>(
                   2 * std::max<std::size_t>(1, common::available_parallelism()))
             : nullptr;
     auto task =
@@ -1441,10 +1441,10 @@ dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
            dstd::SharedPtr<
                coro::UnboundedChannel<dftracer::utils::dataframe::Morsel>>
                ch,
-           dstd::SharedPtr<coro::CoroSemaphore> sem,
+           dstd::SharedPtr<coro::AsyncSemaphore> sem,
            dstd::SharedPtr<dftracer::utils::dstd::StringIntern> iv,
            dstd::SharedPtr<detail::DynamicPrune> dp, bool emit_dyn,
-           dstd::SharedPtr<coro::CoroSemaphore> gt) -> coro::CoroTask<void> {
+           dstd::SharedPtr<coro::AsyncSemaphore> gt) -> coro::CoroTask<void> {
         detail::StreamRowFold fold(
             ch, sem, iv, vv->select, ts, detail::metadata_rows(*vv), emit_dyn,
             nullptr, nullptr, detail::plan_by_path(*vv), gt != nullptr,
@@ -1452,7 +1452,7 @@ dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
         std::array<detail::Fold*, 1> folds{&fold};
         co_await detail::scan::run_folds(vv, folds, *iv, dp.get(), gt.get());
     }(scan_view, time_scale, channel, budget, intern, dyn_prune, emit_dyn_,
-                                                    gate);
+                                                     gate);
 
     dstd::SharedFuture<void> producer =
         spawn_on_current_executor(std::move(task));

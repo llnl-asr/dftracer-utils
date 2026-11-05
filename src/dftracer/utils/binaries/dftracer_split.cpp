@@ -522,7 +522,7 @@ auto add_verify_stage(TaskGraph& graph,
                         output_hash += chunk.event_hash;
                     }
 
-                    coro::CoroSemaphore running(executor_threads);
+                    coro::AsyncSemaphore running(executor_threads);
                     auto* running_ptr = &running;
                     dstd::Vector<coro::SpawnFuture<std::size_t>> futures;
                     futures.reserve(split_files_ptr->size());

@@ -1257,9 +1257,9 @@ struct FilePart {
 
 // Holds one of a group's reader slots until it goes out of scope.
 struct SlotGuard {
-    coro::CoroSemaphore& slots;
+    coro::AsyncSemaphore& slots;
     std::uint64_t n;
-    SlotGuard(coro::CoroSemaphore& s, std::uint64_t taken)
+    SlotGuard(coro::AsyncSemaphore& s, std::uint64_t taken)
         : slots(s), n(taken) {}
     ~SlotGuard() { slots.release(n); }
     SlotGuard(const SlotGuard&) = delete;
@@ -1275,8 +1275,8 @@ constexpr std::uint64_t UNKNOWN_SLOTS =
 // once, so the probes are bounded to stay under the open file limit.
 constexpr std::uint64_t PROBE_LIMIT = 256;
 
-coro::CoroSemaphore& probe_slots() {
-    static coro::CoroSemaphore slots(PROBE_LIMIT);
+coro::AsyncSemaphore& probe_slots() {
+    static coro::AsyncSemaphore slots(PROBE_LIMIT);
     return slots;
 }
 
@@ -1316,7 +1316,7 @@ coro::CoroTask<ReaderSize> reader_size(const dstd::String& file) {
 }
 
 coro::CoroTask<FilePart> read_file(dstd::String file, GroupMem* mem,
-                                   coro::CoroSemaphore* slots,
+                                   coro::AsyncSemaphore* slots,
                                    std::uint64_t total_slots,
                                    GroupProgress* progress) {
     const ReaderSize size = co_await reader_size(file);
@@ -1623,7 +1623,7 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
 
     const std::uint64_t total_slots =
         std::max<std::uint64_t>(1, (memory_share / 4) / READER_BYTES);
-    coro::CoroSemaphore slots(total_slots);
+    coro::AsyncSemaphore slots(total_slots);
     dstd::Vector<coro::SpawnFuture<FilePart>> reads;
     reads.reserve(g.files.size());
     for (const auto& f : g.files)

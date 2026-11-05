@@ -30,7 +30,7 @@ struct IndexedFile {
 // meets a writer fails and reads as a stale index.
 struct IndexRoot {
     static constexpr std::uint64_t ALL_PERMITS = std::uint64_t{1} << 32;
-    coro::CoroSemaphore gate{ALL_PERMITS};
+    coro::AsyncSemaphore gate{ALL_PERMITS};
     std::mutex current_mutex;
     dstd::StringViewMap<IndexedFile> current;
 };

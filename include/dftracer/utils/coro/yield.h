@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_CORO_YIELD_H
 #define DFTRACER_UTILS_CORO_YIELD_H
 
+#include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/pool_resume.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
@@ -163,6 +164,7 @@ struct YieldCheckAwaitable {
             }
         }
         suspended = true;
+        detail::ParkOwnerScope owner(detail::park_owner_of(h));
         if constexpr (std::is_void_v<R> || std::is_same_v<R, bool>) {
             if (yielding) {
                 yield_to_executor(h);

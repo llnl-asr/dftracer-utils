@@ -45,6 +45,8 @@ bool runs_on(Executor* home) noexcept;
 void resume_on_home(Executor* home, std::coroutine_handle<> awaiter) noexcept;
 /// Executor::current(), for code that sees only a declaration of Executor.
 Executor* current_executor() noexcept;
+/// Executor::wake_cancelled, for code that sees only a declaration of Executor.
+void wake_cancelled_on(Executor* executor) noexcept;
 }  // namespace detail
 
 namespace this_coro {
@@ -456,8 +458,9 @@ class CoroTask {
      */
     void cancel() noexcept {
         if (coro_handle_) {
-            coro_handle_.promise().cancel_flag.store(true,
-                                                     std::memory_order_release);
+            auto& promise = coro_handle_.promise();
+            promise.cancel_flag.store(true, std::memory_order_release);
+            if (promise.executor) detail::wake_cancelled_on(promise.executor);
         }
     }
 

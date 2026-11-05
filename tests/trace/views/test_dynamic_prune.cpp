@@ -273,7 +273,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         // path instead lets a morsel's columns vary batch to batch, which
         // would make "column 0 is pid" an assumption this test cannot make.
         // A tight memory_budget throttles the scan to about one checkpoint
-        // in flight at a time (CoroSemaphore gates each unit's byte range
+        // in flight at a time (AsyncSemaphore gates each unit's byte range
         // before it is claimed), so "narrow partway" below is deterministic
         // instead of racing a scan that a handful of worker threads could
         // otherwise finish before the test ever calls narrow().

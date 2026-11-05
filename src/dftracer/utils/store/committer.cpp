@@ -154,6 +154,7 @@ struct Committer::StopWait {
         if (executor == nullptr) executor = &committer.executor_;
         committer.stop_waiter_ = handle;
         committer.stop_executor_ = executor;
+        coro::detail::ParkOwnerScope no_owner({});
         park = executor->park(this, &StopWait::ignore_cancel);
         return true;
     }

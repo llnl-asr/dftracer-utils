@@ -45,7 +45,7 @@ class StreamRowFold : public Fold {
    public:
     StreamRowFold(
         dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel,
-        dstd::SharedPtr<coro::CoroSemaphore> budget,
+        dstd::SharedPtr<coro::AsyncSemaphore> budget,
         dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern,
         dstd::Vector<dstd::String> select, double time_scale = 1.0,
         bool keep_metadata = false, bool emit_dyn = false,
@@ -114,7 +114,7 @@ class StreamRowFold : public Fold {
     }
 
     dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel_;
-    dstd::SharedPtr<coro::CoroSemaphore> budget_;
+    dstd::SharedPtr<coro::AsyncSemaphore> budget_;
     dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_;
     dstd::Vector<dstd::String> select_;
     double time_scale_;

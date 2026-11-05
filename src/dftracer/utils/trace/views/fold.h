@@ -172,7 +172,7 @@ coro::CoroTask<ExportStats> fuse(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dstd::Span<Fold* const> folds, dftracer::utils::dstd::StringIntern& intern,
     const CoverageSet* covered = nullptr, std::uint64_t limit = 0,
-    DynamicPrune* dyn_prune = nullptr, coro::CoroSemaphore* gate = nullptr);
+    DynamicPrune* dyn_prune = nullptr, coro::AsyncSemaphore* gate = nullptr);
 
 /// Fields the scanner must capture into each event's args for this plan: the
 /// non-scalar Field group keys and nested agg fields the POD does not natively

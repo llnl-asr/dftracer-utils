@@ -133,7 +133,7 @@ coro::CoroTask<dstd::String> run_flamegraph_partial(
 coro::CoroTask<ExportStats> run_folds(
     const ViewPlan& plan, dstd::Span<Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern,
-    DynamicPrune* dyn_prune = nullptr, coro::CoroSemaphore* gate = nullptr);
+    DynamicPrune* dyn_prune = nullptr, coro::AsyncSemaphore* gate = nullptr);
 
 // Build-only terminal: materialize the filtered-trace MV (row query) or the
 // rollup (aggregation) and return scan stats. A no-op when the MV already
@@ -262,7 +262,7 @@ void add_branch(ViewSessionState& state, BranchHooks hooks);
 void add_stream_branch(
     ViewSessionState& state, dstd::SharedPtr<const ViewPlan> plan,
     dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel,
-    dstd::SharedPtr<coro::CoroSemaphore> budget,
+    dstd::SharedPtr<coro::AsyncSemaphore> budget,
     dstd::SharedPtr<const std::atomic<bool>> dropped);
 
 /// Offer `q` as a narrowing of the session's shared scan. execute() applies it

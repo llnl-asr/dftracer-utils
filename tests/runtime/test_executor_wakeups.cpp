@@ -91,7 +91,7 @@ TEST_SUITE("ExecutorWakeups") {
         constexpr auto MAX_MEDIAN_LATENCY = 1ms;
 
         Runtime rt(THREADS);
-        coro::CoroSemaphore gate(1);
+        coro::AsyncSemaphore gate(1);
         REQUIRE(gate.try_acquire(1));
         std::atomic<std::int64_t> finished_ns{0};
 

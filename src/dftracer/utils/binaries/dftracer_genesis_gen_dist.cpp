@@ -499,7 +499,7 @@ coro::CoroTask<void> group_worker(
     utilities::fileio::GzipLineWriter* writer,
     utilities::fileio::GzipLineWriter* head_writer,
     const dstd::Vector<trace::genesis::RunGroup>* groups,
-    coro::CoroSemaphore* memory, Shares shares, WorkerTotals* totals,
+    coro::AsyncSemaphore* memory, Shares shares, WorkerTotals* totals,
     Progress* progress, std::size_t w) {
     auto prod = writer->producer();
     auto head_prod = head_writer->producer();
@@ -700,7 +700,7 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
                           return discovery.groups[a].compressed_bytes >
                                  discovery.groups[b].compressed_bytes;
                       });
-    coro::CoroSemaphore memory(budget);
+    coro::AsyncSemaphore memory(budget);
 
     dstd::Vector<WorkerTotals> totals(threads);
     auto indices = coro::make_channel<std::size_t>(threads * 2);

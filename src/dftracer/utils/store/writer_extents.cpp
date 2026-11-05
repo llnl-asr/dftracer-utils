@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/completion_latch.h>
+#include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/store/writer_extents.h>
@@ -124,6 +125,7 @@ bool WriterExtents::SpaceWait::await_suspend(std::coroutine_handle<> handle) {
     parked_ = handle;
     executor_ = executor;
     if (executor_ != nullptr) {
+        coro::detail::ParkOwnerScope no_owner({});
         park_ = executor_->park(this, &SpaceWait::ignore_cancel);
     }
     return true;

@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Wake a task parked on a channel, event, semaphore, mutex, sleep or future when the task is cancelled, so `when_any` and `SpawnFuture::cancel` no longer wait for the parked wait to end.
+  The wait raises a cancelled error.
+- Rename `coro::CoroSemaphore` to `coro::AsyncSemaphore`, and add `permit()`, which gives the units back on destruction.
+- Raise timeouts from `coro::timeout` with the condition `dstd::Condition::Timeout`.
+- Add `coro::sleep`, `with_timeout`, `with_deadline`, `retry`, `when_all_settled`, `first_success`, `parallel_map`, `parallel_map_unordered`, `AsyncEvent` and `AsyncLatch`.
 - Make `coro::Channel` a lock-free ring on the send and receive fast paths, 3 to 60 times faster in `channel_bench` at 48 and 96 threads.
   Items of one producer now arrive in order.
 - Require a capacity of at least 1 for `coro::Channel`, where 0 meant unbounded, and add `coro::UnboundedChannel` with `make_unbounded_channel` for that case.

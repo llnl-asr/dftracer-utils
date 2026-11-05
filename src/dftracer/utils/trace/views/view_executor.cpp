@@ -660,7 +660,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
 coro::CoroTask<ExportStats> run_folds(
     const ViewPlan& plan, dstd::Span<Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern, DynamicPrune* dyn_prune,
-    coro::CoroSemaphore* gate) {
+    coro::AsyncSemaphore* gate) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     auto catalog = select_catalog_fold(plan, vdef, intern);
     dstd::Vector<Fold*> all(folds.begin(), folds.end());
@@ -1718,7 +1718,7 @@ struct FoldFactory {
 struct StreamBranch {
     dstd::SharedPtr<const ViewPlan> plan;
     dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel;
-    dstd::SharedPtr<coro::CoroSemaphore> budget;
+    dstd::SharedPtr<coro::AsyncSemaphore> budget;
     dstd::SharedPtr<const std::atomic<bool>> dropped;
 };
 
@@ -1752,7 +1752,7 @@ void add_branch(ViewSessionState& state, BranchHooks hooks) {
 void add_stream_branch(
     ViewSessionState& state, dstd::SharedPtr<const ViewPlan> plan,
     dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel,
-    dstd::SharedPtr<coro::CoroSemaphore> budget,
+    dstd::SharedPtr<coro::AsyncSemaphore> budget,
     dstd::SharedPtr<const std::atomic<bool>> dropped) {
     state.stream_branches.push_back({std::move(plan), std::move(channel),
                                      std::move(budget), std::move(dropped)});

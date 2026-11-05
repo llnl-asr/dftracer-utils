@@ -626,7 +626,7 @@ struct InflatePlan {
     bool extend_last = false;
     dstd::Vector<GzipMember> members;
     dstd::Vector<InflateRange> ranges;
-    dftracer::utils::coro::CoroSemaphore permits;
+    dftracer::utils::coro::AsyncSemaphore permits;
     dstd::Vector<RangeSlot> ring;
     InflateBuffers buffers;
     std::atomic<std::size_t> next{0};

@@ -123,7 +123,7 @@ coro::CoroTask<ExportStats> run_folds(
     ScanPlan plan, dstd::Span<detail::Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern,
     detail::DynamicPrune* dyn_prune = nullptr,
-    coro::CoroSemaphore* gate = nullptr);
+    coro::AsyncSemaphore* gate = nullptr);
 coro::CoroTask<ExportStats> run(ScanPlan plan,
                                 const ProgressFn* progress = nullptr);
 dstd::String materialize_dir(const ScanPlan& plan);

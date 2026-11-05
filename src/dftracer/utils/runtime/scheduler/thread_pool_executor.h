@@ -255,6 +255,9 @@ class ThreadPoolExecutor final : public TaskExecutor {
     void unpark(coro::detail::ParkNode* n) noexcept override {
         park_registry_.unpark(n);
     }
+    void wake_cancelled() noexcept override {
+        park_registry_.cancel_requested_waiters();
+    }
     dstd::SharedPtr<std::atomic<bool>> shutdown_token() const override {
         return shutdown_token_;
     }

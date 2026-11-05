@@ -717,7 +717,7 @@ TEST_CASE("GzipLineWriter - unordered mode") {
                                                 std::move(o));
         REQUIRE(wr.has_value());
         GzipLineWriter& w = *wr;
-        coro::CoroSemaphore done(PRODUCERS);
+        coro::AsyncSemaphore done(PRODUCERS);
         co_await done.acquire(PRODUCERS);
         for (std::size_t p = 0; p < PRODUCERS; ++p) {
             scope.spawn([&, p]() -> coro::CoroTask<void> {
@@ -792,7 +792,7 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
             REQUIRE(pr.has_value());
             prods.push_back(std::move(*pr));
         }
-        coro::CoroSemaphore done(PRODUCERS);
+        coro::AsyncSemaphore done(PRODUCERS);
         co_await done.acquire(PRODUCERS);
         for (std::size_t p = 0; p < PRODUCERS; ++p) {
             scope.spawn([&, p]() -> coro::CoroTask<void> {
@@ -909,7 +909,7 @@ TEST_CASE("GzipLineWriter - producers stay within the memory budget") {
             REQUIRE(pr.has_value());
             prods.push_back(std::move(*pr));
         }
-        coro::CoroSemaphore done(PRODUCERS);
+        coro::AsyncSemaphore done(PRODUCERS);
         co_await done.acquire(PRODUCERS);
         for (std::size_t p = 0; p < PRODUCERS; ++p) {
             scope.spawn([&, p]() -> coro::CoroTask<void> {

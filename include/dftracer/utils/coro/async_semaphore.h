@@ -28,19 +28,19 @@ namespace dftracer::utils::coro {
  * waiters are re-enqueued on the executor rather than resumed inline, so
  * release() does not recurse into resumed coroutines.
  */
-class CoroSemaphore {
+class AsyncSemaphore {
    public:
-    explicit CoroSemaphore(std::uint64_t capacity) noexcept
+    explicit AsyncSemaphore(std::uint64_t capacity) noexcept
         : capacity_(capacity), available_(capacity) {}
 
-    CoroSemaphore(const CoroSemaphore&) = delete;
-    CoroSemaphore& operator=(const CoroSemaphore&) = delete;
+    AsyncSemaphore(const AsyncSemaphore&) = delete;
+    AsyncSemaphore& operator=(const AsyncSemaphore&) = delete;
 
     /// co_await throws a cancelled error (see coro::is_cancelled) when the
     /// executor shuts down while it waits. No permits are taken then.
     class AcquireOperation {
        public:
-        AcquireOperation(CoroSemaphore& sem, std::uint64_t n) noexcept
+        AcquireOperation(AsyncSemaphore& sem, std::uint64_t n) noexcept
             : sem_(sem), need_(n > sem.capacity_ ? sem.capacity_ : n) {}
 
         ~AcquireOperation() {
@@ -98,7 +98,7 @@ class CoroSemaphore {
         }
 
        private:
-        CoroSemaphore& sem_;
+        AsyncSemaphore& sem_;
         std::uint64_t need_;
         Executor* executor_ = nullptr;
         std::coroutine_handle<> handle_{};
@@ -107,6 +107,51 @@ class CoroSemaphore {
 
     /// Acquire `n` permits (co_await). `n` above capacity is clamped.
     AcquireOperation acquire(std::uint64_t n) noexcept { return {*this, n}; }
+
+    /// Permits that go back when this is destroyed. Move-only.
+    class Permit {
+       public:
+        Permit(AsyncSemaphore& sem, std::uint64_t n) noexcept
+            : sem_(&sem), n_(n) {}
+        ~Permit() {
+            if (sem_) sem_->release(n_);
+        }
+        Permit(Permit&& other) noexcept : sem_(other.sem_), n_(other.n_) {
+            other.sem_ = nullptr;
+        }
+        Permit(const Permit&) = delete;
+        Permit& operator=(const Permit&) = delete;
+        Permit& operator=(Permit&&) = delete;
+
+       private:
+        AsyncSemaphore* sem_;
+        std::uint64_t n_;
+    };
+
+    /// @ref acquire that gives a @ref Permit from co_await.
+    class PermitOperation {
+       public:
+        PermitOperation(AsyncSemaphore& sem, std::uint64_t n) noexcept
+            : sem_(sem), n_(n), acquire_(sem, n) {}
+
+        bool await_ready() const noexcept { return acquire_.await_ready(); }
+        bool await_suspend(std::coroutine_handle<> h) noexcept {
+            return acquire_.await_suspend(h);
+        }
+        Permit await_resume() {
+            acquire_.await_resume();
+            return Permit(sem_, n_);
+        }
+
+       private:
+        AsyncSemaphore& sem_;
+        std::uint64_t n_;
+        AcquireOperation acquire_;
+    };
+
+    [[nodiscard]] PermitOperation permit(std::uint64_t n = 1) noexcept {
+        return {*this, n};
+    }
 
     /// Takes `n` permits only if they are free now, ahead of any waiters;
     /// false, without waiting, when they are not. For a holder that needs a

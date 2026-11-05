@@ -723,20 +723,25 @@ class TimeoutAwaitable {
 
     Duration duration_;
     TimerService* timer_service_;
+    bool raises_;
     dstd::SharedPtr<State> state_;
 
    public:
     using result_type = void;
 
-    explicit TimeoutAwaitable(Duration duration, TimerService* timer_service)
+    /// With @p raises false, co_await returns when the time passes.
+    explicit TimeoutAwaitable(Duration duration, TimerService* timer_service,
+                              bool raises = true)
         : duration_(duration),
           timer_service_(timer_service),
+          raises_(raises),
           state_(dstd::make_shared<State>()) {}
 
     /// A copy waits on its own timer.
     TimeoutAwaitable(const TimeoutAwaitable& other)
         : duration_(other.duration_),
           timer_service_(other.timer_service_),
+          raises_(other.raises_),
           state_(dstd::make_shared<State>()) {}
     TimeoutAwaitable(TimeoutAwaitable&&) noexcept = default;
     TimeoutAwaitable& operator=(const TimeoutAwaitable&) = delete;
@@ -791,8 +796,9 @@ class TimeoutAwaitable {
         if (st.outcome == Outcome::Cancelled) {
             throw_cancelled("timeout cancelled");
         }
-        throw common::DFTUtilsException(common::ErrorCode::Pipeline,
-                                        "Operation timed out");
+        if (!raises_) return;
+        throw common::DFTUtilsException(
+            dstd::Error{dstd::Condition::Timeout, "Operation timed out"});
     }
 
     /// Ends the wait early. Thread-safe. Does nothing once the wait is over.

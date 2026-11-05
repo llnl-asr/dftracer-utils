@@ -620,7 +620,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     }
 
     struct PieceRelease {
-        coro::CoroSemaphore* permits;
+        coro::AsyncSemaphore* permits;
         FoldBufferPool* buffers;
         void operator()(Parsed* p) const {
             buffers->give(std::move(p->batch));
@@ -636,7 +636,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         dropped_lines_ += done->dropped;
         if (builders_) builders_->step(done->checkpoint_idx, done->lines);
         if (!permits_) {
-            permits_ = dstd::make_unique<coro::CoroSemaphore>(MAX_PIECES_HELD);
+            permits_ = dstd::make_unique<coro::AsyncSemaphore>(MAX_PIECES_HELD);
             tails_.resize(folds_.size());
         }
         co_await permits_->acquire(1);
@@ -887,7 +887,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     dstd::Deque<BloomStep> bloom_steps_;
     index::extensions::BloomFold* bloom_ = nullptr;
     index::schemas::dft::agg::AggregationFold* agg_ = nullptr;
-    dstd::UniquePtr<coro::CoroSemaphore> permits_;
+    dstd::UniquePtr<coro::AsyncSemaphore> permits_;
     dstd::Vector<dstd::Optional<coro::SpawnFuture<void>>> tails_;
     // Shared by every file of a build, so a slot keeps its capacity from file
     // to file.

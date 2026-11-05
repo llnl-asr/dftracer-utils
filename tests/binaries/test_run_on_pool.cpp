@@ -69,6 +69,26 @@ TEST_CASE("a watchdog timeout stops the task and raises a timeout error") {
     CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(30));
 }
 
+TEST_CASE("a watchdog task timeout names the task and stops it") {
+    binaries::WatchdogArgs watchdog;
+    watchdog.task_timeout = 1;
+    watchdog.interval = 1;
+    const auto start = std::chrono::steady_clock::now();
+    try {
+        binaries::run_on_pool(
+            "slow_task", small_runtime(), watchdog,
+            [](coro::Scope&) -> coro::CoroTask<void> {
+                co_await coro::sleep(std::chrono::seconds(60));
+            });
+        FAIL("the timeout did not raise");
+    } catch (const common::DFTUtilsException& e) {
+        CHECK(e.condition() == dstd::Condition::Timeout);
+        CHECK(dstd::StringView(e.what()).find("Task 'slow_task' timed out") !=
+              dstd::StringView::npos);
+    }
+    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(30));
+}
+
 TEST_CASE("a watchdog timeout raises for a body that gives a value") {
     binaries::WatchdogArgs watchdog;
     watchdog.global_timeout = 1;

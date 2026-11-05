@@ -439,6 +439,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   They fed per-argument stats that every index build stored and no query read.
 - Remove `IndexDatabase.write_aggregation_tracker` and the process-parent tracking of the aggregation tier, which every index build stored and no query read.
 - Remove `CoroScope::join_all()`, which was an alias of `CoroScope::join()`. Call `join()`.
+- Remove the C++ `CoroScope`, `Task`, `TaskGraph` and `Pipeline` types. Use `coro::Scope`, `coro::with_scope`, `coro::parallel_map` and `coro::JoinSet`.
 - Remove `DFTUtilsException::code()`. Read `condition()`, `error()`, `domain()` or `code_int()` instead, or `errorcode_of(e.error())` for the coarse code an `ErrorCode` names.
 - Stop installing the C++ headers under `dftracer/utils/server/` and `dftracer/utils/utilities/`, except `utilities/filesystem/types.h`, `utilities/hash/types.h` and `utilities/hash/fnv1a_hasher_utility.h`, and the `utilities/utilities.h` umbrella. They are now private to the library.
 - Stop installing the C++ `trace/trace.h` umbrella, the `trace/comparator/` headers, the `trace/event_collector_utility.h`, `trace/chunk_extractor_utility.h` and `trace/metadata_collector_utility.h` headers and `index/build/chunk_indexer.h`. `CompareView` is no longer a public C++ API; compare traces with `TraceViewer.compare` in Python.
@@ -451,6 +452,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a false memory leak report and a failed exit check when a thread flushed its pool counts while a pool closed.
 - Link a static consumer through pkg-config: each library's `.pc` file now requires every library of ours it needs and lists the third-party archives of its `Libs.private`, where `dftracer_utils_utilities` required only the runtime.
 - Fix the row order of a `collect_all` or `TraceSession` plan that promises scan order (a duql pipeline with a stage after the scan, such as `select ... | where ...` or `derive`): it came back in worker order, and now reads on its own in scan order.
   Streaming row plans of one session no longer wait for a plan that cannot stream: they share one scan with a bounded buffer, where one such plan used to make every plan hold all of its events until the scan ended (3.3 GB and 1.5x the time for five row plans over 1.44M events, now 0.6 GB and 0.6x).

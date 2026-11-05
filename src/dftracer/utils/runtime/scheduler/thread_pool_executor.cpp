@@ -8,9 +8,6 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/io/io_backend_factory.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/error.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 
 #include <chrono>
 #include <coroutine>
@@ -854,13 +851,8 @@ ExecutorProgress ThreadPoolExecutor::progress() const {
         }
     }
 
-    // Build task trees (find root tasks)
-    dstd::HashSet<common::TaskIndex> processed;
     for (const auto& [task_id, info] : task_registry_) {
-        if (info.parent_task_id == -1) {  // Root task
-            auto task_progress = build_task_progress_tree(task_id, processed);
-            progress.root_tasks.push_back(task_progress);
-        }
+        progress.root_tasks.push_back(task_progress_of(info));
     }
 
     // Worker states (dynamic set; lock against add/retire mutation)
@@ -889,28 +881,9 @@ ExecutorProgress ThreadPoolExecutor::progress() const {
     return progress;
 }
 
-TaskProgress ThreadPoolExecutor::build_task_progress_tree(
-    common::TaskIndex task_id,
-    dstd::HashSet<common::TaskIndex>& processed) const {
+TaskProgress ThreadPoolExecutor::task_progress_of(const TaskInfo& info) const {
     TaskProgress progress;
-
-    if (processed.count(task_id)) {
-        // Avoid cycles
-        progress.task_id = task_id;
-        progress.name = "[Cycle Detected]";
-        return progress;
-    }
-    processed.insert(task_id);
-
-    auto it = task_registry_.find(task_id);
-    if (it == task_registry_.end()) {
-        progress.task_id = task_id;
-        progress.name = "[Not Found]";
-        return progress;
-    }
-
-    const TaskInfo& info = it->second;
-    progress.task_id = task_id;
+    progress.task_id = info.task_id;
     progress.name = info.name;
 
     // State
@@ -941,17 +914,8 @@ TaskProgress ThreadPoolExecutor::build_task_progress_tree(
                 .count();
     }
 
-    // Progress
-    progress.total_subtasks = info.child_task_ids.size();
-    progress.completed_subtasks = info.completed_children.load();
-    if (progress.total_subtasks > 0) {
-        progress.progress_percentage =
-            (100.0 * static_cast<double>(progress.completed_subtasks)) /
-            static_cast<double>(progress.total_subtasks);
-    } else {
-        progress.progress_percentage =
-            (info.state == TaskState::Completed) ? 100.0 : 0.0;
-    }
+    progress.progress_percentage =
+        (info.state == TaskState::Completed) ? 100.0 : 0.0;
 
     progress.location = info.location;
     progress.worker = (info.location == TaskLocation::LocalQueue ||
@@ -959,236 +923,12 @@ TaskProgress ThreadPoolExecutor::build_task_progress_tree(
                           ? static_cast<std::int32_t>(info.worker_id)
                           : -1;
 
-    // Build children recursively
-    for (common::TaskIndex child_id : info.child_task_ids) {
-        progress.children.push_back(
-            build_task_progress_tree(child_id, processed));
-    }
-
     return progress;
 }
 
 // ============================================================================
 // Phase 3: Coro-based task execution
 // ============================================================================
-
-coro::detail::Coro ThreadPoolExecutor::run_task(dstd::SharedPtr<Task> task,
-                                                dstd::SharedPtr<std::any> input,
-                                                TaskOwner* owner) {
-    // Get worker context from TLS (set by worker_thread at start).
-    auto* context = static_cast<WorkerContext*>(current_worker_context());
-
-    if (!task) {
-        co_return;
-    }
-    // Tells the owner the task ended, also when the queued frame is destroyed
-    // unrun at shutdown.
-    struct FinishTask {
-        TaskOwner* owner;
-        dstd::SharedPtr<Task> task;
-        bool ran = false;
-        ~FinishTask() {
-            if (!ran)
-                task->set_exception(std::make_exception_ptr(
-                    PipelineError(PipelineError::Interrupted,
-                                  "the pipeline of the task stopped")));
-            owner->finish_task(task);
-        }
-    } finish{owner, task};
-    if (!context || owner->is_stopping()) {
-        ++tasks_completed_;
-        co_return;
-    }
-
-    // Update worker context
-    context->current_task_id = task->id();
-    {
-        std::lock_guard<std::mutex> lock(context->task_name_mutex);
-        context->current_task_name = task->name();
-    }
-    context->last_activity = std::chrono::steady_clock::now();
-
-    // Update task registry to RUNNING
-    {
-        std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-        auto it = task_registry_.find(task->id());
-        if (it != task_registry_.end()) {
-            it->second.state = TaskState::Running;
-            it->second.started_at = std::chrono::steady_clock::now();
-            it->second.worker_id = context->worker_id;
-            it->second.location = TaskLocation::Executing;
-        }
-    }
-
-    task->result().mark_running();
-
-    {
-        std::exception_ptr task_error;
-
-        DFTRACER_UTILS_LOG_DEBUG("Worker %zu executing task ID %ld ('%s')",
-                                 context->worker_id, task->id(), task->name());
-
-        // The body never throws and records task_error.
-        co_await run_coro_scope(
-            this, [&, this](CoroScope& scope) -> coro::CoroTask<void> {
-                try {
-                    auto coro_task = task->execute(scope, *input);
-                    // Propagate executor to the CoroTask's PromiseBase so that
-                    // nested awaitables (when_any, channel, etc.) can schedule
-                    // resumptions.  run_task() is a Coro (CoroPromise, not
-                    // PromiseBase), so the normal PromiseBase propagation in
-                    // CoroTask::await_suspend doesn't fire.
-                    coro_task.handle().promise().set_executor(this);
-                    std::any result = co_await std::move(coro_task);
-
-                    task->set_result(std::move(result));
-                } catch (...) {
-                    task_error = std::current_exception();
-                }
-            });
-
-        // After the awaits we may have resumed on a different worker; the
-        // starting `context` can be freed (retired), so touch the live resumer.
-        auto* finishing = static_cast<WorkerContext*>(current_worker_context());
-
-        if (!task_error) {
-            DFTRACER_UTILS_LOG_DEBUG(
-                "Task ID %ld ('%s') completed successfully", task->id(),
-                task->name());
-
-            ++tasks_completed_;
-            if (finishing) finishing->tasks_executed++;
-
-            // Update task registry to COMPLETED
-            {
-                std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-                auto it = task_registry_.find(task->id());
-                if (it != task_registry_.end()) {
-                    it->second.state = TaskState::Completed;
-                    it->second.completed_at = std::chrono::steady_clock::now();
-                    it->second.location = TaskLocation::Done;
-
-                    // Update parent's completed children count
-                    if (it->second.parent_task_id != -1) {
-                        auto parent_it =
-                            task_registry_.find(it->second.parent_task_id);
-                        if (parent_it != task_registry_.end()) {
-                            parent_it->second.completed_children++;
-                        }
-                    }
-                    retire_locked(task->id());
-                }
-            }
-
-            // Notify scheduler
-            finish.ran = true;
-
-        } else {
-            try {
-                std::rethrow_exception(task_error);
-            } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_ERROR("Task ID %ld ('%s') failed: %s",
-                                         task->id(), task->name(), e.what());
-
-                task->set_exception(task_error);
-
-                ++tasks_failed_;
-                if (finishing) finishing->tasks_executed++;
-
-                {
-                    std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-                    auto it = task_registry_.find(task->id());
-                    if (it != task_registry_.end()) {
-                        it->second.state = TaskState::Failed;
-                        it->second.completed_at =
-                            std::chrono::steady_clock::now();
-                        it->second.error_message = e.what();
-                        it->second.location = TaskLocation::Done;
-                        retire_locked(task->id());
-                    }
-                }
-
-                finish.ran = true;
-
-            } catch (...) {
-                DFTRACER_UTILS_LOG_ERROR(
-                    "Task ID %ld ('%s') failed with unknown exception",
-                    task->id(), task->name());
-
-                task->set_exception(task_error);
-
-                ++tasks_failed_;
-                if (finishing) finishing->tasks_executed++;
-
-                {
-                    std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-                    auto it = task_registry_.find(task->id());
-                    if (it != task_registry_.end()) {
-                        it->second.state = TaskState::Failed;
-                        it->second.completed_at =
-                            std::chrono::steady_clock::now();
-                        it->second.error_message = "Unknown exception";
-                        it->second.location = TaskLocation::Done;
-                        retire_locked(task->id());
-                    }
-                }
-
-                finish.ran = true;
-            }
-        }
-    }
-
-    // Clear current-task info only on the worker still showing this task: after
-    // migration the starting worker's context may be freed or already onto its
-    // next task.
-    if (auto* cur = static_cast<WorkerContext*>(current_worker_context());
-        cur &&
-        cur->current_task_id.load(std::memory_order_relaxed) == task->id()) {
-        cur->current_task_id = -1;
-        std::lock_guard<std::mutex> lock(cur->task_name_mutex);
-        cur->current_task_name.clear();
-    }
-
-    co_return;
-}
-
-void ThreadPoolExecutor::submit_task(dstd::SharedPtr<Task> task,
-                                     dstd::SharedPtr<std::any> input,
-                                     TaskOwner* owner,
-                                     common::TaskIndex parent_task_id) {
-    // Register in task registry
-    {
-        std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-
-        auto [it, inserted] = task_registry_.emplace(
-            std::piecewise_construct, std::forward_as_tuple(task->id()),
-            std::forward_as_tuple());
-
-        if (inserted) {
-            it->second.task_id = task->id();
-            it->second.parent_task_id = parent_task_id;
-            it->second.name = task->name();
-            it->second.state = TaskState::Queued;
-            it->second.queued_at = std::chrono::steady_clock::now();
-            it->second.location = TaskLocation::SharedQueue;
-            it->second.worker_id = static_cast<std::size_t>(-1);
-
-            if (parent_task_id != -1) {
-                auto parent_it = task_registry_.find(parent_task_id);
-                if (parent_it != task_registry_.end()) {
-                    parent_it->second.child_task_ids.push_back(task->id());
-                }
-            }
-        }
-    }
-
-    ++total_tasks_submitted_;
-
-    // Create Coro, set executor on promise, enqueue released handle
-    auto coro = run_task(std::move(task), std::move(input), owner);
-    coro.handle().promise().executor = this;
-    post(coro.release());
-}
 
 common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
     coro::detail::Coro coro, dstd::StringView name,
@@ -1209,7 +949,6 @@ common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
         if (inserted) {
             auto now = std::chrono::steady_clock::now();
             it->second.task_id = id;
-            it->second.parent_task_id = -1;
             it->second.name.assign(name.data(), name.size());
             it->second.state = TaskState::Queued;
             it->second.queued_at = now;

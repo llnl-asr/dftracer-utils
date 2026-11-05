@@ -460,15 +460,16 @@ auto run_on_pool(const char* name, const RuntimeArgs& runtime,
                  std::chrono::seconds(watchdog.task_timeout),
                  std::chrono::seconds(watchdog.warning_threshold));
     dog.set_executor(rt.executor());
-    dog.set_timeout_callback([&](const auto& why) {
-        DFTRACER_UTILS_LOG_ERROR("Watchdog timeout: %s", why.c_str());
+    dog.set_timeout_callback([&](dstd::StringView why) {
         reason.assign(why.data(), why.size());
+        DFTRACER_UTILS_LOG_ERROR("Watchdog timeout: %s", reason.c_str());
         source.request_stop(rt.executor());
     });
     dog.set_warning_callback(
-        [](const auto& task_name, std::int64_t elapsed_ms) {
-            DFTRACER_UTILS_LOG_WARN("Long-running task: %s (%lld ms)",
-                                    task_name.c_str(),
+        [](dstd::StringView task_name, std::int64_t elapsed_ms) {
+            DFTRACER_UTILS_LOG_WARN("Long-running task: %.*s (%lld ms)",
+                                    static_cast<int>(task_name.size()),
+                                    task_name.data(),
                                     static_cast<long long>(elapsed_ms));
         });
     dog.mark_execution_start();
@@ -632,10 +633,9 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     std::size_t checkpoint_size = 0) {
     if (!directory.empty()) {
         utilities::filesystem::PatternDirectoryScannerUtility scanner;
-        auto scanned = co_await scanner(
-            ctx,
-            utilities::filesystem::PatternDirectoryScannerUtilityInput{
-                directory, utilities::filesystem::trace_file_patterns(), true});
+        utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
+            directory, utilities::filesystem::trace_file_patterns(), true};
+        auto scanned = co_await scanner(ctx, scan_input);
         entries->assign(std::make_move_iterator(scanned.begin()),
                         std::make_move_iterator(scanned.end()));
     } else {

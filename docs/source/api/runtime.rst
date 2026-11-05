@@ -5,7 +5,7 @@ Runtime Module
 
 The ``Runtime`` is a handle to the process runtime, the one thread pool that
 every part of the library runs on. It runs coroutines and Python callables
-over the C++ ``Executor`` without Pipeline/DAG overhead. Making a ``Runtime``
+over the C++ ``Executor`` without task-graph overhead. Making a ``Runtime``
 configures the process runtime in place; it runs until the process exits.
 
 Runtime Class

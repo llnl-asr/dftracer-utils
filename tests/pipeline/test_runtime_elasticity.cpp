@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
-// Every pipeline runs on the one process runtime. An explicit
-// with_elastic()/with_eager() sets the mode of its pool, a pipeline that sets
-// none keeps it, and DFTRACER_UTILS_ELASTIC decides the mode of a new runtime.
-// The observable is the live worker count.
+// Every task runs on the one process runtime. An explicit eager or elastic
+// setting sets the mode of its pool, a configure that sets none keeps it, and
+// DFTRACER_UTILS_ELASTIC decides the mode of a new runtime. The observable is
+// the live worker count.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/platform_compat.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
@@ -50,8 +48,8 @@ class ElasticEnv {
     std::string prev_;
 };
 
-std::size_t live_workers(const Pipeline& p) {
-    return p.runtime().progress().workers.size();
+std::size_t live_workers() {
+    return default_runtime().progress().workers.size();
 }
 
 // An eager pool starts at its full compute width. Nothing clamps that to the
@@ -66,15 +64,11 @@ std::size_t eager_full_width() {
 #endif
 }
 
-PipelineConfig base() {
-    return PipelineConfig().with_compute_threads(THREADS).with_watchdog(false);
-}
-
 // Waits up to five seconds for the pool to reach `want` live workers.
-bool settles_at(const Pipeline& p, std::size_t want) {
+bool settles_at(std::size_t want) {
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (live_workers(p) != want) {
+    while (live_workers() != want) {
         if (std::chrono::steady_clock::now() > deadline) return false;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
@@ -82,14 +76,14 @@ bool settles_at(const Pipeline& p, std::size_t want) {
 }
 
 // In a fork child, which makes its own runtime: the live workers of the first
-// pipeline under `env`, as the exit status.
-std::size_t first_pipeline_workers(const char* env) {
+// configure under `env`, as the exit status.
+std::size_t first_runtime_workers(const char* env) {
     const pid_t child = ::fork();
     REQUIRE(child >= 0);
     if (child == 0) {
         ElasticEnv set(env);
-        Pipeline p(base());
-        ::_exit(static_cast<int>(live_workers(p)));
+        configure_default_runtime({.threads = THREADS});
+        ::_exit(static_cast<int>(live_workers()));
     }
     int status = 0;
     REQUIRE(::waitpid(child, &status, 0) == child);
@@ -99,19 +93,19 @@ std::size_t first_pipeline_workers(const char* env) {
 
 }  // namespace
 
-TEST_SUITE("PipelineElasticity") {
-    TEST_CASE("with_eager runs the full width and unset keeps it") {
-        Pipeline eager(base().with_eager());
-        CHECK(live_workers(eager) == eager_full_width());
-        Pipeline unset(base());
-        CHECK(live_workers(unset) == eager_full_width());
+TEST_SUITE("RuntimeElasticity") {
+    TEST_CASE("eager runs the full width and unset keeps it") {
+        configure_default_runtime({.threads = THREADS, .eager = true});
+        CHECK(live_workers() == eager_full_width());
+        configure_default_runtime({.threads = THREADS});
+        CHECK(live_workers() == eager_full_width());
     }
 
-    TEST_CASE("with_elastic lets an eager pool settle at its floor") {
-        Pipeline eager(base().with_eager());
-        REQUIRE(live_workers(eager) == eager_full_width());
-        Pipeline elastic(base().with_elastic());
-        CHECK(settles_at(elastic, 1));
+    TEST_CASE("elastic lets an eager pool settle at its floor") {
+        configure_default_runtime({.threads = THREADS, .eager = true});
+        REQUIRE(live_workers() == eager_full_width());
+        configure_default_runtime({.threads = THREADS, .eager = false});
+        CHECK(settles_at(1));
     }
 
     TEST_CASE("the env decides the mode of a new runtime") {
@@ -121,7 +115,7 @@ TEST_SUITE("PipelineElasticity") {
         MESSAGE("not run under ThreadSanitizer");
         return;
 #endif
-        CHECK(first_pipeline_workers("0") == eager_full_width());
-        CHECK(first_pipeline_workers("1") == 1);
+        CHECK(first_runtime_workers("0") == eager_full_width());
+        CHECK(first_runtime_workers("1") == 1);
     }
 }

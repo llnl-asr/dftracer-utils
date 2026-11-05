@@ -128,12 +128,8 @@ set(DFTRACER_UTILS_CORO_SOURCES
 # -----------------------------------------
 
 set(DFTRACER_UTILS_RUNTIME_SOURCES
-    # Pipeline - New Architecture
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/tasks/error.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/pipeline/pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/thread_pool_executor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/task_executor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/pipeline/scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/watchdog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/runtime.cpp
     # Coro task ABI bridge
@@ -147,9 +143,6 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_backend_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_backend_sync.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_completion_thread.cpp
-    # Tasks
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/tasks/task.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/tasks/task_result.cpp
 )
 
 # Conditionally add io_uring backend sources

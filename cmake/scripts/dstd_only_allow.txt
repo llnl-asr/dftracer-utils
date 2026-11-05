@@ -50,14 +50,6 @@ benchmarks/heap_bench.cpp | thread, vector | scaffolding must not allocate from 
 benchmarks/memory_attribution_bench.cpp | vector | memory::detail::PoolStats is below dstd
 tests/runtime/test_task_pool.cpp | set, thread, vector | a dstd container or thread would charge the pool under test
 
-# The Task, TaskGraph and Pipeline APIs still take std::any and std::vector.
-include/dftracer/utils/runtime/scheduler/task_executor.h | any | Task API
-src/dftracer/utils/runtime/scheduler/thread_pool_executor.h | any | Task API
-src/dftracer/utils/runtime/scheduler/thread_pool_executor.cpp | any | Task API
-tests/coro/test_channel.cpp | vector | Pipeline::set_source takes std::vector
-tests/coro/test_coro_syntax.cpp | any, any_cast | the Task API passes std::any
-src/dftracer/utils/runtime/scheduler/watchdog.h | function, string | the pipeline callbacks take std::string
-src/dftracer/utils/runtime/scheduler/watchdog.cpp | string | the pipeline callbacks take std::string
 
 # Edges to a library that takes std types.
 src/dftracer/utils/index/record_schema.cpp | string | yaml-cpp converts to std::string

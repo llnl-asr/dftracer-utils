@@ -4,7 +4,7 @@ Coroutine caveats
 =================
 
 The async core of dftracer-utils is built on C++20 coroutines: ``CoroTask``,
-channels, ``when_all`` / ``when_any``, and the ``CoroScope`` runtime. Coroutines
+channels, ``when_all`` / ``when_any``, and the ``coro::Scope`` runtime. Coroutines
 are what make the runtime and the plugin engine read like
 straight-line code while running concurrently. They also come with lifetime
 rules and compiler bugs that are easy to trip over and hard to debug, because
@@ -102,7 +102,7 @@ coroutine:
    }
 
    // The spawned lambda is trivial: it only forwards.
-   scope.spawn([params](CoroScope&) -> CoroTask<void> {
+   scope.spawn([params]() -> CoroTask<void> {
        co_await process_group(params);
    });
 
@@ -156,11 +156,11 @@ So a lambda inside a ``co_await`` expression may capture only ``&``, ``&name`` o
 .. code-block:: cpp
 
    // Wrong: the by-value capture is destroyed twice on GCC 12.1.
-   co_await ctx.scope([files](CoroScope& scope) -> CoroTask<void> { ... });
+   co_await coro::with_scope([files](coro::Scope& scope) -> CoroTask<void> { ... });
 
    // Right: the lambda is a named local.
-   auto run_scope = [files](CoroScope& scope) -> CoroTask<void> { ... };
-   co_await ctx.scope(run_scope);
+   auto run_scope = [files](coro::Scope& scope) -> CoroTask<void> { ... };
+   co_await coro::with_scope(run_scope);
 
 The bodies of lambdas inside the expression are not part of it, and a
 ``co_await`` in such a body is checked as its own expression. The ``coro_lambdas``
@@ -229,12 +229,11 @@ Join and cancel rules
 
 Two rules keep a child coroutine from outliving the frame that it points into:
 
-#. **A scope is joined by construction.** The ``CoroScope`` constructor is
-   private. Only ``run_coro_scope``, ``with_scope``, the runtime's scope and a
-   scope's own child spawns make one, and a scope that is destroyed without a
-   join calls ``std::terminate``. A scope that lives across many calls (the
-   gzip writer, the padded striped writer) is made through
-   ``CoroScope::long_lived`` and must be joined before its owner closes.
+#. **A scope is joined.** A ``coro::Scope`` that spawned and is destroyed
+   without ``co_await scope.join()`` calls ``std::terminate``.
+   ``coro::with_scope`` joins also when its body raises, so use it in code that
+   can raise between a spawn and the join.
+   A scope that lives across many calls (such as the gzip line writer's) is a member of its owner, and the owner joins it before it closes.
 #. **``when_any`` waits for its losers.** It cancels the losers and awaits them
    before it returns, so no loser outlives the parent. The cancel token is
    cooperative: ``when_any`` returns as late as the slowest loser takes to see

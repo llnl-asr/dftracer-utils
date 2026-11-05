@@ -8,11 +8,7 @@
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/pipeline/scheduler.h>
-#include <dftracer/utils/runtime/scheduler/task_executor.h>
-#include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
@@ -72,14 +68,8 @@ struct CancelledAtOnce {
 
 template <typename Body>
 void run_on_pool(Body& body) {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
-    Scheduler scheduler(&executor);
-    auto task =
-        make_task([&body](CoroScope&) -> CoroTask<void> { co_await body(); },
-                  "WhenAllVector");
-    scheduler.schedule(task);
-    task->wait();
-    executor.shutdown();
+    Runtime rt(4);
+    rt.block_on(body());
 }
 
 }  // namespace

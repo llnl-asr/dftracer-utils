@@ -188,7 +188,6 @@ dftracer/utils/runtime/io/backend_type.h
 dftracer/utils/runtime/runtime.h
 dftracer/utils/runtime/scheduler/task_executor.h
 dftracer/utils/runtime/task_handle.h
-dftracer/utils/runtime/tasks/coro_scope.h
 dftracer/utils/trace/args_map.h
 dftracer/utils/trace/time_metric.h
 dftracer/utils/trace/trace_config.h

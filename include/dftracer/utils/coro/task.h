@@ -29,10 +29,6 @@
 #include <type_traits>
 #include <utility>
 
-namespace dftracer::utils {
-class Scheduler;
-}  // namespace dftracer::utils
-
 namespace dftracer::utils::coro {
 
 class Executor;
@@ -104,8 +100,6 @@ struct PromiseBase : detail::FrameAllocation {
     /// the child's final suspend; the second one continues the awaiter.
     std::atomic<bool> handoff{false};
     std::coroutine_handle<> continuation{nullptr};
-    common::TaskIndex awaited_task_id{-1};
-    Scheduler* scheduler{nullptr};
     Executor* executor{nullptr};
     /// The executor the awaiter runs on. A task that ends elsewhere posts the
     /// awaiter back to it instead of resuming it on this thread.
@@ -133,7 +127,6 @@ struct PromiseBase : detail::FrameAllocation {
     std::uint_least32_t trace_line{0};
 #endif
 
-    void set_scheduler(Scheduler* s) { scheduler = s; }
     void set_executor(Executor* e) { executor = e; }
     Executor* get_executor() const { return executor; }
     void set_root_promise(PromiseBase* p) { root_promise = p; }
@@ -689,7 +682,7 @@ class CoroTask {
      * @return @ref CoroTask holding a tuple of both results
      *
      * Note: In the current synchronous execution model, these run sequentially.
-     * For true parallel execution, use CoroScope::spawn().
+     * For true parallel execution, use @ref Scope::spawn.
      *
      * Usage:
      * @code

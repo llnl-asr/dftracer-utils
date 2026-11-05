@@ -704,7 +704,12 @@ def generate(xml_dir: Path, output_dir: Path) -> None:
     repo_url = detect_repo_url(repo_root)
     source_ref = detect_source_ref(repo_root)
     items = parse_doxygen_xml(xml_dir)
-    functions = parse_namespace_functions(xml_dir)
+    # A deduction guide is listed as a function with the name of its class,
+    # and the class entry already covers it.
+    class_names = {i.name for i in items}
+    functions = [
+        f for f in parse_namespace_functions(xml_dir) if f.name not in class_names
+    ]
     items.extend(functions)
     print(
         f"  Found {len(items)} public API items "

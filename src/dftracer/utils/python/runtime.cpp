@@ -112,35 +112,12 @@ static PyObject *build_task_progress(const dftracer::utils::TaskProgress &tp) {
     if (!set_str(td, "name", tp.name) || !set_str(td, "state", state) ||
         !set_double(td, "queued_duration_ms", tp.queued_duration_ms) ||
         !set_double(td, "execution_duration_ms", tp.execution_duration_ms) ||
-        !set_size(td, "total_subtasks", tp.total_subtasks) ||
-        !set_size(td, "completed_subtasks", tp.completed_subtasks) ||
         !set_double(td, "progress_pct", tp.progress_percentage) ||
         !set_str(td, "location", location)) {
         Py_DECREF(td);
         return NULL;
     }
 
-    PyObject *children =
-        PyList_New(static_cast<Py_ssize_t>(tp.children.size()));
-    if (!children) {
-        Py_DECREF(td);
-        return NULL;
-    }
-    for (std::size_t i = 0; i < tp.children.size(); ++i) {
-        PyObject *child = build_task_progress(tp.children[i]);
-        if (!child) {
-            Py_DECREF(children);
-            Py_DECREF(td);
-            return NULL;
-        }
-        PyList_SET_ITEM(children, static_cast<Py_ssize_t>(i), child);
-    }
-    if (PyDict_SetItemString(td, "children", children) < 0) {
-        Py_DECREF(children);
-        Py_DECREF(td);
-        return NULL;
-    }
-    Py_DECREF(children);
     return td;
 }
 

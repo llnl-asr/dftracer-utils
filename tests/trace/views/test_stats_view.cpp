@@ -6,7 +6,6 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/statistics/stats_view.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>

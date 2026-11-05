@@ -144,7 +144,6 @@ COMPONENT_GROUPS = [
             "dftracer::utils::TypedTaskHandle",
             "dftracer::utils::TaskInfo",
             "dftracer::utils::TaskProgress",
-            "dftracer::utils::CoroScope",
             "dftracer::utils::TimerService",
             "dftracer::utils::ShardedMutex",
             "dftracer::utils::BufferPool",
@@ -257,7 +256,7 @@ def generate_collaboration(
     """classDiagram of a group's inheritance + composition edges.
 
     Edges to types outside the group are kept and the target drawn as a greyed
-    leaf, so cross-layer relationships (e.g. TaskGraph holding a core Task) show.
+    leaf, so cross-layer relationships (e.g. a Channel holding a coro Task) show.
     Only classes touched by an edge are drawn; returns None when the group has
     no relationships worth a diagram, or when its external fan-out is too broad.
     """

@@ -20,7 +20,6 @@
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 
-#include <any>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -32,11 +31,8 @@
 
 namespace dftracer::utils {
 
-class Task;
-
-/// Executes queued coroutine work on a pool of worker threads, notifying the
-/// scheduler that submitted each task when it ends. Pool size defaults to
-/// hardware_concurrency.
+/// Executes queued coroutine work on a pool of worker threads. Pool size
+/// defaults to hardware_concurrency.
 class ThreadPoolExecutor final : public TaskExecutor {
    private:
     // Aligned to avoid false sharing between adjacent workers.
@@ -325,12 +321,6 @@ class ThreadPoolExecutor final : public TaskExecutor {
     void mark_coro_failed(common::TaskIndex id,
                           dstd::StringView message) override;
 
-    /// Submit a DAG task for execution. parent_task_id tracks the parent, or
-    /// -1 for a root task.
-    void submit_task(dstd::SharedPtr<Task> task,
-                     dstd::SharedPtr<std::any> input, TaskOwner* owner,
-                     common::TaskIndex parent_task_id = -1) override;
-
     common::TaskIndex current_worker_task_id() const override;
 
     bool drive_until(dstd::FunctionRef<bool()> done) override;
@@ -350,9 +340,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
      */
     void monitor_loop();
 
-    TaskProgress build_task_progress_tree(
-        common::TaskIndex task_id,
-        dstd::HashSet<common::TaskIndex>& processed) const;
+    TaskProgress task_progress_of(const TaskInfo& info) const;
 
     void signal_global_work();
 
@@ -374,13 +362,6 @@ class ThreadPoolExecutor final : public TaskExecutor {
     void wake_one_worker();
 
     void wake_all_workers();
-
-    /// Create a Coro that executes a Task with full bookkeeping. The returned
-    /// Coro is at initial_suspend: the caller must set the executor on the
-    /// promise and enqueue via release().
-    coro::detail::Coro run_task(dstd::SharedPtr<Task> task,
-                                dstd::SharedPtr<std::any> input,
-                                TaskOwner* owner);
 
     /// The completion hook a tracked coro's promise calls.
     static void on_tracked_task_complete(void* owner,

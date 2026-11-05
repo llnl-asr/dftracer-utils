@@ -38,14 +38,14 @@ class Watchdog {
      * Callback when timeout is detected
      * Parameters: reason (string describing what timed out)
      */
-    using TimeoutCallback = std::function<void(const std::string& reason)>;
+    using TimeoutCallback = dstd::Function<void(dstd::StringView reason)>;
 
     /**
      * Callback for warnings about long-running tasks
      * Parameters: task name, elapsed time in milliseconds
      */
     using WarningCallback =
-        std::function<void(const std::string& task_name, int64_t elapsed_ms)>;
+        dstd::Function<void(dstd::StringView task_name, int64_t elapsed_ms)>;
 
     /**
      * Information about an active task execution

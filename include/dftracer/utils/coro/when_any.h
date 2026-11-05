@@ -101,8 +101,8 @@ struct WhenAnyResult {
 
     /**
      * Helper to request cancellation on all remaining futures
-     * This is cooperative cancellation - tasks must check
-     * ctx.is_cancellation_requested()
+     * This is cooperative cancellation - a @ref Scope child ends cancelled at
+     * its next wait
      */
     void cancel_remaining() const {
         for (auto& token : remaining_cancellation_tokens) {

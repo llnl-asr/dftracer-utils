@@ -1,11 +1,11 @@
-:description: Why the core is built on C++20 coroutines instead of threads or callbacks, and how CoroTask, CoroScope, the io backend, and Runtime fit together.
+:description: Why the core is built on C++20 coroutines instead of threads or callbacks, and how CoroTask, Scope, the io backend, and Runtime fit together.
 
 Async runtime
 =============
 
 What this explains: why ``dftracer_utils_runtime`` is built on C++20 coroutines
 instead of a thread-per-request or callback model, and how the pieces
-(``CoroTask``, ``CoroScope``, the io backend, ``Runtime``/``Executor``) fit
+(``CoroTask``, ``Scope``, the io backend, ``Runtime``/``Executor``) fit
 together.
 
 Why coroutines, not blocking threads
@@ -45,20 +45,24 @@ and ``coro/async_mutex.h`` / ``async_generator.h`` round out the
 primitives a coroutine-based pipeline needs that a plain thread-based one
 would reach for a blocking mutex or an iterator to get.
 
-``CoroScope``: structured concurrency
+``Scope``: structured concurrency
 ----------------------------------------
 
 A bare ``CoroTask`` has no notion of "who owns this work" beyond its caller.
-``CoroScope`` (``runtime/tasks/coro_scope.h``) is the context object task lambdas
-receive; it is what makes concurrency structured rather than fire-and-forget
-by default:
+``coro::Scope`` (``coro/scope.h``) is the object that owns a group of child tasks.
+``coro::with_scope(fn)`` makes one, passes it to ``fn`` and always joins it.
+This is what makes concurrency structured rather than fire-and-forget:
 
-- ``scope.spawn(...)`` launches a child coroutine and returns a
-  ``SpawnFuture<T>`` - ignore it for fire-and-forget, or ``co_await`` it to
-  join that specific child.
+- ``scope.spawn(...)`` starts a child coroutine that the scope joins.
+  ``scope.spawn_future(...)`` returns a ``SpawnFuture<T>``, which you can
+  ``co_await`` to join that specific child.
+- ``co_await scope.join()`` waits for every child and raises the first error of a
+  ``spawn`` child.
+  A scope that spawned and is destroyed without a join ends the process.
+  ``with_scope`` joins also when its body raises.
 - ``dftracer::utils::io::read``/``write``/``open``/``close``
   are the async I/O surface: free functions that submit to the executor's io
-  backend and suspend, rather than blocking. They need no ``CoroScope``
+  backend and suspend, rather than blocking. They need no ``Scope``
   argument - inside an executor worker they suspend on the configured
   backend; outside one they fall back to a blocking syscall.
 - Cancellation propagates through the scope, so a cancelled parent can stop

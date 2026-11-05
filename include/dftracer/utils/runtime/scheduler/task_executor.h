@@ -13,7 +13,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/backend_type.h>
 
-#include <any>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -26,23 +25,6 @@ namespace dftracer::utils {
 namespace io {
 class IoBackend;
 }  // namespace io
-
-class Task;
-
-/// Who submitted a task to a @ref TaskExecutor and hears when it ends. Several
-/// owners share one executor.
-class TaskOwner {
-   public:
-    /// Called once per submitted task, from the worker that ends it. The
-    /// executor does not touch the owner after this returns.
-    virtual void finish_task(dstd::SharedPtr<Task> task) noexcept = 0;
-    /// True once the owner stopped: a task of it that has not started does
-    /// not run.
-    virtual bool is_stopping() const noexcept = 0;
-
-   protected:
-    ~TaskOwner() = default;
-};
 
 struct ExecutorConfig {
     std::size_t thread_count =
@@ -86,7 +68,6 @@ dstd::StringView task_state_name(TaskState state) noexcept;
 
 struct TaskInfo {
     common::TaskIndex task_id;
-    common::TaskIndex parent_task_id;  ///< -1 for root tasks
     dstd::String name;
     std::size_t worker_id;
 
@@ -95,9 +76,6 @@ struct TaskInfo {
     std::chrono::steady_clock::time_point queued_at;
     std::chrono::steady_clock::time_point started_at;
     std::chrono::steady_clock::time_point completed_at;
-
-    dstd::Vector<common::TaskIndex> child_task_ids;
-    std::atomic<std::size_t> completed_children{0};
 
     dstd::String error_message;
 
@@ -111,11 +89,7 @@ struct TaskProgress {
     double queued_duration_ms;
     double execution_duration_ms;
 
-    std::size_t total_subtasks;
-    std::size_t completed_subtasks;
     double progress_percentage;  ///< 0-100
-
-    dstd::Vector<TaskProgress> children;
 
     std::int32_t worker;  ///< Worker of a LocalQueue or Executing task, else -1
     TaskState state;
@@ -191,13 +165,6 @@ class TaskExecutor : public coro::Executor {
     /// @ref coro::Executor::drive_until.
     bool drive_until(dstd::FunctionRef<bool()> done) override = 0;
 
-    /// Runs `task` and then calls `owner->finish_task(task)`, once, from the
-    /// worker that ends it, so `owner` must outlive the task. A task whose
-    /// owner is stopping before it starts does not run. It ends with an
-    /// Interrupted error, as does a queued task that shutdown() destroys.
-    virtual void submit_task(dstd::SharedPtr<Task> task,
-                             dstd::SharedPtr<std::any> input, TaskOwner* owner,
-                             common::TaskIndex parent_task_id = -1) = 0;
     virtual common::TaskIndex enqueue_tracked(
         coro::detail::Coro coro, dstd::StringView name,
         dstd::SharedPtr<std::atomic<common::TaskIndex>> tid_out = nullptr) = 0;

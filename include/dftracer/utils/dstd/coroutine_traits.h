@@ -135,7 +135,7 @@ using awaitable_result_type_t = typename AwaitableResultType<T>::type;
 // ============================================================================
 // Type trait: UnwrapCoroTask
 // Unwrap coro::CoroTask<T> to T, otherwise return as-is
-// Useful for type deduction in make_task()
+// Useful for type deduction in generic task wrappers
 // ============================================================================
 
 template <typename T>

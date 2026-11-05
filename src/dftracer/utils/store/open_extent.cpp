@@ -6,7 +6,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/spawn_detached.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/open_extent.h>

@@ -5,10 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/runtime/pipeline/scheduler.h>
-#include <dftracer/utils/runtime/scheduler/task_executor.h>
-#include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
-#include <dftracer/utils/runtime/tasks/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -45,31 +42,25 @@ TEST_CASE("TraceIndex - discovers .pfw.gz files") {
     REQUIRE(!file1.empty());
     REQUIRE(!file2.empty());
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> success{false};
     std::size_t file_count = 0;
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-            co_await index.initialize();
+    auto body = [&]() -> coro::CoroTask<void> {
+        TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
+        co_await index.initialize();
 
-            file_count = index.file_count();
-            if (file_count >= 2) {
-                success.store(true);
-            }
-            co_return;
-        },
-        "TraceIndexDiscovery");
+        file_count = index.file_count();
+        if (file_count >= 2) {
+            success.store(true);
+        }
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
     CHECK(file_count >= 2);
-
-    executor.shutdown();
 }
 
 TEST_CASE("TraceIndex - find_file by path") {
@@ -79,32 +70,26 @@ TEST_CASE("TraceIndex - find_file by path") {
     auto file = create_pfw_gz(env, 50, 1);
     REQUIRE(!file.empty());
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> found{false};
     dstd::String found_path;
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-            co_await index.initialize();
+    auto body = [&]() -> coro::CoroTask<void> {
+        TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
+        co_await index.initialize();
 
-            auto* info = index.find_file(dstd::String(file));
-            if (info != nullptr) {
-                found.store(true);
-                found_path = info->path;
-            }
-            co_return;
-        },
-        "TraceIndexFindFile");
+        auto* info = index.find_file(dstd::String(file));
+        if (info != nullptr) {
+            found.store(true);
+            found_path = info->path;
+        }
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(found.load());
     CHECK(found_path == file);
-
-    executor.shutdown();
 }
 
 TEST_CASE("TraceIndex - find_file returns nullptr for missing file") {
@@ -114,29 +99,23 @@ TEST_CASE("TraceIndex - find_file returns nullptr for missing file") {
     auto file = create_pfw_gz(env, 50, 1);
     REQUIRE(!file.empty());
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> is_null{false};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-            co_await index.initialize();
+    auto body = [&]() -> coro::CoroTask<void> {
+        TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
+        co_await index.initialize();
 
-            auto* info = index.find_file("/nonexistent/path.pfw.gz");
-            if (info == nullptr) {
-                is_null.store(true);
-            }
-            co_return;
-        },
-        "TraceIndexNotFound");
+        auto* info = index.find_file("/nonexistent/path.pfw.gz");
+        if (info == nullptr) {
+            is_null.store(true);
+        }
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(is_null.load());
-
-    executor.shutdown();
 }
 
 TEST_CASE("TraceIndex - file_at by index") {
@@ -146,60 +125,49 @@ TEST_CASE("TraceIndex - file_at by index") {
     auto file = create_pfw_gz(env, 50, 1);
     REQUIRE(!file.empty());
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> success{false};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-            co_await index.initialize();
+    auto body = [&]() -> coro::CoroTask<void> {
+        TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
+        co_await index.initialize();
 
-            REQUIRE(index.file_count() >= 1);
-            auto* info = index.file_at(0);
-            if (info != nullptr && !info->path.empty()) {
-                success.store(true);
-            }
+        REQUIRE(index.file_count() >= 1);
+        auto* info = index.file_at(0);
+        if (info != nullptr && !info->path.empty()) {
+            success.store(true);
+        }
 
-            // Out of range returns nullptr
-            auto* bad = index.file_at(999);
-            REQUIRE(bad == nullptr);
-            co_return;
-        },
-        "TraceIndexFileAt");
+        // Out of range returns nullptr
+        auto* bad = index.file_at(999);
+        REQUIRE(bad == nullptr);
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
-
-    executor.shutdown();
 }
 
 TEST_CASE("TraceIndex - empty directory") {
     auto dir = dftu_utils_test::make_unique_test_path("trace_index_empty");
     REQUIRE(dstd::fs::create_directories(dir).has_value());
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<std::size_t> count{999};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dstd::String(dir.str()), dstd::String(dir.str()));
-            co_await index.initialize();
+    auto body = [&]() -> coro::CoroTask<void> {
+        TraceIndex index(dstd::String(dir.str()), dstd::String(dir.str()));
+        co_await index.initialize();
 
-            count.store(index.file_count());
-            co_return;
-        },
-        "TraceIndexEmpty");
+        count.store(index.file_count());
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(count.load() == 0);
 
-    executor.shutdown();
     (void)dstd::fs::remove_all(dir);
 }
 
@@ -228,23 +196,18 @@ TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
                                           o)
         .build();
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
     dstd::String schema, app, nodes;
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-            co_await index.initialize();
-            schema = index.record_schema().id;
-            app = index.resolve("runs", "run", "app", "ab");
-            nodes = index.resolve("runs", "run", "nodes", "ab");
-            co_return;
-        },
-        "TraceIndexGenesis");
-    scheduler.schedule(task);
-    task->wait();
+    auto body = [&]() -> coro::CoroTask<void> {
+        TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
+        co_await index.initialize();
+        schema = index.record_schema().id;
+        app = index.resolve("runs", "run", "app", "ab");
+        nodes = index.resolve("runs", "run", "nodes", "ab");
+        co_return;
+    };
+    rt.block_on(body());
     CHECK(schema == "genesis");
     CHECK(app == "laghos");
     CHECK(nodes == "4");
-    executor.shutdown();
 }

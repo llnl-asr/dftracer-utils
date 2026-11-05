@@ -13,7 +13,6 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>

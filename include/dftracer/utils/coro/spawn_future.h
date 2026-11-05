@@ -95,15 +95,15 @@ struct SharedState {
     }
 };
 
-/// Future returned by CoroScope::spawn() for both void and typed coroutines
-/// (await_resume yields void when T is void).
+/// Future returned by @ref Scope::spawn_future for both void and typed
+/// coroutines (await_resume yields void when T is void).
 ///
 /// Awaitable: co_await on a SpawnFuture<T> suspends the caller until
 /// the spawned coroutine completes, then returns the typed result.
 ///
 /// Usage:
 /// @code
-/// SpawnFuture<int> future = scope.spawn([](CoroScope& s) -> CoroTask<int> {
+/// SpawnFuture<int> future = scope.spawn_future([]() -> CoroTask<int> {
 ///     co_return 42;
 /// });
 /// int result = co_await future;  // suspends until spawn completes
@@ -191,8 +191,7 @@ class SpawnFuture {
     bool is_done() const { return state_->is_done(); }
 
     /// Asks the spawned coroutine to stop. A @ref Scope child ends cancelled
-    /// at its next wait, and a CoroScope child sees it through
-    /// CoroScope::is_cancellation_requested(). Thread-safe, idempotent.
+    /// at its next wait. Thread-safe, idempotent.
     void cancel() noexcept {
         if (!state_) return;
         state_->cancel_flag.store(true, std::memory_order_release);

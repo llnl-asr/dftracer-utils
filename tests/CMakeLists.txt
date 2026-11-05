@@ -215,9 +215,6 @@ endif()
 add_test(NAME naming COMMAND sh ${CMAKE_SOURCE_DIR}/scripts/check_naming.sh
                              ${CMAKE_SOURCE_DIR} ${CMAKE_BINARY_DIR})
 set_tests_properties(naming PROPERTIES SKIP_RETURN_CODE 77)
-add_test(NAME long_lived_scopes
-         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
-                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_long_lived_scopes.cmake)
 add_test(NAME single_runtime
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_single_runtime.cmake)
@@ -315,14 +312,10 @@ set(TEST_CPP_SOURCES
     common/test_str_format.cpp
     common/test_hw_concurrency.cpp
     # Pipeline tests
-    pipeline/test_pipeline.cpp
 
-    pipeline/test_task_scope.cpp
     pipeline/test_dynamic_workers.cpp
-    pipeline/test_pipeline_elasticity.cpp
+    pipeline/test_runtime_elasticity.cpp
     pipeline/test_blocking_handoff.cpp
-    pipeline/test_simple_scope.cpp
-    pipeline/test_coro_scope.cpp
     pipeline/test_run_loop.cpp
     # Coroutine tests
     test_testing_utilities.cpp
@@ -353,7 +346,6 @@ set(TEST_CPP_SOURCES
     # Async I/O tests
     io/test_async_io.cpp
     # Task Graph tests
-    task_graph/test_task_graph.cpp
     # Reader tests
     reader/test_reader.cpp
     reader/test_reader_stream.cpp
@@ -497,8 +489,6 @@ foreach(test_file ${TEST_CPP_SOURCES})
   # These thread-heavy tests contend heavily when run together on low-core CI.
   # Give them extra timeout and serialize via a shared lock.
   if(bin_exec STREQUAL "runtime/test_runtime"
-     OR bin_exec STREQUAL "pipeline/test_task_scope"
-     OR bin_exec STREQUAL "pipeline/test_pipeline"
      OR bin_exec STREQUAL "coro/test_channel"
      OR bin_exec STREQUAL "coro/test_channel_queue")
     set(heavy_thread_timeout 180)

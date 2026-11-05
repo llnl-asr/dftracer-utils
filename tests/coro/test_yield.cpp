@@ -5,12 +5,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/scheduler/task_executor.h>
-#include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
@@ -27,22 +22,17 @@ TEST_CASE("Yield - Executor::current() is nullptr outside worker") {
 }
 
 TEST_CASE("Yield - Executor::current() is set inside worker task") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 1});
-    Scheduler scheduler(&executor);
+    Runtime rt(1);
 
     std::atomic<coro::Executor*> observed{nullptr};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            observed.store(coro::Executor::current());
-            co_return;
-        },
-        "CheckCurrent");
+    auto body = [&]() -> coro::CoroTask<void> {
+        observed.store(coro::Executor::current());
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
-    CHECK(observed.load() == &executor);
-    executor.shutdown();
+    rt.block_on(body());
+    CHECK(observed.load() == rt.executor());
 }
 
 // ============================================================================
@@ -50,25 +40,20 @@ TEST_CASE("Yield - Executor::current() is set inside worker task") {
 // ============================================================================
 
 TEST_CASE("Yield - maybe_yield() does not hang with executor") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<int> counter{0};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            for (int i = 0; i < 100; ++i) {
-                counter.fetch_add(1);
-                co_await coro::maybe_yield();
-            }
-            co_return;
-        },
-        "MaybeYieldLoop");
+    auto body = [&]() -> coro::CoroTask<void> {
+        for (int i = 0; i < 100; ++i) {
+            counter.fetch_add(1);
+            co_await coro::maybe_yield();
+        }
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(counter.load() == 100);
-    executor.shutdown();
 }
 
 // ============================================================================
@@ -76,25 +61,20 @@ TEST_CASE("Yield - maybe_yield() does not hang with executor") {
 // ============================================================================
 
 TEST_CASE("Yield - yield() does not hang with executor") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<int> counter{0};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            for (int i = 0; i < 10; ++i) {
-                counter.fetch_add(1);
-                co_await coro::yield();
-            }
-            co_return;
-        },
-        "YieldLoop");
+    auto body = [&]() -> coro::CoroTask<void> {
+        for (int i = 0; i < 10; ++i) {
+            counter.fetch_add(1);
+            co_await coro::yield();
+        }
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(counter.load() == 10);
-    executor.shutdown();
 }
 
 // ============================================================================
@@ -120,41 +100,30 @@ TEST_CASE("Yield - timeslice duration 0 disables yielding") {
 // ============================================================================
 
 TEST_CASE("Yield - Multiple coroutines yielding concurrently") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
-    Scheduler scheduler(&executor);
+    Runtime rt(4);
 
     constexpr int NUM_TASKS = 20;
     constexpr int ITERS_PER_TASK = 50;
     std::atomic<int> total{0};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope(
-                [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                    for (int t = 0; t < NUM_TASKS; ++t) {
-                        scope.spawn([&total]() -> coro::CoroTask<void> {
-                            for (int i = 0; i < ITERS_PER_TASK; ++i) {
-                                total.fetch_add(1);
-                                co_await coro::maybe_yield();
-                            }
-                            co_return;
-                        });
+    rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            for (int t = 0; t < NUM_TASKS; ++t) {
+                scope.spawn([&total]() -> coro::CoroTask<void> {
+                    for (int i = 0; i < ITERS_PER_TASK; ++i) {
+                        total.fetch_add(1);
+                        co_await coro::maybe_yield();
                     }
                     co_return;
                 });
+            }
             co_return;
-        },
-        "ConcurrentYield");
-
-    scheduler.schedule(task);
-    task->wait();
+        }));
     CHECK(total.load() == NUM_TASKS * ITERS_PER_TASK);
-    executor.shutdown();
 }
 
 TEST_CASE("Yield - Forced yield re-enqueues on executor") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     // Two tasks that yield() back and forth.  Each increments a counter.
     // If yield() didn't re-enqueue, one would starve.
@@ -162,35 +131,26 @@ TEST_CASE("Yield - Forced yield re-enqueues on executor") {
     std::atomic<int> a_count{0};
     std::atomic<int> b_count{0};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope(
-                [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                    scope.spawn([&a_count]() -> coro::CoroTask<void> {
-                        for (int i = 0; i < ITERS; ++i) {
-                            a_count.fetch_add(1);
-                            co_await coro::yield();
-                        }
-                        co_return;
-                    });
-                    scope.spawn([&b_count]() -> coro::CoroTask<void> {
-                        for (int i = 0; i < ITERS; ++i) {
-                            b_count.fetch_add(1);
-                            co_await coro::yield();
-                        }
-                        co_return;
-                    });
-                    co_return;
-                });
+    rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            scope.spawn([&a_count]() -> coro::CoroTask<void> {
+                for (int i = 0; i < ITERS; ++i) {
+                    a_count.fetch_add(1);
+                    co_await coro::yield();
+                }
+                co_return;
+            });
+            scope.spawn([&b_count]() -> coro::CoroTask<void> {
+                for (int i = 0; i < ITERS; ++i) {
+                    b_count.fetch_add(1);
+                    co_await coro::yield();
+                }
+                co_return;
+            });
             co_return;
-        },
-        "ForcedYieldPingPong");
-
-    scheduler.schedule(task);
-    task->wait();
+        }));
     CHECK(a_count.load() == ITERS);
     CHECK(b_count.load() == ITERS);
-    executor.shutdown();
 }
 
 TEST_CASE("CoroTask::get on a pool worker sees the finished task's result") {

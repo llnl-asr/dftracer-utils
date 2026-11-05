@@ -4,11 +4,7 @@
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/variant.h>
-#include <dftracer/utils/runtime/pipeline/scheduler.h>
-#include <dftracer/utils/runtime/scheduler/task_executor.h>
-#include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
@@ -16,291 +12,222 @@
 using namespace dftracer::utils;
 
 TEST_CASE("when_any - Two heterogeneous types (int, string)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
-    Scheduler scheduler(&executor);
+    Runtime rt(4);
 
     std::atomic<bool> index_valid{false};
     std::atomic<bool> value_valid{false};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope([&](coro::Scope& scope)
-                                          -> coro::CoroTask<void> {
-                auto f1 = scope.spawn_future(
-                    []() -> coro::CoroTask<int> { co_return 42; });
-                auto f2 =
-                    scope.spawn_future([]() -> coro::CoroTask<dstd::String> {
-                        co_return dstd::String("hello");
-                    });
-
-                auto result =
-                    co_await coro::when_any(std::move(f1), std::move(f2));
-
-                auto* iv = &index_valid;
-                auto* vv = &value_valid;
-
-                iv->store(result.index <= 1, std::memory_order_relaxed);
-
-                if (result.index == 0) {
-                    vv->store(result.get<0>() == 42, std::memory_order_relaxed);
-                } else {
-                    vv->store(result.get<1>() == "hello",
-                              std::memory_order_relaxed);
-                }
-
-                co_return;
+    rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            auto f1 = scope.spawn_future(
+                []() -> coro::CoroTask<int> { co_return 42; });
+            auto f2 = scope.spawn_future([]() -> coro::CoroTask<dstd::String> {
+                co_return dstd::String("hello");
             });
-            co_return;
-        },
-        "HeteroTwoTypes");
 
-    scheduler.schedule(task);
-    task->wait();
+            auto result = co_await coro::when_any(std::move(f1), std::move(f2));
+
+            auto* iv = &index_valid;
+            auto* vv = &value_valid;
+
+            iv->store(result.index <= 1, std::memory_order_relaxed);
+
+            if (result.index == 0) {
+                vv->store(result.get<0>() == 42, std::memory_order_relaxed);
+            } else {
+                vv->store(result.get<1>() == "hello",
+                          std::memory_order_relaxed);
+            }
+
+            co_return;
+        }));
     CHECK(index_valid.load());
     CHECK(value_valid.load());
-    executor.shutdown();
 }
 
 TEST_CASE("when_any - Three heterogeneous types") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
-    Scheduler scheduler(&executor);
+    Runtime rt(4);
 
     std::atomic<bool> index_valid{false};
     std::atomic<bool> type_valid{false};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope(
-                [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                    auto f1 = scope.spawn_future(
-                        []() -> coro::CoroTask<int> { co_return 1; });
-                    auto f2 = scope.spawn_future(
-                        []() -> coro::CoroTask<float> { co_return 2.0f; });
-                    auto f3 = scope.spawn_future(
-                        []() -> coro::CoroTask<dstd::String> {
-                            co_return dstd::String("three");
-                        });
+    rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            auto f1 = scope.spawn_future(
+                []() -> coro::CoroTask<int> { co_return 1; });
+            auto f2 = scope.spawn_future(
+                []() -> coro::CoroTask<float> { co_return 2.0f; });
+            auto f3 = scope.spawn_future([]() -> coro::CoroTask<dstd::String> {
+                co_return dstd::String("three");
+            });
 
-                    auto result = co_await coro::when_any(
-                        std::move(f1), std::move(f2), std::move(f3));
+            auto result = co_await coro::when_any(std::move(f1), std::move(f2),
+                                                  std::move(f3));
 
-                    auto* iv = &index_valid;
-                    auto* tv = &type_valid;
+            auto* iv = &index_valid;
+            auto* tv = &type_valid;
 
-                    iv->store(result.index <= 2, std::memory_order_relaxed);
+            iv->store(result.index <= 2, std::memory_order_relaxed);
 
-                    bool correct_type = false;
-                    switch (result.index) {
-                        case 0:
-                            correct_type = (result.get<0>() == 1);
-                            break;
-                        case 1:
-                            correct_type = (result.get<1>() == 2.0f);
-                            break;
-                        case 2:
-                            correct_type = (result.get<2>() == "three");
-                            break;
-                        default:
-                            break;
-                    }
-                    tv->store(correct_type, std::memory_order_relaxed);
+            bool correct_type = false;
+            switch (result.index) {
+                case 0:
+                    correct_type = (result.get<0>() == 1);
+                    break;
+                case 1:
+                    correct_type = (result.get<1>() == 2.0f);
+                    break;
+                case 2:
+                    correct_type = (result.get<2>() == "three");
+                    break;
+                default:
+                    break;
+            }
+            tv->store(correct_type, std::memory_order_relaxed);
 
-                    co_return;
-                });
             co_return;
-        },
-        "HeteroThreeTypes");
-
-    scheduler.schedule(task);
-    task->wait();
+        }));
     CHECK(index_valid.load());
     CHECK(type_valid.load());
-    executor.shutdown();
 }
 
 TEST_CASE("when_any - Mixed void and non-void") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
-    Scheduler scheduler(&executor);
+    Runtime rt(4);
 
     std::atomic<bool> index_valid{false};
     std::atomic<bool> type_valid{false};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope(
-                [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                    auto f1 = scope.spawn_future(
-                        []() -> coro::CoroTask<void> { co_return; });
-                    auto f2 = scope.spawn_future(
-                        []() -> coro::CoroTask<int> { co_return 99; });
+    rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            auto f1 =
+                scope.spawn_future([]() -> coro::CoroTask<void> { co_return; });
+            auto f2 = scope.spawn_future(
+                []() -> coro::CoroTask<int> { co_return 99; });
 
-                    auto result =
-                        co_await coro::when_any(std::move(f1), std::move(f2));
+            auto result = co_await coro::when_any(std::move(f1), std::move(f2));
 
-                    auto* iv = &index_valid;
-                    auto* tv = &type_valid;
+            auto* iv = &index_valid;
+            auto* tv = &type_valid;
 
-                    iv->store(result.index <= 1, std::memory_order_relaxed);
+            iv->store(result.index <= 1, std::memory_order_relaxed);
 
-                    bool correct_type = false;
-                    if (result.index == 0) {
-                        correct_type = (result.get<0>() == dstd::Monostate{});
-                    } else {
-                        correct_type = (result.get<1>() == 99);
-                    }
-                    tv->store(correct_type, std::memory_order_relaxed);
+            bool correct_type = false;
+            if (result.index == 0) {
+                correct_type = (result.get<0>() == dstd::Monostate{});
+            } else {
+                correct_type = (result.get<1>() == 99);
+            }
+            tv->store(correct_type, std::memory_order_relaxed);
 
-                    co_return;
-                });
             co_return;
-        },
-        "HeteroVoidAndInt");
-
-    scheduler.schedule(task);
-    task->wait();
+        }));
     CHECK(index_valid.load());
     CHECK(type_valid.load());
-    executor.shutdown();
 }
 
 TEST_CASE("when_any - Exception propagation") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
-    Scheduler scheduler(&executor);
+    Runtime rt(4);
 
     std::atomic<bool> handled{false};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope(
-                [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                    auto f1 = scope.spawn_future([]() -> coro::CoroTask<int> {
-                        throw std::runtime_error("boom");
-                        co_return 0;
-                    });
-                    auto f2 = scope.spawn_future(
-                        []() -> coro::CoroTask<dstd::String> {
-                            co_return dstd::String("ok");
-                        });
+    rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            auto f1 = scope.spawn_future([]() -> coro::CoroTask<int> {
+                throw std::runtime_error("boom");
+                co_return 0;
+            });
+            auto f2 = scope.spawn_future([]() -> coro::CoroTask<dstd::String> {
+                co_return dstd::String("ok");
+            });
 
-                    auto* h = &handled;
-                    try {
-                        auto result = co_await coro::when_any(std::move(f1),
-                                                              std::move(f2));
-                        // The int task may have lost the race; string won.
-                        if (result.index == 1) {
-                            h->store(result.get<1>() == "ok",
-                                     std::memory_order_relaxed);
-                        } else {
-                            // Should not reach here without exception
-                            h->store(false, std::memory_order_relaxed);
-                        }
-                    } catch (const std::runtime_error& e) {
-                        // Throwing task won the race
-                        h->store(dstd::String(e.what()) == "boom",
-                                 std::memory_order_relaxed);
-                    }
+            auto* h = &handled;
+            try {
+                auto result =
+                    co_await coro::when_any(std::move(f1), std::move(f2));
+                // The int task may have lost the race; string won.
+                if (result.index == 1) {
+                    h->store(result.get<1>() == "ok",
+                             std::memory_order_relaxed);
+                } else {
+                    // Should not reach here without exception
+                    h->store(false, std::memory_order_relaxed);
+                }
+            } catch (const std::runtime_error& e) {
+                // Throwing task won the race
+                h->store(dstd::String(e.what()) == "boom",
+                         std::memory_order_relaxed);
+            }
 
-                    co_return;
-                });
             co_return;
-        },
-        "HeteroException");
-
-    scheduler.schedule(task);
-    task->wait();
+        }));
     CHECK(handled.load());
-    executor.shutdown();
 }
 
 TEST_CASE("when_any - Index-based get<N>() access") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
-    Scheduler scheduler(&executor);
+    Runtime rt(4);
 
     std::atomic<bool> accessed{false};
     std::atomic<bool> value_correct{false};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope([&](coro::Scope& scope)
-                                          -> coro::CoroTask<void> {
-                auto f1 = scope.spawn_future(
-                    []() -> coro::CoroTask<int> { co_return 42; });
-                auto f2 =
-                    scope.spawn_future([]() -> coro::CoroTask<dstd::String> {
-                        co_return dstd::String("hello");
-                    });
-
-                auto result =
-                    co_await coro::when_any(std::move(f1), std::move(f2));
-
-                auto* acc = &accessed;
-                auto* vc = &value_correct;
-
-                acc->store(true, std::memory_order_relaxed);
-
-                if (result.index == 0) {
-                    vc->store(result.get<0>() == 42, std::memory_order_relaxed);
-                } else {
-                    vc->store(result.get<1>() == "hello",
-                              std::memory_order_relaxed);
-                }
-
-                co_return;
+    rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            auto f1 = scope.spawn_future(
+                []() -> coro::CoroTask<int> { co_return 42; });
+            auto f2 = scope.spawn_future([]() -> coro::CoroTask<dstd::String> {
+                co_return dstd::String("hello");
             });
-            co_return;
-        },
-        "HeteroGetAccess");
 
-    scheduler.schedule(task);
-    task->wait();
+            auto result = co_await coro::when_any(std::move(f1), std::move(f2));
+
+            auto* acc = &accessed;
+            auto* vc = &value_correct;
+
+            acc->store(true, std::memory_order_relaxed);
+
+            if (result.index == 0) {
+                vc->store(result.get<0>() == 42, std::memory_order_relaxed);
+            } else {
+                vc->store(result.get<1>() == "hello",
+                          std::memory_order_relaxed);
+            }
+
+            co_return;
+        }));
     CHECK(accessed.load());
     CHECK(value_correct.load());
-    executor.shutdown();
 }
 
 TEST_CASE("when_any - Overload resolution (homogeneous uses vector version)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
-    Scheduler scheduler(&executor);
+    Runtime rt(4);
 
     std::atomic<bool> index_valid{false};
     std::atomic<int> result_value{-1};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope(
-                [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                    // Both futures are SpawnFuture<int> -- homogeneous overload
-                    // selected; result is WhenAnyResult<int>, not
-                    // WhenAnyTupleResult.
-                    auto f1 = scope.spawn_future(
-                        []() -> coro::CoroTask<int> { co_return 10; });
-                    auto f2 = scope.spawn_future(
-                        []() -> coro::CoroTask<int> { co_return 20; });
+    rt.block_on(coro::with_scope([&](coro::Scope& scope)
+                                     -> coro::CoroTask<void> {
+        // Both futures are SpawnFuture<int> -- homogeneous overload
+        // selected; result is WhenAnyResult<int>, not
+        // WhenAnyTupleResult.
+        auto f1 =
+            scope.spawn_future([]() -> coro::CoroTask<int> { co_return 10; });
+        auto f2 =
+            scope.spawn_future([]() -> coro::CoroTask<int> { co_return 20; });
 
-                    auto result =
-                        co_await coro::when_any(std::move(f1), std::move(f2));
+        auto result = co_await coro::when_any(std::move(f1), std::move(f2));
 
-                    // result_type is WhenAnyResult<int>: .result is int
-                    static_assert(
-                        std::is_same_v<decltype(result.result), int>,
-                        "homogeneous when_any must return WhenAnyResult<int>");
+        // result_type is WhenAnyResult<int>: .result is int
+        static_assert(std::is_same_v<decltype(result.result), int>,
+                      "homogeneous when_any must return WhenAnyResult<int>");
 
-                    auto* iv = &index_valid;
-                    auto* rv = &result_value;
+        auto* iv = &index_valid;
+        auto* rv = &result_value;
 
-                    iv->store(result.index <= 1, std::memory_order_relaxed);
-                    rv->store(result.result, std::memory_order_relaxed);
+        iv->store(result.index <= 1, std::memory_order_relaxed);
+        rv->store(result.result, std::memory_order_relaxed);
 
-                    co_return;
-                });
-            co_return;
-        },
-        "HomogeneousOverload");
-
-    scheduler.schedule(task);
-    task->wait();
+        co_return;
+    }));
     CHECK(index_valid.load());
     int rv = result_value.load();
     CHECK((rv == 10 || rv == 20));
-    executor.shutdown();
 }

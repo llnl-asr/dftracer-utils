@@ -26,9 +26,9 @@ struct CoroPromise;
 /// through channels), no continuation chain (flat scheduling), and
 /// integrates with @ref JoinHandle for structured concurrency.
 ///
-/// Coro is the internal execution primitive. Users interact
-/// with Task (the DAG API); internally, each ready Task is wrapped
-/// in a run_task() coroutine and enqueued to the Executor.
+/// Coro is the internal execution primitive. Users interact with
+/// CoroTask and @ref Scope; internally, each spawned task is wrapped in a Coro
+/// and enqueued to the Executor.
 class Coro {
    public:
     using promise_type = CoroPromise;

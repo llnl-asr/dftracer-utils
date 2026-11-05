@@ -7,11 +7,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
-#include <dftracer/utils/runtime/pipeline/scheduler.h>
-#include <dftracer/utils/runtime/scheduler/task_executor.h>
-#include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -341,35 +337,30 @@ TEST_CASE("AsyncIO - async read with executor") {
     dstd::String data = "executor async read test data!";
     auto path = create_temp_file(data);
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> success{false};
     dstd::String read_data;
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            int fd = ::open(path.c_str(), O_RDONLY);
-            REQUIRE(fd >= 0);
+    auto body = [&]() -> coro::CoroTask<void> {
+        int fd = ::open(path.c_str(), O_RDONLY);
+        REQUIRE(fd >= 0);
 
-            char buf[128] = {};
-            ssize_t n = co_await io::pread(fd, buf, data.size(), 0);
-            if (n == static_cast<ssize_t>(data.size())) {
-                read_data.assign(buf, static_cast<std::size_t>(n));
-                success.store(true);
-            }
+        char buf[128] = {};
+        ssize_t n = co_await io::pread(fd, buf, data.size(), 0);
+        if (n == static_cast<ssize_t>(data.size())) {
+            read_data.assign(buf, static_cast<std::size_t>(n));
+            success.store(true);
+        }
 
-            ::close(fd);
-            co_return;
-        },
-        "AsyncReadTest");
+        ::close(fd);
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
     CHECK(read_data == data);
 
-    executor.shutdown();
     ::unlink(path.c_str());
 }
 
@@ -381,28 +372,24 @@ TEST_CASE("AsyncIO - async write with executor") {
 
     dstd::String data = "executor async write test!";
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> success{false};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            int fd = ::open(path, O_WRONLY | O_TRUNC);
-            REQUIRE(fd >= 0);
+    auto body = [&]() -> coro::CoroTask<void> {
+        int fd = ::open(path, O_WRONLY | O_TRUNC);
+        REQUIRE(fd >= 0);
 
-            ssize_t n = co_await io::write(fd, data.data(), data.size());
-            if (n == static_cast<ssize_t>(data.size())) {
-                success.store(true);
-            }
+        ssize_t n = co_await io::write(fd, data.data(), data.size());
+        if (n == static_cast<ssize_t>(data.size())) {
+            success.store(true);
+        }
 
-            ::close(fd);
-            co_return;
-        },
-        "AsyncWriteTest");
+        ::close(fd);
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
 
     // Read back and verify
@@ -414,7 +401,6 @@ TEST_CASE("AsyncIO - async write with executor") {
     CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == data);
     ::close(rfd);
 
-    executor.shutdown();
     ::unlink(path);
 }
 
@@ -422,36 +408,31 @@ TEST_CASE("AsyncIO - async pread with executor") {
     dstd::String data = "ABCDEFGHIJKLMNOP";
     auto path = create_temp_file(data);
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> success{false};
     dstd::String read_data;
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            int fd = ::open(path.c_str(), O_RDONLY);
-            REQUIRE(fd >= 0);
+    auto body = [&]() -> coro::CoroTask<void> {
+        int fd = ::open(path.c_str(), O_RDONLY);
+        REQUIRE(fd >= 0);
 
-            // Read 5 bytes from offset 4
-            char buf[16] = {};
-            ssize_t n = co_await io::pread(fd, buf, 5, 4);
-            if (n == 5) {
-                read_data.assign(buf, 5);
-                success.store(true);
-            }
+        // Read 5 bytes from offset 4
+        char buf[16] = {};
+        ssize_t n = co_await io::pread(fd, buf, 5, 4);
+        if (n == 5) {
+            read_data.assign(buf, 5);
+            success.store(true);
+        }
 
-            ::close(fd);
-            co_return;
-        },
-        "AsyncPreadTest");
+        ::close(fd);
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
     CHECK(read_data == "EFGHI");
 
-    executor.shutdown();
     ::unlink(path.c_str());
 }
 
@@ -464,29 +445,25 @@ TEST_CASE("AsyncIO - async pwrite with executor") {
     REQUIRE(wr == static_cast<ssize_t>(initial.size()));
     ::close(tmpfd);
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> success{false};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            int fd = ::open(path, O_WRONLY);
-            REQUIRE(fd >= 0);
+    auto body = [&]() -> coro::CoroTask<void> {
+        int fd = ::open(path, O_WRONLY);
+        REQUIRE(fd >= 0);
 
-            dstd::String patch = "BBB";
-            ssize_t n = co_await io::pwrite(fd, patch.data(), patch.size(), 3);
-            if (n == static_cast<ssize_t>(patch.size())) {
-                success.store(true);
-            }
+        dstd::String patch = "BBB";
+        ssize_t n = co_await io::pwrite(fd, patch.data(), patch.size(), 3);
+        if (n == static_cast<ssize_t>(patch.size())) {
+            success.store(true);
+        }
 
-            ::close(fd);
-            co_return;
-        },
-        "AsyncPwriteTest");
+        ::close(fd);
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
 
     // Read back and verify
@@ -498,7 +475,6 @@ TEST_CASE("AsyncIO - async pwrite with executor") {
     CHECK(dstd::String(buf, static_cast<std::size_t>(n)) == "AAABBBAAAA");
     ::close(rfd);
 
-    executor.shutdown();
     ::unlink(path);
 }
 
@@ -506,24 +482,20 @@ TEST_CASE("AsyncIO - async write to pipe with executor") {
     int pipefd[2];
     REQUIRE(::pipe(pipefd) == 0);
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     dstd::String data = "async pipe write";
     std::atomic<bool> success{false};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            ssize_t n = co_await io::write(pipefd[1], data.data(), data.size());
-            if (n == static_cast<ssize_t>(data.size())) {
-                success.store(true);
-            }
-            co_return;
-        },
-        "AsyncPipeWriteTest");
+    auto body = [&]() -> coro::CoroTask<void> {
+        ssize_t n = co_await io::write(pipefd[1], data.data(), data.size());
+        if (n == static_cast<ssize_t>(data.size())) {
+            success.store(true);
+        }
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
 
     // Read back from pipe
@@ -534,46 +506,40 @@ TEST_CASE("AsyncIO - async write to pipe with executor") {
 
     ::close(pipefd[0]);
     ::close(pipefd[1]);
-    executor.shutdown();
 }
 
 TEST_CASE("AsyncIO - async open + pread + close lifecycle") {
     dstd::String data = "full lifecycle test";
     auto path = create_temp_file(data);
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> success{false};
     dstd::String read_data;
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            ssize_t fd_result = co_await io::open(path.c_str(), O_RDONLY);
-            REQUIRE(fd_result >= 0);
-            int fd = static_cast<int>(fd_result);
+    auto body = [&]() -> coro::CoroTask<void> {
+        ssize_t fd_result = co_await io::open(path.c_str(), O_RDONLY);
+        REQUIRE(fd_result >= 0);
+        int fd = static_cast<int>(fd_result);
 
-            char buf[128] = {};
-            ssize_t n = co_await io::pread(fd, buf, data.size(), 0);
-            if (n == static_cast<ssize_t>(data.size())) {
-                read_data.assign(buf, static_cast<std::size_t>(n));
-            }
+        char buf[128] = {};
+        ssize_t n = co_await io::pread(fd, buf, data.size(), 0);
+        if (n == static_cast<ssize_t>(data.size())) {
+            read_data.assign(buf, static_cast<std::size_t>(n));
+        }
 
-            ssize_t close_result = co_await io::close(fd);
-            if (close_result == 0 && n == static_cast<ssize_t>(data.size())) {
-                success.store(true);
-            }
+        ssize_t close_result = co_await io::close(fd);
+        if (close_result == 0 && n == static_cast<ssize_t>(data.size())) {
+            success.store(true);
+        }
 
-            co_return;
-        },
-        "LifecycleTest");
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
     CHECK(read_data == data);
 
-    executor.shutdown();
     ::unlink(path.c_str());
 }
 
@@ -589,55 +555,50 @@ TEST_CASE("AsyncIO - multiple concurrent async reads") {
         expected.push_back(content);
     }
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 4});
-    Scheduler scheduler(&executor);
+    Runtime rt(4);
 
     std::atomic<int> completed{0};
     dstd::Vector<dstd::String> results(N);
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope(
-                [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                    for (int i = 0; i < N; ++i) {
-                        auto* path_ptr = &paths[i];
-                        auto* expected_ptr = &expected[i];
-                        auto* result_ptr = &results[i];
-                        auto* completed_ptr = &completed;
+    auto body = [&]() -> coro::CoroTask<void> {
+        co_await coro::with_scope(
+            [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                for (int i = 0; i < N; ++i) {
+                    auto* path_ptr = &paths[i];
+                    auto* expected_ptr = &expected[i];
+                    auto* result_ptr = &results[i];
+                    auto* completed_ptr = &completed;
 
-                        scope.spawn([path_ptr, expected_ptr, result_ptr,
-                                     completed_ptr]() -> coro::CoroTask<void> {
-                            int fd = ::open(path_ptr->c_str(), O_RDONLY);
-                            if (fd < 0) co_return;
+                    scope.spawn([path_ptr, expected_ptr, result_ptr,
+                                 completed_ptr]() -> coro::CoroTask<void> {
+                        int fd = ::open(path_ptr->c_str(), O_RDONLY);
+                        if (fd < 0) co_return;
 
-                            char buf[256] = {};
-                            ssize_t n = co_await io::pread(
-                                fd, buf, expected_ptr->size(), 0);
-                            if (n > 0) {
-                                result_ptr->assign(buf,
-                                                   static_cast<std::size_t>(n));
-                            }
+                        char buf[256] = {};
+                        ssize_t n = co_await io::pread(fd, buf,
+                                                       expected_ptr->size(), 0);
+                        if (n > 0) {
+                            result_ptr->assign(buf,
+                                               static_cast<std::size_t>(n));
+                        }
 
-                            ::close(fd);
-                            completed_ptr->fetch_add(1);
-                            co_return;
-                        });
-                    }
+                        ::close(fd);
+                        completed_ptr->fetch_add(1);
+                        co_return;
+                    });
+                }
 
-                    co_return;
-                });
-            co_return;
-        },
-        "ConcurrentReads");
+                co_return;
+            });
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(completed.load() == N);
     for (int i = 0; i < N; ++i) {
         CHECK(results[i] == expected[i]);
     }
 
-    executor.shutdown();
     for (auto& p : paths) ::unlink(p.c_str());
 }
 
@@ -649,52 +610,40 @@ TEST_CASE("AsyncIO - read error handling (invalid fd)") {
 }
 
 TEST_CASE("AsyncIO - IoBackend::name() reports backend type") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 1});
-    Scheduler scheduler(&executor);
+    Runtime rt(1);
 
     dstd::String backend_name;
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            REQUIRE(coro::Executor::current() != nullptr);
-            auto* backend = io::current_backend();
-            REQUIRE(backend != nullptr);
-            backend_name = backend->name();
-            co_return;
-        },
-        "BackendNameTest");
+    auto body = [&]() -> coro::CoroTask<void> {
+        REQUIRE(coro::Executor::current() != nullptr);
+        auto* backend = io::current_backend();
+        REQUIRE(backend != nullptr);
+        backend_name = backend->name();
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(!backend_name.empty());
     MESSAGE("Active I/O backend: ", backend_name);
     CHECK((backend_name == "threadpool" || backend_name == "io_uring" ||
            backend_name == "epoll+threadpool" ||
            backend_name == "kqueue+threadpool"));
-
-    executor.shutdown();
 }
 
 TEST_CASE("AsyncIO - async read error handling with executor (invalid fd)") {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<ssize_t> result{0};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            char buf[16] = {};
-            ssize_t n = co_await io::read(-1, buf, 16);
-            result.store(n);
-            co_return;
-        },
-        "ErrorHandlingTest");
+    auto body = [&]() -> coro::CoroTask<void> {
+        char buf[16] = {};
+        ssize_t n = co_await io::read(-1, buf, 16);
+        result.store(n);
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(result.load() < 0);
-
-    executor.shutdown();
 }
 
 TEST_CASE("AsyncIO - large pread with executor") {
@@ -706,33 +655,28 @@ TEST_CASE("AsyncIO - large pread with executor") {
     }
     auto path = create_temp_file(data);
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> success{false};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            int fd = ::open(path.c_str(), O_RDONLY);
-            REQUIRE(fd >= 0);
+    auto body = [&]() -> coro::CoroTask<void> {
+        int fd = ::open(path.c_str(), O_RDONLY);
+        REQUIRE(fd >= 0);
 
-            dstd::Vector<char> buf(SIZE);
-            ssize_t n = co_await io::pread(fd, buf.data(), SIZE, 0);
-            if (n == static_cast<ssize_t>(SIZE) &&
-                std::memcmp(buf.data(), data.data(), SIZE) == 0) {
-                success.store(true);
-            }
+        dstd::Vector<char> buf(SIZE);
+        ssize_t n = co_await io::pread(fd, buf.data(), SIZE, 0);
+        if (n == static_cast<ssize_t>(SIZE) &&
+            std::memcmp(buf.data(), data.data(), SIZE) == 0) {
+            success.store(true);
+        }
 
-            ::close(fd);
-            co_return;
-        },
-        "LargeReadTest");
+        ::close(fd);
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
 
-    executor.shutdown();
     ::unlink(path.c_str());
 }
 
@@ -746,47 +690,41 @@ static void run_lifecycle_on_backend(io::IoBackendType type,
     dstd::String data = dstd::String("backend test: ") + type_name;
     auto path = create_temp_file(data);
 
-    ThreadPoolExecutor executor(
-        ExecutorConfig{.thread_count = 2, .io_backend_type = type});
-    Scheduler scheduler(&executor);
+    Runtime rt(ExecutorConfig{.thread_count = 2, .io_backend_type = type});
 
     std::atomic<bool> success{false};
     dstd::String read_data;
     dstd::String backend_name;
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            REQUIRE(coro::Executor::current() != nullptr);
-            auto* backend = io::current_backend();
-            REQUIRE(backend != nullptr);
-            backend_name = backend->name();
+    auto body = [&]() -> coro::CoroTask<void> {
+        REQUIRE(coro::Executor::current() != nullptr);
+        auto* backend = io::current_backend();
+        REQUIRE(backend != nullptr);
+        backend_name = backend->name();
 
-            ssize_t fd_result = co_await io::open(path.c_str(), O_RDONLY);
-            REQUIRE(fd_result >= 0);
-            int fd = static_cast<int>(fd_result);
+        ssize_t fd_result = co_await io::open(path.c_str(), O_RDONLY);
+        REQUIRE(fd_result >= 0);
+        int fd = static_cast<int>(fd_result);
 
-            char buf[128] = {};
-            ssize_t n = co_await io::pread(fd, buf, data.size(), 0);
-            if (n == static_cast<ssize_t>(data.size())) {
-                read_data.assign(buf, static_cast<std::size_t>(n));
-            }
+        char buf[128] = {};
+        ssize_t n = co_await io::pread(fd, buf, data.size(), 0);
+        if (n == static_cast<ssize_t>(data.size())) {
+            read_data.assign(buf, static_cast<std::size_t>(n));
+        }
 
-            ssize_t close_result = co_await io::close(fd);
-            if (close_result == 0 && n == static_cast<ssize_t>(data.size())) {
-                success.store(true);
-            }
+        ssize_t close_result = co_await io::close(fd);
+        if (close_result == 0 && n == static_cast<ssize_t>(data.size())) {
+            success.store(true);
+        }
 
-            co_return;
-        },
-        dstd::String("BackendLifecycle[") + type_name + "]");
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     MESSAGE("Backend requested: ", type_name, ", actual: ", backend_name);
     CHECK(success.load());
     CHECK(read_data == data);
 
-    executor.shutdown();
     ::unlink(path.c_str());
 }
 
@@ -796,25 +734,20 @@ static void run_pipe_write_on_backend(io::IoBackendType type,
     int pipefd[2];
     REQUIRE(::pipe(pipefd) == 0);
 
-    ThreadPoolExecutor executor(
-        ExecutorConfig{.thread_count = 2, .io_backend_type = type});
-    Scheduler scheduler(&executor);
+    Runtime rt(ExecutorConfig{.thread_count = 2, .io_backend_type = type});
 
     dstd::String data = dstd::String("pipe write on ") + type_name;
     std::atomic<bool> success{false};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            ssize_t n = co_await io::write(pipefd[1], data.data(), data.size());
-            if (n == static_cast<ssize_t>(data.size())) {
-                success.store(true);
-            }
-            co_return;
-        },
-        dstd::String("PipeWrite[") + type_name + "]");
+    auto body = [&]() -> coro::CoroTask<void> {
+        ssize_t n = co_await io::write(pipefd[1], data.data(), data.size());
+        if (n == static_cast<ssize_t>(data.size())) {
+            success.store(true);
+        }
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
 
     // Read back from pipe
@@ -825,7 +758,6 @@ static void run_pipe_write_on_backend(io::IoBackendType type,
 
     ::close(pipefd[0]);
     ::close(pipefd[1]);
-    executor.shutdown();
 }
 
 TEST_CASE("AsyncIO - lifecycle on threadpool backend (forced)") {
@@ -1133,53 +1065,48 @@ TEST_CASE("AsyncIO - async readv/writev with executor") {
     REQUIRE(tmpfd >= 0);
     ::close(tmpfd);
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> success{false};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            int fd = ::open(path, O_RDWR | O_TRUNC);
-            REQUIRE(fd >= 0);
+    auto body = [&]() -> coro::CoroTask<void> {
+        int fd = ::open(path, O_RDWR | O_TRUNC);
+        REQUIRE(fd >= 0);
 
-            // writev
-            dstd::String p1 = "Hello, ";
-            dstd::String p2 = "World!";
-            struct iovec wv[2];
-            wv[0].iov_base = const_cast<char*>(p1.data());
-            wv[0].iov_len = p1.size();
-            wv[1].iov_base = const_cast<char*>(p2.data());
-            wv[1].iov_len = p2.size();
+        // writev
+        dstd::String p1 = "Hello, ";
+        dstd::String p2 = "World!";
+        struct iovec wv[2];
+        wv[0].iov_base = const_cast<char*>(p1.data());
+        wv[0].iov_len = p1.size();
+        wv[1].iov_base = const_cast<char*>(p2.data());
+        wv[1].iov_len = p2.size();
 
-            ssize_t wn = co_await io::writev(fd, wv, 2);
-            REQUIRE(wn == static_cast<ssize_t>(p1.size() + p2.size()));
+        ssize_t wn = co_await io::writev(fd, wv, 2);
+        REQUIRE(wn == static_cast<ssize_t>(p1.size() + p2.size()));
 
-            // preadv at offset 0
-            char b1[7] = {};
-            char b2[6] = {};
-            struct iovec rv[2];
-            rv[0].iov_base = b1;
-            rv[0].iov_len = 7;
-            rv[1].iov_base = b2;
-            rv[1].iov_len = 6;
+        // preadv at offset 0
+        char b1[7] = {};
+        char b2[6] = {};
+        struct iovec rv[2];
+        rv[0].iov_base = b1;
+        rv[0].iov_len = 7;
+        rv[1].iov_base = b2;
+        rv[1].iov_len = 6;
 
-            ssize_t rn = co_await io::preadv(fd, rv, 2, 0);
-            if (rn == 13 && dstd::String(b1, 7) == "Hello, " &&
-                dstd::String(b2, 6) == "World!") {
-                success.store(true);
-            }
+        ssize_t rn = co_await io::preadv(fd, rv, 2, 0);
+        if (rn == 13 && dstd::String(b1, 7) == "Hello, " &&
+            dstd::String(b2, 6) == "World!") {
+            success.store(true);
+        }
 
-            ::close(fd);
-            co_return;
-        },
-        "AsyncIovTest");
+        ::close(fd);
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
 
-    executor.shutdown();
     ::unlink(path);
 }
 
@@ -1187,35 +1114,30 @@ TEST_CASE("AsyncIO - async lseek + read with executor") {
     dstd::String data = "ABCDEFGHIJ";
     auto path = create_temp_file(data);
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<bool> success{false};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            int fd = ::open(path.c_str(), O_RDONLY);
-            REQUIRE(fd >= 0);
+    auto body = [&]() -> coro::CoroTask<void> {
+        int fd = ::open(path.c_str(), O_RDONLY);
+        REQUIRE(fd >= 0);
 
-            ssize_t pos = co_await io::lseek(fd, 5, SEEK_SET);
-            REQUIRE(pos == 5);
+        ssize_t pos = co_await io::lseek(fd, 5, SEEK_SET);
+        REQUIRE(pos == 5);
 
-            char buf[5] = {};
-            ssize_t n = co_await io::read(fd, buf, 5);
-            if (n == 5 && dstd::String(buf, 5) == "FGHIJ") {
-                success.store(true);
-            }
+        char buf[5] = {};
+        ssize_t n = co_await io::read(fd, buf, 5);
+        if (n == 5 && dstd::String(buf, 5) == "FGHIJ") {
+            success.store(true);
+        }
 
-            ::close(fd);
-            co_return;
-        },
-        "AsyncLseekTest");
+        ::close(fd);
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
     CHECK(success.load());
 
-    executor.shutdown();
     ::unlink(path.c_str());
 }
 
@@ -1223,31 +1145,27 @@ TEST_CASE("AsyncIO - async sendfile with executor") {
     dstd::String data = "async sendfile test data";
     auto path = create_temp_file(data);
 
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     int pipefd[2];
     REQUIRE(::pipe(pipefd) == 0);
 
     std::atomic<bool> success{false};
 
-    auto task = make_task(
-        [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            int in_fd = ::open(path.c_str(), O_RDONLY);
-            REQUIRE(in_fd >= 0);
+    auto body = [&]() -> coro::CoroTask<void> {
+        int in_fd = ::open(path.c_str(), O_RDONLY);
+        REQUIRE(in_fd >= 0);
 
-            ssize_t n = co_await io::sendfile(pipefd[1], in_fd, 0, data.size());
-            if (n == static_cast<ssize_t>(data.size())) {
-                success.store(true);
-            }
+        ssize_t n = co_await io::sendfile(pipefd[1], in_fd, 0, data.size());
+        if (n == static_cast<ssize_t>(data.size())) {
+            success.store(true);
+        }
 
-            ::close(in_fd);
-            co_return;
-        },
-        "AsyncSendfileTest");
+        ::close(in_fd);
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    rt.block_on(body());
 
     // Close write end so read won't block if sendfile failed
     // (macOS sendfile requires a socket destination, not a pipe).
@@ -1260,6 +1178,5 @@ TEST_CASE("AsyncIO - async sendfile with executor") {
     }
 
     ::close(pipefd[0]);
-    executor.shutdown();
     ::unlink(path.c_str());
 }

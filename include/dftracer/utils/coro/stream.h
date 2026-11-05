@@ -808,6 +808,7 @@ inline constexpr bool NEEDS_TO_ASYNC_V = false;
 
 }  // namespace detail
 
+/// @cond DFTRACER_UTILS_STREAM_REJECTS
 template <typename T>
 void merge(dstd::Vector<Generator<T>>) {
     static_assert(detail::NEEDS_TO_ASYNC_V<T>,
@@ -844,6 +845,7 @@ void with_item_timeout(Generator<T>, Args&&...) {
                   "with_item_timeout needs an AsyncGenerator: use "
                   "coro::to_async");
 }
+/// @endcond
 
 /// @ref map as an adaptor.
 template <typename F>

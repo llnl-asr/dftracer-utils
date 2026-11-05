@@ -16,7 +16,6 @@
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugins_internal.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>

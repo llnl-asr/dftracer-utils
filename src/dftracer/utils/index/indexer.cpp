@@ -242,11 +242,10 @@ Indexer Indexer::open(dstd::Vector<dstd::String> paths,
             "indexer-open",
             coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 utilities::filesystem::PatternDirectoryScannerUtility scanner;
-                matched = co_await scanner(
-                    scope,
-                    utilities::filesystem::PatternDirectoryScannerUtilityInput{
-                        p, utilities::filesystem::trace_file_patterns(), false,
-                        /*with_size=*/false});
+                utilities::filesystem::PatternDirectoryScannerUtilityInput
+                    scan_input{p, utilities::filesystem::trace_file_patterns(),
+                               false, /*with_size=*/false};
+                matched = co_await scanner(scope, scan_input);
             })));
         for (auto& e : matched)
             impl->paths.push_back(dstd::String(e.path.str()));

@@ -361,27 +361,47 @@ are heap-allocated and may outlive the caller's stack.
 Capture Rules for Coroutine Lambdas
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+The captures of a lambda coroutine live in the closure, not in the coroutine frame.
+The closure must stay alive until the task ends.
+``scope.spawn(fn)`` moves the closure into the frame of the child, so its captures live as long as the task.
+Do not call the lambda yourself and pass the task it returns to ``scope.spawn(task)`` or ``co_await`` it from a temporary closure.
+The closure then dies at the end of that statement, while the task still reads its captures.
+
+.. code-block:: cpp
+
+    // Right: spawn(fn) owns the closure for the life of the child.
+    scope.spawn([filename]() -> coro::CoroTask<void> {
+        co_await process(filename);
+    });
+
+    // Wrong: the temporary closure dies at the semicolon.
+    // scope.spawn([filename]() -> coro::CoroTask<void> {
+    //     co_await process(filename);
+    // }());
+
+The samples below show the lambda that is passed to ``scope.spawn``.
+
 **Scalars (int, bool, size_t, enum): capture by value**
 
-Cheap and always safe. The scalar value is copied into the coroutine frame.
+Cheap and always safe. The scalar value is copied into the closure.
 
 .. code-block:: cpp
 
     int event_id = 42;
-    auto task = [event_id](CoroScope& scope) -> coro::CoroTask<void> {
-        // Safe: event_id is copied into the coroutine frame
+    auto task = [event_id]() -> coro::CoroTask<void> {
+        // Safe: event_id is copied into the closure
         co_await channel.send(event_id);
     };
 
 **Owning types (std::string, shared_ptr, unique_ptr): capture by value**
 
-Safe because the coroutine owns a copy. Automatic cleanup on coroutine destruction.
+Safe because the closure owns a copy. Automatic cleanup when the child ends.
 
 .. code-block:: cpp
 
     std::string filename = "trace.pfw.gz";
-    auto task = [filename](CoroScope& scope) -> coro::CoroTask<void> {
-        // Safe: coroutine owns a copy of the string
+    auto task = [filename]() -> coro::CoroTask<void> {
+        // Safe: the closure owns a copy of the string
         std::cout << "Processing " << filename << "\n";
         co_await something_async();
     };
@@ -394,7 +414,7 @@ Avoid expensive deep copies. Use pointer-by-value (`auto* ptr = &vec; [ptr](...)
 
     std::vector<Event> events = load_events();
     auto* events_ptr = &events;
-    auto task = [events_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task = [events_ptr]() -> coro::CoroTask<void> {
         // Safe: events_ptr points to the vector in the caller's scope
         for (const auto& e : *events_ptr) {
             co_await process_event(e);
@@ -402,7 +422,7 @@ Avoid expensive deep copies. Use pointer-by-value (`auto* ptr = &vec; [ptr](...)
     };
     
     // WRONG: Do NOT capture the entire vector
-    // auto task = [events](CoroScope& scope) -> coro::CoroTask<void> { // BAD!
+    // auto task = [events]() -> coro::CoroTask<void> { // BAD!
     //     for (const auto& e : events) { ... }
     // };
 
@@ -418,13 +438,13 @@ Use pointer-by-value instead.
     std::string_view view = data;
     
     // WRONG: view points to freed memory
-    // auto task = [view](CoroScope& scope) -> coro::CoroTask<void> {
+    // auto task = [view]() -> coro::CoroTask<void> {
     //     std::cout << view << "\n";  // Use-after-free!
     // };
     
     // CORRECT: use pointer-by-value
     auto* data_ptr = &data;
-    auto task = [data_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task = [data_ptr]() -> coro::CoroTask<void> {
         std::string_view safe_view(*data_ptr);
         std::cout << safe_view << "\n";  // Safe
     };
@@ -438,13 +458,13 @@ References in coroutine lambdas dangle immediately. Use pointer-by-value or valu
     int counter = 0;
     
     // WRONG: reference dangles
-    // auto task = [&counter](CoroScope& scope) -> coro::CoroTask<void> {
+    // auto task = [&counter]() -> coro::CoroTask<void> {
     //     counter++;  // Undefined behavior!
     // };
     
     // CORRECT: use pointer-by-value
     auto* counter_ptr = &counter;
-    auto task = [counter_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task = [counter_ptr]() -> coro::CoroTask<void> {
         (*counter_ptr)++;  // Safe
     };
 
@@ -459,27 +479,29 @@ Always use explicit capture lists.
     std::string name = "event";
     
     // WRONG: all variables captured by reference
-    // auto task = [&](CoroScope& scope) -> coro::CoroTask<void> { ... };
+    // auto task = [&]() -> coro::CoroTask<void> { ... };
     
     // CORRECT: explicit captures by value or pointer
     auto* name_ptr = &name;
-    auto task = [event_id, name_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task = [event_id, name_ptr]() -> coro::CoroTask<void> {
         co_await channel.send(event_id);
         std::cout << *name_ptr << "\n";
     };
 
-CoroScope Lifetime Rules
+Scope Lifetime Rules
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Always ensure the ``CoroScope`` outlives all spawned tasks and channels.
+Always ensure the ``coro::Scope`` outlives all spawned tasks and channels.
+``coro::with_scope`` does this: it joins the scope before it returns, also when its body raises.
+A channel that a child uses is declared outside the body of ``with_scope`` or is awaited out before the body can raise, since the locals of the body die when it raises.
 
 .. code-block:: cpp
 
-    auto task = make_task([](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task = coro::with_scope([](coro::Scope& scope) -> coro::CoroTask<void> {
         auto channel = coro::make_channel<Event>(100);
 
         // Spawn producer -- producer() pre-registers the slot eagerly
-        scope.spawn([ch = channel->producer()](CoroScope& s) mutable
+        scope.spawn([ch = channel->producer()]() mutable
                         -> coro::CoroTask<void> {
             auto guard = ch.guard();
             for (int i = 0; i < 100; ++i) {
@@ -490,12 +512,17 @@ Always ensure the ``CoroScope`` outlives all spawned tasks and channels.
         });
 
         // Consumer reads until channel closes
-        while (auto event = co_await channel->receive()) {
+        while (true) {
+            auto event = co_await channel->receive();
+            if (!event) break;
             process(*event);
         }
 
         co_return;
     });
+
+    // Blocks the caller until the scope is joined.
+    runtime.block_on(std::move(task));
 
 Channel Patterns
 ~~~~~~~~~~~~~~~~
@@ -568,7 +595,7 @@ Never store it across the parser's or the input buffer's lifetime.
 
 **Instantiating Executor directly**
 
-``Executor`` (``coro/executor.h``) is internal to the runtime, and ``Pipeline`` is an internal class that is not installed. Never create an ``Executor`` directly; use ``Runtime`` instead.
+``Executor`` (``coro/executor.h``) is internal to the runtime and is not installed. Never create an ``Executor`` directly; use ``Runtime`` instead.
 
 **Per-event SQL indexing**
 

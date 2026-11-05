@@ -47,13 +47,12 @@ class BasicChannelConsumer;
  *
  * // producer() counts the producer now, so the channel never sees zero
  * // producers while coroutines are still being scheduled.
- * auto task = make_task(
- *     [ch = channel->producer()](CoroScope& ctx) mutable
- *         -> CoroTask<void> {
- *         auto guard = ch.guard();
- *         for (auto chunk : read_chunks())
- *             co_await ch.send(std::move(chunk));
- *     });
+ * auto produce = [ch = channel->producer()]() mutable -> CoroTask<void> {
+ *     auto guard = ch.guard();
+ *     for (auto chunk : read_chunks())
+ *         co_await ch.send(std::move(chunk));
+ * };
+ * scope.spawn(std::move(produce));
  * @endcode
  */
 template <typename Queue>

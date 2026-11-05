@@ -20,7 +20,7 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/spawn_detached.h>
 
 #include <algorithm>
 #include <atomic>

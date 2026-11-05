@@ -79,13 +79,7 @@ set(_extra_files
     tests/testing_utilities.cpp
     tests/testing_utilities.h)
 
-# The Task, TaskGraph and Pipeline trees move in a later step.
-set(_skip
-    include/dftracer/utils/runtime/tasks
-    src/dftracer/utils/runtime/tasks
-    src/dftracer/utils/runtime/task_graph
-    src/dftracer/utils/runtime/pipeline
-    include/dftracer/utils/dstd/vendor)
+set(_skip include/dftracer/utils/dstd/vendor)
 
 set(_program [=[
 NR == FNR {

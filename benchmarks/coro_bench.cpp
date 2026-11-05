@@ -53,10 +53,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
-#include <dftracer/utils/runtime/pipeline/scheduler.h>
-#include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -122,15 +119,9 @@ void finish_meter(const Meter &start, Result &r) {
 // Runs `body` as the only top-level coroutine and returns what it stored.
 template <class Body>
 Result run_on_executor(Body body) {
-    ThreadPoolExecutor executor(ExecutorConfig{.thread_count = THREADS});
-    Scheduler scheduler(&executor);
+    Runtime rt(ExecutorConfig{.thread_count = THREADS}, false);
     Result result;
-    auto task = make_task(
-        [&](CoroScope &) -> coro::CoroTask<void> { co_await body(result); },
-        "coro_bench");
-    scheduler.schedule(task);
-    task->wait();
-    executor.shutdown();
+    rt.block_on(body(result));
     return result;
 }
 

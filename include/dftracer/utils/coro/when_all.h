@@ -182,9 +182,9 @@ class WhenAllVectorAwaitable {
  *
  * Usage:
  * @code
- * dstd::Vector<TaskFuture<int>> futures;
+ * dstd::Vector<SpawnFuture<int>> futures;
  * for (int i = 0; i < 100; i++) {
- *     futures.push_back(ctx.spawn([]() -> Task<int> {
+ *     futures.push_back(scope.spawn_future([]() -> CoroTask<int> {
  *         co_return compute();
  *     }));
  * }

@@ -2,8 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 #include <no_core_dump.h>
 #include <sys/wait.h>
@@ -35,8 +35,8 @@ int run_in_child(Body body) {
 TEST_CASE("an un-joined scope terminates") {
     int status = run_in_child([] {
         Runtime rt(ExecutorConfig{.thread_count = 2}, false);
-        auto scope = CoroScope::long_lived(rt.executor());
-        scope->spawn([](CoroScope&) -> coro::CoroTask<void> { co_return; });
+        auto scope = dstd::make_unique<coro::Scope>(rt.executor());
+        scope->spawn([]() -> coro::CoroTask<void> { co_return; });
         scope.reset();
     });
     REQUIRE(WIFSIGNALED(status));
@@ -46,8 +46,8 @@ TEST_CASE("an un-joined scope terminates") {
 TEST_CASE("a joined scope is destroyed without terminating") {
     int status = run_in_child([] {
         Runtime rt(ExecutorConfig{.thread_count = 2}, false);
-        auto scope = CoroScope::long_lived(rt.executor());
-        scope->spawn([](CoroScope&) -> coro::CoroTask<void> { co_return; });
+        auto scope = dstd::make_unique<coro::Scope>(rt.executor());
+        scope->spawn([]() -> coro::CoroTask<void> { co_return; });
         rt.block_on(coro::named("join", [&]() -> coro::CoroTask<void> {
             co_await scope->join();
         }()));
@@ -57,7 +57,7 @@ TEST_CASE("a joined scope is destroyed without terminating") {
     CHECK(WEXITSTATUS(status) == 0);
 }
 
-TEST_CASE("run_coro_scope joins when its body throws") {
+TEST_CASE("with_scope joins when its body throws") {
     Runtime rt(ExecutorConfig{.thread_count = 2}, false);
     std::atomic<int> done{0};
     CHECK_THROWS_AS(

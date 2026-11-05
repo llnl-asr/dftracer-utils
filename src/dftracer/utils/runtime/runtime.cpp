@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shutdown.h>
@@ -14,7 +15,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/spawn_detached.h>
 #include <pthread.h>
 
 #include <algorithm>
@@ -370,7 +371,7 @@ dstd::SharedPtr<Runtime> peek_default_runtime() {
     return g_default_runtime;
 }
 
-namespace detail {
+namespace {
 
 bool executor_stopping(coro::Executor* executor) noexcept {
     if (!executor) return true;
@@ -381,6 +382,24 @@ bool executor_stopping(coro::Executor* executor) noexcept {
     return token && token->load(std::memory_order_acquire);
 }
 
-}  // namespace detail
+}  // namespace
+
+bool spawn_detached(coro::Executor* executor, coro::CoroTask<void> task) {
+    if (executor_stopping(executor)) return false;
+    auto make_coro = [](coro::CoroTask<void> t,
+                        coro::Executor* exec) -> coro::detail::Coro {
+        try {
+            t.handle().promise().set_executor(exec);
+            co_await std::move(t);
+        } catch (...) {
+            DFTRACER_UTILS_LOG_ERROR("detached task failed");
+        }
+    };
+    auto c = make_coro(std::move(task), executor);
+    c.handle().promise().executor = executor;
+    auto handle = c.release();
+    executor->post(handle);
+    return true;
+}
 
 }  // namespace dftracer::utils

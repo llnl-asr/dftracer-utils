@@ -43,7 +43,7 @@ indexes the files that are missing a requested tier or changed since they
 were indexed, ``rebuild`` re-indexes every file, and ``files`` lists what the
 index holds. ``manifest`` and ``explain`` inspect the extensions, and
 ``rebuild_extension`` and ``drop_extension`` act on one of them. Each call has a blocking form and an async form that runs in
-the caller's ``CoroScope``. The same calls are in the C ABI
+the caller's ``coro::Scope``. The same calls are in the C ABI
 (:doc:`../c_api/indexer`).
 
 .. code-block:: cpp

@@ -7,7 +7,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/spawn_detached.h>
 
 #include <exception>
 

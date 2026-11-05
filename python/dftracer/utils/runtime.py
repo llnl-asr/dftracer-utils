@@ -50,17 +50,14 @@ class WorkerProgress(TypedDict):
 
 
 class TaskProgress(TypedDict):
-    """One task's slice of :meth:`Runtime.get_progress` (``children`` recurses)."""
+    """One task's slice of :meth:`Runtime.get_progress`."""
 
     name: str
     state: str
     queued_duration_ms: float
     execution_duration_ms: float
-    total_subtasks: int
-    completed_subtasks: int
     progress_pct: float
     location: str
-    children: List["TaskProgress"]
 
 
 class RuntimeProgress(TypedDict):

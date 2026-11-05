@@ -40,7 +40,6 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <algorithm>
 #include <cmath>

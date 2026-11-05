@@ -21,9 +21,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/runtime/tasks/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -121,16 +119,10 @@ FidelityStats analyze(const dstd::Vector<DispatchSample>& samples) {
 void run_pipelined(ReplayEngine& engine,
                    const dstd::Vector<dstd::String>& files,
                    ReplayResult& result, std::size_t threads) {
-    Pipeline pipeline(PipelineConfig::parallel(threads));
-    auto root = make_task(
-        [&engine, &files, &result](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope([&](coro::Scope& scope) {
-                return engine.run_pipelined(scope, files, result, /*cap=*/64);
-            });
-        },
-        "replay_pipelined");
-    pipeline.set_source(root);
-    pipeline.execute();
+    Runtime rt(threads);
+    rt.block_on(coro::with_scope([&](coro::Scope& scope) {
+        return engine.run_pipelined(scope, files, result, /*cap=*/64);
+    }));
 }
 
 bool is_ci_env() {
@@ -250,16 +242,10 @@ TEST_CASE("Replay fidelity - pipelined path") {
     ReplayResult result;
     dstd::Vector<dstd::String> files = {dstd::String(trace_file)};
 
-    Pipeline pipeline(PipelineConfig::parallel(4));
-    auto root = make_task(
-        [&engine, &files, &result](CoroScope&) -> coro::CoroTask<void> {
-            co_await coro::with_scope([&](coro::Scope& scope) {
-                return engine.run_pipelined(scope, files, result, /*cap=*/64);
-            });
-        },
-        "replay_pipelined");
-    pipeline.set_source(root);
-    pipeline.execute();
+    Runtime rt(4);
+    rt.block_on(coro::with_scope([&](coro::Scope& scope) {
+        return engine.run_pipelined(scope, files, result, /*cap=*/64);
+    }));
 
     CHECK(result.total_events == N);
     auto stats = analyze(rec.samples);

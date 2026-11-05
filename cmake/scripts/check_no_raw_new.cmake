@@ -11,16 +11,16 @@
 #   <path glob> | <type> | <reason>    the type may be made with new in the files
 # The check also fails on a row that matches no file or that no site uses.
 #
-# Usage: cmake -DSOURCE_DIR=<repo root> -P check_no_raw_new.cmake
-#        cmake -DSOURCE_DIR=<repo root> -DSELF_TEST=ON -P check_no_raw_new.cmake
+# Usage: cmake -DSOURCE_DIR=<repo root> -DWORK_DIR=<dir> -P check_no_raw_new.cmake
+#        cmake -DSOURCE_DIR=<repo root> -DWORK_DIR=<dir> -DSELF_TEST=ON -P check_no_raw_new.cmake
 
 cmake_minimum_required(VERSION 3.20)
 
 if(NOT SOURCE_DIR)
   message(FATAL_ERROR "check_no_raw_new.cmake requires -DSOURCE_DIR=...")
 endif()
-if(NOT CMAKE_CURRENT_BINARY_DIR)
-  set(CMAKE_CURRENT_BINARY_DIR "${CMAKE_BINARY_DIR}")
+if(NOT DEFINED WORK_DIR)
+  message(FATAL_ERROR "check_no_raw_new.cmake requires -DWORK_DIR=...")
 endif()
 
 find_program(_awk awk REQUIRED)
@@ -187,7 +187,7 @@ function(no_raw_new_run root allow work out_var rc_var)
 endfunction()
 
 if(SELF_TEST)
-  set(_root "${CMAKE_CURRENT_BINARY_DIR}/no_raw_new_self")
+  set(_root "${WORK_DIR}/no_raw_new_self")
   file(REMOVE_RECURSE "${_root}")
   file(MAKE_DIRECTORY "${_root}")
   function(_expect label want_rc out rc)
@@ -260,7 +260,7 @@ if(NOT _files)
   message(FATAL_ERROR "no_raw_new: no source file under src and include")
 endif()
 
-no_raw_new_run("${SOURCE_DIR}" "${SOURCE_DIR}/cmake/scripts/raw_new_allow.txt" "${CMAKE_CURRENT_BINARY_DIR}" _out _rc ${_files})
+no_raw_new_run("${SOURCE_DIR}" "${SOURCE_DIR}/cmake/scripts/raw_new_allow.txt" "${WORK_DIR}" _out _rc ${_files})
 if(_rc)
   string(REPLACE "${SOURCE_DIR}/" "" _out "${_out}")
   message("${_out}")

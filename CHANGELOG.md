@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Install only our own `include/` tree: the headers of nanoarrow, flatcc, zstd, libdeflate, pcre2, yaml-cpp and doctest no longer reach the install prefix, nor do their pkg-config files, man pages and documentation.
+  A static build still installs their archives and CMake configs, so a static consumer links as before.
 - Rename the trait structs `dstd::awaitable_result_type` and `dstd::unwrap_coro_task` to `AwaitableResultType` and `UnwrapCoroTask`, the macros `DF_*` of the dataframe kernels to `DFTRACER_UTILS_*`, and the public fields of coroutine promise and shared-state types (`coro::PromiseBase`, `coro::CoroTask<T>::promise_type`, `coro::detail` completion states) to names without a trailing underscore.
 - Rename C++ names to the word rules: getters lose `get_` (`Runtime::progress()`, `TaskExecutor::thread_count()` and `io_pool_size()`, `common::logger::level()`, `coro::timeslice_duration()`, `CoroScope::executor()`), `num_x` becomes `x_count` (`ExecutorConfig::thread_count`, `Host::writer(path, worker_count, gzip)`, the `slot_count` argument of `map_batches`), `x_len` and `x_length` become `x_size` (`dstd::path_detail::root_size`), `create_x` becomes `make_x`, and `dstd::get_type_name<T>()` becomes `dstd::type_name<T>()`. The C ABI, the Python API and the strings users type (CLI flags, JSON keys, environment variables) keep their names.
 - Build a plugin against the installed headers without nanoarrow: `plugins/owned_arrow.h` holds the Arrow C structs and releases them itself.
@@ -280,6 +282,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add the library `libdftracer_utils_trace`: the index, the views and folds, the trace reader and the Arrow interchange.
+  It links every library below it and none of `dftracer_utils_utilities`, which now links it. The `dftracer_utils` target links it, so a program that links `dftracer_utils` needs no change.
 - Add the library `libdftracer_utils_io`: gzip readers and writers, the parallel writers, hashing, directory scanning, text filters and the file helpers (logical path, modification time, sampled file hash).
   It links `dftracer_utils_runtime` and `dftracer_utils_json`, and the `dftracer_utils` target links it, so a program that links `dftracer_utils` needs no change.
 - Add `memory::Pool`, `memory::PoolHandle` and `memory::Reservation` in `dftracer/utils/memory/pool.h`: open a child pool of `memory::root_pool()` with a limit, `try_reserve` the bytes a job needs, back a `dstd::PoolVector` with the pool through `memory::PoolAllocator` and read its `live()` and `peak()`.
@@ -415,6 +419,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Link a static consumer through pkg-config: each library's `.pc` file now requires every library of ours it needs and lists the third-party archives of its `Libs.private`, where `dftracer_utils_utilities` required only the runtime.
 - Fix the row order of a `collect_all` or `TraceSession` plan that promises scan order (a duql pipeline with a stage after the scan, such as `select ... | where ...` or `derive`): it came back in worker order, and now reads on its own in scan order.
   Streaming row plans of one session no longer wait for a plan that cannot stream: they share one scan with a bounded buffer, where one such plan used to make every plan hold all of its events until the scan ended (3.3 GB and 1.5x the time for five row plans over 1.44M events, now 0.6 GB and 0.6x).
   A leading `select` of a plan that is not absorbed by the source streams too.

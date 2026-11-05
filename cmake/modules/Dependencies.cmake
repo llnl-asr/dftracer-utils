@@ -45,14 +45,72 @@ function(install_dependency_config NAME TARGETS_FILE)
   cmake_parse_arguments(ARG "" "" DEPENDENCIES ${ARGN})
   set(content "include(CMakeFindDependencyMacro)\n")
   foreach(pkg ${ARG_DEPENDENCIES})
-    bundled_find_dependency(line ${pkg})
-    string(APPEND content "${line}")
+    if(pkg STREQUAL "Threads")
+      string(APPEND content "find_dependency(Threads)\n")
+    else()
+      bundled_find_dependency(line ${pkg})
+      string(APPEND content "${line}")
+    endif()
   endforeach()
   string(APPEND content
          "include(\"\${CMAKE_CURRENT_LIST_DIR}/${TARGETS_FILE}\")\n")
-  file(WRITE ${CMAKE_BINARY_DIR}/${NAME}/${NAME}Config.cmake "${content}")
-  install(FILES ${CMAKE_BINARY_DIR}/${NAME}/${NAME}Config.cmake
+  file(WRITE ${CMAKE_BINARY_DIR}/dependency_configs/${NAME}/${NAME}Config.cmake
+       "${content}")
+  install(FILES ${CMAKE_BINARY_DIR}/dependency_configs/${NAME}/${NAME}Config.cmake
           DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${NAME})
+endfunction()
+
+# Installs only the archives of a CPM package, whose own install would also put
+# its headers, pkg-config and documentation files in the prefix, with a config
+# that gives NAMESPACE::<target> to a static library of ours that links it.
+# Without EXPORT_SET the targets go into a new export set. With one, the package
+# is added EXCLUDE_FROM_ALL and declares that set for its targets; it stays the
+# only export set of them, which is what our own exports need, so the config
+# declares the imported targets by hand. Only a static build needs the
+# archives.
+function(install_dependency_archive NAME NAMESPACE)
+  cmake_parse_arguments(ARG "" "EXPORT_SET" "TARGETS;DEPENDENCIES" ${ARGN})
+  if(NOT DFTRACER_UTILS_BUILD_STATIC)
+    return()
+  endif()
+  set(targets_file ${NAME}-targets.cmake)
+  if(ARG_EXPORT_SET)
+    install(TARGETS ${ARG_TARGETS} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    set(content "")
+    foreach(target ${ARG_TARGETS})
+      string(
+        APPEND
+        content
+        "if(NOT TARGET ${NAMESPACE}${target})
+  add_library(${NAMESPACE}${target} STATIC IMPORTED)
+  set_target_properties(
+    ${NAMESPACE}${target}
+    PROPERTIES IMPORTED_LOCATION
+               \"\${CMAKE_CURRENT_LIST_DIR}/../../$<TARGET_FILE_NAME:${target}>\")
+  if(\"Threads\" IN_LIST _dftu_${NAME}_link)
+    set_property(TARGET ${NAMESPACE}${target} PROPERTY INTERFACE_LINK_LIBRARIES Threads::Threads)
+  endif()
+endif()
+")
+    endforeach()
+    set(generated ${CMAKE_BINARY_DIR}/dependency_configs/${NAME}/${targets_file})
+    set(prefix_content "set(_dftu_${NAME}_link ${ARG_DEPENDENCIES})\n")
+    file(GENERATE OUTPUT ${generated} CONTENT "${prefix_content}${content}")
+    install(FILES ${generated}
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${NAME})
+  else()
+    install(
+      TARGETS ${ARG_TARGETS}
+      EXPORT ${NAME}Targets
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(
+      EXPORT ${NAME}Targets
+      FILE ${targets_file}
+      NAMESPACE ${NAMESPACE}
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${NAME})
+  endif()
+  install_dependency_config(${NAME} ${targets_file}
+                            DEPENDENCIES ${ARG_DEPENDENCIES})
 endfunction()
 
 # The static libraries link highway, utf8proc and vectorscan privately, so a
@@ -371,6 +429,8 @@ function(need_zstd)
       "ZSTD_BUILD_SHARED OFF"
       "ZSTD_BUILD_STATIC ON"
       "ZSTD_LEGACY_SUPPORT OFF"
+      EXCLUDE_FROM_ALL
+      YES
       FORCE
       YES)
   endif()
@@ -400,13 +460,12 @@ function(need_zstd)
     APPEND
     PROPERTY INTERFACE_INCLUDE_DIRECTORIES
              "$<BUILD_INTERFACE:${zstd_SOURCE_DIR}/lib>")
-  # zstd's own install puts the archive and zstdTargets.cmake, which names
-  # zstd::libzstd_static, under the prefix.
   # zstd's build tree names only libzstd_static; nanoarrow links
-  # zstd::libzstd_static.
+  # zstd::libzstd_static. The installed zstdConfig.cmake names it the same.
   if(NOT TARGET zstd::libzstd_static)
     add_library(zstd::libzstd_static ALIAS libzstd_static)
   endif()
+  install_dependency_archive(zstd zstd:: EXPORT_SET zstdExports TARGETS libzstd_static)
   dftracer_utils_ok("Built zstd 1.5.7 with CPM (static, hidden)")
 endfunction()
 
@@ -437,7 +496,9 @@ function(need_libdeflate)
       OPTIONS
       "LIBDEFLATE_BUILD_SHARED_LIB OFF"
       "LIBDEFLATE_BUILD_STATIC_LIB ON"
-      "LIBDEFLATE_BUILD_GZIP OFF")
+      "LIBDEFLATE_BUILD_GZIP OFF"
+      EXCLUDE_FROM_ALL
+      YES)
   endif()
 
   if(libdeflate_ADDED)
@@ -446,6 +507,9 @@ function(need_libdeflate)
     if(TARGET libdeflate_static)
       set_target_properties(libdeflate_static
                             PROPERTIES POSITION_INDEPENDENT_CODE ON)
+      # Its header is not installed.
+      set_target_properties(libdeflate_static PROPERTIES PUBLIC_HEADER "")
+      install_dependency_archive(libdeflate libdeflate:: EXPORT_SET libdeflate_exported_targets TARGETS libdeflate_static)
     endif()
     dftracer_utils_ok("Built libdeflate with CPM")
   endif()
@@ -600,26 +664,6 @@ function(need_nanoarrow)
       add_library(nanoarrow::nanoarrow ALIAS nanoarrow_static)
     endif()
 
-    # Install headers
-    install(
-      DIRECTORY ${nanoarrow_SOURCE_DIR}/src/nanoarrow/
-      DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nanoarrow
-      FILES_MATCHING
-      PATTERN "*.h"
-      PATTERN "*.hpp"
-      PATTERN "testing" EXCLUDE
-      PATTERN "integration" EXCLUDE
-      PATTERN "device" EXCLUDE)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/nanoarrow/nanoarrow_config.h
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nanoarrow)
-    if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
-      install(
-        DIRECTORY ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/include/flatcc/
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/flatcc
-        FILES_MATCHING
-        PATTERN "*.h")
-    endif()
-
     # Suppress warnings from nanoarrow headers (redundant redeclarations, shadow
     # warnings in nanoarrow 0.8.0 internal headers)
     foreach(_na_target ${NANOARROW_TARGETS})
@@ -767,8 +811,17 @@ function(need_pcre2)
       "PCRE2_SUPPORT_LIBBZ2 OFF"
       "PCRE2_SUPPORT_LIBZ OFF"
       "PCRE2_SUPPORT_LIBEDIT OFF"
-      "PCRE2_SUPPORT_LIBREADLINE OFF")
+      "PCRE2_SUPPORT_LIBREADLINE OFF"
+      EXCLUDE_FROM_ALL
+      YES)
     if(pcre2_ADDED)
+      set(pcre2_dependencies)
+      if(REQUIRE_PTHREAD)
+        set(pcre2_dependencies Threads)
+      endif()
+      install_dependency_archive(pcre2 pcre2:: EXPORT_SET pcre2-targets
+                                 TARGETS pcre2-8-static
+                                 DEPENDENCIES ${pcre2_dependencies})
       dftracer_utils_ok("Added PCRE2 ${pcre2_VERSION} via CPM")
     endif()
   endif()
@@ -1072,9 +1125,10 @@ function(need_yaml_cpp)
       "YAML_CPP_BUILD_TOOLS OFF"
       "YAML_CPP_BUILD_CONTRIB OFF"
       "YAML_BUILD_SHARED_LIBS OFF"
-      "YAML_CPP_INSTALL ON"
+      "YAML_CPP_INSTALL OFF"
       FORCE
       YES)
+    install_dependency_archive(yaml-cpp yaml-cpp:: TARGETS yaml-cpp)
   endif()
 endfunction()
 
@@ -1102,7 +1156,9 @@ endfunction()
 # ==============================================================================
 
 function(need_test_deps)
-  cpmaddpackage(NAME doctest GITHUB_REPOSITORY doctest/doctest VERSION 2.4.11)
+  cpmaddpackage(
+    NAME doctest GITHUB_REPOSITORY doctest/doctest VERSION 2.4.11
+    OPTIONS "DOCTEST_NO_INSTALL ON")
 
   cpmaddpackage(
     NAME

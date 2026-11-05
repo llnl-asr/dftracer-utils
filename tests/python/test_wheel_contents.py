@@ -40,6 +40,7 @@ REQUIRED_PATTERNS = (
     "dftracer/lib/libdftracer_utils_json",
     "dftracer/lib/libdftracer_utils_duql",
     "dftracer/lib/libdftracer_utils_dataframe",
+    "dftracer/lib/libdftracer_utils_trace",
     "dftracer/lib/libdftracer_utils_utilities",
     "dftracer/bin/dftracer_index",
     "dftracer/bin/ldb",

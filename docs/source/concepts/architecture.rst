@@ -7,10 +7,10 @@ What this explains: how the codebase is layered, and the path a query takes
 from a ``.pfw.gz`` trace file on disk to a result the caller can use, in C++,
 C, or Python.
 
-Seven libraries, one dependency direction
+Eight libraries, one dependency direction
 -------------------------------------------
 
-The C++ build produces seven layered libraries, each as both a shared and a
+The C++ build produces eight layered libraries, each as both a shared and a
 static variant (``src/CMakeLists.txt``), aggregated behind
 ``dftracer::utils``:
 
@@ -32,12 +32,16 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   ``DataFrame``, the Highway kernels, and the Arrow bridge. It also holds the
   duql parts that call the dataframe (``vectorize``, ``lookup``, ``overlap``
   and ``group_fold``), so it links ``dftracer_utils_duql``.
+- ``dftracer_utils_trace`` is the trace layer: the index (build, plan, cache,
+  schemas), the views and folds, the trace reader and the Arrow interchange.
+  It links every library above it and never includes the parts of
+  ``dftracer_utils_utilities``.
 - ``dftracer_utils_utilities`` depends on the libraries above and
-  holds the top domain logic: trace reading, indexing, aggregation,
-  comparison, statistics, plugins, and replay.
+  holds the top domain logic: comparison, statistics, genesis, plugins, the
+  server, DLIO, and replay.
 
 The dependency runs one way, down this list. Nothing in ``runtime`` knows what
-a DFTracer event looks like; nothing in ``utilities`` reimplements scheduling,
+a DFTracer event looks like; nothing in ``trace`` or ``utilities`` reimplements scheduling,
 I/O, JSON parsing, or the columnar kernels. This split is why the coroutine
 runtime can be reasoned about (and tested) on its own, and why domain code
 never has to touch a raw file descriptor or worry about which io backend is
@@ -52,7 +56,8 @@ active.
        Json["dftracer_utils_json<br/>simdjson-backed parsing"]
        Query["dftracer_utils_duql<br/>predicate IR, evaluator"]
        DF["dftracer_utils_dataframe<br/>Series/DataFrame, SIMD kernels"]
-       Util["dftracer_utils_utilities<br/>trace, indexer, plugins"]
+       Trace["dftracer_utils_trace<br/>index, views, trace reader"]
+       Util["dftracer_utils_utilities<br/>comparator, plugins, server"]
        Store --> Runtime
        Io --> Runtime
        Io --> Json
@@ -61,11 +66,13 @@ active.
        Query --> Json
        DF --> Runtime
        DF --> Query
-       Util --> Runtime
-       Util --> Io
-       Util --> Json
-       Util --> Query
-       Util --> DF
+       Trace --> Runtime
+       Trace --> Store
+       Trace --> Io
+       Trace --> Json
+       Trace --> Query
+       Trace --> DF
+       Util --> Trace
 
 The domain logic itself is grouped by what it does rather than by a shared
 base class: readers and the fused scan under ``trace/``, the index under

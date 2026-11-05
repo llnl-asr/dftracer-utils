@@ -47,7 +47,7 @@ build dirs land under ``build/build-<preset>/``).
    cmake --preset dev            # RelWithDebInfo, shared + static, no Python
    cmake --build --preset dev
 
-The build produces seven layered component libraries, each as shared and static:
+The build produces eight layered component libraries, each as shared and static:
 
 - ``dftracer_utils_runtime``, the async runtime (coroutines, tasks, I/O backend,
   pipelines, common primitives).
@@ -58,8 +58,9 @@ The build produces seven layered component libraries, each as shared and static:
 - ``dftracer_utils_duql``, the duql filter language (predicate IR, string codec, evaluator).
 - ``dftracer_utils_dataframe``, the columnar SIMD engine (``Series`` /
   ``DataFrame``, Highway kernels, the Arrow bridge, query execution / masking).
-- ``dftracer_utils_utilities``, the domain layer (trace readers, indexer,
-  aggregation, comparison, statistics, plugins, DLIO, replay).
+- ``dftracer_utils_trace``, the trace layer (index, views, trace reader, Arrow).
+- ``dftracer_utils_utilities``, the domain layer (comparison, statistics,
+  genesis, plugins, server, DLIO, replay).
 
 You do not link these individually, ``find_package(dftracer_utils)`` and the
 ``dftracer::utils`` target pull the whole set transitively (see below).
@@ -260,7 +261,7 @@ project with ``find_package``:
 
 The exported targets are ``dftracer::utils`` (the default alias: shared, falling
 back to static), ``dftracer_utils::shared``, and ``dftracer_utils::static``.
-Linking any of them pulls in all five component libraries and their include
+Linking any of them pulls in all the component libraries and their include
 directories transitively, so no manual ``-I`` / ``-l`` is needed. The stable C ABI (``dftu_dataframe_*``,
 ``dftu_duql_*``, and the plugin ``abi.h``) ships in the same libraries, a C
 consumer links the same target and includes the C headers.
@@ -271,6 +272,14 @@ under ``<prefix>/lib/pkgconfig``:
 .. code-block:: console
 
    $ pkg-config --cflags --libs dftracer_utils_utilities
+
+Each file requires the libraries of ours that it needs. For a static link, add
+``--static`` to get the archives of the bundled third-party libraries too.
+
+The install holds only our own headers under ``<prefix>/include``. A static build
+also installs the archives and CMake configs of its bundled libraries (simdjson,
+zlib-ng, libdeflate, zstd, nanoarrow, pcre2, yaml-cpp, Highway), but no header
+of theirs.
 
 Verify the build
 ----------------

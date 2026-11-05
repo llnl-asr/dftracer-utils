@@ -7,7 +7,8 @@
 # libraries it bundles. Also check the libraries of ours that each shared
 # library needs: memory needs none, dstd needs only memory, common needs only
 # memory and dstd, coro needs only memory, dstd and common, io needs only memory,
-# dstd, common, coro, runtime and json, and json and duql do not need runtime.
+# dstd, common, coro, runtime and json, trace needs everything but utilities,
+# and json and duql do not need runtime.
 # Library names come from the create_library NAME arguments in
 # src/CMakeLists.txt.
 #
@@ -238,6 +239,10 @@ foreach(_name ${_names})
       message(SEND_ERROR "${_name}: needs ${_above_io}, but io needs only memory, dstd, common, coro, runtime and json")
       set(_failed TRUE)
     endif()
+  endif()
+  if(_name STREQUAL "dftracer_utils_trace" AND "dftracer_utils_utilities" IN_LIST _needed)
+    message(SEND_ERROR "${_name}: needs dftracer_utils_utilities, but trace is below utilities")
+    set(_failed TRUE)
   endif()
   if((_name STREQUAL "dftracer_utils_json" OR _name STREQUAL "dftracer_utils_duql")
      AND "dftracer_utils_runtime" IN_LIST _needed)

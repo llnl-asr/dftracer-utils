@@ -758,6 +758,7 @@ function(create_unified_library_config)
       DESCRIPTION
       URL
       PKG_CONFIG_REQUIRES
+      PKG_CONFIG_LIBS_PRIVATE
       BUILD_SHARED
       BUILD_STATIC)
   set(multiValueArgs FIND_DEPENDENCIES)
@@ -934,6 +935,8 @@ function(create_unified_library_config)
     URL
     "${CFG_URL}"
     REQUIRES
-    "${CFG_PKG_CONFIG_REQUIRES}")
+    "${CFG_PKG_CONFIG_REQUIRES}"
+    LIBS_PRIVATE
+    "${CFG_PKG_CONFIG_LIBS_PRIVATE}")
 
 endfunction()

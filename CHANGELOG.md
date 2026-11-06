@@ -462,6 +462,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix static linking from `pkg-config --static --libs` with pkg-config 0.29, which printed each library after the archives it needs.
 - Fix store writes that fail with "operation canceled" on Linux with io_uring when the thread that started them exits.
 - Fix a read blocked on a pipe or socket that stayed blocked through shutdown on Linux kernels older than 5.19 with io_uring.
 - Fix a small memory leak when a task is cancelled before its I/O operation starts.

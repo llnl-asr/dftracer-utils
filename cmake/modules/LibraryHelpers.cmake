@@ -654,8 +654,11 @@ function(_create_library_package_configs)
     string(APPEND PC_CONTENT "Requires: ${PKG_PKG_CONFIG_REQUIRES}\n")
   endif()
 
+  # pkg-config 0.29 prints Libs.private before Libs, so an archive that reads
+  # once needs the library named first here too.
   if(PKG_PKG_CONFIG_LIBS_PRIVATE)
-    string(APPEND PC_CONTENT "Libs.private: ${PKG_PKG_CONFIG_LIBS_PRIVATE}\n")
+    string(APPEND PC_CONTENT
+           "Libs.private: -l${PKG_OUTPUT_NAME} ${PKG_PKG_CONFIG_LIBS_PRIVATE}\n")
   endif()
 
   if(PKG_PKG_CONFIG_CFLAGS_PRIVATE)

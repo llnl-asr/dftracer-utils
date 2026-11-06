@@ -15,6 +15,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <exception>
+#include <mutex>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -22,22 +23,23 @@ using namespace dftracer::utils;
 namespace {
 
 /// A user executor that implements the one required operation: it keeps the
-/// handles it is given and the test thread runs them.
+/// handles it is given and the test thread runs them. A timer thread can post
+/// too, so the queue takes a lock.
 struct MiniExecutor : coro::Executor {
-    dstd::Vector<std::coroutine_handle<>> ready;
-
     void post(std::coroutine_handle<> handle) noexcept override {
-        if (handle) ready.push_back(handle);
+        if (!handle) return;
+        std::lock_guard<std::mutex> lock(mutex);
+        ready.push_back(handle);
     }
 
     /// Runs the queued handles in the order they were posted, then destroys
     /// the frames that finished. Everything the tasks post while they run is
     /// picked up before it returns.
     void run() {
-        while (!ready.empty()) {
-            std::coroutine_handle<> handle = ready.front();
-            ready.erase(ready.begin());
-            if (handle && !handle.done()) coro::resume_on(*this, handle);
+        for (;;) {
+            const std::coroutine_handle<> handle = take();
+            if (!handle) break;
+            if (!handle.done()) coro::resume_on(*this, handle);
         }
         coro::drain_thread_local_destroys();
     }
@@ -46,22 +48,37 @@ struct MiniExecutor : coro::Executor {
     /// `done` holds. Work another thread posts is picked up too.
     void run_until(const std::atomic<bool>& done) {
         while (!done.load(std::memory_order_acquire)) {
-            if (ready.empty()) {
+            const std::coroutine_handle<> handle = take();
+            if (!handle) {
                 coro::park_driver(&queue_filled, this,
                                   std::chrono::milliseconds{2});
                 continue;
             }
-            std::coroutine_handle<> handle = ready.front();
-            ready.erase(ready.begin());
-            if (handle && !handle.done()) coro::resume_on(*this, handle);
+            if (!handle.done()) coro::resume_on(*this, handle);
         }
         coro::drain_thread_local_destroys();
     }
 
-   private:
-    static bool queue_filled(void* self) {
-        return !static_cast<MiniExecutor*>(self)->ready.empty();
+    bool is_empty() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return ready.empty();
     }
+
+   private:
+    std::coroutine_handle<> take() {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (ready.empty()) return {};
+        const std::coroutine_handle<> handle = ready.front();
+        ready.erase(ready.begin());
+        return handle;
+    }
+
+    static bool queue_filled(void* self) {
+        return !static_cast<MiniExecutor*>(self)->is_empty();
+    }
+
+    std::mutex mutex;
+    dstd::Vector<std::coroutine_handle<>> ready;
 };
 
 coro::CoroTask<int> leaf(int value) {
@@ -118,7 +135,7 @@ coro::CoroTask<void> block_on_own_thread(MiniExecutor& exec, bool& threw,
     } catch (const common::DFTUtilsException&) {
         threw = true;
     }
-    left_queue_empty = exec.ready.empty();
+    left_queue_empty = exec.is_empty();
     task_untouched = !inner.done();
     co_return;
 }

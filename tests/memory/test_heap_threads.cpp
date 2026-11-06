@@ -143,6 +143,33 @@ TEST_CASE("the owner takes remote frees back on its slow path") {
     CHECK(second == std::set<void*>(first.begin(), first.end()));
 }
 
+TEST_CASE("a medium run freed by another thread reaches its owner at once") {
+    constexpr std::size_t SIZE = MIB;
+    constexpr int COUNT = 30;
+    std::vector<void*> first;
+    std::size_t reused = 0;
+    Gate allocated;
+    Gate freed;
+    std::thread owner([&] {
+        for (int i = 0; i < COUNT; ++i)
+            first.push_back(detail::page_allocate(SIZE, 16));
+        allocated.open();
+        freed.wait();
+        const std::set<void*> old(first.begin(), first.end());
+        std::vector<void*> again;
+        for (int i = 0; i < COUNT; ++i) {
+            again.push_back(detail::page_allocate(SIZE, 16));
+            reused += old.count(again.back());
+        }
+        for (void* p : again) detail::page_deallocate(p, SIZE);
+    });
+    allocated.wait();
+    for (void* p : first) detail::page_deallocate(p, SIZE);
+    freed.open();
+    owner.join();
+    CHECK(reused > 0);
+}
+
 TEST_CASE("a returned heap is adopted and its pending frees are drained") {
     constexpr int COUNT = 100;
     std::size_t start = live();

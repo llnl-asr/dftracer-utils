@@ -531,7 +531,11 @@ void remote_free(Heap& h, PageDesc* d, void* p) noexcept {
     store_link(p, c->head);
     c->head = p;
     if (c->tail == nullptr) c->tail = p;
-    if (++h.remote_count == REMOTE_BUFFER) flush_remote(h);
+    // A medium run can hold 1 MiB, so 64 of them waiting here on a thread that
+    // frees little else keep the owner mapping new spans.
+    if (++h.remote_count == REMOTE_BUFFER || d->kind != PageKind::Small) {
+        flush_remote(h);
+    }
 }
 
 void free_small_block(Heap& h, SpanHeader* s, std::size_t index,

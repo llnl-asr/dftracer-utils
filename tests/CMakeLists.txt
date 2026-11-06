@@ -496,10 +496,8 @@ foreach(test_file ${TEST_CPP_SOURCES})
 
   # Default timeout for all tests (safety net against hangs in CI)
   set(default_test_timeout 120)
-  if(DFTRACER_UTILS_ENABLE_TSAN)
+  if(DFTRACER_UTILS_ENABLE_TSAN OR DFTRACER_UTILS_ENABLE_ASAN)
     set(default_test_timeout 1800)
-  elseif(DFTRACER_UTILS_ENABLE_ASAN)
-    set(default_test_timeout 600)
   endif()
 
   set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${default_test_timeout})

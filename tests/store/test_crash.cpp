@@ -49,7 +49,10 @@ constexpr int ROUNDS = 20;
 /// A durable batch in every fourth round: the rounds between two durable ones
 /// are one unsynced window with several whole commits in it.
 constexpr int DURABLE_EVERY = 4;
-constexpr int TAIL_COMMITS = 45;
+/// More than CHECKPOINT_INTERVAL commits after the last durable sync, so
+/// however the rounds batch, a checkpoint summary names a record that is still
+/// unsynced.
+constexpr int TAIL_COMMITS = 70;
 constexpr std::size_t RAW_KEYS = 1;
 constexpr std::size_t RAW_VALUE_BYTES = 1000;
 /// A raw value longer than the format's big-value bound: its segment holds a

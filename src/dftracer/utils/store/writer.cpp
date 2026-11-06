@@ -154,6 +154,7 @@ NamespaceItem namespace_item(const NamespaceSpec& spec, NamespaceId id) {
     item.fold_kind = static_cast<std::uint8_t>(spec.fold);
     item.codec = static_cast<std::uint8_t>(spec.codec);
     item.durable = spec.durable ? 1 : 0;
+    item.shared = spec.shared ? 1 : 0;
     return item;
 }
 
@@ -526,6 +527,18 @@ dstd::Expected<void, dstd::Error> Writer::apply(
             }
             queued.push_back(
                 QueuedChange{batch, change.kind == ChangeKind::Dropped});
+            if (change.replaces_older) {
+                auto* hides = new PendingBatch;
+                hides->namespace_id = namespaces[i]->id.value;
+                hides->namespace_item =
+                    namespace_item(namespaces[i]->spec, namespaces[i]->id);
+                hides->scope_id = scopes[i]->id;
+                hides->scope_item = scope_item(*change.scope, scopes[i]->id);
+                hides->copy_item.local_id = 0;
+                hides->copy_item.generation = copies[i]->generation;
+                hides->durable = namespaces[i]->spec.durable;
+                queued.push_back(QueuedChange{hides, true});
+            }
         }
     }
     committer_.on_changes(
@@ -794,6 +807,35 @@ dstd::Expected<void, dstd::Error> Writer::prepare(const Batch& batch,
     return {};
 }
 
+dstd::Vector<EraseItem> Writer::erase_items(const Batch& batch,
+                                            std::uint32_t copy_id,
+                                            std::uint64_t ordinal) {
+    dstd::Vector<EraseItem> items;
+    items.reserve(batch.erases_.size());
+    for (const Batch::EraseEntry& erase : batch.erases_) {
+        EraseItem item;
+        item.copy_id = copy_id;
+        item.ordinal = ordinal;
+        item.begin_key = copy_bytes(erase.begin);
+        item.end_key = copy_bytes(erase.end);
+        items.push_back(std::move(item));
+    }
+    return items;
+}
+
+dstd::Optional<NamespaceSpec> Writer::spec_when_no_copy(
+    NamespaceId namespace_id, const ScopeKey& scope) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    NamespaceEntry* namespace_entry = find_namespace(namespace_id.value);
+    if (namespace_entry == nullptr) return dstd::nullopt;
+    ScopeEntry* scope_entry = find_scope(scope);
+    CopyEntry* copy_entry =
+        scope_entry == nullptr ? nullptr
+                               : find_copy(namespace_id.value, scope_entry->id);
+    if (copy_entry != nullptr && copy_entry->live) return dstd::nullopt;
+    return namespace_entry->spec;
+}
+
 dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
     if (committer_.failed()) {
@@ -828,7 +870,14 @@ dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
     }
 
     if (!charged) {
-        delete pending;
+        if (batch.erases_.empty()) {
+            delete pending;
+            return {};
+        }
+        committer_.on_erase(
+            pending,
+            erase_items(batch, pending->copy_item.local_id,
+                        next_ordinal_.fetch_add(1, std::memory_order_relaxed)));
         return {};
     }
 
@@ -840,6 +889,9 @@ dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
     info.copy_id = pending->copy_item.local_id;
     info.entry_count = segment->entry_count;
     info.ordinal = next_ordinal_.fetch_add(1, std::memory_order_relaxed);
+    // On the batch of the segment, so the record that lists the extent lists
+    // them too. A reader or a crash never sees the erases without the puts.
+    pending->erases = erase_items(batch, info.copy_id, info.ordinal);
     info.first_key = std::move(segment->first_key);
     info.last_key = std::move(segment->last_key);
 
@@ -998,7 +1050,9 @@ dstd::Expected<bool, dstd::Error> Writer::erase(NamespaceId namespace_id,
             copy_entry->sources);
         pending->durable = namespace_entry->spec.durable;
     }
-    committer_.on_erase(pending, std::move(item));
+    dstd::Vector<EraseItem> items;
+    items.push_back(std::move(item));
+    committer_.on_erase(pending, std::move(items));
     return true;
 }
 

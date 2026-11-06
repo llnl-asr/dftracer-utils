@@ -402,6 +402,8 @@ set(TEST_CPP_SOURCES
     store/test_crash.cpp
     store/test_processes.cpp
     store/test_store_api.cpp
+    store/test_store_fork.cpp
+    store/test_store_pack.cpp
     store/test_adopt.cpp
     index/test_agg_extension.cpp
     index/test_counters_columns.cpp

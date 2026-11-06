@@ -37,6 +37,29 @@ struct ScopeGeneration {
     std::uint64_t generation = 0;
 };
 
+/// One scope that Store::pack rewrites. A state of Absent is a whole-scope
+/// drop.
+struct PackTarget {
+    NamespaceSpec spec;
+    ScopeKey scope;
+    ScopeState state = ScopeState::Ready;
+    std::uint64_t params_hash = 0;
+    dstd::Vector<SourceStat> sources;
+};
+
+/// A closed file with no current data, and the files that replaced it.
+struct ReplacedFile {
+    dstd::String name;
+    std::uint64_t size = 0;
+    dstd::Vector<dstd::String> replaced_by;
+};
+
+struct PackPlan {
+    std::size_t files_packed = 0;
+    dstd::Vector<PackTarget> targets;
+    dstd::Vector<ReplacedFile> replaced;
+};
+
 /// Cumulative block reads, readable at any time from any thread. An open
 /// leaves them at zero.
 struct ReadStats {
@@ -266,6 +289,10 @@ struct ScopeGroup {
     dstd::Vector<dstd::UniquePtr<LazyBlock>> segments;
     std::uint64_t highest_generation = 0;
     bool dropped = false;
+    /// In a shared namespace, reads use the copies from first_visible to
+    /// current, the newest last. Otherwise only current.
+    bool shared = false;
+    std::size_t first_visible = 0;
     std::size_t current = 0;
 };
 
@@ -568,6 +595,12 @@ class ScanCursor {
     struct Arm {
         ScopeKey scope;
         const detail::ScopeGroup* group = nullptr;
+        /// The copy this arm reads, in group->copies.
+        std::size_t copy_index = 0;
+        /// A merge by key stays inside one rank. A fold merges the rows of all
+        /// its scopes, so they share a rank. A shared namespace merges only
+        /// the copies of one scope, so each scope has its own.
+        std::size_t merge_rank = 0;
         bool opened = false;
         ScopeCursor cursor;
     };
@@ -689,6 +722,11 @@ class Snapshot {
     dstd::Expected<dstd::Vector<ScopeGeneration>, dstd::Error> generations()
         const;
 
+    /// What Store::pack does on this view. Reads every directory block, and
+    /// the segment blocks of every file not below `small_file_bytes`.
+    dstd::Expected<PackPlan, dstd::Error> pack_plan(
+        std::uint64_t small_file_bytes, double dead_ratio) const;
+
     ScopeState state(const NamespaceSpec& spec, const ScopeKey& scope) const;
 
     /// The current copy of `scope` from the scope directories, reading no data
@@ -734,6 +772,14 @@ class Snapshot {
 
     Snapshot() = default;
 
+    /// Calls `visit(directory, index)` for each directory entry of `file`.
+    template <typename Visit>
+    dstd::Expected<void, dstd::Error> walk_directory(
+        const detail::FileData& file, Visit&& visit) const;
+
+    dstd::Expected<dstd::Optional<Value>, dstd::Error> get_in_copy(
+        const detail::CopyData& copy, const detail::ScopeGroup& group,
+        dstd::ByteView key) const;
     /// The group of a scope: from the leaf block of the first file whose
     /// directory holds it, built and published there on its first query. Null
     /// when no file holds the scope, and the error of a block that had to be

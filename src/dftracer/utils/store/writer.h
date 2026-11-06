@@ -93,6 +93,9 @@ struct CopyChange {
     std::uint64_t params_hash = 0;
     const dstd::Vector<SourceStat>* sources = nullptr;
     ChangeKind kind = ChangeKind::Ready;
+    /// Ready only, in a shared namespace. The copy stands for all older copies
+    /// of the scope, and the same record hides them.
+    bool replaces_older = false;
 };
 
 class Writer;
@@ -161,6 +164,10 @@ class Writer {
                                            const ScopeKey& scope,
                                            dstd::ByteView begin,
                                            dstd::ByteView end);
+    /// The spec of the namespace when this writer holds no current copy of the
+    /// scope, so a batch with erases has none of its own to hide keys in.
+    dstd::Optional<NamespaceSpec> spec_when_no_copy(NamespaceId namespace_id,
+                                                    const ScopeKey& scope);
     /// Hides the keys of [begin, end) that the current copy holds from earlier
     /// batches (an empty `end` means the last key). The copy stays current and
     /// a batch committed after it shows its keys again. False, with nothing
@@ -277,6 +284,9 @@ class Writer {
     void latch(const dstd::Error& error);
     dstd::Optional<dstd::Error> latched() const;
 
+    static dstd::Vector<EraseItem> erase_items(const Batch& batch,
+                                               std::uint32_t copy_id,
+                                               std::uint64_t ordinal);
     /// The three below create the PendingBatch for one change and update the
     /// copy bookkeeping. They hold the writer lock and cannot fail.
     PendingBatch* publish_locked(const NamespaceEntry& namespace_entry,

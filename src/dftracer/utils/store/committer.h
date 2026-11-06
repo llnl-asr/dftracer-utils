@@ -56,6 +56,8 @@ struct PendingBatch : dstd::HeapObject {
     /// the segment's extent lists each run as a block of the same commit, so a
     /// lost run makes that commit read as bad.
     dstd::Vector<ExtentRef> big_runs;
+    /// Recorded with the extent that holds the batch's segment.
+    dstd::Vector<EraseItem> erases;
     bool durable = false;
     /// The CopyItem is recorded again as the state that replaces the first.
     bool publish = false;
@@ -97,8 +99,9 @@ class Committer {
     /// last key and both empty a whole-scope drop. Takes ownership of `batch`.
     void on_drop(PendingBatch* batch, dstd::Vector<std::uint8_t>&& begin,
                  dstd::Vector<std::uint8_t>&& end);
-    /// Queues a range erase of one copy. Takes ownership of `batch`.
-    void on_erase(PendingBatch* batch, EraseItem&& item);
+    /// Queues range erases of one copy, all in one record. Takes ownership of
+    /// `batch`.
+    void on_erase(PendingBatch* batch, dstd::Vector<EraseItem>&& items);
     /// Queues copy state changes under one lock, so one record holds all of
     /// them: published building copies, failed copies and whole-scope drops.
     /// Takes ownership of every batch.
@@ -138,7 +141,7 @@ class Committer {
         bool emit_drop = false;
         dstd::Vector<std::uint8_t> begin_key;
         dstd::Vector<std::uint8_t> end_key;
-        dstd::Optional<EraseItem> erase;
+        dstd::Vector<EraseItem> erases;
     };
 
     struct WakeState;

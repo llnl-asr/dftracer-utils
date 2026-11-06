@@ -308,10 +308,10 @@ void Committer::on_drop(PendingBatch* batch, dstd::Vector<std::uint8_t>&& begin,
     add_entry(std::move(entry));
 }
 
-void Committer::on_erase(PendingBatch* batch, EraseItem&& item) {
+void Committer::on_erase(PendingBatch* batch, dstd::Vector<EraseItem>&& items) {
     PendingEntry entry;
     entry.batch = batch;
-    entry.erase = std::move(item);
+    entry.erases = std::move(items);
     add_entry(std::move(entry));
 }
 
@@ -439,6 +439,9 @@ dstd::Expected<void, dstd::Error> Committer::commit_pending() {
             for (void* context : entry.extent.contexts) {
                 auto* batch = static_cast<PendingBatch*>(context);
                 if (batch == nullptr) continue;
+                for (EraseItem& erase : batch->erases) {
+                    file_.add(std::move(erase));
+                }
                 for (const ExtentRef& run : batch->big_runs) {
                     ExtentRefItem big;
                     big.offset = run.offset;
@@ -481,7 +484,7 @@ dstd::Expected<void, dstd::Error> Committer::commit_pending() {
             item.end_key = std::move(entry.end_key);
             file_.add(std::move(item));
         }
-        if (entry.erase) file_.add(std::move(*entry.erase));
+        for (EraseItem& erase : entry.erases) file_.add(std::move(erase));
     }
 
     dstd::Expected<void, dstd::Error> recorded;

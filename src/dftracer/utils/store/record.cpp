@@ -112,7 +112,7 @@ dstd::Expected<NamespaceItem, dstd::Error> decode_namespace(
         !read_u32(bytes, at, item.format_version) ||
         !read_u8(bytes, at, item.fold_kind) ||
         !read_u8(bytes, at, item.codec) || !read_u8(bytes, at, item.durable) ||
-        at != bytes.size()) {
+        !read_u8(bytes, at, item.shared) || at != bytes.size()) {
         return parse_error();
     }
     return item;
@@ -275,6 +275,7 @@ void encode_namespace(dstd::Vector<std::uint8_t>& payload,
     payload.push_back(item.fold_kind);
     payload.push_back(item.codec);
     payload.push_back(item.durable);
+    payload.push_back(item.shared);
 }
 
 void encode_scope(dstd::Vector<std::uint8_t>& payload, const ScopeItem& item) {

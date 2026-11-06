@@ -101,6 +101,7 @@ constexpr ErrorCode errorcode_of(dstd::Condition c) noexcept {
         case dstd::Condition::Timeout:
         case dstd::Condition::Unsupported:
         case dstd::Condition::Cancelled:
+        case dstd::Condition::ForkedHandle:
             return ErrorCode::Unknown;
     }
     return ErrorCode::Unknown;

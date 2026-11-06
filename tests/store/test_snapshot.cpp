@@ -2242,6 +2242,30 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(close_writer(*writer).has_value());
     }
 
+    TEST_CASE("a file shorter than its header holds nothing and is no skip") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_newborn");
+        const ScopeKey scope = file_scope("/traces/n.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        Batch batch = writer->batch(*id, scope, 0);
+        batch.put(view_of(dstd::String("key-a")), view_of(dstd::String("a")));
+        REQUIRE(writer->commit(std::move(batch)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
+
+        write_file(dir.file("w-newborn-empty.dfs"), {});
+        write_file(dir.file("w-newborn-part.dfs"),
+                   dstd::Vector<std::uint8_t>(100, 0));
+
+        auto snapshot = engine::Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->skipped().empty());
+        auto cursor =
+            snapshot->scan(spec, scope, dstd::ByteView{}, dstd::ByteView{});
+        CHECK(collect(cursor).size() == 1);
+    }
+
     TEST_CASE("a file of another format version is skipped and listed") {
         dftu_utils_test::ScopedTestDir dir("snapshot_unsupported");
         const ScopeKey scope = file_scope("/traces/u.pfw");

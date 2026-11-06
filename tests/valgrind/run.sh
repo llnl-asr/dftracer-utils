@@ -430,6 +430,12 @@ run_cpp_one() {
     fi
   fi
 
+  # A forked child ends with blocks that its parent's threads own. Those threads
+  # do not exist in the child, so Valgrind reports the blocks as lost and each
+  # child exits with the error code. Memory errors in the child still fail.
+  local -a leak_errors=(--errors-for-leak-kinds=definite,indirect)
+  [[ "$name" == store/test_store_fork ]] && leak_errors=(--errors-for-leak-kinds=none)
+
   local -a doctest_args=()
   case "${name##*/}" in
   test_channel | test_reader | test_reader_stream | \
@@ -452,7 +458,7 @@ run_cpp_one() {
     valgrind "${COMMON_OPTS[@]}" "${CPP_OPTS[@]}" "${extra[@]}" \
     --leak-check=full \
     --show-leak-kinds=definite,indirect \
-    --errors-for-leak-kinds=definite,indirect \
+    "${leak_errors[@]}" \
     --suppressions="$SUPP_DIR/valgrind-cpp.supp" \
     --log-file="${logf}.%p" \
     "$exe" "${doctest_args[@]}" >"${logf}.out" 2>&1) || rc=$?

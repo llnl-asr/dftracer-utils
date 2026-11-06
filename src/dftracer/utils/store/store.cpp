@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/executor.h>
@@ -20,12 +21,14 @@
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/store.h>
 #include <dftracer/utils/store/writer.h>
+#include <pthread.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -38,6 +41,10 @@ namespace {
 
 using dstd::ByteView;
 
+/// Store::pack commits a rewritten copy in batches of about this size, which
+/// bounds what it holds in memory.
+constexpr std::size_t PACK_BATCH_BYTES = std::size_t{16} * 1024 * 1024;
+
 /// Most batches hold few entries, and an arena grows by full blocks after this.
 constexpr std::size_t FIRST_ARENA_BLOCK = 4096;
 
@@ -46,6 +53,34 @@ const std::array<std::uint8_t, 8> COUNT_VALUE = {1, 0, 0, 0, 0, 0, 0, 0};
 dstd::Unexpected<dstd::Error> invalid_error() {
     return dstd::Unexpected<dstd::Error>(
         dstd::Error(dstd::Condition::InvalidArgument));
+}
+
+/// Counts the forks this process came through. Each store call reads it, and
+/// getpid would be one more system call for every snapshot.
+std::atomic<std::uint64_t> g_forks{0};
+
+void count_fork_in_child() noexcept {
+    g_forks.fetch_add(1, std::memory_order_relaxed);
+}
+
+[[maybe_unused]] const bool FORK_COUNTER_REGISTERED =
+    ::pthread_atfork(nullptr, nullptr, count_fork_in_child) == 0;
+
+dstd::Error forked_handle_error() {
+    return dstd::Error(dstd::Condition::ForkedHandle,
+                       "store: this handle belongs to the parent of a fork, "
+                       "call Store::open in the child");
+}
+
+dstd::Error shared_erase_error() {
+    return dstd::Error(dstd::Condition::Unsupported,
+                       "store: a shared namespace has no erase");
+}
+
+dstd::Error foreign_copy_error() {
+    return dstd::Error(dstd::Condition::Unsupported,
+                       "erase needs the copy this writer wrote, and another "
+                       "data file holds the current copy of the scope");
 }
 
 /// Absolute and without a trailing separator, so two spellings of one directory
@@ -60,7 +95,7 @@ dstd::Path directory_key(dstd::StringView dir) {
 
 bool operator==(const NamespaceSpec& a, const NamespaceSpec& b) {
     return a.name == b.name && a.format_version == b.format_version &&
-           a.fold == b.fold && a.durable == b.durable;
+           a.fold == b.fold && a.durable == b.durable && a.shared == b.shared;
 }
 
 bool operator!=(const NamespaceSpec& a, const NamespaceSpec& b) {
@@ -132,6 +167,20 @@ void Batch::record_error(dstd::Condition condition) {
 void Batch::add(ByteView key, ByteView value) {
     const ByteView kept_key = keep(key);
     entries_.push_back(Entry{kept_key, keep(value)});
+}
+
+void Batch::erase(ByteView key) {
+    if (error_) return;
+    dstd::Vector<std::byte> end(key.size() + 1, std::byte{0});
+    std::copy_n(key.data(), key.size(), end.begin());
+    const ByteView kept_begin = keep(key);
+    erases_.push_back(EraseEntry{kept_begin, keep({end.data(), end.size()})});
+}
+
+void Batch::erase_range(ByteView begin, ByteView end) {
+    if (error_) return;
+    const ByteView kept_begin = keep(begin);
+    erases_.push_back(EraseEntry{kept_begin, keep(end)});
 }
 
 void Batch::put(ByteView key, ByteView value) {
@@ -276,6 +325,12 @@ void close_all_at_shutdown() {
 void Store::register_shutdown_close() {
     static std::atomic<bool> registered{false};
     if (registered.exchange(true, std::memory_order_acq_rel)) return;
+    // The exit check registers here, so it runs after the hook that this adds
+    // has stopped what holds memory.
+    if (auto configured = common::configure_memory_from_env(); !configured) {
+        DFTRACER_UTILS_LOG_ERROR("store: memory settings: %s",
+                                 configured.error().format().c_str());
+    }
     dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores,
                             &close_all_at_shutdown);
 }
@@ -285,6 +340,7 @@ struct Store::State {
     /// that made the call. First, so it closes after every other member is
     /// gone.
     memory::PoolHandle pool;
+    const std::uint64_t owner_fork = g_forks.load(std::memory_order_relaxed);
     dstd::Path dir;
     mutable std::mutex mutex;
     dstd::SharedPtr<Runtime> runtime;
@@ -310,6 +366,12 @@ struct Store::State {
     std::atomic<std::int64_t> next_look{0};
 
     using Registry = dstd::Map<dstd::String, dstd::WeakPtr<State>>;
+
+    /// True in the child of a fork. The mutexes may be held by a thread that
+    /// does not exist here, so this comes before any lock.
+    bool forked() const {
+        return g_forks.load(std::memory_order_relaxed) != owner_fork;
+    }
 
     static Registry& registry() {
         static dstd::NoDestructor<Registry> value;
@@ -358,6 +420,11 @@ struct Store::State {
         dstd::SharedPtr<State> self);
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> close_task(
         dstd::SharedPtr<State> self);
+    static coro::CoroTask<dstd::Expected<void, dstd::Error>> pack_rewrite(
+        dstd::SharedPtr<State> self, const engine::Snapshot& view,
+        const engine::PackPlan& plan, PackReport& report);
+    static coro::CoroTask<dstd::Expected<PackReport, dstd::Error>> pack_task(
+        dstd::SharedPtr<State> self, PackOptions options);
 };
 
 Store::State::State(dstd::Path directory)
@@ -367,6 +434,25 @@ Store::State::State(dstd::Path directory)
 
 Store::State::~State() {
     if (!pool) return;
+    if (forked()) {
+        // The threads these wait for are gone, and the writer's file is the
+        // parent's to close.
+        struct Inherited {
+            memory::PoolHandle pool;
+            dstd::SharedPtr<Runtime> runtime;
+            dstd::SharedPtr<engine::Writer> writer;
+            dstd::SharedPtr<const engine::Snapshot> held;
+            dstd::SharedPtr<const engine::Snapshot> published;
+        };
+        static dstd::NoDestructor<std::mutex> inherited_mutex;
+        static dstd::NoDestructor<dstd::Vector<Inherited>> inherited;
+        memory::detail::Scope general(memory::detail::Manager::get().general());
+        std::lock_guard<std::mutex> lock(*inherited_mutex);
+        inherited->push_back(Inherited{std::move(pool), std::move(runtime),
+                                       std::move(writer), std::move(held),
+                                       std::move(published)});
+        return;
+    }
     {
         memory::detail::Scope in_pool(*pool);
         drop_published();
@@ -386,7 +472,8 @@ Store::State::get_or_open(dstd::StringView dir) {
     auto& states = registry();
     auto found = states.find(key.str());
     if (found != states.end()) {
-        if (auto live = found->second.lock()) return live;
+        auto live = found->second.lock();
+        if (live && !live->forked()) return live;
     }
     const auto made = dstd::fs::create_directories(key.view());
     if (!made) {
@@ -421,6 +508,7 @@ dstd::Expected<void, dstd::Error> Store::State::ensure_dir_locked() {
 
 dstd::Expected<dstd::SharedPtr<engine::Writer>, dstd::Error>
 Store::State::writer_for_use() {
+    if (forked()) return dstd::Unexpected<dstd::Error>(forked_handle_error());
     memory::detail::Scope in_pool(*pool);
     std::lock_guard<std::mutex> lock(mutex);
     if (writer) return writer;
@@ -571,6 +659,29 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::State::commit_task(
     auto opened = self->writer_for_use();
     if (!opened) co_return dstd::Unexpected<dstd::Error>(opened.error());
     const dstd::SharedPtr<engine::Writer> writer = *opened;
+    if (!batch.erases_.empty()) {
+        bool shared = false;
+        {
+            std::lock_guard<std::mutex> lock(self->mutex);
+            for (const Namespace& known : self->namespaces) {
+                if (known.id == batch.namespace_id_) shared = known.spec.shared;
+            }
+        }
+        if (shared) {
+            co_return dstd::Unexpected<dstd::Error>(shared_erase_error());
+        }
+        auto spec = writer->spec_when_no_copy(
+            engine::NamespaceId{batch.namespace_id_}, batch.scope_);
+        if (spec) {
+            auto view = Store(self).snapshot();
+            if (!view) co_return dstd::Unexpected<dstd::Error>(view.error());
+            const Namespace ns{*spec, batch.namespace_id_};
+            if (view->copy_info(ns, batch.scope_).state == ScopeState::Ready) {
+                co_return dstd::Unexpected<dstd::Error>(foreign_copy_error());
+            }
+            batch.erases_.clear();
+        }
+    }
     auto result = writer->commit(std::move(batch));
     while (!result && result.error().is_code(engine::WriterErrc::Busy)) {
         co_await writer->space();
@@ -603,6 +714,9 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::State::failed_task(
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::State::flush_task(
     dstd::SharedPtr<State> self) {
+    if (self->forked()) {
+        co_return dstd::Unexpected<dstd::Error>(forked_handle_error());
+    }
     dstd::SharedPtr<engine::Writer> writer;
     {
         std::lock_guard<std::mutex> lock(self->mutex);
@@ -616,6 +730,9 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::State::flush_task(
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::State::close_task(
     dstd::SharedPtr<State> self) {
+    if (self->forked()) {
+        co_return dstd::Unexpected<dstd::Error>(forked_handle_error());
+    }
     dstd::SharedPtr<engine::Writer> writer = self->take_writer().writer;
     if (!writer) co_return dstd::Expected<void, dstd::Error>{};
     auto closed = co_await writer->close();
@@ -627,6 +744,122 @@ std::uint64_t internal::opens() noexcept {
     return open_count.load(std::memory_order_relaxed);
 }
 
+coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::State::pack_rewrite(
+    dstd::SharedPtr<State> self, const engine::Snapshot& view,
+    const engine::PackPlan& plan, PackReport& report) {
+    using Failure = dstd::Unexpected<dstd::Error>;
+    Store store(self);
+    dstd::Vector<engine::CopyChange> changes;
+    for (const engine::PackTarget& target : plan.targets) {
+        auto handle = store.ns(target.spec);
+        if (!handle) {
+            if (!handle.error().is(dstd::Condition::InvalidArgument)) {
+                co_return Failure(handle.error());
+            }
+            ++report.copies_skipped;
+            continue;
+        }
+        engine::ChangeKind kind = engine::ChangeKind::Ready;
+        if (target.state == ScopeState::Absent) {
+            kind = engine::ChangeKind::Dropped;
+        } else if (target.state == ScopeState::Failed) {
+            kind = engine::ChangeKind::Failed;
+        } else {
+            engine::ScanCursor rows = view.scan(
+                target.spec, target.scope, dstd::ByteView{}, dstd::ByteView{});
+            std::size_t batch_bytes = 0;
+            Batch batch = store.building_batch(*handle, target.scope);
+            while (!rows.at_end()) {
+                auto value = rows.value();
+                if (!value) co_return Failure(value.error());
+                batch.add(rows.key(), *value);
+                batch_bytes += rows.key().size() + value->size();
+                rows.next();
+                if (batch_bytes < PACK_BATCH_BYTES) continue;
+                auto committed = co_await commit_task(self, std::move(batch));
+                if (!committed) co_return Failure(committed.error());
+                batch = store.building_batch(*handle, target.scope);
+                batch_bytes = 0;
+            }
+            if (rows.error()) co_return Failure(*rows.error());
+            auto committed = co_await commit_task(self, std::move(batch));
+            if (!committed) co_return Failure(committed.error());
+        }
+        changes.push_back(engine::CopyChange{
+            engine::NamespaceId{handle->id}, &target.scope, target.params_hash,
+            target.sources.empty() ? nullptr : &target.sources, kind,
+            target.spec.shared && kind == engine::ChangeKind::Ready});
+        ++report.copies_written;
+    }
+    if (changes.empty()) co_return dstd::Expected<void, dstd::Error>{};
+    auto published = co_await publish_task(self, std::move(changes));
+    if (!published) co_return Failure(published.error());
+    co_return dstd::Expected<void, dstd::Error>{};
+}
+
+coro::CoroTask<dstd::Expected<PackReport, dstd::Error>> Store::State::pack_task(
+    dstd::SharedPtr<State> self, PackOptions options) {
+    using Failure = dstd::Unexpected<dstd::Error>;
+    if (self->forked()) co_return Failure(forked_handle_error());
+    auto closed_before = co_await close_task(self);
+    if (!closed_before) co_return Failure(closed_before.error());
+
+    auto view = engine::Snapshot::open(self->dir.str());
+    if (!view) co_return Failure(view.error());
+    auto plan = view->pack_plan(options.small_file_bytes, options.dead_ratio);
+    if (!plan) co_return Failure(plan.error());
+
+    PackReport report;
+    report.files_packed = plan->files_packed;
+    auto rewritten = co_await pack_rewrite(self, *view, *plan, report);
+    // Also on a failure: copies left building would refuse plain batches. They
+    // stay hidden from readers, and the old copies stay current.
+    auto closed_after = co_await close_task(self);
+    if (!rewritten) co_return Failure(rewritten.error());
+    if (!closed_after) co_return Failure(closed_after.error());
+
+    auto after = engine::Snapshot::open(self->dir.str());
+    if (!after) co_return Failure(after.error());
+    // Every file counts as small, so this reads no segment block: only the
+    // list of replaced files is used.
+    auto settled =
+        after->pack_plan(std::numeric_limits<std::uint64_t>::max(), 2.0);
+    if (!settled) co_return Failure(settled.error());
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+    const std::uint64_t keep_ns = options.keep_seconds * 1000000000ULL;
+    for (const engine::ReplacedFile& file : settled->replaced) {
+        bool old_enough = true;
+        for (const dstd::String& name : file.replaced_by) {
+            auto stamp =
+                dstd::fs::mtime_ns((self->dir / dstd::PathView(name)).view());
+            if (!stamp) {
+                old_enough = false;
+                break;
+            }
+            const std::uint64_t age =
+                static_cast<std::uint64_t>(now) > *stamp
+                    ? static_cast<std::uint64_t>(now) - *stamp
+                    : 0;
+            old_enough = old_enough && age >= keep_ns;
+        }
+        if (!old_enough) continue;
+        auto removed =
+            dstd::fs::remove((self->dir / dstd::PathView(file.name)).view());
+        if (!removed) {
+            co_return Failure(
+                dstd::Error(dstd::Condition::Io,
+                            common::str_cat("store: cannot delete ", file.name,
+                                            ": ", removed.error().message())));
+        }
+        ++report.files_deleted;
+        report.bytes_deleted += file.size;
+    }
+    self->bump_version();
+    co_return report;
+}
+
 dstd::Expected<Store, dstd::Error> Store::open(dstd::StringView dir) {
     auto state = State::get_or_open(dir);
     if (!state) return dstd::Unexpected<dstd::Error>(state.error());
@@ -635,6 +868,10 @@ dstd::Expected<Store, dstd::Error> Store::open(dstd::StringView dir) {
 
 dstd::Expected<Namespace, dstd::Error> Store::ns(const NamespaceSpec& spec) {
     if (spec.name.empty()) return invalid_error();
+    if (spec.shared && spec.fold != FoldKind::None) return invalid_error();
+    if (state_->forked()) {
+        return dstd::Unexpected<dstd::Error>(forked_handle_error());
+    }
     memory::detail::Scope in_pool(*state_->pool);
     std::lock_guard<std::mutex> lock(state_->mutex);
     for (const Namespace& known : state_->namespaces) {
@@ -737,6 +974,9 @@ dstd::Expected<void, dstd::Error> Store::erase(const Namespace& ns,
                                                const ScopeKey& scope,
                                                dstd::ByteView begin,
                                                dstd::ByteView end) {
+    if (ns.spec.shared) {
+        return dstd::Unexpected<dstd::Error>(shared_erase_error());
+    }
     auto opened = state_->writer_for_use();
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
     auto erased =
@@ -747,10 +987,12 @@ dstd::Expected<void, dstd::Error> Store::erase(const Namespace& ns,
     auto view = snapshot();
     if (!view) return dstd::Unexpected<dstd::Error>(view.error());
     if (view->copy_info(ns, scope).state != ScopeState::Ready) return {};
-    return dstd::Unexpected<dstd::Error>(
-        dstd::Error(dstd::Condition::Unsupported,
-                    "erase needs the copy this writer wrote, and another data "
-                    "file holds the current copy of the scope"));
+    return dstd::Unexpected<dstd::Error>(foreign_copy_error());
+}
+
+coro::CoroTask<dstd::Expected<PackReport, dstd::Error>> Store::pack(
+    PackOptions options) {
+    return State::pack_task(state_, options);
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::flush() {
@@ -761,7 +1003,21 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::close() {
     return State::close_task(state_);
 }
 
+dstd::Expected<void, dstd::Error> Store::refresh() {
+    if (state_->forked()) {
+        return dstd::Unexpected<dstd::Error>(forked_handle_error());
+    }
+    memory::detail::Scope in_pool(*state_->pool);
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->foreign_checked = {};
+    state_->refresh_if_changed_locked();
+    return {};
+}
+
 dstd::Expected<Snapshot, dstd::Error> Store::snapshot() {
+    if (state_->forked()) {
+        return dstd::Unexpected<dstd::Error>(forked_handle_error());
+    }
     auto held = state_->snapshot();
     if (!held) return dstd::Unexpected<dstd::Error>(held.error());
     Snapshot view;
@@ -774,8 +1030,8 @@ dstd::Expected<void, dstd::Error> Store::close_all() {
     {
         std::lock_guard<std::mutex> lock(registry_mutex());
         for (const auto& entry : State::registry()) {
-            if (auto state = entry.second.lock())
-                live.push_back(std::move(state));
+            auto state = entry.second.lock();
+            if (state && !state->forked()) live.push_back(std::move(state));
         }
     }
     dstd::Expected<void, dstd::Error> first;
@@ -797,6 +1053,7 @@ dstd::Expected<std::size_t, dstd::Error> Store::adopt(dstd::StringView from_dir,
         std::lock_guard<std::mutex> lock(registry_mutex());
         auto found = State::registry().find(key.str());
         if (found != State::registry().end()) live = found->second.lock();
+        if (live && live->forked()) live = nullptr;
     }
     if (live) {
         std::lock_guard<std::mutex> lock(live->mutex);

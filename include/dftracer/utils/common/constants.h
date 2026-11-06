@@ -64,6 +64,14 @@ inline constexpr std::uint32_t TOOL_DEADLOCK_TIMEOUT_SECONDS = 600;
 }  // namespace executor_settings
 
 namespace store {
+/// Store::pack merges closed data files below this size.
+inline constexpr std::uint64_t STORE_PACK_SMALL_FILE_BYTES =
+    std::uint64_t{64} * 1024 * 1024;
+/// Store::pack rewrites a larger closed file once this share of it is dead.
+inline constexpr double STORE_PACK_DEAD_RATIO = 0.5;
+/// Store::pack keeps a replaced file this long, for snapshots that still read
+/// it.
+inline constexpr std::uint64_t STORE_PACK_KEEP_SECONDS = 3600;
 /// The raw bytes of a data extent of a new index store file. A Lustre file
 /// takes its largest stripe size, capped at STORE_MAX_EXTENT_BYTES, and
 /// anything else STORE_DEFAULT_EXTENT_BYTES. STORE_EXTENT_BYTES_ENV overrides

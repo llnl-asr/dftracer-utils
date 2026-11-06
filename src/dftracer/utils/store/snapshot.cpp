@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -72,6 +73,17 @@ dstd::String path_string(dstd::StringView dir, dstd::StringView name) {
     if (!out.empty() && out.back() != '/') out.push_back('/');
     out.append(name.data(), name.size());
     return out;
+}
+
+bool namespace_is_shared(const detail::FileData& file,
+                         const NamespaceSpec& spec) {
+    for (const NamespaceItem& item : file.reader.index().namespaces) {
+        if (item.name == spec.name &&
+            item.format_version == spec.format_version) {
+            return item.shared != 0;
+        }
+    }
+    return false;
 }
 
 void warn_skipped(dstd::StringView dir, dstd::StringView name,
@@ -610,7 +622,12 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
         }
         auto reader = DataFileReader::open(path, FooterItems::Directory);
         if (!reader) {
-            open_errors[index] = reader.error();
+            // Another process just created it and has not written its header,
+            // or crashed before that. Either way it holds no commit.
+            const auto size = dstd::fs::file_size(dstd::PathView(path));
+            if (!size || *size >= FILE_HEADER_BYTES) {
+                open_errors[index] = reader.error();
+            }
             return;
         }
         detail::FileData& file = opened[index].emplace(std::move(*reader));
@@ -626,7 +643,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
             skipped_.push_back({names[index], *open_errors[index]});
             continue;
         }
-        files_.push_back(std::move(*opened[index]));
+        if (opened[index]) files_.push_back(std::move(*opened[index]));
     }
 
     const auto group_commits = [&](std::size_t file_index) {
@@ -1060,6 +1077,45 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
     return report;
 }
 
+template <typename Visit>
+dstd::Expected<void, dstd::Error> Snapshot::walk_directory(
+    const detail::FileData& file, Visit&& visit) const {
+    dstd::Optional<dstd::Error> failure;
+    const auto walk = [&](const detail::LazyBlock& node, std::uint32_t level,
+                          auto&& self) -> void {
+        if (failure) return;
+        detail::LazyBlock& block = const_cast<detail::LazyBlock&>(node);
+        const detail::LoadStatus status = load_block(file, block);
+        if (status.state != detail::LoadState::Good) {
+            failure = status.state == detail::LoadState::Failed
+                          ? status.error
+                          : dstd::Error(dstd::Condition::Parse);
+            return;
+        }
+        if (level > 1) {
+            for (const dstd::UniquePtr<detail::LazyBlock>& child :
+                 node.children) {
+                self(*child, level - 1, self);
+            }
+            return;
+        }
+        for (std::size_t index = 0; index < node.directory->size(); ++index) {
+            auto visited = visit(*node.directory, index);
+            if (!visited) {
+                failure = visited.error();
+                return;
+            }
+        }
+    };
+    if (file.directory_levels != 0) {
+        for (const dstd::UniquePtr<detail::LazyBlock>& root : file.roots) {
+            walk(*root, file.directory_levels, walk);
+        }
+    }
+    if (failure) return dstd::Unexpected<dstd::Error>(*failure);
+    return {};
+}
+
 dstd::Expected<dstd::Vector<ScopeGeneration>, dstd::Error>
 Snapshot::generations() const {
     struct Item {
@@ -1067,45 +1123,24 @@ Snapshot::generations() const {
         std::uint64_t generation = 0;
     };
     dstd::Vector<Item> items;
-    dstd::Optional<dstd::Error> failure;
     for (const detail::FileData& file : files_) {
         // A block that does not load fails the whole call: a writer takes its
         // generations from here, and a scope left out would start again low.
-        const auto walk = [&](const detail::LazyBlock& node,
-                              std::uint32_t level, auto&& self) -> void {
-            if (failure) return;
-            detail::LazyBlock& block = const_cast<detail::LazyBlock&>(node);
-            const detail::LoadStatus status = load_block(file, block);
-            if (status.state != detail::LoadState::Good) {
-                failure = status.state == detail::LoadState::Failed
-                              ? status.error
-                              : dstd::Error(dstd::Condition::Parse);
-                return;
-            }
-            if (level > 1) {
-                for (const dstd::UniquePtr<detail::LazyBlock>& child :
-                     node.children) {
-                    self(*child, level - 1, self);
-                }
-                return;
-            }
-            for (std::size_t index = 0; index < node.directory->size();
-                 ++index) {
-                auto key = node.directory->key(index);
-                auto highest = node.directory->highest_generation(index);
+        auto walked = walk_directory(
+            file,
+            [&items](const ScopeDirectory& directory,
+                     std::size_t index) -> dstd::Expected<void, dstd::Error> {
+                auto key = directory.key(index);
+                auto highest = directory.highest_generation(index);
                 if (!key || !highest) {
-                    failure = dstd::Error(dstd::Condition::Parse);
-                    return;
+                    return dstd::Unexpected<dstd::Error>(
+                        dstd::Error(dstd::Condition::Parse));
                 }
                 items.push_back({std::move(*key), *highest});
-            }
-        };
-        if (file.directory_levels == 0) continue;
-        for (const dstd::UniquePtr<detail::LazyBlock>& root : file.roots) {
-            walk(*root, file.directory_levels, walk);
-        }
+                return {};
+            });
+        if (!walked) return dstd::Unexpected<dstd::Error>(walked.error());
     }
-    if (failure) return dstd::Unexpected<dstd::Error>(*failure);
     std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
         return compare_directory_keys(a.key, b.key) < 0;
     });
@@ -1124,6 +1159,248 @@ Snapshot::generations() const {
         at = end;
     }
     return out;
+}
+
+dstd::Expected<PackPlan, dstd::Error> Snapshot::pack_plan(
+    std::uint64_t small_file_bytes, double dead_ratio) const {
+    struct Row {
+        std::size_t file = 0;
+        DirectoryKey key;
+        /// The newest copy this file has that a reader can see.
+        std::uint64_t copy_generation = 0;
+        CopyState copy_state = CopyState::Ready;
+        std::uint64_t params_hash = 0;
+        dstd::Vector<SourceStat> sources;
+        std::uint64_t drop_generation = 0;
+        std::uint64_t range_drop_generation = 0;
+    };
+    dstd::Vector<Row> rows;
+    for (std::size_t file = 0; file < files_.size(); ++file) {
+        auto walked = walk_directory(
+            files_[file],
+            [&rows, file](const ScopeDirectory& directory, std::size_t index)
+                -> dstd::Expected<void, dstd::Error> {
+                auto entry = directory.entry(index);
+                if (!entry) {
+                    return dstd::Unexpected<dstd::Error>(entry.error());
+                }
+                Row row;
+                row.file = file;
+                row.key = entry->key;
+                for (const DirectoryCopy& copy : entry->copies) {
+                    if (copy.state == CopyState::Building ||
+                        copy.generation < row.copy_generation) {
+                        continue;
+                    }
+                    row.copy_generation = copy.generation;
+                    row.copy_state = copy.state;
+                    row.params_hash = copy.params_hash;
+                    row.sources = copy.sources;
+                }
+                for (const DirectoryDrop& drop : entry->drops) {
+                    std::uint64_t& newest =
+                        drop.begin.empty() && drop.end.empty()
+                            ? row.drop_generation
+                            : row.range_drop_generation;
+                    newest = std::max(newest, drop.generation);
+                }
+                rows.push_back(std::move(row));
+                return {};
+            });
+        if (!walked) return dstd::Unexpected<dstd::Error>(walked.error());
+    }
+    dstd::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+        return compare_directory_keys(a.key, b.key) < 0;
+    });
+
+    const auto spec_of = [this](const DirectoryKey& key) {
+        NamespaceSpec spec;
+        spec.name = dstd::String(key.name.data(), key.name.size());
+        spec.format_version = key.format_version;
+        for (const detail::FileData& file : files_) {
+            for (const NamespaceItem& item : file.reader.index().namespaces) {
+                if (item.name != spec.name ||
+                    item.format_version != key.format_version) {
+                    continue;
+                }
+                spec.fold = static_cast<FoldKind>(item.fold_kind);
+                spec.codec = static_cast<PageCodec>(item.codec);
+                spec.durable = item.durable != 0;
+                spec.shared = item.shared != 0;
+                return spec;
+            }
+        }
+        return spec;
+    };
+
+    struct Group {
+        std::size_t begin = 0;
+        std::size_t end = 0;
+        std::size_t newest_row = 0;
+        bool dropped = false;
+        dstd::Vector<std::size_t> holders;
+    };
+    const auto reads_after = [this](std::size_t a, std::size_t b) {
+        const detail::FileData& file_a = files_[a];
+        const detail::FileData& file_b = files_[b];
+        if (file_a.writer_random != file_b.writer_random) {
+            return file_a.writer_random > file_b.writer_random;
+        }
+        return file_a.name.compare(file_b.name) > 0;
+    };
+    dstd::Vector<Group> groups;
+    dstd::Vector<std::uint8_t> file_live(files_.size(), 0);
+    dstd::Vector<dstd::Set<std::size_t>> file_replaced_by(files_.size());
+    for (std::size_t at = 0; at < rows.size();) {
+        Group group;
+        group.begin = at;
+        std::uint64_t current = 0;
+        std::uint64_t whole_drop = 0;
+        for (group.end = at;
+             group.end < rows.size() &&
+             compare_directory_keys(rows[group.end].key, rows[at].key) == 0;
+             ++group.end) {
+            const Row& row = rows[group.end];
+            // The tie-break of find_group, so the state and sources pack keeps
+            // belong to the copy whose rows it scans.
+            const bool newer =
+                row.copy_generation > current ||
+                (row.copy_generation != 0 && row.copy_generation == current &&
+                 reads_after(row.file, rows[group.newest_row].file));
+            if (newer) {
+                current = row.copy_generation;
+                group.newest_row = group.end;
+            }
+            whole_drop = std::max(whole_drop, row.drop_generation);
+        }
+        group.dropped = whole_drop > current;
+        const bool shared = spec_of(rows[at].key).shared;
+        for (std::size_t i = group.begin; i < group.end; ++i) {
+            const Row& row = rows[i];
+            const bool holds =
+                group.dropped
+                    ? row.drop_generation == whole_drop
+                    : (shared && row.copy_generation != 0 &&
+                       row.copy_generation >= whole_drop) ||
+                          (current != 0 && row.copy_generation == current) ||
+                          row.range_drop_generation > current;
+            if (holds) {
+                group.holders.push_back(row.file);
+                file_live[row.file] = 1;
+            }
+        }
+        for (std::size_t i = group.begin; i < group.end; ++i) {
+            for (const std::size_t holder : group.holders) {
+                if (holder != rows[i].file) {
+                    file_replaced_by[rows[i].file].insert(holder);
+                }
+            }
+        }
+        at = group.end;
+        if (!group.holders.empty()) groups.push_back(std::move(group));
+    }
+
+    const auto closed = [this](std::size_t file) {
+        return files_[file].reader.index().tail.has_value();
+    };
+    const auto is_small = [&](std::size_t file) {
+        return files_[file].reader.file_size() < small_file_bytes;
+    };
+    dstd::Vector<std::uint64_t> live_bytes(files_.size(), 0);
+    dstd::Vector<std::uint64_t> total_bytes(files_.size(), 0);
+    bool any_large = false;
+    for (std::size_t file = 0; file < files_.size(); ++file) {
+        any_large = any_large ||
+                    (closed(file) && file_live[file] != 0 && !is_small(file));
+    }
+    if (any_large) {
+        for (const Group& group : groups) {
+            const DirectoryKey& key = rows[group.begin].key;
+            auto found = find_group(spec_of(key), scope_of(key));
+            if (!found) return dstd::Unexpected<dstd::Error>(found.error());
+            if (*found == nullptr) continue;
+            const detail::ScopeGroup& held = **found;
+            for (std::size_t c = 0; c < held.copies.size(); ++c) {
+                const detail::CopyData& copy = held.copies[c];
+                if (is_small(copy.file_index)) continue;
+                std::uint64_t bytes = 0;
+                for (const detail::CopyCommit& commit : copy.commits) {
+                    auto run = copy_segments(copy, commit);
+                    if (!run) return dstd::Unexpected<dstd::Error>(run.error());
+                    if (run->block == nullptr) continue;
+                    for (std::size_t i = run->begin; i < run->end; ++i) {
+                        bytes += run->block->segments[i].length;
+                    }
+                }
+                total_bytes[copy.file_index] += bytes;
+                if (!held.dropped &&
+                    (c == held.current ||
+                     (held.shared && c >= held.first_visible))) {
+                    live_bytes[copy.file_index] += bytes;
+                }
+            }
+        }
+    }
+
+    dstd::Vector<std::uint8_t> packed(files_.size(), 0);
+    std::size_t small_live = 0;
+    for (std::size_t file = 0; file < files_.size(); ++file) {
+        if (closed(file) && file_live[file] != 0 && is_small(file)) {
+            ++small_live;
+        }
+    }
+    PackPlan plan;
+    for (std::size_t file = 0; file < files_.size(); ++file) {
+        if (!closed(file) || file_live[file] == 0) continue;
+        const bool wanted =
+            is_small(file)
+                ? small_live >= 2
+                : total_bytes[file] != 0 &&
+                      static_cast<double>(total_bytes[file] -
+                                          live_bytes[file]) >=
+                          dead_ratio * static_cast<double>(total_bytes[file]);
+        if (!wanted) continue;
+        packed[file] = 1;
+        ++plan.files_packed;
+    }
+    for (const Group& group : groups) {
+        bool chosen = false;
+        bool held_open = false;
+        for (const std::size_t holder : group.holders) {
+            chosen = chosen || packed[holder] != 0;
+            held_open = held_open || !closed(holder);
+        }
+        if (!chosen || held_open) continue;
+        const Row& newest = rows[group.newest_row];
+        PackTarget target;
+        target.spec = spec_of(rows[group.begin].key);
+        target.scope = scope_of(rows[group.begin].key);
+        if (group.dropped) {
+            target.state = ScopeState::Absent;
+        } else {
+            target.state = newest.copy_state == CopyState::Failed
+                               ? ScopeState::Failed
+                               : ScopeState::Ready;
+            target.params_hash = newest.params_hash;
+            target.sources = newest.sources;
+        }
+        plan.targets.push_back(std::move(target));
+    }
+    for (std::size_t file = 0; file < files_.size(); ++file) {
+        if (!closed(file) || file_live[file] != 0) continue;
+        ReplacedFile replaced;
+        replaced.name = files_[file].name;
+        replaced.size = files_[file].reader.file_size();
+        // A file without a footer may have lost commits to a crash, so it
+        // cannot stand in for the last complete copy.
+        bool complete = true;
+        for (const std::size_t holder : file_replaced_by[file]) {
+            complete = complete && closed(holder);
+            replaced.replaced_by.push_back(files_[holder].name);
+        }
+        if (complete) plan.replaced.push_back(std::move(replaced));
+    }
+    return plan;
 }
 
 detail::GroupSlots::~GroupSlots() {
@@ -1252,6 +1529,7 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
         if (!entry) return dstd::Unexpected<dstd::Error>(entry.error());
         group->highest_generation =
             std::max(group->highest_generation, entry->highest_generation);
+        group->shared = group->shared || namespace_is_shared(held, spec);
         for (const DirectoryCopy& listed : entry->copies) {
             // A copy still building is not readable until it is published.
             if (listed.state == CopyState::Building) continue;
@@ -1319,6 +1597,16 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
     } else {
         group->current = group->copies.size() - 1U;
         const std::uint64_t current = group->copies[group->current].generation;
+        if (group->shared) {
+            std::uint64_t floor = 0;
+            for (const DirectoryDrop& drop : drops) {
+                floor = std::max(floor, drop.generation);
+            }
+            while (group->first_visible < group->copies.size() &&
+                   group->copies[group->first_visible].generation < floor) {
+                ++group->first_visible;
+            }
+        }
         for (const DirectoryDrop& drop : drops) {
             if (drop.generation <= current) continue;
             if (drop.begin.empty() && drop.end.empty()) {
@@ -2279,8 +2567,20 @@ dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get(
     if (group == nullptr || group->dropped || group->copies.empty()) {
         return dstd::Optional<Value>{};
     }
-    const detail::CopyData& copy = group->copies[group->current];
-    if (copy.state != CopyState::Ready || key_hidden(key, group->hidden)) {
+    if (!group->shared) {
+        return get_in_copy(group->copies[group->current], *group, key);
+    }
+    for (std::size_t c = group->copies.size(); c-- > group->first_visible;) {
+        auto held = get_in_copy(group->copies[c], *group, key);
+        if (!held || held->has_value()) return held;
+    }
+    return dstd::Optional<Value>{};
+}
+
+dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get_in_copy(
+    const detail::CopyData& copy, const detail::ScopeGroup& group,
+    ByteView key) const {
+    if (copy.state != CopyState::Ready || key_hidden(key, group.hidden)) {
         return dstd::Optional<Value>{};
     }
     const auto holds_key = [key](ByteView first, ByteView last) {
@@ -2419,6 +2719,9 @@ bool ScanCursor::take_error(const ScopeCursor& cursor) {
 struct ScanCursor::ArmAfter {
     const dstd::Vector<Arm>* arms;
     bool operator()(std::size_t a, std::size_t b) const {
+        if ((*arms)[a].merge_rank != (*arms)[b].merge_rank) {
+            return (*arms)[a].merge_rank > (*arms)[b].merge_rank;
+        }
         const int by_key =
             compare_bytes((*arms)[a].cursor.key(), (*arms)[b].cursor.key());
         if (by_key != 0) return by_key > 0;
@@ -2435,7 +2738,7 @@ void ScanCursor::push_arm(std::size_t index) {
 bool ScanCursor::open_arm(std::size_t index) {
     Arm& arm = arms_[index];
     arm.opened = true;
-    const detail::CopyData& copy = arm.group->copies[arm.group->current];
+    const detail::CopyData& copy = arm.group->copies[arm.copy_index];
     const detail::LoadStatus status = snapshot_->ensure_copy(copy);
     if (status.state == detail::LoadState::Failed) {
         error_ = status.error;
@@ -2475,7 +2778,8 @@ void ScanCursor::settle() {
         return;
     }
     const ByteView best = arms_[arm_heap_.front()].cursor.key();
-    while (!arm_heap_.empty() &&
+    const std::size_t rank = arms_[arm_heap_.front()].merge_rank;
+    while (!arm_heap_.empty() && arms_[arm_heap_.front()].merge_rank == rank &&
            compare_bytes(arms_[arm_heap_.front()].cursor.key(), best) == 0) {
         std::pop_heap(arm_heap_.begin(), arm_heap_.end(), ArmAfter{&arms_});
         at_key_.push_back(arm_heap_.back());
@@ -2685,6 +2989,7 @@ ScanCursor Snapshot::scan(const NamespaceSpec& spec,
     keep(end, cursor.end_storage_);
 
     FoldKind fold = FoldKind::None;
+    std::size_t shared_rank = 0;
     for (const ScopeKey& scope : scopes) {
         auto found = find_group(spec, scope);
         if (!found) {
@@ -2696,12 +3001,30 @@ ScanCursor Snapshot::scan(const NamespaceSpec& spec,
         if (group == nullptr || group->dropped || group->copies.empty()) {
             continue;
         }
+        if (group->shared) {
+            // Arms merge by key, and Last takes the newest copy's value because
+            // the arms of a key are visited in order.
+            fold = FoldKind::Last;
+            ++shared_rank;
+            for (std::size_t c = group->first_visible; c <= group->current;
+                 ++c) {
+                if (group->copies[c].state != CopyState::Ready) continue;
+                ScanCursor::Arm arm;
+                arm.scope = scope;
+                arm.group = group;
+                arm.copy_index = c;
+                arm.merge_rank = shared_rank;
+                cursor.arms_.push_back(std::move(arm));
+            }
+            continue;
+        }
         const detail::CopyData& copy = group->copies[group->current];
         if (copy.state != CopyState::Ready) continue;
         if (fold == FoldKind::None) fold = copy.fold;
         ScanCursor::Arm arm;
         arm.scope = scope;
         arm.group = group;
+        arm.copy_index = group->current;
         cursor.arms_.push_back(std::move(arm));
     }
     cursor.fold_ = fold;

@@ -472,6 +472,121 @@ TEST_SUITE("store api") {
               dstd::Optional<dstd::String>("2"));
     }
 
+    TEST_CASE("a batch erases keys and range, and its own puts stay") {
+        dftu_utils_test::ScopedTestDir dir("store_api_batch_erase");
+        Store store = open_store(dir);
+        const Namespace ns = register_ns(store, spec_of("dftu.test.berase"));
+        const ScopeKey scope = scope_of("/traces/erase.pfw");
+        put_all(store, ns, scope,
+                {{"a", "1"}, {"b", "2"}, {"c", "3"}, {"d", "4"}, {"e", "5"}});
+        REQUIRE(run(store.flush()).has_value());
+
+        Batch batch = store.batch(ns, scope);
+        const dstd::String a = "a", b = "b", d = "d", none, renewed = "new";
+        batch.put(view_of(a), view_of(renewed));
+        batch.erase(view_of(a));
+        batch.erase(view_of(b));
+        batch.erase_range(view_of(d), view_of(none));
+        REQUIRE(run(store.commit(std::move(batch))).has_value());
+        REQUIRE(run(store.flush()).has_value());
+
+        const auto check = [&](const Namespace& handle) {
+            CHECK(get_value(store, handle, scope, "a") ==
+                  dstd::Optional<dstd::String>("new"));
+            CHECK_FALSE(get_value(store, handle, scope, "b").has_value());
+            CHECK(get_value(store, handle, scope, "c") ==
+                  dstd::Optional<dstd::String>("3"));
+            CHECK_FALSE(get_value(store, handle, scope, "d").has_value());
+            CHECK_FALSE(get_value(store, handle, scope, "e").has_value());
+        };
+        check(ns);
+        REQUIRE(run(store.close()).has_value());
+        check(register_ns(store, spec_of("dftu.test.berase")));
+    }
+
+    TEST_CASE("a later batch shows an erased key again") {
+        dftu_utils_test::ScopedTestDir dir("store_api_batch_erase_only");
+        Store store = open_store(dir);
+        const Namespace ns = register_ns(store, spec_of("dftu.test.eonly"));
+        const ScopeKey scope = scope_of("/traces/erase.pfw");
+        put_all(store, ns, scope, {{"a", "1"}, {"b", "2"}});
+
+        Batch erase_only = store.batch(ns, scope);
+        const dstd::String a = "a";
+        erase_only.erase(view_of(a));
+        REQUIRE(run(store.commit(std::move(erase_only))).has_value());
+        REQUIRE(run(store.flush()).has_value());
+        CHECK_FALSE(get_value(store, ns, scope, "a").has_value());
+        CHECK(get_value(store, ns, scope, "b").has_value());
+
+        put_all(store, ns, scope, {{"a", "again"}});
+        REQUIRE(run(store.flush()).has_value());
+        CHECK(get_value(store, ns, scope, "a") ==
+              dstd::Optional<dstd::String>("again"));
+    }
+
+    TEST_CASE("a reader sees the erases and the puts of a batch together") {
+        dftu_utils_test::ScopedTestDir dir("store_api_batch_erase_atomic");
+        Store store = open_store(dir);
+        const Namespace ns = register_ns(store, spec_of("dftu.test.eatomic"));
+        const ScopeKey scope = scope_of("/traces/erase.pfw");
+        put_all(store, ns, scope, {{"old", "1"}});
+        REQUIRE(run(store.flush()).has_value());
+
+        Batch batch = store.batch(ns, scope);
+        const dstd::String old_key = "old", new_key = "new", value = "2";
+        batch.erase(view_of(old_key));
+        batch.put(view_of(new_key), view_of(value));
+        REQUIRE(run(store.commit(std::move(batch))).has_value());
+
+        for (int i = 0; i < 200; ++i) {
+            const bool has_old = get_value(store, ns, scope, "old").has_value();
+            const bool has_new = get_value(store, ns, scope, "new").has_value();
+            CHECK(has_old != has_new);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        REQUIRE(run(store.flush()).has_value());
+        CHECK_FALSE(get_value(store, ns, scope, "old").has_value());
+        CHECK(get_value(store, ns, scope, "new").has_value());
+    }
+
+    TEST_CASE("a batch erase refuses a copy another writer wrote") {
+        dftu_utils_test::ScopedTestDir dir("store_api_batch_erase_foreign");
+        Store store = open_store(dir);
+        const Namespace ns = register_ns(store, spec_of("dftu.test.eforeign"));
+        const ScopeKey written = scope_of("/traces/written.pfw");
+        const ScopeKey absent = scope_of("/traces/absent.pfw");
+        put_all(store, ns, written, {{"a", "1"}});
+        REQUIRE(run(store.close()).has_value());
+
+        const Namespace again =
+            register_ns(store, spec_of("dftu.test.eforeign"));
+        const dstd::String a = "a", b = "b";
+        Batch refused = store.batch(again, written);
+        refused.erase(view_of(a));
+        auto result = run(store.commit(std::move(refused)));
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().condition() == dstd::Condition::Unsupported);
+
+        Batch nothing_to_hide = store.batch(again, absent);
+        nothing_to_hide.erase(view_of(a));
+        REQUIRE(run(store.commit(std::move(nothing_to_hide))).has_value());
+        REQUIRE(run(store.flush()).has_value());
+        auto no_copy = store.snapshot();
+        REQUIRE(no_copy.has_value());
+        CHECK(no_copy->copy_info(again, absent).state == ScopeState::Absent);
+
+        Batch with_put = store.batch(again, absent);
+        with_put.erase(view_of(a));
+        with_put.put(view_of(b), view_of(a));
+        REQUIRE(run(store.commit(std::move(with_put))).has_value());
+        REQUIRE(run(store.flush()).has_value());
+        CHECK(get_value(store, again, written, "a") ==
+              dstd::Optional<dstd::String>("1"));
+        CHECK(get_value(store, again, absent, "b") ==
+              dstd::Optional<dstd::String>("a"));
+    }
+
     TEST_CASE("a write after close opens a new writer") {
         dftu_utils_test::ScopedTestDir dir("store_api_close");
         Store store = open_store(dir);

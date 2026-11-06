@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_STORE_STORE_H
 #define DFTRACER_UTILS_STORE_STORE_H
 
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
@@ -69,6 +70,11 @@ struct NamespaceSpec {
     bool durable = false;
     /// Writers only. Reads and namespace matching ignore it.
     PageCodec codec = PageCodec::Zstd;
+    /// Each scope holds the keys of every writer, and the newest copy wins for
+    /// a key that several wrote. Otherwise the first batch of a new writer
+    /// replaces the scope. A shared namespace has no fold and refuses erases
+    /// with dstd::Condition::Unsupported. A drop still clears the whole scope.
+    bool shared = false;
 };
 
 bool operator==(const NamespaceSpec& a, const NamespaceSpec& b);
@@ -138,6 +144,14 @@ class Batch {
     /// InvalidArgument on a non-fold namespace, and when a numeric fold gets a
     /// value that is not 8 bytes. Reported by commit.
     void fold(dstd::ByteView key, dstd::ByteView value);
+    /// Hides `key` in the copy of this batch's scope. The erases of a batch
+    /// apply before its puts, whatever the call order, so a put of an erased
+    /// key stays. Commit reports Unsupported when another data file holds the
+    /// current copy. With no current copy there is nothing to hide.
+    void erase(dstd::ByteView key);
+    /// erase() of every key in [begin, end). An empty `end` means to the last
+    /// key.
+    void erase_range(dstd::ByteView begin, dstd::ByteView end);
 
    private:
     friend class engine::Writer;
@@ -146,6 +160,11 @@ class Batch {
     struct Entry {
         dstd::ByteView key;
         dstd::ByteView value;
+    };
+
+    struct EraseEntry {
+        dstd::ByteView begin;
+        dstd::ByteView end;
     };
 
     Batch() = default;
@@ -164,6 +183,7 @@ class Batch {
     dstd::Optional<dstd::Error> error_;
     bool building_ = false;
     dstd::Vector<Entry> entries_;
+    dstd::Vector<EraseEntry> erases_;
     /// Opened by the first put() that copies. put_ref() needs none.
     dstd::UniquePtr<dstd::StringArena> arena_;
 };
@@ -261,11 +281,42 @@ struct Publish {
     Change change = Change::Ready;
 };
 
+/// When Store::pack rewrites a file, and how long a replaced one stays.
+struct PackOptions {
+    /// Closed files below this size merge into one, when there are at least
+    /// two.
+    std::uint64_t small_file_bytes =
+        common::constants::store::STORE_PACK_SMALL_FILE_BYTES;
+    /// A larger closed file is rewritten once this share of its segment bytes
+    /// belongs to copies that are no longer current.
+    double dead_ratio = common::constants::store::STORE_PACK_DEAD_RATIO;
+    /// A closed file with no current data is deleted once the files that
+    /// replaced it are this old. A snapshot older than the delete gets an Io
+    /// error from a file it had not opened yet, and never wrong data.
+    std::uint64_t keep_seconds =
+        common::constants::store::STORE_PACK_KEEP_SECONDS;
+};
+
+struct PackReport {
+    std::size_t files_packed = 0;
+    std::size_t copies_written = 0;
+    /// Scopes left where they are, because their namespace differs from one
+    /// this process registered under that name.
+    std::size_t copies_skipped = 0;
+    std::size_t files_deleted = 0;
+    std::uint64_t bytes_deleted = 0;
+};
+
 /// One store directory, shared by every handle to it in this process, with one
 /// writer that opens on the first write. Thread safe.
+///
+/// A handle that a fork child inherited reports dstd::Condition::ForkedHandle
+/// from every call. Destroying it joins and closes nothing. The child calls
+/// open() for a handle of its own.
 class Store {
    public:
-    /// Creates the directory when it does not exist.
+    /// Creates the directory when it does not exist. A fork while another
+    /// thread is inside this call can leave a later call in the child waiting.
     static dstd::Expected<Store, dstd::Error> open(dstd::StringView dir);
 
     /// Registers the namespace with this process's writer. The same spec
@@ -306,9 +357,23 @@ class Store {
     /// Flushes and closes this process's writer. A later write opens a new one.
     coro::CoroTask<dstd::Expected<void, dstd::Error>> close();
 
+    /// Closes this process's writer, rewrites the current copies of the chosen
+    /// files into one new file, makes them current in one record, then deletes
+    /// the files that @ref PackOptions lets go. Never touches a file without a
+    /// footer. Run it with no other writer active in the directory: the caller
+    /// keeps this process from committing, and other processes from writing,
+    /// until it returns.
+    coro::CoroTask<dstd::Expected<PackReport, dstd::Error>> pack(
+        PackOptions options = {});
+
     /// The newest view: reopened after a commit of this process and when
     /// another process added data files.
     dstd::Expected<Snapshot, dstd::Error> snapshot();
+
+    /// Looks for new data of other processes now. snapshot() looks at most once
+    /// per second, so a reader that must see what another process just flushed
+    /// calls this first.
+    dstd::Expected<void, dstd::Error> refresh();
 
     /// Closes the writer of every store this process holds. The shutdown hook
     /// runs it while the runtime still runs. Returns the first error.

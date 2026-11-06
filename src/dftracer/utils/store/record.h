@@ -36,6 +36,7 @@ struct NamespaceItem {
     std::uint8_t fold_kind = 0;
     std::uint8_t codec = 0;
     std::uint8_t durable = 0;
+    std::uint8_t shared = 0;
 };
 
 inline constexpr std::size_t SOURCE_STAT_BYTES = 24;

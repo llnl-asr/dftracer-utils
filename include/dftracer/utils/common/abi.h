@@ -27,7 +27,8 @@ typedef enum {
     DFTU_COND_COMPRESSION,
     DFTU_COND_TIMEOUT,
     DFTU_COND_UNSUPPORTED,
-    DFTU_COND_CANCELLED
+    DFTU_COND_CANCELLED,
+    DFTU_COND_FORKED_HANDLE
 } dftu_condition;
 
 /** A fallible call's error: (domain, code) is the precise identity (mirrors

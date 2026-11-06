@@ -312,6 +312,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add a public `IoBackend` with one `submit(IoOp&)` call, so a program can run its own I/O backend through `ExecutorConfig::io_backend_factory`.
+- Add a public `FileSystem` that `runtime::fs` runs on, so `find`, `walk`, `stat`, `read_file` and `write_file` work on any store that `register_file_system` adds for a path scheme such as `s3://`.
+  A `file://` path is local.
 - Add `coro::CoroutineHooks`, which shows each enqueue, resume and suspend of a coroutine to your own callbacks, and `coro::CoroutineEventLog`, which records them for a reader on another thread.
   With nothing installed, an event costs one load and a branch.
 - Add `coro::Executor::post_yield`, which queues a coroutine that gives up its slice behind the other work of the thread.
@@ -459,6 +462,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix store writes that fail with "operation canceled" on Linux with io_uring when the thread that started them exits.
+- Fix a read blocked on a pipe or socket that stayed blocked through shutdown on Linux kernels older than 5.19 with io_uring.
+- Fix a small memory leak when a task is cancelled before its I/O operation starts.
+- Fix directory listings that blocked a worker on io_uring. They now run on an I/O thread.
 - Fix `Runtime.progress` that showed a running task as queued, with no running tasks and no worker.
 - Fix a data race in `coro::when_any` between a winner that cancels a loser and the start of that loser.
 - Fix a false memory leak report and a failed exit check when a thread flushed its pool counts while a pool closed.

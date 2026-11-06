@@ -157,7 +157,6 @@ class ExtentWriter {
                                                  void* context,
                                                  PageCodec codec);
     void submit(PendingWrite* pending);
-    void resubmit(PendingWrite* pending);
     /// Counts one write in flight. Called before a seal becomes visible, and
     /// by each write that starts without a seal, so that no wait can return in
     /// the window between the seal of an extent and the submit of its write.
@@ -166,7 +165,7 @@ class ExtentWriter {
     void discard(OpenExtent* extent);
     void latch_error(int error_number);
     dstd::Error latched_error() const;
-    static void on_write_done(void* context, ssize_t result) noexcept;
+    static void on_write_done(runtime::io::IoOp& op) noexcept;
 
     DataFileWriter& file_;
     runtime::io::IoBackend& backend_;

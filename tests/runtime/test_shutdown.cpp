@@ -22,7 +22,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
-#include <dftracer/utils/runtime/io/io_backend.h>
+#include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <unistd.h>
@@ -357,8 +357,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         auto frame = [&]() -> coro::CoroTask<void> {
             probe.entered.store(true);
             char byte = 0;
-            ssize_t n = co_await rt.executor()->io_backend().submit_read(
-                fds[0], &byte, 1);
+            ssize_t n = co_await runtime::io::read(fds[0], &byte, 1);
             probe.cancelled.store(n == -ECANCELED);
             probe.finished.store(true);
             co_return;

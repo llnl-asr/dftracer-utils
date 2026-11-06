@@ -152,6 +152,7 @@ struct ExtentWriter::PendingWrite : dstd::HeapObject {
     WrittenExtent written;
     dstd::Vector<std::uint8_t> buffer;
     std::size_t written_bytes = 0;
+    runtime::io::IoOp op;
 };
 
 ExtentWriter::ExtentWriter(DataFileWriter& file,
@@ -491,28 +492,25 @@ void ExtentWriter::release_in_flight() {
 }
 
 void ExtentWriter::submit(PendingWrite* pending) {
-    backend_.submit_pwrite_callback(file_.fd(), pending->buffer.data(),
-                                    pending->buffer.size(),
-                                    static_cast<off_t>(pending->written.offset),
-                                    &ExtentWriter::on_write_done, pending);
-    backend_.flush();
-}
-
-void ExtentWriter::resubmit(PendingWrite* pending) {
     const std::size_t done = pending->written_bytes;
-    backend_.submit_pwrite_callback(
-        file_.fd(), pending->buffer.data() + done,
-        pending->buffer.size() - done,
-        static_cast<off_t>(pending->written.offset + done),
-        &ExtentWriter::on_write_done, pending);
+    runtime::io::IoOp& op = pending->op;
+    op.kind = runtime::io::IoOpKind::Pwrite;
+    op.handle = file_.fd();
+    op.buffer = pending->buffer.data() + done;
+    op.length = pending->buffer.size() - done;
+    op.offset = static_cast<std::int64_t>(pending->written.offset + done);
+    op.complete = &ExtentWriter::on_write_done;
+    op.context = pending;
+    backend_.submit(op);
     backend_.flush();
 }
 
-void ExtentWriter::on_write_done(void* context, ssize_t result) noexcept {
-    auto* pending = static_cast<PendingWrite*>(context);
+void ExtentWriter::on_write_done(runtime::io::IoOp& op) noexcept {
+    auto* pending = static_cast<PendingWrite*>(op.context);
+    const ssize_t result = op.result;
     ExtentWriter* writer = pending->owner;
     if (result == -EINTR) {
-        writer->resubmit(pending);
+        writer->submit(pending);
         return;
     }
     if (result < 0 || result == 0) {
@@ -530,7 +528,7 @@ void ExtentWriter::on_write_done(void* context, ssize_t result) noexcept {
 
     pending->written_bytes += static_cast<std::size_t>(result);
     if (pending->written_bytes < pending->buffer.size()) {
-        writer->resubmit(pending);
+        writer->submit(pending);
         return;
     }
 

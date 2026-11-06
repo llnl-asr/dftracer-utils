@@ -15,11 +15,10 @@
 
 namespace dftracer::utils::runtime::io {
 
-KqueueThreadPoolBackend::KqueueThreadPoolBackend(coro::Executor& executor,
-                                                 std::size_t pool_size,
+KqueueThreadPoolBackend::KqueueThreadPoolBackend(std::size_t pool_size,
                                                  unsigned batch_threshold,
                                                  IoPoolOptions pool_options)
-    : ThreadPoolFileOps(executor, pool_size, batch_threshold, pool_options) {}
+    : ThreadPoolFileOps(pool_size, batch_threshold, pool_options) {}
 
 KqueueThreadPoolBackend::~KqueueThreadPoolBackend() = default;
 

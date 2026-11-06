@@ -48,7 +48,7 @@ TEST_CASE("AsyncIO - sync fallback: read without executor") {
     // No executor -- falls back to synchronous ::read()
     char buf[64] = {};
     auto awaitable = runtime::io::read(fd, buf, data.size());
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == static_cast<ssize_t>(data.size()));
     CHECK(dstd::String(buf, static_cast<std::size_t>(awaitable.result)) ==
           data);
@@ -63,7 +63,7 @@ TEST_CASE("AsyncIO - sync fallback: write without executor") {
 
     dstd::String data = "write test data";
     auto awaitable = runtime::io::write(fd, data.data(), data.size());
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == static_cast<ssize_t>(data.size()));
 
     // Read back and verify
@@ -81,12 +81,12 @@ TEST_CASE("AsyncIO - sync fallback: open/close without executor") {
     auto path = create_temp_file(data);
 
     auto open_result = runtime::io::open(path.c_str(), O_RDONLY);
-    CHECK(open_result.is_ready);
+    CHECK(open_result.await_ready());
     CHECK(open_result.result >= 0);
 
     int fd = static_cast<int>(open_result.result);
     auto close_result = runtime::io::close(fd);
-    CHECK(close_result.is_ready);
+    CHECK(close_result.await_ready());
     CHECK(close_result.result == 0);
 
     ::unlink(path.c_str());
@@ -107,7 +107,7 @@ TEST_CASE("AsyncIO - sync fallback: pread without executor") {
     // Read from offset 7
     char buf[64] = {};
     auto awaitable = runtime::io::pread(fd, buf, 15, 7);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == 15);
     CHECK(dstd::String(buf, 15) == "positional I/O!");
 
@@ -127,7 +127,7 @@ TEST_CASE("AsyncIO - sync fallback: pwrite without executor") {
     // Positional write at offset 3
     dstd::String patch = "BBB";
     auto awaitable = runtime::io::pwrite(fd, patch.data(), patch.size(), 3);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == static_cast<ssize_t>(patch.size()));
 
     // Read back and verify
@@ -153,7 +153,7 @@ TEST_CASE("AsyncIO - sync fallback: write to pipe (non-seekable fd)") {
     // runtime::io::write should use ::write() which works on pipes.
     // Previously used ::pwrite() which fails with ESPIPE on pipes.
     auto awaitable = runtime::io::write(pipefd[1], data.data(), data.size());
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == static_cast<ssize_t>(data.size()));
 
     // Read back from pipe
@@ -178,7 +178,7 @@ TEST_CASE("AsyncIO - sync fallback: read from pipe (non-seekable fd)") {
     // runtime::io::read should use ::read() which works on pipes.
     char buf[64] = {};
     auto awaitable = runtime::io::read(pipefd[0], buf, data.size());
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == static_cast<ssize_t>(data.size()));
     CHECK(dstd::String(buf, static_cast<std::size_t>(awaitable.result)) ==
           data);
@@ -194,7 +194,7 @@ TEST_CASE("AsyncIO - pwrite fails on pipe (expected ESPIPE)") {
     dstd::String data = "should fail";
     auto awaitable =
         runtime::io::pwrite(pipefd[1], data.data(), data.size(), 0);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == -ESPIPE);
 
     ::close(pipefd[0]);
@@ -207,7 +207,7 @@ TEST_CASE("AsyncIO - pread fails on pipe (expected ESPIPE)") {
 
     char buf[16] = {};
     auto awaitable = runtime::io::pread(pipefd[0], buf, sizeof(buf), 0);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == -ESPIPE);
 
     ::close(pipefd[0]);
@@ -227,11 +227,11 @@ TEST_CASE("AsyncIO - sequential writes advance file position") {
     dstd::String part1 = "Hello, ";
     dstd::String part2 = "World!";
     auto a1 = runtime::io::write(fd, part1.data(), part1.size());
-    CHECK(a1.is_ready);
+    CHECK(a1.await_ready());
     CHECK(a1.result == static_cast<ssize_t>(part1.size()));
 
     auto a2 = runtime::io::write(fd, part2.data(), part2.size());
-    CHECK(a2.is_ready);
+    CHECK(a2.await_ready());
     CHECK(a2.result == static_cast<ssize_t>(part2.size()));
 
     // Read back
@@ -255,13 +255,13 @@ TEST_CASE("AsyncIO - sequential reads advance file position") {
     // Two sequential reads should advance position
     char buf1[5] = {};
     auto a1 = runtime::io::read(fd, buf1, 5);
-    CHECK(a1.is_ready);
+    CHECK(a1.await_ready());
     CHECK(a1.result == 5);
     CHECK(dstd::String(buf1, 5) == "ABCDE");
 
     char buf2[5] = {};
     auto a2 = runtime::io::read(fd, buf2, 5);
-    CHECK(a2.is_ready);
+    CHECK(a2.await_ready());
     CHECK(a2.result == 5);
     CHECK(dstd::String(buf2, 5) == "FGHIJ");
 
@@ -607,7 +607,7 @@ TEST_CASE("AsyncIO - multiple concurrent async reads") {
 TEST_CASE("AsyncIO - read error handling (invalid fd)") {
     auto awaitable = runtime::io::read(-1, nullptr, 0);
     // With no executor, sync fallback calls read(-1, ...) which fails
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result < 0);
 }
 
@@ -826,7 +826,7 @@ TEST_CASE("AsyncIO - sync fallback: writev without executor") {
     iov[1].iov_len = p2.size();
 
     auto awaitable = runtime::io::writev(fd, iov, 2);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == static_cast<ssize_t>(p1.size() + p2.size()));
 
     // Read back
@@ -855,7 +855,7 @@ TEST_CASE("AsyncIO - sync fallback: readv without executor") {
     iov[1].iov_len = 5;
 
     auto awaitable = runtime::io::readv(fd, iov, 2);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == 10);
     CHECK(dstd::String(buf1, 5) == "ABCDE");
     CHECK(dstd::String(buf2, 5) == "FGHIJ");
@@ -885,7 +885,7 @@ TEST_CASE("AsyncIO - sync fallback: pwritev without executor") {
     iov[1].iov_len = p2.size();
 
     auto awaitable = runtime::io::pwritev(fd, iov, 2, 3);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == 4);
 
     char buf[64] = {};
@@ -913,7 +913,7 @@ TEST_CASE("AsyncIO - sync fallback: preadv without executor") {
     iov[1].iov_len = 4;
 
     auto awaitable = runtime::io::preadv(fd, iov, 2, 2);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == 7);
     CHECK(dstd::String(buf1, 3) == "CDE");
     CHECK(dstd::String(buf2, 4) == "FGHI");
@@ -939,7 +939,7 @@ TEST_CASE("AsyncIO - writev to pipe (non-seekable fd)") {
     iov[1].iov_len = p2.size();
 
     auto awaitable = runtime::io::writev(pipefd[1], iov, 2);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == static_cast<ssize_t>(p1.size() + p2.size()));
 
     char buf[64] = {};
@@ -964,7 +964,7 @@ TEST_CASE("AsyncIO - sync fallback: lseek without executor") {
 
     // Seek to offset 5
     auto awaitable = runtime::io::lseek(fd, 5, SEEK_SET);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == 5);
 
     // Sequential read should start from offset 5
@@ -974,12 +974,12 @@ TEST_CASE("AsyncIO - sync fallback: lseek without executor") {
 
     // Seek relative
     auto a2 = runtime::io::lseek(fd, -3, SEEK_CUR);
-    CHECK(a2.is_ready);
+    CHECK(a2.await_ready());
     CHECK(a2.result == 7);
 
     // Seek to end
     auto a3 = runtime::io::lseek(fd, 0, SEEK_END);
-    CHECK(a3.is_ready);
+    CHECK(a3.await_ready());
     CHECK(a3.result == static_cast<ssize_t>(data.size()));
 
     ::unlink(path.c_str());
@@ -990,7 +990,7 @@ TEST_CASE("AsyncIO - lseek on pipe fails (expected ESPIPE)") {
     REQUIRE(::pipe(pipefd) == 0);
 
     auto awaitable = runtime::io::lseek(pipefd[0], 0, SEEK_SET);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
     CHECK(awaitable.result == -ESPIPE);
 
     ::close(pipefd[0]);
@@ -1014,7 +1014,7 @@ TEST_CASE("AsyncIO - sync fallback: sendfile without executor") {
     REQUIRE(::pipe(pipefd) == 0);
 
     auto awaitable = runtime::io::sendfile(pipefd[1], in_fd, 0, data.size());
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
 
     // Close write end so read won't block if sendfile failed
     // (macOS sendfile requires a socket destination).
@@ -1043,7 +1043,7 @@ TEST_CASE("AsyncIO - sendfile with offset") {
 
     // Send 6 bytes starting at offset 10
     auto awaitable = runtime::io::sendfile(pipefd[1], in_fd, 10, 6);
-    CHECK(awaitable.is_ready);
+    CHECK(awaitable.await_ready());
 
     // Close write end so read won't block if sendfile failed.
     ::close(pipefd[1]);

@@ -81,7 +81,10 @@ The io backend: one abstraction, several implementations
 concrete implementation (``IoBackendType`` in ``runtime/io/backend_type.h``):
 
 - **io_uring** on Linux, when available - the kernel does the async I/O and
-  the coroutine resumes on completion, no worker thread blocks on it.
+  the coroutine resumes on completion, no worker thread blocks on it. One
+  thread owns the ring, because the kernel cancels a request when the thread
+  that submitted it exits. A call with no ring opcode, such as a directory
+  listing or a ``stat``, runs on an I/O thread.
 - **kqueue + thread pool** on macOS/BSD.
 - **epoll + thread pool** as a portable fallback where neither of the above
   is usable.

@@ -2,8 +2,8 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dstd/os.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
-#include <dftracer/utils/runtime/io/io_sendfile.h>
 #include <dftracer/utils/runtime/io/ops.h>
+#include <dftracer/utils/runtime/io/thread_pool_file_ops.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -46,18 +46,43 @@ int iov_max_entries() noexcept {
     return value;
 }
 
-// Every free op has the same shape: if the executor driving this thread has a
-// backend, forward to its submit_* member (async); else run the blocking
-// syscall, fold a failure to -errno, and hand back a ready awaitable. Submit is
-// the backend member; sync is the syscall wrapper.
-template <auto Submit, class Sync, class... Args>
-IoAwaitable io_dispatch(Sync sync, Args... args) noexcept {
-    if (auto* backend = current_backend()) {
-        return (backend->*Submit)(args...);
+// With a backend the op runs when awaited. Without one it runs here.
+IoAwaitable dispatch(IoAwaitable op) noexcept {
+    if (IoBackend* backend = current_backend()) {
+        op.backend = backend;
+        op.resume_on = coro::Executor::current();
+    } else {
+        op.result = run_blocking(op);
     }
-    auto result = sync(args...);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(static_cast<ssize_t>(result));
+    return op;
+}
+
+IoAwaitable make_op(IoOpKind kind, dstd::NativeHandle fd) noexcept {
+    IoAwaitable op;
+    op.kind = kind;
+    op.handle = fd;
+    return op;
+}
+
+IoAwaitable make_buffer_op(IoOpKind kind, dstd::NativeHandle fd, void* buf,
+                           std::size_t len, std::uint64_t offset = 0,
+                           int flags = 0) noexcept {
+    IoAwaitable op = make_op(kind, fd);
+    op.buffer = buf;
+    op.length = len;
+    op.offset = static_cast<std::int64_t>(offset);
+    op.flags = flags;
+    return op;
+}
+
+IoAwaitable make_vector_op(IoOpKind kind, dstd::NativeHandle fd,
+                           const struct iovec* iov, int iovcnt,
+                           std::uint64_t offset = 0) noexcept {
+    IoAwaitable op = make_op(kind, fd);
+    op.iov = iov;
+    op.iov_count = iovcnt;
+    op.offset = static_cast<std::int64_t>(offset);
+    return op;
 }
 
 }  // namespace
@@ -74,40 +99,32 @@ void set_current_backend(const coro::Executor* owner,
 }
 
 IoAwaitable read(dstd::NativeHandle fd, void* buf, std::size_t len) noexcept {
-    return io_dispatch<&IoBackend::submit_read>(
-        [](int f, void* b, std::size_t n) { return ::read(f, b, n); }, fd, buf,
-        len);
+    return dispatch(make_buffer_op(IoOpKind::Read, fd, buf, len));
 }
 
 IoAwaitable write(dstd::NativeHandle fd, const void* buf,
                   std::size_t len) noexcept {
-    return io_dispatch<&IoBackend::submit_write>(
-        [](int f, const void* b, std::size_t n) { return ::write(f, b, n); },
-        fd, buf, len);
+    return dispatch(
+        make_buffer_op(IoOpKind::Write, fd, const_cast<void*>(buf), len));
 }
 
 IoAwaitable pread(dstd::NativeHandle fd, void* buf, std::size_t len,
                   std::uint64_t offset) noexcept {
-    return io_dispatch<&IoBackend::submit_pread>(
-        [](int f, void* b, std::size_t n, off_t o) {
-            return ::pread(f, b, n, o);
-        },
-        fd, buf, len, static_cast<off_t>(offset));
+    return dispatch(make_buffer_op(IoOpKind::Pread, fd, buf, len, offset));
 }
 
 IoAwaitable pwrite(dstd::NativeHandle fd, const void* buf, std::size_t len,
                    std::uint64_t offset) noexcept {
-    return io_dispatch<&IoBackend::submit_pwrite>(
-        [](int f, const void* b, std::size_t n, off_t o) {
-            return ::pwrite(f, b, n, o);
-        },
-        fd, buf, len, static_cast<off_t>(offset));
+    return dispatch(make_buffer_op(IoOpKind::Pwrite, fd, const_cast<void*>(buf),
+                                   len, offset));
 }
 
 IoAwaitable open(const char* path, int flags, mode_t mode) noexcept {
-    return io_dispatch<&IoBackend::submit_open>(
-        [](const char* p, int fl, mode_t m) { return ::open(p, fl, m); }, path,
-        flags, mode);
+    IoAwaitable op = make_op(IoOpKind::Open, -1);
+    op.path = path;
+    op.flags = flags;
+    op.mode = mode;
+    return dispatch(op);
 }
 
 coro::CoroTask<dstd::Expected<dstd::File, dstd::Error>> open_file(
@@ -125,69 +142,68 @@ coro::CoroTask<dstd::Expected<dstd::File, dstd::Error>> open_file(
 }
 
 IoAwaitable close(dstd::NativeHandle fd) noexcept {
-    return io_dispatch<&IoBackend::submit_close>(
-        [](int f) { return ::close(f); }, fd);
+    return dispatch(make_op(IoOpKind::Close, fd));
 }
 
 IoAwaitable fsync(dstd::NativeHandle fd) noexcept {
-    return io_dispatch<&IoBackend::submit_fsync>(
-        [](int f) { return ::fsync(f); }, fd);
+    return dispatch(make_op(IoOpKind::Fsync, fd));
 }
 
 IoAwaitable ftruncate(dstd::NativeHandle fd, std::uint64_t length) noexcept {
-    return io_dispatch<&IoBackend::submit_ftruncate>(
-        [](int f, off_t l) { return ::ftruncate(f, l); }, fd, length);
+    IoAwaitable op = make_op(IoOpKind::Ftruncate, fd);
+    op.offset = static_cast<std::int64_t>(length);
+    return dispatch(op);
 }
 
 IoAwaitable fstat(dstd::NativeHandle fd, struct stat* buf) noexcept {
-    return io_dispatch<&IoBackend::submit_fstat>(
-        [](int f, struct stat* b) { return ::fstat(f, b); }, fd, buf);
+    IoAwaitable op = make_op(IoOpKind::Fstat, fd);
+    op.stat_out = buf;
+    return dispatch(op);
 }
 
 IoAwaitable call(BlockingFn fn, void* context) noexcept {
-    return io_dispatch<&IoBackend::submit_call>(
-        [](BlockingFn f, void* c) { return f(c); }, fn, context);
+    IoAwaitable op = make_op(IoOpKind::Call, -1);
+    op.call = fn;
+    op.call_context = context;
+    return dispatch(op);
 }
 
 IoAwaitable accept(dstd::NativeHandle listen_fd, struct sockaddr* addr,
                    socklen_t* addrlen) noexcept {
-    return io_dispatch<&IoBackend::submit_accept>(
-        [](int lf, struct sockaddr* a, socklen_t* al) {
-            return ::accept(lf, a, al);
-        },
-        listen_fd, addr, addrlen);
+    IoAwaitable op = make_op(IoOpKind::Accept, listen_fd);
+    op.addr = addr;
+    op.addrlen = addrlen;
+    if (IoBackend* backend = current_backend()) {
+        op.backend = backend;
+        op.resume_on = coro::Executor::current();
+    } else {
+        // A socket left blocking, unlike one a backend accepts: the blocking
+        // recv and send that follow here must wait.
+        op.result = ::accept(listen_fd, addr, addrlen);
+        if (op.result < 0) op.result = -errno;
+    }
+    return op;
 }
 
 IoAwaitable recv(dstd::NativeHandle fd, void* buf, std::size_t len,
                  int flags) noexcept {
-    return io_dispatch<&IoBackend::submit_recv>(
-        [](int f, void* b, std::size_t n, int fl) {
-            return ::recv(f, b, n, fl);
-        },
-        fd, buf, len, flags);
+    return dispatch(make_buffer_op(IoOpKind::Recv, fd, buf, len, 0, flags));
 }
 
 IoAwaitable send(dstd::NativeHandle fd, const void* buf, std::size_t len,
                  int flags) noexcept {
-    return io_dispatch<&IoBackend::submit_send>(
-        [](int f, const void* b, std::size_t n, int fl) {
-            return ::send(f, b, n, fl);
-        },
-        fd, buf, len, flags);
+    return dispatch(make_buffer_op(IoOpKind::Send, fd, const_cast<void*>(buf),
+                                   len, 0, flags));
 }
 
 IoAwaitable readv(dstd::NativeHandle fd, const struct iovec* iov,
                   int iovcnt) noexcept {
-    return io_dispatch<&IoBackend::submit_readv>(
-        [](int f, const struct iovec* v, int c) { return ::readv(f, v, c); },
-        fd, iov, iovcnt);
+    return dispatch(make_vector_op(IoOpKind::Readv, fd, iov, iovcnt));
 }
 
 IoAwaitable writev(dstd::NativeHandle fd, const struct iovec* iov,
                    int iovcnt) noexcept {
-    return io_dispatch<&IoBackend::submit_writev>(
-        [](int f, const struct iovec* v, int c) { return ::writev(f, v, c); },
-        fd, iov, iovcnt);
+    return dispatch(make_vector_op(IoOpKind::Writev, fd, iov, iovcnt));
 }
 
 coro::CoroTask<ssize_t> writev_all(dstd::NativeHandle fd, struct iovec* iov,
@@ -218,36 +234,29 @@ coro::CoroTask<ssize_t> writev_all(dstd::NativeHandle fd, struct iovec* iov,
 
 IoAwaitable preadv(dstd::NativeHandle fd, const struct iovec* iov, int iovcnt,
                    std::uint64_t offset) noexcept {
-    return io_dispatch<&IoBackend::submit_preadv>(
-        [](int f, const struct iovec* v, int c, off_t o) {
-            return ::preadv(f, v, c, o);
-        },
-        fd, iov, iovcnt, static_cast<off_t>(offset));
+    return dispatch(make_vector_op(IoOpKind::Preadv, fd, iov, iovcnt, offset));
 }
 
 IoAwaitable pwritev(dstd::NativeHandle fd, const struct iovec* iov, int iovcnt,
                     std::uint64_t offset) noexcept {
-    return io_dispatch<&IoBackend::submit_pwritev>(
-        [](int f, const struct iovec* v, int c, off_t o) {
-            return ::pwritev(f, v, c, o);
-        },
-        fd, iov, iovcnt, static_cast<off_t>(offset));
+    return dispatch(make_vector_op(IoOpKind::Pwritev, fd, iov, iovcnt, offset));
 }
 
 IoAwaitable lseek(dstd::NativeHandle fd, std::int64_t offset,
                   int whence) noexcept {
-    return io_dispatch<&IoBackend::submit_lseek>(
-        [](int f, off_t o, int w) { return ::lseek(f, o, w); }, fd,
-        static_cast<off_t>(offset), whence);
+    IoAwaitable op = make_op(IoOpKind::Lseek, fd);
+    op.offset = offset;
+    op.whence = whence;
+    return dispatch(op);
 }
 
 IoAwaitable sendfile(dstd::NativeHandle out_fd, dstd::NativeHandle in_fd,
                      std::uint64_t offset, std::size_t count) noexcept {
-    return io_dispatch<&IoBackend::submit_sendfile>(
-        [](int of, int inf, off_t o, std::size_t c) {
-            return platform_sendfile(of, inf, o, c);
-        },
-        out_fd, in_fd, static_cast<off_t>(offset), count);
+    IoAwaitable op = make_op(IoOpKind::Sendfile, in_fd);
+    op.out_handle = out_fd;
+    op.offset = static_cast<std::int64_t>(offset);
+    op.length = count;
+    return dispatch(op);
 }
 
 }  // namespace dftracer::utils::runtime::io

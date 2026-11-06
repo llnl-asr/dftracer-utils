@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/runtime/io/io_sendfile.h>
 #include <dftracer/utils/runtime/io/thread_pool_file_ops.h>
 #include <fcntl.h>
@@ -17,22 +16,23 @@ namespace dftracer::utils::runtime::io {
 
 namespace {
 // A socket call may wait on a peer indefinitely, so it is not tracked.
-bool is_file_op(IoOp op) {
-    return op != IoOp::Accept && op != IoOp::Recv && op != IoOp::Send;
+bool is_file_op(IoOpKind kind) {
+    return kind != IoOpKind::Accept && kind != IoOpKind::Recv &&
+           kind != IoOpKind::Send;
 }
 
 // Operations whose syscall can block on a peer for ever, so cancel_pending()
 // has to be able to interrupt their wait. File writes are left out: they do
 // not wait for a peer and the extra poll would slow every sequential write.
-bool waits_for_peer(IoOp op, short& events) {
-    switch (op) {
-        case IoOp::Read:
-        case IoOp::Readv:
-        case IoOp::Recv:
-        case IoOp::Accept:
+bool waits_for_peer(IoOpKind kind, short& events) {
+    switch (kind) {
+        case IoOpKind::Read:
+        case IoOpKind::Readv:
+        case IoOpKind::Recv:
+        case IoOpKind::Accept:
             events = POLLIN;
             return true;
-        case IoOp::Send:
+        case IoOpKind::Send:
             events = POLLOUT;
             return true;
         default:
@@ -83,271 +83,55 @@ bool wait_ready(int fd, short events, const IoThreadPool& pool) {
 }
 }  // namespace
 
-ThreadPoolFileOps::ThreadPoolFileOps(coro::Executor& executor,
-                                     std::size_t pool_size,
+ThreadPoolFileOps::ThreadPoolFileOps(std::size_t pool_size,
                                      unsigned batch_threshold,
                                      IoPoolOptions pool_options)
-    : executor_(executor), pool_(pool_size, batch_threshold, pool_options) {}
+    : pool_(pool_size, batch_threshold, pool_options) {}
 
-IoAwaitable ThreadPoolFileOps::make_request(
-    IoOp op, int fd, void* buf, std::size_t len, off_t offset, const char* path,
-    int flags, mode_t mode, coro::Executor* executor, IoThreadPool* pool) {
-    auto* req = new IoRequest{};
-    req->submit = &ThreadPoolFileOps::submit_to_pool;
-    req->op = op;
-    req->fd = fd;
-    req->buf = buf;
-    req->len = len;
-    req->offset = offset;
-    req->path = path;
-    req->flags = flags;
-    req->mode = mode;
-    req->executor = executor;
-    req->pool = pool;
-
-    IoAwaitable awaitable;
-    // req->awaitable will be updated in submit_to_pool with the
-    // stable address from await_suspend (the IoAwaitable may move
-    // before the coroutine frame is allocated).
-    req->awaitable = nullptr;
-    awaitable.submit_ctx = req;
-    return awaitable;
+void ThreadPoolFileOps::submit(IoOp& op) {
+    if (is_file_op(op.kind)) pool_.begin_tracked();
+    pool_.submit([this, &op] { execute(op); });
 }
 
-IoAwaitable ThreadPoolFileOps::submit_read(int fd, void* buf, std::size_t len) {
-    return make_request(IoOp::Read, fd, buf, len, 0, nullptr, 0, 0, &executor_,
-                        &pool_);
-}
-
-IoAwaitable ThreadPoolFileOps::submit_write(int fd, const void* buf,
-                                            std::size_t len) {
-    return make_request(IoOp::Write, fd, const_cast<void*>(buf), len, 0,
-                        nullptr, 0, 0, &executor_, &pool_);
-}
-
-IoAwaitable ThreadPoolFileOps::submit_pread(int fd, void* buf, std::size_t len,
-                                            off_t offset) {
-    return make_request(IoOp::Pread, fd, buf, len, offset, nullptr, 0, 0,
-                        &executor_, &pool_);
-}
-
-void ThreadPoolFileOps::submit_pread_callback(int fd, void* buf,
-                                              std::size_t len, off_t offset,
-                                              IoCompletionFn completion,
-                                              void* context) {
-    auto* req = new IoRequest{};
-    req->op = IoOp::Pread;
-    req->fd = fd;
-    req->buf = buf;
-    req->len = len;
-    req->offset = offset;
-    req->completion = completion;
-    req->completion_ctx = context;
-    req->pool = &pool_;
-    if (is_file_op(req->op)) pool_.begin_tracked();
-    pool_.submit([req] { execute_request(req); });
-}
-
-IoAwaitable ThreadPoolFileOps::submit_pwrite(int fd, const void* buf,
-                                             std::size_t len, off_t offset) {
-    return make_request(IoOp::Pwrite, fd, const_cast<void*>(buf), len, offset,
-                        nullptr, 0, 0, &executor_, &pool_);
-}
-
-void ThreadPoolFileOps::submit_pwrite_callback(int fd, const void* buf,
-                                               std::size_t len, off_t offset,
-                                               IoCompletionFn completion,
-                                               void* context) {
-    auto* req = new IoRequest{};
-    req->op = IoOp::Pwrite;
-    req->fd = fd;
-    req->buf = const_cast<void*>(buf);
-    req->len = len;
-    req->offset = offset;
-    req->completion = completion;
-    req->completion_ctx = context;
-    req->pool = &pool_;
-    if (is_file_op(req->op)) pool_.begin_tracked();
-    pool_.submit([req] { execute_request(req); });
-}
-
-IoAwaitable ThreadPoolFileOps::submit_open(const char* path, int flags,
-                                           mode_t mode) {
-    return make_request(IoOp::Open, -1, nullptr, 0, 0, path, flags, mode,
-                        &executor_, &pool_);
-}
-
-IoAwaitable ThreadPoolFileOps::submit_close(int fd) {
-    return make_request(IoOp::Close, fd, nullptr, 0, 0, nullptr, 0, 0,
-                        &executor_, &pool_);
-}
-
-IoAwaitable ThreadPoolFileOps::submit_fsync(int fd) {
-    return make_request(IoOp::Fsync, fd, nullptr, 0, 0, nullptr, 0, 0,
-                        &executor_, &pool_);
-}
-
-IoAwaitable ThreadPoolFileOps::submit_ftruncate(int fd, off_t length) {
-    return make_request(IoOp::Ftruncate, fd, nullptr, 0, length, nullptr, 0, 0,
-                        &executor_, &pool_);
-}
-
-IoAwaitable ThreadPoolFileOps::submit_fstat(int fd, struct stat* buf) {
-    auto req_awaitable = make_request(IoOp::Fstat, fd, nullptr, 0, 0, nullptr,
-                                      0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx);
-    req->stat_buf = buf;
-    return req_awaitable;
-}
-
-IoAwaitable ThreadPoolFileOps::submit_call(BlockingFn fn, void* context) {
-    auto req_awaitable = make_request(IoOp::Call, -1, context, 0, 0, nullptr, 0,
-                                      0, &executor_, &pool_);
-    static_cast<IoRequest*>(req_awaitable.submit_ctx)->call_fn = fn;
-    return req_awaitable;
-}
-
-IoAwaitable ThreadPoolFileOps::submit_accept(int listen_fd,
-                                             struct sockaddr* addr,
-                                             socklen_t* addrlen) {
-    auto req_awaitable = make_request(IoOp::Accept, listen_fd, nullptr, 0, 0,
-                                      nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx);
-    req->addr = addr;
-    req->addrlen = addrlen;
-    return req_awaitable;
-}
-
-IoAwaitable ThreadPoolFileOps::submit_recv(int fd, void* buf, std::size_t len,
-                                           int flags) {
-    auto req_awaitable = make_request(IoOp::Recv, fd, buf, len, 0, nullptr, 0,
-                                      0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx);
-    req->msg_flags = flags;
-    return req_awaitable;
-}
-
-IoAwaitable ThreadPoolFileOps::submit_send(int fd, const void* buf,
-                                           std::size_t len, int flags) {
-    auto req_awaitable =
-        make_request(IoOp::Send, fd, const_cast<void*>(buf), len, 0, nullptr, 0,
-                     0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx);
-    req->msg_flags = flags;
-    return req_awaitable;
-}
-
-IoAwaitable ThreadPoolFileOps::submit_readv(int fd, const struct iovec* iov,
-                                            int iovcnt) {
-    auto req_awaitable = make_request(IoOp::Readv, fd, nullptr, 0, 0, nullptr,
-                                      0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx);
-    req->iov = iov;
-    req->iovcnt = iovcnt;
-    return req_awaitable;
-}
-
-IoAwaitable ThreadPoolFileOps::submit_writev(int fd, const struct iovec* iov,
-                                             int iovcnt) {
-    auto req_awaitable = make_request(IoOp::Writev, fd, nullptr, 0, 0, nullptr,
-                                      0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx);
-    req->iov = iov;
-    req->iovcnt = iovcnt;
-    return req_awaitable;
-}
-
-IoAwaitable ThreadPoolFileOps::submit_preadv(int fd, const struct iovec* iov,
-                                             int iovcnt, off_t offset) {
-    auto req_awaitable = make_request(IoOp::Preadv, fd, nullptr, 0, offset,
-                                      nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx);
-    req->iov = iov;
-    req->iovcnt = iovcnt;
-    return req_awaitable;
-}
-
-IoAwaitable ThreadPoolFileOps::submit_pwritev(int fd, const struct iovec* iov,
-                                              int iovcnt, off_t offset) {
-    auto req_awaitable = make_request(IoOp::Pwritev, fd, nullptr, 0, offset,
-                                      nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx);
-    req->iov = iov;
-    req->iovcnt = iovcnt;
-    return req_awaitable;
-}
-
-IoAwaitable ThreadPoolFileOps::submit_lseek(int fd, off_t offset, int whence) {
-    auto req_awaitable = make_request(IoOp::Lseek, fd, nullptr, 0, offset,
-                                      nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx);
-    req->whence = whence;
-    return req_awaitable;
-}
-
-IoAwaitable ThreadPoolFileOps::submit_sendfile(int out_fd, int in_fd,
-                                               off_t offset,
-                                               std::size_t count) {
-    auto req_awaitable =
-        make_request(IoOp::Sendfile, in_fd, nullptr, count, offset, nullptr, 0,
-                     0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx);
-    req->dest_fd = out_fd;
-    return req_awaitable;
-}
-
-void ThreadPoolFileOps::submit_to_pool(SubmitContext* ctx,
-                                       IoAwaitable* awaitable) {
-    auto* req = static_cast<IoRequest*>(ctx);
-    if (is_file_op(req->op)) req->pool->begin_tracked();
-    // Update the awaitable pointer -- await_suspend passes the real,
-    // stable address of the IoAwaitable in the coroutine frame.
-    req->awaitable = awaitable;
-    req->pool->submit([req] { execute_request(req); });
-}
-
-namespace {
-
-// The raw syscall result: a count or fd, or -1 with errno set.
-ssize_t run_syscall(const IoRequest* req) {
+ssize_t run_blocking(const IoOp& op) noexcept {
     ssize_t result = 0;
-    switch (req->op) {
-        case IoOp::Read:
-            result = ::read(req->fd, req->buf, req->len);
+    switch (op.kind) {
+        case IoOpKind::Read:
+            result = ::read(op.handle, op.buffer, op.length);
             break;
-        case IoOp::Write:
-            result = ::write(req->fd, req->buf, req->len);
+        case IoOpKind::Write:
+            result = ::write(op.handle, op.buffer, op.length);
             break;
-        case IoOp::Pread:
-            result = ::pread(req->fd, req->buf, req->len, req->offset);
+        case IoOpKind::Pread:
+            result = ::pread(op.handle, op.buffer, op.length, op.offset);
             break;
-        case IoOp::Pwrite:
-            result = ::pwrite(req->fd, req->buf, req->len, req->offset);
+        case IoOpKind::Pwrite:
+            result = ::pwrite(op.handle, op.buffer, op.length, op.offset);
             break;
-        case IoOp::Open:
-            result = ::open(req->path, req->flags, req->mode);
+        case IoOpKind::Open:
+            result = ::open(op.path, op.flags, op.mode);
             break;
-        case IoOp::Close:
-            result = ::close(req->fd);
+        case IoOpKind::Close:
+            result = ::close(op.handle);
             break;
-        case IoOp::Fsync:
-            result = ::fsync(req->fd);
+        case IoOpKind::Fsync:
+            result = ::fsync(op.handle);
             break;
-        case IoOp::Ftruncate:
-            result = ::ftruncate(req->fd, req->offset);
+        case IoOpKind::Ftruncate:
+            result = ::ftruncate(op.handle, op.offset);
             break;
-        case IoOp::Fstat:
-            result = ::fstat(req->fd, req->stat_buf);
+        case IoOpKind::Fstat:
+            result = ::fstat(op.handle, op.stat_out);
             break;
-        case IoOp::Call:
-            result = req->call_fn(req->buf);
+        case IoOpKind::Call:
+            result = op.call(op.call_context);
             break;
-        case IoOp::Accept:
+        case IoOpKind::Accept:
 #ifdef __linux__
-            result = ::accept4(req->fd, req->addr, req->addrlen,
+            result = ::accept4(op.handle, op.addr, op.addrlen,
                                SOCK_NONBLOCK | SOCK_CLOEXEC);
 #else
-            result = ::accept(req->fd, req->addr, req->addrlen);
+            result = ::accept(op.handle, op.addr, op.addrlen);
             if (result >= 0) {
                 int fd = static_cast<int>(result);
                 int fl = ::fcntl(fd, F_GETFL, 0);
@@ -356,65 +140,57 @@ ssize_t run_syscall(const IoRequest* req) {
             }
 #endif
             break;
-        case IoOp::Recv:
-            result = ::recv(req->fd, req->buf, req->len, req->msg_flags);
+        case IoOpKind::Recv:
+            result = ::recv(op.handle, op.buffer, op.length, op.flags);
             break;
-        case IoOp::Send:
-            result = ::send(req->fd, req->buf, req->len, req->msg_flags);
+        case IoOpKind::Send:
+            result = ::send(op.handle, op.buffer, op.length, op.flags);
             break;
-        case IoOp::Readv:
-            result = ::readv(req->fd, req->iov, req->iovcnt);
+        case IoOpKind::Readv:
+            result = ::readv(op.handle, op.iov, op.iov_count);
             break;
-        case IoOp::Writev:
-            result = ::writev(req->fd, req->iov, req->iovcnt);
+        case IoOpKind::Writev:
+            result = ::writev(op.handle, op.iov, op.iov_count);
             break;
-        case IoOp::Preadv:
-            result = ::preadv(req->fd, req->iov, req->iovcnt, req->offset);
+        case IoOpKind::Preadv:
+            result = ::preadv(op.handle, op.iov, op.iov_count, op.offset);
             break;
-        case IoOp::Pwritev:
-            result = ::pwritev(req->fd, req->iov, req->iovcnt, req->offset);
+        case IoOpKind::Pwritev:
+            result = ::pwritev(op.handle, op.iov, op.iov_count, op.offset);
             break;
-        case IoOp::Lseek:
-            result = ::lseek(req->fd, req->offset, req->whence);
+        case IoOpKind::Lseek:
+            result = ::lseek(op.handle, op.offset, op.whence);
             break;
-        case IoOp::Sendfile:
-            result =
-                platform_sendfile(req->dest_fd, req->fd, req->offset, req->len);
+        case IoOpKind::Sendfile:
+            result = platform_sendfile(op.out_handle, op.handle, op.offset,
+                                       op.length);
             break;
     }
-    return result;
+    return result < 0 ? -errno : result;
 }
 
-}  // namespace
-
-void ThreadPoolFileOps::execute_request(IoRequest* req) {
+void ThreadPoolFileOps::execute(IoOp& op) noexcept {
     ssize_t result = 0;
     short events = 0;
-    const bool may_wait = waits_for_peer(req->op, events) &&
-                          !((req->op == IoOp::Read || req->op == IoOp::Readv) &&
-                            is_regular_file(req->fd));
-    if (may_wait && !wait_ready(req->fd, events, *req->pool)) {
+    const bool may_wait =
+        waits_for_peer(op.kind, events) &&
+        !((op.kind == IoOpKind::Read || op.kind == IoOpKind::Readv) &&
+          is_regular_file(op.handle));
+    if (may_wait && !wait_ready(op.handle, events, pool_)) {
         result = -ECANCELED;
     } else {
-        result = run_syscall(req);
-        if (result < 0) result = -errno;
-        if (req->op == IoOp::Close) {
-            forget_fd_kind(req->fd);
-        } else if (req->op == IoOp::Open && result >= 0) {
+        result = run_blocking(op);
+        if (op.kind == IoOpKind::Close) {
+            forget_fd_kind(op.handle);
+        } else if (op.kind == IoOpKind::Open && result >= 0) {
             forget_fd_kind(static_cast<int>(result));
         }
     }
 
-    IoThreadPool* const pool = req->pool;
-    const bool tracked = is_file_op(req->op);
-    if (req->awaitable != nullptr) {
-        req->awaitable->result = result;
-        req->awaitable->resume_through(*req->executor);
-    } else if (req->completion != nullptr) {
-        req->completion(req->completion_ctx, result);
-    }
-    delete req;
-    if (tracked) pool->end_tracked();
+    const bool tracked = is_file_op(op.kind);
+    op.result = result;
+    op.complete(op);
+    if (tracked) pool_.end_tracked();
 }
 
 std::size_t ThreadPoolFileOps::poll(int /*timeout_ms*/) {

@@ -10,10 +10,6 @@
 
 #include <cstddef>
 
-namespace dftracer::utils::coro {
-class Executor;
-}  // namespace dftracer::utils::coro
-
 namespace dftracer::utils::runtime::io {
 
 /// epoll + thread pool I/O backend.
@@ -23,8 +19,7 @@ namespace dftracer::utils::runtime::io {
 /// currently only watching an eventfd used for clean shutdown.
 class EpollThreadPoolBackend : public ThreadPoolFileOps {
    public:
-    explicit EpollThreadPoolBackend(coro::Executor& executor,
-                                    std::size_t pool_size = 4,
+    explicit EpollThreadPoolBackend(std::size_t pool_size = 4,
                                     unsigned batch_threshold = 0,
                                     IoPoolOptions pool_options = {});
     ~EpollThreadPoolBackend() override;

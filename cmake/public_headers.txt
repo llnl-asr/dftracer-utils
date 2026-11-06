@@ -184,6 +184,9 @@ dftracer/utils/plugins/plugin/source.h
 dftracer/utils/plugins/plugin/types.h
 dftracer/utils/plugins/prims.h
 dftracer/utils/plugins/result_registry.h
+dftracer/utils/runtime/fs/filesystem.h
+dftracer/utils/runtime/fs/fs.h
+dftracer/utils/runtime/io/backend.h
 dftracer/utils/runtime/io/backend_type.h
 dftracer/utils/runtime/runtime.h
 dftracer/utils/runtime/scheduler/task_executor.h

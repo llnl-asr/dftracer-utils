@@ -33,9 +33,6 @@ PluginHostState | derives dstd::HeapObject
 ArrowStreamingIteratorState | derives dstd::HeapObject
 src/dftracer/utils/plugins/fold_adapter.cpp | SketchBox | derives dstd::HeapObject
 ParkNode | derives dstd::HeapObject
-IoUringRequest | has a class operator new on the heap
-IoUringSubmitCtx | has a class operator new on the heap
-src/dftracer/utils/runtime/io/thread_pool_file_ops.cpp | IoRequest | has a class operator new on the heap
 
 # The heap itself, and code that compiles in a plugin on the plugin's allocator.
 src/dftracer/utils/memory/* | the heap

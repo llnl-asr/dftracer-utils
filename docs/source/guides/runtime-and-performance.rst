@@ -26,9 +26,16 @@ Tune threads and memory, and build your own concurrent workflows on the coroutin
 
       Fan-out, fan-in, racing tasks and streaming channels.
 
+   .. grid-item-card:: Add your own I/O backend or file system
+      :link: runtime/custom-io
+      :link-type: doc
+
+      Change how I/O runs or where the bytes live.
+
 .. toctree::
    :hidden:
 
    runtime/performance
    runtime/memory-budget
    pipelines/patterns
+   runtime/custom-io

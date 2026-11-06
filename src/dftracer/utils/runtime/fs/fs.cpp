@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/str_format.h>
-#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/coro/adaptive_gate.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/fs/fs.h>
-#include <dftracer/utils/runtime/io/ops.h>
 
 #include <algorithm>
 #include <atomic>
@@ -23,21 +20,7 @@ using dstd::fs::FileKind;
 
 constexpr std::size_t STAT_BATCH = 16;
 constexpr std::size_t STREAM_SLOTS = 256;
-
-#if DFTRACER_UTILS_TEST_PROBES
-std::atomic<std::size_t> g_stat_batches{0};
-std::atomic<std::size_t> g_stat_threads{0};
-std::atomic<std::size_t> g_stat_epoch{1};
-thread_local std::size_t t_stat_epoch = 0;
-
-void note_stat_batch() noexcept {
-    g_stat_batches.fetch_add(1, std::memory_order_relaxed);
-    const std::size_t epoch = g_stat_epoch.load(std::memory_order_relaxed);
-    if (t_stat_epoch == epoch) return;
-    t_stat_epoch = epoch;
-    g_stat_threads.fetch_add(1, std::memory_order_relaxed);
-}
-#endif
+constexpr std::size_t READ_CHUNK = 64 * 1024;
 
 struct Found {
     dstd::Path path;
@@ -50,69 +33,6 @@ using Batch = dstd::Expected<dstd::Vector<Found>, dstd::Error>;
 using BatchChannel = coro::Channel<Batch>;
 using BatchProducer = decltype(std::declval<BatchChannel&>().producer());
 
-// A later layer that asks for this input through common::stat_input makes no
-// second syscall.
-dstd::Expected<dstd::fs::FileStat, dstd::Error> stat_and_keep(
-    dstd::PathView path) noexcept {
-    auto found = dstd::fs::stat(path);
-    if (found) {
-        common::InputFileStat kept;
-        kept.size = found->size;
-        kept.mtime =
-            static_cast<std::int64_t>(found->mtime_ns / NANOS_PER_SECOND);
-        kept.mtime_ns = static_cast<std::int64_t>(found->mtime_ns);
-        kept.is_directory = found->kind == FileKind::Directory;
-        kept.is_regular_file = found->kind == FileKind::File;
-        common::remember_input(path.str(), kept);
-    }
-    return found;
-}
-
-template <typename Fn>
-struct IoCall {
-    Fn* fn;
-    dstd::Optional<std::invoke_result_t<Fn&>> result;
-
-    static ssize_t run(void* context) noexcept {
-        auto* call = static_cast<IoCall*>(context);
-        call->result.emplace((*call->fn)());
-        return 0;
-    }
-};
-
-// A call with no I/O thread free stays queued and holds no worker.
-template <typename Fn>
-coro::CoroTask<std::invoke_result_t<Fn&>> on_io(Fn fn) {
-    IoCall<Fn> call{&fn, dstd::nullopt};
-    runtime::io::IoAwaitable op =
-        runtime::io::call(&IoCall<Fn>::run, static_cast<void*>(&call));
-    co_await op;
-    co_return std::move(*call.result);
-}
-
-dstd::Expected<dstd::Vector<Entry>, dstd::Error> list_sync(
-    dstd::PathView dir) noexcept {
-    auto opened = dstd::fs::Dir::open(dir);
-    if (!opened) return dstd::Unexpected(opened.error());
-    auto entries = opened->entries();
-    if (!entries) return dstd::Unexpected(entries.error());
-    dstd::Vector<Entry> listing;
-    for (const dstd::fs::DirEntry& entry : *entries) {
-        FileKind kind = entry.kind;
-        if (kind == FileKind::Unknown) {
-            const auto found = opened->lstat(entry.name);
-            if (found) kind = found->kind;
-        }
-        listing.push_back(Entry{dir / entry.name, kind});
-    }
-    if (entries->error() != 0) {
-        return dstd::Unexpected(
-            dstd::Error(dstd::Condition::Io,
-                        common::str_cat("Cannot read directory: ", dir.str())));
-    }
-    return listing;
-}
-
 bool any_match(const dstd::Vector<dstd::String>& patterns,
                dstd::StringView name) noexcept {
     return std::any_of(patterns.begin(), patterns.end(),
@@ -123,6 +43,7 @@ bool any_match(const dstd::Vector<dstd::String>& patterns,
 
 struct WalkPlan {
     coro::Scope* scope = nullptr;
+    dstd::SharedPtr<FileSystem> file_system;
     dstd::SharedPtr<BatchChannel> channel;
     coro::AdaptiveGate gate;
     dstd::Vector<dstd::String> patterns;
@@ -133,8 +54,10 @@ struct WalkPlan {
     bool every_entry = false;
     std::atomic<bool> stopped{false};
 
-    WalkPlan(coro::Scope& s, std::size_t cap)
+    WalkPlan(coro::Scope& s, dstd::SharedPtr<FileSystem> file_system_in,
+             std::size_t cap)
         : scope(&s),
+          file_system(std::move(file_system_in)),
           channel(coro::make_channel<Batch>(STREAM_SLOTS)),
           gate(cap) {}
 };
@@ -167,48 +90,48 @@ coro::CoroTask<void> report(const dstd::SharedPtr<WalkPlan>& plan,
     co_await out.send(std::move(failed));
 }
 
-// Fills the slice in place. Returns the first error that must end the stream.
-dstd::Optional<dstd::Error> stat_range(const WalkPlan& plan,
-                                       dstd::Vector<Found>& items,
-                                       std::size_t begin, std::size_t stop,
-                                       dstd::Vector<Found>& out) noexcept {
-#if DFTRACER_UTILS_TEST_PROBES
-    note_stat_batch();
-#endif
-    for (std::size_t i = begin; i < stop; ++i) {
-        Found& item = items[i];
-        auto found = stat_and_keep(item.path.view());
-        if (!found) {
-            if (found.error().is(dstd::Condition::NotFound) ||
-                plan.skip_unreadable) {
-                continue;
-            }
-            return found.error();
-        }
-        if (found->kind != FileKind::File) continue;
-        item.size = found->size;
-        item.mtime_ns = found->mtime_ns;
-        item.kind = FileKind::File;
-        out.push_back(std::move(item));
-    }
-    return dstd::nullopt;
-}
-
 coro::CoroTask<void> stat_slice(dstd::SharedPtr<WalkPlan> plan,
                                 dstd::SharedPtr<dstd::Vector<Found>> items,
                                 std::size_t begin, std::size_t stop,
                                 BatchProducer out) {
     if (plan->stopped.load(std::memory_order_relaxed)) co_return;
-    dstd::Vector<Found> files;
-    files.reserve(stop - begin);
-    dstd::Optional<dstd::Error> failure;
+    const std::size_t count = stop - begin;
+    dstd::Vector<dstd::PathView> paths;
+    paths.reserve(count);
+    for (std::size_t i = begin; i < stop; ++i) {
+        paths.push_back((*items)[i].path.view());
+    }
+    dstd::Vector<dstd::Expected<dstd::fs::FileStat, dstd::Error>> stats;
+    stats.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        stats.push_back(dstd::fs::FileStat{});
+    }
     {
-        auto admitted = co_await plan->gate.enter(stop - begin);
-        auto fn = [&]() noexcept {
-            return stat_range(*plan, *items, begin, stop, files);
-        };
-        auto call = on_io(fn);
-        failure = co_await std::move(call);
+        auto admitted = co_await plan->gate.enter(count);
+        auto batch = plan->file_system->stat_batch(
+            dstd::Span<const dstd::PathView>(paths.data(), paths.size()),
+            dstd::Span<dstd::Expected<dstd::fs::FileStat, dstd::Error>>(
+                stats.data(), stats.size()));
+        co_await std::move(batch);
+    }
+    dstd::Vector<Found> files;
+    files.reserve(count);
+    dstd::Optional<dstd::Error> failure;
+    for (std::size_t i = 0; i < count && !failure; ++i) {
+        Found& item = (*items)[begin + i];
+        auto& found = stats[i];
+        if (!found) {
+            if (!found.error().is(dstd::Condition::NotFound) &&
+                !plan->skip_unreadable) {
+                failure = found.error();
+            }
+            continue;
+        }
+        if (found->kind != FileKind::File) continue;
+        item.size = found->size;
+        item.mtime_ns = found->mtime_ns;
+        item.kind = FileKind::File;
+        files.push_back(std::move(item));
     }
     if (!files.empty()) {
         Batch batch(std::move(files));
@@ -223,8 +146,7 @@ coro::CoroTask<void> stat_slice(dstd::SharedPtr<WalkPlan> plan,
 coro::CoroTask<void> walk_dir(dstd::SharedPtr<WalkPlan> plan, dstd::Path dir,
                               BatchProducer out) {
     if (plan->stopped.load(std::memory_order_relaxed)) co_return;
-    auto list_fn = [&dir]() noexcept { return list_sync(dir.view()); };
-    auto list_call = on_io(list_fn);
+    auto list_call = plan->file_system->list(dir.view());
     auto listed = co_await std::move(list_call);
     if (!listed) {
         if (plan->skip_unreadable) co_return;
@@ -277,8 +199,7 @@ coro::CoroTask<void> walk_dir(dstd::SharedPtr<WalkPlan> plan, dstd::Path dir,
 
 coro::CoroTask<void> walk_root(dstd::SharedPtr<WalkPlan> plan, dstd::Path root,
                                BatchProducer out) {
-    auto stat_fn = [&root]() noexcept { return dstd::fs::stat(root.view()); };
-    auto stat_call = on_io(stat_fn);
+    auto stat_call = plan->file_system->stat(root.view());
     auto found = co_await std::move(stat_call);
     if (!found) {
         auto reported = report(plan, out, std::move(found.error()));
@@ -297,28 +218,50 @@ coro::CoroTask<void> walk_root(dstd::SharedPtr<WalkPlan> plan, dstd::Path root,
     co_await std::move(walked);
 }
 
-dstd::SharedPtr<WalkPlan> make_plan(coro::Scope& scope, std::size_t limit) {
+// A path with no file system gets a plan with none, and that error as the one
+// item of the stream.
+dstd::SharedPtr<WalkPlan> make_plan(
+    coro::Scope& scope,
+    const dstd::Expected<dstd::SharedPtr<FileSystem>, dstd::Error>& file_system,
+    std::size_t limit) {
     coro::Executor* executor = scope.executor();
     const std::size_t cap =
         limit != 0 ? limit
                    : (executor != nullptr ? executor->concurrency() : 1);
-    return dstd::make_shared<WalkPlan>(scope, cap);
+    return dstd::make_shared<WalkPlan>(
+        scope, file_system ? *file_system : dstd::SharedPtr<FileSystem>{}, cap);
 }
 
-void start(const dstd::SharedPtr<WalkPlan>& plan, dstd::PathView root) {
+coro::CoroTask<void> report_no_file_system(dstd::SharedPtr<WalkPlan> plan,
+                                           dstd::Error error,
+                                           BatchProducer out) {
+    auto reported = report(plan, out, std::move(error));
+    co_await std::move(reported);
+}
+
+void start(
+    const dstd::SharedPtr<WalkPlan>& plan,
+    const dstd::Expected<dstd::SharedPtr<FileSystem>, dstd::Error>& file_system,
+    dstd::PathView root) {
+    if (!file_system) {
+        plan->scope->spawn(report_no_file_system(plan, file_system.error(),
+                                                 plan->channel->producer()));
+        return;
+    }
     plan->scope->spawn(
         walk_root(plan, dstd::Path(root.str()), plan->channel->producer()));
 }
 
 dstd::SharedPtr<WalkPlan> start_find(coro::Scope& scope, dstd::PathView root,
                                      FindOptions options) {
-    auto plan = make_plan(scope, options.limit);
+    auto file_system = file_system_for(root);
+    auto plan = make_plan(scope, file_system, options.limit);
     plan->patterns = std::move(options.patterns);
     plan->skip_dirs = std::move(options.skip_dirs);
     plan->recursive = options.recursive;
     plan->with_stat = options.with_stat;
     plan->skip_unreadable = options.skip_unreadable;
-    start(plan, root);
+    start(plan, file_system, root);
     return plan;
 }
 
@@ -389,32 +332,76 @@ coro::CoroTask<dstd::Expected<dstd::Vector<FoundFile>, dstd::Error>> drain(
 
 coro::CoroTask<dstd::Expected<dstd::Vector<Entry>, dstd::Error>> list_owned(
     dstd::Path path) {
-    auto fn = [&path]() noexcept { return list_sync(path.view()); };
-    auto call = on_io(fn);
+    auto file_system = file_system_for(path.view());
+    if (!file_system) co_return dstd::Unexpected(file_system.error());
+    auto call = (*file_system)->list(path.view());
     co_return co_await std::move(call);
 }
 
 coro::CoroTask<dstd::Expected<dstd::fs::FileStat, dstd::Error>> stat_owned(
     dstd::Path path) {
-    auto fn = [&path]() noexcept { return stat_and_keep(path.view()); };
-    auto call = on_io(fn);
+    auto file_system = file_system_for(path.view());
+    if (!file_system) co_return dstd::Unexpected(file_system.error());
+    auto call = (*file_system)->stat(path.view());
     co_return co_await std::move(call);
 }
 
 coro::CoroTask<dstd::Expected<dstd::String, dstd::Error>> read_owned(
     dstd::Path path) {
-    auto fn = [&path]() noexcept { return dstd::fs::read_file(path.view()); };
-    auto call = on_io(fn);
-    co_return co_await std::move(call);
+    auto file_system = file_system_for(path.view());
+    if (!file_system) co_return dstd::Unexpected(file_system.error());
+    auto opening = (*file_system)->open(path.view(), dstd::OpenOptions{});
+    auto opened = co_await std::move(opening);
+    if (!opened) co_return dstd::Unexpected(opened.error());
+    FileSystemFile& file = **opened;
+    dstd::String out;
+    std::size_t size = 0;
+    for (;;) {
+        out.resize(size + READ_CHUNK);
+        auto reading = file.read_at(
+            size, dstd::Span<std::uint8_t>(
+                      reinterpret_cast<std::uint8_t*>(out.data()) + size,
+                      READ_CHUNK));
+        auto got = co_await std::move(reading);
+        if (!got) co_return dstd::Unexpected(got.error());
+        if (*got == 0) break;
+        size += *got;
+    }
+    out.resize(size);
+    auto closing = file.close();
+    auto closed = co_await std::move(closing);
+    if (!closed) co_return dstd::Unexpected(closed.error());
+    co_return out;
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> write_owned(
     dstd::Path path, dstd::StringView data) {
-    auto fn = [&path, data]() noexcept {
-        return dstd::fs::write_file(path.view(), data);
-    };
-    auto call = on_io(fn);
-    co_return co_await std::move(call);
+    auto file_system = file_system_for(path.view());
+    if (!file_system) co_return dstd::Unexpected(file_system.error());
+    dstd::OpenOptions options;
+    options.access = dstd::Access::Write;
+    options.creation = dstd::Creation::AlwaysNew;
+    auto opening = (*file_system)->open(path.view(), options);
+    auto opened = co_await std::move(opening);
+    if (!opened) co_return dstd::Unexpected(opened.error());
+    FileSystemFile& file = **opened;
+    std::size_t done = 0;
+    while (done < data.size()) {
+        auto writing = file.write_at(
+            done, dstd::ByteView(
+                      reinterpret_cast<const std::uint8_t*>(data.data()) + done,
+                      data.size() - done));
+        auto put = co_await std::move(writing);
+        if (!put) co_return dstd::Unexpected(put.error());
+        if (*put == 0) {
+            co_return dstd::Unexpected(dstd::Error(
+                dstd::Condition::Io,
+                common::str_cat("Cannot write file: ", path.str())));
+        }
+        done += *put;
+    }
+    auto closing = file.close();
+    co_return co_await std::move(closing);
 }
 
 struct StatSlice {
@@ -458,16 +445,26 @@ stat_many(dstd::Span<const dstd::Path> paths, std::size_t limit) {
         slices.push_back(
             StatSlice{begin, std::min(begin + STAT_BATCH, paths.size())});
     }
+    if (paths.empty()) co_return results;
+    auto file_system = file_system_for(paths[0].view());
+    if (!file_system) {
+        for (Result& result : results) {
+            result = dstd::Unexpected(file_system.error());
+        }
+        co_return results;
+    }
+    FileSystem* const target = file_system->get();
     Result* const out = results.data();
-    auto job = [paths, out](StatSlice slice) -> coro::CoroTask<void> {
-        auto fn = [paths, out, slice]() noexcept {
-            for (std::size_t i = slice.begin; i < slice.stop; ++i) {
-                out[i] = stat_and_keep(paths[i].view());
-            }
-            return true;
-        };
-        auto call = on_io(fn);
-        co_await std::move(call);
+    auto job = [paths, out, target](StatSlice slice) -> coro::CoroTask<void> {
+        dstd::Vector<dstd::PathView> views;
+        views.reserve(slice.stop - slice.begin);
+        for (std::size_t i = slice.begin; i < slice.stop; ++i) {
+            views.push_back(paths[i].view());
+        }
+        auto batch = target->stat_batch(
+            dstd::Span<const dstd::PathView>(views.data(), views.size()),
+            dstd::Span<Result>(out + slice.begin, slice.stop - slice.begin));
+        co_await std::move(batch);
     };
     coro::ParallelOptions options;
     options.max_in_flight = limit;
@@ -478,13 +475,14 @@ stat_many(dstd::Span<const dstd::Path> paths, std::size_t limit) {
 
 coro::AsyncGenerator<dstd::Expected<Entry, dstd::Error>> walk(
     coro::Scope& scope, dstd::PathView root, WalkOptions options) {
-    auto plan = make_plan(scope, 0);
+    auto file_system = file_system_for(root);
+    auto plan = make_plan(scope, file_system, 0);
     plan->skip_dirs = std::move(options.skip_dirs);
     plan->recursive = options.recursive;
     plan->with_stat = false;
     plan->skip_unreadable = options.skip_unreadable;
     plan->every_entry = true;
-    start(plan, root);
+    start(plan, file_system, root);
     return entries_of(StreamEnd(std::move(plan)));
 }
 
@@ -497,24 +495,5 @@ coro::CoroTask<dstd::Expected<dstd::Vector<FoundFile>, dstd::Error>> find_all(
     coro::Scope& scope, dstd::PathView root, FindOptions options) {
     return drain(StreamEnd(start_find(scope, root, std::move(options))));
 }
-
-#if DFTRACER_UTILS_TEST_PROBES
-std::size_t stat_batch_count() noexcept {
-    return g_stat_batches.load(std::memory_order_relaxed);
-}
-
-std::size_t stat_thread_count() noexcept {
-    return g_stat_threads.load(std::memory_order_relaxed);
-}
-
-bool has_run_stat_batch() noexcept {
-    return t_stat_epoch == g_stat_epoch.load(std::memory_order_relaxed);
-}
-
-void reset_stat_threads() noexcept {
-    g_stat_epoch.fetch_add(1, std::memory_order_relaxed);
-    g_stat_threads.store(0, std::memory_order_relaxed);
-}
-#endif
 
 }  // namespace dftracer::utils::runtime::fs

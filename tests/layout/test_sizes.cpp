@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/term.h>
+#include <dftracer/utils/runtime/io/backend.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
@@ -50,8 +51,11 @@ constexpr std::size_t RESULT_VOID_BUDGET = 24;
 constexpr std::size_t RECORD_ITEM_BUDGET = 72;
 // Four counts, a mode and a kind, laid out by decreasing alignment.
 constexpr std::size_t FILE_STAT_BUDGET = 40;
+// Lives in the frame of each task that awaits I/O.
+constexpr std::size_t IO_OP_BUDGET = 80;
 
 static_assert(within<dftu_series, SERIES_BUDGET, 8>());
+static_assert(within<runtime::io::IoOp, IO_OP_BUDGET, 8>());
 static_assert(within<dataframe::DataType, DATA_TYPE_BUDGET, 8>());
 static_assert(within<dataframe::Field, FIELD_BUDGET, 8>());
 static_assert(within<dataframe::Morsel, MORSEL_BUDGET, 8>());

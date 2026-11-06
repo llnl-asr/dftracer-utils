@@ -110,6 +110,13 @@ class File {
     /// The handle stays owned by this File and is valid until it closes.
     NativeHandle native_handle() const noexcept { return handle_; }
 
+    /// Gives up the handle without closing it. The caller closes it.
+    NativeHandle release() noexcept {
+        const NativeHandle handle = handle_;
+        handle_ = -1;
+        return handle;
+    }
+
    private:
     explicit File(NativeHandle handle) noexcept : handle_(handle) {}
 

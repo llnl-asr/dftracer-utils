@@ -108,29 +108,26 @@ class FaultBackend : public runtime::io::ThreadPoolBackend {
    public:
     enum class Fault { None, ShortWrite, EintrOnce, ZeroOnce };
 
-    FaultBackend(coro::Executor& executor, Fault fault)
-        : runtime::io::ThreadPoolBackend(executor, 1, 0),
+    explicit FaultBackend(Fault fault)
+        : runtime::io::ThreadPoolBackend(1, 0),
           fault_(fault),
           eintr_pending_(fault == Fault::EintrOnce),
           zero_pending_(fault == Fault::ZeroOnce) {}
 
     dstd::String name() const override { return "fault"; }
 
-    void submit_pwrite_callback(int fd, const void* buf, std::size_t len,
-                                off_t offset,
-                                runtime::io::IoCompletionFn completion,
-                                void* context) override {
+    void submit(runtime::io::IoOp& op) override {
         std::lock_guard<std::mutex> lock(mutex_);
-        pending_.push_back(Op{fd, buf, len, offset, completion, context});
+        pending_.push_back(&op);
     }
 
     int flush() override {
-        dstd::Vector<Op> ops;
+        dstd::Vector<runtime::io::IoOp*> ops;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             ops.swap(pending_);
         }
-        for (const Op& op : ops) run(op);
+        for (runtime::io::IoOp* op : ops) run(*op);
         return static_cast<int>(ops.size());
     }
 
@@ -139,45 +136,41 @@ class FaultBackend : public runtime::io::ThreadPoolBackend {
     }
 
    private:
-    struct Op {
-        int fd;
-        const void* buf;
-        std::size_t len;
-        off_t offset;
-        runtime::io::IoCompletionFn completion;
-        void* context;
-    };
-
     static ssize_t pwrite_some(int fd, const void* buf, std::size_t len,
                                off_t offset) {
         const ssize_t written = ::pwrite(fd, buf, len, offset);
         return written < 0 ? static_cast<ssize_t>(-errno) : written;
     }
 
-    void run(const Op& op) {
+    void run(runtime::io::IoOp& op) {
+        const void* buf = op.buffer;
         ssize_t result = 0;
         switch (fault_) {
             case Fault::None:
-                result = pwrite_some(op.fd, op.buf, op.len, op.offset);
+                result = pwrite_some(op.handle, buf, op.length, op.offset);
                 break;
             case Fault::ShortWrite: {
-                const std::size_t half = op.len > 1 ? op.len / 2 : op.len;
-                result = pwrite_some(op.fd, op.buf, half, op.offset);
+                const std::size_t half =
+                    op.length > 1 ? op.length / 2 : op.length;
+                result = pwrite_some(op.handle, buf, half, op.offset);
                 break;
             }
             case Fault::EintrOnce:
-                result = eintr_pending_.exchange(false)
-                             ? static_cast<ssize_t>(-EINTR)
-                             : pwrite_some(op.fd, op.buf, op.len, op.offset);
+                result =
+                    eintr_pending_.exchange(false)
+                        ? static_cast<ssize_t>(-EINTR)
+                        : pwrite_some(op.handle, buf, op.length, op.offset);
                 break;
             case Fault::ZeroOnce:
-                result = zero_pending_.exchange(false)
-                             ? static_cast<ssize_t>(0)
-                             : pwrite_some(op.fd, op.buf, op.len, op.offset);
+                result =
+                    zero_pending_.exchange(false)
+                        ? static_cast<ssize_t>(0)
+                        : pwrite_some(op.handle, buf, op.length, op.offset);
                 break;
         }
         completions_.fetch_add(1, std::memory_order_acq_rel);
-        op.completion(op.context, result);
+        op.result = result;
+        op.complete(op);
     }
 
     Fault fault_;
@@ -185,7 +178,7 @@ class FaultBackend : public runtime::io::ThreadPoolBackend {
     std::atomic<bool> zero_pending_;
     std::atomic<std::size_t> completions_{0};
     std::mutex mutex_;
-    dstd::Vector<Op> pending_;
+    dstd::Vector<runtime::io::IoOp*> pending_;
 };
 
 void write_id(std::uint8_t* out, std::uint32_t id) {
@@ -705,7 +698,7 @@ TEST_CASE("store open extent: stress a small extent from many threads") {
 
 TEST_CASE("store open extent: a short write is finished with resubmissions") {
     Runtime runtime(1);
-    FaultBackend backend(*runtime.executor(), FaultBackend::Fault::ShortWrite);
+    FaultBackend backend(FaultBackend::Fault::ShortWrite);
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
@@ -740,7 +733,7 @@ TEST_CASE("store open extent: a short write is finished with resubmissions") {
 
 TEST_CASE("store open extent: an interrupted write is retried in full") {
     Runtime runtime(1);
-    FaultBackend backend(*runtime.executor(), FaultBackend::Fault::EintrOnce);
+    FaultBackend backend(FaultBackend::Fault::EintrOnce);
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
@@ -774,7 +767,7 @@ TEST_CASE("store open extent: an interrupted write is retried in full") {
 
 TEST_CASE("store open extent: a zero write result latches an Io error") {
     Runtime runtime(1);
-    FaultBackend backend(*runtime.executor(), FaultBackend::Fault::ZeroOnce);
+    FaultBackend backend(FaultBackend::Fault::ZeroOnce);
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
@@ -801,7 +794,7 @@ TEST_CASE("store open extent: a zero write result latches an Io error") {
 
 TEST_CASE("store open extent: an extent write needs the backend flush") {
     Runtime runtime(1);
-    FaultBackend backend(*runtime.executor(), FaultBackend::Fault::None);
+    FaultBackend backend(FaultBackend::Fault::None);
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";

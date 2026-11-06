@@ -5,25 +5,28 @@
 
 namespace dftracer::utils::runtime::io {
 
+namespace {
+
+void resume_waiter(IoOp& op) noexcept {
+    auto& self = static_cast<IoAwaitable&>(op);
+    self.resume_on->post(self.waiter);
+}
+
+}  // namespace
+
 void IoAwaitable::await_suspend(std::coroutine_handle<> h) noexcept {
-    handle = h;
-    resume_on = coro::Executor::current();
+    waiter = h;
+    if (coro::Executor* current = coro::Executor::current()) {
+        resume_on = current;
+    }
+    complete = &resume_waiter;
     // Coroutines reached by symmetric transfer never pass through the executor
     // queue until they suspend here; register now (parent = the resuming
     // ancestor) so the I/O completion's re-enqueue does not orphan them.
     if (const coro::CoroutineHooks* hooks = coro::coroutine_hooks()) {
         hooks->enqueue(hooks->user, h.address(), coro::CoroutineOrigin::Io);
     }
-    if (submit_ctx && submit_ctx->submit) {
-        submit_ctx->submit(submit_ctx, this);
-    }
-    // If submit_ctx is null, this is a bug -- should have been
-    // caught by is_ready = true in the sync path.
-}
-
-void IoAwaitable::resume_through(coro::Executor& fallback) noexcept {
-    coro::Executor* target = resume_on != nullptr ? resume_on : &fallback;
-    target->post(handle);
+    backend->submit(*this);
 }
 
 }  // namespace dftracer::utils::runtime::io

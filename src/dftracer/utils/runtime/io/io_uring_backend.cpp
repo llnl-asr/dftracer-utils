@@ -1,36 +1,23 @@
 // SPDX-License-Identifier: MIT
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/runtime/io/io_uring_backend.h>
 #include <fcntl.h>
 #include <sys/eventfd.h>
-#include <sys/sendfile.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <unistd.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <thread>
 
-// TSAN annotations for kernel-mediated synchronization (io_uring).
-// The kernel provides ordering between SQE submission and CQE completion,
-// but TSAN cannot observe it.  Annotate the boundary so TSAN sees the
-// happens-before edge: submit_fn -> kernel -> completion_loop.
-#if defined(__SANITIZE_THREAD__)
-#define DFTRACER_UTILS_TSAN 1
-#elif defined(__has_feature)
-#if __has_feature(thread_sanitizer)
-#define DFTRACER_UTILS_TSAN 1
-#endif
-#endif
-
 namespace dftracer::utils::runtime::io {
-
-namespace {
-constexpr int CANCEL_SQE_RETRIES = 1000;
-}  // namespace
 
 // ============================================================================
 // Ring implementation
@@ -46,6 +33,9 @@ bool Ring::init(unsigned entries) {
     if (ring_fd_ < 0) {
         return false;
     }
+    features_ = params.features;
+    cq_entries_ = params.cq_entries;
+    pending_ = 0;
 
     // Map SQ ring
     sq_ring_size_ = params.sq_off.array + params.sq_entries * sizeof(unsigned);
@@ -103,8 +93,6 @@ bool Ring::init(unsigned entries) {
     cq_tail_ = reinterpret_cast<unsigned*>(cq_base + params.cq_off.tail);
     cq_ring_mask_ =
         reinterpret_cast<unsigned*>(cq_base + params.cq_off.ring_mask);
-    cq_ring_entries_ =
-        reinterpret_cast<unsigned*>(cq_base + params.cq_off.ring_entries);
     cqes_ =
         reinterpret_cast<struct io_uring_cqe*>(cq_base + params.cq_off.cqes);
 
@@ -131,67 +119,37 @@ void Ring::destroy() {
 }
 
 struct io_uring_sqe* Ring::get_sqe() {
-    unsigned head = __atomic_load_n(sq_head_, __ATOMIC_ACQUIRE);
-    unsigned tail = *sq_tail_;
-    unsigned mask = *sq_ring_mask_;
-
-    if (tail - head >= *sq_ring_entries_) {
-        return nullptr;  // SQ is full
-    }
-
-    unsigned index = tail & mask;
+    const unsigned head =
+        std::atomic_ref<unsigned>(*sq_head_).load(std::memory_order_acquire);
+    const unsigned tail = *sq_tail_;
+    if (tail - head >= *sq_ring_entries_) return nullptr;
+    const unsigned index = tail & *sq_ring_mask_;
     sq_array_[index] = index;
-    auto* sqe = &sqes_[index];
-    *sq_tail_ = tail + 1;
-    return sqe;
+    std::atomic_ref<unsigned>(*sq_tail_).store(tail + 1,
+                                               std::memory_order_release);
+    ++pending_;
+    return &sqes_[index];
 }
 
-int Ring::flush() {
-    const unsigned to_submit = pending_count_.load(std::memory_order_relaxed);
-    if (to_submit == 0) return 0;
-    pending_count_.store(0, std::memory_order_relaxed);
-    // Memory barrier: make SQE writes visible to kernel
-    __atomic_store_n(sq_tail_, *sq_tail_, __ATOMIC_RELEASE);
-    return sys_io_uring_enter(ring_fd_, to_submit, 0, 0);
+int Ring::enter(bool wait) {
+    if (pending_ == 0 && !wait) return 0;
+    const int taken = sys_io_uring_enter(ring_fd_, pending_, wait ? 1 : 0,
+                                         wait ? IORING_ENTER_GETEVENTS : 0);
+    if (taken < 0) return -errno;
+    pending_ -= static_cast<unsigned>(taken);
+    return taken;
 }
 
 struct io_uring_cqe* Ring::peek_cqe() {
-    unsigned head = __atomic_load_n(cq_head_, __ATOMIC_ACQUIRE);
-    unsigned tail = __atomic_load_n(cq_tail_, __ATOMIC_ACQUIRE);
-
-    if (head == tail) {
-        return nullptr;  // CQ is empty
-    }
-
-    unsigned mask = *cq_ring_mask_;
-    return &cqes_[head & mask];
+    const unsigned head = *cq_head_;
+    const unsigned tail =
+        std::atomic_ref<unsigned>(*cq_tail_).load(std::memory_order_acquire);
+    return head == tail ? nullptr : &cqes_[head & *cq_ring_mask_];
 }
 
-int Ring::wait_cqe(struct io_uring_cqe** cqe_out) {
-    // First try non-blocking peek
-    auto* cqe = peek_cqe();
-    if (cqe) {
-        *cqe_out = cqe;
-        return 0;
-    }
-
-    // Block until at least one CQE is available
-    int ret = sys_io_uring_enter(ring_fd_, 0, 1, IORING_ENTER_GETEVENTS);
-    if (ret < 0) {
-        return -errno;
-    }
-
-    cqe = peek_cqe();
-    if (!cqe) {
-        return -EAGAIN;
-    }
-    *cqe_out = cqe;
-    return 0;
-}
-
-void Ring::cqe_seen(struct io_uring_cqe* /*cqe*/) {
-    unsigned head = *cq_head_;
-    __atomic_store_n(cq_head_, head + 1, __ATOMIC_RELEASE);
+void Ring::cqe_seen() {
+    std::atomic_ref<unsigned>(*cq_head_).store(*cq_head_ + 1,
+                                               std::memory_order_release);
 }
 
 }  // namespace uring
@@ -200,610 +158,379 @@ void Ring::cqe_seen(struct io_uring_cqe* /*cqe*/) {
 // IoUringBackend implementation
 // ============================================================================
 
-IoUringBackend::IoUringBackend(coro::Executor& executor, unsigned ring_entries,
-                               unsigned batch_threshold)
-    : executor_(executor),
-      ring_entries_(ring_entries),
-      batch_threshold_(batch_threshold) {}
+namespace {
+
+constexpr unsigned RING_ENTRIES = 256;
+
+// Values of user_data that name no operation, which an IoOp address never is.
+void* const WAKE_TAG = reinterpret_cast<void*>(std::uintptr_t{1});
+void* const CANCEL_TAG = reinterpret_cast<void*>(std::uintptr_t{2});
+
+// The most bytes one read or write moves, as read(2) and write(2) define it.
+constexpr std::size_t MAX_RW_BYTES = 0x7ffff000;
+
+unsigned rw_length(const IoOp& op) noexcept {
+    return static_cast<unsigned>(std::min(op.length, MAX_RW_BYTES));
+}
+
+bool has_opcode(IoOpKind kind) noexcept {
+    switch (kind) {
+        case IoOpKind::Read:
+        case IoOpKind::Write:
+        case IoOpKind::Pread:
+        case IoOpKind::Pwrite:
+        case IoOpKind::Open:
+        case IoOpKind::Close:
+        case IoOpKind::Fsync:
+        case IoOpKind::Accept:
+        case IoOpKind::Recv:
+        case IoOpKind::Send:
+        case IoOpKind::Readv:
+        case IoOpKind::Writev:
+        case IoOpKind::Preadv:
+        case IoOpKind::Pwritev:
+            return true;
+        case IoOpKind::Ftruncate:
+        case IoOpKind::Fstat:
+        case IoOpKind::Lseek:
+        case IoOpKind::Sendfile:
+        case IoOpKind::Call:
+            return false;
+    }
+    return false;
+}
+
+bool can_wait_for_peer(IoOpKind kind) noexcept {
+    switch (kind) {
+        case IoOpKind::Read:
+        case IoOpKind::Readv:
+        case IoOpKind::Recv:
+        case IoOpKind::Accept:
+        case IoOpKind::Send:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void prepare(struct io_uring_sqe* sqe, IoOp& op) noexcept {
+    // Offset -1 uses the current file position.
+    switch (op.kind) {
+        case IoOpKind::Read:
+            uring::prep_read(sqe, op.handle, op.buffer, rw_length(op), -1);
+            break;
+        case IoOpKind::Write:
+            uring::prep_write(sqe, op.handle, op.buffer, rw_length(op), -1);
+            break;
+        case IoOpKind::Pread:
+            uring::prep_read(sqe, op.handle, op.buffer, rw_length(op),
+                             op.offset);
+            break;
+        case IoOpKind::Pwrite:
+            uring::prep_write(sqe, op.handle, op.buffer, rw_length(op),
+                              op.offset);
+            break;
+        case IoOpKind::Open:
+            uring::prep_openat(sqe, AT_FDCWD, op.path, op.flags, op.mode);
+            break;
+        case IoOpKind::Close:
+            uring::prep_close(sqe, op.handle);
+            break;
+        case IoOpKind::Fsync:
+            uring::prep_fsync(sqe, op.handle, 0);
+            break;
+        case IoOpKind::Accept:
+            uring::prep_accept(sqe, op.handle, op.addr, op.addrlen,
+                               SOCK_NONBLOCK | SOCK_CLOEXEC);
+            break;
+        case IoOpKind::Recv:
+            uring::prep_recv(sqe, op.handle, op.buffer, rw_length(op),
+                             op.flags);
+            break;
+        case IoOpKind::Send:
+            uring::prep_send(sqe, op.handle, op.buffer, rw_length(op),
+                             op.flags);
+            break;
+        case IoOpKind::Readv:
+            uring::prep_readv(sqe, op.handle, op.iov,
+                              static_cast<unsigned>(op.iov_count), -1);
+            break;
+        case IoOpKind::Writev:
+            uring::prep_writev(sqe, op.handle, op.iov,
+                               static_cast<unsigned>(op.iov_count), -1);
+            break;
+        case IoOpKind::Preadv:
+            uring::prep_readv(sqe, op.handle, op.iov,
+                              static_cast<unsigned>(op.iov_count), op.offset);
+            break;
+        case IoOpKind::Pwritev:
+            uring::prep_writev(sqe, op.handle, op.iov,
+                               static_cast<unsigned>(op.iov_count), op.offset);
+            break;
+        case IoOpKind::Ftruncate:
+        case IoOpKind::Fstat:
+        case IoOpKind::Lseek:
+        case IoOpKind::Sendfile:
+        case IoOpKind::Call:
+            break;
+    }
+    uring::sqe_set_data(sqe, &op);
+}
+
+}  // namespace
+
+IoUringBackend::IoUringBackend(std::size_t pool_size,
+                               IoPoolOptions pool_options)
+    : ThreadPoolFileOps(pool_size, 0, pool_options) {}
+
+IoUringBackend::~IoUringBackend() = default;
 
 bool IoUringBackend::probe() {
     uring::Ring test_ring;
-    return test_ring.init(32);
+    // The ring runs sequential reads and writes at the file position.
+    return test_ring.init(32) &&
+           (test_ring.features() & IORING_FEAT_RW_CUR_POS) != 0;
 }
 
 void IoUringBackend::start() {
     cancelling_.store(false, std::memory_order_release);
-    cancel_unsupported_.store(false, std::memory_order_release);
-    if (!ring_.init(ring_entries_)) {
-        DFTRACER_UTILS_LOG_ERROR("io_uring ring init failed (entries=%u)",
-                                 ring_entries_);
-        return;
+    cancel_requested_.store(false, std::memory_order_release);
+    stopping_.store(false, std::memory_order_release);
+    if (!ring_.init(RING_ENTRIES)) {
+        throw common::DFTUtilsException(
+            common::ErrorCode::Internal,
+            common::str_cat("io_uring setup failed: ", std::strerror(errno)));
     }
-    DFTRACER_UTILS_LOG_DEBUG(
-        "io_uring backend started (ring entries=%u, batch_threshold=%u)",
-        ring_entries_, batch_threshold_);
-
-    completion_thread_.start([this] { completion_loop(); });
+    // Blocking, because the ring gets -EAGAIN from a non-blocking eventfd
+    // instead of waiting for it.
+    wake_fd_.reset(::eventfd(0, EFD_CLOEXEC));
+    if (!wake_fd_.valid()) {
+        const int error = errno;
+        ring_.destroy();
+        throw common::DFTUtilsException(
+            common::ErrorCode::Internal,
+            common::str_cat("eventfd failed: ", std::strerror(error)));
+    }
+    pool_.start();
+    thread_ = dstd::Thread([this] { ring_loop(); });
 }
 
 void IoUringBackend::stop() {
-    // 1. Signal the completion thread to stop (sets running_ = false).
-    completion_thread_.signal_stop();
-
-    // 2. Submit a NOP to wake the thread blocked on wait_cqe.
-    {
-        std::lock_guard<std::mutex> lock(submit_mutex_);
-        auto* sqe = ring_.get_sqe();
-        if (sqe) {
-            uring::prep_nop(sqe);
-            uring::sqe_set_data(sqe, nullptr);
-            // NOP bypass: submit immediately, don't batch
-            ring_.mark_pending();
-            ring_.flush();
-        }
-    }
-
-    // 3. Join the thread (now it will see running_ == false after
-    //    the NOP CQE wakes it from wait_cqe).
-    completion_thread_.join();
+    stopping_.store(true, std::memory_order_seq_cst);
+    wake();
+    if (thread_.joinable()) thread_.join();
+    pool_.stop();
     ring_.destroy();
+    wake_fd_.reset();
 }
 
-void IoUringBackend::cancel_pending() {
-    cancelling_.store(true, std::memory_order_release);
-    std::lock_guard<std::mutex> lock(submit_mutex_);
-    auto* sqe = ring_.get_sqe();
-    // A full SQ drains once the kernel takes what is pending, so flush and
-    // retry. It is not a sign that cancel is unsupported.
-    for (int attempt = 0; sqe == nullptr && attempt < CANCEL_SQE_RETRIES;
-         ++attempt) {
-        ring_.flush();
-        sqe = ring_.get_sqe();
-        if (sqe == nullptr) std::this_thread::yield();
-    }
-    if (sqe == nullptr) {
-        DFTRACER_UTILS_LOG_ERROR("%s",
-                                 "io_uring submission queue stayed full; "
-                                 "pending operations were not cancelled");
+void IoUringBackend::submit(IoOp& op) {
+    if (!has_opcode(op.kind)) {
+        ThreadPoolFileOps::submit(op);
         return;
     }
-    uring::prep_cancel_all(sqe);
-    uring::sqe_set_data(sqe, nullptr);
-    ring_.mark_pending();
-    ring_.flush();
-}
-
-void IoUringBackend::completion_loop() {
-    while (completion_thread_.running()) {
-        struct io_uring_cqe* cqe = nullptr;
-        int ret = ring_.wait_cqe(&cqe);
-        if (ret < 0) {
-            // EINTR or shutdown -- just retry
-            continue;
-        }
-        if (!cqe) {
-            continue;
-        }
-
-        auto* req = static_cast<IoUringRequest*>(uring::cqe_get_data(cqe));
-        if (req) {
-            DFTRACER_UTILS_TSAN_ACQUIRE(req);
-            if (req->awaitable) {
-                req->awaitable->result = cqe->res;
-                req->awaitable->resume_through(executor_);
-            } else if (req->completion != nullptr) {
-                req->completion(req->completion_ctx, cqe->res);
-            }
-            delete req;
-            in_flight_.fetch_sub(1, std::memory_order_acq_rel);
-        } else if (cqe->res == -EINVAL) {
-            // Only the cancel request completes with -EINVAL and no request.
-            cancel_unsupported_.store(true, std::memory_order_release);
-        }
-        ring_.cqe_seen(cqe);
-    }
-}
-
-void IoUringBackend::maybe_flush_locked() {
-    if (ring_.pending_count() >= batch_threshold_) {
-        int ret = ring_.flush();
-        if (ret < 0) {
-            DFTRACER_UTILS_LOG_ERROR("io_uring flush failed: %s",
-                                     std::strerror(-ret));
-        }
-    }
+    in_flight_.fetch_add(1, std::memory_order_acq_rel);
+    IoOp* head = incoming_.load(std::memory_order_relaxed);
+    do {
+        op.next = head;
+    } while (!incoming_.compare_exchange_weak(
+        head, &op, std::memory_order_seq_cst, std::memory_order_relaxed));
 }
 
 int IoUringBackend::flush() {
-    if (ring_.pending_count() == 0) return 0;
-    std::lock_guard<std::mutex> lock(submit_mutex_);
-    int ret = ring_.flush();
-    if (ret < 0) {
-        DFTRACER_UTILS_LOG_ERROR("io_uring flush failed: %s",
-                                 std::strerror(-ret));
+    const int woken = ThreadPoolFileOps::flush();
+    if (incoming_.load(std::memory_order_seq_cst) != nullptr &&
+        parked_.load(std::memory_order_seq_cst) &&
+        parked_.exchange(false, std::memory_order_seq_cst)) {
+        wake();
     }
-    return ret;
+    return woken;
 }
 
-void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx);
-    auto* backend = uring_ctx->backend;
+void IoUringBackend::cancel_pending() {
+    ThreadPoolFileOps::cancel_pending();
+    cancelling_.store(true, std::memory_order_seq_cst);
+    cancel_requested_.store(true, std::memory_order_seq_cst);
+    wake();
+}
 
-    // Ops that always require a sync fallback (no io_uring opcode).
-    // Handle them before touching the SQ ring so we never allocate an
-    // SQE slot that would be left uninitialised.  These ops do not
-    // access ring state, so no submit_mutex_ is needed.
-    switch (uring_ctx->op) {
-        case IoOp::Ftruncate: {
-            ssize_t sync_result = ::ftruncate(uring_ctx->fd, uring_ctx->offset);
-            if (sync_result < 0) sync_result = -errno;
-            if (awaitable != nullptr) {
-                awaitable->result = sync_result;
-            } else if (uring_ctx->completion != nullptr) {
-                uring_ctx->completion(uring_ctx->completion_ctx, sync_result);
-            }
-            delete uring_ctx;
-            if (awaitable != nullptr) {
-                awaitable->resume_through(backend->executor_);
-            }
-            return;
-        }
-        case IoOp::Fstat: {
-            ssize_t sync_result = ::fstat(uring_ctx->fd, uring_ctx->stat_buf);
-            if (sync_result < 0) sync_result = -errno;
-            if (awaitable != nullptr) {
-                awaitable->result = sync_result;
-            } else if (uring_ctx->completion != nullptr) {
-                uring_ctx->completion(uring_ctx->completion_ctx, sync_result);
-            }
-            delete uring_ctx;
-            if (awaitable != nullptr) {
-                awaitable->resume_through(backend->executor_);
-            }
-            return;
-        }
-        case IoOp::Call: {
-            ssize_t sync_result = uring_ctx->call_fn(uring_ctx->buf);
-            if (sync_result < 0) sync_result = -errno;
-            awaitable->result = sync_result;
-            delete uring_ctx;
-            awaitable->resume_through(backend->executor_);
-            return;
-        }
-        case IoOp::Lseek: {
-            ssize_t sync_result =
-                ::lseek(uring_ctx->fd, uring_ctx->offset, uring_ctx->whence);
-            if (sync_result < 0) sync_result = -errno;
-            if (awaitable != nullptr) {
-                awaitable->result = sync_result;
-            } else if (uring_ctx->completion != nullptr) {
-                uring_ctx->completion(uring_ctx->completion_ctx, sync_result);
-            }
-            delete uring_ctx;
-            if (awaitable != nullptr) {
-                awaitable->resume_through(backend->executor_);
-            }
-            return;
-        }
-        case IoOp::Sendfile: {
-            off_t off = uring_ctx->offset;
-            ssize_t sync_result = ::sendfile(uring_ctx->dest_fd, uring_ctx->fd,
-                                             &off, uring_ctx->len);
-            if (sync_result < 0) sync_result = -errno;
-            if (awaitable != nullptr) {
-                awaitable->result = sync_result;
-            } else if (uring_ctx->completion != nullptr) {
-                uring_ctx->completion(uring_ctx->completion_ctx, sync_result);
-            }
-            delete uring_ctx;
-            if (awaitable != nullptr) {
-                awaitable->resume_through(backend->executor_);
-            }
-            return;
-        }
-        default:
-            break;  // Proceed to io_uring SQE path
+void IoUringBackend::wake() noexcept {
+    if (!wake_fd_.valid()) return;
+    const std::uint64_t one = 1;
+    [[maybe_unused]] const ssize_t written =
+        ::write(wake_fd_.get(), &one, sizeof(one));
+}
+
+void IoUringBackend::take_incoming() noexcept {
+    IoOp* taken = incoming_.exchange(nullptr, std::memory_order_seq_cst);
+    IoOp* first = nullptr;
+    IoOp* const old_tail = backlog_tail_;
+    // The stack holds the newest first.
+    while (taken != nullptr) {
+        IoOp* const next = taken->next;
+        taken->next = first;
+        if (first == nullptr) backlog_tail_ = taken;
+        first = taken;
+        taken = next;
     }
+    if (first == nullptr) return;
+    if (old_tail == nullptr) {
+        backlog_head_ = first;
+    } else {
+        old_tail->next = first;
+    }
+}
 
-    // Create the request object that will be stored in SQE user_data
-    auto* req = new IoUringRequest{};
-    req->awaitable = awaitable;
-    req->completion = uring_ctx->completion;
-    req->completion_ctx = uring_ctx->completion_ctx;
+void IoUringBackend::fail(IoOp& op, ssize_t result) noexcept {
+    op.result = result;
+    op.complete(op);
+    in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+}
 
-    std::unique_lock<std::mutex> lock(backend->submit_mutex_);
-
-    // Checked under the submit lock: cancel_pending() sets the flag before it
-    // takes the lock, so an operation either sees the flag here or is already
-    // on the ring when the cancel request is queued behind it.
-    if (backend->cancelling_.load(std::memory_order_acquire)) {
-        switch (uring_ctx->op) {
-            case IoOp::Read:
-            case IoOp::Readv:
-            case IoOp::Recv:
-            case IoOp::Accept:
-            case IoOp::Send: {
-                lock.unlock();
-                delete req;
-                const ssize_t cancelled = -ECANCELED;
-                if (awaitable != nullptr) {
-                    awaitable->result = cancelled;
-                } else if (uring_ctx->completion != nullptr) {
-                    uring_ctx->completion(uring_ctx->completion_ctx, cancelled);
-                }
-                delete uring_ctx;
-                if (awaitable != nullptr) {
-                    awaitable->resume_through(backend->executor_);
-                }
-                return;
-            }
-            default:
-                break;
+void IoUringBackend::fill_ring() noexcept {
+    if (!wake_armed_) {
+        struct io_uring_sqe* sqe = ring_.get_sqe();
+        if (sqe != nullptr) {
+            uring::prep_read(sqe, wake_fd_.get(), &wake_value_,
+                             sizeof(wake_value_), 0);
+            uring::sqe_set_data(sqe, WAKE_TAG);
+            wake_armed_ = true;
+            ++in_ring_;
         }
     }
-
-    struct io_uring_sqe* sqe = backend->ring_.get_sqe();
-    if (!sqe) {
-        // SQ full -- fall back to synchronous execution. Neither the syscall
-        // nor the completion touches ring state, and a completion may submit
-        // again or call flush(), which takes submit_mutex_, so the lock goes
-        // before both.
-        lock.unlock();
-        ssize_t result = 0;
-        switch (uring_ctx->op) {
-            case IoOp::Read:
-                result = ::read(uring_ctx->fd, uring_ctx->buf, uring_ctx->len);
-                break;
-            case IoOp::Write:
-                result = ::write(uring_ctx->fd, uring_ctx->buf, uring_ctx->len);
-                break;
-            case IoOp::Pread:
-                result = ::pread(uring_ctx->fd, uring_ctx->buf, uring_ctx->len,
-                                 uring_ctx->offset);
-                break;
-            case IoOp::Pwrite:
-                result = ::pwrite(uring_ctx->fd, uring_ctx->buf, uring_ctx->len,
-                                  uring_ctx->offset);
-                break;
-            case IoOp::Open:
-                result =
-                    ::open(uring_ctx->path, uring_ctx->flags, uring_ctx->mode);
-                break;
-            case IoOp::Close:
-                result = ::close(uring_ctx->fd);
-                break;
-            case IoOp::Fsync:
-                result = ::fsync(uring_ctx->fd);
-                break;
-            case IoOp::Ftruncate:
-            case IoOp::Fstat:
-            case IoOp::Call:
-            case IoOp::Lseek:
-            case IoOp::Sendfile:
-                // Handled by early sync path; unreachable.
-                __builtin_unreachable();
-            case IoOp::Accept:
-                result = ::accept4(uring_ctx->fd, uring_ctx->addr,
-                                   uring_ctx->addrlen, uring_ctx->accept_flags);
-                break;
-            case IoOp::Recv:
-                result = ::recv(uring_ctx->fd, uring_ctx->buf, uring_ctx->len,
-                                uring_ctx->msg_flags);
-                break;
-            case IoOp::Send:
-                result = ::send(uring_ctx->fd, uring_ctx->buf, uring_ctx->len,
-                                uring_ctx->msg_flags);
-                break;
-            case IoOp::Readv:
-                result =
-                    ::readv(uring_ctx->fd, uring_ctx->iov, uring_ctx->iovcnt);
-                break;
-            case IoOp::Writev:
-                result =
-                    ::writev(uring_ctx->fd, uring_ctx->iov, uring_ctx->iovcnt);
-                break;
-            case IoOp::Preadv:
-                result = ::preadv(uring_ctx->fd, uring_ctx->iov,
-                                  uring_ctx->iovcnt, uring_ctx->offset);
-                break;
-            case IoOp::Pwritev:
-                result = ::pwritev(uring_ctx->fd, uring_ctx->iov,
-                                   uring_ctx->iovcnt, uring_ctx->offset);
-                break;
+    const bool cancelling = cancelling_.load(std::memory_order_seq_cst);
+    // Bounded by the CQ. An op that waits on a peer does not count: it can sit
+    // for ever and must not hold back a file op. The kernel keeps any overflow.
+    while (backlog_head_ != nullptr && in_ring_ < ring_.cq_entries()) {
+        IoOp& op = *backlog_head_;
+        const bool peer = can_wait_for_peer(op.kind);
+        if (cancelling && peer) {
+            backlog_head_ = op.next;
+            if (backlog_head_ == nullptr) backlog_tail_ = nullptr;
+            fail(op, -ECANCELED);
+            continue;
         }
-        if (result < 0) result = -errno;
-        IoCompletionFn completion = uring_ctx->completion;
-        void* completion_ctx = uring_ctx->completion_ctx;
-        delete uring_ctx;
-        if (awaitable != nullptr) {
-            awaitable->result = result;
+        struct io_uring_sqe* sqe = ring_.get_sqe();
+        if (sqe == nullptr) return;
+        backlog_head_ = op.next;
+        if (backlog_head_ == nullptr) backlog_tail_ = nullptr;
+        prepare(sqe, op);
+        if (!peer) {
+            ++in_ring_;
+        } else {
+            op.prev = nullptr;
+            op.next = waiting_head_;
+            if (waiting_head_ != nullptr) waiting_head_->prev = &op;
+            waiting_head_ = &op;
         }
-        delete req;
-        if (awaitable != nullptr) {
-            awaitable->resume_through(backend->executor_);
-        } else if (completion != nullptr) {
-            completion(completion_ctx, result);
-        }
-        return;
     }
+}
 
-    switch (uring_ctx->op) {
-        case IoOp::Read:
-            // offset -1 = use current file position (sequential)
-            uring::prep_read(sqe, uring_ctx->fd, uring_ctx->buf,
-                             static_cast<unsigned>(uring_ctx->len), -1);
-            break;
-        case IoOp::Write:
-            uring::prep_write(sqe, uring_ctx->fd, uring_ctx->buf,
-                              static_cast<unsigned>(uring_ctx->len), -1);
-            break;
-        case IoOp::Pread:
-            uring::prep_read(sqe, uring_ctx->fd, uring_ctx->buf,
-                             static_cast<unsigned>(uring_ctx->len),
-                             uring_ctx->offset);
-            break;
-        case IoOp::Pwrite:
-            uring::prep_write(sqe, uring_ctx->fd, uring_ctx->buf,
-                              static_cast<unsigned>(uring_ctx->len),
-                              uring_ctx->offset);
-            break;
-        case IoOp::Open:
-            uring::prep_openat(sqe, AT_FDCWD, uring_ctx->path, uring_ctx->flags,
-                               uring_ctx->mode);
-            break;
-        case IoOp::Close:
-            uring::prep_close(sqe, uring_ctx->fd);
-            break;
-        case IoOp::Fsync:
-            uring::prep_fsync(sqe, uring_ctx->fd, 0);
-            break;
-        case IoOp::Ftruncate:
-        case IoOp::Fstat:
-        case IoOp::Call:
-            // Handled by early sync path above; unreachable.
-            __builtin_unreachable();
-        case IoOp::Accept:
-            uring::prep_accept(sqe, uring_ctx->fd, uring_ctx->addr,
-                               uring_ctx->addrlen, uring_ctx->accept_flags);
-            break;
-        case IoOp::Recv:
-            uring::prep_recv(sqe, uring_ctx->fd, uring_ctx->buf,
-                             static_cast<unsigned>(uring_ctx->len),
-                             uring_ctx->msg_flags);
-            break;
-        case IoOp::Send:
-            uring::prep_send(sqe, uring_ctx->fd, uring_ctx->buf,
-                             static_cast<unsigned>(uring_ctx->len),
-                             uring_ctx->msg_flags);
-            break;
-        case IoOp::Readv:
-            // offset -1 = use current file position (sequential)
-            uring::prep_readv(sqe, uring_ctx->fd, uring_ctx->iov,
-                              static_cast<unsigned>(uring_ctx->iovcnt), -1);
-            break;
-        case IoOp::Writev:
-            uring::prep_writev(sqe, uring_ctx->fd, uring_ctx->iov,
-                               static_cast<unsigned>(uring_ctx->iovcnt), -1);
-            break;
-        case IoOp::Preadv:
-            uring::prep_readv(sqe, uring_ctx->fd, uring_ctx->iov,
-                              static_cast<unsigned>(uring_ctx->iovcnt),
-                              uring_ctx->offset);
-            break;
-        case IoOp::Pwritev:
-            uring::prep_writev(sqe, uring_ctx->fd, uring_ctx->iov,
-                               static_cast<unsigned>(uring_ctx->iovcnt),
-                               uring_ctx->offset);
-            break;
-        case IoOp::Lseek:
-        case IoOp::Sendfile:
-            // Handled by early sync path above; unreachable.
-            __builtin_unreachable();
+std::size_t IoUringBackend::reap() noexcept {
+    std::size_t reaped = 0;
+    while (struct io_uring_cqe* cqe = ring_.peek_cqe()) {
+        void* const data = reinterpret_cast<void*>(cqe->user_data);
+        const ssize_t res = cqe->res;
+        ring_.cqe_seen();
+        ++reaped;
+        if (data == WAKE_TAG) {
+            --in_ring_;
+            wake_armed_ = false;
+            continue;
+        }
+        if (data == CANCEL_TAG) {
+            --in_ring_;
+            continue;
+        }
+        auto& op = *static_cast<IoOp*>(data);
+        if (can_wait_for_peer(op.kind)) {
+            // A cancelled op has left the list and points at itself.
+            if (op.prev != &op) unlink_waiting(op);
+        } else {
+            --in_ring_;
+        }
+        op.result = res;
+        op.complete(op);
+        in_flight_.fetch_sub(1, std::memory_order_acq_rel);
     }
-
-    uring::sqe_set_data(sqe, req);
-    DFTRACER_UTILS_TSAN_RELEASE(req);
-    backend->in_flight_.fetch_add(1, std::memory_order_acq_rel);
-    backend->ring_.mark_pending();
-    backend->maybe_flush_locked();
-    delete uring_ctx;
+    return reaped;
 }
 
-static IoAwaitable make_uring_request(IoOp op, int fd, void* buf,
-                                      std::size_t len, off_t offset,
-                                      const char* path, int flags, mode_t mode,
-                                      IoUringBackend* backend) {
-    auto* ctx = new IoUringSubmitCtx{};
-    ctx->submit = &IoUringBackend::submit_fn;
-    ctx->op = op;
-    ctx->fd = fd;
-    ctx->buf = buf;
-    ctx->len = len;
-    ctx->offset = offset;
-    ctx->path = path;
-    ctx->flags = flags;
-    ctx->mode = mode;
-    ctx->backend = backend;
-
-    IoAwaitable awaitable;
-    awaitable.submit_ctx = ctx;
-    return awaitable;
+void IoUringBackend::unlink_waiting(IoOp& op) noexcept {
+    if (op.prev != nullptr) {
+        op.prev->next = op.next;
+    } else {
+        waiting_head_ = op.next;
+    }
+    if (op.next != nullptr) op.next->prev = op.prev;
+    op.prev = &op;
 }
 
-IoAwaitable IoUringBackend::submit_read(int fd, void* buf, std::size_t len) {
-    return make_uring_request(IoOp::Read, fd, buf, len, 0, nullptr, 0, 0, this);
+void IoUringBackend::cancel_waiting() noexcept {
+    while (waiting_head_ != nullptr) {
+        struct io_uring_sqe* sqe = ring_.get_sqe();
+        if (sqe == nullptr) {
+            const int entered = ring_.enter(false);
+            if (reap() == 0 && entered <= 0) std::this_thread::yield();
+            continue;
+        }
+        IoOp& op = *waiting_head_;
+        unlink_waiting(op);
+        uring::prep_cancel(sqe, &op);
+        uring::sqe_set_data(sqe, CANCEL_TAG);
+        ++in_ring_;
+    }
 }
 
-IoAwaitable IoUringBackend::submit_write(int fd, const void* buf,
-                                         std::size_t len) {
-    return make_uring_request(IoOp::Write, fd, const_cast<void*>(buf), len, 0,
-                              nullptr, 0, 0, this);
-}
+void IoUringBackend::ring_loop() noexcept {
+    for (;;) {
+        const bool reaped = reap() != 0;
+        take_incoming();
+        if (cancel_requested_.load(std::memory_order_seq_cst)) {
+            cancel_requested_.store(false, std::memory_order_seq_cst);
+            cancel_waiting();
+        }
+        fill_ring();
+        if (stopping_.load(std::memory_order_seq_cst)) break;
 
-IoAwaitable IoUringBackend::submit_pread(int fd, void* buf, std::size_t len,
-                                         off_t offset) {
-    return make_uring_request(IoOp::Pread, fd, buf, len, offset, nullptr, 0, 0,
-                              this);
-}
-
-void IoUringBackend::submit_pread_callback(int fd, void* buf, std::size_t len,
-                                           off_t offset,
-                                           IoCompletionFn completion,
-                                           void* context) {
-    auto awaitable = make_uring_request(IoOp::Pread, fd, buf, len, offset,
-                                        nullptr, 0, 0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(awaitable.submit_ctx);
-    uring_ctx->completion = completion;
-    uring_ctx->completion_ctx = context;
-    submit_fn(uring_ctx, nullptr);
-}
-
-IoAwaitable IoUringBackend::submit_pwrite(int fd, const void* buf,
-                                          std::size_t len, off_t offset) {
-    return make_uring_request(IoOp::Pwrite, fd, const_cast<void*>(buf), len,
-                              offset, nullptr, 0, 0, this);
-}
-
-void IoUringBackend::submit_pwrite_callback(int fd, const void* buf,
-                                            std::size_t len, off_t offset,
-                                            IoCompletionFn completion,
-                                            void* context) {
-    auto awaitable =
-        make_uring_request(IoOp::Pwrite, fd, const_cast<void*>(buf), len,
-                           offset, nullptr, 0, 0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(awaitable.submit_ctx);
-    uring_ctx->completion = completion;
-    uring_ctx->completion_ctx = context;
-    submit_fn(uring_ctx, nullptr);
-}
-
-IoAwaitable IoUringBackend::submit_open(const char* path, int flags,
-                                        mode_t mode) {
-    return make_uring_request(IoOp::Open, -1, nullptr, 0, 0, path, flags, mode,
-                              this);
-}
-
-IoAwaitable IoUringBackend::submit_close(int fd) {
-    return make_uring_request(IoOp::Close, fd, nullptr, 0, 0, nullptr, 0, 0,
-                              this);
-}
-
-IoAwaitable IoUringBackend::submit_fsync(int fd) {
-    return make_uring_request(IoOp::Fsync, fd, nullptr, 0, 0, nullptr, 0, 0,
-                              this);
-}
-
-IoAwaitable IoUringBackend::submit_ftruncate(int fd, off_t length) {
-    return make_uring_request(IoOp::Ftruncate, fd, nullptr, 0, length, nullptr,
-                              0, 0, this);
-}
-
-IoAwaitable IoUringBackend::submit_fstat(int fd, struct stat* buf) {
-    auto ctx =
-        make_uring_request(IoOp::Fstat, fd, nullptr, 0, 0, nullptr, 0, 0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx);
-    uring_ctx->stat_buf = buf;
-    return ctx;
-}
-
-IoAwaitable IoUringBackend::submit_call(BlockingFn fn, void* context) {
-    auto ctx =
-        make_uring_request(IoOp::Call, -1, context, 0, 0, nullptr, 0, 0, this);
-    static_cast<IoUringSubmitCtx*>(ctx.submit_ctx)->call_fn = fn;
-    return ctx;
-}
-
-IoAwaitable IoUringBackend::submit_accept(int listen_fd, struct sockaddr* addr,
-                                          socklen_t* addrlen) {
-    auto ctx = make_uring_request(IoOp::Accept, listen_fd, nullptr, 0, 0,
-                                  nullptr, 0, 0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx);
-    uring_ctx->addr = addr;
-    uring_ctx->addrlen = addrlen;
-    uring_ctx->accept_flags = SOCK_NONBLOCK | SOCK_CLOEXEC;
-    return ctx;
-}
-
-IoAwaitable IoUringBackend::submit_recv(int fd, void* buf, std::size_t len,
-                                        int flags) {
-    auto ctx =
-        make_uring_request(IoOp::Recv, fd, buf, len, 0, nullptr, 0, 0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx);
-    uring_ctx->msg_flags = flags;
-    return ctx;
-}
-
-IoAwaitable IoUringBackend::submit_send(int fd, const void* buf,
-                                        std::size_t len, int flags) {
-    auto ctx = make_uring_request(IoOp::Send, fd, const_cast<void*>(buf), len,
-                                  0, nullptr, 0, 0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx);
-    uring_ctx->msg_flags = flags;
-    return ctx;
-}
-
-IoAwaitable IoUringBackend::submit_readv(int fd, const struct iovec* iov,
-                                         int iovcnt) {
-    auto ctx =
-        make_uring_request(IoOp::Readv, fd, nullptr, 0, 0, nullptr, 0, 0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx);
-    uring_ctx->iov = iov;
-    uring_ctx->iovcnt = iovcnt;
-    return ctx;
-}
-
-IoAwaitable IoUringBackend::submit_writev(int fd, const struct iovec* iov,
-                                          int iovcnt) {
-    auto ctx = make_uring_request(IoOp::Writev, fd, nullptr, 0, 0, nullptr, 0,
-                                  0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx);
-    uring_ctx->iov = iov;
-    uring_ctx->iovcnt = iovcnt;
-    return ctx;
-}
-
-IoAwaitable IoUringBackend::submit_preadv(int fd, const struct iovec* iov,
-                                          int iovcnt, off_t offset) {
-    auto ctx = make_uring_request(IoOp::Preadv, fd, nullptr, 0, offset, nullptr,
-                                  0, 0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx);
-    uring_ctx->iov = iov;
-    uring_ctx->iovcnt = iovcnt;
-    return ctx;
-}
-
-IoAwaitable IoUringBackend::submit_pwritev(int fd, const struct iovec* iov,
-                                           int iovcnt, off_t offset) {
-    auto ctx = make_uring_request(IoOp::Pwritev, fd, nullptr, 0, offset,
-                                  nullptr, 0, 0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx);
-    uring_ctx->iov = iov;
-    uring_ctx->iovcnt = iovcnt;
-    return ctx;
-}
-
-IoAwaitable IoUringBackend::submit_lseek(int fd, off_t offset, int whence) {
-    auto ctx = make_uring_request(IoOp::Lseek, fd, nullptr, 0, offset, nullptr,
-                                  0, 0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx);
-    uring_ctx->whence = whence;
-    return ctx;
-}
-
-IoAwaitable IoUringBackend::submit_sendfile(int out_fd, int in_fd, off_t offset,
-                                            std::size_t count) {
-    auto ctx = make_uring_request(IoOp::Sendfile, in_fd, nullptr, count, offset,
-                                  nullptr, 0, 0, this);
-    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx);
-    uring_ctx->dest_fd = out_fd;
-    return ctx;
-}
-
-std::size_t IoUringBackend::poll(int /*timeout_ms*/) {
-    // The dedicated completion thread is the sole CQ consumer.
-    // Workers must NOT read CQEs -- doing so would race with
-    // completion_loop() and cause use-after-free.
-    return 0;
+        // Each side writes its flag and then reads the other, so either a
+        // flush sees the park and wakes the ring or the ring sees the op.
+        parked_.store(true, std::memory_order_seq_cst);
+        // A full SQ left ops in the backlog: this enter makes room, so go round
+        // again for them unless the CQ bound is what holds them.
+        const bool backlog_can_move =
+            backlog_head_ != nullptr && in_ring_ < ring_.cq_entries();
+        const bool wait =
+            !reaped && !backlog_can_move &&
+            incoming_.load(std::memory_order_seq_cst) == nullptr &&
+            !cancel_requested_.load(std::memory_order_seq_cst) &&
+            !stopping_.load(std::memory_order_seq_cst) &&
+            ring_.peek_cqe() == nullptr;
+        if (!wait) parked_.store(false, std::memory_order_relaxed);
+        const int entered = ring_.enter(wait);
+        parked_.store(false, std::memory_order_relaxed);
+        if (entered == -EAGAIN || entered == -EBUSY) {
+            // Out of kernel resources until completions drain. No wake comes
+            // for that, so this retries.
+            std::this_thread::yield();
+        } else if (entered < 0 && entered != -EINTR) {
+            DFTRACER_UTILS_LOG_ERROR("io_uring_enter failed: %s",
+                                     std::strerror(-entered));
+            std::this_thread::yield();
+        }
+    }
+    // The executor saw zero in flight before stop(). Nothing here has reached
+    // the kernel, so fail what a late submit left.
+    take_incoming();
+    while (backlog_head_ != nullptr) {
+        IoOp& op = *backlog_head_;
+        backlog_head_ = op.next;
+        fail(op, -ECANCELED);
+    }
+    backlog_tail_ = nullptr;
+    waiting_head_ = nullptr;
+    in_ring_ = 0;
+    wake_armed_ = false;
 }
 
 }  // namespace dftracer::utils::runtime::io

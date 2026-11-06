@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_RUNTIME_FS_FS_H
 #define DFTRACER_UTILS_RUNTIME_FS_FS_H
 
-#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
@@ -13,6 +12,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/fs/filesystem.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -20,13 +20,6 @@
 namespace dftracer::utils::runtime::fs {
 
 inline constexpr std::uint64_t NANOS_PER_SECOND = 1000000000;
-
-/// One name in a directory, with the kind readdir reported, or an lstat of the
-/// name when it reported none.
-struct Entry {
-    dstd::Path path;
-    dstd::fs::FileKind kind = dstd::fs::FileKind::Unknown;
-};
 
 struct FoundFile {
     dstd::Path path;
@@ -63,8 +56,8 @@ struct FindOptions {
     bool skip_unreadable = false;
 };
 
-/// Same calls as @ref dstd::fs, off the worker. Blocks the worker only on a
-/// backend with no I/O threads. @p path is copied.
+/// Same calls as @ref dstd::fs, on the @ref FileSystem of the path and off the
+/// worker. @p path is copied.
 coro::CoroTask<dstd::Expected<dstd::Vector<Entry>, dstd::Error>> list_dir(
     dstd::PathView path);
 coro::CoroTask<dstd::Expected<dstd::fs::FileStat, dstd::Error>> stat(
@@ -76,8 +69,8 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> write_file(
     dstd::PathView path, dstd::StringView data);
 
 /// One result per path, in the order of @p paths, which must stay valid until
-/// the task ends. Follows symlinks. @p limit is the calls in flight at most, 0
-/// uses the concurrency of the executor.
+/// the task ends and name one file system. Follows symlinks. @p limit is the
+/// calls in flight at most, 0 uses the concurrency of the executor.
 coro::CoroTask<dstd::Vector<dstd::Expected<dstd::fs::FileStat, dstd::Error>>>
 stat_many(dstd::Span<const dstd::Path> paths, std::size_t limit = 0);
 
@@ -112,18 +105,6 @@ template <std::size_t N>
 dstd::Vector<dstd::String> names_of(const char* const (&names)[N]) {
     return dstd::Vector<dstd::String>(names, names + N);
 }
-
-#if DFTRACER_UTILS_TEST_PROBES
-/// The stat batches @ref find has run in this process. For tests.
-std::size_t stat_batch_count() noexcept;
-/// The threads that have run a stat batch since the last
-/// @ref reset_stat_threads. For tests.
-std::size_t stat_thread_count() noexcept;
-/// Whether the calling thread has run a stat batch since the last
-/// @ref reset_stat_threads. For tests.
-bool has_run_stat_batch() noexcept;
-void reset_stat_threads() noexcept;
-#endif
 
 }  // namespace dftracer::utils::runtime::fs
 

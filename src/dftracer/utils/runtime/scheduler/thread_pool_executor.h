@@ -257,6 +257,9 @@ class ThreadPoolExecutor final : public TaskExecutor {
     runtime::io::IoBackendType io_backend_type_ =
         runtime::io::IoBackendType::Auto;
     unsigned io_batch_threshold_ = 16;
+    dstd::UniquePtr<runtime::io::IoBackend> (*io_backend_factory_)(
+        void* context) = nullptr;
+    void* io_backend_context_ = nullptr;
 
    public:
     explicit ThreadPoolExecutor(const ExecutorConfig& config = {});

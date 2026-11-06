@@ -12,10 +12,6 @@
 
 #include <cstddef>
 
-namespace dftracer::utils::coro {
-class Executor;
-}  // namespace dftracer::utils::coro
-
 namespace dftracer::utils::runtime::io {
 
 /// kqueue + thread pool I/O backend (macOS, FreeBSD, etc.).
@@ -25,8 +21,7 @@ namespace dftracer::utils::runtime::io {
 /// currently only watching a user event used for clean shutdown.
 class KqueueThreadPoolBackend : public ThreadPoolFileOps {
    public:
-    explicit KqueueThreadPoolBackend(coro::Executor& executor,
-                                     std::size_t pool_size = 4,
+    explicit KqueueThreadPoolBackend(std::size_t pool_size = 4,
                                      unsigned batch_threshold = 0,
                                      IoPoolOptions pool_options = {});
     ~KqueueThreadPoolBackend() override;

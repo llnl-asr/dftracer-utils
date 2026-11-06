@@ -43,6 +43,13 @@ struct ExecutorConfig {
     runtime::io::IoBackendType io_backend_type =
         runtime::io::IoBackendType::Auto;
     unsigned io_batch_threshold = 16;
+    /// Makes the I/O backend in place of io_backend_type, once for each start
+    /// of the executor, which owns the result and starts it. It gets
+    /// io_backend_context, which must stay valid as long as the executor runs.
+    /// Must not return null.
+    dstd::UniquePtr<runtime::io::IoBackend> (*io_backend_factory)(
+        void* context) = nullptr;
+    void* io_backend_context = nullptr;
     /// Finished tasks kept for progress. The oldest are dropped first.
     std::size_t task_history = common::constants::TASK_HISTORY_LIMIT;
 };

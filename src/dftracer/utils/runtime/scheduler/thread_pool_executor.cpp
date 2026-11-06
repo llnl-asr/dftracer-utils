@@ -27,7 +27,9 @@ ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
       keepalive_(config.elastic_keepalive),
       task_history_(config.task_history),
       io_backend_type_(config.io_backend_type),
-      io_batch_threshold_(config.io_batch_threshold) {
+      io_batch_threshold_(config.io_batch_threshold),
+      io_backend_factory_(config.io_backend_factory),
+      io_backend_context_(config.io_backend_context) {
     std::size_t threads = config.thread_count == 0
                               ? common::hardware_concurrency()
                               : config.thread_count;
@@ -84,9 +86,11 @@ void ThreadPoolExecutor::start() {
 
     // Create and start I/O backend before workers so workers
     // can use it immediately.
-    io_backend_ = runtime::io::make_io_backend(
-        *this, io_pool_size_.load(), io_backend_type_, io_batch_threshold_,
-        {eager_.load(), keepalive_});
+    io_backend_ = io_backend_factory_ != nullptr
+                      ? io_backend_factory_(io_backend_context_)
+                      : runtime::io::make_io_backend(
+                            io_pool_size_.load(), io_backend_type_,
+                            io_batch_threshold_, {eager_.load(), keepalive_});
     io_backend_->start();
 
     // Spawn the floor (== the cap in eager mode). The elastic monitor grows the

@@ -3,161 +3,78 @@
 #define DFTRACER_UTILS_RUNTIME_IO_IO_URING_BACKEND_H
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 
-#include <dftracer/utils/memory/detail/heap.h>
-#include <dftracer/utils/runtime/io/io.h>
-#include <dftracer/utils/runtime/io/io_backend.h>
-#include <dftracer/utils/runtime/io/io_completion_thread.h>
-#include <dftracer/utils/runtime/io/io_op.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/runtime/io/io_uring_wrapper.h>
-#include <sys/stat.h>
-#include <sys/uio.h>
+#include <dftracer/utils/runtime/io/thread_pool_file_ops.h>
 
-#include <algorithm>
 #include <atomic>
 #include <cstddef>
-#include <mutex>
-
-namespace dftracer::utils::coro {
-class Executor;
-}  // namespace dftracer::utils::coro
+#include <cstdint>
 
 namespace dftracer::utils::runtime::io {
 
-/// io_uring request. Stored in the SQE's user_data so we can
-/// recover the IoAwaitable pointer on completion.
-struct IoUringRequest {
-    static void* operator new(std::size_t size) {
-        return memory::detail::allocate(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
-    }
-    static void operator delete(void* ptr, std::size_t size) noexcept {
-        memory::detail::deallocate(ptr, size);
-    }
-
-    IoAwaitable* awaitable = nullptr;
-    IoCompletionFn completion = nullptr;
-    void* completion_ctx = nullptr;
-};
-
-/// io_uring I/O backend using raw syscalls (no liburing dependency).
-/// Uses a dedicated completion thread that blocks on wait_cqe and
-/// enqueues completed coroutine handles back to the executor.
-class IoUringBackend : public IoBackend {
+/**
+ * @brief io_uring backend through raw system calls, no liburing.
+ *
+ * One thread owns the ring and is the only one that enters the kernel. The
+ * kernel ties a request to the thread that submits it and cancels the request
+ * when that thread exits, so a write from a short-lived thread would fail on a
+ * healthy disk. Other threads push to a stack and wake the owner when it
+ * sleeps. An operation with no ring opcode runs on the thread pool.
+ */
+class IoUringBackend : public ThreadPoolFileOps {
    public:
-    explicit IoUringBackend(coro::Executor& executor,
-                            unsigned ring_entries = 256,
-                            unsigned batch_threshold = 16);
+    explicit IoUringBackend(std::size_t pool_size = 4,
+                            IoPoolOptions pool_options = {});
+    ~IoUringBackend() override;
 
-    /// Probe whether io_uring actually works on this kernel at runtime.
-    /// Returns true if io_uring_setup succeeds.
+    /// Whether this kernel has what the backend needs.
     bool probe();
 
+    /// Throws when the kernel refuses a ring, because no operation could end.
     void start() override;
     void stop() override;
-
-    IoAwaitable submit_read(int fd, void* buf, std::size_t len) override;
-    IoAwaitable submit_write(int fd, const void* buf, std::size_t len) override;
-    IoAwaitable submit_pread(int fd, void* buf, std::size_t len,
-                             off_t offset) override;
-    void submit_pread_callback(int fd, void* buf, std::size_t len, off_t offset,
-                               IoCompletionFn completion,
-                               void* context) override;
-    IoAwaitable submit_pwrite(int fd, const void* buf, std::size_t len,
-                              off_t offset) override;
-    void submit_pwrite_callback(int fd, const void* buf, std::size_t len,
-                                off_t offset, IoCompletionFn completion,
-                                void* context) override;
-    IoAwaitable submit_open(const char* path, int flags, mode_t mode) override;
-    IoAwaitable submit_close(int fd) override;
-    IoAwaitable submit_fsync(int fd) override;
-    IoAwaitable submit_ftruncate(int fd, off_t length) override;
-    IoAwaitable submit_fstat(int fd, struct stat* buf) override;
-    IoAwaitable submit_call(BlockingFn fn, void* context) override;
-    IoAwaitable submit_accept(int listen_fd, struct sockaddr* addr,
-                              socklen_t* addrlen) override;
-    IoAwaitable submit_recv(int fd, void* buf, std::size_t len,
-                            int flags) override;
-    IoAwaitable submit_send(int fd, const void* buf, std::size_t len,
-                            int flags) override;
-    IoAwaitable submit_readv(int fd, const struct iovec* iov,
-                             int iovcnt) override;
-    IoAwaitable submit_writev(int fd, const struct iovec* iov,
-                              int iovcnt) override;
-    IoAwaitable submit_preadv(int fd, const struct iovec* iov, int iovcnt,
-                              off_t offset) override;
-    IoAwaitable submit_pwritev(int fd, const struct iovec* iov, int iovcnt,
-                               off_t offset) override;
-    IoAwaitable submit_lseek(int fd, off_t offset, int whence) override;
-    IoAwaitable submit_sendfile(int out_fd, int in_fd, off_t offset,
-                                std::size_t count) override;
-
-    std::size_t poll(int timeout_ms) override;
+    void submit(IoOp& op) override;
     int flush() override;
     dstd::String name() const override { return "io_uring"; }
 
-    /// Counts requests on the ring. Reads zero once cancel_pending() found
-    /// the kernel cannot cancel them, so shutdown does not wait for a peer.
     std::size_t in_flight() const override {
-        return cancel_unsupported_.load(std::memory_order_acquire)
-                   ? 0
-                   : in_flight_.load(std::memory_order_acquire);
+        return ThreadPoolFileOps::in_flight() +
+               in_flight_.load(std::memory_order_acquire);
     }
 
-    /// Cancels the requests on the ring (kernel 5.19 or later) and fails
-    /// reads, accepts and sends submitted afterwards with -ECANCELED.
+    /// Cancels the reads, accepts and sends on the ring, on every kernel, and
+    /// fails those submitted afterwards with -ECANCELED.
     void cancel_pending() override;
 
-    /// Static callback for SubmitContext::submit.
-    static void submit_fn(SubmitContext* ctx, IoAwaitable* awaitable);
-
    private:
-    /// Completion loop run by the completion thread.
-    void completion_loop();
+    void ring_loop() noexcept;
+    void wake() noexcept;
+    void take_incoming() noexcept;
+    void fill_ring() noexcept;
+    std::size_t reap() noexcept;
+    void fail(IoOp& op, ssize_t result) noexcept;
+    void unlink_waiting(IoOp& op) noexcept;
+    void cancel_waiting() noexcept;
 
-    /// Flush pending SQEs if threshold reached. Called under submit_mutex_.
-    void maybe_flush_locked();
-
-    coro::Executor& executor_;
-    unsigned ring_entries_;
-    unsigned batch_threshold_;
+    // Only the ring thread touches these.
     uring::Ring ring_;
-    IoCompletionThread completion_thread_;
-    std::mutex submit_mutex_;
+    IoOp* backlog_head_ = nullptr;
+    IoOp* backlog_tail_ = nullptr;
+    IoOp* waiting_head_ = nullptr;
+    unsigned in_ring_ = 0;
+    bool wake_armed_ = false;
+    std::uint64_t wake_value_ = 0;
+
+    dstd::Thread thread_;
+    dstd::ScopedFd wake_fd_;
+    std::atomic<IoOp*> incoming_{nullptr};
     std::atomic<std::size_t> in_flight_{0};
+    std::atomic<bool> parked_{false};
     std::atomic<bool> cancelling_{false};
-    std::atomic<bool> cancel_unsupported_{false};
-};
-
-/// SubmitContext subclass for io_uring. Carries the operation
-/// details needed to prepare an SQE on await_suspend.
-struct IoUringSubmitCtx : SubmitContext {
-    static void* operator new(std::size_t size) {
-        return memory::detail::allocate(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
-    }
-    static void operator delete(void* ptr, std::size_t size) noexcept {
-        memory::detail::deallocate(ptr, size);
-    }
-
-    IoOp op = IoOp::Read;
-    int fd = -1;
-    void* buf = nullptr;
-    std::size_t len = 0;
-    off_t offset = 0;
-    const char* path = nullptr;
-    int flags = 0;
-    mode_t mode = 0;
-    struct stat* stat_buf = nullptr;
-    BlockingFn call_fn = nullptr;
-    struct sockaddr* addr = nullptr;
-    socklen_t* addrlen = nullptr;
-    int accept_flags = 0;
-    int msg_flags = 0;
-    const struct iovec* iov = nullptr;
-    int iovcnt = 0;
-    int whence = 0;
-    int dest_fd = -1;
-    IoUringBackend* backend = nullptr;
-    IoCompletionFn completion = nullptr;
-    void* completion_ctx = nullptr;
+    std::atomic<bool> cancel_requested_{false};
+    std::atomic<bool> stopping_{false};
 };
 
 }  // namespace dftracer::utils::runtime::io

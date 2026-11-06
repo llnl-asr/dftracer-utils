@@ -10,10 +10,14 @@
 #undef BLOCK_SIZE
 #endif
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
@@ -43,10 +47,11 @@ inline int sys_io_uring_register(int fd, unsigned opcode, void* arg,
 // Minimal io_uring ring manager
 // ============================================================================
 
-/// Owns the ring fd and mmap'd memory. Not thread-safe -- caller
-/// must synchronize SQE submission (submit_mutex_ in the backend).
+/// Owns the ring fd and mmap'd memory. One thread uses it.
 class Ring {
     int ring_fd_ = -1;
+    unsigned features_ = 0;
+    unsigned cq_entries_ = 0;
 
     // SQ ring (submission queue)
     void* sq_ring_ptr_ = nullptr;
@@ -63,17 +68,14 @@ class Ring {
     unsigned* cq_head_ = nullptr;
     unsigned* cq_tail_ = nullptr;
     unsigned* cq_ring_mask_ = nullptr;
-    unsigned* cq_ring_entries_ = nullptr;
     struct io_uring_cqe* cqes_ = nullptr;
 
     // SQE array
     struct io_uring_sqe* sqes_ = nullptr;
     std::size_t sqes_size_ = 0;
 
-    // Batched submission: count of SQEs prepared but not yet
-    // submitted to the kernel via io_uring_enter. Written under the
-    // backend's submit lock. Atomic so flush() can skip the lock when empty.
-    std::atomic<unsigned> pending_count_{0};
+    // SQEs prepared but not yet taken by the kernel.
+    unsigned pending_ = 0;
 
    public:
     Ring() = default;
@@ -89,39 +91,24 @@ class Ring {
     /// Tear down: munmap + close fd.
     void destroy();
 
-    bool is_valid() const { return ring_fd_ >= 0; }
-    int fd() const { return ring_fd_; }
+    unsigned features() const { return features_; }
+    unsigned cq_entries() const { return cq_entries_; }
 
-    /// Get next available SQE slot. Returns nullptr if SQ is full.
+    /// Next free SQE, which counts as pending once prepared. Null if the SQ
+    /// is full.
     struct io_uring_sqe* get_sqe();
 
-    /// Increment pending count after preparing an SQE.
-    /// Call after get_sqe() + prep_*() to record that this SQE
-    /// should be submitted on the next flush().
-    void mark_pending() {
-        pending_count_.store(pending_count_.load(std::memory_order_relaxed) + 1,
-                             std::memory_order_relaxed);
-    }
+    unsigned pending() const { return pending_; }
 
-    /// Number of SQEs prepared but not yet submitted.
-    unsigned pending_count() const {
-        return pending_count_.load(std::memory_order_relaxed);
-    }
+    /// Hands the pending SQEs to the kernel and, when `wait` is set, waits for
+    /// one completion. Gives the count the kernel took or a negative errno. The
+    /// ones it did not take stay pending.
+    int enter(bool wait);
 
-    /// Submit all pending SQEs to the kernel in a single
-    /// io_uring_enter syscall. Returns the number of SQEs
-    /// submitted, or negative errno on failure.
-    int flush();
-
-    /// Non-blocking peek at next CQE. Returns nullptr if CQ empty.
+    /// Next completion, or null. Copy what it holds before cqe_seen().
     struct io_uring_cqe* peek_cqe();
 
-    /// Blocking wait for at least one CQE.
-    /// Returns 0 on success, negative errno on failure.
-    int wait_cqe(struct io_uring_cqe** cqe_out);
-
-    /// Mark a CQE as consumed (advance CQ head).
-    void cqe_seen(struct io_uring_cqe* cqe);
+    void cqe_seen();
 };
 
 // ============================================================================
@@ -163,15 +150,12 @@ inline void prep_nop(struct io_uring_sqe* sqe) {
     sqe->opcode = IORING_OP_NOP;
 }
 
-// Cancels every request in flight. Needs a 5.19 kernel. An older one
-// completes the cancel with -EINVAL.
-inline void prep_cancel_all(struct io_uring_sqe* sqe) {
-    constexpr __u32 CANCEL_ALL = 1U << 0;
-    constexpr __u32 CANCEL_ANY = 1U << 2;
+// Cancels the request whose user_data is `target`.
+inline void prep_cancel(struct io_uring_sqe* sqe, void* target) {
     std::memset(sqe, 0, sizeof(*sqe));
     sqe->opcode = IORING_OP_ASYNC_CANCEL;
     sqe->fd = -1;
-    sqe->cancel_flags = CANCEL_ALL | CANCEL_ANY;
+    sqe->addr = reinterpret_cast<__u64>(target);
 }
 
 inline void prep_close(struct io_uring_sqe* sqe, int fd) {
@@ -241,10 +225,6 @@ inline void prep_writev(struct io_uring_sqe* sqe, int fd,
 
 inline void sqe_set_data(struct io_uring_sqe* sqe, void* data) {
     sqe->user_data = reinterpret_cast<__u64>(data);
-}
-
-inline void* cqe_get_data(struct io_uring_cqe* cqe) {
-    return reinterpret_cast<void*>(cqe->user_data);
 }
 
 }  // namespace dftracer::utils::runtime::io::uring

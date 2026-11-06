@@ -137,6 +137,32 @@ class IoBackend {
     /// Called by executor shutdown.
     virtual void cancel_pending() {}
 
+    /// Called on a thread the executor starts, before its first operation, and
+    /// again before it exits. A backend that ties operations to the thread that
+    /// submits them uses these. An operation may come from any thread, attached
+    /// or not.
+    virtual void attach_thread() {}
+    virtual void detach_thread() {}
+
+    /// For a backend whose completions need the submitting thread. Gives a
+    /// token when the calling thread should wait through @ref park instead of
+    /// its own sleep, or null when it has nothing to wait for. A token needs a
+    /// @ref finish_park on the same thread, whether it parked or not.
+    virtual void* prepare_park() { return nullptr; }
+
+    /// Waits for a completion on the calling thread, a @ref unpark or
+    /// `timeout_ms`. It may also return early. Completions run in @ref
+    /// finish_park.
+    virtual void park(void* token, std::int64_t timeout_ms) {
+        (void)token;
+        (void)timeout_ms;
+    }
+
+    /// Ends a @ref park from any thread, or the next one with this token.
+    virtual void unpark(void* token) noexcept { (void)token; }
+
+    virtual void finish_park(void* token) { (void)token; }
+
     /// Human-readable name for logging.
     virtual dstd::String name() const = 0;
 };

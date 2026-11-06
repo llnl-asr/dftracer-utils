@@ -52,6 +52,11 @@ A backend that holds operations must also do these three things:
 - Report what it holds in ``in_flight``, because the executor waits for zero before it stops.
 - Complete with ``-ECANCELED`` after ``cancel_pending`` any operation that waits on a pipe or socket.
 
+A backend that ties an operation to the thread that submits it, as a per-thread kernel ring does, can use six more methods.
+``attach_thread`` and ``detach_thread`` run on each executor worker when it starts and before it exits.
+``prepare_park``, ``park``, ``unpark`` and ``finish_park`` let an idle worker wait on the backend in place of its own sleep.
+The executor also calls ``poll`` from its monitor thread, so ``poll`` must collect what a busy or blocked worker has not.
+
 Add a file system
 -----------------
 

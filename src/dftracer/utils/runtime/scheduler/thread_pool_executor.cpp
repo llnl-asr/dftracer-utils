@@ -407,6 +407,8 @@ void ThreadPoolExecutor::sysmon_loop() {
         if (!running_.load(std::memory_order_acquire)) break;
 
         check_lifo_stalls();
+        // A worker that runs long or blocks is not reaping its own ring.
+        if (io_backend_) io_backend_->poll(0);
         if (blocked_workers_.load(std::memory_order_acquire) == 0) {
             std::this_thread::sleep_for(
                 std::chrono::nanoseconds(LIFO_CHECK_NS));
@@ -578,6 +580,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     set_current_worker_context(context);
     coro::CurrentScope current_scope{*this};
     set_current_backend(this);
+    if (io_backend_) io_backend_->attach_thread();
     coro::reset_timeslice();
     wake_sysmon_if_parked();
 
@@ -684,6 +687,9 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     }
     coro::set_current_worker_index(-1);
 
+    // Before the core moves, since this can post what it drains.
+    if (io_backend_) io_backend_->detach_thread();
+
     flush_core(core);
     // A task moved here while the other workers park has no one to run it.
     notify();
@@ -738,6 +744,14 @@ bool ThreadPoolExecutor::drive_until(
             if (io_backend_->poll(0) > 0 ||
                 core.lifo.load(std::memory_order_relaxed) != nullptr ||
                 core.queue.size_approx() != 0) {
+                park = IDLE_PARK_MIN;
+                continue;
+            }
+            // Nothing else reads this thread's ring while it waits here, and a
+            // notify does not end this wait, so the shortest timeout.
+            if (void* token = io_backend_->prepare_park()) {
+                io_backend_->park(token, IDLE_PARK_MIN.count());
+                io_backend_->finish_park(token);
                 park = IDLE_PARK_MIN;
                 continue;
             }
@@ -921,23 +935,33 @@ void ThreadPoolExecutor::park_worker(WorkerContext* ctx) {
         sleepers_.push_back(ctx);
     }
     std::atomic_thread_fence(std::memory_order_seq_cst);
+    void* const io_token = io_backend_ ? io_backend_->prepare_park() : nullptr;
     const bool work = pending_tasks(false) != 0;
 
     bool timed_out = false;
     {
         std::unique_lock<std::mutex> lock(sleepers_mutex_);
+        // Under the lock, so a waker either sees it or leaves notified set.
+        ctx->park_token = io_token;
         const auto keep_waiting = [&] {
             return !work && !ctx->notified &&
                    running_.load(std::memory_order_acquire) &&
                    !ctx->retire.load(std::memory_order_acquire);
         };
         while (keep_waiting()) {
+            if (io_token != nullptr) {
+                lock.unlock();
+                io_backend_->park(io_token, IDLE_PARK_MAX.count());
+                lock.lock();
+                break;
+            }
             if (ctx->park_cv.wait_for(lock, IDLE_PARK_MAX) ==
                 std::cv_status::timeout) {
                 timed_out = true;
                 break;
             }
         }
+        ctx->park_token = nullptr;
         if (ctx->notified) {
             ctx->searching = true;
         } else {
@@ -946,6 +970,7 @@ void ThreadPoolExecutor::park_worker(WorkerContext* ctx) {
         }
     }
     idle_workers_.fetch_sub(1, std::memory_order_seq_cst);
+    if (io_token != nullptr) io_backend_->finish_park(io_token);
     wake_sysmon_if_parked();
     // Only this thread may purge its heap, so an idle worker gives its freed
     // pages back itself.
@@ -962,6 +987,7 @@ bool ThreadPoolExecutor::wake_sleeper(bool force) noexcept {
     searching_.fetch_add(1, std::memory_order_acq_rel);
     // Under the lock: past it the worker can exit and its context can go.
     ctx->park_cv.notify_one();
+    if (ctx->park_token != nullptr) io_backend_->unpark(ctx->park_token);
     return true;
 }
 
@@ -993,6 +1019,9 @@ void ThreadPoolExecutor::wake_all_workers() {
             ctx->notified = true;
             searching_.fetch_add(1, std::memory_order_acq_rel);
             ctx->park_cv.notify_one();
+            if (ctx->park_token != nullptr) {
+                io_backend_->unpark(ctx->park_token);
+            }
         }
         sleepers_.clear();
     }

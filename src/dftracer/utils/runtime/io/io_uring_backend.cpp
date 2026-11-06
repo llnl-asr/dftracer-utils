@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/runtime/io/io_uring_backend.h>
 #include <fcntl.h>
@@ -140,16 +141,37 @@ int Ring::enter(bool wait) {
     return taken;
 }
 
+int Ring::enter_wait(std::int64_t timeout_ms) {
+    KernelTimespec timeout{timeout_ms / 1000, (timeout_ms % 1000) * 1000000};
+    GeteventsArg arg{};
+    arg.sigmask_sz = _NSIG / 8;
+    arg.ts = reinterpret_cast<std::uint64_t>(&timeout);
+    const int taken = static_cast<int>(syscall(
+        __NR_io_uring_enter, ring_fd_, pending_, 1,
+        IORING_ENTER_GETEVENTS | IORING_ENTER_EXT_ARG, &arg, sizeof(arg)));
+    if (taken < 0) return -errno;
+    pending_ -= static_cast<unsigned>(taken);
+    return taken;
+}
+
+void Ring::limit_kernel_workers(unsigned bounded) {
+    unsigned limits[2] = {bounded, 0};
+    // Older kernels refuse it and keep their default.
+    (void)sys_io_uring_register(ring_fd_, REGISTER_IOWQ_MAX_WORKERS, limits, 2);
+}
+
 struct io_uring_cqe* Ring::peek_cqe() {
-    const unsigned head = *cq_head_;
+    const unsigned head =
+        std::atomic_ref<unsigned>(*cq_head_).load(std::memory_order_acquire);
     const unsigned tail =
         std::atomic_ref<unsigned>(*cq_tail_).load(std::memory_order_acquire);
     return head == tail ? nullptr : &cqes_[head & *cq_ring_mask_];
 }
 
 void Ring::cqe_seen() {
-    std::atomic_ref<unsigned>(*cq_head_).store(*cq_head_ + 1,
-                                               std::memory_order_release);
+    std::atomic_ref<unsigned> head(*cq_head_);
+    head.store(head.load(std::memory_order_relaxed) + 1,
+               std::memory_order_release);
 }
 
 }  // namespace uring
@@ -161,6 +183,14 @@ void Ring::cqe_seen() {
 namespace {
 
 constexpr unsigned RING_ENTRIES = 256;
+
+// One per worker that does I/O, so its size counts against the memory budget.
+// A burst past it waits in the worker's backlog.
+constexpr unsigned WORKER_RING_ENTRIES = 64;
+
+// Each thread that submits gets its own kernel workers, so the default of four
+// per CPU would multiply by the workers.
+constexpr unsigned WORKER_RING_KERNEL_WORKERS = 4;
 
 // Values of user_data that name no operation, which an IoOp address never is.
 void* const WAKE_TAG = reinterpret_cast<void*>(std::uintptr_t{1});
@@ -207,6 +237,22 @@ bool can_wait_for_peer(IoOpKind kind) noexcept {
         case IoOpKind::Recv:
         case IoOpKind::Accept:
         case IoOpKind::Send:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// These end by themselves, so a worker can always drain them before it exits. A
+// sequential read or write may be on a pipe, and an open may be on a FIFO.
+bool runs_on_worker_ring(IoOpKind kind) noexcept {
+    switch (kind) {
+        case IoOpKind::Pread:
+        case IoOpKind::Pwrite:
+        case IoOpKind::Preadv:
+        case IoOpKind::Pwritev:
+        case IoOpKind::Close:
+        case IoOpKind::Fsync:
             return true;
         default:
             return false;
@@ -279,6 +325,53 @@ void prepare(struct io_uring_sqe* sqe, IoOp& op) noexcept {
 
 }  // namespace
 
+struct IoUringBackend::WorkerRing {
+    // The one reader of the CQ. A parked ring keeps its reader, because the
+    // wake request must not vanish between the check and the sleep.
+    alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) std::atomic<bool> reaping{false};
+    std::atomic<bool> live{false};
+    std::atomic<bool> parked{false};
+    std::atomic<bool> claimed{false};
+    std::atomic<std::size_t> in_flight{0};
+    std::atomic<unsigned> in_ring{0};
+    // Read under `reaping` or by the ring's thread.
+    bool wake_armed = false;
+
+    // Only the ring's thread touches these.
+    uring::Ring ring;
+    IoOp* backlog_head = nullptr;
+    IoOp* backlog_tail = nullptr;
+    bool ring_failed = false;
+
+    std::uint64_t wake_value = 0;
+    dstd::ScopedFd wake_fd;
+    WorkerRing* next = nullptr;
+    dstd::UniquePtr<WorkerRing> owned_next;
+
+    // Sequentially consistent, as the park handshake reads `parked` around it.
+    void lock() noexcept {
+        while (reaping.exchange(true, std::memory_order_seq_cst)) {
+            DFTRACER_UTILS_CPU_PAUSE();
+        }
+    }
+    bool try_lock() noexcept {
+        return !reaping.load(std::memory_order_relaxed) &&
+               !reaping.exchange(true, std::memory_order_seq_cst);
+    }
+    void unlock() noexcept { reaping.store(false, std::memory_order_release); }
+};
+
+namespace {
+
+struct AttachedRing {
+    const void* backend = nullptr;
+    void* ring = nullptr;
+};
+
+thread_local AttachedRing t_attached;
+
+}  // namespace
+
 IoUringBackend::IoUringBackend(std::size_t pool_size,
                                IoPoolOptions pool_options)
     : ThreadPoolFileOps(pool_size, 0, pool_options) {}
@@ -287,9 +380,10 @@ IoUringBackend::~IoUringBackend() = default;
 
 bool IoUringBackend::probe() {
     uring::Ring test_ring;
-    // The ring runs sequential reads and writes at the file position.
-    return test_ring.init(32) &&
-           (test_ring.features() & IORING_FEAT_RW_CUR_POS) != 0;
+    // The ring runs sequential reads and writes at the file position, and a
+    // driver waits for its own ring with a timeout.
+    constexpr unsigned NEEDED = IORING_FEAT_RW_CUR_POS | IORING_FEAT_EXT_ARG;
+    return test_ring.init(32) && (test_ring.features() & NEEDED) == NEEDED;
 }
 
 void IoUringBackend::start() {
@@ -322,11 +416,230 @@ void IoUringBackend::stop() {
     pool_.stop();
     ring_.destroy();
     wake_fd_.reset();
+    // Every worker has detached. Iterative, as the chain can be long.
+    worker_rings_.store(nullptr, std::memory_order_release);
+    dstd::UniquePtr<WorkerRing> rings = std::move(worker_rings_owned_);
+    while (rings) rings = std::move(rings->owned_next);
+}
+
+std::size_t IoUringBackend::in_flight() const {
+    std::size_t total = 0;
+    // The rings first: a completion on a thread with no ring resubmits to the
+    // owner before its ring's count falls, so an op moves only that way.
+    for (const WorkerRing* worker =
+             worker_rings_.load(std::memory_order_acquire);
+         worker != nullptr; worker = worker->next) {
+        total += worker->in_flight.load(std::memory_order_acquire);
+    }
+    return total + in_flight_.load(std::memory_order_acquire) +
+           ThreadPoolFileOps::in_flight();
+}
+
+void IoUringBackend::attach_thread() {
+    std::lock_guard<std::mutex> lock(worker_rings_mutex_);
+    for (WorkerRing* worker = worker_rings_.load(std::memory_order_relaxed);
+         worker != nullptr; worker = worker->next) {
+        bool expected = false;
+        if (worker->claimed.compare_exchange_strong(expected, true)) {
+            t_attached = {this, worker};
+            return;
+        }
+    }
+    auto node = dstd::make_unique<WorkerRing>();
+    WorkerRing* const worker = node.get();
+    worker->claimed.store(true, std::memory_order_relaxed);
+    worker->next = worker_rings_.load(std::memory_order_relaxed);
+    worker->owned_next = std::move(worker_rings_owned_);
+    worker_rings_owned_ = std::move(node);
+    worker_rings_.store(worker, std::memory_order_release);
+    t_attached = {this, worker};
+}
+
+IoUringBackend::WorkerRing* IoUringBackend::calling_worker_ring(
+    IoOpKind kind) noexcept {
+    if (t_attached.backend != this || !runs_on_worker_ring(kind)) {
+        return nullptr;
+    }
+    auto* worker = static_cast<WorkerRing*>(t_attached.ring);
+    if (worker->live.load(std::memory_order_relaxed)) return worker;
+    // A worker that never does I/O costs no ring. One the kernel refuses, such
+    // as past the file limit, leaves this worker on the owner's ring.
+    if (worker->ring_failed) return nullptr;
+    worker->lock();
+    const bool created = worker->ring.init(WORKER_RING_ENTRIES);
+    if (created) {
+        worker->ring.limit_kernel_workers(WORKER_RING_KERNEL_WORKERS);
+        worker->live.store(true, std::memory_order_release);
+    }
+    worker->unlock();
+    worker->ring_failed = !created;
+    return created ? worker : nullptr;
+}
+
+void IoUringBackend::fill_worker(WorkerRing& worker) noexcept {
+    while (worker.backlog_head != nullptr &&
+           worker.in_ring.load(std::memory_order_relaxed) <
+               worker.ring.cq_entries()) {
+        struct io_uring_sqe* sqe = worker.ring.get_sqe();
+        if (sqe == nullptr) {
+            if (worker.ring.enter(false) <= 0) return;
+            sqe = worker.ring.get_sqe();
+            if (sqe == nullptr) return;
+        }
+        IoOp& op = *worker.backlog_head;
+        worker.backlog_head = op.next;
+        if (worker.backlog_head == nullptr) worker.backlog_tail = nullptr;
+        prepare(sqe, op);
+        // A thief completes it, ordered only through the kernel.
+        DFTRACER_UTILS_TSAN_RELEASE(&op);
+        worker.in_ring.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+std::size_t IoUringBackend::drain_worker(WorkerRing& worker) noexcept {
+    std::size_t reaped = 0;
+    while (struct io_uring_cqe* cqe = worker.ring.peek_cqe()) {
+        void* const data = reinterpret_cast<void*>(cqe->user_data);
+        const ssize_t res = cqe->res;
+        worker.ring.cqe_seen();
+        worker.in_ring.fetch_sub(1, std::memory_order_relaxed);
+        if (data == WAKE_TAG) {
+            worker.wake_armed = false;
+            continue;
+        }
+        ++reaped;
+        auto& op = *static_cast<IoOp*>(data);
+        DFTRACER_UTILS_TSAN_ACQUIRE(&op);
+        op.result = res;
+        op.complete(op);
+        // After the complete, so a quiesce that reads zero sees its task.
+        worker.in_flight.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    return reaped;
+}
+
+std::size_t IoUringBackend::reap_worker(WorkerRing& worker) noexcept {
+    if (worker.ring.peek_cqe() == nullptr) return 0;
+    // A completion that submits and flushes lands here on its own ring, and the
+    // drain further up takes what that added.
+    if (!worker.try_lock()) return 0;
+    const std::size_t reaped = drain_worker(worker);
+    worker.unlock();
+    return reaped;
+}
+
+void IoUringBackend::flush_worker(WorkerRing& worker) noexcept {
+    fill_worker(worker);
+    if (worker.ring.pending() != 0) {
+        const int entered = worker.ring.enter(false);
+        // What it did not take stays pending for the next flush or the park.
+        if (entered < 0 && entered != -EAGAIN && entered != -EBUSY &&
+            entered != -EINTR) {
+            DFTRACER_UTILS_LOG_ERROR("io_uring_enter failed: %s",
+                                     std::strerror(-entered));
+        }
+    }
+    reap_worker(worker);
+}
+
+// Thieves stay out from here on. One already inside finishes first.
+void IoUringBackend::quiet_worker(WorkerRing& worker) noexcept {
+    worker.parked.store(true, std::memory_order_seq_cst);
+    worker.lock();
+    worker.unlock();
+}
+
+void IoUringBackend::detach_thread() {
+    if (t_attached.backend != this) return;
+    auto* worker = static_cast<WorkerRing*>(t_attached.ring);
+    t_attached = {};
+    if (worker->live.load(std::memory_order_relaxed)) {
+        quiet_worker(*worker);
+        // The kernel cancels what an exiting thread submitted.
+        while (worker->in_flight.load(std::memory_order_acquire) != 0) {
+            fill_worker(*worker);
+            const int entered = worker->ring.enter(true);
+            if (entered < 0 && entered != -EINTR) std::this_thread::yield();
+            reap_worker(*worker);
+        }
+        worker->lock();
+        worker->live.store(false, std::memory_order_release);
+        worker->ring.destroy();
+        worker->wake_armed = false;
+        worker->in_ring.store(0, std::memory_order_relaxed);
+        worker->unlock();
+        worker->parked.store(false, std::memory_order_seq_cst);
+    }
+    worker->ring_failed = false;
+    worker->claimed.store(false, std::memory_order_release);
+}
+
+void* IoUringBackend::prepare_park() {
+    if (t_attached.backend != this) return nullptr;
+    auto* worker = static_cast<WorkerRing*>(t_attached.ring);
+    if (worker->in_flight.load(std::memory_order_acquire) == 0) return nullptr;
+    quiet_worker(*worker);
+    if (!worker->wake_fd.valid()) {
+        // Blocking, as for the owner's ring.
+        worker->wake_fd.reset(::eventfd(0, EFD_CLOEXEC));
+    }
+    if (!worker->wake_fd.valid()) {
+        worker->parked.store(false, std::memory_order_seq_cst);
+        return nullptr;
+    }
+    if (!worker->wake_armed) {
+        struct io_uring_sqe* sqe = worker->ring.get_sqe();
+        if (sqe == nullptr) {
+            worker->ring.enter(false);
+            sqe = worker->ring.get_sqe();
+        }
+        if (sqe == nullptr) {
+            worker->parked.store(false, std::memory_order_seq_cst);
+            return nullptr;
+        }
+        uring::prep_read(sqe, worker->wake_fd.get(), &worker->wake_value,
+                         sizeof(worker->wake_value), 0);
+        uring::sqe_set_data(sqe, WAKE_TAG);
+        worker->wake_armed = true;
+        worker->in_ring.fetch_add(1, std::memory_order_relaxed);
+    }
+    return worker;
+}
+
+void IoUringBackend::park(void* token, std::int64_t timeout_ms) {
+    auto& worker = *static_cast<WorkerRing*>(token);
+    fill_worker(worker);
+    // -ETIME, -EINTR and a full CQ all come back to the caller's checks.
+    (void)worker.ring.enter_wait(timeout_ms);
+}
+
+void IoUringBackend::unpark(void* token) noexcept {
+    auto& worker = *static_cast<WorkerRing*>(token);
+    const std::uint64_t one = 1;
+    [[maybe_unused]] const ssize_t written =
+        ::write(worker.wake_fd.get(), &one, sizeof(one));
+}
+
+void IoUringBackend::finish_park(void* token) {
+    auto& worker = *static_cast<WorkerRing*>(token);
+    worker.parked.store(false, std::memory_order_seq_cst);
+    reap_worker(worker);
 }
 
 void IoUringBackend::submit(IoOp& op) {
     if (!has_opcode(op.kind)) {
         ThreadPoolFileOps::submit(op);
+        return;
+    }
+    if (WorkerRing* worker = calling_worker_ring(op.kind)) {
+        worker->in_flight.fetch_add(1, std::memory_order_acq_rel);
+        op.next = nullptr;
+        if (worker->backlog_tail == nullptr) {
+            worker->backlog_head = &op;
+        } else {
+            worker->backlog_tail->next = &op;
+        }
+        worker->backlog_tail = &op;
         return;
     }
     in_flight_.fetch_add(1, std::memory_order_acq_rel);
@@ -339,12 +652,44 @@ void IoUringBackend::submit(IoOp& op) {
 
 int IoUringBackend::flush() {
     const int woken = ThreadPoolFileOps::flush();
+    if (t_attached.backend == this) {
+        auto* worker = static_cast<WorkerRing*>(t_attached.ring);
+        if (worker->live.load(std::memory_order_relaxed)) flush_worker(*worker);
+    }
     if (incoming_.load(std::memory_order_seq_cst) != nullptr &&
         parked_.load(std::memory_order_seq_cst) &&
         parked_.exchange(false, std::memory_order_seq_cst)) {
         wake();
     }
     return woken;
+}
+
+std::size_t IoUringBackend::poll(int timeout_ms) {
+    (void)timeout_ms;
+    std::size_t reaped = 0;
+    const void* const own =
+        t_attached.backend == this ? t_attached.ring : nullptr;
+    for (WorkerRing* worker = worker_rings_.load(std::memory_order_acquire);
+         worker != nullptr; worker = worker->next) {
+        if (worker == own) {
+            if (worker->live.load(std::memory_order_relaxed)) {
+                reaped += reap_worker(*worker);
+            }
+            continue;
+        }
+        if (worker->in_flight.load(std::memory_order_relaxed) == 0 ||
+            worker->parked.load(std::memory_order_relaxed) ||
+            !worker->try_lock()) {
+            continue;
+        }
+        // Held across the drain: a retiring worker destroys its ring under it.
+        if (worker->live.load(std::memory_order_acquire) &&
+            !worker->parked.load(std::memory_order_seq_cst)) {
+            reaped += drain_worker(*worker);
+        }
+        worker->unlock();
+    }
+    return reaped;
 }
 
 void IoUringBackend::cancel_pending() {

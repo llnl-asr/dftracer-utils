@@ -9,6 +9,7 @@
 #ifdef BLOCK_SIZE
 #undef BLOCK_SIZE
 #endif
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -21,7 +22,29 @@
 #include <cstdint>
 #include <cstring>
 
+#ifndef IORING_FEAT_EXT_ARG
+#define IORING_FEAT_EXT_ARG (1U << 8)
+#endif
+#ifndef IORING_ENTER_EXT_ARG
+#define IORING_ENTER_EXT_ARG (1U << 3)
+#endif
+
 namespace dftracer::utils::runtime::io::uring {
+
+// Kernel ABI values that older kernel headers do not name.
+constexpr unsigned REGISTER_IOWQ_MAX_WORKERS = 19;
+
+struct KernelTimespec {
+    std::int64_t tv_sec;
+    long long tv_nsec;
+};
+
+struct GeteventsArg {
+    std::uint64_t sigmask;
+    std::uint32_t sigmask_sz;
+    std::uint32_t pad;
+    std::uint64_t ts;
+};
 
 // ============================================================================
 // Raw syscall wrappers
@@ -47,7 +70,8 @@ inline int sys_io_uring_register(int fd, unsigned opcode, void* arg,
 // Minimal io_uring ring manager
 // ============================================================================
 
-/// Owns the ring fd and mmap'd memory. One thread uses it.
+/// Owns the ring fd and mmap'd memory. One thread submits. Completions need one
+/// reader at a time, which may be another thread.
 class Ring {
     int ring_fd_ = -1;
     unsigned features_ = 0;
@@ -104,6 +128,12 @@ class Ring {
     /// one completion. Gives the count the kernel took or a negative errno. The
     /// ones it did not take stay pending.
     int enter(bool wait);
+
+    /// As enter(true), giving up after `timeout_ms`, then with -ETIME.
+    int enter_wait(std::int64_t timeout_ms);
+
+    /// Caps the kernel threads that serve the calling thread's bounded work.
+    void limit_kernel_workers(unsigned bounded);
 
     /// Next completion, or null. Copy what it holds before cqe_seen().
     struct io_uring_cqe* peek_cqe();

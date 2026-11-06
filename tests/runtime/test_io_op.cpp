@@ -2,18 +2,21 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/io/thread_pool_file_ops.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <unistd.h>
 
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -244,6 +247,29 @@ dstd::UniquePtr<runtime::io::IoBackend> make_counting(void* context) {
         *static_cast<std::atomic<int>*>(context));
 }
 
+// fsync goes to the kernel's own workers, so it never ends inside the submit.
+coro::CoroTask<void> sync_many(int fd, int rounds, std::atomic<int>& bad) {
+    std::uint32_t value = 7;
+    for (int i = 0; i < rounds; ++i) {
+        const ssize_t put =
+            co_await runtime::io::pwrite(fd, &value, sizeof(value), 0);
+        if (put != static_cast<ssize_t>(sizeof(value))) {
+            bad.fetch_add(1, std::memory_order_relaxed);
+        }
+        const ssize_t synced = co_await runtime::io::fsync(fd);
+        if (synced != 0) bad.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void sync_done(IoOp& op) noexcept {
+    static_cast<std::atomic<int>*>(op.context)
+        ->fetch_add(op.result == 0 ? 1 : 1000, std::memory_order_release);
+}
+
+void note_done(IoOp& op) noexcept {
+    *static_cast<dstd::Thread::Id*>(op.context) = dstd::Thread::current_id();
+}
+
 constexpr runtime::io::IoBackendType TYPES[] = {
     runtime::io::IoBackendType::Threadpool, runtime::io::IoBackendType::Auto};
 
@@ -284,6 +310,157 @@ TEST_CASE("io op: a user backend from the options runs the operations") {
     CHECK(got == 3);
     CHECK(std::strcmp(read_back, "abc") == 0);
     CHECK(ops.load() == 1);
+}
+
+TEST_CASE("io op: a cached read on a worker ends inside its flush") {
+    TempFile file;
+    char data[64] = {};
+    REQUIRE(::pwrite(file.fd(), data, sizeof(data), 0) ==
+            static_cast<ssize_t>(sizeof(data)));
+    Runtime rt(ExecutorConfig{.thread_count = 1}, false);
+    runtime::io::IoBackend& backend = rt.executor()->io_backend();
+    if (backend.name() != "io_uring") {
+        MESSAGE("skipped: needs the io_uring backend");
+        return;
+    }
+    dstd::Thread::Id worker{};
+    dstd::Thread::Id completed{};
+    auto body = [&]() -> coro::CoroTask<void> {
+        worker = dstd::Thread::current_id();
+        IoOp op;
+        op.kind = IoOpKind::Pread;
+        op.handle = file.fd();
+        op.buffer = data;
+        op.length = sizeof(data);
+        op.complete = &note_done;
+        op.context = &completed;
+        backend.submit(op);
+        backend.flush();
+        CHECK(completed == worker);
+        CHECK(op.result == static_cast<ssize_t>(sizeof(data)));
+        co_return;
+    };
+    rt.block_on(body());
+}
+
+TEST_CASE("io op: a parked worker resumes when its own fsync ends") {
+    TempFile file;
+    std::atomic<int> bad{0};
+    Runtime rt(ExecutorConfig{.thread_count = 1}, false);
+    rt.block_on(sync_many(file.fd(), 200, bad));
+    CHECK(bad.load() == 0);
+}
+
+TEST_CASE("io op: a completion arrives while its worker never reaps") {
+    // One worker, which spins here without leaving the slice, so only the
+    // sysmon can reap its ring.
+    TempFile file;
+    Runtime rt(ExecutorConfig{.thread_count = 1}, false);
+    runtime::io::IoBackend& backend = rt.executor()->io_backend();
+    std::atomic<int> done{0};
+    bool arrived = false;
+    auto body = [&]() -> coro::CoroTask<void> {
+        IoOp op;
+        op.kind = IoOpKind::Fsync;
+        op.handle = file.fd();
+        op.complete = &sync_done;
+        op.context = &done;
+        backend.submit(op);
+        backend.flush();
+        for (int waited = 0; waited < 20000; ++waited) {
+            if (done.load(std::memory_order_acquire) != 0) {
+                arrived = true;
+                break;
+            }
+            ::usleep(1000);
+        }
+        // Past this point the op must have ended, as it lives in this frame.
+        while (done.load(std::memory_order_acquire) == 0) ::usleep(1000);
+        co_return;
+    };
+    rt.block_on(body());
+    CHECK(arrived);
+    CHECK(done.load() == 1);
+}
+
+TEST_CASE("io op: a retired worker's writes all end") {
+    // A thread's exit makes the kernel cancel what it submitted, and a ring it
+    // destroyed never completes anything, so a worker must drain first.
+    TempFile file;
+    std::atomic<int> bad{0};
+    Runtime rt(ExecutorConfig{.thread_count = 8}, false);
+    auto* pool = dynamic_cast<ThreadPoolExecutor*>(rt.executor());
+    REQUIRE(pool != nullptr);
+    std::atomic<bool> stop{false};
+    dstd::Thread churn([&] {
+        // The newest goes first, so each batch must run long enough for the new
+        // workers to take tasks and open rings.
+        while (!stop.load(std::memory_order_acquire)) {
+            for (int i = 0; i < 6; ++i) pool->add_worker();
+            ::usleep(2000);
+            for (int i = 0; i < 6; ++i) pool->retire_worker();
+        }
+    });
+    rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            for (int task = 0; task < 64; ++task) {
+                scope.spawn(sync_many(file.fd(), 128, bad));
+            }
+            co_return;
+        }));
+    stop.store(true, std::memory_order_release);
+    churn.join();
+    CHECK(bad.load() == 0);
+}
+
+TEST_CASE("io op: new work wakes a worker parked on its own ring") {
+    Runtime rt(ExecutorConfig{.thread_count = 1}, false);
+    runtime::io::IoBackend& backend = rt.executor()->io_backend();
+    if (backend.name() != "io_uring") {
+        MESSAGE("skipped: needs the io_uring backend");
+        return;
+    }
+    int fds[2];
+    REQUIRE(::pipe(fds) == 0);
+    // Offset -1 reads at the file position, so this waits for the writer and
+    // holds the worker's ring in flight for the whole test.
+    char byte = 0;
+    std::atomic<int> done{0};
+    IoOp op;
+    op.kind = IoOpKind::Pread;
+    op.handle = fds[0];
+    op.buffer = &byte;
+    op.length = 1;
+    op.offset = -1;
+    op.complete = &sync_done;
+    op.context = &done;
+    auto start = [&]() -> coro::CoroTask<void> {
+        backend.submit(op);
+        backend.flush();
+        co_return;
+    };
+    rt.block_on(start());
+
+    constexpr int ROUNDS = 20;
+    int ran = 0;
+    const auto began = std::chrono::steady_clock::now();
+    for (int i = 0; i < ROUNDS; ++i) {
+        ::usleep(2000);
+        auto step = [&]() -> coro::CoroTask<void> {
+            ++ran;
+            co_return;
+        };
+        rt.block_on(step());
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - began;
+    CHECK(ran == ROUNDS);
+    // A lost wake costs each round the park timeout of 256 ms.
+    CHECK(elapsed < std::chrono::seconds(2));
+
+    REQUIRE(::write(fds[1], "x", 1) == 1);
+    while (done.load(std::memory_order_acquire) == 0) ::usleep(100);
+    ::close(fds[0]);
+    ::close(fds[1]);
 }
 
 TEST_CASE("io op: a file write passes reads that wait on a peer") {

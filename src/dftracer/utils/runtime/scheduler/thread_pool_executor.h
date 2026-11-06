@@ -72,6 +72,9 @@ class ThreadPoolExecutor final : public TaskExecutor {
         // in searching_ when it takes it from sleepers_.
         bool notified{false};
         std::condition_variable park_cv;
+        // Guarded by sleepers_mutex_. Set while this worker parks in the I/O
+        // backend, which park_cv does not wake.
+        void* park_token{nullptr};
 
         // Health monitoring for watchdog
         std::atomic<bool> is_idle{false};

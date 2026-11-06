@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_IO_IO_URING_BACKEND_H
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/runtime/io/io_uring_wrapper.h>
@@ -11,17 +12,24 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 
 namespace dftracer::utils::runtime::io {
 
 /**
  * @brief io_uring backend through raw system calls, no liburing.
  *
- * One thread owns the ring and is the only one that enters the kernel. The
+ * An executor worker submits positional file operations to a ring of its own,
+ * where a read of cached data ends inside the submit, with no thread woken. The
  * kernel ties a request to the thread that submits it and cancels the request
  * when that thread exits, so a write from a short-lived thread would fail on a
- * healthy disk. Other threads push to a stack and wake the owner when it
- * sleeps. An operation with no ring opcode runs on the thread pool.
+ * healthy disk. So a worker drains its ring before it exits, and everything
+ * that may never end or comes from any other thread goes to one owner thread's
+ * ring: those threads push to a stack and wake the owner when it sleeps. An
+ * operation with no ring opcode runs on the thread pool.
+ *
+ * A worker reaps its own ring. A worker that runs long or blocks leaves
+ * completions behind, so idle workers and the sysmon reap them through poll().
  */
 class IoUringBackend : public ThreadPoolFileOps {
    public:
@@ -37,18 +45,31 @@ class IoUringBackend : public ThreadPoolFileOps {
     void stop() override;
     void submit(IoOp& op) override;
     int flush() override;
+    std::size_t poll(int timeout_ms) override;
+    void attach_thread() override;
+    void detach_thread() override;
+    void* prepare_park() override;
+    void park(void* token, std::int64_t timeout_ms) override;
+    void unpark(void* token) noexcept override;
+    void finish_park(void* token) override;
     dstd::String name() const override { return "io_uring"; }
 
-    std::size_t in_flight() const override {
-        return ThreadPoolFileOps::in_flight() +
-               in_flight_.load(std::memory_order_acquire);
-    }
+    std::size_t in_flight() const override;
 
     /// Cancels the reads, accepts and sends on the ring, on every kernel, and
     /// fails those submitted afterwards with -ECANCELED.
     void cancel_pending() override;
 
    private:
+    struct WorkerRing;
+
+    WorkerRing* calling_worker_ring(IoOpKind kind) noexcept;
+    void fill_worker(WorkerRing& worker) noexcept;
+    void flush_worker(WorkerRing& worker) noexcept;
+    void quiet_worker(WorkerRing& worker) noexcept;
+    static std::size_t drain_worker(WorkerRing& worker) noexcept;
+    static std::size_t reap_worker(WorkerRing& worker) noexcept;
+
     void ring_loop() noexcept;
     void wake() noexcept;
     void take_incoming() noexcept;
@@ -75,6 +96,12 @@ class IoUringBackend : public ThreadPoolFileOps {
     std::atomic<bool> cancelling_{false};
     std::atomic<bool> cancel_requested_{false};
     std::atomic<bool> stopping_{false};
+
+    // Grows only, until stop(). A retired worker's ring is reused, so thieves
+    // never read freed memory.
+    std::mutex worker_rings_mutex_;
+    dstd::UniquePtr<WorkerRing> worker_rings_owned_;
+    std::atomic<WorkerRing*> worker_rings_{nullptr};
 };
 
 }  // namespace dftracer::utils::runtime::io

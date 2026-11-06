@@ -185,8 +185,8 @@ TEST_CASE("Thread::try_start runs the body or reports an error") {
 }
 
 TEST_CASE("Thread takes a stack size at start") {
-    // Above the default stack, because glibc reuses a cached stack that is bigger
-    // than the request and then reports the bigger size.
+    // Above the default stack, because glibc reuses a cached stack that is
+    // bigger than the request and then reports the bigger size.
     constexpr std::size_t WANT = 64 * 1024 * 1024;
     std::size_t got = 0;
     dstd::Thread t(

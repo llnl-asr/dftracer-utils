@@ -758,6 +758,7 @@ use_precompiled_header(dftracer_utils_runtime_objects)
 # +++++++++++++++++++++++++++++++++++++++++
 
 set(DFTRACER_UTILS_STORE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/committer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/crc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/data_file.cpp
@@ -2589,6 +2590,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/plugin_host.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/store.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/store.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/task_handle.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/task_handle.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/memoryview_batch.cpp

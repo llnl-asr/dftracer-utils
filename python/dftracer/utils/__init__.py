@@ -62,6 +62,7 @@ from .lazyframe import (  # noqa: F401
 from .live_trace_viewer import LiveTraceViewer  # noqa: F401
 from .runtime import Runtime, TaskHandle  # noqa: F401
 from .series import Series  # noqa: F401
+from .store import Store  # noqa: F401
 from .time_unit import TimeUnit  # noqa: F401
 from .trace_viewer import Containment, Handle, Session, TraceViewer  # noqa: F401
 
@@ -136,6 +137,7 @@ __all__ = [
     "GroupKey",
     "Phase",
     "TimeUnit",
+    "Store",
     "TraceViewer",
     "LiveTraceViewer",
     "Containment",

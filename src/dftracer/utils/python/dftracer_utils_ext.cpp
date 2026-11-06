@@ -25,6 +25,7 @@
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/series.h>
+#include <dftracer/utils/python/store.h>
 #include <dftracer/utils/python/streaming_iterator.h>
 #include <dftracer/utils/python/task_handle.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
@@ -184,6 +185,7 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::init_indexer(m) < 0) return NULL;
     if (dftracer::utils::python::init_task_handle(m) < 0) return NULL;
     if (dftracer::utils::python::init_runtime(m) < 0) return NULL;
+    if (dftracer::utils::python::init_store(m) < 0) return NULL;
     if (dftracer::utils::python::init_memoryview_batch(m) < 0) return NULL;
     if (dftracer::utils::python::init_trace_reader_iterator(m) < 0) return NULL;
     if (dftracer::utils::python::init_arrow_streaming_iterator(m) < 0)

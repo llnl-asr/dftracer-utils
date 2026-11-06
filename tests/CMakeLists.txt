@@ -616,6 +616,7 @@ endforeach()
 
 set(TEST_C_SOURCES
     index/test_indexer_abi.c
+    store/test_store_abi.c
     )
 
 foreach (test_file ${TEST_C_SOURCES})

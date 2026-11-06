@@ -15,6 +15,13 @@ dftu_duql | derives dstd::HeapObject
 dftu_indexer | derives dstd::HeapObject
 dftu_indexer_file_list | derives dstd::HeapObject
 dftu_view | derives dstd::HeapObject
+dftu_store_s | derives dstd::HeapObject
+dftu_store_ns_s | derives dstd::HeapObject
+dftu_store_batch_s | derives dstd::HeapObject
+dftu_store_snapshot_s | derives dstd::HeapObject
+dftu_store_cursor_s | derives dstd::HeapObject
+dftu_store_value_s | derives dstd::HeapObject
+dftu_store_value_list_s | derives dstd::HeapObject
 src/dftracer/utils/dataframe/agg/seed.cpp | AggState | derives dstd::HeapObject
 src/dftracer/utils/dataframe/agg/serialize.cpp | AggState | derives dstd::HeapObject
 src/dftracer/utils/dataframe/agg/state.cpp | AggState | derives dstd::HeapObject

@@ -32,6 +32,12 @@ Tune threads and memory, and build your own concurrent workflows on the coroutin
 
       Change how I/O runs or where the bytes live.
 
+   .. grid-item-card:: Store your own data
+      :link: runtime/key-value-store
+      :link-type: doc
+
+      Atomic batches, snapshots and merging small files.
+
 .. toctree::
    :hidden:
 
@@ -39,3 +45,4 @@ Tune threads and memory, and build your own concurrent workflows on the coroutin
    runtime/memory-budget
    pipelines/patterns
    runtime/custom-io
+   runtime/key-value-store

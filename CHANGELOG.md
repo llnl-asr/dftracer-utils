@@ -312,6 +312,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add a public key-value store API in `store/store.h`, a C ABI in `store/abi.h` and `dftracer.utils.Store` in Python.
+- Add `Batch::erase` and `Batch::erase_range`, which apply in the same record as the puts of the batch.
+- Add `Store::pack`, which merges small closed data files into one and deletes the files it replaced after a keep time.
+- Make a `Store` handle that a fork child inherited fail each call with `ForkedHandle`, and join and close nothing when the child drops it.
+- Add shared namespaces to the store: each scope holds the keys of every writer, where a plain namespace shows only the newest writer of a scope.
+- Encode keys and values of the Python store with an order-preserving format by default, and decode them on read: `None`, `bool`, `int`, `float`, `str`, `bytes`, `tuple`, `list`, `dict` and classes that define `store_type_id`, `to_store` and `from_store` or use `register_type`.
+  Pass `raw=True` to `Store.namespace` for bytes-like keys and values that C++ or the C ABI reads or writes. A namespace with a fold is raw.
+  A namespace is generic in its key and value types, and `key_type` and `value_type` check them at run time.
 - Add a public `IoBackend` with one `submit(IoOp&)` call, so a program can run its own I/O backend through `ExecutorConfig::io_backend_factory`.
 - Add a public `FileSystem` that `runtime::fs` runs on, so `find`, `walk`, `stat`, `read_file` and `write_file` work on any store that `register_file_system` adds for a path scheme such as `s3://`.
   A `file://` path is local.
@@ -462,6 +470,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix higher peak memory in `dftracer_index` and other trace tools: a thread now returns a freed block above 32 KiB to the thread that allocated it at once.
+- Stop the false "cannot be read" warning when a store reader opens a data file that another process has just created.
+- Fix a link failure for static `pkg-config` users of a Debug build, where the archive was named `libyaml-cppd.a`.
 - Fix static linking from `pkg-config --static --libs` with pkg-config 0.29, which printed each library after the archives it needs.
 - Fix store writes that fail with "operation canceled" on Linux with io_uring when the thread that started them exits.
 - Fix a read blocked on a pipe or socket that stayed blocked through shutdown on Linux kernels older than 5.19 with io_uring.

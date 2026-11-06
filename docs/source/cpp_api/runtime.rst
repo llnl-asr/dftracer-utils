@@ -21,6 +21,7 @@ How the runtime, executors, tasks, and pipeline relate:
 .. mermaid:: /_generated/runtime.mmd
 
 .. include:: /cpp_api/_generated/core.rst.inc
+.. include:: /cpp_api/_generated/runtime.fs.rst.inc
 .. include:: /cpp_api/_generated/common.rst.inc
 .. include:: /cpp_api/_generated/common.logger.rst.inc
 .. include:: /cpp_api/_generated/memory.rst.inc

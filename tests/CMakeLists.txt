@@ -496,6 +496,8 @@ foreach(test_file ${TEST_CPP_SOURCES})
   set(default_test_timeout 120)
   if(DFTRACER_UTILS_ENABLE_TSAN)
     set(default_test_timeout 1800)
+  elseif(DFTRACER_UTILS_ENABLE_ASAN)
+    set(default_test_timeout 600)
   endif()
 
   set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${default_test_timeout})
@@ -1106,6 +1108,17 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         "-DLINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}" -P
         ${CMAKE_CURRENT_SOURCE_DIR}/package_consumer/run.cmake)
     if(DFTRACER_UTILS_BUILD_STATIC)
+      # An archive built with a sanitizer needs its runtime in the consumer.
+      set(pkgconfig_consumer_flags "${CMAKE_CXX_FLAGS}")
+      if(DFTRACER_UTILS_ENABLE_ASAN)
+        string(APPEND pkgconfig_consumer_flags " -fsanitize=address")
+      endif()
+      if(DFTRACER_UTILS_ENABLE_UBSAN)
+        string(APPEND pkgconfig_consumer_flags " -fsanitize=undefined")
+      endif()
+      if(DFTRACER_UTILS_ENABLE_TSAN)
+        string(APPEND pkgconfig_consumer_flags " -fsanitize=thread")
+      endif()
       add_test(
         NAME test_pkgconfig_static_consumer
         COMMAND
@@ -1113,7 +1126,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
           -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/package_consumer
           -DWORK_DIR=${CMAKE_BINARY_DIR}/test_pkgconfig_static_consumer
           -DPREFIX=${TEST_INSTALL_PREFIX} -DCXX_COMPILER=${CMAKE_CXX_COMPILER}
-          "-DCXX_FLAGS=${CMAKE_CXX_FLAGS}" -P
+          "-DCXX_FLAGS=${pkgconfig_consumer_flags}" -P
           ${CMAKE_CURRENT_SOURCE_DIR}/package_consumer/run_pkgconfig_static.cmake)
       set_tests_properties(
         test_pkgconfig_static_consumer

@@ -44,7 +44,7 @@ struct Owner {
 void on_release(void* ctx) {
     auto* o = static_cast<Owner*>(ctx);
     ++*o->released;
-    delete o;
+    dstd::Delete<Owner>{}(o);
 }
 
 void put_view(std::uint8_t* v, const dstd::String& s, std::int32_t index,

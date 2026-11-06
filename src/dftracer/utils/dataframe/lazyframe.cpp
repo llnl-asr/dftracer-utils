@@ -1620,7 +1620,7 @@ class HostCursorBridge {
         return task_to_abi(self_->next_task(max_rows, out));
     }
     static void destroy_thunk(void* self) {
-        delete static_cast<HostCursorBridge*>(self);
+        dstd::Delete<HostCursorBridge>{}(static_cast<HostCursorBridge*>(self));
     }
 
     coro::CoroTask<void> narrow_task(Expr predicate, std::int32_t* out) {

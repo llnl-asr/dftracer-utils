@@ -505,8 +505,11 @@ function(need_libdeflate)
     # The static lib links into our shared libraries, so it must be PIC (GNU ld
     # rejects non-PIC objects in a shared object; macOS ld tolerates it).
     if(TARGET libdeflate_static)
+      # Each of our shared libraries holds its own copy, so its internal data
+      # stays hidden or the copies bind to one symbol, an ODR violation in ASan.
       set_target_properties(libdeflate_static
-                            PROPERTIES POSITION_INDEPENDENT_CODE ON)
+                            PROPERTIES POSITION_INDEPENDENT_CODE ON
+                                       C_VISIBILITY_PRESET hidden)
       # Its header is not installed.
       set_target_properties(libdeflate_static PROPERTIES PUBLIC_HEADER "")
       install_dependency_archive(libdeflate libdeflate:: EXPORT_SET libdeflate_exported_targets TARGETS libdeflate_static)
@@ -1128,6 +1131,8 @@ function(need_yaml_cpp)
       "YAML_CPP_INSTALL OFF"
       FORCE
       YES)
+    # Libs.private names -lyaml-cpp in every build type.
+    set_target_properties(yaml-cpp PROPERTIES DEBUG_POSTFIX "")
     install_dependency_archive(yaml-cpp yaml-cpp:: TARGETS yaml-cpp)
   endif()
 endfunction()

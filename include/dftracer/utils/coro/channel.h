@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <memory>
 #include <mutex>
+#include <type_traits>
 #include <utility>
 
 namespace dftracer::utils::coro {
@@ -35,9 +36,7 @@ class BasicChannelConsumer;
  *
  * Send and receive take no lock on the fast path. A coroutine that cannot go on
  * parks under the lock and an opposite operation resumes it. Items from one
- * producer arrive in order on @ref Channel. @ref UnboundedChannel keeps that
- * order only per thread, so a producer that moves between threads can see its
- * items reordered.
+ * producer arrive in order.
  *
  * The stream ends for receivers after @ref close or after the last registered
  * producer leaves, and only when every sent item is received.
@@ -541,9 +540,16 @@ class BasicChannel : public std::enable_shared_from_this<BasicChannel<Queue>> {
     }
 
    public:
+    /// An @ref UnboundedChannel.
+    BasicChannel()
+        requires std::is_default_constructible_v<Queue>
+    = default;
+
     /// @param capacity The exact capacity of a @ref Channel, at least 1 (0 logs
-    ///        and aborts), or the first block size of an @ref UnboundedChannel.
-    explicit BasicChannel(std::size_t capacity) : queue_(capacity) {}
+    ///        and aborts).
+    explicit BasicChannel(std::size_t capacity)
+        requires std::is_constructible_v<Queue, std::size_t>
+        : queue_(capacity) {}
 
     ~BasicChannel() { close(); }
 
@@ -552,8 +558,16 @@ class BasicChannel : public std::enable_shared_from_this<BasicChannel<Queue>> {
     BasicChannel(BasicChannel&&) = delete;
     BasicChannel& operator=(BasicChannel&&) = delete;
 
-    static dstd::SharedPtr<BasicChannel> make(std::size_t capacity) {
+    static dstd::SharedPtr<BasicChannel> make(std::size_t capacity)
+        requires std::is_constructible_v<Queue, std::size_t>
+    {
         return dstd::make_shared<BasicChannel>(capacity);
+    }
+
+    static dstd::SharedPtr<BasicChannel> make()
+        requires std::is_default_constructible_v<Queue>
+    {
+        return dstd::make_shared<BasicChannel>();
     }
 
     /// Returns a send handle with a producer slot already counted. Take it
@@ -818,9 +832,8 @@ dstd::SharedPtr<Channel<T>> make_channel(std::size_t capacity) {
 }
 
 template <typename T>
-dstd::SharedPtr<UnboundedChannel<T>> make_unbounded_channel(
-    std::size_t initial_size = 1024) {
-    return UnboundedChannel<T>::make(initial_size);
+dstd::SharedPtr<UnboundedChannel<T>> make_unbounded_channel() {
+    return UnboundedChannel<T>::make();
 }
 
 }  // namespace dftracer::utils::coro

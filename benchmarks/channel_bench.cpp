@@ -34,6 +34,7 @@ struct Case {
     const char* name;
     std::size_t producers;
     std::size_t consumers;
+    /// 0 means an unbounded channel.
     std::size_t capacity;
 };
 
@@ -45,10 +46,15 @@ constexpr Case CASES[] = {
     {"spmc_8_cap256", 1, 8, 256},
     {"mpmc_4_cap64", 4, 4, 64},
     {"mpmc_16_cap1024", 16, 16, 1024},
+    {"unb_spsc", 1, 1, 0},
+    {"unb_mpsc_8", 8, 1, 0},
+    {"unb_spmc_8", 1, 8, 0},
+    {"unb_mpmc_4", 4, 4, 0},
+    {"unb_mpmc_16", 16, 16, 0},
 };
 
-coro::CoroTask<void> produce(coro::Channel<std::uint64_t>& channel,
-                             coro::ChannelProducer<std::uint64_t> producer,
+template <typename Channel, typename Producer>
+coro::CoroTask<void> produce(Channel& channel, Producer producer,
                              std::uint64_t first, std::uint64_t count) {
     auto guard = producer.guard();
     for (std::uint64_t i = 0; i < count; ++i) {
@@ -57,8 +63,8 @@ coro::CoroTask<void> produce(coro::Channel<std::uint64_t>& channel,
     }
 }
 
-coro::CoroTask<void> consume(coro::Channel<std::uint64_t>& channel,
-                             std::atomic<std::uint64_t>& sum,
+template <typename Channel>
+coro::CoroTask<void> consume(Channel& channel, std::atomic<std::uint64_t>& sum,
                              std::atomic<std::uint64_t>& seen) {
     std::uint64_t local_sum = 0;
     std::uint64_t local_seen = 0;
@@ -72,10 +78,11 @@ coro::CoroTask<void> consume(coro::Channel<std::uint64_t>& channel,
     seen.fetch_add(local_seen, std::memory_order_relaxed);
 }
 
-coro::CoroTask<void> run_case(const Case& c, std::uint64_t items,
-                              std::atomic<std::uint64_t>& sum,
-                              std::atomic<std::uint64_t>& seen) {
-    coro::Channel<std::uint64_t> channel(c.capacity);
+template <typename Channel>
+coro::CoroTask<void> run_on(Channel& channel, const Case& c,
+                            std::uint64_t items,
+                            std::atomic<std::uint64_t>& sum,
+                            std::atomic<std::uint64_t>& seen) {
     coro::Scope scope;
     const std::uint64_t per_producer = items / c.producers;
     for (std::size_t p = 0; p < c.producers; ++p) {
@@ -86,6 +93,18 @@ coro::CoroTask<void> run_case(const Case& c, std::uint64_t items,
         scope.spawn(consume(channel, sum, seen));
     }
     co_await scope.join();
+}
+
+coro::CoroTask<void> run_case(const Case& c, std::uint64_t items,
+                              std::atomic<std::uint64_t>& sum,
+                              std::atomic<std::uint64_t>& seen) {
+    if (c.capacity == 0) {
+        coro::UnboundedChannel<std::uint64_t> channel;
+        co_await run_on(channel, c, items, sum, seen);
+    } else {
+        coro::Channel<std::uint64_t> channel(c.capacity);
+        co_await run_on(channel, c, items, sum, seen);
+    }
 }
 
 }  // namespace

@@ -37,6 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Add `coro::sleep`, `with_timeout`, `with_deadline`, `retry`, `when_all_settled`, `first_success`, `parallel_map`, `parallel_map_unordered`, `AsyncEvent` and `AsyncLatch`.
 - Make `coro::Channel` a lock-free ring on the send and receive fast paths, 3 to 60 times faster in `channel_bench` at 48 and 96 threads.
   Items of one producer now arrive in order.
+- Make `coro::UnboundedChannel` a queue of linked blocks with one global order, 2.5 to 12 times faster in `channel_bench` on most rows, and 13% slower with 16 senders and 16 receivers on 48 threads.
+  `make_unbounded_channel` no longer takes a size.
 - Require a capacity of at least 1 for `coro::Channel`, where 0 meant unbounded, and add `coro::UnboundedChannel` with `make_unbounded_channel` for that case.
   `dftracer_replay --channel-capacity 0` is now an error.
 - Install only our own `include/` tree: the headers of nanoarrow, flatcc, zstd, libdeflate, pcre2, yaml-cpp and doctest no longer reach the install prefix, nor do their pkg-config files, man pages and documentation.

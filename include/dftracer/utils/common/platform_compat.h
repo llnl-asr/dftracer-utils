@@ -153,4 +153,13 @@ extern "C" void __tsan_release(void *);
 #define DFTRACER_UTILS_PRINTF_FORMAT(FMT_INDEX, ARG_INDEX)
 #endif
 
+/// Tells the CPU that this thread spins, so a contended cache line settles.
+#if defined(__x86_64__) || defined(__i386__)
+#define DFTRACER_UTILS_CPU_PAUSE() __builtin_ia32_pause()
+#elif defined(__aarch64__)
+#define DFTRACER_UTILS_CPU_PAUSE() __asm__ __volatile__("yield")
+#else
+#define DFTRACER_UTILS_CPU_PAUSE() ((void)0)
+#endif
+
 #endif  // DFTRACER_UTILS_COMMON_PLATFORM_COMPAT_H

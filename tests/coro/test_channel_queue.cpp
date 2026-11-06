@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -255,7 +256,7 @@ TEST_CASE("RingQueue loses and duplicates nothing when a close races pushes") {
 }
 
 TEST_CASE("UnboundedQueue loses and duplicates nothing when a close races") {
-    UnboundedQueue<std::uint64_t> queue(16);
+    UnboundedQueue<std::uint64_t> queue;
     check_close_race(queue);
 }
 
@@ -366,6 +367,100 @@ TEST_CASE("Channel blocking_receive sees every item, then the end") {
     }());
     reader.join();
     CHECK(seen == 2 * PER_PRODUCER);
+}
+
+TEST_CASE("UnboundedQueue keeps one order and its size across blocks") {
+    UnboundedQueue<std::uint64_t> queue;
+    constexpr std::uint64_t COUNT = 1000;
+    dstd::Optional<std::uint64_t> out;
+    CHECK(queue.try_pop(out) == PopStatus::Empty);
+    for (std::uint64_t i = 0; i < COUNT; ++i) {
+        std::uint64_t item = i;
+        REQUIRE(queue.try_push(item) == PushStatus::Ok);
+        CHECK(queue.size() == i + 1);
+    }
+    for (std::uint64_t i = 0; i < COUNT; ++i) {
+        REQUIRE(queue.try_pop(out) == PopStatus::Ok);
+        CHECK(*out == i);
+        CHECK(queue.size() == COUNT - i - 1);
+    }
+    CHECK(queue.try_pop(out) == PopStatus::Empty);
+}
+
+TEST_CASE("UnboundedQueue refuses a push after close and drains first") {
+    UnboundedQueue<std::uint64_t> queue;
+    constexpr std::uint64_t COUNT = 100;
+    for (std::uint64_t i = 0; i < COUNT; ++i) {
+        std::uint64_t item = i;
+        REQUIRE(queue.try_push(item) == PushStatus::Ok);
+    }
+    queue.mark_closed();
+    std::uint64_t refused = 7;
+    CHECK(queue.try_push(refused) == PushStatus::Closed);
+    CHECK(refused == 7);
+    dstd::Optional<std::uint64_t> out;
+    for (std::uint64_t i = 0; i < COUNT; ++i) {
+        REQUIRE(queue.try_pop(out) == PopStatus::Ok);
+        CHECK(*out == i);
+    }
+    CHECK(queue.try_pop(out) == PopStatus::Closed);
+}
+
+TEST_CASE("UnboundedQueue destroys the items left in it") {
+    auto counter = dstd::make_shared<int>(0);
+    {
+        UnboundedQueue<dstd::SharedPtr<int>> queue;
+        for (int i = 0; i < 100; ++i) {
+            auto item = counter;
+            REQUIRE(queue.try_push(item) == PushStatus::Ok);
+            CHECK(item == nullptr);
+        }
+        dstd::Optional<dstd::SharedPtr<int>> out;
+        for (int i = 0; i < 40; ++i) {
+            REQUIRE(queue.try_pop(out) == PopStatus::Ok);
+        }
+        out.reset();
+        CHECK(counter.use_count() == 61);
+    }
+    CHECK(counter.use_count() == 1);
+}
+
+TEST_CASE("UnboundedQueue hands each item to one consumer under threads") {
+    UnboundedQueue<std::uint64_t> queue;
+    constexpr std::uint64_t PER_PRODUCER = 20000;
+    constexpr std::uint64_t PRODUCERS = 4;
+    std::atomic<std::uint64_t> sum{0};
+    std::atomic<std::uint64_t> seen{0};
+    dstd::Vector<dstd::Thread> threads;
+    for (std::uint64_t p = 0; p < PRODUCERS; ++p) {
+        threads.emplace_back([&queue, p] {
+            for (std::uint64_t i = 1; i <= PER_PRODUCER; ++i) {
+                std::uint64_t item = p * PER_PRODUCER + i;
+                CHECK(queue.try_push(item) == PushStatus::Ok);
+            }
+        });
+    }
+    for (int c = 0; c < 4; ++c) {
+        threads.emplace_back([&] {
+            dstd::Optional<std::uint64_t> out;
+            for (;;) {
+                const auto status = queue.try_pop(out);
+                if (status == PopStatus::Closed) return;
+                if (status == PopStatus::Empty) {
+                    std::this_thread::yield();
+                    continue;
+                }
+                sum.fetch_add(*out, std::memory_order_relaxed);
+                seen.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (std::uint64_t p = 0; p < PRODUCERS; ++p) threads[p].join();
+    queue.mark_closed();
+    for (std::size_t t = PRODUCERS; t < threads.size(); ++t) threads[t].join();
+    const std::uint64_t total = PER_PRODUCER * PRODUCERS;
+    CHECK(seen.load() == total);
+    CHECK(sum.load() == total * (total + 1) / 2);
 }
 
 TEST_CASE("UnboundedChannel never refuses and ends after the last producer") {

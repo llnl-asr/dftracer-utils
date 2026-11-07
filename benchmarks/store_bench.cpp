@@ -6,7 +6,8 @@
 // amplification of the write, the cost of a commit as the number of scopes
 // grows, the read path (open, point get, scope scan and full scan) on the data
 // the shared write case left behind, and a fold scan over many scopes, the way
-// an index query sums per-file aggregates over every file of a trace set.
+// an index query sums per-file aggregates over every file of a trace set, and
+// an index that grows by many publishes to a shared namespace.
 //
 //   store_bench --smoke
 //
@@ -16,6 +17,9 @@
 //
 //   store_bench --dir /private/tmp --case fold --fold-scopes 1000,8404
 //   --fold-keys 1024
+//
+//   store_bench --dir /private/tmp --case grow --grow-keys 1000000
+//   --copies 1,10,100,1000
 //
 //   store_bench --dir /p/a --keep /p/kept --threads 96 --payload-mib 4096
 //   store_bench --dir /p/b --reuse /p/kept --threads 96 --payload-mib 4096
@@ -42,6 +46,16 @@
 // scope count and part count: its scan reads scopes * keys fold entries and
 // yields one output key per distinct key, so ns_per_key divides by keys, and 1,
 // 4 and 16 parts show how one fold scan scales.
+//
+// The grow case writes --grow-keys chunk keys, big-endian and rising, into one
+// scope of a shared namespace in C refreshes, for each C of --copies. A refresh
+// is a new writer, a batch of the next keys and one 4 KiB `meta` value that
+// the newest refresh wins, a commit, a publish and the close of the writer. A
+// grow row names its copies, the state (grown, then packed when Store::pack
+// accepts the namespace) and one operation. refresh is the mean per refresh,
+// with the p99 in extra. The reads run on a snapshot opened after the writes,
+// so the page cache of the operating system is warm. The baseline rows write
+// the same keys through one writer into a namespace that is not shared.
 
 #include <bench_counters.h>
 #include <dftracer/utils/common/constants.h>
@@ -68,6 +82,7 @@
 #include <dftracer/utils/store/extent_size.h>
 #include <dftracer/utils/store/io_fault.h>
 #include <dftracer/utils/store/snapshot.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/store/writer.h>
 
 #include <algorithm>
@@ -132,6 +147,15 @@ constexpr std::uint64_t FOLD_KEY_INVALID = ~std::uint64_t{0};
 constexpr std::uint64_t FOLD_VALUE_MODULUS = 1000;
 /// The parts a fold scan is split into: the whole scan, then two meshes.
 constexpr std::uint64_t FOLD_THREADS[] = {1, 4, 16};
+/// The grow case: chunk keys are big-endian chunk numbers, and every refresh
+/// rewrites the summary value.
+constexpr std::size_t GROW_KEY_BYTES = 8;
+constexpr std::size_t GROW_META_BYTES = 4096;
+constexpr char GROW_META_KEY[] = "meta";
+constexpr std::size_t GROW_META_KEY_BYTES = sizeof(GROW_META_KEY) - 1;
+constexpr std::uint64_t GROW_SCAN_KEYS = 1000;
+/// One range scan for every this many point gets, as each reads GROW_SCAN_KEYS.
+constexpr std::uint64_t GETS_PER_GROW_SCAN = 100;
 
 const char* filesystem_name(dftracer::utils::common::FilesystemKind kind) {
     switch (kind) {
@@ -168,6 +192,8 @@ struct Options {
     std::uint64_t gets = POINT_GETS;
     dstd::Vector<std::uint64_t> fold_scopes{1000, 8404};
     std::uint64_t fold_keys = 1024;
+    std::uint64_t grow_keys = 1000000;
+    dstd::Vector<std::uint64_t> copies{1, 10, 100, 1000};
     dstd::String which = "all";
     dstd::String keep;
     dstd::String reuse;
@@ -187,6 +213,8 @@ void apply_smoke(Options& opt) {
     opt.gets = POINT_GETS_SMOKE;
     opt.fold_scopes = {50};
     opt.fold_keys = 64;
+    opt.grow_keys = 20000;
+    opt.copies = {1, 10, 100};
     opt.which = "all";
 }
 
@@ -296,6 +324,16 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 return false;
             }
             opt.fold_keys = parsed[0];
+        } else if (arg == "--grow-keys") {
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
+            if (parsed.size() != 1 || parsed[0] == 0) return false;
+            opt.grow_keys = parsed[0];
+        } else if (arg == "--copies") {
+            opt.copies = parse_u64_list(value());
+            if (opt.copies.empty()) return false;
+            for (std::uint64_t copies : opt.copies) {
+                if (copies == 0) return false;
+            }
         } else if (arg == "--keep") {
             opt.keep = value();
             if (opt.keep.empty()) return false;
@@ -308,7 +346,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (arg == "--case") {
             const dstd::String which = value();
             if (which != "write" && which != "query" && which != "scopes" &&
-                which != "fold" && which != "all") {
+                which != "fold" && which != "grow" && which != "all") {
                 return false;
             }
             opt.which = which;
@@ -328,7 +366,8 @@ void usage() {
            "                   [--keys-per-batch N] [--scopes 10,1000,100000]\n"
            "                   [--commits N] [--gets N]\n"
            "                   [--fold-scopes 1000,8404] [--fold-keys N]\n"
-           "                   [--case write|query|scopes|fold|all]\n"
+           "                   [--grow-keys N] [--copies 1,10,100,1000]\n"
+           "                   [--case write|query|scopes|fold|grow|all]\n"
            "                   [--keep PATH | --reuse PATH] [--codec "
            "zstd|none]\n"
            "                   [--space DIR]\n";
@@ -575,6 +614,59 @@ std::uint64_t directory_bytes(const dstd::String& dir) {
     return total;
 }
 
+struct DiskUse {
+    std::uint64_t bytes = 0;
+    std::uint64_t files = 0;
+};
+
+/// The regular files under `dir` at any depth, and their bytes.
+DiskUse disk_use(const dstd::String& dir) {
+    DiskUse use;
+    auto walked = dftracer::utils::dstd::fs::walk(
+        dir, [&](dftracer::utils::dstd::PathView p,
+                 dftracer::utils::dstd::fs::FileKind kind) {
+            if (kind == dftracer::utils::dstd::fs::FileKind::File) {
+                auto st = dftracer::utils::dstd::fs::stat(p);
+                if (st) {
+                    use.bytes += st->size;
+                    ++use.files;
+                }
+            }
+            return dftracer::utils::dstd::fs::WalkAction::Continue;
+        });
+    if (!walked) {
+        std::cerr << "store_bench: cannot walk " << dir << ": "
+                  << to_std(walked.error()) << "\n";
+        std::exit(1);
+    }
+    return use;
+}
+
+/// The key of chunk `chunk`: eight big-endian bytes, so the keys sort by chunk
+/// number and `meta` sorts after every one.
+std::array<std::uint8_t, GROW_KEY_BYTES> grow_key(std::uint64_t chunk) {
+    std::array<std::uint8_t, GROW_KEY_BYTES> key{};
+    for (std::size_t at = GROW_KEY_BYTES; at-- > 0;) {
+        key[at] = static_cast<std::uint8_t>(chunk & 0xFF);
+        chunk >>= 8;
+    }
+    return key;
+}
+
+/// The summary value of refresh `refresh`: its number, then filler.
+dstd::String grow_meta(std::uint64_t refresh) {
+    dstd::String meta(GROW_META_BYTES, 'm');
+    dftracer::utils::dstd::write_u64_le(
+        reinterpret_cast<std::uint8_t*>(meta.data()), refresh);
+    return meta;
+}
+
+bool same_bytes(ByteView bytes, const dstd::String& expected) {
+    return dftracer::utils::dstd::StringView(
+               reinterpret_cast<const char*>(bytes.data()), bytes.size()) ==
+           dftracer::utils::dstd::StringView(expected.data(), expected.size());
+}
+
 /// The keys of one case, and which of them a commit wrote or a key absent from
 /// every scope: what the query case reads and checks.
 struct Workload {
@@ -676,6 +768,16 @@ struct FoldRow {
     std::uint64_t mismatches = 0;
     /// What the snapshot had read when the scan of this row finished.
     store::engine::ReadStats reads;
+};
+
+struct GrowRow {
+    dstd::String copies;
+    dstd::String state;
+    dstd::String op;
+    std::uint64_t count = 0;
+    double ms_total = 0;
+    double ns_per_item = 0;
+    dstd::String extra;
 };
 
 /// One timed fold scan: its parts added, against the sums written.
@@ -796,6 +898,7 @@ struct Bench {
     bool query_header_written = false;
     bool scope_header_written = false;
     bool fold_header_written = false;
+    bool grow_header_written = false;
     bool comment_written = false;
     bool failed = false;
     std::uint32_t extent_size = 0;
@@ -930,6 +1033,12 @@ struct Bench {
         std::cout << "scopes\tns_new_scope\tns_commit\n";
     }
 
+    void ensure_grow_header() {
+        if (grow_header_written) return;
+        grow_header_written = true;
+        std::cout << "copies\tstate\top\tcount\tms_total\tns_per_item\textra\n";
+    }
+
     void ensure_fold_header() {
         if (fold_header_written) return;
         fold_header_written = true;
@@ -960,6 +1069,14 @@ struct Bench {
     void print_query_row(const QueryRow& row);
     void print_scope_row(const ScopeRow& row);
     void print_fold_row(const FoldRow& row);
+    void print_grow_row(const GrowRow& row);
+    NamespaceSpec grow_spec(bool shared) const;
+    bool run_grow_case(const dstd::String& label, std::uint64_t copies,
+                       bool shared, bool do_pack);
+    bool grow_reads(const dstd::String& label, const char* state,
+                    const dstd::String& dir,
+                    const NamespaceSpec& namespace_spec, const ScopeKey& scope,
+                    std::uint64_t total, std::uint64_t last_refresh);
     bool check_write_row(const WriteRow& row);
     std::uint64_t count_keys(const dstd::String& dir);
     void close_writers(Runtime& runtime,
@@ -1055,6 +1172,16 @@ void Bench::print_fold_row(const FoldRow& row) {
         fixed(row.ms_open, 3), '\t', fixed(row.ms_scan, 3), '\t',
         fixed(row.ns_per_key, 1), '\t', row.mismatches, '\t',
         format_read_stats(row.reads));
+    std::cout << line << '\n';
+}
+
+void Bench::print_grow_row(const GrowRow& row) {
+    ensure_grow_header();
+    ensure_comment();
+    const dstd::String line = dftracer::utils::common::str_cat(
+        row.copies, '\t', row.state, '\t', row.op, '\t', row.count, '\t',
+        fixed(row.ms_total, 3), '\t', fixed(row.ns_per_item, 1), '\t',
+        row.extra);
     std::cout << line << '\n';
 }
 
@@ -1814,6 +1941,329 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
     return ok;
 }
 
+NamespaceSpec Bench::grow_spec(bool shared) const {
+    NamespaceSpec namespace_spec = spec();
+    namespace_spec.name = dstring("bench-grow");
+    namespace_spec.shared = shared;
+    return namespace_spec;
+}
+
+GrowRow grow_row(const dstd::String& label, const char* state, const char* op,
+                 std::uint64_t count, std::uint64_t nanos, dstd::String extra) {
+    GrowRow row;
+    row.copies = label;
+    row.state = state;
+    row.op = op;
+    row.count = count;
+    row.ms_total = static_cast<double>(nanos) / 1e6;
+    row.ns_per_item =
+        count > 0 ? static_cast<double>(nanos) / static_cast<double>(count) : 0;
+    row.extra = std::move(extra);
+    return row;
+}
+
+bool Bench::grow_reads(const dstd::String& label, const char* state,
+                       const dstd::String& dir,
+                       const NamespaceSpec& namespace_spec,
+                       const ScopeKey& scope, std::uint64_t total,
+                       std::uint64_t last_refresh) {
+    const auto open_started = std::chrono::steady_clock::now();
+    auto opened = Snapshot::open(dir);
+    const std::uint64_t open_nanos =
+        nanos_between(open_started, std::chrono::steady_clock::now());
+    if (!opened) {
+        fail("snapshot of " + dir + ": " + to_std(opened.error()));
+        return false;
+    }
+    Snapshot snapshot = std::move(*opened);
+    print_grow_row(
+        grow_row(label, state, "open", 1, open_nanos,
+                 format_stats(snapshot.open_stats(), snapshot.read_stats())));
+    const DiskUse use = disk_use(dir);
+    print_grow_row(
+        grow_row(label, state, "disk", use.files, 0,
+                 dftracer::utils::common::str_cat("disk_bytes=", use.bytes,
+                                                  " files=", use.files)));
+
+    const ValuePool values(opt.value_bytes, opt.trace_values);
+    const dstd::String expected_meta = grow_meta(last_refresh);
+    const ByteView meta_key{GROW_META_KEY, GROW_META_KEY_BYTES};
+    bool ok = true;
+
+    std::uint64_t mismatches = 0;
+    {
+        std::mt19937_64 random(QUERY_SEED);
+        const auto started = std::chrono::steady_clock::now();
+        for (std::uint64_t at = 0; at < opt.gets; ++at) {
+            const auto key = grow_key(random() % total);
+            auto found = snapshot.get(namespace_spec, scope,
+                                      ByteView{key.data(), key.size()});
+            if (!found) {
+                fail("get of " + dir + ": " + to_std(found.error()));
+                return false;
+            }
+            if (!found->has_value() ||
+                !same_bytes((*found)->bytes(),
+                            values.for_key(key.data(), key.size()))) {
+                ++mismatches;
+            }
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        print_grow_row(grow_row(label, state, "get_chunk", opt.gets, nanos,
+                                "mismatches=" + dstd::to_string(mismatches) +
+                                    " " +
+                                    format_read_stats(snapshot.read_stats())));
+    }
+    if (mismatches > 0) {
+        fail(dstd::to_string(mismatches) + " chunk gets of " + dir +
+             " did not return the value written");
+        ok = false;
+    }
+
+    mismatches = 0;
+    {
+        const auto started = std::chrono::steady_clock::now();
+        for (std::uint64_t at = 0; at < opt.gets; ++at) {
+            auto found = snapshot.get(namespace_spec, scope, meta_key);
+            if (!found) {
+                fail("get of meta of " + dir + ": " + to_std(found.error()));
+                return false;
+            }
+            if (!found->has_value() ||
+                !same_bytes((*found)->bytes(), expected_meta)) {
+                ++mismatches;
+            }
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        print_grow_row(grow_row(label, state, "get_meta", opt.gets, nanos,
+                                "mismatches=" + dstd::to_string(mismatches)));
+    }
+    if (mismatches > 0) {
+        fail(dstd::to_string(mismatches) + " meta gets of " + dir +
+             " did not return the newest summary");
+        ok = false;
+    }
+
+    mismatches = 0;
+    {
+        const std::uint64_t span =
+            std::min<std::uint64_t>(GROW_SCAN_KEYS, total);
+        const std::uint64_t scans =
+            std::max<std::uint64_t>(1, opt.gets / GETS_PER_GROW_SCAN);
+        std::mt19937_64 random(QUERY_SEED ^ 0x9E3779B97F4A7C15ULL);
+        const auto started = std::chrono::steady_clock::now();
+        for (std::uint64_t at = 0; at < scans; ++at) {
+            const std::uint64_t first = random() % (total - span + 1);
+            const auto begin = grow_key(first);
+            const auto end = grow_key(first + span);
+            auto cursor = snapshot.scan(namespace_spec, scope,
+                                        ByteView{begin.data(), begin.size()},
+                                        ByteView{end.data(), end.size()});
+            std::uint64_t rows = 0;
+            while (!cursor.at_end()) {
+                const auto want = grow_key(first + rows);
+                auto value = cursor.value();
+                if (rows >= span || !value.has_value() ||
+                    cursor.key().size() != GROW_KEY_BYTES ||
+                    !std::equal(want.begin(), want.end(),
+                                reinterpret_cast<const std::uint8_t*>(
+                                    cursor.key().data())) ||
+                    !same_bytes(*value,
+                                values.for_key(want.data(), want.size()))) {
+                    ++mismatches;
+                    break;
+                }
+                ++rows;
+                cursor.next();
+            }
+            if (cursor.error()) {
+                fail("scan of " + dir + ": " + to_std(*cursor.error()));
+                return false;
+            }
+            if (rows != span) ++mismatches;
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        print_grow_row(
+            grow_row(label, state, "scan_range", scans, nanos,
+                     "keys_per_scan=" + dstd::to_string(span) + " ns_per_key=" +
+                         fixed(static_cast<double>(nanos) /
+                                   static_cast<double>(scans * span),
+                               1) +
+                         " mismatches=" + dstd::to_string(mismatches)));
+    }
+    if (mismatches > 0) {
+        fail(dstd::to_string(mismatches) + " range scans of " + dir +
+             " did not return the keys written");
+        ok = false;
+    }
+
+    mismatches = 0;
+    {
+        const dstd::String meta_name(GROW_META_KEY, GROW_META_KEY_BYTES);
+        const auto started = std::chrono::steady_clock::now();
+        std::uint64_t rows = 0;
+        auto cursor =
+            snapshot.scan(namespace_spec, scope, ByteView{}, ByteView{});
+        while (!cursor.at_end()) {
+            auto value = cursor.value();
+            bool good = value.has_value();
+            if (good && rows < total) {
+                const auto want = grow_key(rows);
+                good = cursor.key().size() == GROW_KEY_BYTES &&
+                       std::equal(want.begin(), want.end(),
+                                  reinterpret_cast<const std::uint8_t*>(
+                                      cursor.key().data())) &&
+                       same_bytes(*value,
+                                  values.for_key(want.data(), want.size()));
+            } else if (good && rows == total) {
+                good = same_bytes(cursor.key(), meta_name) &&
+                       same_bytes(*value, expected_meta);
+            } else {
+                good = false;
+            }
+            if (!good) ++mismatches;
+            ++rows;
+            cursor.next();
+        }
+        if (cursor.error()) {
+            fail("scan of " + dir + ": " + to_std(*cursor.error()));
+            return false;
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        print_grow_row(
+            grow_row(label, state, "full_scan", rows, nanos,
+                     "rows_expected=" + dstd::to_string(total + 1) +
+                         " mismatches=" + dstd::to_string(mismatches) + " " +
+                         format_read_stats(snapshot.read_stats())));
+        if (rows != total + 1) {
+            fail("the full scan of " + dir + " read " + dstd::to_string(rows) +
+                 " rows, not " + dstd::to_string(total + 1));
+            ok = false;
+        }
+    }
+    if (mismatches > 0) {
+        fail(dstd::to_string(mismatches) + " rows of the full scan of " + dir +
+             " are not the ones written");
+        ok = false;
+    }
+    return ok;
+}
+
+bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
+                          bool shared, bool do_pack) {
+    const std::uint64_t per_refresh = opt.grow_keys / copies;
+    if (per_refresh == 0) {
+        fail("--grow-keys " + dstd::to_string(opt.grow_keys) +
+             " is below --copies " + dstd::to_string(copies));
+        return false;
+    }
+    const std::uint64_t total = per_refresh * copies;
+    const dstd::String dir = case_dir("grow-" + label);
+    auto opened = store::Store::open(dstd::StringView(dir.data(), dir.size()));
+    if (!opened) {
+        fail("store of " + dir + ": " + to_std(opened.error()));
+        return false;
+    }
+    store::Store grown = std::move(*opened);
+    const NamespaceSpec namespace_spec = grow_spec(shared);
+    auto handle = grown.ns(namespace_spec);
+    if (!handle) {
+        fail("namespace of " + dir + ": " + to_std(handle.error()));
+        return false;
+    }
+    const ScopeKey scope = ScopeKey::file("/bench/grow.dft");
+    const ValuePool values(opt.value_bytes, opt.trace_values);
+    const ByteView meta_key{GROW_META_KEY, GROW_META_KEY_BYTES};
+    dstd::Vector<std::uint64_t> refresh_nanos;
+    refresh_nanos.reserve(static_cast<std::size_t>(copies));
+    std::uint64_t write_nanos = 0;
+    for (std::uint64_t refresh = 0; refresh < copies; ++refresh) {
+        const dstd::String meta = grow_meta(refresh);
+        const auto started = std::chrono::steady_clock::now();
+        Batch batch = grown.building_batch(*handle, scope);
+        for (std::uint64_t at = 0; at < per_refresh; ++at) {
+            const auto key = grow_key(refresh * per_refresh + at);
+            const dstd::String& value = values.for_key(key.data(), key.size());
+            batch.put(ByteView{key.data(), key.size()},
+                      ByteView{value.data(), value.size()});
+        }
+        batch.put(meta_key, ByteView{meta.data(), meta.size()});
+        auto committed =
+            default_runtime().submit(grown.commit(std::move(batch))).get();
+        if (!committed) {
+            fail("commit of " + dir + ": " + to_std(committed.error()));
+            return false;
+        }
+        store::Publish target;
+        target.ns = &*handle;
+        target.scope = &scope;
+        auto published =
+            default_runtime()
+                .submit(grown.publish(
+                    dftracer::utils::dstd::Span<const store::Publish>(&target,
+                                                                      1)))
+                .get();
+        if (!published) {
+            fail("publish of " + dir + ": " + to_std(published.error()));
+            return false;
+        }
+        auto closed = default_runtime().submit(grown.close()).get();
+        if (!closed) {
+            fail("close of " + dir + ": " + to_std(closed.error()));
+            return false;
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        refresh_nanos.push_back(nanos);
+        write_nanos += nanos;
+    }
+    std::sort(refresh_nanos.begin(), refresh_nanos.end());
+    const std::size_t p99_at =
+        static_cast<std::size_t>((refresh_nanos.size() * 99 + 99) / 100 - 1);
+    print_grow_row(grow_row(
+        label, "grown", "refresh", copies, write_nanos,
+        "mean_ms=" +
+            fixed(static_cast<double>(write_nanos) / 1e6 /
+                      static_cast<double>(copies),
+                  3) +
+            " p99_ms=" +
+            fixed(static_cast<double>(refresh_nanos[p99_at]) / 1e6, 3) +
+            " total_ms=" + fixed(static_cast<double>(write_nanos) / 1e6, 3) +
+            " keys_per_refresh=" + dstd::to_string(per_refresh) +
+            " keys=" + dstd::to_string(total)));
+    bool ok = grow_reads(label, "grown", dir, namespace_spec, scope, total,
+                         copies - 1);
+    if (ok && do_pack) {
+        store::PackOptions pack_options;
+        pack_options.keep_seconds = 0;
+        const auto started = std::chrono::steady_clock::now();
+        auto packed = default_runtime().submit(grown.pack(pack_options)).get();
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        if (!packed) {
+            print_grow_row(grow_row(label, "grown", "pack_refused", 1, nanos,
+                                    to_std(packed.error())));
+        } else {
+            print_grow_row(
+                grow_row(label, "packed", "pack", 1, nanos,
+                         dftracer::utils::common::str_cat(
+                             "files_packed=", packed->files_packed,
+                             " copies_written=", packed->copies_written,
+                             " copies_skipped=", packed->copies_skipped,
+                             " files_deleted=", packed->files_deleted,
+                             " bytes_deleted=", packed->bytes_deleted)));
+            ok = grow_reads(label, "packed", dir, namespace_spec, scope, total,
+                            copies - 1);
+        }
+    }
+    (void)dftracer::utils::dstd::fs::remove_all(dir);
+    return ok;
+}
+
 bool Bench::run_kept() {
     const bool keep = !opt.keep.empty();
     const dstd::String& base = keep ? opt.keep : opt.reuse;
@@ -1855,6 +2305,8 @@ bool Bench::run() {
     const bool do_query = opt.which == "query" || opt.which == "all";
     const bool do_scopes = opt.which == "scopes" || opt.which == "all";
     const bool do_fold = opt.which == "fold" || opt.which == "all";
+    const bool do_grow =
+        opt.which == "grow" || (opt.which == "all" && opt.smoke);
     // The query case reads what the shared write case wrote, so with no write
     // rows asked for it writes that one case and prints only the query rows.
     const dstd::Vector<dstd::String> modes =
@@ -1900,6 +2352,15 @@ bool Bench::run() {
         note_backend(runtime);
         for (std::uint64_t scopes : opt.fold_scopes) {
             if (!run_fold_case(runtime, scopes)) failed = true;
+        }
+    }
+    if (do_grow) {
+        note_backend(default_runtime());
+        if (!run_grow_case("baseline", 1, false, false)) failed = true;
+        for (std::uint64_t copies : opt.copies) {
+            if (!run_grow_case(dstd::to_string(copies), copies, true, true)) {
+                failed = true;
+            }
         }
     }
     return !failed;

@@ -1172,7 +1172,9 @@ void PoolInternals::close(Pool& p, std::uint32_t generation) noexcept {
     // A thread stopped inside a flush or a scope switch shows a charge twice or
     // not at all for as long as it stays stopped, so equal reads prove nothing.
     // A real leak never reaches zero, so it alone is left after the wait.
-    for (int read = 0; read < CLOSE_READS && (bytes != 0 || blocks != 0);
+    // Only a scratch pool reports a leak; other pools may close holding blocks.
+    for (int read = 0; p.kind_ == PoolKind::Scratch && read < CLOSE_READS &&
+                       (bytes != 0 || blocks != 0);
          ++read) {
         ::nanosleep(&CLOSE_READ_WAIT, nullptr);
         full_fence();

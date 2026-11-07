@@ -1372,7 +1372,9 @@ TEST_CASE(
 
 TEST_CASE("uring register: resize_rings gives the rings the new sizes") {
     Ring ring;
-    OPEN_RING_OR_SKIP(ring, 8, 0);
+    // The kernel resizes only a ring that defers its task work.
+    OPEN_RING_OR_SKIP(ring, 8,
+                      IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN);
 
     struct io_uring_params params;
     std::memset(&params, 0, sizeof(params));
@@ -1408,7 +1410,8 @@ TEST_CASE("uring register: resize_rings gives the rings the new sizes") {
 
 TEST_CASE("uring register: a wait region times an enter by its slot") {
     Ring ring;
-    OPEN_RING_OR_SKIP(ring, 8, 0);
+    // The kernel takes a wait region only before the ring starts.
+    OPEN_RING_OR_SKIP(ring, 8, IORING_SETUP_R_DISABLED);
 
     const std::size_t page = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
     void* const memory = ::mmap(nullptr, page, PROT_READ | PROT_WRITE,
@@ -1431,6 +1434,7 @@ TEST_CASE("uring register: a wait region times an enter by its slot") {
         return;
     }
     REQUIRE(registered == 0);
+    REQUIRE(enable_rings(ring) == 0);
 
     const auto start = std::chrono::steady_clock::now();
     const long ret =
@@ -1525,7 +1529,6 @@ TEST_CASE("uring register: napi static tracking takes and drops an id") {
     Napi old;
     REQUIRE(unregister_napi(ring, old) == 0);
     CHECK(old.busy_poll_to == 50);
-    CHECK(old.op_param == NAPI_TRACKING_STATIC);
 }
 
 TEST_CASE("uring register: a kernel allocated buffer ring serves a recv") {

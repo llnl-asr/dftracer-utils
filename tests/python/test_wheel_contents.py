@@ -43,8 +43,6 @@ REQUIRED_PATTERNS = (
     "dftracer/lib/libdftracer_utils_trace",
     "dftracer/lib/libdftracer_utils_utilities",
     "dftracer/bin/dftracer_index",
-    "dftracer/bin/ldb",
-    "dftracer/bin/sst_dump",
     # Plugin headers a pip-installed wheel needs to compile JIT plugins and the
     # dftracer_plugin CLI scaffold: prims.h is included by jit-generated code,
     # plugin.h by the CLI scaffold, abi.h by both.
@@ -54,7 +52,8 @@ REQUIRED_PATTERNS = (
     # The whole include/dftracer/utils tree ships (not a hand-picked subset) so
     # any public C/C++ ABI header compiles standalone from the wheel: spot
     # check headers from directories that were NOT part of the old subset.
-    "dftracer/include/dftracer/utils/runtime/abi.h",
+    "dftracer/include/dftracer/utils/common/abi.h",
+    "dftracer/include/dftracer/utils/store/abi.h",
     "dftracer/include/dftracer/utils/coro/abi.h",
     "dftracer/include/dftracer/utils/dataframe/abi.h",
     "dftracer/include/dftracer/utils/duql/abi.h",

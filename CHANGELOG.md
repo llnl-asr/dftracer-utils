@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Lower the default of `DFTRACER_UTILS_MEM_DECAY_MS` from 1000 to 200, so the heap gives idle pages back sooner.
+  Peak memory of the index, stats, view and comparator tools falls 6% to 15% on a 1 GB trace set, with no change in run time above noise.
 - Add `runtime::fs::exists`, `create_directories` and `remove`, and run the per-file checks of the indexer and the tools off the worker, so they no longer hold a worker thread.
 - Let another worker run while a store commit or a spill file blocks on slow storage, so a tool keeps its full parallelism during long writes.
 - Give each executor worker its own io_uring ring for positional reads and writes, `close` and `fsync`.

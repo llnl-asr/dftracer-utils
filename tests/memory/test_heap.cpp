@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/memory/asan.h>
+#include <dftracer/utils/memory/detail/constants.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/heap_page.h>
@@ -16,6 +17,7 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 #include <set>
@@ -26,6 +28,11 @@ using namespace dftracer::utils::memory;
 using namespace dftracer::utils::memory::detail;
 
 namespace {
+
+// A check here needs idle pages still backed after a free, so the delay must
+// outlast any pause of a loaded machine. Read once, before the first
+// allocation.
+const int DECAY_SET = ::setenv(constants::DECAY_MS_ENV, "1000", 0);
 
 constexpr std::size_t KIB = 1024;
 constexpr std::size_t MIB = 1024 * KIB;

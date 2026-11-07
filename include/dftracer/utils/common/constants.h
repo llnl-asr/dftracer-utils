@@ -28,7 +28,7 @@ namespace memory_settings {
 inline constexpr const char* MEMORY_BACKEND_ENV =
     "DFTRACER_UTILS_MEMORY_BACKEND";
 inline constexpr const char* DECAY_MS_ENV = "DFTRACER_UTILS_MEM_DECAY_MS";
-inline constexpr std::uint32_t DEFAULT_DECAY_MS = 1000;
+inline constexpr std::uint32_t DEFAULT_DECAY_MS = 200;
 inline constexpr const char* BUDGET_ENV = "DFTRACER_UTILS_MEM_BUDGET";
 inline constexpr std::uint64_t DEFAULT_BUDGET_BYTES = 0;
 inline constexpr const char* HARD_LIMIT_ENV = "DFTRACER_UTILS_MEM_HARD_LIMIT";

@@ -91,11 +91,15 @@ Memory and kernels
        same name (``page_heap``, and ``system`` in the sanitizer presets). Any
        other value stops the process at the first allocation.
    * - ``DFTRACER_UTILS_MEM_DECAY_MS``
-     - ``1000``
+     - ``200``
      - Milliseconds an idle page or run stays backed before the heap gives it
        back to the operating system. ``0`` gives it back at the first slow
        path. Read once before the first allocation. A value that is not a whole
        number up to ``4294967295`` stops the process at the first allocation.
+       A lower value makes the heap more aggressive: peak memory falls and a
+       run can take longer, because freed pages must be mapped again. A higher
+       value is more relaxed: runs can be a little faster and peak memory
+       rises. Tune it when the default does not fit your memory limit.
    * - ``DFTRACER_UTILS_MEM_BUDGET``
      - a third of the available memory
      - The sum of reservations that the memory manager accepts, in bytes or

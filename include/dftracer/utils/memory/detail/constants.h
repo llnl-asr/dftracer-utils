@@ -16,7 +16,7 @@ inline constexpr const char* MEMORY_BACKEND_ENV =
 /// path purges it, read once before the first allocation. Zero purges at the
 /// first slow path. Anything but a whole number up to 4294967295 aborts.
 inline constexpr const char* DECAY_MS_ENV = "DFTRACER_UTILS_MEM_DECAY_MS";
-inline constexpr std::uint32_t DEFAULT_DECAY_MS = 1000;
+inline constexpr std::uint32_t DEFAULT_DECAY_MS = 200;
 
 /// The sum of reservations the root accepts, in bytes or with a unit such as
 /// "4GB". Unset is zero, a third of the available memory.

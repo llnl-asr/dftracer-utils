@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_EXPR_HANDLE_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_EXPR_HANDLE_H
 
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -26,12 +27,12 @@ std::uint64_t expr_fingerprint(const Expr& e);
 
 // `e` with each col(i) replaced by `by_index[i]`; an out-of-range or empty
 // entry keeps the column reference.
-Expr expr_rebind_cols(const Expr& e, const std::vector<Expr>& by_index);
+Expr expr_rebind_cols(const Expr& e, const dstd::Vector<Expr>& by_index);
 
 // A stable text for the expression tree, equal for equal trees in any process
 // (literals and is_in values written out, no addresses): an identity that may
 // be persisted.
-std::string expr_canonical(const Expr& e);
+dstd::String expr_canonical(const Expr& e);
 
 }  // namespace dftracer::utils::dataframe
 

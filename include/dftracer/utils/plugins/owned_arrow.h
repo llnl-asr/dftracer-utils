@@ -1,14 +1,8 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_OWNED_ARROW_H
 #define DFTRACER_UTILS_PLUGINS_OWNED_ARROW_H
 
-// In an Arrow build nanoarrow provides the Arrow C interfaces; otherwise
-// arrow_abi.h does. Either one defines them all, so the include order of the
-// two does not matter.
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <nanoarrow/nanoarrow.hpp>
-#else
 #include <dftracer/utils/plugins/arrow_abi.h>
-#endif
 
 namespace dftracer::utils::plugins {
 

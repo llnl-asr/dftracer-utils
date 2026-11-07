@@ -1,25 +1,27 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/comparator/comparison_config.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <simdjson.h>
-
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::trace::comparator {
 
 namespace {
 
-std::vector<std::string> split_csv(const std::string& s) {
-    std::vector<std::string> result;
-    std::istringstream ss(s);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
+dstd::Vector<dstd::String> split_csv(dstd::StringView s) {
+    dstd::Vector<dstd::String> result;
+    while (!s.empty()) {
+        const std::size_t comma = s.find(',');
+        const dstd::StringView token = s.substr(0, comma);
+        s = comma == dstd::StringView::npos ? dstd::StringView{}
+                                            : s.substr(comma + 1);
         auto start = token.find_first_not_of(" \t");
         auto end = token.find_last_not_of(" \t");
-        if (start != std::string::npos) {
-            result.push_back(token.substr(start, end - start + 1));
+        if (start != dstd::StringView::npos) {
+            result.emplace_back(token.substr(start, end - start + 1));
         }
     }
     return result;
@@ -29,7 +31,7 @@ std::vector<std::string> split_csv(const std::string& s) {
 
 // static
 bool ComparisonConfig::parse_node(simdjson::dom::element val,
-                                  ComparisonNode& node, std::string& error) {
+                                  ComparisonNode& node, dstd::String& error) {
     if (!val.is_object()) {
         error = "node must be a JSON object";
         return false;
@@ -40,29 +42,30 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
         error = "node missing required string field 'name'";
         return false;
     }
-    node.name = std::string(name_result.value_unsafe().get_string().value());
+    node.name = dstd::String(name_result.value_unsafe().get_string().value());
 
     auto query_result = val["duql"];
     if (!query_result.error() && query_result.value_unsafe().is_string()) {
         node.query =
-            std::string(query_result.value_unsafe().get_string().value());
+            dstd::String(query_result.value_unsafe().get_string().value());
     }
 
     auto gb_result = val["group_by"];
     if (!gb_result.error() && gb_result.value_unsafe().is_array()) {
         for (auto elem : gb_result.value_unsafe().get_array()) {
             if (elem.is_string()) {
-                node.group_by.push_back(std::string(elem.get_string().value()));
+                node.group_by.push_back(
+                    dstd::String(elem.get_string().value()));
             }
         }
     }
 
     auto metrics_result = val["metrics"];
     if (!metrics_result.error() && metrics_result.value_unsafe().is_array()) {
-        std::vector<std::string> metrics;
+        dstd::Vector<dstd::String> metrics;
         for (auto elem : metrics_result.value_unsafe().get_array()) {
             if (elem.is_string()) {
-                metrics.push_back(std::string(elem.get_string().value()));
+                metrics.push_back(dstd::String(elem.get_string().value()));
             }
         }
         node.metrics = std::move(metrics);
@@ -70,7 +73,7 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
 
     auto pct_result = val["percentiles"];
     if (!pct_result.error() && pct_result.value_unsafe().is_array()) {
-        std::vector<double> percentiles;
+        dstd::Vector<double> percentiles;
         for (auto elem : pct_result.value_unsafe().get_array()) {
             if (elem.is_double() || elem.is_int64() || elem.is_uint64()) {
                 percentiles.push_back(elem.get_double().value());
@@ -90,7 +93,7 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
     auto sort_result = val["sort_by"];
     if (!sort_result.error() && sort_result.value_unsafe().is_string()) {
         node.sort_by =
-            std::string(sort_result.value_unsafe().get_string().value());
+            dstd::String(sort_result.value_unsafe().get_string().value());
     }
 
     auto children_result = val["children"];
@@ -106,27 +109,26 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
 }
 
 // static
-std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
-    const std::string& path, std::string& error) {
-    std::ifstream file(path);
-    if (!file) {
+dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
+    const dstd::String& path, dstd::String& error) {
+    auto loaded = dstd::fs::read_file(path);
+    if (!loaded) {
         error = "failed to read or parse JSON file: " + path;
-        return std::nullopt;
+        return dstd::nullopt;
     }
-    std::string content((std::istreambuf_iterator<char>(file)),
-                        std::istreambuf_iterator<char>());
+    const dstd::String& content = *loaded;
 
     simdjson::dom::parser parser;
-    auto result = parser.parse(content);
+    auto result = parser.parse(content.data(), content.size());
     if (result.error()) {
         error = "failed to parse JSON file: " + path;
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     auto root = result.value_unsafe();
     if (!root.is_object()) {
         error = "JSON root must be an object";
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     ComparisonConfig cfg;
@@ -135,18 +137,18 @@ std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
     if (baseline_result.error() ||
         !baseline_result.value_unsafe().is_string()) {
         error = "missing required string field 'baseline'";
-        return std::nullopt;
+        return dstd::nullopt;
     }
     cfg.baseline =
-        std::string(baseline_result.value_unsafe().get_string().value());
+        dstd::String(baseline_result.value_unsafe().get_string().value());
 
     auto variant_result = root["variant"];
     if (variant_result.error() || !variant_result.value_unsafe().is_string()) {
         error = "missing required string field 'variant'";
-        return std::nullopt;
+        return dstd::nullopt;
     }
     cfg.variant =
-        std::string(variant_result.value_unsafe().get_string().value());
+        dstd::String(variant_result.value_unsafe().get_string().value());
 
     auto defaults_result = root["defaults"];
     if (!defaults_result.error() &&
@@ -159,7 +161,7 @@ std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
             for (auto elem : dm_result.value_unsafe().get_array()) {
                 if (elem.is_string()) {
                     cfg.defaults.metrics.push_back(
-                        std::string(elem.get_string().value()));
+                        dstd::String(elem.get_string().value()));
                 }
             }
         }
@@ -194,7 +196,7 @@ std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
         auto ds_result = defaults_val["sort_by"];
         if (!ds_result.error() && ds_result.value_unsafe().is_string()) {
             cfg.defaults.sort_by =
-                std::string(ds_result.value_unsafe().get_string().value());
+                dstd::String(ds_result.value_unsafe().get_string().value());
         }
     }
 
@@ -203,7 +205,7 @@ std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
         for (auto node_elem : nodes_result.value_unsafe().get_array()) {
             ComparisonNode node;
             if (!parse_node(node_elem, node, error)) {
-                return std::nullopt;
+                return dstd::nullopt;
             }
             cfg.nodes.push_back(std::move(node));
         }
@@ -213,10 +215,10 @@ std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
 }
 
 // static
-ComparisonConfig ComparisonConfig::from_cli(const std::string& baseline,
-                                            const std::string& variant,
-                                            const std::string& query,
-                                            const std::string& group_by_str) {
+ComparisonConfig ComparisonConfig::from_cli(const dstd::String& baseline,
+                                            const dstd::String& variant,
+                                            const dstd::String& query,
+                                            const dstd::String& group_by_str) {
     ComparisonConfig cfg;
     cfg.baseline = baseline;
     cfg.variant = variant;
@@ -236,10 +238,10 @@ ComparisonConfig ComparisonConfig::from_cli(const std::string& baseline,
 }
 
 void ComparisonConfig::resolve_node(
-    ComparisonNode& node, const std::string& parent_query,
-    const std::vector<std::string>& parent_metrics,
-    const std::vector<double>& parent_percentiles, double parent_threshold,
-    const std::string& parent_sort_by) {
+    ComparisonNode& node, const dstd::String& parent_query,
+    const dstd::Vector<dstd::String>& parent_metrics,
+    const dstd::Vector<double>& parent_percentiles, double parent_threshold,
+    const dstd::String& parent_sort_by) {
     if (node.query.empty()) {
         node.composed_query = parent_query;
     } else if (parent_query.empty()) {
@@ -268,19 +270,17 @@ void ComparisonConfig::resolve() {
 }
 
 // static
-std::optional<ComparisonConfig> ComparisonConfig::from_preset(
-    const std::string& preset, const std::string& baseline,
-    const std::string& variant) {
-    namespace ops = dftracer::utils::trace::internal::posix_ops;
-
-    if (preset != "dlio") return std::nullopt;
+dstd::Optional<ComparisonConfig> ComparisonConfig::from_preset(
+    const dstd::String& preset, const dstd::String& baseline,
+    const dstd::String& variant) {
+    if (preset != "dlio") return dstd::nullopt;
 
     ComparisonConfig cfg;
     cfg.baseline = baseline;
     cfg.variant = variant;
 
-    auto node = [](std::string name, std::string query,
-                   std::vector<ComparisonNode> children = {}) {
+    auto node = [](dstd::String name, dstd::String query,
+                   dstd::Vector<ComparisonNode> children = {}) {
         ComparisonNode n;
         n.name = std::move(name);
         n.query = std::move(query);
@@ -342,10 +342,14 @@ std::optional<ComparisonConfig> ComparisonConfig::from_preset(
     cfg.nodes.push_back(
         node("POSIX/STDIO I/O", R"(cat in ["POSIX", "STDIO"])",
              {
-                 node("Read", ops::name_in_query(ops::READ)),
-                 node("Write", ops::name_in_query(ops::WRITE)),
-                 node("Metadata", ops::name_in_query(ops::METADATA)),
-                 node("Sync", ops::name_in_query(ops::SYNC)),
+                 node("Read", trace::internal::posix_ops::name_in_query(
+                                  trace::internal::posix_ops::READ)),
+                 node("Write", trace::internal::posix_ops::name_in_query(
+                                   trace::internal::posix_ops::WRITE)),
+                 node("Metadata", trace::internal::posix_ops::name_in_query(
+                                      trace::internal::posix_ops::METADATA)),
+                 node("Sync", trace::internal::posix_ops::name_in_query(
+                                  trace::internal::posix_ops::SYNC)),
              }));
 
     cfg.nodes.push_back(node("Communication", R"(cat == "comm")"));

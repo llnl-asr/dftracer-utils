@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """duql `lookup ... overlap` against a nested-loop reference."""
 
 import gzip

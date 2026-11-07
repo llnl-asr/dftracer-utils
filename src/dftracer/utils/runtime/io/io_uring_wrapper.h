@@ -1,0 +1,302 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_RUNTIME_IO_IO_URING_WRAPPER_H
+#define DFTRACER_UTILS_RUNTIME_IO_IO_URING_WRAPPER_H
+#ifdef DFTRACER_UTILS_HAVE_IO_URING
+
+#include <linux/io_uring.h>
+// linux/io_uring.h may pull in kernel headers that define BLOCK_SIZE
+// as a macro, which collides with concurrentqueue. Undefine it.
+#ifdef BLOCK_SIZE
+#undef BLOCK_SIZE
+#endif
+#include <signal.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/uio.h>
+#include <unistd.h>
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
+#ifndef IORING_FEAT_EXT_ARG
+#define IORING_FEAT_EXT_ARG (1U << 8)
+#endif
+#ifndef IORING_ENTER_EXT_ARG
+#define IORING_ENTER_EXT_ARG (1U << 3)
+#endif
+#ifndef IORING_SETUP_R_DISABLED
+#define IORING_SETUP_R_DISABLED (1U << 6)
+#endif
+#ifndef IORING_SETUP_TASKRUN_FLAG
+#define IORING_SETUP_TASKRUN_FLAG (1U << 9)
+#endif
+#ifndef IORING_SETUP_SINGLE_ISSUER
+#define IORING_SETUP_SINGLE_ISSUER (1U << 12)
+#endif
+#ifndef IORING_SETUP_DEFER_TASKRUN
+#define IORING_SETUP_DEFER_TASKRUN (1U << 13)
+#endif
+#ifndef IORING_SQ_TASKRUN
+#define IORING_SQ_TASKRUN (1U << 2)
+#endif
+#ifndef IORING_REGISTER_ENABLE_RINGS
+#define IORING_REGISTER_ENABLE_RINGS 12
+#endif
+
+namespace dftracer::utils::runtime::io::uring {
+
+// Kernel ABI values that older kernel headers do not name.
+constexpr unsigned REGISTER_IOWQ_MAX_WORKERS = 19;
+
+struct KernelTimespec {
+    std::int64_t tv_sec;
+    long long tv_nsec;
+};
+
+struct GeteventsArg {
+    std::uint64_t sigmask;
+    std::uint32_t sigmask_sz;
+    std::uint32_t pad;
+    std::uint64_t ts;
+};
+
+// ============================================================================
+// Raw syscall wrappers
+// ============================================================================
+
+inline int sys_io_uring_setup(unsigned entries, struct io_uring_params* p) {
+    return static_cast<int>(syscall(__NR_io_uring_setup, entries, p));
+}
+
+inline int sys_io_uring_enter(int fd, unsigned to_submit, unsigned min_complete,
+                              unsigned flags) {
+    return static_cast<int>(syscall(__NR_io_uring_enter, fd, to_submit,
+                                    min_complete, flags, nullptr, 0));
+}
+
+inline int sys_io_uring_register(int fd, unsigned opcode, void* arg,
+                                 unsigned nr_args) {
+    return static_cast<int>(
+        syscall(__NR_io_uring_register, fd, opcode, arg, nr_args));
+}
+
+// ============================================================================
+// Minimal io_uring ring manager
+// ============================================================================
+
+/// Owns the ring fd and mmap'd memory. One thread submits. Completions need one
+/// reader at a time, which may be another thread.
+class Ring {
+    int ring_fd_ = -1;
+    unsigned features_ = 0;
+    unsigned cq_entries_ = 0;
+
+    // SQ ring (submission queue)
+    void* sq_ring_ptr_ = nullptr;
+    std::size_t sq_ring_size_ = 0;
+    unsigned* sq_head_ = nullptr;
+    unsigned* sq_tail_ = nullptr;
+    unsigned* sq_ring_mask_ = nullptr;
+    unsigned* sq_ring_entries_ = nullptr;
+    unsigned* sq_array_ = nullptr;
+    unsigned* sq_flags_ = nullptr;
+    bool deferred_ = false;
+
+    // CQ ring (completion queue)
+    void* cq_ring_ptr_ = nullptr;
+    std::size_t cq_ring_size_ = 0;
+    unsigned* cq_head_ = nullptr;
+    unsigned* cq_tail_ = nullptr;
+    unsigned* cq_ring_mask_ = nullptr;
+    struct io_uring_cqe* cqes_ = nullptr;
+
+    // SQE array
+    struct io_uring_sqe* sqes_ = nullptr;
+    std::size_t sqes_size_ = 0;
+
+    // SQEs prepared but not yet taken by the kernel.
+    unsigned pending_ = 0;
+
+   public:
+    Ring() = default;
+    ~Ring() { destroy(); }
+
+    Ring(const Ring&) = delete;
+    Ring& operator=(const Ring&) = delete;
+
+    /// Initialize the ring. Returns true on success, false if kernel
+    /// doesn't support io_uring (ENOSYS) or other setup failure.
+    bool init(unsigned entries, unsigned setup_flags = 0);
+
+    /// Makes the calling thread the ring's one submitter.
+    bool enable();
+
+    /// Runs deferred completions so they show in the CQ. Owner thread only.
+    void run_deferred();
+
+    /// Tear down: munmap + close fd.
+    void destroy();
+
+    unsigned features() const { return features_; }
+    unsigned cq_entries() const { return cq_entries_; }
+
+    /// Next free SQE, which counts as pending once prepared. Null if the SQ
+    /// is full.
+    struct io_uring_sqe* get_sqe();
+
+    unsigned pending() const { return pending_; }
+
+    /// Hands the pending SQEs to the kernel and, when `wait` is set, waits for
+    /// one completion. Gives the count the kernel took or a negative errno. The
+    /// ones it did not take stay pending.
+    int enter(bool wait);
+
+    /// As enter(true), giving up after `timeout_ms`, then with -ETIME.
+    int enter_wait(std::int64_t timeout_ms);
+
+    /// Caps the kernel threads that serve the calling thread's bounded work.
+    void limit_kernel_workers(unsigned bounded);
+
+    /// Next completion, or null. Copy what it holds before cqe_seen().
+    struct io_uring_cqe* peek_cqe();
+
+    void cqe_seen();
+};
+
+// ============================================================================
+// SQE preparation helpers, after the prep helpers and ring setup of liburing,
+// https://github.com/axboe/liburing (MIT), Copyright 2020 Jens Axboe, file
+// src/include/liburing.h.
+// ============================================================================
+
+inline void prep_read(struct io_uring_sqe* sqe, int fd, void* buf, unsigned len,
+                      off_t offset) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_READ;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(buf);
+    sqe->len = len;
+    sqe->off = static_cast<__u64>(offset);
+}
+
+inline void prep_write(struct io_uring_sqe* sqe, int fd, const void* buf,
+                       unsigned len, off_t offset) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_WRITE;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(buf);
+    sqe->len = len;
+    sqe->off = static_cast<__u64>(offset);
+}
+
+inline void prep_openat(struct io_uring_sqe* sqe, int dfd, const char* path,
+                        int flags, mode_t mode) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_OPENAT;
+    sqe->fd = dfd;
+    sqe->addr = reinterpret_cast<__u64>(path);
+    sqe->len = static_cast<__u32>(mode);
+    sqe->open_flags = static_cast<__u32>(flags);
+}
+
+inline void prep_nop(struct io_uring_sqe* sqe) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_NOP;
+}
+
+// Cancels the request whose user_data is `target`.
+inline void prep_cancel(struct io_uring_sqe* sqe, void* target) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_ASYNC_CANCEL;
+    sqe->fd = -1;
+    sqe->addr = reinterpret_cast<__u64>(target);
+}
+
+// Ends with -ETIME after `timeout`, which must live until the kernel takes the
+// request.
+inline void prep_timeout(struct io_uring_sqe* sqe,
+                         const KernelTimespec* timeout) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_TIMEOUT;
+    sqe->fd = -1;
+    sqe->addr = reinterpret_cast<__u64>(timeout);
+    sqe->len = 1;
+}
+
+inline void prep_close(struct io_uring_sqe* sqe, int fd) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_CLOSE;
+    sqe->fd = fd;
+}
+
+inline void prep_fsync(struct io_uring_sqe* sqe, int fd, unsigned flags) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_FSYNC;
+    sqe->fd = fd;
+    sqe->fsync_flags = flags;
+}
+
+inline void prep_accept(struct io_uring_sqe* sqe, int fd, struct sockaddr* addr,
+                        socklen_t* addrlen, int flags) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_ACCEPT;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(addr);
+    sqe->addr2 = reinterpret_cast<__u64>(addrlen);
+    sqe->accept_flags = static_cast<__u32>(flags);
+}
+
+inline void prep_recv(struct io_uring_sqe* sqe, int fd, void* buf, unsigned len,
+                      int flags) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_RECV;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(buf);
+    sqe->len = len;
+    sqe->msg_flags = static_cast<__u32>(flags);
+}
+
+inline void prep_send(struct io_uring_sqe* sqe, int fd, const void* buf,
+                      unsigned len, int flags) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_SEND;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(buf);
+    sqe->len = len;
+    sqe->msg_flags = static_cast<__u32>(flags);
+}
+
+inline void prep_readv(struct io_uring_sqe* sqe, int fd,
+                       const struct iovec* iov, unsigned nr_vecs,
+                       off_t offset) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_READV;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(iov);
+    sqe->len = nr_vecs;
+    sqe->off = static_cast<__u64>(offset);
+}
+
+inline void prep_writev(struct io_uring_sqe* sqe, int fd,
+                        const struct iovec* iov, unsigned nr_vecs,
+                        off_t offset) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_WRITEV;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(iov);
+    sqe->len = nr_vecs;
+    sqe->off = static_cast<__u64>(offset);
+}
+
+inline void sqe_set_data(struct io_uring_sqe* sqe, void* data) {
+    sqe->user_data = reinterpret_cast<__u64>(data);
+}
+
+}  // namespace dftracer::utils::runtime::io::uring
+
+#endif  // DFTRACER_UTILS_HAVE_IO_URING
+#endif  // DFTRACER_UTILS_RUNTIME_IO_IO_URING_WRAPPER_H

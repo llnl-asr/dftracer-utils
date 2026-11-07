@@ -1,5 +1,10 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <zlib.h>
@@ -8,21 +13,20 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <vector>
 
-using dftu_utils_test::ScopedTestDir;
+using namespace dftracer::utils;
 
 namespace {
 
-std::string binary() {
-    static const std::string path = dftu_utils_test::find_binary_by_name(
-        "DFTRACER_GENESIS_GEN_DIST_PATH", "dftracer_genesis_gen_dist");
+dstd::String binary() {
+    static const dstd::String path = dftu_utils_test::find_binary_by_name(
+        "DFTRACER_UTILS_GENESIS_GEN_DIST_PATH", "dftracer_genesis_gen_dist");
     return path;
 }
 
-std::string call(const std::string& name, int ts, int dur,
-                 const std::string& cat = "CPP_APP") {
-    std::ostringstream o;
+dstd::String call(const dstd::String& name, int ts, int dur,
+                  const dstd::String& cat = "CPP_APP") {
+    dftu_utils_test::TextOut o;
     o << R"({"name":")" << name << R"(","cat":")" << cat
       << R"(","pid":1,"tid":1,"ts":)" << ts << R"(,"dur":)" << dur
       << R"(,"ph":1,"args":{"hhash":"h1"}})"
@@ -30,32 +34,32 @@ std::string call(const std::string& name, int ts, int dur,
     return o.str();
 }
 
-void write_run(const fs::path& root, const std::string& input, int calls) {
-    const fs::path dir = root / "app" / "sys" / input / "nodes_1" / "ppn_1";
-    fs::create_directories(dir / "compacted");
-    std::ofstream(dir / "summary.json")
+void write_run(const dstd::Path& root, const dstd::String& input, int calls) {
+    const dstd::Path dir = root / "app" / "sys" / input / "nodes_1" / "ppn_1";
+    REQUIRE(dstd::fs::create_directories(dir / "compacted").has_value());
+    dftu_utils_test::FileOut(dir / "summary.json")
         << R"({"ok":true,"app":"app","system":"sys","input":")" << input
         << R"(","nodes":1,"ppn":1,"sets":["set1"]})";
-    std::string t = "[\n" + call("start", 0, 0, "dftracer") +
-                    call("end", calls * 100 + 100, 0, "dftracer");
+    dstd::String t = "[\n" + call("start", 0, 0, "dftracer") +
+                     call("end", calls * 100 + 100, 0, "dftracer");
     for (int i = 0; i < calls; ++i)
-        t += call("f" + std::to_string(i % 7), i * 100, 50);
+        t += call("f" + dstd::to_string(i % 7), i * 100, 50);
     dftu_utils_test::write_gz_trace(
-        (dir / "compacted" / "set1.pfw.gz").string(), t);
+        dstd::String((dir / "compacted" / "set1.pfw.gz").str()), t);
 }
 
-std::vector<std::string> sorted_gz_lines(const std::string& path) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> sorted_gz_lines(const dstd::String& path) {
+    dstd::Vector<dstd::String> out;
     gzFile f = gzopen(path.c_str(), "rb");
     REQUIRE(f != nullptr);
-    std::string text;
+    dstd::String text;
     char buf[65536];
     int n = 0;
     while ((n = gzread(f, buf, sizeof(buf))) > 0) text.append(buf, n);
     gzclose(f);
-    std::istringstream in(text);
-    std::string l;
-    while (std::getline(in, l))
+    dftu_utils_test::LineStream in(text);
+    dstd::String l;
+    while (in.next(l))
         if (!l.empty()) out.push_back(l);
     std::sort(out.begin(), out.end());
     return out;
@@ -64,42 +68,43 @@ std::vector<std::string> sorted_gz_lines(const std::string& path) {
 }  // namespace
 
 TEST_CASE("ranks split the run groups and join one output") {
-    const std::string launcher = dftu_utils_test::find_mpi_launcher();
+    const dstd::String launcher = dftu_utils_test::find_mpi_launcher();
     if (binary().empty() || launcher.empty()) {
         MESSAGE("skipped: no dftracer_genesis_gen_dist or MPI launcher");
         return;
     }
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_mpi");
-    const fs::path root = d.path() / "root";
+    dftu_utils_test::ScopedTestDir d("gen_dist_mpi");
+    const dstd::Path root = d.path() / "root";
     for (int i = 0; i < 6; ++i)
-        write_run(root, "in" + std::to_string(i), 200 * (i + 1));
+        write_run(root, "in" + dstd::to_string(i), 200 * (i + 1));
 
     REQUIRE(dftu_utils_test::run_mpi(
                 launcher, 1, binary(),
-                {root.string(), "-o", d.file("one.pfw.gz")}) == 0);
+                {dstd::String(root.str()), "-o", d.file("one.pfw.gz")}) == 0);
     REQUIRE(dftu_utils_test::run_mpi(
                 launcher, 3, binary(),
-                {root.string(), "-o", d.file("three.pfw.gz")}) == 0);
+                {dstd::String(root.str()), "-o", d.file("three.pfw.gz")}) == 0);
     const auto one = sorted_gz_lines(d.file("one.pfw.gz"));
     REQUIRE_FALSE(one.empty());
     CHECK(sorted_gz_lines(d.file("three.pfw.gz")) == one);
     for (int r = 0; r < 3; ++r)
-        CHECK_FALSE(
-            fs::exists(d.file("three.pfw.gz." + std::to_string(r) + ".part")));
+        CHECK_FALSE(dstd::fs::exists(
+                        d.file("three.pfw.gz." + dstd::to_string(r) + ".part"))
+                        .value());
 }
 
 TEST_CASE("--shard is refused with more than one rank") {
-    const std::string launcher = dftu_utils_test::find_mpi_launcher();
+    const dstd::String launcher = dftu_utils_test::find_mpi_launcher();
     if (binary().empty() || launcher.empty()) {
         MESSAGE("skipped: no dftracer_genesis_gen_dist or MPI launcher");
         return;
     }
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_mpi_shard");
+    dftu_utils_test::ScopedTestDir d("gen_dist_mpi_shard");
     write_run(d.path() / "root", "in", 100);
-    CHECK(dftu_utils_test::run_mpi(launcher, 2, binary(),
-                                   {(d.path() / "root").string(), "-o",
-                                    d.file("o.pfw.gz"), "--shard", "0/2"}) !=
-          0);
+    CHECK(
+        dftu_utils_test::run_mpi(launcher, 2, binary(),
+                                 {dstd::String((d.path() / "root").str()), "-o",
+                                  d.file("o.pfw.gz"), "--shard", "0/2"}) != 0);
 }

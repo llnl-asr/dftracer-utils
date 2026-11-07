@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # PythonHelpers.cmake - Utilities for Python packaging with scikit-build-core
 
 #[=[

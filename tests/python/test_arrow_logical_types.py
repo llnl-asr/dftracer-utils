@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Python-surface exercise of the 15 Arrow logical types the C++ engine added
 (Float16, Date32/64, Time32/64, Timestamp, Duration, Decimal128/256,
 FixedSizeBinary, LargeString/Binary, LargeList, FixedSizeList, Map).

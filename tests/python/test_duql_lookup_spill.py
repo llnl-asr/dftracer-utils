@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """duql `lookup` of a side over the row cap and the memory budget."""
 
 import gzip

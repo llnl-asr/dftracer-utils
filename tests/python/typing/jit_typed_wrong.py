@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Deliberately-wrong typed @jit.plugin: ty must flag every mistake below.
 
 Each marked line is a real authoring error the typed DSL now catches statically,

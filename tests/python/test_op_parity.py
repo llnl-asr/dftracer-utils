@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The Python surface of Series / DataFrame / LazyFrame against the op
 registry, in both directions (scripts/check_op_parity_doxygen.py --python).
 A Python method with no op behind it, or a registered op no Python method

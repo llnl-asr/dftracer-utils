@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/dataframe/plan.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/abi.h>
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/query.h>
@@ -11,15 +14,9 @@
 
 #include <cstdint>
 #include <cstring>
-#include <string>
-#include <vector>
 
-using dftracer::utils::Condition;
-using dftracer::utils::DFTUtilsException;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Series;
-namespace duql = dftracer::utils::duql;
-namespace dataframe = dftracer::utils::dataframe;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 int bit_at(const Series& mask, int i) {
@@ -28,8 +25,8 @@ int bit_at(const Series& mask, int i) {
 }
 
 // 'T', 'F' or 'N' (null) per row; a null row must store data 0.
-std::string truth(const Series& m) {
-    std::string out;
+dstd::String truth(const Series& m) {
+    dstd::String out;
     for (int i = 0; i < m.length(); ++i) {
         if (m.is_null(i)) {
             CHECK(bit_at(m, i) == 0);
@@ -44,19 +41,20 @@ std::string truth(const Series& m) {
 Series mask_of(const char* q, const DataFrame& b) {
     auto parsed = duql::Query::from_string(q);
     REQUIRE(parsed.has_value());
-    return dataframe::evaluate_mask(parsed->root(), b);
+    return dataframe::evaluate_mask(duql::detail::QueryAccess::root(*parsed),
+                                    b);
 }
 
 std::int64_t kept_rows(const char* q, const DataFrame& b) {
     auto parsed = duql::Query::from_string(q);
     REQUIRE(parsed.has_value());
     dataframe::QueryPlan plan;
-    plan.where = &parsed->root();
+    plan.where = &duql::detail::QueryAccess::root(*parsed);
     return dataframe::execute(plan, b).num_rows();
 }
 
 DataFrame nullable_x() {
-    std::vector<std::int64_t> x{1, 0, 3, 2};
+    dstd::Vector<std::int64_t> x{1, 0, 3, 2};
     std::uint8_t valid = 0b1101;
     DataFrame b;
     b.names = {"x", "cat"};
@@ -68,7 +66,7 @@ DataFrame nullable_x() {
 
 TEST_SUITE("query vec_mask") {
     TEST_CASE("numeric + string predicate lowers to a SIMD mask") {
-        std::vector<std::int64_t> dur{50, 150, 200, 80, 300};
+        dstd::Vector<std::int64_t> dur{50, 150, 200, 80, 300};
         DataFrame b;
         b.names = {"dur", "cat"};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
@@ -76,7 +74,8 @@ TEST_SUITE("query vec_mask") {
 
         auto q = duql::Query::from_string("dur > 100 and cat == \"io\"");
         REQUIRE(q.has_value());
-        Series mask = dataframe::evaluate_mask(q->root(), b);
+        Series mask =
+            dataframe::evaluate_mask(duql::detail::QueryAccess::root(*q), b);
         REQUIRE(mask.type() == dftracer::utils::dataframe::TypeId::Bool);
         REQUIRE(mask.length() == 5);
         // dur>100: {1,2,4}; cat==io: {0,2,3}; AND -> only row 2.
@@ -88,14 +87,15 @@ TEST_SUITE("query vec_mask") {
     }
 
     TEST_CASE("in-list lowers to OR-of-equals") {
-        std::vector<std::int64_t> x{1, 2, 3, 4};
+        dstd::Vector<std::int64_t> x{1, 2, 3, 4};
         DataFrame b;
         b.names = {"x"};
         b.columns.push_back(Series::flat_i64(x.data(), 4));
 
         auto q = duql::Query::from_string("x in [2, 4]");
         REQUIRE(q.has_value());
-        Series mask = dataframe::evaluate_mask(q->root(), b);
+        Series mask =
+            dataframe::evaluate_mask(duql::detail::QueryAccess::root(*q), b);
         CHECK(bit_at(mask, 0) == 0);
         CHECK(bit_at(mask, 1) == 1);
         CHECK(bit_at(mask, 2) == 0);
@@ -117,7 +117,7 @@ TEST_SUITE("query vec_mask") {
     }
 
     TEST_CASE("unsupported predicate throws DuqlErrc::Unsupported") {
-        std::vector<std::int64_t> v{1};
+        dstd::Vector<std::int64_t> v{1};
         DataFrame b;
         b.names = {"name"};
         b.columns.push_back(Series::flat_i64(v.data(), 1));
@@ -127,10 +127,10 @@ TEST_SUITE("query vec_mask") {
         REQUIRE(q.has_value());
         bool threw = false;
         try {
-            dataframe::evaluate_mask(q->root(), b);
-        } catch (const DFTUtilsException& e) {
+            dataframe::evaluate_mask(duql::detail::QueryAccess::root(*q), b);
+        } catch (const dftracer::utils::common::DFTUtilsException& e) {
             threw = true;
-            CHECK(e.condition() == Condition::Unsupported);
+            CHECK(e.condition() == dstd::Condition::Unsupported);
             CHECK(e.domain() == duql::ERROR_DOMAIN.id);
         }
         CHECK(threw);
@@ -172,12 +172,11 @@ TEST_SUITE("query vec_mask") {
     }
 
     TEST_CASE("Kleene and/or/not truth table") {
-        using dataframe::TypeId;
         // a = TTT FFF NNN, b = TFN TFN TFN; null slots carry data 1.
-        std::vector<std::uint8_t> ad{0b11000111, 0b1};
-        std::vector<std::uint8_t> av{0b00111111, 0b0};
-        std::vector<std::uint8_t> bd{0b01101101, 0b1};
-        std::vector<std::uint8_t> bv{0b11011011, 0b0};
+        dstd::Vector<std::uint8_t> ad{0b11000111, 0b1};
+        dstd::Vector<std::uint8_t> av{0b00111111, 0b0};
+        dstd::Vector<std::uint8_t> bd{0b01101101, 0b1};
+        dstd::Vector<std::uint8_t> bv{0b11011011, 0b0};
         Series a = Series::flat(TypeId::Bool, ad.data(), 9, av.data());
         Series c = Series::flat(TypeId::Bool, bd.data(), 9, bv.data());
         CHECK(truth(a & c) == "TFNFFFNFN");
@@ -187,7 +186,7 @@ TEST_SUITE("query vec_mask") {
     }
 
     TEST_CASE("query plan: where + select + order by + limit") {
-        std::vector<std::int64_t> dur{50, 150, 200, 80, 300};
+        dstd::Vector<std::int64_t> dur{50, 150, 200, 80, 300};
         DataFrame b;
         b.names = {"dur", "cat"};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
@@ -196,7 +195,7 @@ TEST_SUITE("query vec_mask") {
         auto q = duql::Query::from_string("dur > 60");
         REQUIRE(q.has_value());
         dataframe::QueryPlan plan;
-        plan.where = &q->root();
+        plan.where = &duql::detail::QueryAccess::root(*q);
         plan.select = {"dur", "cat"};
         plan.order_by = "dur";
         plan.descending = true;
@@ -204,14 +203,14 @@ TEST_SUITE("query vec_mask") {
         DataFrame out = dataframe::execute(plan, b);
         // dur>60: {150,200,80,300}; sort desc -> 300,200,150,80; limit 2.
         REQUIRE(out.num_rows() == 2);
-        REQUIRE(out.names == std::vector<std::string>{"dur", "cat"});
+        REQUIRE(out.names == dstd::Vector<dstd::String>{"dur", "cat"});
         CHECK(out.columns[0].data<std::int64_t>()[0] == 300);
         CHECK(out.columns[0].data<std::int64_t>()[1] == 200);
         CHECK(out.columns[1].string_at(0) == "net");
     }
 
     TEST_CASE("query plan: where + group by/agg + order by + limit") {
-        std::vector<std::int64_t> dur{10, 5, 20, 15, 30};
+        dstd::Vector<std::int64_t> dur{10, 5, 20, 15, 30};
         DataFrame b;
         b.names = {"cat", "dur"};
         b.columns.push_back(Series::strings({"io", "cpu", "io", "io", "net"}));
@@ -227,7 +226,7 @@ TEST_SUITE("query vec_mask") {
         // groups io(3),cpu(1),net(1); order by count desc -> io first.
         REQUIRE(out.num_rows() == 3);
         REQUIRE(out.names ==
-                std::vector<std::string>{"cat", "count", "sum_dur"});
+                dstd::Vector<dstd::String>{"cat", "count", "sum_dur"});
         CHECK(out.columns[0].string_at(0) == "io");
         CHECK(out.columns[1].data<std::int64_t>()[0] == 3);
         CHECK(out.columns[2].data<std::int64_t>()[0] == 45);  // io dur 10+20+15
@@ -243,7 +242,7 @@ TEST_SUITE("query vec_mask") {
         CHECK(std::strstr(s, "io") != nullptr);
         dftu_duql_string_free(s);
 
-        std::vector<std::int64_t> dur{50, 150, 200};
+        dstd::Vector<std::int64_t> dur{50, 150, 200};
         Series cdur = Series::flat_i64(dur.data(), 3);
         Series ccat = Series::strings({"io", "io", "net"});
         const dftu_series* cols[2] = {cdur.handle(), ccat.handle()};

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Author a compose op (``dftu_op``) in Python and JIT-compile it to a native
 plugin.
 

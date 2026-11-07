@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin that records the columns dftu_plugin::reads projects into
  * on_batch. One Slice declares `static reads()`, the other does not; the
  * `declare_reads` config key picks which one the factory builds, so a single
@@ -5,13 +6,16 @@
  */
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::plugins;
 
@@ -25,7 +29,7 @@ struct ColumnProbe {
 
     bool seen = false;
     std::int64_t num_columns = -1;
-    std::string columns;
+    dstd::String columns;
     bool has_args_x = false;
     double args_x_sum = 0.0;
 
@@ -34,7 +38,7 @@ struct ColumnProbe {
         seen = true;
         num_columns = dftu_dataframe_num_columns(df);
 
-        std::vector<std::string> names;
+        dstd::Vector<dstd::String> names;
         names.reserve(static_cast<std::size_t>(num_columns));
         for (std::int32_t i = 0; i < num_columns; ++i) {
             const char* n = dftu_dataframe_column_name(df, i);
@@ -72,10 +76,10 @@ struct ColumnProbe {
     }
 
     void finalize(Host h) {
-        h.emit_result("reads_probe.num_columns", std::to_string(num_columns));
+        h.emit_result("reads_probe.num_columns", dstd::to_string(num_columns));
         h.emit_result("reads_probe.columns", columns);
         h.emit_result("reads_probe.has_args_x", has_args_x ? "1" : "0");
-        h.emit_result("reads_probe.args_x_sum", std::to_string(args_x_sum));
+        h.emit_result("reads_probe.args_x_sum", dstd::to_string(args_x_sum));
     }
 };
 

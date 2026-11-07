@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example dftracer-utils plugin in pure C: a weighted process<->file bipartite
  * graph, and the plain shape of a dft.ext.agg accumulator - a two-column key
  * plus several aggregates over the same batch. Each batch arrives as a column
@@ -58,7 +59,8 @@ static void destroy(void* self) { (void)self; }
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
+                                                const dftu_value* config) {
     (void)h;
     (void)config;
     g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;

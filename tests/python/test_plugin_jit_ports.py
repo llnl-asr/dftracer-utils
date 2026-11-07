@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Inter-plugin communication for @jit.plugin authoring.
 
 A jit plugin declares a batch-scoped publish port with jit.publish (its wire id

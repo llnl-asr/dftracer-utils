@@ -1,12 +1,38 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 
 #include <algorithm>
 #include <cstdio>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::utilities::replay {
+
+void ReplayResult::merge(const ReplayResult& other) {
+    total_events += other.total_events;
+    executed_events += other.executed_events;
+    filtered_events += other.filtered_events;
+    failed_events += other.failed_events;
+    total_duration += other.total_duration;
+    execution_duration += other.execution_duration;
+    for (const auto& [func, count] : other.function_counts)
+        function_counts[func] += count;
+    for (const auto& [cat, count] : other.category_counts)
+        category_counts[cat] += count;
+    error_messages.insert(error_messages.end(), other.error_messages.begin(),
+                          other.error_messages.end());
+    for (const auto& [pid, count] : other.pid_counts) pid_counts[pid] += count;
+    for (const auto& [tid, count] : other.tid_counts) tid_counts[tid] += count;
+    total_bytes_read += other.total_bytes_read;
+    total_bytes_written += other.total_bytes_written;
+    first_timestamp = std::min(first_timestamp, other.first_timestamp);
+    last_timestamp = std::max(last_timestamp, other.last_timestamp);
+    total_nodes += other.total_nodes;
+    tree_depth = std::max(tree_depth, other.tree_depth);
+    unique_processes += other.unique_processes;
+}
 
 // =============================================================================
 // ReplayResult::print_summary Implementation
@@ -67,7 +93,7 @@ void ReplayResult::print_summary() const {
         // pool; sorting needs an indexable copy. Keep the views to avoid
         // re-allocating strings for the dictionary entries (read,
         // write, ...).
-        std::vector<std::pair<std::string_view, std::size_t>> sorted_funcs(
+        dstd::Vector<dstd::Pair<dstd::StringView, std::size_t>> sorted_funcs(
             function_counts.begin(), function_counts.end());
         std::sort(
             sorted_funcs.begin(), sorted_funcs.end(),

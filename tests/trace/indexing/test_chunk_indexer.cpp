@@ -1,22 +1,24 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <fstream>
-#include <string>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::build;
 
 // Helper to create a test trace file (plain text), then compress to gzip.
 // Returns the .gz path and the uncompressed size.
-static std::pair<std::string, std::size_t> create_test_trace_gz(
-    const std::string& dir, int num_events) {
-    std::string plain_path = dir + "/test_index.trace";
+static dstd::Pair<dstd::String, std::size_t> create_test_trace_gz(
+    const dstd::String& dir, int event_count) {
+    dstd::String plain_path = dir + "/test_index.trace";
     {
-        std::ofstream ofs(plain_path);
+        dftu_utils_test::FileOut ofs(plain_path);
 
         // Metadata events
         ofs << R"({"name":"HH","ph":"M","args":{"hhash":"abc123","name":"testhost","value":"abc123"}})"
@@ -27,7 +29,7 @@ static std::pair<std::string, std::size_t> create_test_trace_gz(
             << "\n";
 
         // Regular events
-        for (int i = 0; i < num_events; ++i) {
+        for (int i = 0; i < event_count; ++i) {
             std::uint64_t ts = 1000000 + static_cast<std::uint64_t>(i * 1000);
             int dur = 100 + i * 10;
             const char* names[] = {"read", "write", "open", "close"};
@@ -46,20 +48,20 @@ static std::pair<std::string, std::size_t> create_test_trace_gz(
         ofs.close();
     }
 
-    std::size_t uncompressed_size = fs::file_size(plain_path);
-    std::string gz_path = plain_path + ".gz";
-    dftu_utils_test::compress_file_to_gzip(plain_path, gz_path);
-    fs::remove(plain_path);
+    std::size_t uncompressed_size = dstd::fs::file_size(plain_path).value();
+    dstd::String gz_path = plain_path + ".gz";
+    dftu_utils_test::compress_file_to_gzip(dstd::String(plain_path),
+                                           dstd::String(gz_path));
+    (void)dstd::fs::remove(plain_path);
 
     return {gz_path, uncompressed_size};
 }
 
 TEST_SUITE("ChunkIndexer") {
     TEST_CASE("ChunkIndexer - Process trace with metadata and events") {
-        std::string test_dir =
-            dftu_utils_test::make_unique_test_path("test_chunk_indexer")
-                .string();
-        fs::create_directories(test_dir);
+        dstd::String test_dir = dstd::String(
+            dftu_utils_test::make_unique_test_path("test_chunk_indexer").str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
         auto [trace_file, uncompressed_size] =
             create_test_trace_gz(test_dir, 50);
@@ -111,14 +113,14 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.statistics.name_counts.count("read") == 1);
         CHECK(output.statistics.duration_count == 50);
 
-        fs::remove_all(test_dir);
+        (void)dstd::fs::remove_all(test_dir);
     }
 
     TEST_CASE("ChunkIndexer - Extra dimensions with nested keys") {
-        std::string test_dir =
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_chunk_indexer_extra")
-                .string();
-        fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
         auto [trace_file, uncompressed_size] =
             create_test_trace_gz(test_dir, 20);
@@ -157,18 +159,18 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.bloom_filters.at("io.size").possibly_contains("1024"));
         CHECK(output.bloom_filters.at("io.size").possibly_contains("2048"));
 
-        fs::remove_all(test_dir);
+        (void)dstd::fs::remove_all(test_dir);
     }
 
     TEST_CASE("ChunkIndexer - Events missing some fields") {
-        std::string test_dir =
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_chunk_indexer_missing")
-                .string();
-        fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string plain_path = test_dir + "/test_sparse.trace";
+        dstd::String plain_path = test_dir + "/test_sparse.trace";
         {
-            std::ofstream ofs(plain_path);
+            dftu_utils_test::FileOut ofs(plain_path);
             // Event without fhash (not all events are I/O)
             ofs << R"({"name":"compute","cat":"APP","pid":1,"tid":1,"ts":1000,"dur":500,"ph":"X","args":{"hhash":"abc123"}})"
                 << "\n";
@@ -178,10 +180,11 @@ TEST_SUITE("ChunkIndexer") {
             ofs.close();
         }
 
-        std::size_t uncompressed_size = fs::file_size(plain_path);
-        std::string gz_path = plain_path + ".gz";
-        dftu_utils_test::compress_file_to_gzip(plain_path, gz_path);
-        fs::remove(plain_path);
+        std::size_t uncompressed_size = dstd::fs::file_size(plain_path).value();
+        dstd::String gz_path = plain_path + ".gz";
+        dftu_utils_test::compress_file_to_gzip(dstd::String(plain_path),
+                                               dstd::String(gz_path));
+        (void)dstd::fs::remove(plain_path);
 
         ChunkIndexerConfig config;
         config.expected_entries_per_chunk = 100;
@@ -203,6 +206,6 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.bloom_filters.at("fhash").possibly_contains("def456"));
         CHECK(output.statistics.total_events == 2);
 
-        fs::remove_all(test_dir);
+        (void)dstd::fs::remove_all(test_dir);
     }
 }

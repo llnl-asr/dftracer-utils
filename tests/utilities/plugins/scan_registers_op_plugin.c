@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin that tries to register an op from on_batch instead of its
  * factory. The scan-time host must refuse: registration is a load-time
  * concern, so an op registered here would land after ordering, the prune and

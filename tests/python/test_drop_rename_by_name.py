@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """LazyFrame.drop and LazyFrame.rename(mapping) by name, including the columns
 a trace scan adds that the schema does not list."""
 

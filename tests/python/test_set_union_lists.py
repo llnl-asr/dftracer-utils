@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """``set_union`` over list columns, and a text form that loses no value
 (openspec change set-union-over-list-cells)."""
 

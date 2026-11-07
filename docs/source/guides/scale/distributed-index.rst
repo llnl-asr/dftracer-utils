@@ -1,4 +1,4 @@
-:description: Index a large trace set in parallel across a dask cluster: workers build shards to node-local staging and the coordinator assembles the store.
+:description: Index a large trace set in parallel across a dask cluster: each worker writes its share of the files straight into the index store.
 
 Build an index across a dask cluster
 ====================================
@@ -7,8 +7,8 @@ Build an index across a dask cluster
    :class: goal
 
    Index a large trace set in parallel across a `dask
-   <https://www.dask.org/>`_ cluster, with each worker building shards to
-   node-local staging and the coordinator assembling them into one index store.
+   <https://www.dask.org/>`_ cluster, with each worker writing its share of
+   the files straight into one index store.
 
 This is a Python-only API. It lives in ``dftracer.utils.dask`` and has no C++ or
 C equivalent; the C++ indexer is single-process (parallel within the node).
@@ -23,23 +23,21 @@ package root):
 
    from dftracer.utils.dask import distributed_index
 
-The minimal call runs inline on the coordinator - no cluster needed. Three
-arguments are required: a source (``directory`` or ``files``), an
-``index_path``, and a ``local_staging`` directory:
+The minimal call runs inline on the coordinator - no cluster needed. Two
+arguments are required: a source (``directory`` or ``files``) and an
+``index_path``:
 
 .. code-block:: python
 
    result = distributed_index(
        directory="./traces",
        index_path="/path/to/index.dftindex",
-       local_staging="/path/to/staging",
    )
-   # {"total_files": 128, "per_worker": [...], "index_path": "...",
-   #  "artifact_batches": 4}
+   # {"total_files": 128, "per_worker": [...], "index_path": "..."}
 
 With ``client=None`` (the default) every task runs inline on the coordinator. To
-fan the work across workers, pass a ``dask.distributed.Client`` and give a
-``shared_staging`` path on a filesystem the coordinator can also read:
+fan the work across workers, pass a ``dask.distributed.Client`` and give every
+worker write access to ``index_path``:
 
 .. code-block:: python
 
@@ -52,8 +50,6 @@ fan the work across workers, pass a ``dask.distributed.Client`` and give a
    result = distributed_index(
        directory="/shared/traces",
        index_path="/shared/index.dftindex",
-       local_staging="/scratch/local",     # node-local scratch on each worker
-       shared_staging="/shared/staging",   # visible to the coordinator
        client=client,
        partition="lpt",                    # longest-processing-time balancing
    )
@@ -73,13 +69,7 @@ Useful parameters
      - Trace source. Give one of them.
    * - ``index_path``
      - (required)
-     - Output index store path.
-   * - ``local_staging``
-     - (required)
-     - Per-worker (node-local) staging directory.
-   * - ``shared_staging``
-     - = ``local_staging``
-     - Staging root reachable by the coordinator (needed with a real cluster).
+     - Output index store path, written by every worker.
    * - ``client``
      - ``None``
      - A dask ``Client``; ``None`` runs inline on the coordinator.
@@ -100,9 +90,26 @@ Useful parameters
      - Callback ``(done, total, message)`` for progress reporting.
 
 ``distributed_index`` returns a dict with ``total_files``, ``per_worker`` (files
-per worker), ``index_path``, and ``artifact_batches``. It raises ``ValueError``
-when ``index_path`` or ``local_staging`` is empty or neither ``directory`` nor
+per worker) and ``index_path``. It raises ``ValueError``
+when ``index_path`` is empty or neither ``directory`` nor
 ``files`` is given, and ``ImportError`` when dask is not installed.
+
+The build runs in four steps.
+
+1. Each worker builds its files as a complete index root at
+   ``<index_path>/shards/<worker>``, staging the build on node-local disk when
+   ``<index_path>`` is a network filesystem,
+   and falling back to building in place when there is no node-local scratch.
+2. The coordinator writes ``<index_path>/shards.json`` once every task
+   finished.
+3. The coordinator merges the shards into ``<index_path>/store`` by moving
+   their store data files there, then removes the manifest and the emptied
+   shard directories.
+4. The coordinator records the aggregation config and queries read
+   ``<index_path>/store`` like any other index root.
+
+A failed task fails the whole build and leaves the arrived shards in place, so
+a later call merges them without rebuilding.
 
 Related helpers
 ---------------
@@ -112,6 +119,12 @@ native runtime thread count), ``assign_files_by_pid(file_pids, n_workers)``
 (worker assignment by majority-PID affinity), and the ``DaskTraceViewer`` /
 ``DaskAggregatedTraceViewer`` classes for querying across the cluster once the
 index exists.
+
+``assign_files_by_pid`` takes a dict that maps each trace path to its set of
+PIDs, and returns a dict that maps each worker id to a list of trace paths.
+It sends the files of one majority PID to the same worker.
+A file with no recorded PID goes to the worker its path hashes to with
+``zlib.crc32``, so two runs of the same input give the same assignment.
 
 ``DaskTraceViewer.flamegraph(partition=("pid", "tid"), ts, dur, name, group)``
 builds a flamegraph across the cluster: each file shard folds a serialized arena
@@ -125,99 +138,135 @@ phase / time like ``collect``.
 Query a shard set
 -----------------
 
-``distributed_index`` (and any producer that writes disjoint per-worker
-indexes) can leave behind a set of immutable index shards instead of one
-consolidated store. ``ShardedView`` (C++,
-``dftracer/utils/trace/views/sharded_view.h``) queries that set as one logical
-index, without opening or rebuilding a merged store: it enumerates every
-shard's files, aggregates each shard independently with
-``aggregate_partial()``, and reduces the partials - the in-process form of the
+``distributed_index`` merges its shards into the index root, so a reader needs
+no shard support. A producer that keeps its per-worker indexes unmerged can
+leave them as a set of immutable index shards in ``<root>/shards/<n>`` next to
+the ``<root>/shards.json`` manifest. ``dftracer_view`` queries that set as one
+logical index, without opening or rebuilding a merged store: it aggregates
+each shard independently and reduces the partials - the in-process form of the
 :doc:`distributed-aggregation` fan-in pattern.
 
-.. code-block:: cpp
-
-   #include <dftracer/utils/trace/views/sharded_view.h>
-
-   using namespace dftracer::utils::trace::views;
-
-   ShardedView sv = ShardedView::from_manifest("/shared/index-shards");
-   // or, bypassing the manifest:
-   ShardedView sv2 = ShardedView::from_shard_dirs({"/shared/s0", "/shared/s1"});
-
-   auto configure = [](View v) {
-       return v.group_by({GroupKey::name()})
-               .agg({{AggOp::Count, "", "count"}, {AggOp::Sum, "dur", "sum_dur"}});
-   };
-   dftracer::utils::dataframe::DataFrame table = sv.aggregate(configure).get();
-
-   // Or emit the merged aggregation as ph="C" counter events. ExportSink is
-   // abstract (just write(std::string_view)), so a caller implements one:
-   struct StringSink : ExportSink {
-       std::string data;
-       void write(std::string_view chunk) override { data.append(chunk); }
-   };
-   StringSink sink;
-   ExportStats stats = sv.aggregate_counters(configure, sink).get();
-
-``ShardedView`` is fully read-only: it never builds, rebuilds, or persists a
+A shard set is read-only: a query never builds, rebuilds, or persists a
 rollup, so it takes no write lock and is safe against shards on a read-only
-mount or NFS. It only answers aggregate/counter queries (``configure`` must
-set a ``group_by``/``agg``) - there is no raw-event read across a shard set.
+mount or NFS. It only answers aggregate/counter queries (the query must set a
+group-by and aggregations) - there is no raw-event read across a shard set.
+
+Build and query a shard set by hand
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A shard is a directory that holds its own traces and its own ``.dftindex``,
+as if one worker had indexed its slice alone. Make a different trace for each:
+
+.. code-block:: python
+
+   import gzip
+   import os
+
+   os.makedirs("shard-a", exist_ok=True)
+   os.makedirs("shard-b", exist_ok=True)
+
+   with gzip.open("shard-a/trace.pfw.gz", "wt") as f:
+       for i in range(200):
+           f.write(
+               f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,'
+               f'"ts":{1000 + i},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+           )
+
+   with gzip.open("shard-b/trace.pfw.gz", "wt") as f:
+       for i in range(300):
+           f.write(
+               f'{{"name":"read","cat":"POSIX","pid":2,"tid":1,'
+               f'"ts":{2000 + i},"dur":{5 + i},"ph":"X","args":{{}}}}\n'
+           )
+
+Index each shard with no coordination between them:
+
+.. code-block:: console
+
+   $ dftracer_index shard-a
+   $ dftracer_index shard-b
+
+Then catalog the shards into the manifest of an index root with
+``write_shard_set(root, shard_dirs)``, and pass absolute shard paths:
+
+.. code-block:: python
+
+   import os
+   from dftracer.utils import write_shard_set
+
+   os.makedirs("set/.dftindex", exist_ok=True)
+   write_shard_set(
+       "set/.dftindex",
+       [os.path.abspath("shard-a"), os.path.abspath("shard-b")],
+   )
+
+Query the set through its folder. With 200 events in ``shard-a`` and 300 in
+``shard-b``, the partials reduce into one row:
+
+.. code-block:: console
+
+   $ dftracer_view set --group-by cat --agg count,sum:dur
+   {"cat":"posix","count":500,"sum_dur":68250}
+
+To end with one ordinary index, put the shards under
+``set/.dftindex/shards/<n>`` and call ``consolidate_shard_set("set/.dftindex")``
+as described below.
 
 The shard-set format
 ~~~~~~~~~~~~~~~~~~~~~
 
-A shard set is a directory holding a ``shards.json`` manifest
-(written by ``IndexShardManifest``, which is internal to the index module):
-a ``format_version`` plus a list of ``IndexShardEntry`` records, each naming
-one shard's ``path`` (relative to the manifest's directory), its closed
-``file_id_min``/``file_id_max`` range, ``num_files``, and ``num_events``. Every
-shard's file-id range is disjoint from every other shard's, so a merge reader
-can open all of them without key collisions.
+A shard set is a directory holding a ``shards.json`` manifest.
+``IndexShardManifest`` writes that manifest and is internal to the index
+module.
+The manifest holds a ``format_version`` and a list of ``IndexShardEntry``
+records.
+Each record names one shard's ``path``, which is relative to the manifest's
+directory, and gives the shard's ``num_files`` and ``num_events`` counts.
+Each shard is a self-contained read-only index, so a reader opens each shard
+independently.
+The ``index`` line of ``VERSION`` sets ``format_version``, and a reader
+rejects a manifest that holds another version.
 
-Three free functions manage the set:
+Two free functions manage the set:
 
 - ``write_shard_set(root, shard_dirs)`` - catalog an existing set of shard
   directories into a manifest at ``root``. Atomic (write-temp-then-rename), so
   a concurrent reader never sees a torn manifest.
-- ``consolidate_shard_set(scope, root, out_root)`` - rebuild one unified index
-  (with its aggregation tier) from the shards' trace files at ``out_root``,
-  re-reading traces. Requires the trace files to be present with distinct
-  logical filenames across shards.
-- ``merge_shard_set(root, out_root)`` - merge the shards' aggregation tiers
-  into one consolidated tier index at ``out_root`` **without** re-reading
-  traces (re-keys each shard's interned strings into a unified dictionary and
-  combines them). Answers tier-covered queries from a single index, but does
-  not serve scan-fallback queries the way ``consolidate_shard_set`` does.
+- ``consolidate_shard_set(root)`` - merge every shard into ``root``'s own
+  store by moving each shard's store data files there, then remove the
+  manifest and the emptied shard directories. A move that fails leaves the
+  manifest and the remaining shards in place and throws, so a later call
+  retries the merge without a rebuild.
 
-The default nested location a producer uses is ``<trace-dir>/.dftindex-shards``
-(``SHARD_SET_DIRNAME``) so the shard set does not get picked up as trace input
-by the directory scanner.
+The shards of a root live in ``<root>/shards/<n>`` and the manifest is
+``<root>/shards.json`` (``shard_root`` and ``shard_manifest_path``), so the
+shard set is inside the index root that holds it and the directory scanner
+never picks it up as trace input.
 
 CLI: dftracer_view autodetects a shard set
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``dftracer_view`` resolves a shard-set root from ``-d``/``--directory`` or
-``--index-dir`` (the directory itself if it holds ``shards.json``, else its
-``.dftindex-shards`` subdirectory) and, when found, routes the query through
-``ShardedView`` instead of scanning trace files directly. A shard set only
-supports aggregate/counter queries:
+``dftracer_view`` resolves a shard-set root from its folder input or
+``--index-dir`` (adding ``.dftindex`` to the path when the path is not an
+index root yet, then reading ``shards.json``) and, when found, routes the
+query through the shard set instead of scanning trace files directly. A
+shard set only supports aggregate/counter queries:
 
 .. code-block:: bash
 
-   dftracer_view -d /shared/traces --group-by name --agg count,sum:dur \
+   dftracer_view /shared/traces --group-by name --agg count,sum:dur \
        > result.ndjson
 
 If ``-d``/``--index-dir`` does not resolve to a shard set (no ``shards.json``
-under it or its ``.dftindex-shards`` subdirectory), ``dftracer_view`` falls
-back to its normal single-index path.
+in the index root), ``dftracer_view`` falls back to its normal single-index
+path.
 
 See also
 --------
 
 - :doc:`../../trace-viewer` - query the index this builds.
 - :doc:`distributed-aggregation` - the partial-aggregate fan-in pattern
-  ``ShardedView`` runs in-process, and the pattern to use when reducing
+  a shard-set query runs in-process, and the pattern to use when reducing
   partials yourself (e.g. across MPI ranks).
 - :doc:`mpi` - the MPI modes of ``dftracer_view``, the other cross-node path.
 - :doc:`../io/compression` - ``checkpoint_size`` is the gzip member size.

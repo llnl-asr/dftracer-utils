@@ -1,15 +1,15 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_MULTI_LINE_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_MULTI_LINE_STREAM_H
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 
 #include <cstdio>
 #include <cstring>
-#include <memory>
-#include <span>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -22,10 +22,10 @@ namespace dftracer::utils::utilities::reader::internal {
  */
 class MultiLineStream : public ReaderStream {
    private:
-    std::unique_ptr<ReaderStream> underlying_stream_;
-    std::span<const char> current_span_;
-    std::string line_accumulator_;
-    std::string output_buffer_;
+    dstd::UniquePtr<ReaderStream> underlying_stream_;
+    dstd::Span<const char> current_span_;
+    dstd::String line_accumulator_;
+    dstd::String output_buffer_;
     bool is_finished_;
     std::size_t current_line_;
     std::size_t start_line_;
@@ -37,7 +37,7 @@ class MultiLineStream : public ReaderStream {
         output_buf_pos_;  // Position in output_buffer_ for buffer-based reads
 
    public:
-    explicit MultiLineStream(std::unique_ptr<ReaderStream> underlying_stream,
+    explicit MultiLineStream(dstd::UniquePtr<ReaderStream> underlying_stream,
                              std::size_t start_line = 0,
                              std::size_t end_line = 0,
                              std::size_t initial_line = 1)
@@ -58,7 +58,7 @@ class MultiLineStream : public ReaderStream {
 
     ~MultiLineStream() override { reset(); }
 
-    coro::CoroTask<std::span<const char>> read_async() override {
+    coro::CoroTask<dstd::Span<const char>> read_async() override {
         if (!underlying_stream_) {
             co_return {};
         }
@@ -72,7 +72,8 @@ class MultiLineStream : public ReaderStream {
 
         // Read and accumulate multiple lines into output_buffer_
         while (!reached_end_of_range() && !reached_max_lines(max_lines)) {
-            if (!co_await refill_if_needed()) {
+            const auto refill_if_needed_ok = co_await refill_if_needed();
+            if (!refill_if_needed_ok) {
                 break;
             }
 
@@ -91,8 +92,8 @@ class MultiLineStream : public ReaderStream {
             co_return {};
         }
 
-        co_return std::span<const char>(output_buffer_.data(),
-                                        output_buffer_.size());
+        co_return dstd::Span<const char>(output_buffer_.data(),
+                                         output_buffer_.size());
     }
 
     coro::CoroTask<std::size_t> read_async(char* buffer,
@@ -151,7 +152,7 @@ class MultiLineStream : public ReaderStream {
         }
         line_accumulator_.clear();
         output_buffer_.clear();
-        current_span_ = std::span<const char>();
+        current_span_ = dstd::Span<const char>();
         is_finished_ = false;
         current_line_ = initial_line_;
         lines_output_ = 0;
@@ -234,7 +235,7 @@ class MultiLineStream : public ReaderStream {
             }
 
             std::size_t newline_pos = newline_ptr - current_span_.data();
-            std::size_t line_len = newline_pos - span_pos_;
+            std::size_t line_size = newline_pos - span_pos_;
 
             // Determine if this line should be output
             bool in_range = is_line_in_output_range();
@@ -245,14 +246,14 @@ class MultiLineStream : public ReaderStream {
                 if (!line_accumulator_.empty()) {
                     // Complete accumulated line
                     line_accumulator_.append(current_span_.data() + span_pos_,
-                                             line_len);
+                                             line_size);
                     output_buffer_.append(line_accumulator_);
                     output_buffer_.push_back('\n');
                     line_accumulator_.clear();
                 } else {
                     // Direct append from span
                     output_buffer_.append(current_span_.data() + span_pos_,
-                                          line_len);
+                                          line_size);
                     output_buffer_.push_back('\n');
                 }
                 lines_output_++;

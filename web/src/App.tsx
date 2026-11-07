@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
 import {
   fetchCallTree,

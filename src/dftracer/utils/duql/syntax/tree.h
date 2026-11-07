@@ -1,14 +1,17 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DUQL_SYNTAX_TREE_H
 #define DFTRACER_UTILS_DUQL_SYNTAX_TREE_H
 
-#include <dftracer/utils/core/common/versions.h>
+#include <dftracer/utils/common/versions.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <string>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::duql::syntax {
 
@@ -16,9 +19,9 @@ inline constexpr int DUQL_VERSION_MAJOR = DFTRACER_UTILS_DUQL_VERSION_MAJOR;
 inline constexpr int DUQL_VERSION_MINOR = DFTRACER_UTILS_DUQL_VERSION_MINOR;
 
 struct Expr;
-using ExprPtr = std::unique_ptr<Expr>;
+using ExprPtr = dstd::UniquePtr<Expr>;
 struct Pipeline;
-using PipelinePtr = std::unique_ptr<Pipeline>;
+using PipelinePtr = dstd::UniquePtr<Pipeline>;
 
 /// Byte range of a node in the source text.
 struct Span {
@@ -33,44 +36,44 @@ struct Null {
 /// A literal. Integers keep the old parser's typing: non-negative ones are
 /// unsigned. `number_text` keeps a number's spelling for printing.
 struct Literal {
-    std::variant<Null, bool, std::int64_t, std::uint64_t, double, std::string>
+    dstd::Variant<Null, bool, std::int64_t, std::uint64_t, double, dstd::String>
         value;
-    std::string number_text;
+    dstd::String number_text;
     bool operator==(const Literal&) const = default;
 };
 
 /// A duration literal such as `250ms`; `amount` is the number as written.
 struct Duration {
-    std::string amount;
-    std::string unit;
+    dstd::String amount;
+    dstd::String unit;
     bool operator==(const Duration&) const = default;
 };
 
 /// One step of a path: a key (bare or backtick-quoted) or an array index.
 struct PathStep {
-    std::string key;
+    dstd::String key;
     bool quoted = false;
-    std::optional<std::int64_t> index;
+    dstd::Optional<std::int64_t> index;
     bool wildcard() const { return key == "*" && !quoted; }
     bool operator==(const PathStep&) const = default;
 };
 
-enum class PathRoot : std::uint8_t { RECORD, CURRENT, ENCLOSING };
+enum class PathRoot : std::uint8_t { Record, Current, Enclosing };
 
 /// `a.b[0]`, `.name` (current row) or `^.name` (enclosing row). A step with
 /// key `*` that is not quoted is a wildcard: the path is a pattern.
 struct Path {
-    PathRoot root = PathRoot::RECORD;
-    std::vector<PathStep> steps;
+    PathRoot root = PathRoot::Record;
+    dstd::Vector<PathStep> steps;
     bool operator==(const Path&) const = default;
 };
 
 struct Param {
-    std::string name;
+    dstd::String name;
     bool operator==(const Param&) const = default;
 };
 
-enum class UnaryOp : std::uint8_t { NEG, NOT };
+enum class UnaryOp : std::uint8_t { Neg, Not };
 
 struct Unary {
     UnaryOp op;
@@ -78,25 +81,25 @@ struct Unary {
 };
 
 enum class BinaryOp : std::uint8_t {
-    OR,
-    AND,
-    EQ,
-    NE,
-    LT,
-    LE,
-    GT,
-    GE,
-    REGEX,
-    IREGEX,
-    NREGEX,
-    NIREGEX,
-    ADD,
-    SUB,
-    MUL,
-    DIV,
-    IDIV,
-    MOD,
-    COALESCE,
+    Or,
+    And,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Regex,
+    Iregex,
+    Nregex,
+    Niregex,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Idiv,
+    Mod,
+    Coalesce,
 };
 
 struct Binary {
@@ -111,15 +114,15 @@ struct Binary {
 struct In {
     ExprPtr subject;
     bool negated = false;
-    std::vector<ExprPtr> list;
+    dstd::Vector<ExprPtr> list;
     PipelinePtr subquery;
-    std::string list_param;
+    dstd::String list_param;
 };
 
 /// `"text" [not] in path` or `"text" [not] in any(path)`: the legacy
 /// case-insensitive substring test.
 struct Contains {
-    std::string text;
+    dstd::String text;
     bool negated = false;
     Path path;
     bool any = false;
@@ -138,9 +141,9 @@ struct Like {
     ExprPtr subject;
     bool negated = false;
     bool icase = false;
-    std::string pattern;
-    std::optional<std::string> escape;
-    std::string pattern_param;
+    dstd::String pattern;
+    dstd::Optional<dstd::String> escape;
+    dstd::String pattern_param;
 };
 
 struct Is {
@@ -152,20 +155,20 @@ struct Is {
 /// `key -> rowset(target_key).path`.
 struct Arrow {
     ExprPtr key;
-    std::string rowset;
-    std::optional<Path> target_key;
+    dstd::String rowset;
+    dstd::Optional<Path> target_key;
     Path path;
 };
 
 struct Arg {
-    std::string name;
+    dstd::String name;
     ExprPtr value;
 };
 
 /// `name(args)`; `name` may be namespaced (`myplug.entropy`).
 struct Call {
-    std::string name;
-    std::vector<Arg> args;
+    dstd::String name;
+    dstd::Vector<Arg> args;
 };
 
 /// `call over N rows` (`rows`) or `call over width` (a duration, number or
@@ -177,11 +180,11 @@ struct Over {
 };
 
 struct List {
-    std::vector<ExprPtr> items;
+    dstd::Vector<ExprPtr> items;
 };
 
 struct Tuple {
-    std::vector<ExprPtr> items;
+    dstd::Vector<ExprPtr> items;
 };
 
 struct Subquery {
@@ -194,9 +197,9 @@ struct Index {
     ExprPtr index;
 };
 
-using ExprNode = std::variant<Literal, Duration, Path, Param, Unary, Binary, In,
-                              Contains, Between, Like, Is, Arrow, Call, Over,
-                              List, Tuple, Subquery, Index>;
+using ExprNode = dstd::Variant<Literal, Duration, Path, Param, Unary, Binary,
+                               In, Contains, Between, Like, Is, Arrow, Call,
+                               Over, List, Tuple, Subquery, Index>;
 
 struct Expr {
     ExprNode node;
@@ -204,125 +207,125 @@ struct Expr {
 };
 
 struct Assign {
-    std::string name;
+    dstd::String name;
     ExprPtr value;
 };
 
 /// A `select` or `group` item: `expr [as name]` or `name = expr`.
 struct Item {
     ExprPtr value;
-    std::string name;
+    dstd::String name;
 };
 
-enum class NullsOrder : std::uint8_t { DEFAULT, FIRST, LAST };
+enum class NullsOrder : std::uint8_t { Default, First, Last };
 
 struct SortKey {
     ExprPtr value;
     bool descending = false;
-    NullsOrder nulls = NullsOrder::DEFAULT;
+    NullsOrder nulls = NullsOrder::Default;
 };
 
 struct Where {
     ExprPtr condition;
 };
 struct Derive {
-    std::vector<Assign> fields;
+    dstd::Vector<Assign> fields;
 };
 struct Parse {
     Path column;
     ExprPtr pattern;
 };
 struct Select {
-    std::vector<Item> items;
+    dstd::Vector<Item> items;
 };
 struct Drop {
-    std::vector<Path> paths;
+    dstd::Vector<Path> paths;
 };
 struct Rename {
-    std::vector<std::pair<std::string, Path>> pairs;
+    dstd::Vector<dstd::Pair<dstd::String, Path>> pairs;
 };
 struct Distinct {
-    std::vector<Item> keys;
+    dstd::Vector<Item> keys;
 };
 struct Group {
-    std::vector<Item> keys;
-    std::vector<Assign> aggregates;
+    dstd::Vector<Item> keys;
+    dstd::Vector<Assign> aggregates;
 };
 struct Agg {
-    std::vector<Assign> aggregates;
+    dstd::Vector<Assign> aggregates;
 };
 struct Window {
-    std::vector<Item> partition;
-    std::vector<SortKey> order;
-    std::vector<Assign> fields;
+    dstd::Vector<Item> partition;
+    dstd::Vector<SortKey> order;
+    dstd::Vector<Assign> fields;
 };
 /// `pivot k [in [v [as label], ...]] { ... }`; `labels` pairs with
 /// `values`, empty for a value with no label.
 struct Pivot {
     ExprPtr key;
-    std::vector<ExprPtr> values;
-    std::vector<std::string> labels;
-    std::vector<Assign> aggregates;
+    dstd::Vector<ExprPtr> values;
+    dstd::Vector<dstd::String> labels;
+    dstd::Vector<Assign> aggregates;
 };
 struct Unpivot {
-    std::vector<Path> paths;
-    std::string key_name;
-    std::string value_name;
+    dstd::Vector<Path> paths;
+    dstd::String key_name;
+    dstd::String value_name;
 };
 struct Sort {
-    std::vector<SortKey> keys;
+    dstd::Vector<SortKey> keys;
 };
 /// `take n [by ... [sort ...]]`, or `take a..b` (`last` is `b`): rows `a`
 /// to `b`, 1-based and inclusive.
 struct Take {
-    std::string count;
-    std::vector<ExprPtr> by;
-    std::vector<SortKey> order;
-    std::string last;
+    dstd::String count;
+    dstd::Vector<ExprPtr> by;
+    dstd::Vector<SortKey> order;
+    dstd::String last;
 };
 struct Skip {
-    std::string count;
+    dstd::String count;
 };
 struct Sample {
-    std::string amount;
+    dstd::String amount;
     bool percent = false;
-    std::string seed;
+    dstd::String seed;
 };
 struct Expand {
     Path path;
-    std::string as;
-    std::string with_index;
+    dstd::String as;
+    dstd::String with_index;
     bool keep_empty = false;
 };
-enum class LookupKind : std::uint8_t { LEFT, INNER, ANTI };
+enum class LookupKind : std::uint8_t { Left, Inner, Anti };
 
 /// `lookup side on k [== k2], ... [inner | anti] [into name]`; `side` is the
 /// inline `(from ...)` pipeline when `rowset` is empty.
 struct Lookup {
-    std::string rowset;
+    dstd::String rowset;
     PipelinePtr side;
-    LookupKind kind = LookupKind::LEFT;
-    std::vector<std::pair<ExprPtr, ExprPtr>> keys;
-    std::string into;
+    LookupKind kind = LookupKind::Left;
+    dstd::Vector<dstd::Pair<ExprPtr, ExprPtr>> keys;
+    dstd::String into;
 };
-enum class AsofDirection { BACKWARD, FORWARD, NEAREST };
+enum class AsofDirection { Backward, Forward, Nearest };
 
 /// `lookup rowset on k [== k2], ... asof t [== t2] [direction] [within d]`;
 /// `within` is a number, a duration or a parameter.
 struct AsofLookup {
-    std::string rowset;
+    dstd::String rowset;
     PipelinePtr side;
-    std::vector<std::pair<ExprPtr, ExprPtr>> keys;
-    std::pair<ExprPtr, ExprPtr> time;
-    AsofDirection direction = AsofDirection::BACKWARD;
+    dstd::Vector<dstd::Pair<ExprPtr, ExprPtr>> keys;
+    dstd::Pair<ExprPtr, ExprPtr> time;
+    AsofDirection direction = AsofDirection::Backward;
     ExprPtr within;
 };
 /// `lookup rowset on k [== k2], ... overlap [into name]`.
 struct OverlapLookup {
-    std::string rowset;
+    dstd::String rowset;
     PipelinePtr side;
-    std::vector<std::pair<ExprPtr, ExprPtr>> keys;
-    std::string into;
+    dstd::Vector<dstd::Pair<ExprPtr, ExprPtr>> keys;
+    dstd::String into;
 };
 struct Union {
     PipelinePtr other;
@@ -341,7 +344,7 @@ struct CallTree {};
 struct Use {
     Call call;
 };
-enum class FillMode : std::uint8_t { ZERO, FORWARD, LINEAR };
+enum class FillMode : std::uint8_t { Zero, Forward, Linear };
 /// `bucket width [every step] [at origin] [fill [forward | linear] [from low to
 /// high]] [as name]`; the key column is `bucket` without a name.
 struct Bucket {
@@ -350,23 +353,23 @@ struct Bucket {
     ExprPtr at;
     ExprPtr low;
     ExprPtr high;
-    FillMode fill_mode = FillMode::ZERO;
+    FillMode fill_mode = FillMode::Zero;
     bool fill = false;
-    std::string as;
+    dstd::String as;
 };
 /// `session [k, ...] gap g [max m] [as name]`.
 struct Session {
-    std::vector<Item> keys;
+    dstd::Vector<Item> keys;
     ExprPtr gap;
     ExprPtr max;
-    std::string as;
+    dstd::String as;
 };
 
 using StageNode =
-    std::variant<Where, Derive, Select, Drop, Rename, Distinct, Group, Agg,
-                 Window, Pivot, Unpivot, Sort, Take, Skip, Sample, Expand,
-                 Lookup, AsofLookup, OverlapLookup, Union, CallStage, TimeRange,
-                 CallTree, Bucket, Session, Parse, Use>;
+    dstd::Variant<Where, Derive, Select, Drop, Rename, Distinct, Group, Agg,
+                  Window, Pivot, Unpivot, Sort, Take, Skip, Sample, Expand,
+                  Lookup, AsofLookup, OverlapLookup, Union, CallStage,
+                  TimeRange, CallTree, Bucket, Session, Parse, Use>;
 
 struct Stage {
     StageNode node;
@@ -375,43 +378,43 @@ struct Stage {
 
 /// A `from` source: a quoted file, a row set or a parameter.
 struct From {
-    std::variant<std::string, Param> name;
+    dstd::Variant<dstd::String, Param> name;
     bool quoted = false;
 };
 
 struct Pipeline {
-    std::vector<From> sources;
-    std::vector<Stage> stages;
+    dstd::Vector<From> sources;
+    dstd::Vector<Stage> stages;
 };
 
 struct Let {
-    std::string name;
+    dstd::String name;
     PipelinePtr pipeline;
 };
 
 /// `def name[(params)] = expr | stages`.
 struct Def {
-    std::string name;
-    std::vector<std::string> params;
-    std::variant<ExprPtr, PipelinePtr> body;
+    dstd::String name;
+    dstd::Vector<dstd::String> params;
+    dstd::Variant<ExprPtr, PipelinePtr> body;
 };
 
 struct RowSet {
-    std::string name;
+    dstd::String name;
     PipelinePtr pipeline;
 };
 
 /// `source name { rowset = pipeline ... def ... }`.
 struct SourceDecl {
-    std::string name;
-    std::vector<RowSet> rowsets;
-    std::vector<Def> defs;
+    dstd::String name;
+    dstd::Vector<RowSet> rowsets;
+    dstd::Vector<Def> defs;
 };
 
-using Decl = std::variant<Let, Def, SourceDecl>;
+using Decl = dstd::Variant<Let, Def, SourceDecl>;
 
 struct Program {
-    std::vector<Decl> decls;
+    dstd::Vector<Decl> decls;
     /// Absent when the text holds only declarations.
     PipelinePtr pipeline;
 };
@@ -421,10 +424,10 @@ bool equal(const Program& a, const Program& b);
 
 /// Canonical text: the engine's `duql MAJOR.MINOR`, then one declaration or
 /// stage per line.
-std::string to_text(const Program& query);
-std::string to_text(const Expr& expr);
+dstd::String to_text(const Program& query);
+dstd::String to_text(const Expr& expr);
 /// A pipeline on one line, stages joined by ` | `.
-std::string to_text(const Pipeline& pipeline);
+dstd::String to_text(const Pipeline& pipeline);
 
 }  // namespace dftracer::utils::duql::syntax
 

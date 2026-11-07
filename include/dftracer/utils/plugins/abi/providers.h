@@ -1,12 +1,14 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_ABI_PROVIDERS_H
 #define DFTRACER_UTILS_PLUGINS_ABI_PROVIDERS_H
 
 /** @file
  * dftu.svc.providers: lets a plugin register itself as a named source, so it
- * can back a LazyFrame the way a file or another engine does. Registration is
- * a build-phase concern: call register_provider from the plugin factory, the
- * same phase dftu_svc_ops::register_op and dftu_svc_agg::register_state run
- * in. Include dftracer/utils/plugins/abi.h rather than this file directly.
+ * can back a @ref dftracer::utils::dataframe::LazyFrame "LazyFrame" the way a
+ * file or another engine does. Registration is a build-phase concern: call
+ * register_provider from the plugin factory, the same phase
+ * dftu_svc_ops::register_op and dftu_svc_agg::register_state run in. Include
+ * dftracer/utils/plugins/abi.h rather than this file directly.
  *
  * A registered dftu_source_vt (dftracer/utils/dataframe/abi.h) is a C mirror
  * of the C++ dftracer::utils::dataframe::Source / Cursor pair (lazyframe.h):

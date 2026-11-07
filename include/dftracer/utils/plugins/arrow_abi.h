@@ -1,10 +1,12 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_ARROW_ABI_H
 #define DFTRACER_UTILS_PLUGINS_ARROW_ABI_H
 
 /* The standard Arrow C Data and C Stream Interfaces (stable across Arrow
-   versions), under their standard guards so they coexist with a real arrow
-   header. Both are defined: an arrow header that finds these guards (or the
-   ARROW_FLAG_* macros) already set skips its own copy of both. */
+   versions), copied as the Arrow project intends, Apache-2.0,
+   https://arrow.apache.org/docs/format/CDataInterface.html . The guards stay
+   exactly as Arrow defines them, so a real arrow header that finds them set
+   skips its own copy. */
 
 #ifdef __cplusplus
 extern "C" {

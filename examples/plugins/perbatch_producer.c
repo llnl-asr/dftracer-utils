@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example producer plugin: each batch it computes a derived value (the count of
  * events carrying a duration) and publishes it on the batch-scoped port named
  * com.example.perbatch_dur, so a consumer running later in the same fuse order
@@ -67,7 +68,8 @@ static const char* const* provides(void* self) {
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
+                                                const dftu_value* config) {
     (void)h;
     (void)config;
     g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;

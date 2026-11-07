@@ -1,61 +1,60 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <cstdio>
 #include <exception>
-#include <string>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::views;
-using namespace dftracer::utils::utilities::filesystem;
 using dftracer::utils::plugins::ConfigTree;
 using dftracer::utils::plugins::Plugins;
 
 struct PluginBlock {
-    std::string path;
-    std::string pconfig;
-    std::vector<std::pair<std::string, std::string>> pargs;
+    dstd::StringView path;
+    dstd::StringView pconfig;
+    dstd::Vector<dstd::Pair<dstd::StringView, dstd::StringView>> pargs;
 };
 
 // Config applied under every plugin block.
 struct SharedConfig {
-    std::string pconfig;
-    std::vector<std::pair<std::string, std::string>> pargs;
+    dstd::StringView pconfig;
+    dstd::Vector<dstd::Pair<dstd::StringView, dstd::StringView>> pargs;
 };
 
 struct PluginArgs {
-    std::vector<PluginBlock> blocks;
+    dstd::Vector<PluginBlock> blocks;
     SharedConfig shared;
 };
 
-static std::pair<std::string, std::string> split_kv(const std::string& kv) {
+static dstd::Pair<dstd::StringView, dstd::StringView> split_kv(
+    const dstd::StringView& kv) {
     const auto eq = kv.find('=');
-    if (eq == std::string::npos) return {kv, std::string()};
+    if (eq == dstd::StringView::npos) return {kv, dstd::StringView()};
     return {kv.substr(0, eq), kv.substr(eq + 1)};
 }
 
 // Pull the plugin/config flags into `out`, keeping the rest in `kept` for
-// argparse; false on misuse (already logged).
-static bool prescan_plugin_args(int argc, char** argv, std::vector<char*>& kept,
-                                PluginArgs& out) {
+// the option parser; false on misuse (already logged).
+static bool prescan_plugin_args(int argc, char** argv,
+                                dstd::Vector<char*>& kept, PluginArgs& out) {
     kept.push_back(argv[0]);
     for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        auto take_value = [&](const char* flag, std::string& value) -> bool {
+        const dstd::StringView arg = argv[i];
+        auto take_value = [&](const char* flag,
+                              dstd::StringView& value) -> bool {
             if (i + 1 >= argc) {
                 DFTRACER_UTILS_LOG_ERROR("%s requires a value", flag);
                 return false;
@@ -65,13 +64,13 @@ static bool prescan_plugin_args(int argc, char** argv, std::vector<char*>& kept,
         };
 
         if (arg == "--plugin") {
-            std::string path;
+            dstd::StringView path;
             if (!take_value("--plugin", path)) return false;
             out.blocks.push_back(PluginBlock{path, {}, {}});
-        } else if (arg.rfind("--plugin=", 0) == 0) {
+        } else if (arg.starts_with("--plugin=")) {
             out.blocks.push_back(PluginBlock{arg.substr(9), {}, {}});
-        } else if (arg == "--parg" || arg.rfind("--parg=", 0) == 0) {
-            std::string kv;
+        } else if (arg == "--parg" || arg.starts_with("--parg=")) {
+            dstd::StringView kv;
             if (arg == "--parg") {
                 if (!take_value("--parg", kv)) return false;
             } else {
@@ -85,8 +84,8 @@ static bool prescan_plugin_args(int argc, char** argv, std::vector<char*>& kept,
                 return false;
             }
             out.blocks.back().pargs.push_back(split_kv(kv));
-        } else if (arg == "--pconfig" || arg.rfind("--pconfig=", 0) == 0) {
-            std::string file;
+        } else if (arg == "--pconfig" || arg.starts_with("--pconfig=")) {
+            dstd::StringView file;
             if (arg == "--pconfig") {
                 if (!take_value("--pconfig", file)) return false;
             } else {
@@ -101,8 +100,8 @@ static bool prescan_plugin_args(int argc, char** argv, std::vector<char*>& kept,
             }
             out.blocks.back().pconfig = file;
         } else if (arg == "--shared-parg" ||
-                   arg.rfind("--shared-parg=", 0) == 0) {
-            std::string kv;
+                   arg.starts_with("--shared-parg=")) {
+            dstd::StringView kv;
             if (arg == "--shared-parg") {
                 if (!take_value("--shared-parg", kv)) return false;
             } else {
@@ -110,8 +109,8 @@ static bool prescan_plugin_args(int argc, char** argv, std::vector<char*>& kept,
             }
             out.shared.pargs.push_back(split_kv(kv));
         } else if (arg == "--shared-pconfig" ||
-                   arg.rfind("--shared-pconfig=", 0) == 0) {
-            std::string file;
+                   arg.starts_with("--shared-pconfig=")) {
+            dstd::StringView file;
             if (arg == "--shared-pconfig") {
                 if (!take_value("--shared-pconfig", file)) return false;
             } else {
@@ -125,44 +124,34 @@ static bool prescan_plugin_args(int argc, char** argv, std::vector<char*>& kept,
     return true;
 }
 
-class RunArgParse : public cli::ArgParse {
+class RunArgParse : public binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_EMPTY};
-    cli::FilesArgs files_args;
-    cli::PipelineArgs pipeline;
-    cli::IndexingArgs indexing;
-    cli::WatchdogArgs watchdog;
+    binaries::InputArgs inputs{binaries::DirMode::DefaultEmpty,
+                               "Trace files or a folder of trace files"};
+    binaries::RuntimeArgs runtime_args;
+    binaries::IndexingArgs indexing;
+    binaries::WatchdogArgs watchdog;
 
     bool no_auto_index = false;
     bool describe = false;
 
-    explicit RunArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+    explicit RunArgParse(binaries::ArgParser& p) : ArgParse(p) {
         indexing.with_force = false;
         indexing.index_dir_help =
             "Directory where .dftindex stores are created";
-        schema(directory, files_args, pipeline, indexing, watchdog);
+        schema(inputs, runtime_args, indexing, watchdog);
     }
 
    protected:
     void register_args() override {
         // The plugin/config flags are extracted by prescan_plugin_args before
-        // argparse runs.
-        parser()
-            .add_argument("--no-auto-index")
-            .help(
-                "Disable automatic index building for files missing .dftindex")
-            .flag();
-        parser()
-            .add_argument("--describe")
-            .help(
-                "Load --plugin libraries, print what each provides/consumes, "
-                "and exit without scanning")
-            .flag();
-    }
-
-    void post_parse() override {
-        no_auto_index = parser().get<bool>("--no-auto-index");
-        describe = parser().get<bool>("--describe");
+        // the option parser runs.
+        parser().flag(
+            no_auto_index, {"--no-auto-index"},
+            "Disable automatic index building for files missing .dftindex");
+        parser().flag(describe, {"--describe"},
+                      "Load --plugin libraries, print what each "
+                      "provides/consumes, and exit without scanning");
     }
 };
 
@@ -172,11 +161,15 @@ static ConfigTree build_config(const SharedConfig& shared,
                                const PluginBlock& block) {
     ConfigTree tree;
     if (!shared.pconfig.empty())
-        tree.merge_from(ConfigTree::from_json_file(shared.pconfig));
-    for (const auto& [k, v] : shared.pargs) tree.set(k, v);
+        tree.merge_from(
+            ConfigTree::from_json_file(dstd::String(shared.pconfig)));
+    for (const auto& [k, v] : shared.pargs)
+        tree.set(dstd::String(k), dstd::String(v));
     if (!block.pconfig.empty())
-        tree.merge_from(ConfigTree::from_json_file(block.pconfig));
-    for (const auto& [k, v] : block.pargs) tree.set(k, v);
+        tree.merge_from(
+            ConfigTree::from_json_file(dstd::String(block.pconfig)));
+    for (const auto& [k, v] : block.pargs)
+        tree.set(dstd::String(k), dstd::String(v));
     return tree;
 }
 
@@ -190,31 +183,32 @@ static bool block_has_config(const SharedConfig& shared,
 // --describe and the real run so both go through the same load-time
 // validation (ABI gate, reserved-name refusal, duplicate-provides, unmet
 // consumes).
-static Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
+static dstd::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
     auto builder = Plugins::builder();
     for (const auto& block : plugin_args.blocks) {
         if (block_has_config(plugin_args.shared, block)) {
             try {
-                builder.add(block.path,
+                builder.add(dstd::String(block.path),
                             build_config(plugin_args.shared, block));
             } catch (const std::exception& e) {
-                return make_error(
-                    ErrorCode::INVALID_ARGUMENT,
-                    "plugin '" + block.path + "' config error: " + e.what());
+                return common::make_error(
+                    common::ErrorCode::InvalidArgument,
+                    common::str_cat("plugin '", block.path,
+                                    "' config error: ", e.what()));
             }
         } else {
-            builder.add(block.path);
+            builder.add(dstd::String(block.path));
         }
     }
     return builder.build();
 }
 
-static std::string join_or_none(const std::vector<std::string>& names) {
+static dstd::String join_or_none(const dstd::Vector<dstd::String>& names) {
     if (names.empty()) return "(none)";
-    std::string out;
+    dstd::String out;
     for (const auto& name : names) {
         if (!out.empty()) out += ", ";
-        out += name;
+        out.append(name.data(), name.size());
     }
     return out;
 }
@@ -262,8 +256,8 @@ static int describe_plugins(const PluginArgs& plugin_args) {
 
 static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
                                        const PluginArgs* plugin_args) {
-    const auto& directory = cli->directory.value;
-    const auto& index_dir = cli->indexing.index_dir;
+    const dstd::String directory(cli->inputs.directory);
+    const dstd::String index_dir(cli->indexing.index_dir);
     const auto checkpoint_size = cli->indexing.checkpoint_size;
     const bool no_auto_index = cli->no_auto_index;
 
@@ -273,34 +267,17 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
         co_return 1;
     }
 
-    std::vector<std::string> files;
+    dstd::Vector<dstd::String> files;
     if (!directory.empty()) {
-        PatternDirectoryScannerUtility scanner;
-        PatternDirectoryScannerUtilityInput scan_input{
-            directory, trace_file_patterns(), false};
-        auto matched = co_await scanner(scan_input);
-        for (const auto& entry : matched) files.push_back(entry.path.string());
-    } else {
-        files = cli->files_args.value;
+        auto matched =
+            binaries::scan_trace_files_on_pool(cli->runtime_args, directory);
+        for (const auto& entry : matched) files.emplace_back(entry.path.str());
     }
+    for (const auto file : cli->inputs.files) files.emplace_back(file);
 
     if (files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("%s",
-                                 "No trace files found. Use -d or --files.");
+        DFTRACER_UTILS_LOG_ERROR("%s", "No trace files found.");
         co_return 1;
-    }
-
-    // Normalize single-member inputs to multi-member gzip so each checkpoint is
-    // a real member.
-    if (!no_auto_index) {
-        dftracer::utils::index::build::MemberNormalizeResult norm;
-        cli::run_on_pool(cli->pipeline, "dftracer_run normalize",
-                         [&](CoroScope&) -> coro::CoroTask<void> {
-                             norm = co_await dftracer::utils::index::build::
-                                 normalize_members_for_ingest(std::move(files),
-                                                              checkpoint_size);
-                         });
-        files = std::move(norm.files);
     }
 
     // A load or fold-ordering failure must stop the run before any scanning.
@@ -310,41 +287,38 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
         co_return 1;
     }
 
-    std::vector<ViewFile> view_files;
+    dstd::Vector<ViewFile> view_files;
     view_files.reserve(files.size());
     for (const auto& file_path : files) {
         ViewFile vf;
-        vf.file_path = file_path;
-        vf.index_path = internal::determine_index_path(file_path, index_dir);
+        vf.file_path.assign(file_path.data(), file_path.size());
+        const dstd::String index_path =
+            internal::determine_index_path(file_path, index_dir);
+        vf.index_path.assign(index_path.data(), index_path.size());
         vf.checkpoint_size = checkpoint_size;
         view_files.push_back(std::move(vf));
     }
 
     ExportStats stats;
-    auto pipeline_config = cli::build_pipeline_config(
-        "DFTracer Run", cli->pipeline, cli->watchdog);
-    Pipeline pipeline(pipeline_config);
-    auto task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            if (!no_auto_index)
-                co_await dftracer::utils::index::build::ensure_indexes_fresh(
-                    &ctx, "", files, index_dir);
-            View view = View::from_files(view_files);
-            auto run = co_await plugins->run(view);
-            if (!run) {
-                DFTRACER_UTILS_LOG_ERROR("%s", run.error().format().c_str());
-                co_return;
-            }
-            stats = run->stats;
-            co_return;
-        },
-        "DFTracerRun");
-    pipeline.set_source(task);
-    pipeline.set_destination(task);
     try {
-        pipeline.execute();
+        binaries::run_on_pool("DFTracer Run", cli->runtime_args, cli->watchdog,
+                              [&](coro::Scope&) -> coro::CoroTask<void> {
+                                  if (!no_auto_index)
+                                      co_await dftracer::utils::index::build::
+                                          ensure_indexes_fresh("", files,
+                                                               index_dir);
+                                  View view = View::from_files(view_files);
+                                  auto run = co_await plugins->run(view);
+                                  if (!run) {
+                                      DFTRACER_UTILS_LOG_ERROR(
+                                          "%s", run.error().format().c_str());
+                                      co_return;
+                                  }
+                                  stats = run->stats;
+                                  co_return;
+                              });
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Pipeline failed: %s", e.what());
+        DFTRACER_UTILS_LOG_ERROR("Run failed: %s", e.what());
         co_return 1;
     }
 
@@ -361,11 +335,11 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
 
 int main(int argc, char** argv) {
     PluginArgs plugin_args;
-    std::vector<char*> kept;
+    dstd::Vector<char*> kept;
     kept.reserve(static_cast<std::size_t>(argc));
     if (!prescan_plugin_args(argc, argv, kept, plugin_args)) return 1;
 
-    return cli::cli_main<RunArgParse>(
+    return binaries::cli_main<RunArgParse>(
         static_cast<int>(kept.size()), kept.data(), "dftracer_run",
         "Run compiled analysis plugins over DFTracer trace files. Each "
         "--plugin shared library is loaded and run as a fold over one shared, "

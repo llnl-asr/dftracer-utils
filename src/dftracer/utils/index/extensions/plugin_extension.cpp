@@ -1,7 +1,15 @@
-#include <dftracer/utils/core/common/logging.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
+#include <dftracer/utils/index/tables.h>
 
-#include <map>
 #include <mutex>
 #include <shared_mutex>
 
@@ -12,16 +20,25 @@ constexpr std::uint64_t DEFAULT_MAX_PAYLOAD = std::uint64_t{1} << 20;
 
 struct Registry {
     std::shared_mutex mutex;
-    std::map<std::string, PluginExtensionPtr, std::less<>> by_name;
+    dstd::Map<dstd::String, PluginExtensionPtr, std::less<>> by_name;
 };
 
 Registry& registry() {
-    static Registry r;
+    Registry& r = dstd::Singleton<Registry>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+            Registry& held = dstd::Singleton<Registry>::get();
+            decltype(held.by_name) dropped;
+            std::unique_lock lock(held.mutex);
+            dropped.swap(held.by_name);
+        });
+        return true;
+    }();
     return r;
 }
 
 struct Out {
-    std::string bytes;
+    dstd::String bytes;
     std::uint64_t cap = 0;
     bool over = false;
 };
@@ -42,7 +59,7 @@ std::uint64_t PluginExtension::max_payload() const {
     return vt.max_payload ? vt.max_payload : DEFAULT_MAX_PAYLOAD;
 }
 
-bool register_plugin_extension(std::string_view name,
+bool register_plugin_extension(dstd::StringView name,
                                const ::dftu_index_extension* vt, void* self) {
     if (!vt || !vt->make_builder || !vt->step || !vt->finish_granule ||
         !vt->destroy_builder || !vt->compile || !vt->may_match ||
@@ -52,8 +69,8 @@ bool register_plugin_extension(std::string_view name,
             static_cast<int>(name.size()), name.data());
         return false;
     }
-    auto ext = std::make_shared<PluginExtension>(
-        PluginExtension{std::string(name), *vt, self});
+    auto ext = dstd::make_shared<PluginExtension>(
+        PluginExtension{dstd::String(name), *vt, self});
     auto& r = registry();
     std::unique_lock lock(r.mutex);
     if (!r.by_name.emplace(ext->name, std::move(ext)).second) {
@@ -65,30 +82,30 @@ bool register_plugin_extension(std::string_view name,
     return true;
 }
 
-void unregister_plugin_extension(std::string_view name) {
+void unregister_plugin_extension(dstd::StringView name) {
     auto& r = registry();
     std::unique_lock lock(r.mutex);
     if (auto it = r.by_name.find(name); it != r.by_name.end())
         r.by_name.erase(it);
 }
 
-std::vector<PluginExtensionPtr> plugin_extensions() {
+dstd::Vector<PluginExtensionPtr> plugin_extensions() {
     auto& r = registry();
     std::shared_lock lock(r.mutex);
-    std::vector<PluginExtensionPtr> out;
+    dstd::Vector<PluginExtensionPtr> out;
     out.reserve(r.by_name.size());
     for (const auto& [name, ext] : r.by_name) out.push_back(ext);
     return out;
 }
 
-PluginExtensionPtr find_plugin_extension(std::string_view name) {
+PluginExtensionPtr find_plugin_extension(dstd::StringView name) {
     auto& r = registry();
     std::shared_lock lock(r.mutex);
     auto it = r.by_name.find(name);
     return it == r.by_name.end() ? nullptr : it->second;
 }
 
-PluginBuilders::PluginBuilders(std::vector<PluginExtensionPtr> extensions) {
+PluginBuilders::PluginBuilders(dstd::Vector<PluginExtensionPtr> extensions) {
     built_.reserve(extensions.size());
     for (auto& ext : extensions) {
         void* b = ext->vt.make_builder(ext->self);
@@ -120,12 +137,12 @@ void PluginBuilders::end_granule() {
 }
 
 void PluginBuilders::step(std::uint64_t granule,
-                          std::span<const std::string_view> lines) {
+                          dstd::Span<const dstd::StringView> lines) {
     if (granule_ && *granule_ != granule) end_granule();
     granule_ = granule;
     lines_.clear();
     lines_.reserve(lines.size());
-    for (std::string_view l : lines)
+    for (dstd::StringView l : lines)
         lines_.push_back({l.data(), l.size(), nullptr, nullptr});
     for (auto& b : built_)
         if (b.builder && !b.chunk_failed &&
@@ -145,26 +162,23 @@ void PluginBuilders::finish() {
     }
 }
 
-void PluginBuilders::write(store::IndexWrite& w, int file_id) {
-    namespace records = store::records;
+void PluginBuilders::write(FileBuild& build) {
     for (auto& b : built_) {
-        const std::string& name = b.ext->name;
-        records::clear_plugin(w, file_id, name);
+        const dstd::String& name = b.ext->name;
         if (!b.builder) {
-            records::put_plugin_manifest(w, file_id, name, b.ext->vt.version,
-                                         b.ext->vt.params_hash,
-                                         store::layout::ExtStatus::FAILED);
+            index::fail_plugin(build, name, b.ext->vt.version,
+                               b.ext->vt.params_hash);
             continue;
         }
-        records::put_path(w, store::IndexExtension::PLUGIN, file_id, name);
+        GranuleViews granules;
+        granules.reserve(b.granules.size());
         for (const auto& [granule, bytes] : b.granules)
-            records::put_path_granule(w, store::IndexExtension::PLUGIN, file_id,
-                                      name, granule, bytes);
-        if (b.file)
-            records::put_path_file(w, store::IndexExtension::PLUGIN, file_id,
-                                   name, *b.file);
-        records::put_plugin_manifest(w, file_id, name, b.ext->vt.version,
-                                     b.ext->vt.params_hash);
+            granules.emplace_back(granule,
+                                  dstd::StringView(bytes.data(), bytes.size()));
+        dstd::Optional<dstd::StringView> file;
+        if (b.file) file = dstd::StringView(b.file->data(), b.file->size());
+        index::put_plugin_views(build, name, b.ext->vt.version,
+                                b.ext->vt.params_hash, granules, file);
     }
 }
 

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Coverage script for dftracer-utils
 # Generates code coverage reports using gcov/lcov
 
@@ -373,6 +374,9 @@ Generate code coverage report for dftracer-utils.
 OPTIONS:
     --open              Open coverage report in browser after generation
     --no-clean          Skip cleaning previous coverage data
+    --build-only        Build with coverage, run nothing (CI build job)
+    --test-only         Run the tests and the report on an existing build
+                        (CI test shards; CTEST_ARGS picks the shard)
     --min-coverage NUM  Set minimum coverage threshold (default: $MIN_COVERAGE)
     -h, --help          Show this help message
 
@@ -387,6 +391,8 @@ EOF
 main() {
 	local open_browser=false
 	local do_clean=true
+	local do_build=true
+	local do_test=true
 
 	# Parse arguments
 	while [[ $# -gt 0 ]]; do
@@ -397,6 +403,15 @@ main() {
 			;;
 		--no-clean)
 			do_clean=false
+			shift
+			;;
+		--build-only)
+			do_test=false
+			shift
+			;;
+		--test-only)
+			do_clean=false
+			do_build=false
 			shift
 			;;
 		--min-coverage)
@@ -424,7 +439,13 @@ main() {
 		clean_previous
 	fi
 
-	build_with_coverage
+	if [ "$do_build" = true ]; then
+		build_with_coverage
+	fi
+	if [ "$do_test" = false ]; then
+		log_success "Coverage build completed"
+		return
+	fi
 	run_tests
 	run_python_tests
 	generate_coverage_report

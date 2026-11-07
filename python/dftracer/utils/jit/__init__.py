@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Author a DFTracer plugin in Python and get a native one.
 
 Decorate a class with :func:`plugin`; its :func:`map` attributes and single

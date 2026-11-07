@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """duql correlated sub-queries against a per-row reference."""
 
 import gzip

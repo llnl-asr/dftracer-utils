@@ -1,14 +1,15 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PYTHON_INDEXER_H
 #define DFTRACER_UTILS_PYTHON_INDEXER_H
 
 #include <Python.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 
 #include <cstdint>
-#include <memory>
 
 typedef struct {
-    PyObject_HEAD std::shared_ptr<
+    PyObject_HEAD dftracer::utils::dstd::SharedPtr<
         dftracer::utils::index::gzip::CheckpointIndexer> *handle;
     PyObject *gz_path;
     PyObject *index_path;

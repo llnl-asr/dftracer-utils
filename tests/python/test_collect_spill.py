@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A collect with a memory budget below its size spills later parts to a mapped,
 unlinked file in DFTRACER_UTILS_SPILL_DIR and returns the unbudgeted values."""
 

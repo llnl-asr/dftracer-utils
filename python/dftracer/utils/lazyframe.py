@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The ``LazyFrame`` Python wrapper: a deferred query over a native batch.
 
 ``LazyFrame`` wraps the native ``_LazyFrame`` handle. Builder methods record ops

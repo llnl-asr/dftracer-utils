@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import type { FlameNode } from "../data/types";
 
 export interface FnRow {

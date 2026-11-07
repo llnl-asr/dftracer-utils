@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <doctest/doctest.h>
@@ -11,7 +12,7 @@ TEST_SUITE("AggregationConfig") {
         CHECK(config.use_relative_time == false);
         CHECK(config.compute_statistics == true);
         CHECK(config.compute_percentiles == false);
-        CHECK(config.output_format == std::string("json"));
+        CHECK(config.output_format == "json");
     }
 
     TEST_CASE("AggregationConfig - Valid formats") {

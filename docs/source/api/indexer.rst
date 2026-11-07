@@ -4,7 +4,7 @@ Indexer Module
 ==============
 
 The indexer module provides functionality for indexing DFTracer trace files
-(``.pfw.gz``) backed by a ``.dftindex`` RocksDB store. The
+(``.pfw.gz``) backed by a ``.dftindex`` store. The
 top-level :class:`~dftracer.utils.Indexer` follows a ``resolve`` / ``build``
 pattern over a directory or file list and exposes the higher index tiers
 (checkpoints, bloom filters, aggregation).
@@ -26,11 +26,13 @@ How the indexer types relate:
    :undoc-members:
    :show-inheritance:
 
-Aggregation is enabled by passing ``require_aggregation=True`` (defaults) or
-``require_aggregation=AggregationConfig(...)``. The aggregation knobs
-(``time_interval_ms``, ``group_keys``, ``custom_metric_fields``,
-``compute_percentiles``, ``group_by_file``) are fields of
-:class:`~dftracer.utils.AggregationConfig`, not direct ``Indexer`` arguments.
+Every index build makes the aggregation tier, with one standard config: 1 s
+windows, the percentile sketches on, and the file hash in the key. The
+aggregation knobs (``time_interval_ms``, ``group_keys``,
+``compute_percentiles``, ``group_by_file``) are
+fields of :class:`~dftracer.utils.AggregationConfig`, not direct ``Indexer``
+arguments, and ``aggregation_config=AggregationConfig(...)`` customizes the
+tier. There is no switch that turns it off.
 
 Three arguments steer what the build keeps. ``extensions`` picks the pruning
 extensions from ``"zonemap"``, ``"bloom"``, ``"counts"`` and ``"postings"``
@@ -45,8 +47,8 @@ AggregationConfig
 -----------------
 
 Configuration for the aggregation tier, passed via
-``require_aggregation=AggregationConfig(...)``. Exported from
-``dftracer.utils``.
+``aggregation_config=AggregationConfig(...)``. Its defaults are the standard
+config. Exported from ``dftracer.utils``.
 
 .. autoclass:: dftracer.utils.AggregationConfig
    :members:
@@ -85,15 +87,15 @@ CheckpointIndexer Class
    :show-inheritance:
    :special-members: __enter__, __exit__
 
-Distributed Index (SST-based)
------------------------------
+Distributed Index
+-----------------
 
-The distributed-index path lets a coordinator assign file ids, fan one
-indexing task per Dask worker, and bulk-ingest worker-produced SST artifacts
-back into the unified ``.dftindex`` store. The public entry point is
-:func:`~dftracer.utils.dask.distributed_index`; it assigns file ids on the
-coordinator, fans one indexing task per worker, and ingests the resulting SSTs. The scan,
-LPT-partition, and SST-registry primitives it drives are internal to the
+The distributed-index path lets a coordinator fan one indexing task per Dask
+worker, and each worker writes its files straight into the unified
+``.dftindex`` store. The public entry point is
+:func:`~dftracer.utils.dask.distributed_index`; it assigns the file-to-worker
+split on the coordinator and lets every worker number and write its own files.
+The scan and LPT-partition primitives it drives are internal to the
 native extension and have no public Python path.
 
 .. autofunction:: dftracer.utils.dask.distributed_index

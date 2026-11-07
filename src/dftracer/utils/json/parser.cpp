@@ -1,16 +1,25 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/json/parser.h>
 
 namespace dftracer::utils::json {
 
 JsonParser::JsonParser(std::size_t capacity) : parser_(capacity) {}
 
-bool JsonParser::parse(std::string_view json_line) {
+bool JsonParser::parse(dstd::StringView json_line) {
     // Reuse padbuf_'s capacity instead of allocating a padded_string per line;
     // resize() zero-fills the SIMDJSON_PADDING tail On-Demand requires.
+    borrowed_ = false;
+    length_ = json_line.size();
     padbuf_.assign(json_line.data(), json_line.size());
     padbuf_.resize(json_line.size() + simdjson::SIMDJSON_PADDING);
     auto result =
         parser_.iterate(padbuf_.data(), json_line.size(), padbuf_.size());
+    if (detail::is_repairable(result.error())) {
+        detail::repair_line(padbuf_.data(), json_line.size());
+        result =
+            parser_.iterate(padbuf_.data(), json_line.size(), padbuf_.size());
+    }
     if (result.error()) {
         valid_ = false;
         return false;
@@ -22,51 +31,54 @@ bool JsonParser::parse(std::string_view json_line) {
 }
 
 void JsonParser::rewind() {
-    if (valid_) {
+    // A document a read error abandoned cannot be rewound.
+    if (readable()) {
         active_.rewind();
     }
 }
 
-std::optional<std::int64_t> JsonParser::get_int64(std::string_view key) {
-    if (!valid_) return std::nullopt;
+dstd::Optional<std::int64_t> JsonParser::get_int64(dstd::StringView key) {
+    if (!readable()) return dstd::nullopt;
     auto result = active_[key].get_int64();
-    if (result.error()) return std::nullopt;
+    if (result.error()) return dstd::nullopt;
     return result.value();
 }
 
-std::optional<std::uint64_t> JsonParser::get_uint64(std::string_view key) {
-    if (!valid_) return std::nullopt;
+dstd::Optional<std::uint64_t> JsonParser::get_uint64(dstd::StringView key) {
+    if (!readable()) return dstd::nullopt;
     auto result = active_[key].get_uint64();
-    if (result.error()) return std::nullopt;
+    if (result.error()) return dstd::nullopt;
     return result.value();
 }
 
-std::optional<double> JsonParser::get_double(std::string_view key) {
-    if (!valid_) return std::nullopt;
-    auto result = active_[key].get_double();
-    if (result.error()) return std::nullopt;
-    return result.value();
-}
-
-std::optional<bool> JsonParser::get_bool(std::string_view key) {
-    if (!valid_) return std::nullopt;
-    auto result = active_[key].get_bool();
-    if (result.error()) return std::nullopt;
-    return result.value();
-}
-
-std::optional<std::string_view> JsonParser::get_string(std::string_view key) {
-    if (!valid_) return std::nullopt;
-    auto result = active_[key].get_string();
-    if (result.error()) return std::nullopt;
-    return result.value();
-}
-
-std::optional<simdjson::ondemand::value> JsonParser::get_value(
-    std::string_view key) {
-    if (!valid_) return std::nullopt;
+dstd::Optional<double> JsonParser::get_double(dstd::StringView key) {
+    if (!readable()) return dstd::nullopt;
     auto result = active_[key];
-    if (result.error()) return std::nullopt;
+    if (result.error()) return dstd::nullopt;
+    auto value = result.value_unsafe();
+    return detail::get_double_or_refused(value);
+}
+
+dstd::Optional<bool> JsonParser::get_bool(dstd::StringView key) {
+    if (!readable()) return dstd::nullopt;
+    auto result = active_[key].get_bool();
+    if (result.error()) return dstd::nullopt;
+    return result.value();
+}
+
+dstd::Optional<dstd::StringView> JsonParser::get_string(dstd::StringView key) {
+    if (!readable()) return dstd::nullopt;
+    auto result = active_[key];
+    if (result.error()) return dstd::nullopt;
+    auto value = result.value_unsafe();
+    return detail::get_string_or_raw(value);
+}
+
+dstd::Optional<simdjson::ondemand::value> JsonParser::get_value(
+    dstd::StringView key) {
+    if (!readable()) return dstd::nullopt;
+    auto result = active_[key];
+    if (result.error()) return dstd::nullopt;
     return result.value();
 }
 

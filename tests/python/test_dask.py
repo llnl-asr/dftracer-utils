@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """
 End-to-end Dask integration tests for  utilities
 Tests combining indexer and reader functionality with Dask distributed computing
 """
 
+import json
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -19,7 +23,45 @@ except ImportError:
 import dftracer.utils as dftu_utils
 from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 
-from .common import Environment
+from .common import Environment, determine_index_path
+
+ASSIGN_SNIPPET = """
+import json
+from dftracer.utils.dask import assign_files_by_pid
+
+paths = ["/data/trace%d.pfw.gz" % i for i in range(8)]
+out = assign_files_by_pid({p: set() for p in paths}, 4)
+print(json.dumps({str(w): sorted(f) for w, f in out.items()}, sort_keys=True))
+"""
+
+
+def _assign_in_new_process():
+    done = subprocess.run(
+        [sys.executable, "-c", ASSIGN_SNIPPET],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return json.loads(done.stdout)
+
+
+def test_assign_files_by_pid_is_stable_across_processes():
+    """Files with no PID land on the same worker in two separate processes"""
+    first = _assign_in_new_process()
+    second = _assign_in_new_process()
+    assert first == second
+    assigned = sorted(f for files in first.values() for f in files)
+    assert assigned == ["/data/trace%d.pfw.gz" % i for i in range(8)]
+
+
+def test_assign_files_by_pid_groups_by_majority_pid():
+    """Files that share a majority PID land on the same worker"""
+    from dftracer.utils.dask import assign_files_by_pid
+
+    out = assign_files_by_pid({"/t/a.pfw.gz": {7}, "/t/b.pfw.gz": {7, 9}, "/t/c.pfw.gz": {9}}, 4)
+    worker = {f: w for w, files in out.items() for f in files}
+    assert sorted(worker) == ["/t/a.pfw.gz", "/t/b.pfw.gz", "/t/c.pfw.gz"]
+    assert worker["/t/a.pfw.gz"] == worker["/t/b.pfw.gz"]
 
 
 @pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
@@ -120,6 +162,75 @@ class TestDirectoryIndexerWithDask:
             status2 = indexer.ensure_indexed()
             assert len(status2.ready) == 1
             assert len(status2.needs_work) == 0
+
+
+@pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
+class TestDistributedIndex:
+    """distributed_index builds one shard per worker and merges it into the root."""
+
+    def _query(self, files, index_dir):
+        table = (
+            dftu_utils.TraceViewer(files, index_path=index_dir)
+            .group_by("cat")
+            .agg("count", "sum:dur")
+            .collect()
+            .to_dict()
+        )
+        return {k: sorted(v) for k, v in table.items()}
+
+    def test_inline_build_merges_into_the_index_root(self):
+        from dftracer.utils.dask import distributed_index
+
+        with Environment(lines=100) as env:
+            files = [env.create_test_gzip_file(f"g{k}/t{k}.pfw.gz") for k in range(4)]
+            index_path = determine_index_path(files[0], env.temp_dir)
+            result = distributed_index(files=files, index_path=index_path)
+
+            assert result["total_files"] == 4
+            assert os.path.isdir(os.path.join(index_path, "store"))
+            assert not os.path.exists(os.path.join(index_path, "shards"))
+            assert not os.path.exists(os.path.join(index_path, "shards.json"))
+
+            local = determine_index_path(files[0], os.path.join(env.temp_dir, "local"))
+            with dftu_utils.Indexer(files=files, index_dir=os.path.dirname(local)) as ix:
+                ix.ensure_indexed()
+            assert self._query(files, index_path) == self._query(files, os.path.dirname(local))
+
+    def test_merges_worker_shards_into_the_index_root(self):
+        from dask.distributed import Client, LocalCluster
+
+        from dftracer.utils.dask import distributed_index
+        from dftracer.utils.dftracer_utils_ext import Index
+
+        with Environment(lines=100) as env:
+            files = [env.create_test_gzip_file(f"f{k}/t{k}.pfw.gz") for k in range(4)]
+            index_path = determine_index_path(files[0], env.temp_dir)
+
+            cluster = LocalCluster(processes=True, n_workers=2, threads_per_worker=1)
+            client = Client(cluster)
+            try:
+                result = distributed_index(files=files, index_path=index_path, client=client)
+            finally:
+                client.close()
+                cluster.close()
+
+            assert result["total_files"] == 4
+            assert sum(result["per_worker"]) == 4
+            # Every shard arrived, so the merge left one store and no bookkeeping.
+            assert os.path.isdir(os.path.join(index_path, "store"))
+            assert not os.path.exists(os.path.join(index_path, "shards"))
+            assert not os.path.exists(os.path.join(index_path, "shards.json"))
+
+            local = determine_index_path(files[0], os.path.join(env.temp_dir, "local"))
+            with dftu_utils.Indexer(files=files, index_dir=os.path.dirname(local)) as ix:
+                ix.ensure_indexed()
+
+            with dftu_utils.Indexer(files=files, index_dir=env.temp_dir) as ix:
+                status = ix.resolve()
+            assert sorted(status.ready) == sorted(files)
+            assert status.needs_work == []
+            assert Index(index_path).find_stale_files(files)["stale"] is False
+            assert self._query(files, index_path) == self._query(files, os.path.dirname(local))
 
 
 @pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
@@ -306,6 +417,61 @@ class TestDaskTraceViewer:
 
                 # A matching full read returns the same events (served from parts).
                 assert full_count() == base
+            finally:
+                client.close()
+                cluster.close()
+
+    def test_materialize_row_view_processes_share_one_view_root(self):
+        import pyarrow as pa
+        from dask.distributed import Client, LocalCluster
+
+        from dftracer.utils import TraceViewer
+        from dftracer.utils.dask import DaskTraceViewer
+
+        with Environment(lines=200) as env:
+            files = self._cluster_files(env)
+
+            def query():
+                return TraceViewer(files, index_path=env.temp_dir).filter('cat == "STDIO"')
+
+            def rows():
+                return sum(pa.record_batch(c).num_rows for c in query().stream(batch_size=128))
+
+            def parts(views):
+                return sorted(
+                    os.path.join(r, f)
+                    for r, _d, fs in os.walk(views)
+                    for f in fs
+                    if f.endswith(".pfw.gz")
+                )
+
+            cluster = LocalCluster(processes=True, n_workers=2, threads_per_worker=1)
+            client = Client(cluster)
+            try:
+                base = rows()
+                assert base > 0
+
+                DaskTraceViewer(files, env.temp_dir, client=client, files_per_task=1).filter(
+                    'cat == "STDIO"'
+                ).materialize()
+
+                views = os.path.join(env.temp_dir, ".dftindex", "views")
+                slugs = os.listdir(views)
+                assert len(slugs) == 1
+                root = os.path.join(views, slugs[0])
+                found = parts(views)
+                assert len(found) >= 2
+                for part in found:
+                    rel = os.path.relpath(part, root).split(os.sep)
+                    assert rel[0] == "parts" and rel[1].startswith("shard-")
+                assert os.path.isdir(os.path.join(root, "store"))
+                stray = [
+                    r for r, ds, _f in os.walk(os.path.join(root, "parts")) if ".dftindex" in ds
+                ]
+                assert stray == []
+
+                assert rows() == base
+                assert parts(views) == found
             finally:
                 client.close()
                 cluster.close()

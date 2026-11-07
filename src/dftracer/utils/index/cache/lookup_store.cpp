@@ -1,129 +1,116 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/versions.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/versions.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/index/cache/lookup_store.h>
-#include <dftracer/utils/index/cache/lru.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/view_plan.h>
-#include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 
 #include <algorithm>
-#include <map>
 #include <system_error>
-#include <vector>
 
 namespace dftracer::utils::index::cache {
 
-namespace rdb = index::store;
-namespace codec = utilities::common::serialization;
-
 namespace {
 
-std::string value_key(std::uint64_t sig) {
-    std::string key;
-    key.push_back('\x01');
-    codec::put_be64(key, sig);
-    return key;
-}
+constexpr dstd::StringView VALUE_KEY = "\x01";
+// The size of an entry counts the signature that names it.
+constexpr std::uint64_t SIG_BYTES = 8;
 
 }  // namespace
 
-std::string lookup_cache_path(const trace::views::detail::ViewPlan& plan) {
-    const std::string dir = cache_dir(plan);
-    return dir.empty() ? dir : (fs::path(dir) / "lookups").string();
+dstd::String lookup_cache_path(const trace::views::detail::ViewPlan& plan) {
+    const dstd::String dir = cache_dir(plan);
+    return dir.empty() ? dir : index::lookups_dir(dir);
 }
 
-std::optional<std::uint64_t> lookup_signature(
-    const trace::views::detail::ViewPlan& plan, std::string_view side_text) {
+dstd::Optional<std::uint64_t> lookup_signature(
+    const trace::views::detail::ViewPlan& plan, dstd::StringView side_text) {
     if (!plan.record_schema)
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
-                                "lookup signature: the plan's record schema "
-                                "is not resolved");
-    std::string sig;
-    auto add = [&](std::string_view s) {
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
+            "lookup signature: the plan's record schema "
+            "is not resolved");
+    dstd::String sig;
+    auto add = [&](dstd::StringView s) {
         sig.append(s);
         sig.push_back('\0');
     };
     add(side_text);
     add(DFTRACER_UTILS_DUQL_VERSION_STRING);
-    add(std::to_string(plan.record_schema->params_hash()));
-    std::vector<const trace::views::ViewFile*> files;
+    add(dstd::to_string(plan.record_schema->params_hash()));
+    dstd::Vector<const trace::views::ViewFile*> files;
     files.reserve(plan.files.size());
     for (const auto& f : plan.files) files.push_back(&f);
     std::sort(files.begin(), files.end(),
               [](auto* a, auto* b) { return a->file_path < b->file_path; });
-    std::map<std::string, std::optional<rdb::IndexDatabase>, std::less<>> dbs;
+    dstd::Map<dstd::String, dstd::Optional<index::Snapshot>, std::less<>> snaps;
     for (const auto* f : files) {
-        if (f->index_path.empty()) return std::nullopt;
-        auto [it, fresh] = dbs.try_emplace(f->index_path);
+        if (f->index_path.empty()) return dstd::nullopt;
+        auto [it, fresh] =
+            snaps.try_emplace(dstd::String(dstd::StringView(f->index_path)));
         if (fresh) {
             try {
-                it->second.emplace(f->index_path, rdb::IndexOpenMode::ReadOnly);
-            } catch (const DFTUtilsException&) {
-                return std::nullopt;
+                it->second.emplace(
+                    common::unwrap(index::plan::open_snapshot(it->first)));
+            } catch (const common::DFTUtilsException&) {
+                return dstd::nullopt;
             }
         }
-        const rdb::IndexDatabase& idx = *it->second;
-        if (idx.check_freshness(f->file_path) !=
-            rdb::IndexDatabase::Freshness::Fresh)
-            return std::nullopt;
-        const std::string logical =
-            rdb::internal::get_logical_path(f->file_path);
-        const auto hash = idx.get_file_hash(logical);
-        const auto stat = idx.get_file_stat(logical);
-        if (!hash || !stat) return std::nullopt;
+        const index::Snapshot& snapshot = *it->second;
+        const dstd::String logical =
+            index::store::internal::get_logical_path(f->file_path);
+        common::InputFileStat now;
+        dftracer::utils::common::stat_input(f->file_path, now);
+        const SourceStat now_stat{static_cast<std::uint64_t>(now.mtime),
+                                  now.size};
+        if (snapshot.freshness(logical, now_stat) != index::Freshness::Current)
+            return dstd::nullopt;
+        const auto file = snapshot.file(logical);
+        if (!file) return dstd::nullopt;
+        const auto hash = index::file_hash(snapshot, *file);
+        if (!hash) return dstd::nullopt;
         add(logical);
-        add(std::to_string(*hash));
-        add(std::to_string(stat->mtime));
-        add(std::to_string(stat->size));
+        add(dstd::to_string(*hash));
+        add(dstd::to_string(file->stat().mtime));
+        add(dstd::to_string(file->stat().size));
     }
-    return dftracer::utils::hash::fnv1a_hash(sig);
+    return dftracer::utils::dstd::hash::xxh3_64(sig);
 }
 
-std::shared_ptr<rdb::RocksDatabase> open_lookup_db(
-    const std::string& path, rdb::RocksDatabase::OpenMode mode) {
-    try {
-        if (mode == rdb::RocksDatabase::OpenMode::ReadWrite)
-            fs::create_directories(path);
-        return rdb::RocksDBManager::instance().get_or_open(path, mode);
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+dstd::SharedPtr<CacheStore> open_lookup_db(dstd::StringView path,
+                                           CacheStore::Mode mode) {
+    return CacheStore::open(path, mode);
 }
 
-std::optional<std::string> read_lookup(rdb::RocksDatabase& db,
-                                       std::uint64_t sig) {
-    std::string value;
-    const auto st = db.get(value_key(sig), &value, rdb::cf::ROLLUP);
-    if (st.IsNotFound()) return std::nullopt;
-    check_status(st, "lookup read");
-    touch_usage(db, rdb::cf::ROLLUP, sig);
+dstd::Optional<dstd::String> read_lookup(CacheStore& db, std::uint64_t sig) {
+    auto value = db.get(sig, VALUE_KEY);
+    if (value) db.touch(sig);
     return value;
 }
 
-bool lookup_exists(const rdb::RocksDatabase& db, std::uint64_t sig) {
-    std::string value;
-    return db.get(value_key(sig), &value, rdb::cf::ROLLUP).ok();
+bool lookup_exists(const CacheStore& db, std::uint64_t sig) {
+    return db.get(sig, VALUE_KEY).has_value();
 }
 
-void persist_lookup(rdb::RocksDatabase& db, std::uint64_t sig,
-                    std::string_view value) {
-    const std::string key = value_key(sig);
-    auto batch = db.begin_batch();
-    db.put(batch, rdb::cf::ROLLUP, key, value);
-    put_usage(db, batch, rdb::cf::ROLLUP, sig,
-              key.size() + value.size() + 9 + USAGE_BYTES);
-    check_status(db.commit_batch(batch), "lookup persist");
-    evict_lru(db, rdb::cf::ROLLUP, sig,
-              [&db](rdb::RocksDatabase::Batch& b, std::uint64_t s) {
-                  db.del(b, rdb::cf::ROLLUP, value_key(s));
-              });
+void persist_lookup(CacheStore& db, std::uint64_t sig, dstd::StringView value) {
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> entries;
+    entries.emplace_back(VALUE_KEY, value);
+    db.put(sig, entries, 2 * (1 + SIG_BYTES) + value.size() + USAGE_BYTES);
 }
 
 }  // namespace dftracer::utils::index::cache

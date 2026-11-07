@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
@@ -7,9 +8,8 @@
 #include <cstdint>
 #include <exception>
 #include <stdexcept>
-#include <vector>
 
-namespace dataframe = dftracer::utils::dataframe;
+using namespace dftracer::utils;
 
 namespace {}  // namespace
 
@@ -17,7 +17,7 @@ namespace dftracer::utils::dataframe {
 
 Series DataFrame::mask(const duql::Query& q) const {
     try {
-        return evaluate_mask(q.root(), *this);
+        return evaluate_mask(duql::detail::QueryAccess::root(q), *this);
     } catch (const std::exception&) {
         throw std::runtime_error(
             "DataFrame::mask: predicate has no columnar lowering for this "
@@ -43,7 +43,8 @@ dftu_series* dftu_dataframe_mask(const dftu_duql* q,
     dftu_series* out = nullptr;
     try {
         const auto& query = dftracer::utils::duql::duql_handle_unwrap(q);
-        out = dftracer::utils::dataframe::evaluate_mask(query.root(), b)
+        out = dftracer::utils::dataframe::evaluate_mask(
+                  duql::detail::QueryAccess::root(query), b)
                   .release();
     } catch (const std::exception&) {
         out = nullptr;

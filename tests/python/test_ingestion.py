@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Ingestion constructors on the Series / DataFrame wrappers: round-trip each
 source (numpy, list, pandas, polars, parquet, dict) back to the same values.
 Series.from_numpy on a numeric array takes the native pyarrow-free path."""

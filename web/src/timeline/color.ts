@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Curated qualitative palette tuned for the dark timeline surface. Ordered for
 // separation between neighbours; assigned to names in first-seen order so a name
 // keeps its color across queries (color follows the entity, not its rank).
@@ -34,12 +35,16 @@ export function colorSlot(field: string, value: string): string {
 const assigned = new Map<string, string>();
 let nextSlot = 0;
 
-function hslToHex(h: number, s: number, l: number): string {
-  l /= 100;
-  const a = (s * Math.min(l, 1 - l)) / 100;
+// HSL to RGB as in CSS Color Module Level 4:
+// https://www.w3.org/TR/css-color-4/#hsl-to-rgb
+export function hslToHex(h: number, s: number, l: number): string {
+  const hue = ((h % 360) + 360) % 360;
+  const sat = s / 100;
+  const light = l / 100;
+  const a = sat * Math.min(light, 1 - light);
   const f = (n: number) => {
-    const k = (n + h / 30) % 12;
-    const c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    const k = (n + hue / 30) % 12;
+    const c = light - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
     return Math.round(255 * c)
       .toString(16)
       .padStart(2, "0");

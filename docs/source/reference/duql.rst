@@ -4,7 +4,7 @@ duql syntax
 ===========
 
 duql is the query language of dftracer-utils. Every query string, from
-``TraceViewer.duql``, ``View::duql``, ``dftracer_view --duql``, the C ABI
+``TraceViewer.duql``, ``View::duql``, ``dftracer_view -q``, the C ABI
 or a plugin, is duql text. This page lists the syntax and what each construct does.
 
 The builders in Python (``dftracer.utils.duql``, see :doc:`../api/duql`) and
@@ -72,7 +72,7 @@ with a stage name is a stage, so a field with that name at the start is
 written with backticks: ```sample` == 1``. After a ``|``, a name followed
 by ``(`` that is not a stage name is a pipeline macro call (see `Macros`_).
 
-The first line may declare the language version, as ``duql 0.1`` or
+The first line may declare the language version, as ``duql 0.0`` or
 ``duql 0``. A query runs when its major version equals the engine's and its
 minor version is not greater. A missing minor counts as ``0``. Printed queries
 always carry the engine's version.
@@ -196,7 +196,7 @@ Conditions
 ----------
 
 A View (``View::duql``, ``TraceViewer.duql``, ``dftu_view_duql``,
-``dftracer_view --duql``) runs a pipeline: the stages in `Pipelines`_. Every
+``dftracer_view -q``) runs a pipeline: the stages in `Pipelines`_. Every
 other surface (``Query``, DataFrame masks, the server) takes a single filter:
 no ``from``, no stage after the first. A condition may use:
 
@@ -1259,7 +1259,7 @@ Explain
 
 ``View::explain_duql``, ``TraceViewer.explain_duql`` (also
 ``explain_query``),
-``dftu_view_explain_duql`` and ``dftracer_view --duql ... --explain`` print
+``dftu_view_explain_duql`` and ``dftracer_view -q ... --explain`` print
 the plan without scanning, one step per line:
 
 .. code-block:: text
@@ -1550,7 +1550,7 @@ name in a later one:
 
 1. the query;
 2. the record schema's source;
-3. the ``.duql`` files on ``$DFTRACER_DUQL_PATH`` (files or directories,
+3. the ``.duql`` files on ``$DFTRACER_UTILS_DUQL_PATH`` (files or directories,
    ``:``-separated; a directory gives its ``.duql`` files in name order),
    then those of each ``--duql-path PATH`` of ``dftracer_view``,
    ``dftracer_stats`` and ``dftracer_comparator``. A macro file holds only
@@ -1569,7 +1569,7 @@ takes a literal or a ``$param`` (``take n``, an output name, ``as name``)
 does not take a macro parameter. A pipeline macro cannot read another row
 set: use ``let`` for that. An error inside an expanded body points at the
 call. A View query sees all three scopes; a single filter
-(``Query``, a DataFrame mask, ``dftracer_stats --duql``) has no record schema
+(``Query``, a DataFrame mask, ``dftracer_stats -q``) has no record schema
 and sees the query and the path files.
 
 Matching
@@ -1713,12 +1713,12 @@ pushdown and without.
 Lookup cache
 ~~~~~~~~~~~~
 
-A side is stored in a RocksDB at ``.dftindex-cache/lookups`` beside the
-single index of the files it reads, keyed by its text with parameters
+A side is stored in the ``lookups/`` directory of the index root that holds
+the single index of the files it reads, keyed by its text with parameters
 bound, the duql version, the record schema and the index record of each
 file. A file re-indexed with new records gives a new key. The store keeps
-at most ``DFTRACER_CACHE_MAX_BYTES``, evicting the least recently used
-sides. Deleting ``.dftindex-cache`` loses nothing but time. A side over
+at most ``DFTRACER_UTILS_CACHE_MAX_BYTES``, evicting the least recently used
+sides. Deleting ``lookups/`` loses nothing but time. A side over
 files that share no index, or whose index is not fresh, is not cached.
 
 A plan that reads a lookup uses no rollup or view store.

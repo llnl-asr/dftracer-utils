@@ -1,29 +1,31 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/error.h>
 
 namespace dftracer::utils::index::store {
-std::string IndexerError::format_message(Type type,
-                                         const std::string &message) {
+dstd::String IndexerError::format_message(Type type,
+                                          const dstd::String &message) {
     const char *prefix = "";
     switch (type) {
-        case DATABASE_ERROR:
+        case DatabaseError:
             prefix = "Database error";
             break;
-        case FILE_ERROR:
+        case FileError:
             prefix = "File error";
             break;
-        case COMPRESSION_ERROR:
+        case CompressionError:
             prefix = "Compression error";
             break;
-        case INVALID_ARGUMENT:
+        case InvalidArgument:
             prefix = "Invalid argument";
             break;
-        case BUILD_ERROR:
+        case BuildError:
             prefix = "Build error";
             break;
-        case UNKNOWN_ERROR:
+        case UnknownError:
             prefix = "Unknown error";
             break;
     }
-    return std::string(prefix) + ": " + message;
+    return dstd::String(prefix) + ": " + message;
 }
 }  // namespace dftracer::utils::index::store

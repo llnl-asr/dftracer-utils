@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* The DFTU_SCALAR_* macros are C-only (guarded by #ifndef __cplusplus in
  * abi.h) since they use C99 designated initializers on a union member no
  * C++ literal syntax reaches the same way. Exercised from a plain C TU so

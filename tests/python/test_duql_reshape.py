@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """duql window, expand, pivot, unpivot and quantifiers on a TraceViewer,
 each against a pandas or plain Python reference over the same records."""
 

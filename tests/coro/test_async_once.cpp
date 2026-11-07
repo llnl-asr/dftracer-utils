@@ -1,35 +1,38 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/async_once.h>
-#include <dftracer/utils/core/coro/coro.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/coro/yield.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/coro/async_once.h>
+#include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
+#include <testing_utilities.h>
 
 #include <atomic>
 #include <memory>
 #include <vector>
 
 using namespace dftracer::utils;
-using dftu_utils_test::run_coro;
 
 TEST_SUITE("AsyncOnce") {
     TEST_CASE("runs the producer once for concurrent callers") {
-        coro::AsyncOnce<std::shared_ptr<int>> once;
+        coro::AsyncOnce<dstd::SharedPtr<int>> once;
         std::atomic<int> calls{0};
         const int n = 32;
-        std::vector<std::shared_ptr<int>> results(n);
+        dstd::Vector<dstd::SharedPtr<int>> results(n);
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<std::shared_ptr<int>>> tasks;
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            dstd::Vector<coro::CoroTask<dstd::SharedPtr<int>>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(
-                    once.get([&]() -> coro::CoroTask<std::shared_ptr<int>> {
+                    once.get([&]() -> coro::CoroTask<dstd::SharedPtr<int>> {
                         calls.fetch_add(1, std::memory_order_relaxed);
                         for (int k = 0; k < 4; ++k) co_await coro::yield();
-                        co_return std::make_shared<int>(99);
+                        co_return dstd::make_shared<int>(99);
                     }));
             }
             auto out = co_await coro::when_all(std::move(tasks));
@@ -47,7 +50,7 @@ TEST_SUITE("AsyncOnce") {
         coro::AsyncOnce<int> once;
         std::atomic<int> calls{0};
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             int a = co_await once.get([&]() -> coro::CoroTask<int> {
                 calls.fetch_add(1, std::memory_order_relaxed);
                 co_return 7;

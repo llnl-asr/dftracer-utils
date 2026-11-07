@@ -6,11 +6,8 @@ on:
       os:
         type: string
         required: true
-      rocksdb_version:
-        type: string
-        required: true
       build_type:
-        description: Build type of vectorscan and RocksDB.
+        description: Build type of vectorscan.
         type: string
         default: RelWithDebInfo
 
@@ -30,7 +27,6 @@ jobs:
       CMAKE_ASM_COMPILER_LAUNCHER: sccache
       DFTRACER_UTILS_DEPS_PREFIX: ${{ github.workspace }}/.deps
       CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
-      ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
       DEPS_BUILD_TYPE: ${{ inputs.build_type }}
       SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
       SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
@@ -84,18 +80,6 @@ jobs:
       - name: Save dependency installs
         if: success()
         run: scripts/ci/deps_cache.sh save "ci-${{ inputs.build_type }}" "$DFTRACER_UTILS_DEPS_PREFIX"
-
-      # One install per platform. The prefix is absolute and identical in every
-      # consumer: the PCH embeds <rocksdb/*.h>, so a differing -I path would
-      # invalidate the compiler cache for the whole project. Valgrind jobs use
-      # the same install.
-      - name: Restore and build RocksDB
-        run: |
-          sudo mkdir -p /opt/dftracer-deps
-          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
-          scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
-          scripts/ci/build_rocksdb.sh
-          scripts/ci/deps_cache.sh save rocksdb /opt/dftracer-deps
 
       - name: sccache stats
         if: always()

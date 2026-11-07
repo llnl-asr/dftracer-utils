@@ -1,4 +1,8 @@
-#include <dftracer/utils/core/common/logging.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/parser.h>
@@ -9,8 +13,6 @@
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 
 #include <cstring>
-#include <map>
-#include <string_view>
 
 using dftracer::utils::json::JsonParser;
 using dftracer::utils::json::ondemand_value_to_string;
@@ -19,18 +21,18 @@ namespace dftracer::utils::index::build {
 
 namespace {
 
-static const std::string DIM_HHASH = "hhash";
-static const std::string DIM_FHASH = "fhash";
-static const std::string DIM_SHASH = "shash";
+static const dstd::String DIM_HHASH = "hhash";
+static const dstd::String DIM_FHASH = "fhash";
+static const dstd::String DIM_SHASH = "shash";
 
-static const std::string DIM_NAME = "name";
-static const std::string DIM_CAT = "cat";
-static const std::string DIM_PID = "pid";
-static const std::string DIM_TID = "tid";
+static const dstd::String DIM_NAME = "name";
+static const dstd::String DIM_CAT = "cat";
+static const dstd::String DIM_PID = "pid";
+static const dstd::String DIM_TID = "tid";
 
-std::vector<std::string> get_target_dimensions(
+dstd::Vector<dstd::String> get_target_dimensions(
     const ChunkIndexerConfig& config) {
-    std::vector<std::string> dims;
+    dstd::Vector<dstd::String> dims;
 
     if (config.index_name) dims.push_back(DIM_NAME);
     if (config.index_cat) dims.push_back(DIM_CAT);
@@ -62,14 +64,15 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
         existing = input.existing_state.get();
     }
 
-    std::vector<std::string> target_dims = get_target_dimensions(input.config);
-    std::vector<std::string> missing_dims;
+    dstd::Vector<dstd::String> target_dims =
+        get_target_dimensions(input.config);
+    dstd::Vector<dstd::String> missing_dims;
 
     if (existing) {
         missing_dims = existing->indexed_dims.missing_dimensions(input.config);
 
         const std::uint64_t current_hash =
-            input.config.params_hash(index::store::IndexExtension::BLOOM);
+            input.config.params_hash(index::store::IndexExtension::Bloom);
         bool config_changed =
             existing->config_hash != 0 && existing->config_hash != current_hash;
 
@@ -115,7 +118,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
 
     bool need_rescan = !missing_dims.empty();
 
-    std::shared_ptr<utilities::reader::internal::Reader> reader;
+    dstd::SharedPtr<utilities::reader::internal::Reader> reader;
     if (need_rescan) {
         auto reader_input =
             utilities::fileio::IndexedReadInput::from_file(input.file_path)
@@ -148,8 +151,8 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
     auto stream = reader->stream(
         utilities::reader::internal::StreamConfig()
             .stream_type(
-                utilities::reader::internal::StreamType::MULTI_LINES_BYTES)
-            .range_type(utilities::reader::internal::RangeType::BYTE_RANGE)
+                utilities::reader::internal::StreamType::MultiLinesBytes)
+            .range_type(utilities::reader::internal::RangeType::ByteRange)
             .buffer_size(input.batch_size)
             .from(input.start_byte)
             .to(input.end_byte));
@@ -174,27 +177,28 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
     const bool has_extra_dims = !input.config.extra_dimensions.empty();
 
     co_await dftracer::utils::trace::internal::scan_chunk_lines(
-        *stream, [&](std::string_view line_sv,
+        *stream, [&](dstd::StringView line_sv,
                      [[maybe_unused]] std::uint32_t line_number) {
             if (!parser.parse(line_sv)) {
                 return;
             }
 
             trace::RecordPhase phase = trace::read_phase(parser);
-            if (phase == trace::RecordPhase::UNKNOWN) {
+            if (phase == trace::RecordPhase::Unknown) {
                 return;
             }
 
-            bool is_metadata = (phase == trace::RecordPhase::METADATA);
+            bool is_metadata = (phase == trace::RecordPhase::Metadata);
 
             if (!is_metadata) {
-                // Re-parse: the phase read above already consumed the
-                // document's cursor state.
-                parser.parse(line_sv);
+                // The phase read above consumed the document's cursor. A
+                // syntax error in what it read drops the line.
+                if (!parser.raw_document().is_alive()) return;
+                parser.rewind();
                 auto name_opt = parser.get_string("name");
-                std::string_view name = name_opt.value_or("");
+                dstd::StringView name = name_opt.value_or("");
                 auto cat_opt = parser.get_string("cat");
-                std::string_view cat = cat_opt.value_or("");
+                dstd::StringView cat = cat_opt.value_or("");
 
                 auto pid = parser.get_uint64("pid").value_or(0);
                 auto tid = parser.get_uint64("tid").value_or(0);
@@ -218,7 +222,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                     int n = std::snprintf(pid_buf, sizeof(pid_buf), "%llu",
                                           static_cast<unsigned long long>(pid));
                     output.bloom_filters[DIM_PID].add(
-                        std::string_view(pid_buf, n));
+                        dstd::StringView(pid_buf, n));
                 }
 
                 if (need_tid) {
@@ -226,11 +230,11 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                     int n = std::snprintf(tid_buf, sizeof(tid_buf), "%llu",
                                           static_cast<unsigned long long>(tid));
                     output.bloom_filters[DIM_TID].add(
-                        std::string_view(tid_buf, n));
+                        dstd::StringView(tid_buf, n));
                 }
 
                 if (need_hhash || need_fhash || need_shash || has_extra_dims) {
-                    parser.for_each_field("args", [&](std::string_view key,
+                    parser.for_each_field("args", [&](dstd::StringView key,
                                                       simdjson::ondemand::value
                                                           val) {
                         if (need_hhash && key == "hhash") {
@@ -253,7 +257,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                             for (const auto& dim :
                                  input.config.extra_dimensions) {
                                 if (key == dim) {
-                                    std::string str_val =
+                                    dstd::String str_val =
                                         ondemand_value_to_string(val);
                                     if (!str_val.empty()) {
                                         output.bloom_filters[dim].add(str_val);
@@ -262,11 +266,11 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                                 }
                                 // Nested dimension, e.g. "io.size".
                                 auto dot_pos = dim.find('.');
-                                if (dot_pos != std::string::npos) {
-                                    std::string_view prefix(dim.data(),
+                                if (dot_pos != dstd::String::npos) {
+                                    dstd::StringView prefix(dim.data(),
                                                             dot_pos);
                                     if (key == prefix) {
-                                        std::string_view suffix(
+                                        dstd::StringView suffix(
                                             dim.data() + dot_pos + 1,
                                             dim.size() - dot_pos - 1);
                                         auto obj = val.get_object();
@@ -279,7 +283,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                                                 if (fkey.value() == suffix) {
                                                     auto fval = field.value();
                                                     if (fval.error()) continue;
-                                                    std::string str_val =
+                                                    dstd::String str_val =
                                                         ondemand_value_to_string(
                                                             fval.value());
                                                     if (!str_val.empty()) {

@@ -1,4 +1,19 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+
+#include <cstdio>
 
 namespace dftracer::utils::dataframe {
 
@@ -20,8 +35,10 @@ class SlicedRows : public Cursor {
     SlicedRows(Cursor& in, const std::int64_t& cap, std::int64_t& taken)
         : in_(in), cap_(cap), taken_(taken) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (!co_await feed_.fill(in_, max_rows)) co_return std::nullopt;
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
+        const auto fill_ok = co_await feed_.fill(in_, max_rows);
+        if (!fill_ok) co_return dstd::nullopt;
         Morsel m = feed_.take(std::min(max_rows, cap_));
         taken_ += m.rows;
         co_return m;
@@ -46,10 +63,10 @@ class SlicedRows : public Cursor {
 // budget) and its groups are emitted, at most max_rows per call.
 class GroupByCursor : public Cursor {
    public:
-    GroupByCursor(std::unique_ptr<Cursor> in, std::vector<std::string> sch,
-                  std::vector<std::string> keys, std::vector<GroupAgg> aggs,
-                  std::uint64_t budget, std::vector<AggDynSpec> dyn = {},
-                  std::string dyn_prefix = {})
+    GroupByCursor(dstd::UniquePtr<Cursor> in, dstd::Vector<dstd::String> sch,
+                  dstd::Vector<dstd::String> keys, dstd::Vector<GroupAgg> aggs,
+                  std::uint64_t budget, dstd::Vector<AggDynSpec> dyn = {},
+                  dstd::String dyn_prefix = {})
         : in_(std::move(in)),
           sch_(std::move(sch)),
           keys_(std::move(keys)),
@@ -58,26 +75,29 @@ class GroupByCursor : public Cursor {
           dyn_specs_(std::move(dyn)),
           dyn_prefix_(std::move(dyn_prefix)) {}
 
-    std::optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
         return out_names_;
     }
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
+
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
         if (!spilled_) {
             if (!done_) {
                 done_ = true;
                 chunks_.set(std::move(result_));
             }
-            if (chunks_.empty()) co_return std::nullopt;
+            if (chunks_.empty()) co_return dstd::nullopt;
             co_return chunks_.next(max_rows, output_share(budget_));
         }
         co_return merge_next(max_rows);
     }
 
    private:
-    static int index_in(const std::vector<std::string>& s,
-                        const std::string& n) {
+    static int index_in(const dstd::Vector<dstd::String>& s,
+                        const dstd::String& n) {
         return require_col(s, n, "group_by");
     }
 
@@ -91,12 +111,14 @@ class GroupByCursor : public Cursor {
     }
 
     coro::CoroTask<void> build(std::int64_t max_rows) {
-        std::vector<int> key_idx;
+        dstd::Vector<int> key_idx;
         key_idx.reserve(keys_.size());
-        for (const std::string& k : keys_) key_idx.push_back(index_in(sch_, k));
-        std::vector<int> value_idx;  // sch indices of the deduped value columns
-        ankerl::unordered_dense::map<std::string, std::int32_t> dedup;
-        auto resolve = [&](const std::string& name) -> std::int32_t {
+        for (const dstd::String& k : keys_)
+            key_idx.push_back(index_in(sch_, k));
+        dstd::Vector<int>
+            value_idx;  // sch indices of the deduped value columns
+        dstd::HashMap<dstd::String, std::int32_t> dedup;
+        auto resolve = [&](const dstd::String& name) -> std::int32_t {
             auto it = dedup.find(name);
             if (it != dedup.end()) return it->second;
             const std::int32_t idx =
@@ -118,7 +140,7 @@ class GroupByCursor : public Cursor {
 
         // Dyn columns are the prefix-tagged plan columns, and the
         // prefix-tagged fields of the rest column.
-        std::vector<std::pair<int, std::string>> sch_dyn;
+        dstd::Vector<dstd::Pair<int, dstd::String>> sch_dyn;
         if (!dyn_specs_.empty() && !dyn_prefix_.empty())
             for (std::size_t i = 0; i < sch_.size(); ++i)
                 if (sch_[i].rfind(dyn_prefix_, 0) == 0)
@@ -131,17 +153,17 @@ class GroupByCursor : public Cursor {
         auto accumulate = [&](AggState& st, const Morsel& m,
                               std::int64_t row_base) {
             agg_set_row_base(st, row_base);
-            std::vector<const Series*> keys;
+            dstd::Vector<const Series*> keys;
             keys.reserve(key_idx.size());
             for (int ki : key_idx) keys.push_back(&m.columns[ki]);
-            std::vector<const Series*> values;
+            dstd::Vector<const Series*> values;
             values.reserve(value_idx.size());
             for (int vi : value_idx) values.push_back(&m.columns[vi]);
             if (dyn_specs_.empty()) {
                 agg_accumulate(st, keys, values);
                 return;
             }
-            std::vector<AggDynInput> dyn;
+            dstd::Vector<AggDynInput> dyn;
             const DataFrame rest =
                 rest_dyn ? rest_fields(m.columns.back()) : DataFrame{};
             dyn.reserve(sch_dyn.size() + rest.columns.size());
@@ -162,10 +184,12 @@ class GroupByCursor : public Cursor {
         std::int64_t taken = 0;
         SlicedRows sliced(*in_, cap, taken);
         const std::uint64_t threshold = budget_ / share::SPILL_STATE;
+        std::uint64_t state_bytes = 0;
+        std::uint64_t batch_bytes = 0;
         co_await accumulate_batches(
             sliced, max_rows, budget_, state,
             [&] { return agg_new(specs_, dyn_specs_); }, accumulate,
-            [&](std::vector<Morsel>&, AggStatePtr& st) {
+            [&](dstd::Vector<Morsel>&, AggStatePtr& st) {
                 if (budget_ == 0) return;
                 const std::uint64_t bytes = agg_approx_bytes(*st);
                 if (taken > 0 && has_cap(budget_)) {
@@ -173,25 +197,38 @@ class GroupByCursor : public Cursor {
                         bytes / static_cast<std::uint64_t>(taken), 1);
                     cap = rows_within(threshold / 8, per_row, max_rows);
                 }
-                if (bytes > threshold) {
+                state_bytes = bytes;
+                if (bytes > threshold || asked_ ||
+                    (has_cap(budget_) && gov_.check(bytes) != 0)) {
                     spill_state(*st);
                     st = agg_new(specs_, dyn_specs_);
                     taken = 0;
+                    asked_ = false;
+                    state_bytes = 0;
+                    gov_.spilled(0);
                 }
             },
-            [] { return true; });
+            [] { return true; },
+            [&](const dstd::Vector<Morsel>& batch) {
+                if (!has_cap(budget_)) return false;
+                if (batch.size() == 1) batch_bytes = 0;
+                batch_bytes += spill::columns_bytes(batch.back().columns);
+                asked_ = gov_.check(state_bytes + batch_bytes) != 0;
+                return asked_;
+            });
 
         if (!spilled_) {
             DataFrame r = agg_finalize(*state, keys_);
             out_names_ = r.names;
             result_ = to_morsel(r);
         } else {
-            if (agg_num_groups(*state) > 0) spill_state(*state);
+            if (agg_group_count(*state) > 0) spill_state(*state);
+            coro::BlockingRegion blocking;
             for (std::size_t p = 0; p < part_out_.size(); ++p) {
-                part_out_[p].close();
-                if (!part_out_[p])
-                    throw DFTUtilsException::cat(
-                        ErrorCode::IO,
+                std::FILE* f = part_out_[p].release();
+                if (!f || std::fclose(f) != 0)
+                    throw common::DFTUtilsException::cat(
+                        common::ErrorCode::Io,
                         "group_by spill: cannot write a part file");
                 if (part_bytes_[p])
                     todo_.push_back({part_paths_[p], part_bytes_[p], 0});
@@ -206,9 +243,11 @@ class GroupByCursor : public Cursor {
     void spill_state(const AggState& state) {
         if (!spilled_) {
             spilled_ = true;
+            coro::BlockingRegion blocking;
             for (std::size_t p = 0; p < GROUP_SPILL_PARTS; ++p) {
                 part_paths_.push_back(dir_.run_path(dir_.next_run()));
-                part_out_.emplace_back(part_paths_.back(), std::ios::binary);
+                part_out_.emplace_back(
+                    std::fopen(part_paths_.back().c_str(), "wb"));
                 part_bytes_.push_back(0);
             }
         }
@@ -216,48 +255,57 @@ class GroupByCursor : public Cursor {
         write_split(state, part_out_, part_bytes_, 0);
     }
 
-    void write_split(const AggState& state, std::vector<std::ofstream>& out,
-                     std::vector<std::uint64_t>& bytes, int salt) const {
+    void write_split(const AggState& state, dstd::Vector<dstd::ScopedFile>& out,
+                     dstd::Vector<std::uint64_t>& bytes, int salt) const {
         const auto split = agg_split_groups(state, out.size(), salt);
         for (std::size_t p = 0; p < split.size(); ++p) {
             if (split[p].empty()) continue;
-            const std::string blob =
+            const dstd::String blob =
                 agg_serialize(*agg_extract_groups(state, split[p]), true);
             if (blob.size() > std::numeric_limits<std::uint32_t>::max())
-                throw DFTUtilsException::cat(
-                    ErrorCode::IO,
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io,
                     "group_by spill: a part holds over 4 GiB of group states");
             const auto len = static_cast<std::uint32_t>(blob.size());
-            out[p].write(reinterpret_cast<const char*>(&len), sizeof len);
-            out[p].write(blob.data(),
-                         static_cast<std::streamsize>(blob.size()));
-            if (!out[p])
-                throw DFTUtilsException::cat(
-                    ErrorCode::IO, "group_by spill: cannot write a part file");
+            coro::BlockingRegion blocking;
+            std::FILE* f = out[p].get();
+            if (!f || std::fwrite(&len, sizeof len, 1, f) != 1 ||
+                std::fwrite(blob.data(), 1, blob.size(), f) != blob.size())
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io,
+                    "group_by spill: cannot write a part file");
             bytes[p] += sizeof len + blob.size();
+            dir_.charge().add(sizeof len + blob.size());
         }
     }
 
     // Reads blobs in batches of about `limit` bytes, deserializes each batch
     // in parallel and calls `fn` on it until it returns false.
     template <class F>
-    static void read_batches(const std::string& path, std::uint64_t limit,
+    static void read_batches(const dstd::String& path, std::uint64_t limit,
                              F&& fn) {
-        std::ifstream is(path, std::ios::binary);
-        if (!is)
-            throw DFTUtilsException::cat(
-                ErrorCode::IO, "group_by spill: cannot open part file ", path);
-        std::error_code size_ec;
-        const std::uint64_t file_size = fs::file_size(path, size_ec);
-        if (size_ec)
-            throw DFTUtilsException::cat(
-                ErrorCode::IO, "group_by spill: cannot stat part file ", path);
+        dstd::ScopedFile is;
+        std::uint64_t file_size = 0;
+        {
+            coro::BlockingRegion blocking;
+            is = dstd::ScopedFile(std::fopen(path.c_str(), "rb"));
+            if (!is)
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io,
+                    "group_by spill: cannot open part file ", path);
+            const auto sized = dstd::fs::file_size(dstd::PathView(path));
+            if (!sized)
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io,
+                    "group_by spill: cannot stat part file ", path);
+            file_size = *sized;
+        }
         std::uint64_t consumed = 0;
-        std::vector<std::string> raw;
+        dstd::Vector<dstd::String> raw;
         std::uint64_t have = 0;
         auto flush = [&] {
             if (raw.empty()) return true;
-            std::vector<AggStatePtr> states(raw.size());
+            dstd::Vector<AggStatePtr> states(raw.size());
             parallel_for(
                 static_cast<std::int64_t>(raw.size()), 1,
                 [&](std::int64_t b, std::int64_t e) {
@@ -270,16 +318,24 @@ class GroupByCursor : public Cursor {
             return fn(states);
         };
         std::uint32_t len = 0;
-        while (is.read(reinterpret_cast<char*>(&len), sizeof len)) {
-            consumed += sizeof len;
-            if (len > file_size - consumed)
-                throw DFTUtilsException::cat(
-                    ErrorCode::IO, "group_by spill: corrupt part file");
-            consumed += len;
-            std::string blob(len, '\0');
-            if (!is.read(blob.data(), static_cast<std::streamsize>(len)))
-                throw DFTUtilsException::cat(
-                    ErrorCode::IO, "group_by spill: truncated part file");
+        while (true) {
+            dstd::String blob;
+            {
+                coro::BlockingRegion blocking;
+                if (std::fread(&len, 1, sizeof len, is.get()) != sizeof len)
+                    break;
+                consumed += sizeof len;
+                if (len > file_size - consumed)
+                    throw common::DFTUtilsException::cat(
+                        common::ErrorCode::Io,
+                        "group_by spill: corrupt part file");
+                consumed += len;
+                blob.assign(len, '\0');
+                if (std::fread(blob.data(), 1, len, is.get()) != len)
+                    throw common::DFTUtilsException::cat(
+                        common::ErrorCode::Io,
+                        "group_by spill: truncated part file");
+            }
             have += len;
             raw.push_back(std::move(blob));
             if (have >= limit && !flush()) return;
@@ -287,7 +343,7 @@ class GroupByCursor : public Cursor {
         flush();
     }
 
-    AggStatePtr fold(AggStatePtr acc, std::vector<AggStatePtr>& batch) const {
+    AggStatePtr fold(AggStatePtr acc, dstd::Vector<AggStatePtr>& batch) const {
         for (const AggStatePtr& st : batch) agg_merge(*acc, *st);
         return acc;
     }
@@ -297,7 +353,7 @@ class GroupByCursor : public Cursor {
     }
 
     struct Part {
-        std::string path;
+        dstd::String path;
         std::uint64_t bytes;
         int depth;
     };
@@ -306,61 +362,72 @@ class GroupByCursor : public Cursor {
     // salted hash, so the same keys spread over new parts. Blobs are folded
     // into one state first, so the pieces written are as large as a flush.
     void split_part(const Part& part) {
-        std::vector<std::string> paths;
-        std::vector<std::ofstream> out;
-        std::vector<std::uint64_t> bytes(GROUP_SPILL_PARTS, 0);
-        for (std::size_t p = 0; p < GROUP_SPILL_PARTS; ++p) {
-            paths.push_back(dir_.run_path(dir_.next_run()));
-            out.emplace_back(paths.back(), std::ios::binary);
+        dstd::Vector<dstd::String> paths;
+        dstd::Vector<dstd::ScopedFile> out;
+        dstd::Vector<std::uint64_t> bytes(GROUP_SPILL_PARTS, 0);
+        {
+            coro::BlockingRegion blocking;
+            for (std::size_t p = 0; p < GROUP_SPILL_PARTS; ++p) {
+                paths.push_back(dir_.run_path(dir_.next_run()));
+                out.emplace_back(std::fopen(paths.back().c_str(), "wb"));
+            }
         }
         AggStatePtr acc = agg_new(specs_, dyn_specs_);
-        read_batches(
-            part.path, batch_bytes(), [&](std::vector<AggStatePtr>& batch) {
-                acc = fold(std::move(acc), batch);
-                if (agg_approx_bytes(*acc) > budget_ / share::SPILL_STATE) {
-                    write_split(*acc, out, bytes, part.depth + 1);
-                    acc = agg_new(specs_, dyn_specs_);
-                }
-                return true;
-            });
-        if (agg_num_groups(*acc) > 0)
+        read_batches(part.path, batch_bytes(),
+                     [&](dstd::Vector<AggStatePtr>& batch) {
+                         acc = fold(std::move(acc), batch);
+                         const std::uint64_t held = agg_approx_bytes(*acc);
+                         if (held > budget_ / share::SPILL_STATE ||
+                             (has_cap(budget_) && gov_.check(held) != 0)) {
+                             write_split(*acc, out, bytes, part.depth + 1);
+                             acc = agg_new(specs_, dyn_specs_);
+                             gov_.spilled(0);
+                         }
+                         return true;
+                     });
+        if (agg_group_count(*acc) > 0)
             write_split(*acc, out, bytes, part.depth + 1);
+        coro::BlockingRegion blocking;
         for (std::size_t p = 0; p < out.size(); ++p) {
-            out[p].close();
-            if (!out[p])
-                throw DFTUtilsException::cat(
-                    ErrorCode::IO, "group_by spill: cannot write a part file");
+            std::FILE* f = out[p].release();
+            if (!f || std::fclose(f) != 0)
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io,
+                    "group_by spill: cannot write a part file");
             if (bytes[p]) todo_.push_back({paths[p], bytes[p], part.depth + 1});
         }
-        std::error_code ec;
-        fs::remove(part.path, ec);
+        dir_.remove_run(part.path);
     }
 
     // Merges one part of the spill at a time and emits its groups. With dyn
     // columns every part finalizes under the union of the names the flushed
     // states held, noted as they were written.
-    std::optional<Morsel> merge_next(std::int64_t max_rows) {
+    dstd::Optional<Morsel> merge_next(std::int64_t max_rows) {
         while (true) {
             if (!chunks_.empty())
                 return chunks_.next(max_rows, output_share(budget_));
-            if (todo_.empty()) return std::nullopt;
+            if (todo_.empty()) return dstd::nullopt;
             const Part part = std::move(todo_.back());
             todo_.pop_back();
             AggStatePtr merged = agg_new(specs_, dyn_specs_);
             bool too_big = false;
-            read_batches(part.path, batch_bytes(),
-                         [&](std::vector<AggStatePtr>& batch) {
-                             merged = fold(std::move(merged), batch);
-                             too_big = part.depth < GROUP_SPILL_MAX_DEPTH &&
-                                       agg_approx_bytes(*merged) > budget_;
-                             return !too_big;
-                         });
+            read_batches(
+                part.path, batch_bytes(),
+                [&](dstd::Vector<AggStatePtr>& batch) {
+                    merged = fold(std::move(merged), batch);
+                    const std::uint64_t held = agg_approx_bytes(*merged);
+                    too_big = part.depth < GROUP_SPILL_MAX_DEPTH &&
+                              (held > budget_ ||
+                               (has_cap(budget_) && gov_.check(held) != 0));
+                    return !too_big;
+                });
             if (too_big) {
                 merged.reset();
+                gov_.spilled(0);
                 split_part(part);
                 continue;
             }
-            if (agg_num_groups(*merged) == 0) continue;
+            if (agg_group_count(*merged) == 0) continue;
             DataFrame r = dyn_specs_.empty()
                               ? agg_finalize(*merged, keys_)
                               : agg_finalize(*merged, keys_, layout_);
@@ -369,26 +436,29 @@ class GroupByCursor : public Cursor {
         }
     }
 
-    std::unique_ptr<Cursor> in_;
-    std::vector<std::string> sch_;
-    std::vector<std::string> keys_;
-    std::vector<GroupAgg> aggs_;
+    dstd::UniquePtr<Cursor> in_;
+    dstd::Vector<dstd::String> sch_;
+    dstd::Vector<dstd::String> keys_;
+    dstd::Vector<GroupAgg> aggs_;
     std::uint64_t budget_;
-    std::vector<AggDynSpec> dyn_specs_;
-    std::string dyn_prefix_;
-    std::vector<AggSpec> specs_;
-    std::optional<std::vector<std::string>> out_names_;
+    dstd::Vector<AggDynSpec> dyn_specs_;
+    dstd::String dyn_prefix_;
+    dstd::Vector<AggSpec> specs_;
+    dstd::Optional<dstd::Vector<dstd::String>> out_names_;
     bool built_ = false;
     bool done_ = false;
     bool spilled_ = false;
     AggDynLayout layout_;
     Morsel result_;
     spill::Dir dir_;
-    std::vector<std::string> part_paths_;
-    std::vector<std::ofstream> part_out_;
-    std::vector<std::uint64_t> part_bytes_;
-    std::vector<Part> todo_;
+    dstd::Vector<dstd::String> part_paths_;
+    dstd::Vector<dstd::ScopedFile> part_out_;
+    dstd::Vector<std::uint64_t> part_bytes_;
+    dstd::Vector<Part> todo_;
     ResultChunks chunks_;
+    Governor gov_{"group_by"};
+    // The governor asked for bytes while a batch was read, so spill after it.
+    bool asked_ = false;
 };
 
 // Tumbling/sliding time windows over an ascending Int64 time column, grid
@@ -399,9 +469,9 @@ class GroupByCursor : public Cursor {
 // the input, since a window it belongs to may have left already.
 class GroupByDynamicCursor : public Cursor {
    public:
-    GroupByDynamicCursor(std::unique_ptr<Cursor> in, std::string time_col,
-                         int time_idx, std::vector<int> value_idx,
-                         std::vector<AggSpec> specs, std::int64_t every,
+    GroupByDynamicCursor(dstd::UniquePtr<Cursor> in, dstd::String time_col,
+                         int time_idx, dstd::Vector<int> value_idx,
+                         dstd::Vector<AggSpec> specs, std::int64_t every,
                          std::int64_t period, std::int64_t origin,
                          bool origin_min, std::uint64_t budget)
         : in_(std::move(in)),
@@ -416,9 +486,10 @@ class GroupByDynamicCursor : public Cursor {
           budget_(budget),
           state_(agg_new(specs_)) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         while (chunks_.empty()) {
-            if (eof_) co_return std::nullopt;
+            if (eof_) co_return dstd::nullopt;
             auto m = co_await in_->next(max_rows);
             if (!m) {
                 eof_ = true;
@@ -437,17 +508,19 @@ class GroupByDynamicCursor : public Cursor {
     void accumulate(const Morsel& m) {
         const Series& tc = m.columns[static_cast<std::size_t>(time_idx_)];
         if (tc.type() != TypeId::Int64)
-            throw std::invalid_argument("group_by_dynamic: " + time_col_ +
-                                        " must be an Int64 column");
+            throw std::invalid_argument(
+                ("group_by_dynamic: " + time_col_ + " must be an Int64 column")
+                    .c_str());
         const std::int64_t* t = tc.data<std::int64_t>();
-        std::vector<std::int64_t> keyv, rowsv;
+        dstd::Vector<std::int64_t> keyv, rowsv;
         for (std::int64_t i = 0; i < m.rows; ++i) {
             if (tc.is_null(i)) continue;
             const std::int64_t ts = t[i];
             if (seen_ && ts < last_)
                 throw std::invalid_argument(
-                    "group_by_dynamic: " + time_col_ + " must ascend, " +
-                    std::to_string(ts) + " follows " + std::to_string(last_));
+                    ("group_by_dynamic: " + time_col_ + " must ascend, " +
+                     dstd::to_string(ts) + " follows " + dstd::to_string(last_))
+                        .c_str());
             if (!seen_) {
                 if (origin_min_) origin_ = ts;
                 start0_ = origin_ + floor_to_multiple(ts - origin_, every_);
@@ -464,12 +537,12 @@ class GroupByDynamicCursor : public Cursor {
         if (keyv.empty()) return;
         const Series keyc = Series::flat_i64(
             keyv.data(), static_cast<std::int64_t>(keyv.size()));
-        std::vector<Series> gathered;
+        dstd::Vector<Series> gathered;
         gathered.reserve(value_idx_.size());
         for (int vi : value_idx_)
             gathered.push_back(
                 m.columns[static_cast<std::size_t>(vi)].take(rowsv));
-        std::vector<const Series*> values;
+        dstd::Vector<const Series*> values;
         values.reserve(gathered.size());
         for (const Series& g : gathered) values.push_back(&g);
         agg_set_row_base(*state_, rows_seen_);
@@ -479,10 +552,10 @@ class GroupByDynamicCursor : public Cursor {
 
     // Hands on the windows no later row can reach and keeps the others.
     void close_windows() {
-        if (!seen_ || agg_num_groups(*state_) == 0) return;
+        if (!seen_ || agg_group_count(*state_) == 0) return;
         DataFrame all = agg_finalize(*state_, time_col_);
         const std::int64_t* start = all.columns.front().data<std::int64_t>();
-        std::vector<std::int64_t> closed, open;
+        dstd::Vector<std::int64_t> closed, open;
         for (std::int64_t g = 0; g < all.num_rows(); ++g)
             (start[g] <= last_ - period_ ? closed : open).push_back(g);
         if (closed.empty()) return;
@@ -496,11 +569,11 @@ class GroupByDynamicCursor : public Cursor {
         chunks_.set(morsel_of(done.sort_by(time_col_, false)));
     }
 
-    std::unique_ptr<Cursor> in_;
-    std::string time_col_;
+    dstd::UniquePtr<Cursor> in_;
+    dstd::String time_col_;
     int time_idx_;
-    std::vector<int> value_idx_;
-    std::vector<AggSpec> specs_;
+    dstd::Vector<int> value_idx_;
+    dstd::Vector<AggSpec> specs_;
     std::int64_t every_, period_;
     std::int64_t origin_;
     bool origin_min_;
@@ -518,26 +591,29 @@ class GroupByDynamicCursor : public Cursor {
 
 namespace lazy_internal {
 
-std::unique_ptr<Cursor> make_group_by(
-    std::unique_ptr<Cursor> in, std::vector<std::string> sch,
-    std::vector<std::string> keys, std::vector<GroupAgg> aggs,
-    std::uint64_t budget, std::vector<AggDynSpec> dyn, std::string dyn_prefix) {
-    return std::make_unique<GroupByCursor>(
+dstd::UniquePtr<Cursor> make_group_by(dstd::UniquePtr<Cursor> in,
+                                      dstd::Vector<dstd::String> sch,
+                                      dstd::Vector<dstd::String> keys,
+                                      dstd::Vector<GroupAgg> aggs,
+                                      std::uint64_t budget,
+                                      dstd::Vector<AggDynSpec> dyn,
+                                      dstd::String dyn_prefix) {
+    return dstd::make_unique<GroupByCursor>(
         std::move(in), std::move(sch), std::move(keys), std::move(aggs), budget,
         std::move(dyn), std::move(dyn_prefix));
 }
 
-std::unique_ptr<Cursor> make_group_by_dynamic(
-    std::unique_ptr<Cursor> in, std::vector<std::string> sch,
-    std::string time_col, std::int64_t every, std::int64_t period,
-    std::vector<GroupAgg> aggs, std::int64_t origin, bool origin_min,
+dstd::UniquePtr<Cursor> make_group_by_dynamic(
+    dstd::UniquePtr<Cursor> in, dstd::Vector<dstd::String> sch,
+    dstd::String time_col, std::int64_t every, std::int64_t period,
+    dstd::Vector<GroupAgg> aggs, std::int64_t origin, bool origin_min,
     std::uint64_t budget) {
     if (every <= 0)
         throw std::invalid_argument("group_by_dynamic: every must be > 0");
     const int time_idx = require_col(sch, time_col, "group_by_dynamic");
-    std::vector<int> value_idx;
-    std::vector<std::string> used;
-    const auto resolve = [&](const std::string& name) -> std::int32_t {
+    dstd::Vector<int> value_idx;
+    dstd::Vector<dstd::String> used;
+    const auto resolve = [&](const dstd::String& name) -> std::int32_t {
         const auto it = std::find(used.begin(), used.end(), name);
         if (it != used.end())
             return static_cast<std::int32_t>(it - used.begin());
@@ -545,7 +621,7 @@ std::unique_ptr<Cursor> make_group_by_dynamic(
         used.push_back(name);
         return static_cast<std::int32_t>(used.size() - 1);
     };
-    std::vector<AggSpec> specs;
+    dstd::Vector<AggSpec> specs;
     specs.reserve(aggs.size());
     for (const GroupAgg& a : aggs) {
         AggSpec sp;
@@ -556,7 +632,7 @@ std::unique_ptr<Cursor> make_group_by_dynamic(
         if (agg_uses_by_col(sp.op)) sp.by_col = resolve(a.by);
         specs.push_back(std::move(sp));
     }
-    return std::make_unique<GroupByDynamicCursor>(
+    return dstd::make_unique<GroupByDynamicCursor>(
         std::move(in), std::move(time_col), time_idx, std::move(value_idx),
         std::move(specs), every, period <= 0 ? every : period, origin,
         origin_min, budget);

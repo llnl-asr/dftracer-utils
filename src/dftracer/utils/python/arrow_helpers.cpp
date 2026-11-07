@@ -1,4 +1,5 @@
-#include <dftracer/utils/core/common/config.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define PY_SSIZE_T_CLEAN

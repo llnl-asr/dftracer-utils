@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The engine ops and lazy plans on native columns, with no pyarrow use.
 
 Runs in every build; in one built with DFTRACER_UTILS_ENABLE_ARROW=OFF, and no

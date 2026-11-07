@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/subsumption.h>
@@ -9,7 +10,9 @@ namespace {
 
 // True if an MV filtered by `mv` can answer a query filtered by `q`.
 bool subsumes(const char* mv, const char* q) {
-    return query_subsumes(parse_or_throw(mv).root(), parse_or_throw(q).root());
+    return query_subsumes(
+        dftracer::utils::duql::detail::QueryAccess::root(parse_or_throw(mv)),
+        dftracer::utils::duql::detail::QueryAccess::root(parse_or_throw(q)));
 }
 
 }  // namespace

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The duql builder builds the tree of the equal text and runs like it."""
 
 import gzip

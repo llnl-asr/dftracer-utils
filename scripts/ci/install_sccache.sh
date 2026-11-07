@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # Install a pinned sccache into a manylinux container; verifies the checksum.
 set -eu
 version=v0.18.0

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """to_polars / to_pandas through Arrow equal the native paths; string columns
 convert to Python objects without being materialized."""
 

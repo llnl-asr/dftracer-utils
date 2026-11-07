@@ -1,92 +1,82 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/utilities/reader/internal/arrow_row_builder.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <ankerl/unordered_dense.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/schema.h>
 
-#include <cctype>
 #include <cstdint>
 #include <cstring>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <unordered_map>
 
 namespace dftracer::utils::utilities::reader::internal {
 
-using common::arrow::ColumnType;
-using common::arrow::RecordBatchBuilder;
 using json::JsonParser;
 using json::JsonValueHelper;
+using utilities::arrow::ColumnType;
+using utilities::arrow::RecordBatchBuilder;
 
 namespace {
 
 // --- Row type constants (must match Python TYPE_* constants) ---
 enum RowType : std::int8_t {
-    ROW_EVENT = 0,
-    ROW_FILE_HASH = 1,
-    ROW_HOST_HASH = 2,
-    ROW_STRING_HASH = 3,
-    ROW_METADATA = 4,
-    ROW_PROC_METADATA = 5,
-    ROW_PROFILE = 6,
-    ROW_SYSTEM = 7,
+    RowEvent = 0,
+    RowFileHash = 1,
+    RowHostHash = 2,
+    RowStringHash = 3,
+    RowMetadata = 4,
+    RowProcMetadata = 5,
+    RowProfile = 6,
+    RowSystem = 7,
 };
 
 // --- IO category constants (must match Python IOCategory values) ---
 enum IOCat : std::int8_t {
-    IO_READ = 1,
-    IO_WRITE = 2,
-    IO_METADATA = 3,
-    IO_PCTL = 4,
-    IO_IPC = 5,
-    IO_OTHER = 6,
-    IO_SYNC = 7,
+    IoRead = 1,
+    IoWrite = 2,
+    IoMetadata = 3,
+    IoPctl = 4,
+    IoIpc = 5,
+    IoOther = 6,
+    IoSync = 7,
 };
 
-std::int8_t get_io_cat(std::string_view func) {
+std::int8_t get_io_cat(dstd::StringView func) {
     using namespace dftracer::utils::trace::internal;
     // Op sets are disjoint, so a single flat lookup preserves the original
     // first-match semantics. Keys view the constexpr op arrays (static
     // storage).
-    static const ankerl::unordered_dense::map<std::string_view, std::int8_t>
-        op_to_cat = [] {
-            ankerl::unordered_dense::map<std::string_view, std::int8_t> m;
-            for (auto op : posix_ops::READ) m.emplace(op, IO_READ);
-            for (auto op : posix_ops::WRITE) m.emplace(op, IO_WRITE);
-            for (auto op : posix_ops::SYNC) m.emplace(op, IO_SYNC);
-            for (auto op : posix_ops::PCTL) m.emplace(op, IO_PCTL);
-            for (auto op : posix_ops::IPC) m.emplace(op, IO_IPC);
-            for (auto op : posix_ops::METADATA) m.emplace(op, IO_METADATA);
-            return m;
-        }();
+    static const dstd::HashMap<dstd::StringView, std::int8_t> op_to_cat = [] {
+        dstd::HashMap<dstd::StringView, std::int8_t> m;
+        for (auto op : posix_ops::READ) m.emplace(op, IoRead);
+        for (auto op : posix_ops::WRITE) m.emplace(op, IoWrite);
+        for (auto op : posix_ops::SYNC) m.emplace(op, IoSync);
+        for (auto op : posix_ops::PCTL) m.emplace(op, IoPctl);
+        for (auto op : posix_ops::IPC) m.emplace(op, IoIpc);
+        for (auto op : posix_ops::METADATA) m.emplace(op, IoMetadata);
+        return m;
+    }();
     auto it = op_to_cat.find(func);
     return it != op_to_cat.end() ? it->second
-                                 : static_cast<std::int8_t>(IO_OTHER);
+                                 : static_cast<std::int8_t>(IoOther);
 }
 
-bool str_iequal(std::string_view a, const char *b) {
-    std::size_t len = std::strlen(b);
-    if (a.size() != len) return false;
-    for (std::size_t i = 0; i < len; ++i) {
-        if (std::tolower(static_cast<unsigned char>(a[i])) !=
-            static_cast<unsigned char>(b[i]))
-            return false;
-    }
-    return true;
-}
+using ::dftracer::utils::common::detail::iequals;
 
 // Fields extracted from a row's "args" object in a single pass.
 struct ParsedArgs {
-    std::optional<std::string_view> name, value, hhash, fhash;
-    std::optional<std::int64_t> epoch, step, size_sum, ret;
-    std::optional<std::int64_t> offset, image_idx, image_size;
+    dstd::Optional<dstd::StringView> name, value, hhash, fhash;
+    dstd::Optional<std::int64_t> epoch, step, size_sum, ret;
+    dstd::Optional<std::int64_t> offset, image_idx, image_size;
     // Other int/float args, kept for profile/sys columns.
-    std::unordered_map<std::string, std::int64_t> int_map;
-    std::unordered_map<std::string, double> float_map;
+    dstd::HashMap<dstd::String, std::int64_t> int_map;
+    dstd::HashMap<dstd::String, double> float_map;
 };
 
 // Parse a row's "args" object (already located during the single top-level
@@ -98,9 +88,9 @@ ParsedArgs parse_row_args(simdjson::ondemand::value &args_val) {
     if (obj.error()) return a;
     for (auto field : obj.value_unsafe()) {
         if (field.error()) continue;
-        auto key_r = field.unescaped_key();
-        if (key_r.error()) continue;
-        std::string_view key = key_r.value_unsafe();
+        const auto key_r = json::detail::get_key_or_raw(field);
+        if (!key_r) continue;
+        dstd::StringView key = *key_r;
         auto val_r = field.value();
         if (val_r.error()) continue;
         auto val = val_r.value_unsafe();
@@ -128,9 +118,9 @@ ParsedArgs parse_row_args(simdjson::ondemand::value &args_val) {
             if (auto i = SVH::get_int64(val)) a.image_size = i;
         } else {
             if (auto i = SVH::get_int64(val)) {
-                a.int_map[std::string(key)] = *i;
+                a.int_map[dstd::String(key)] = *i;
             } else if (auto d = SVH::get_double(val)) {
-                a.float_map[std::string(key)] = *d;
+                a.float_map[dstd::String(key)] = *d;
             }
         }
     }
@@ -139,7 +129,7 @@ ParsedArgs parse_row_args(simdjson::ondemand::value &args_val) {
 
 void append_profile_columns(
     RecordBatchBuilder &builder,
-    const std::unordered_map<std::string, std::int64_t> &int_map) {
+    const dstd::HashMap<dstd::String, std::int64_t> &int_map) {
     static const char *profile_keys[] = {
         "count",      "count_max",  "count_min",  "count_sum",  "dftu_cnt",
         "dur",        "dur_max",    "dur_min",    "dur_sum",    "epoch",
@@ -149,7 +139,7 @@ void append_profile_columns(
     for (const char **pk = profile_keys; *pk; ++pk) {
         auto it = int_map.find(*pk);
         if (it != int_map.end()) {
-            auto idx = builder.add_or_get_column(*pk, ColumnType::INT64);
+            auto idx = builder.add_or_get_column(*pk, ColumnType::Int64);
             builder.append_int64(idx, it->second);
         }
     }
@@ -157,7 +147,7 @@ void append_profile_columns(
 
 void append_system_columns(
     RecordBatchBuilder &builder,
-    const std::unordered_map<std::string, double> &float_map) {
+    const dstd::HashMap<dstd::String, double> &float_map) {
     static const char *sys_keys[] = {
         "user_pct", "system_pct",  "iowait_pct",   "idle_pct",
         "irq_pct",  "softirq_pct", "MemAvailable", "MemFree",
@@ -165,7 +155,7 @@ void append_system_columns(
     for (const char **sk = sys_keys; *sk; ++sk) {
         auto it = float_map.find(*sk);
         if (it != float_map.end()) {
-            auto idx = builder.add_or_get_column(*sk, ColumnType::DOUBLE);
+            auto idx = builder.add_or_get_column(*sk, ColumnType::Double);
             builder.append_double(idx, it->second);
         }
     }
@@ -174,18 +164,18 @@ void append_system_columns(
 // Normalize a raw JSON row (parsed with simdjson) into the semantic
 // output schema.  Appends one row to `builder` with the full set of output
 // columns.  Returns false if the row should be skipped (no valid name).
-bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
+bool normalize_row(RecordBatchBuilder &builder, dstd::StringArena &arena,
                    JsonParser &parser, TimeScaleState &time_scale) {
     using SVH = JsonValueHelper;
     // --- Single-pass extraction: capture top-level fields and args in one
     // member walk (dispatch on key, any field order). ---
     dftracer::utils::trace::RecordPhase phase =
-        dftracer::utils::trace::RecordPhase::UNKNOWN;
-    std::string_view name_sv, cat_sv;
-    std::optional<std::int64_t> pid_opt, tid_opt, ts_opt, dur_opt;
+        dftracer::utils::trace::RecordPhase::Unknown;
+    dstd::StringView name_sv, cat_sv;
+    dstd::Optional<std::int64_t> pid_opt, tid_opt, ts_opt, dur_opt;
     ParsedArgs args;
     parser.for_each_field(
-        [&](std::string_view key, simdjson::ondemand::value val) {
+        [&](dstd::StringView key, simdjson::ondemand::value val) {
             if (key == "ph") {
                 phase = dftracer::utils::trace::read_phase(val);
             } else if (key == "name") {
@@ -206,8 +196,8 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
         });
 
     // --- Type classification ---
-    bool is_M = (phase == dftracer::utils::trace::RecordPhase::METADATA);
-    bool is_C = (phase == dftracer::utils::trace::RecordPhase::COUNTER);
+    bool is_M = (phase == dftracer::utils::trace::RecordPhase::Metadata);
+    bool is_C = (phase == dftracer::utils::trace::RecordPhase::Counter);
     bool is_event = !is_M && !is_C;
 
     if (is_M && name_sv == "CM" && args.name && *args.name == "time_metric" &&
@@ -215,56 +205,56 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
         time_scale.metric = trace::parse_time_metric(*args.value);
     }
 
-    std::int8_t row_type = ROW_EVENT;
+    std::int8_t row_type = RowEvent;
     if (is_M) {
         if (name_sv == "FH")
-            row_type = ROW_FILE_HASH;
+            row_type = RowFileHash;
         else if (name_sv == "HH")
-            row_type = ROW_HOST_HASH;
+            row_type = RowHostHash;
         else if (name_sv == "SH")
-            row_type = ROW_STRING_HASH;
+            row_type = RowStringHash;
         else if (name_sv == "PR")
-            row_type = ROW_PROC_METADATA;
+            row_type = RowProcMetadata;
         else
-            row_type = ROW_METADATA;
+            row_type = RowMetadata;
     } else if (is_C) {
-        row_type = str_iequal(cat_sv, "sys") ? ROW_SYSTEM : ROW_PROFILE;
+        row_type = iequals(cat_sv, "sys") ? RowSystem : RowProfile;
     }
-    bool is_hash = (row_type >= ROW_FILE_HASH && row_type <= ROW_STRING_HASH) ||
-                   row_type == ROW_PROC_METADATA;
-    bool is_profile = (row_type == ROW_PROFILE);
-    bool is_sys = (row_type == ROW_SYSTEM);
+    bool is_hash = (row_type >= RowFileHash && row_type <= RowStringHash) ||
+                   row_type == RowProcMetadata;
+    bool is_profile = (row_type == RowProfile);
+    bool is_sys = (row_type == RowSystem);
 
     // Name: metadata rows use args.name if available
-    std::string_view out_name = name_sv;
+    dstd::StringView out_name = name_sv;
     if (is_M && args.name && !args.name->empty()) {
         out_name = *args.name;
     }
     if (out_name.empty()) return false;  // skip rows without name
 
     // --- Declare all output columns ---
-    auto ci_type = builder.add_or_get_column("type", ColumnType::INT64);
-    auto ci_cat = builder.add_or_get_column("cat", ColumnType::STRING);
-    auto ci_name = builder.add_or_get_column("name", ColumnType::STRING);
-    auto ci_pid = builder.add_or_get_column("pid", ColumnType::INT64);
-    auto ci_tid = builder.add_or_get_column("tid", ColumnType::INT64);
-    auto ci_hash = builder.add_or_get_column("hash", ColumnType::STRING);
-    auto ci_value = builder.add_or_get_column("value", ColumnType::STRING);
+    auto ci_type = builder.add_or_get_column("type", ColumnType::Int64);
+    auto ci_cat = builder.add_or_get_column("cat", ColumnType::String);
+    auto ci_name = builder.add_or_get_column("name", ColumnType::String);
+    auto ci_pid = builder.add_or_get_column("pid", ColumnType::Int64);
+    auto ci_tid = builder.add_or_get_column("tid", ColumnType::Int64);
+    auto ci_hash = builder.add_or_get_column("hash", ColumnType::String);
+    auto ci_value = builder.add_or_get_column("value", ColumnType::String);
     auto ci_host_hash =
-        builder.add_or_get_column("host_hash", ColumnType::STRING);
+        builder.add_or_get_column("host_hash", ColumnType::String);
     auto ci_file_hash =
-        builder.add_or_get_column("file_hash", ColumnType::STRING);
-    auto ci_epoch = builder.add_or_get_column("epoch", ColumnType::INT64);
-    auto ci_step = builder.add_or_get_column("step", ColumnType::INT64);
-    auto ci_ts = builder.add_or_get_column("ts", ColumnType::INT64);
-    auto ci_dur = builder.add_or_get_column("dur", ColumnType::INT64);
-    auto ci_te = builder.add_or_get_column("te", ColumnType::INT64);
+        builder.add_or_get_column("file_hash", ColumnType::String);
+    auto ci_epoch = builder.add_or_get_column("epoch", ColumnType::Int64);
+    auto ci_step = builder.add_or_get_column("step", ColumnType::Int64);
+    auto ci_ts = builder.add_or_get_column("ts", ColumnType::Int64);
+    auto ci_dur = builder.add_or_get_column("dur", ColumnType::Int64);
+    auto ci_te = builder.add_or_get_column("te", ColumnType::Int64);
     [[maybe_unused]] auto ci_trange =
-        builder.add_or_get_column("trange", ColumnType::INT64);
-    auto ci_io_cat = builder.add_or_get_column("io_cat", ColumnType::INT64);
-    auto ci_size = builder.add_or_get_column("size", ColumnType::INT64);
-    auto ci_offset = builder.add_or_get_column("offset", ColumnType::INT64);
-    auto ci_image_id = builder.add_or_get_column("image_id", ColumnType::INT64);
+        builder.add_or_get_column("trange", ColumnType::Int64);
+    auto ci_io_cat = builder.add_or_get_column("io_cat", ColumnType::Int64);
+    auto ci_size = builder.add_or_get_column("size", ColumnType::Int64);
+    auto ci_offset = builder.add_or_get_column("offset", ColumnType::Int64);
+    auto ci_image_id = builder.add_or_get_column("image_id", ColumnType::Int64);
 
     // --- Populate core columns ---
     builder.append_int64(ci_type, row_type);
@@ -274,8 +264,8 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
         char lbuf[256];
         std::size_t clen = std::min(cat_sv.size(), sizeof(lbuf));
         for (std::size_t i = 0; i < clen; ++i)
-            lbuf[i] = static_cast<char>(
-                std::tolower(static_cast<unsigned char>(cat_sv[i])));
+            lbuf[i] =
+                ::dftracer::utils::common::detail::to_lower_ascii(cat_sv[i]);
         builder.append_string(ci_cat, arena.push(lbuf, clen));
     } else {
         builder.append_null(ci_cat);
@@ -289,7 +279,7 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     // hash / value
     if (is_hash && args.value && !args.value->empty())
         builder.append_string(ci_hash, *args.value);
-    if (row_type == ROW_METADATA && args.value && !args.value->empty())
+    if (row_type == RowMetadata && args.value && !args.value->empty())
         builder.append_string(ci_value, *args.value);
 
     // host_hash / file_hash
@@ -329,10 +319,9 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     // --- IO columns (events only) ---
     if (is_event) {
         bool is_posix_stdio =
-            str_iequal(cat_sv, "posix") || str_iequal(cat_sv, "stdio");
-        std::int8_t io_cat = is_posix_stdio
-                                 ? get_io_cat(out_name)
-                                 : static_cast<std::int8_t>(IO_OTHER);
+            iequals(cat_sv, "posix") || iequals(cat_sv, "stdio");
+        std::int8_t io_cat = is_posix_stdio ? get_io_cat(out_name)
+                                            : static_cast<std::int8_t>(IoOther);
         // Size uses the shared io-cat rule (size_sum > posix/stdio read|write
         // ret > image_size) so the reader and the View aggregator's "size"
         // cannot drift.
@@ -355,10 +344,9 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     // --- Profile columns ---
     if (is_profile) {
         bool is_posix_stdio =
-            str_iequal(cat_sv, "posix") || str_iequal(cat_sv, "stdio");
-        std::int8_t io_cat = is_posix_stdio
-                                 ? get_io_cat(out_name)
-                                 : static_cast<std::int8_t>(IO_OTHER);
+            iequals(cat_sv, "posix") || iequals(cat_sv, "stdio");
+        std::int8_t io_cat = is_posix_stdio ? get_io_cat(out_name)
+                                            : static_cast<std::int8_t>(IoOther);
         builder.append_int64(ci_io_cat, io_cat);
         append_profile_columns(builder, args.int_map);
     }
@@ -376,7 +364,7 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
 
 // Membership test for the projection (linear over a handful of kept keys, so
 // no per-field allocation).
-static bool keep_key(const RowBuildOptions &opts, std::string_view key) {
+static bool keep_key(const RowBuildOptions &opts, dstd::StringView key) {
     if (!opts.keep || opts.keep->empty()) return true;
     for (const auto &k : *opts.keep)
         if (k == key) return true;
@@ -384,12 +372,12 @@ static bool keep_key(const RowBuildOptions &opts, std::string_view key) {
 }
 
 bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
-                     StringArena &arena, bool normalize,
+                     dstd::StringArena &arena, bool normalize,
                      TimeScaleState &time_scale, const RowBuildOptions &opts) {
     if (normalize) return normalize_row(builder, arena, parser, time_scale);
 
     using SVH = JsonValueHelper;
-    parser.for_each_field([&](std::string_view key_sv,
+    parser.for_each_field([&](dstd::StringView key_sv,
                               simdjson::ondemand::value val) {
         if (!keep_key(opts, key_sv)) return;
         auto type_result = val.type();
@@ -398,7 +386,16 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
         switch (json_type) {
             case simdjson::ondemand::json_type::number: {
                 auto num_result = val.get_number();
-                if (num_result.error()) break;
+                if (num_result.error()) {
+                    if (num_result.error() != simdjson::NUMBER_ERROR) break;
+                    const auto refused = json::detail::refused_number(
+                        json::detail::trim_token(val.raw_json_token()));
+                    if (!refused) break;
+                    std::size_t idx =
+                        builder.add_or_get_column(key_sv, ColumnType::Double);
+                    builder.append_double(idx, *refused);
+                    break;
+                }
                 auto num = num_result.value_unsafe();
                 const bool time_key =
                     opts.time_scale != 1.0 &&
@@ -409,31 +406,31 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
                         v = static_cast<std::int64_t>(static_cast<double>(v) *
                                                       opts.time_scale);
                     std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::INT64);
+                        builder.add_or_get_column(key_sv, ColumnType::Int64);
                     builder.append_int64(idx, v);
                 } else if (num.is_uint64()) {
                     std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::UINT64);
+                        builder.add_or_get_column(key_sv, ColumnType::Uint64);
                     builder.append_uint64(idx, num.get_uint64());
                 } else {
                     std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::DOUBLE);
+                        builder.add_or_get_column(key_sv, ColumnType::Double);
                     builder.append_double(idx, num.get_double());
                 }
                 break;
             }
             case simdjson::ondemand::json_type::string: {
-                auto str_result = val.get_string();
-                if (str_result.error()) break;
-                auto str = str_result.value_unsafe();
+                const auto str_result = json::detail::get_string_or_raw(val);
+                if (!str_result) break;
+                const auto str = *str_result;
                 if (opts.dict_strings) {
                     std::size_t idx = builder.add_or_get_column(
-                        key_sv, ColumnType::DICT_STRING);
+                        key_sv, ColumnType::DictString);
                     builder.append_dict_string(idx, str);
                     break;
                 }
                 std::size_t idx =
-                    builder.add_or_get_column(key_sv, ColumnType::STRING);
+                    builder.add_or_get_column(key_sv, ColumnType::String);
                 builder.append_string(idx, str);
                 break;
             }
@@ -442,7 +439,7 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
                 if (bool_result.error()) break;
                 auto b = bool_result.value_unsafe();
                 std::size_t idx =
-                    builder.add_or_get_column(key_sv, ColumnType::BOOL);
+                    builder.add_or_get_column(key_sv, ColumnType::Bool);
                 builder.append_bool(idx, b);
                 break;
             }
@@ -455,7 +452,7 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
             case simdjson::ondemand::json_type::array: {
                 auto json_str = SVH::to_json_string(val);
                 std::size_t idx =
-                    builder.add_or_get_column(key_sv, ColumnType::STRING);
+                    builder.add_or_get_column(key_sv, ColumnType::String);
                 if (json_str) {
                     builder.append_string(
                         idx, arena.push(json_str->data(), json_str->size()));
@@ -473,15 +470,15 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
 }
 
 bool process_json_line(RecordBatchBuilder &builder, JsonParser &parser,
-                       StringArena &arena, std::string_view content,
+                       dstd::StringArena &arena, dstd::StringView content,
                        bool normalize, TimeScaleState &time_scale,
                        const RowBuildOptions &opts) {
     const char *trimmed;
-    std::size_t trimmed_length;
+    std::size_t trimmed_size;
     if (!dftracer::utils::json::trim_and_validate_with_comma(
-            content.data(), content.size(), trimmed, trimmed_length))
+            content.data(), content.size(), trimmed, trimmed_size))
         return false;
-    if (!parser.parse(std::string_view(trimmed, trimmed_length))) return false;
+    if (!parser.parse(dstd::StringView(trimmed, trimmed_size))) return false;
     return build_arrow_row(builder, parser, arena, normalize, time_scale, opts);
 }
 

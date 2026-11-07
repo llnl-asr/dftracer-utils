@@ -1,15 +1,19 @@
-#include <dftracer/utils/core/common/hash/partition.h>
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/grace_join.h>
 #include <dftracer/utils/dataframe/internal/budget_share.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
+#include <dftracer/utils/dstd/hash/partition.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/vectorize.h>
 
 #include <algorithm>
 #include <atomic>
 #include <functional>
 #include <stdexcept>
-#include <string_view>
 #include <utility>
 
 namespace dftracer::utils::dataframe {
@@ -30,11 +34,11 @@ bool defers_left(JoinHow how) {
            how == JoinHow::Semi || how == JoinHow::Anti || how == JoinHow::Nest;
 }
 
-std::size_t index_of(const std::vector<std::string>& names,
-                     const std::string& name) {
+std::size_t index_of(const dstd::Vector<dstd::String>& names,
+                     const dstd::String& name) {
     const auto it = std::find(names.begin(), names.end(), name);
     if (it == names.end())
-        throw std::out_of_range("join: no column named " + name);
+        throw std::out_of_range(("join: no column named " + name).c_str());
     return static_cast<std::size_t>(it - names.begin());
 }
 
@@ -55,16 +59,16 @@ std::uint64_t block_bytes(std::uint64_t budget) {
     return std::max<std::uint64_t>(budget / share::SPILL_STATE / 4, 1);
 }
 
-std::vector<Series> flat_keys(const DataFrame& f,
-                              const std::vector<std::size_t>& key) {
-    std::vector<Series> out;
+dstd::Vector<Series> flat_keys(const DataFrame& f,
+                               const dstd::Vector<std::size_t>& key) {
+    dstd::Vector<Series> out;
     out.reserve(key.size());
     for (const std::size_t k : key) out.push_back(flat(f.columns[k]));
     return out;
 }
 
 // The value key of row `r`; false when a part has none.
-bool row_key(std::string& text, const std::vector<Series>& keys,
+bool row_key(dstd::String& text, const dstd::Vector<Series>& keys,
              std::int64_t r) {
     text.clear();
     for (const Series& k : keys)
@@ -78,7 +82,7 @@ std::uint64_t grace_join_blocks() {
     return g_blocks.load(std::memory_order_relaxed);
 }
 
-DataFrame merge_morsels(std::vector<DataFrame>& parts) {
+DataFrame merge_morsels(dstd::Vector<DataFrame>& parts) {
     if (parts.empty()) return DataFrame{};
     if (parts.size() == 1) return std::move(parts[0]);
     bool uniform = true;
@@ -92,17 +96,18 @@ DataFrame merge_morsels(std::vector<DataFrame>& parts) {
             if (parts[i].columns[c].type() != parts[0].columns[c].type())
                 uniform = false;
     }
-    std::vector<const DataFrame*> ptrs;
+    dstd::Vector<const DataFrame*> ptrs;
     ptrs.reserve(parts.size());
     for (const DataFrame& p : parts) ptrs.push_back(&p);
     return concat(ptrs, uniform ? ConcatHow::Vertical : ConcatHow::Diagonal);
 }
 
-GraceJoin::GraceJoin(std::vector<std::string> left_names,
-                     std::vector<std::string> right_names,
-                     std::vector<std::string> left_on,
-                     std::vector<std::string> right_on, JoinHow how,
-                     std::string suffix, std::uint64_t budget, bool nulls_equal)
+GraceJoin::GraceJoin(dstd::Vector<dstd::String> left_names,
+                     dstd::Vector<dstd::String> right_names,
+                     dstd::Vector<dstd::String> left_on,
+                     dstd::Vector<dstd::String> right_on, JoinHow how,
+                     dstd::String suffix, std::uint64_t budget,
+                     bool nulls_equal)
     : left_names_(std::move(left_names)),
       right_names_(std::move(right_names)),
       left_on_(std::move(left_on)),
@@ -111,7 +116,7 @@ GraceJoin::GraceJoin(std::vector<std::string> left_names,
       suffix_(std::move(suffix)),
       budget_(budget),
       nulls_equal_(nulls_equal),
-      dir_(std::make_shared<spill::Dir>()) {
+      dir_(dstd::make_shared<spill::Dir>()) {
     if (left_on_.size() != right_on_.size() || left_on_.empty())
         throw std::invalid_argument("join: uneven or empty key list");
     for (const auto& n : left_on_)
@@ -124,7 +129,7 @@ GraceJoin::Parts GraceJoin::make_parts(std::size_t n) const {
     Parts out;
     out.reserve(n);
     for (std::size_t i = 0; i < n; ++i)
-        out.push_back(std::make_unique<Part>(0, dir_));
+        out.push_back(dstd::make_unique<Part>(0, dir_));
     return out;
 }
 
@@ -133,12 +138,12 @@ void GraceJoin::split(const DataFrame& rows, bool right_side, int level,
                       Parts& into) {
     const std::int64_t n = rows.num_rows();
     if (n == 0) return;
-    const std::vector<std::size_t>& key = right_side ? right_key_ : left_key_;
-    std::vector<Series> flats;
+    const dstd::Vector<std::size_t>& key = right_side ? right_key_ : left_key_;
+    dstd::Vector<Series> flats;
     flats.reserve(rows.columns.size());
     for (const Series& c : rows.columns) flats.push_back(flat(c));
-    std::vector<std::vector<std::int64_t>> picks(into.size());
-    std::string text;
+    dstd::Vector<dstd::Vector<std::int64_t>> picks(into.size());
+    dstd::String text;
     for (std::int64_t r = 0; r < n; ++r) {
         text.clear();
         bool keyed = true;
@@ -147,14 +152,14 @@ void GraceJoin::split(const DataFrame& rows, bool right_side, int level,
                 keyed = false;
                 break;
             }
-        picks[keyed ? hash::partition_of(std::string_view(text), into.size(),
-                                         level)
+        picks[keyed ? dstd::hash::partition_of(dstd::StringView(text),
+                                               into.size(), level)
                     : 0]
             .push_back(r);
     }
     for (std::size_t p = 0; p < into.size(); ++p) {
         if (picks[p].empty()) continue;
-        std::vector<Series> cols;
+        dstd::Vector<Series> cols;
         cols.reserve(flats.size());
         for (const Series& c : flats) cols.push_back(c.take(picks[p]));
         const auto count = static_cast<std::int64_t>(picks[p].size());
@@ -178,7 +183,7 @@ void GraceJoin::add_right(const DataFrame& right) {
         DataFrame t;
         t.names = right_names_;
         for (const Series& c : right.columns)
-            t.columns.push_back(c.take(std::vector<std::int64_t>{}));
+            t.columns.push_back(c.take(dstd::Vector<std::int64_t>{}));
         right_template_ = std::move(t);
     }
     split(right, true, 0, top_);
@@ -186,7 +191,7 @@ void GraceJoin::add_right(const DataFrame& right) {
 
 void GraceJoin::add_left(const DataFrame& left) { split(left, false, 0, top_); }
 
-void GraceJoin::start(std::vector<Series> left_templates) {
+void GraceJoin::start(dstd::Vector<Series> left_templates) {
     left_templates_ = std::move(left_templates);
     for (auto& p : top_) queue_.push_back(Work{std::move(p), 0});
     top_.clear();
@@ -194,9 +199,11 @@ void GraceJoin::start(std::vector<Series> left_templates) {
 
 coro::CoroTask<DataFrame> GraceJoin::right_rows(Part& part,
                                                 std::int64_t max_rows) {
-    std::vector<DataFrame> parts;
+    dstd::Vector<DataFrame> parts;
     auto reader = part.right.reader();
-    while (auto m = co_await reader->next(max_rows)) {
+    for (;;) {
+        auto m = co_await reader->next(max_rows);
+        if (!m) break;
         DataFrame f;
         f.names = right_names_;
         f.columns = std::move(m->columns);
@@ -222,7 +229,9 @@ coro::CoroTask<void> GraceJoin::split_part(Work work, std::int64_t max_rows) {
     const int level = work.level + 1;
     {
         auto reader = work.part->right.reader();
-        while (auto m = co_await reader->next(max_rows)) {
+        for (;;) {
+            auto m = co_await reader->next(max_rows);
+            if (!m) break;
             DataFrame f;
             f.names = right_names_;
             f.columns = std::move(m->columns);
@@ -231,7 +240,9 @@ coro::CoroTask<void> GraceJoin::split_part(Work work, std::int64_t max_rows) {
     }
     {
         auto reader = work.part->left.reader();
-        while (auto m = co_await reader->next(max_rows)) {
+        for (;;) {
+            auto m = co_await reader->next(max_rows);
+            if (!m) break;
             DataFrame f;
             f.names = left_names_;
             f.columns = std::move(m->columns);
@@ -249,9 +260,9 @@ coro::CoroTask<void> GraceJoin::split_part(Work work, std::int64_t max_rows) {
 
 // The next block of the right side of the current partition, about a quarter
 // of the budget share; nothing when it is used up.
-coro::CoroTask<std::optional<DataFrame>> GraceJoin::right_block(
+coro::CoroTask<dstd::Optional<DataFrame>> GraceJoin::right_block(
     std::int64_t max_rows) {
-    std::vector<DataFrame> parts;
+    dstd::Vector<DataFrame> parts;
     std::uint64_t bytes = 0;
     const std::uint64_t limit = block_bytes(budget_);
     while (bytes < limit) {
@@ -263,7 +274,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::right_block(
         f.columns = std::move(m->columns);
         parts.push_back(std::move(f));
     }
-    if (parts.empty()) co_return std::nullopt;
+    if (parts.empty()) co_return dstd::nullopt;
     g_blocks.fetch_add(1, std::memory_order_relaxed);
     co_return merge_morsels(parts);
 }
@@ -273,26 +284,28 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::right_block(
 // of it the first value column in which a later row of its key differs (-1
 // for none), found across blocks as the in-memory join finds it.
 coro::CoroTask<DataFrame> GraceJoin::lookup_heads(
-    std::vector<std::int64_t>& conflicts, std::int64_t max_rows) {
+    dstd::Vector<std::int64_t>& conflicts, std::int64_t max_rows) {
     struct Head {
         std::size_t part;
         std::int64_t row;
     };
-    StringViewMap<std::size_t> index;
-    std::vector<Head> heads;
-    std::vector<DataFrame> frames;
-    std::vector<std::size_t> values;
+    dstd::StringViewMap<std::size_t> index;
+    dstd::Vector<Head> heads;
+    dstd::Vector<DataFrame> frames;
+    dstd::Vector<std::size_t> values;
     for (std::size_t c = 0; c < right_names_.size(); ++c)
         if (std::find(right_key_.begin(), right_key_.end(), c) ==
             right_key_.end())
             values.push_back(c);
-    std::string text;
-    while (auto block = co_await right_block(max_rows)) {
-        const std::vector<Series> keys = flat_keys(*block, right_key_);
+    dstd::String text;
+    for (;;) {
+        auto block = co_await right_block(max_rows);
+        if (!block) break;
+        const dstd::Vector<Series> keys = flat_keys(*block, right_key_);
         const std::int64_t n = block->num_rows();
         const std::size_t part = frames.size();
-        std::vector<std::int64_t> picks;
-        std::vector<std::int64_t> at(static_cast<std::size_t>(n), -1);
+        dstd::Vector<std::int64_t> picks;
+        dstd::Vector<std::int64_t> at(static_cast<std::size_t>(n), -1);
         for (std::int64_t r = 0; r < n; ++r) {
             if (!row_key(text, keys, r)) continue;
             const auto [it, fresh] = index.try_emplace(text, heads.size());
@@ -337,9 +350,11 @@ coro::CoroTask<DataFrame> GraceJoin::lookup_heads(
 // the keys into groups of about a block; a key past a block is a group alone.
 coro::CoroTask<void> GraceJoin::assign_groups(std::int64_t max_rows) {
     Current& c = *cur_;
-    std::string text;
+    dstd::String text;
     auto reader = c.part->right.reader();
-    while (auto m = co_await reader->next(max_rows)) {
+    for (;;) {
+        auto m = co_await reader->next(max_rows);
+        if (!m) break;
         DataFrame f;
         f.names = right_names_;
         f.columns = std::move(m->columns);
@@ -347,7 +362,7 @@ coro::CoroTask<void> GraceJoin::assign_groups(std::int64_t max_rows) {
         if (n == 0) continue;
         const std::uint64_t row_bytes = std::max<std::uint64_t>(
             spill::columns_bytes(f.columns) / static_cast<std::uint64_t>(n), 1);
-        const std::vector<Series> keys = flat_keys(f, right_key_);
+        const dstd::Vector<Series> keys = flat_keys(f, right_key_);
         for (std::int64_t r = 0; r < n; ++r)
             if (row_key(text, keys, r)) c.group_of[text] += row_bytes;
     }
@@ -368,22 +383,24 @@ coro::CoroTask<void> GraceJoin::assign_groups(std::int64_t max_rows) {
 
 // The right rows of the next key group, in right order; nothing after the
 // last group.
-coro::CoroTask<std::optional<DataFrame>> GraceJoin::next_group(
+coro::CoroTask<dstd::Optional<DataFrame>> GraceJoin::next_group(
     std::int64_t max_rows) {
     Current& c = *cur_;
-    if (c.group >= c.groups) co_return std::nullopt;
+    if (c.group >= c.groups) co_return dstd::nullopt;
     const std::uint64_t want = c.group++;
     g_blocks.fetch_add(1, std::memory_order_relaxed);
     c.right = c.part->right.reader();
-    std::vector<DataFrame> parts;
-    std::string text;
-    while (auto m = co_await c.right->next(max_rows)) {
+    dstd::Vector<DataFrame> parts;
+    dstd::String text;
+    for (;;) {
+        auto m = co_await c.right->next(max_rows);
+        if (!m) break;
         DataFrame f;
         f.names = right_names_;
         f.columns = std::move(m->columns);
         const std::int64_t n = f.num_rows();
-        const std::vector<Series> keys = flat_keys(f, right_key_);
-        std::vector<std::int64_t> picks;
+        const dstd::Vector<Series> keys = flat_keys(f, right_key_);
+        dstd::Vector<std::int64_t> picks;
         for (std::int64_t r = 0; r < n; ++r) {
             if (!row_key(text, keys, r)) continue;
             const auto it = c.group_of.find(text);
@@ -406,7 +423,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::next_group(
 // partition is then read again from the start. False when the right side is
 // used up.
 coro::CoroTask<bool> GraceJoin::next_block(std::int64_t max_rows) {
-    std::optional<DataFrame> block;
+    dstd::Optional<DataFrame> block;
     if (how_ == JoinHow::Nest)
         block = co_await next_group(max_rows);
     else
@@ -424,7 +441,7 @@ coro::CoroTask<bool> GraceJoin::next_block(std::int64_t max_rows) {
 
 // The next probe of the current join: as many left rows as the output share
 // allows from what the last probes made. Nothing once the left side is read.
-coro::CoroTask<std::optional<DataFrame>> GraceJoin::probe_left(
+coro::CoroTask<dstd::Optional<DataFrame>> GraceJoin::probe_left(
     std::int64_t max_rows) {
     Current& c = *cur_;
     while (!c.left_rows || c.left_at >= c.left_rows->num_rows()) {
@@ -432,7 +449,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::probe_left(
         auto m = co_await c.left->next(max_rows);
         if (!m) {
             c.left_rows.reset();
-            co_return std::nullopt;
+            co_return dstd::nullopt;
         }
         DataFrame f;
         f.names = left_names_;
@@ -469,16 +486,18 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::probe_left(
 // After the last block: the left rows that leave on no match anywhere (Left,
 // Outer and Anti), or on a match in some block (Semi), one left morsel at a
 // time, joined against an empty right side for the join's output layout.
-coro::CoroTask<std::optional<DataFrame>> GraceJoin::deferred_left(
+coro::CoroTask<dstd::Optional<DataFrame>> GraceJoin::deferred_left(
     std::int64_t max_rows) {
     Current& c = *cur_;
     const std::uint8_t keep = how_ == JoinHow::Semi ? 1 : 0;
-    while (auto m = co_await c.left->next(max_rows)) {
+    for (;;) {
+        auto m = co_await c.left->next(max_rows);
+        if (!m) break;
         DataFrame f;
         f.names = left_names_;
         f.columns = std::move(m->columns);
         const std::int64_t n = f.num_rows();
-        std::vector<std::int64_t> picks;
+        dstd::Vector<std::int64_t> picks;
         for (std::int64_t i = 0; i < n; ++i)
             if (c.matched[static_cast<std::size_t>(c.left_base + i)] == keep)
                 picks.push_back(i);
@@ -486,7 +505,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::deferred_left(
         if (picks.empty()) continue;
         co_return c.join->probe(f.take(picks));
     }
-    co_return std::nullopt;
+    co_return dstd::nullopt;
 }
 
 // An empty right side gives the output layout: every row a probe sees is
@@ -501,11 +520,11 @@ void GraceJoin::start_deferred() {
     cur_->last_pass = true;
 }
 
-coro::CoroTask<std::optional<DataFrame>> GraceJoin::next(
+coro::CoroTask<dstd::Optional<DataFrame>> GraceJoin::next(
     std::int64_t max_rows) {
     for (;;) {
         if (!cur_) {
-            if (queue_.empty()) co_return std::nullopt;
+            if (queue_.empty()) co_return dstd::nullopt;
             Work work = std::move(queue_.front());
             queue_.pop_front();
             Part& p = *work.part;
@@ -520,7 +539,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::next(
             cur_->part = std::move(work.part);
             if (over && how_ == JoinHow::Lookup) {
                 cur_->right = cur_->part->right.reader();
-                std::vector<std::int64_t> conflicts;
+                dstd::Vector<std::int64_t> conflicts;
                 DataFrame heads = co_await lookup_heads(conflicts, max_rows);
                 cur_->join.emplace(std::move(heads), left_on_, right_on_, how_,
                                    suffix_, nulls_equal_);
@@ -533,7 +552,8 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::next(
                     cur_->matched.assign(
                         static_cast<std::size_t>(cur_->part->left_rows), 0);
                 if (how_ == JoinHow::Nest) co_await assign_groups(max_rows);
-                if (!co_await next_block(max_rows)) start_deferred();
+                const auto next_block_ok = co_await next_block(max_rows);
+                if (!next_block_ok) start_deferred();
             } else {
                 DataFrame right = co_await right_rows(*cur_->part, max_rows);
                 cur_->join.emplace(std::move(right), left_on_, right_on_, how_,
@@ -542,18 +562,25 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::next(
             }
         }
         if (cur_->last_pass) {
-            if (auto out = co_await deferred_left(max_rows)) {
+            auto out = co_await deferred_left(max_rows);
+            if (out) {
                 co_return std::move(*out);
             }
             cur_.reset();
             continue;
         }
-        if (auto out = co_await probe_left(max_rows)) {
+        auto out = co_await probe_left(max_rows);
+        if (out) {
             if (out->num_rows() > 0) co_return std::move(*out);
             continue;
         }
         DataFrame rest = cur_->join->flush(left_names_, left_templates_);
-        if (cur_->blocks && !co_await next_block(max_rows)) {
+        bool exhausted = false;
+        if (cur_->blocks) {
+            const bool more = co_await next_block(max_rows);
+            exhausted = !more;
+        }
+        if (exhausted) {
             if (defers_left(how_))
                 start_deferred();
             else

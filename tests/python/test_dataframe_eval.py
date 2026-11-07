@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """``DataFrame.eval``: Python expressions over the columns, lowered by the same
 code as ``apply``'s source tier (openspec change dataframe-eval)."""
 

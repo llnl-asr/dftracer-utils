@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Server stress test: generate a large trace, run the viz server under a
 # concurrent load, and compare member-cache on vs off (latency, throughput,
 # peak RSS). Manual harness, not part of CI.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Tests for the LazyFrame deferred-query wrapper.
 
 LazyFrame records ops and runs them on collect(), materializing a DataFrame.

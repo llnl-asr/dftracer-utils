@@ -1,308 +1,130 @@
-#include <dftracer/utils/core/common/error.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_merge_operator.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics_merge_operator.h>
-#include <dftracer/utils/index/store/column_families.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/utilities/common/serialization/binary_codec.h>
-#include <rocksdb/table.h>
+#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/runtime/runtime.h>
 
-#include <algorithm>
+#include <array>
+#include <utility>
 
 namespace dftracer::utils::index::schemas::dft::agg::tier {
 
-namespace cf = index::store::cf;
-namespace layout = index::store::layout;
-
 namespace {
 
-constexpr std::string_view CONFIG_KEY = "\xFF\xFE";
-constexpr std::string_view DICT_PREFIX = "\xFF\xFD";
-constexpr std::string_view TIME_BOUNDS_KEY = "__time_bounds__";
-constexpr std::string_view COLUMNS_KEY = "__observed_columns__";
-constexpr std::string_view TRACKER_KEY = "__tracker__";
-constexpr std::size_t CONFIG_BYTES = 17;
+constexpr dstd::StringView CONFIG_NAME = "config";
+constexpr dstd::StringView TIME_BOUNDS_NAME = "time_bounds";
+constexpr std::size_t CONFIG_FIXED_BYTES = 17;
+constexpr char KEY_SEP = '\x1f';
 constexpr std::uint8_t FLAG_GROUP_BY_FILE = 1U << 0;
-constexpr std::size_t WRITER_BATCH_ROWS = 4096;
 
-// A corrupt index names its directory and says what to do; the status text
-// alone ("Merge operator failed") does not.
-void check(const ::rocksdb::Status& status, const char* what,
-           const RocksDatabase& db) {
-    if (status.ok()) return;
-    if (status.IsCorruption())
-        throw DFTUtilsException::cat(
-            ErrorCode::AGGREGATION, what, " failed: the index at ", db.path(),
-            " is corrupt (", status.ToString(),
-            "); delete that directory and build the index again");
-    throw DFTUtilsException::cat(ErrorCode::IO, what, ": ", status.ToString());
+constexpr std::array<dstd::StringView, 2> META_NAMES = {CONFIG_NAME,
+                                                        TIME_BOUNDS_NAME};
+
+/// Publishes one index-wide record. Blocking, so a caller inside a coroutine
+/// does not have to await it.
+void publish_meta(const Index& index, dstd::StringView name,
+                  dstd::StringView value) {
+    dstd::Expected<void, dstd::Error> published;
+    default_runtime().block_on(
+        coro::named("aggregation meta", [&]() -> coro::CoroTask<void> {
+            published = co_await put_agg_meta(index, name, value);
+        }()));
+    common::unwrap(std::move(published));
 }
 
-std::optional<std::string> get(const RocksDatabase& db, std::string_view key) {
-    std::string value;
-    auto status = db.get(key, &value, cf::AGGREGATION);
-    if (status.IsNotFound()) return std::nullopt;
-    check(status, "aggregation tier read", db);
-    return value;
+void drop_meta(const Index& index, dstd::StringView name) {
+    dstd::Expected<void, dstd::Error> dropped;
+    default_runtime().block_on(
+        coro::named("aggregation meta drop", [&]() -> coro::CoroTask<void> {
+            dropped = co_await delete_agg_meta(index, name);
+        }()));
+    common::unwrap(std::move(dropped));
 }
 
-void put(RocksDatabase& db, std::string_view key, std::string_view value) {
-    check(db.put(key, value, cf::AGGREGATION), "aggregation tier write", db);
-}
-
-std::string manifest_value(std::uint64_t params_hash) {
-    return layout::encode_manifest({layout::ext_version(layout::Ext::AGG),
-                                    params_hash, layout::ExtStatus::READY});
-}
-
-template <class Put>
-void flush_entries(AggInternTable& table, Put&& put_entry) {
-    auto& intern = table.intern;
-    const auto current = static_cast<std::uint32_t>(intern.entry_count());
-    auto flushed = table.flushed_entries.load(std::memory_order_relaxed);
-    if (current <= flushed) return;
-    std::string key;
-    for (std::uint32_t n = flushed; n < current; ++n) {
-        const auto id = intern.entry_id(n);
-        key.assign(DICT_PREFIX);
-        utilities::common::serialization::put_varint(key, id);
-        put_entry(key, intern.resolve(id));
+dstd::Optional<Config> decode_config(dstd::StringView value) {
+    if (value.size() < CONFIG_FIXED_BYTES) return dstd::nullopt;
+    Config c;
+    c.time_interval_us = index::store::layout::read_u64(value);
+    c.params_hash = index::store::layout::read_u64(value.substr(8));
+    c.group_by_file =
+        (static_cast<std::uint8_t>(value[16]) & FLAG_GROUP_BY_FILE) != 0;
+    // The extra group keys follow, joined by 0x1F.
+    dstd::StringView keys = value.substr(CONFIG_FIXED_BYTES);
+    while (!keys.empty()) {
+        const std::size_t at = keys.find(KEY_SEP);
+        c.extra_group_keys.emplace_back(keys.substr(0, at));
+        if (at == dstd::StringView::npos) break;
+        keys.remove_prefix(at + 1);
     }
-    // Another writer may have advanced the watermark meanwhile.
-    while (flushed < current &&
-           !table.flushed_entries.compare_exchange_weak(
-               flushed, current, std::memory_order_relaxed)) {
-    }
+    return c;
+}
+
+dstd::Optional<TimeBounds> decode_time_bounds(dstd::StringView value) {
+    if (value.size() < 16) return dstd::nullopt;
+    return TimeBounds{index::store::layout::read_u64(value),
+                      index::store::layout::read_u64(value.substr(8))};
 }
 
 }  // namespace
 
-std::shared_ptr<RocksDatabase> open(const std::string& index_path,
-                                    RocksDatabase::OpenMode mode) {
-    auto agg_merge = std::make_shared<AggregationMergeOperator>();
-    auto sys_merge = std::make_shared<SystemMetricsMergeOperator>();
-    const bool writing = mode == RocksDatabase::OpenMode::ReadWrite;
-    // Rows are rewritten by every tier rebuild, so a cheap codec keeps flush
-    // and compaction CPU low; the rest of the index is tuned for size.
-    auto fast_compression = [](::rocksdb::ColumnFamilyOptions& opts) {
-#ifdef DFTRACER_UTILS_ENABLE_LZ4
-        opts.compression = ::rocksdb::kLZ4Compression;
-        opts.bottommost_compression = ::rocksdb::kLZ4Compression;
-#elif defined(DFTRACER_UTILS_ENABLE_ZSTD)
-        opts.compression = ::rocksdb::kZSTD;
-        opts.bottommost_compression = ::rocksdb::kZSTD;
-#else
-        opts.compression = ::rocksdb::kNoCompression;
-        opts.bottommost_compression = ::rocksdb::kNoCompression;
-#endif
-    };
-    auto override = [agg_merge, sys_merge, writing, fast_compression](
-                        const std::string& name,
-                        ::rocksdb::ColumnFamilyOptions& opts) {
-        if (name == cf::AGGREGATION) {
-            opts.merge_operator = agg_merge;
-            if (!writing) return;
-            ::rocksdb::BlockBasedTableOptions bbt;
-            bbt.block_size = 32 * 1024;
-            bbt.format_version = 7;
-            bbt.index_block_restart_interval = 16;
-            bbt.whole_key_filtering = false;
-            bbt.separate_key_value_in_data_block = true;
-            opts.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
-            opts.level0_file_num_compaction_trigger = 2;
-            opts.max_bytes_for_level_multiplier = 20;
-            fast_compression(opts);
-        } else if (name == cf::SYSTEM_METRICS) {
-            opts.merge_operator = sys_merge;
-            if (writing) fast_compression(opts);
-        }
-    };
-    auto& mgr = index::store::RocksDBManager::instance();
-    mgr.reset(index_path);
-    return mgr.get_or_open(index_path, mode, override);
+dstd::Expected<dstd::Optional<Config>, dstd::Error> read_config(
+    const Snapshot& snapshot) {
+    auto value = agg_meta(snapshot, CONFIG_NAME);
+    if (!value) return dstd::Unexpected<dstd::Error>(value.error());
+    if (!*value) return dstd::Optional<Config>{};
+    return decode_config(dstd::StringView((*value)->data(), (*value)->size()));
 }
 
-std::optional<Config> read_config(const RocksDatabase& db) {
-    auto value = get(db, CONFIG_KEY);
-    if (!value || value->size() != CONFIG_BYTES) return std::nullopt;
-    Config c;
-    c.time_interval_us = layout::read_u64(*value);
-    c.params_hash = layout::read_u64(std::string_view(*value).substr(8));
-    c.group_by_file =
-        (static_cast<std::uint8_t>((*value)[16]) & FLAG_GROUP_BY_FILE) != 0;
-    return c;
-}
-
-void write_config(RocksDatabase& db, const Config& config) {
-    std::string value;
-    layout::append_u64(value, config.time_interval_us);
-    layout::append_u64(value, config.params_hash);
+void write_config(const Index& index, const Config& config) {
+    dstd::String value;
+    dstd::append_u64_be(value, config.time_interval_us);
+    dstd::append_u64_be(value, config.params_hash);
     value.push_back(
         static_cast<char>(config.group_by_file ? FLAG_GROUP_BY_FILE : 0));
-    put(db, CONFIG_KEY, value);
-}
-
-void put_file(index::store::IndexWrite& w, int file_id,
-              std::uint64_t params_hash) {
-    index::store::records::put_manifest(w, file_id, layout::Ext::AGG,
-                                        params_hash);
-}
-
-void put_files(RocksDatabase& db, std::span<const int> file_ids,
-               std::uint64_t params_hash) {
-    auto batch = db.begin_batch();
-    const auto value = manifest_value(params_hash);
-    for (int id : file_ids)
-        if (id >= 0)
-            db.put(batch, cf::DEFAULT,
-                   layout::manifest_key(static_cast<std::uint32_t>(id),
-                                        layout::Ext::AGG),
-                   value);
-    check(db.commit_batch(batch), "aggregation manifest write", db);
-}
-
-void merge_row(index::store::IndexWrite& w, std::string_view key,
-               std::string_view value) {
-    w.merge(layout::Family::AGGREGATION, key, value);
-}
-
-void merge_system_row(index::store::IndexWrite& w, std::string_view key,
-                      std::string_view value) {
-    w.merge(layout::Family::SYSTEM_METRICS, key, value);
-}
-
-Writer::Writer(RocksDatabase& db) : db_(&db), batch_(db.begin_batch()) {}
-
-void Writer::count() {
-    if (++pending_ < WRITER_BATCH_ROWS) return;
-    check(db_->commit_batch(batch_), "aggregation tier write", *db_);
-    batch_ = db_->begin_batch();
-    pending_ = 0;
-}
-
-void Writer::merge_row(std::string_view key, std::string_view value) {
-    db_->merge(batch_, cf::AGGREGATION, key, value);
-    count();
-}
-
-void Writer::merge_system_row(std::string_view key, std::string_view value) {
-    db_->merge(batch_, cf::SYSTEM_METRICS, key, value);
-    count();
-}
-
-void Writer::finish() {
-    check(db_->commit_batch(batch_), "aggregation tier write", *db_);
-    batch_ = db_->begin_batch();
-    pending_ = 0;
-}
-
-std::unique_ptr<::rocksdb::Iterator> row_iterator(const RocksDatabase& db) {
-    return db.new_iterator(cf::AGGREGATION);
-}
-
-std::unique_ptr<::rocksdb::Iterator> system_row_iterator(
-    const RocksDatabase& db) {
-    return db.new_iterator(cf::SYSTEM_METRICS);
-}
-
-std::optional<TimeBounds> read_time_bounds(const RocksDatabase& db) {
-    auto value = get(db, TIME_BOUNDS_KEY);
-    if (!value || value->size() < 16) return std::nullopt;
-    return TimeBounds{layout::read_u64(*value),
-                      layout::read_u64(std::string_view(*value).substr(8))};
-}
-
-void widen_time_bounds(RocksDatabase& db, TimeBounds bounds) {
-    if (auto stored = read_time_bounds(db)) {
-        bounds.min_bucket = std::min(bounds.min_bucket, stored->min_bucket);
-        bounds.max_bucket = std::max(bounds.max_bucket, stored->max_bucket);
+    for (std::size_t i = 0; i < config.extra_group_keys.size(); ++i) {
+        if (i != 0) value.push_back(KEY_SEP);
+        value.append(config.extra_group_keys[i]);
     }
-    std::string value;
-    layout::append_u64(value, bounds.min_bucket);
-    layout::append_u64(value, bounds.max_bucket);
-    put(db, TIME_BOUNDS_KEY, value);
+    publish_meta(index, CONFIG_NAME, value);
 }
 
-std::optional<std::string> read_observed_columns(const RocksDatabase& db) {
-    return get(db, COLUMNS_KEY);
+dstd::Expected<dstd::Optional<TimeBounds>, dstd::Error> read_time_bounds(
+    const Snapshot& snapshot) {
+    auto value = agg_meta(snapshot, TIME_BOUNDS_NAME);
+    if (!value) return dstd::Unexpected<dstd::Error>(value.error());
+    if (!*value) return dstd::Optional<TimeBounds>{};
+    return decode_time_bounds(
+        dstd::StringView((*value)->data(), (*value)->size()));
 }
 
-void write_observed_columns(RocksDatabase& db, std::string_view bytes) {
-    put(db, COLUMNS_KEY, bytes);
+void write_time_bounds(const Index& index, TimeBounds bounds) {
+    dstd::String value;
+    dstd::append_u64_be(value, bounds.min_bucket);
+    dstd::append_u64_be(value, bounds.max_bucket);
+    publish_meta(index, TIME_BOUNDS_NAME, value);
 }
 
-std::optional<std::string> read_tracker(const RocksDatabase& db) {
-    return get(db, TRACKER_KEY);
-}
+void clear(const Index& index) {
+    auto snapshot = common::unwrap(index.snapshot());
+    auto files = common::unwrap(snapshot.files());
+    dstd::Vector<dstd::StringView> paths;
+    paths.reserve(files.size());
+    for (const FileRef& file : files) paths.push_back(file.path());
+    const dstd::Span<const dstd::StringView> listed(paths.data(), paths.size());
 
-void write_tracker(RocksDatabase& db, std::string_view bytes) {
-    put(db, TRACKER_KEY, bytes);
-}
-
-void load_dictionary(const RocksDatabase& db, AggInternTable& table) {
-    auto it = db.new_iterator(cf::AGGREGATION);
-    for (it->Seek(::rocksdb::Slice(DICT_PREFIX.data(), DICT_PREFIX.size()));
-         it->Valid(); it->Next()) {
-        const std::string_view key(it->key().data(), it->key().size());
-        if (!key.starts_with(DICT_PREFIX)) break;
-        // Key order is not id order past one varint byte, so decode the id.
-        utilities::common::serialization::BinaryReader reader(
-            key.substr(DICT_PREFIX.size()));
-        std::uint32_t id = 0;
-        try {
-            id = static_cast<std::uint32_t>(reader.varint());
-        } catch (const std::exception&) {
-            continue;
-        }
-        table.intern.insert_at_id(
-            id, std::string_view(it->value().data(), it->value().size()));
-    }
-    table.flushed_entries.store(
-        static_cast<std::uint32_t>(table.intern.entry_count()),
-        std::memory_order_relaxed);
-}
-
-void flush_dictionary(index::store::IndexWrite& w, AggInternTable& table) {
-    flush_entries(table, [&w](std::string_view key, std::string_view value) {
-        w.put(layout::Family::AGGREGATION, key, value);
-    });
-}
-
-void flush_dictionary(RocksDatabase& db, AggInternTable& table) {
-    auto batch = db.begin_batch();
-    flush_entries(table, [&](std::string_view key, std::string_view value) {
-        db.put(batch, cf::AGGREGATION, key, value);
-    });
-    check(db.commit_batch(batch), "aggregation dictionary write", db);
-}
-
-void clear(RocksDatabase& db) {
-    const std::string all_end(32, '\xFF');
-    auto batch = db.begin_batch();
-    db.delete_range(batch, cf::AGGREGATION, std::string_view(), all_end);
-    db.delete_range(batch, cf::SYSTEM_METRICS, std::string_view(), all_end);
-    const auto prefix =
-        layout::kind_prefix(layout::Ext::HOST, layout::host::MANIFEST);
-    const std::size_t agg_entry = prefix.size() + 4 + 2;
-    auto it = db.new_iterator(cf::DEFAULT);
-    for (it->Seek(prefix); it->Valid(); it->Next()) {
-        const std::string_view key(it->key().data(), it->key().size());
-        if (!key.starts_with(prefix)) break;
-        if (key.size() == agg_entry &&
-            layout::read_u16(key.substr(prefix.size() + 4)) ==
-                static_cast<std::uint16_t>(layout::Ext::AGG))
-            db.del(batch, cf::DEFAULT, key);
-    }
-    check(db.commit_batch(batch), "aggregation tier clear", db);
-    intern_for_index(db.path())->flushed_entries.store(
-        0, std::memory_order_relaxed);
-}
-
-void compact(RocksDatabase& db) {
-    db.compact(cf::AGGREGATION);
-    db.compact(cf::SYSTEM_METRICS);
+    dstd::Expected<void, dstd::Error> dropped;
+    default_runtime().block_on(
+        coro::named("aggregation tier clear", [&]() -> coro::CoroTask<void> {
+            dropped = co_await remove_extension(
+                index, index::store::layout::Ext::Agg, listed);
+        }()));
+    common::unwrap(std::move(dropped));
+    for (const dstd::StringView name : META_NAMES) drop_meta(index, name);
 }
 
 }  // namespace dftracer::utils::index::schemas::dft::agg::tier

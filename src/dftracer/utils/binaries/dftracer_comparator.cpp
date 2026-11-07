@@ -1,152 +1,109 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregators.h>
 #include <dftracer/utils/trace/comparator/comparison_aggregation.h>
 #include <dftracer/utils/trace/comparator/comparison_config.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 #include <dftracer/utils/trace/comparator/comparison_utility.h>
 #include <dftracer/utils/trace/comparator/tree_table_formatter.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <ctime>
-#include <optional>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
-using namespace dftracer::utils::index::schemas::dft::agg;
 using namespace dftracer::utils::trace::comparator;
-using dftracer::utils::index::build::BatchBuilder;
-using dftracer::utils::index::build::ensure_index_fresh;
-using dftracer::utils::index::build::IndexBuildBatchConfig;
-using dftracer::utils::index::build::Resolver;
-using dftracer::utils::index::build::ResolverInput;
+using dftracer::utils::index::build::resolve_and_build_index;
+using dftracer::utils::index::build::ResolveAndBuildInput;
 
-class ComparatorArgParse : public cli::ArgParse {
+class ComparatorArgParse : public binaries::ArgParse {
    public:
-    cli::PipelineArgs pipeline;
-    cli::IndexingArgs indexing;
-    cli::DuqlArgs duql_args{"duql filter (default: all events)"};
+    binaries::RuntimeArgs runtime_args;
+    binaries::IndexingArgs indexing;
+    binaries::DuqlArgs duql_args{"duql filter (default: all events)"};
 
-    std::string config_path;
-    std::string preset;
-    std::string baseline;
-    std::string variant;
-    std::string baseline_index_dir;
-    std::string variant_index_dir;
-    std::string group_by;
-    std::string format = "table";
+    dstd::StringView config_path;
+    dstd::StringView preset;
+    dstd::StringView baseline;
+    dstd::StringView variant;
+    dstd::StringView baseline_index_dir;
+    dstd::StringView variant_index_dir;
+    dstd::StringView group_by;
+    dstd::StringView format = "table";
     double time_interval = 5000.0;
     double threshold = 0.0;
     bool no_color = false;
     bool compact = false;
 
-    explicit ComparatorArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+    explicit ComparatorArgParse(binaries::ArgParser& p) : ArgParse(p) {
         indexing.with_index_dir = false;
         indexing.force_help = "Force index rebuild";
-        schema(pipeline, indexing, duql_args);
+        schema(runtime_args, indexing, duql_args);
     }
 
    protected:
     void register_args() override {
-        parser()
-            .add_argument("--config")
-            .help("JSON config file for hierarchical comparison")
-            .default_value<std::string>("");
+        parser().option(config_path, {"--config"},
+                        "JSON config file for hierarchical comparison");
 
-        parser()
-            .add_argument("--preset")
-            .help("Built-in comparison preset (supported: dlio)")
-            .default_value<std::string>("");
+        parser().option(preset, {"--preset"},
+                        "Built-in comparison preset (supported: dlio)");
 
-        parser()
-            .add_argument("--baseline")
-            .help("Baseline trace file or directory")
-            .default_value<std::string>("");
+        parser().option(baseline, {"--baseline"},
+                        "Baseline trace file or directory");
 
-        parser()
-            .add_argument("--variant")
-            .help("Variant trace file or directory")
-            .default_value<std::string>("");
+        parser().option(variant, {"--variant"},
+                        "Variant trace file or directory");
 
-        parser()
-            .add_argument("--baseline-index-dir")
-            .help(
-                "Index directory for baseline (default: co-located with data)")
-            .default_value<std::string>("");
+        parser().option(
+            baseline_index_dir, {"--baseline-index-dir"},
+            "Index directory for baseline (default: co-located with data)");
 
-        parser()
-            .add_argument("--variant-index-dir")
-            .help("Index directory for variant (default: co-located with data)")
-            .default_value<std::string>("");
+        parser().option(
+            variant_index_dir, {"--variant-index-dir"},
+            "Index directory for variant (default: co-located with data)");
 
-        parser()
-            .add_argument("--group-by")
-            .help("Comma-separated group keys (default: cat,name)")
-            .default_value<std::string>("");
+        parser().option(group_by, {"--group-by"},
+                        "Comma-separated group keys (default: cat,name)");
 
-        parser()
-            .add_argument("--format")
-            .help("Output format: table (default) or json")
-            .default_value<std::string>("table");
+        parser().option(format, {"--format"},
+                        "Output format: table (default) or json");
 
-        parser()
-            .add_argument("-t", "--time-interval")
-            .help(
-                "Time interval for bucketing (default: 5000ms). A bare number "
-                "is milliseconds; suffixed values like 5s are converted")
-            .default_value(std::string("5000"));
+        parser().duration(
+            time_interval, 1e3, {"-t", "--time-interval"},
+            "Time interval for bucketing (default: 5000ms). A bare number "
+            "is milliseconds; suffixed values like 5s are converted",
+            "5000");
 
-        parser()
-            .add_argument("--threshold")
-            .help("Hide changes below this percentage")
-            .scan<'g', double>()
-            .default_value(0.0);
+        parser().option(threshold, {"--threshold"},
+                        "Hide changes below this percentage");
 
-        parser()
-            .add_argument("--no-color")
-            .help("Disable ANSI color output")
-            .flag();
+        parser().flag(no_color, {"--no-color"}, "Disable ANSI color output");
 
-        parser()
-            .add_argument("--compact")
-            .help(
-                "Collapse nodes with only negligible changes to a single line")
-            .flag();
-    }
-
-    void post_parse() override {
-        config_path = parser().get<std::string>("--config");
-        preset = parser().get<std::string>("--preset");
-        baseline = parser().get<std::string>("--baseline");
-        variant = parser().get<std::string>("--variant");
-        baseline_index_dir = parser().get<std::string>("--baseline-index-dir");
-        variant_index_dir = parser().get<std::string>("--variant-index-dir");
-        group_by = parser().get<std::string>("--group-by");
-        format = parser().get<std::string>("--format");
-        time_interval = cli::get_duration_arg(parser(), "--time-interval", 1e3);
-        threshold = parser().get<double>("--threshold");
-        no_color = parser().get<bool>("--no-color");
-        compact = parser().get<bool>("--compact");
+        parser().flag(
+            compact, {"--compact"},
+            "Collapse nodes with only negligible changes to a single line");
     }
 };
 
 namespace {
 
 void flatten_nodes(const ComparisonNode& node,
-                   std::vector<const ComparisonNode*>& out) {
+                   dstd::Vector<const ComparisonNode*>& out) {
     out.push_back(&node);
     for (const auto& child : node.children) {
         flatten_nodes(child, out);
@@ -154,33 +111,220 @@ void flatten_nodes(const ComparisonNode& node,
 }
 
 struct AggSpec {
-    AggregationConfig agg_cfg;
-    std::optional<duql::Query> query;
     const ComparisonNode* visitor;
 };
 
 struct NodeAggPlan {
     ComparisonNode root;
-    std::vector<AggSpec> specs;
+    dstd::Vector<AggSpec> specs;
 };
 
-static coro::CoroTask<void> run_all_aggregations(
-    CoroScope& ctx, const std::vector<std::string>& files,
-    const std::vector<NodeAggPlan>& plans,
-    std::vector<std::vector<EventAggregatorOutput>>& results,
-    const std::string& index_dir, const ComparisonConfig& config) {
-    results.resize(plans.size());
-    for (std::size_t ni = 0; ni < plans.size(); ++ni) {
-        const auto& plan = plans[ni];
-        results[ni].resize(plan.specs.size());
-        for (std::size_t vi = 0; vi < plan.specs.size(); ++vi) {
-            const auto& spec = plan.specs[vi];
-            results[ni][vi] = co_await run_comparison_aggregation(
-                ctx, files, spec.agg_cfg, spec.query, index_dir,
-                config.checkpoint_size, config.force_rebuild,
-                config.executor_threads);
-        }
+static coro::CoroTask<void> aggregate_all(
+    const dstd::Vector<dstd::String>& files,
+    const dstd::Vector<ComparisonFilter>& filters,
+    const dstd::String& index_dir, const ComparisonConfig& config,
+    std::size_t workers, dstd::StringIntern& strings, SideAggregate& out,
+    bool& failed) {
+    if (files.empty()) co_return;
+    auto result = co_await aggregate_side(
+        files, index_dir, filters,
+        static_cast<std::uint64_t>(config.defaults.time_interval_ms * 1000.0),
+        workers, strings);
+    if (!result) {
+        DFTRACER_UTILS_LOG_ERROR("Aggregation failed: %s",
+                                 result.error().format().c_str());
+        failed = true;
+        co_return;
     }
+    out = std::move(*result);
+}
+
+// Render the assembled comparison output as JSON or a formatted tree table.
+void render_comparison_output(const ComparisonOutput& output,
+                              const ComparisonConfig& config) {
+    if (config.format == "json") {
+        TreeTableFormatter formatter;
+        std::printf("%s\n", formatter.render_json(output).c_str());
+    } else {
+        bool is_tty = isatty(fileno(stdout));
+        FormatterOptions fmt_opts;
+        fmt_opts.use_color = is_tty && !config.no_color;
+        fmt_opts.use_unicode = is_tty;
+        fmt_opts.compact = config.compact;
+        TreeTableFormatter formatter(fmt_opts);
+        formatter.render(stdout, output);
+    }
+}
+
+// Indexes the traces under `path` with the aggregation config the queries use
+// and lists the trace files.
+coro::CoroTask<void> resolve_and_build(const ComparisonConfig& config,
+                                       const dstd::String& path,
+                                       const dstd::String& index_dir,
+                                       dstd::Vector<dstd::String>& out_files,
+                                       std::size_t parallelism) {
+    if (!common::input_exists(path)) {
+        DFTRACER_UTILS_LOG_ERROR("Path does not exist: %s", path.c_str());
+        co_return;
+    }
+
+    ResolveAndBuildInput input;
+    if (common::input_is_regular_file(path)) {
+        input.files.emplace_back(dstd::StringView(path));
+    } else {
+        input.directory.assign(path.data(), path.size());
+    }
+    input.index_dir.assign(index_dir.data(), index_dir.size());
+    input.checkpoint_size = config.checkpoint_size;
+    input.parallelism = parallelism;
+    input.force_rebuild = config.force_rebuild;
+    input.build_bloom = false;
+
+    auto result = co_await resolve_and_build_index(std::move(input));
+    out_files.clear();
+    for (const auto& f : result.all_files)
+        out_files.emplace_back(f.data(), f.size());
+
+    if (out_files.empty()) {
+        DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s", path.c_str());
+        co_return;
+    }
+    for (const auto& failure : result.failures) {
+        DFTRACER_UTILS_LOG_WARN("Could not index %s: %s",
+                                failure.file_path.c_str(),
+                                failure.message.c_str());
+    }
+}
+
+// What the steps share. The ids of both sides' groups are in one string table.
+struct ComparatorState {
+    ComparatorState(const ComparisonConfig& comparison,
+                    const dstd::Vector<ComparisonFilter>& node_filters,
+                    const dstd::Vector<NodeAggPlan>& plans)
+        : config(comparison), filters(node_filters), agg_plans(plans) {}
+
+    const ComparisonConfig& config;
+    const dstd::Vector<ComparisonFilter>& filters;
+    const dstd::Vector<NodeAggPlan>& agg_plans;
+    dstd::Vector<dstd::String> baseline_files;
+    dstd::Vector<dstd::String> variant_files;
+    dstd::StringIntern strings;
+    SideAggregate baseline_side;
+    SideAggregate variant_side;
+    bool baseline_failed = false;
+    bool variant_failed = false;
+};
+
+// One side on its own: build its index, then aggregate it. The two sides run
+// this at once when their indexes are apart, so each takes half of the threads.
+coro::CoroTask<void> index_and_aggregate_side(ComparatorState& state,
+                                              bool is_baseline,
+                                              std::size_t threads) {
+    const auto& config = state.config;
+    const auto& path = is_baseline ? config.baseline : config.variant;
+    const auto& index_dir =
+        is_baseline ? config.baseline_index_dir : config.variant_index_dir;
+    auto& files = is_baseline ? state.baseline_files : state.variant_files;
+    co_await resolve_and_build(config, path, index_dir, files, threads);
+    co_await aggregate_all(
+        files, state.filters, index_dir, config, threads, state.strings,
+        is_baseline ? state.baseline_side : state.variant_side,
+        is_baseline ? state.baseline_failed : state.variant_failed);
+}
+
+// Both sides share one index root: build it once, baseline first, then
+// aggregate. The two aggregations run at once unless both sides are the same
+// files.
+coro::CoroTask<void> index_and_aggregate_shared(ComparatorState& state,
+                                                bool same_files) {
+    const auto& config = state.config;
+    co_await resolve_and_build(config, config.baseline,
+                               config.baseline_index_dir, state.baseline_files,
+                               config.executor_threads);
+    if (same_files) {
+        state.variant_files = state.baseline_files;
+        co_await aggregate_all(state.baseline_files, state.filters,
+                               config.baseline_index_dir, config,
+                               config.executor_threads, state.strings,
+                               state.baseline_side, state.baseline_failed);
+        co_return;
+    }
+    co_await resolve_and_build(config, config.variant, config.variant_index_dir,
+                               state.variant_files, config.executor_threads);
+    const std::size_t agg_threads =
+        std::max<std::size_t>(1, config.executor_threads / 2);
+    auto baseline_task = aggregate_all(
+        state.baseline_files, state.filters, config.baseline_index_dir, config,
+        agg_threads, state.strings, state.baseline_side, state.baseline_failed);
+    auto variant_task = aggregate_all(
+        state.variant_files, state.filters, config.variant_index_dir, config,
+        agg_threads, state.strings, state.variant_side, state.variant_failed);
+    co_await coro::when_all(std::move(baseline_task), std::move(variant_task));
+}
+
+// Compares the two aggregates and prints the result. Returns the exit code.
+coro::CoroTask<int> compare_sides(ComparatorState& state, bool same_files) {
+    const auto& config = state.config;
+    if (state.baseline_files.empty() || state.variant_files.empty() ||
+        state.baseline_failed || state.variant_failed) {
+        co_return 1;
+    }
+
+    ComparisonOutput output;
+    output.baseline_path = config.baseline;
+    output.variant_path = config.variant;
+
+    const SideAggregate& variant_ref =
+        same_files ? state.baseline_side : state.variant_side;
+    output.baseline_file_count = state.baseline_files.size();
+    output.variant_file_count = state.variant_files.size();
+    // Metadata comes from the first node's first visitor so the counts
+    // and makespan reflect the full trace, not the last node.
+    output.baseline_meta = state.baseline_side.meta;
+    output.variant_meta = variant_ref.meta;
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    std::size_t visitor_index = 0;
+    for (std::size_t ni = 0; ni < state.agg_plans.size(); ++ni) {
+        const auto& plan = state.agg_plans[ni];
+        dstd::Vector<ComparisonVisitorPair> pairs;
+        pairs.reserve(plan.specs.size());
+
+        for (std::size_t vi = 0; vi < plan.specs.size(); ++vi) {
+            ComparisonVisitorPair pair;
+            pair.baseline = &state.baseline_side.groups[visitor_index];
+            pair.variant = &variant_ref.groups[visitor_index];
+            pair.node = *plan.specs[vi].visitor;
+            pairs.push_back(std::move(pair));
+            ++visitor_index;
+        }
+
+        ComparisonUtilityInput cmp_input;
+        cmp_input.visitors = std::move(pairs);
+        cmp_input.root_node = plan.root;
+        cmp_input.strings = &state.strings;
+        cmp_input.baseline_file_count = state.baseline_files.size();
+        cmp_input.variant_file_count = state.variant_files.size();
+
+        ComparisonUtility cmp;
+        auto cmp_output = co_await cmp(cmp_input);
+        output.nodes.push_back(std::move(cmp_output->result));
+    }
+
+    auto meta_rows =
+        build_metadata_metrics(output.baseline_meta, output.variant_meta);
+    for (auto& n : output.nodes) {
+        n.summary.metrics.insert(n.summary.metrics.begin(), meta_rows.begin(),
+                                 meta_rows.end());
+    }
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> duration = end_time - start_time;
+    output.execution_time_ms = duration.count();
+
+    render_comparison_output(output, config);
+    co_return 0;
 }
 
 }  // namespace
@@ -188,15 +332,15 @@ static coro::CoroTask<void> run_all_aggregations(
 // Build the comparison config from CLI args (config file, preset, or
 // baseline/variant), apply CLI overrides, and resolve defaults. Returns
 // nullopt on any user-facing error (already logged).
-static std::optional<ComparisonConfig> build_comparison_config(
+static dstd::Optional<ComparisonConfig> build_comparison_config(
     const ComparatorArgParse* cli) {
-    const auto& config_path = cli->config_path;
-    const auto& preset = cli->preset;
-    const auto& baseline_path = cli->baseline;
-    const auto& variant_path = cli->variant;
-    const auto& duql_str = cli->duql_args.duql;
-    const auto& group_by_str = cli->group_by;
-    auto format = cli->format;
+    const dstd::String config_path(cli->config_path);
+    const dstd::String preset(cli->preset);
+    const dstd::String baseline_path(cli->baseline);
+    const dstd::String variant_path(cli->variant);
+    const dstd::String duql_str(cli->duql_args.duql);
+    const dstd::String group_by_str(cli->group_by);
+    const dstd::String format(cli->format);
     auto no_color = cli->no_color;
     auto force_rebuild = cli->indexing.force;
     auto checkpoint_size = cli->indexing.checkpoint_size;
@@ -205,25 +349,25 @@ static std::optional<ComparisonConfig> build_comparison_config(
 
     ComparisonConfig config;
     if (!config_path.empty()) {
-        std::string error;
+        dstd::String error;
         auto parsed = ComparisonConfig::from_json_file(config_path, error);
         if (!parsed) {
             DFTRACER_UTILS_LOG_ERROR("Config error: %s", error.c_str());
-            return std::nullopt;
+            return dstd::nullopt;
         }
         config = std::move(*parsed);
     } else if (!preset.empty()) {
         if (baseline_path.empty() || variant_path.empty()) {
             DFTRACER_UTILS_LOG_ERROR(
                 "--preset requires both --baseline and --variant");
-            return std::nullopt;
+            return dstd::nullopt;
         }
         auto parsed =
             ComparisonConfig::from_preset(preset, baseline_path, variant_path);
         if (!parsed) {
             DFTRACER_UTILS_LOG_ERROR("Unknown preset: %s. Supported: dlio",
                                      preset.c_str());
-            return std::nullopt;
+            return dstd::nullopt;
         }
         config = std::move(*parsed);
         // AND the user query into every top-level node so --duql narrows
@@ -242,19 +386,19 @@ static std::optional<ComparisonConfig> build_comparison_config(
         DFTRACER_UTILS_LOG_ERROR(
             "Must specify --config, --preset, or both --baseline and "
             "--variant");
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     if (!format.empty()) config.format = format;
     config.no_color = no_color;
     if (cli->compact) config.compact = true;
-    if (cli->pipeline.executor_threads > 0)
-        config.executor_threads = cli->pipeline.executor_threads;
+    if (cli->runtime_args.executor_threads > 0)
+        config.executor_threads = cli->runtime_args.executor_threads;
     if (checkpoint_size > 0) config.checkpoint_size = checkpoint_size;
     if (!cli->baseline_index_dir.empty())
-        config.baseline_index_dir = cli->baseline_index_dir;
+        config.baseline_index_dir = dstd::String(cli->baseline_index_dir);
     if (!cli->variant_index_dir.empty())
-        config.variant_index_dir = cli->variant_index_dir;
+        config.variant_index_dir = dstd::String(cli->variant_index_dir);
     if (force_rebuild) config.force_rebuild = force_rebuild;
     if (threshold > 0.0) config.defaults.threshold_pct = threshold;
     if (time_interval_ms > 0.0)
@@ -263,7 +407,7 @@ static std::optional<ComparisonConfig> build_comparison_config(
     config.resolve();
 
     if (config.executor_threads == 0) {
-        config.executor_threads = hardware_concurrency();
+        config.executor_threads = common::hardware_concurrency();
     }
 
     if (config.checkpoint_size == 0) {
@@ -273,64 +417,42 @@ static std::optional<ComparisonConfig> build_comparison_config(
     return config;
 }
 
-// Precompute the per-node aggregation plans from the resolved config (needed by
-// both the baseline and variant Agg tasks). Returns nullopt on an invalid node
-// query (already logged).
-static std::optional<std::vector<NodeAggPlan>> build_agg_plans(
-    const ComparisonConfig& config) {
-    std::vector<NodeAggPlan> agg_plans;
+// Returns false on an invalid or unsupported node query (already logged).
+static bool build_agg_plans(const ComparisonConfig& config,
+                            dstd::Vector<NodeAggPlan>& agg_plans,
+                            dstd::Vector<ComparisonFilter>& filters) {
     for (auto& node : config.nodes) {
         NodeAggPlan plan;
         plan.root = node;
 
-        std::vector<const ComparisonNode*> visitors;
+        dstd::Vector<const ComparisonNode*> visitors;
         flatten_nodes(node, visitors);
 
         for (const auto* visitor : visitors) {
-            AggSpec spec;
+            ComparisonFilter filter;
             if (!visitor->composed_query.empty()) {
-                auto result = duql::Query::from_string(visitor->composed_query);
-                if (!result) {
+                auto query = duql::Query::from_string(visitor->composed_query);
+                if (!query) {
                     DFTRACER_UTILS_LOG_ERROR("Invalid query for node '%s': %s",
                                              visitor->name.c_str(),
-                                             result.error().format().c_str());
-                    return std::nullopt;
+                                             query.error().format().c_str());
+                    return false;
                 }
-                spec.query = std::move(*result);
+                auto translated = filter_from_query(*query);
+                if (!translated) {
+                    DFTRACER_UTILS_LOG_ERROR(
+                        "Node '%s': %s", visitor->name.c_str(),
+                        translated.error().format().c_str());
+                    return false;
+                }
+                filter = std::move(*translated);
             }
-
-            spec.agg_cfg.time_interval_us = static_cast<std::uint64_t>(
-                config.defaults.time_interval_ms * 1000.0);
-            spec.agg_cfg.extra_group_keys = {};
-            spec.agg_cfg.compute_statistics = true;
-            spec.agg_cfg.compute_percentiles = true;
-            spec.agg_cfg.percentiles = visitor->resolved_percentiles;
-            spec.agg_cfg.sketch_accuracy = 0.01;
-            spec.agg_cfg.track_process_parents = false;
-            spec.visitor = visitor;
-
-            plan.specs.push_back(std::move(spec));
+            filters.push_back(std::move(filter));
+            plan.specs.push_back(AggSpec{visitor});
         }
         agg_plans.push_back(std::move(plan));
     }
-    return agg_plans;
-}
-
-// Render the assembled comparison output as JSON or a formatted tree table.
-static void render_comparison_output(const ComparisonOutput& output,
-                                     const ComparisonConfig& config) {
-    if (config.format == "json") {
-        TreeTableFormatter formatter;
-        std::printf("%s\n", formatter.render_json(output).c_str());
-    } else {
-        bool is_tty = isatty(fileno(stdout));
-        FormatterOptions fmt_opts;
-        fmt_opts.use_color = is_tty && !config.no_color;
-        fmt_opts.use_unicode = is_tty;
-        fmt_opts.compact = config.compact;
-        TreeTableFormatter formatter(fmt_opts);
-        formatter.render(stdout, output);
-    }
+    return true;
 }
 
 static int run_comparator(const ComparatorArgParse* cli) {
@@ -338,275 +460,48 @@ static int run_comparator(const ComparatorArgParse* cli) {
     if (!config_opt) return 1;
     ComparisonConfig config = std::move(*config_opt);
 
-    // Precompute aggregation plans from config (needed by both Agg tasks)
-    auto agg_plans_opt = build_agg_plans(config);
-    if (!agg_plans_opt) return 1;
-    std::vector<NodeAggPlan> agg_plans = std::move(*agg_plans_opt);
+    dstd::Vector<NodeAggPlan> agg_plans;
+    dstd::Vector<ComparisonFilter> filters;
+    if (!build_agg_plans(config, agg_plans, filters)) return 1;
 
-    auto pipeline_config =
-        cli::build_pipeline_config("DFTracer Comparator", cli->pipeline);
-    Pipeline pipeline(pipeline_config);
-
-    auto resolve_and_build =
-        [&config](CoroScope& scope, const std::string& path,
-                  const std::string& index_dir,
-                  std::vector<std::string>& out_files) -> coro::CoroTask<void> {
-        if (!fs::exists(path)) {
-            DFTRACER_UTILS_LOG_ERROR("Path does not exist: %s", path.c_str());
-            co_return;
-        }
-
-        if (fs::is_regular_file(path)) {
-            co_await ensure_index_fresh(&scope, "", path, index_dir,
-                                        config.force_rebuild);
-        } else {
-            co_await ensure_index_fresh(&scope, path, "", index_dir,
-                                        config.force_rebuild);
-        }
-
-        Resolver resolver;
-        ResolverInput resolve_input;
-        resolve_input.index_dir = index_dir;
-        resolve_input.require_checkpoints = !config.force_rebuild;
-        if (fs::is_regular_file(path)) {
-            resolve_input.files = {path};
-        } else {
-            resolve_input.directory = path;
-        }
-
-        auto result = co_await resolver(resolve_input);
-        out_files = std::move(result.all_files);
-
-        if (out_files.empty()) {
-            DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
-                                     path.c_str());
-            co_return;
-        }
-
-        if (result.needs_checkpoint.empty()) {
-            DFTRACER_UTILS_LOG_INFO("All %zu files already indexed",
-                                    out_files.size());
-            co_return;
-        }
-
-        auto batch_cfg = std::make_shared<IndexBuildBatchConfig>();
-        batch_cfg->file_paths.reserve(result.needs_checkpoint.size());
-        for (const auto& item : result.needs_checkpoint) {
-            batch_cfg->file_paths.push_back(item.file_path);
-        }
-        batch_cfg->index_dir = index_dir;
-        batch_cfg->checkpoint_size = config.checkpoint_size;
-        batch_cfg->parallelism = config.executor_threads;
-        batch_cfg->force_rebuild = config.force_rebuild;
-
-        DFTRACER_UTILS_LOG_INFO("Indexing %zu of %zu files...",
-                                result.needs_checkpoint.size(),
-                                out_files.size());
-        co_await BatchBuilder::process(&scope, std::move(batch_cfg));
-    };
-
-    // Shared state between tasks
-    std::vector<std::string> baseline_files;
-    std::vector<std::string> variant_files;
-    std::vector<std::vector<EventAggregatorOutput>> baseline_results;
-    std::vector<std::vector<EventAggregatorOutput>> variant_results;
+    ComparatorState state(config, filters, agg_plans);
 
     auto baseline_index_path = trace::internal::determine_index_path(
         config.baseline, config.baseline_index_dir);
     auto variant_index_path = trace::internal::determine_index_path(
         config.variant, config.variant_index_dir);
-    bool shared_index = baseline_index_path == variant_index_path;
-
-    std::shared_ptr<Task> enum_index_base;
-    std::shared_ptr<Task> enum_index_var;
-
-    if (shared_index) {
-        auto enum_index_shared = make_task(
-            [&config, &baseline_files, &variant_files,
-             &resolve_and_build](CoroScope& scope) -> coro::CoroTask<void> {
-                co_await resolve_and_build(scope, config.baseline,
-                                           config.baseline_index_dir,
-                                           baseline_files);
-                if (config.baseline == config.variant) {
-                    variant_files = baseline_files;
-                } else {
-                    co_await resolve_and_build(scope, config.variant,
-                                               config.variant_index_dir,
-                                               variant_files);
-                }
-            },
-            "EnumIndex");
-        enum_index_base = enum_index_shared;
-        enum_index_var = enum_index_shared;
-    } else {
-        enum_index_base = make_task(
-            [&config, &baseline_files,
-             &resolve_and_build](CoroScope& scope) -> coro::CoroTask<void> {
-                co_await resolve_and_build(scope, config.baseline,
-                                           config.baseline_index_dir,
-                                           baseline_files);
-            },
-            "EnumIndexBaseline");
-
-        enum_index_var = make_task(
-            [&config, &variant_files,
-             &resolve_and_build](CoroScope& scope) -> coro::CoroTask<void> {
-                co_await resolve_and_build(scope, config.variant,
-                                           config.variant_index_dir,
-                                           variant_files);
-            },
-            "EnumIndexVariant");
-    }
-
-    std::shared_ptr<Task> agg_base;
-    std::shared_ptr<Task> agg_var;
-
-    bool same_files = shared_index && config.baseline == config.variant;
-    if (same_files) {
-        auto agg_shared = make_task(
-            [&baseline_files, &baseline_results, &variant_results, &agg_plans,
-             &config](CoroScope& ctx) -> coro::CoroTask<void> {
-                if (baseline_files.empty()) co_return;
-                co_await run_all_aggregations(
-                    ctx, baseline_files, agg_plans, baseline_results,
-                    config.baseline_index_dir, config);
-                variant_results = baseline_results;
-            },
-            "Aggregate");
-        agg_shared->depends_on(enum_index_base);
-        agg_base = agg_shared;
-        agg_var = agg_shared;
-    } else {
-        agg_base = make_task(
-            [&baseline_files, &baseline_results, &agg_plans,
-             &config](CoroScope& ctx) -> coro::CoroTask<void> {
-                if (baseline_files.empty()) co_return;
-                co_await run_all_aggregations(
-                    ctx, baseline_files, agg_plans, baseline_results,
-                    config.baseline_index_dir, config);
-            },
-            "AggBaseline");
-        agg_base->depends_on(enum_index_base);
-
-        agg_var = make_task(
-            [&variant_files, &variant_results, &agg_plans,
-             &config](CoroScope& ctx) -> coro::CoroTask<void> {
-                if (variant_files.empty()) co_return;
-                co_await run_all_aggregations(ctx, variant_files, agg_plans,
-                                              variant_results,
-                                              config.variant_index_dir, config);
-            },
-            "AggVariant");
-        agg_var->depends_on(enum_index_var);
-    }
-
-    // Compare (depends on both Agg tasks)
-    ComparisonOutput output;
-    output.baseline_path = config.baseline;
-    output.variant_path = config.variant;
-    int result_code = 0;
-
-    auto compare_task = make_task(
-        [&config, &baseline_files, &variant_files, &baseline_results,
-         &variant_results, &agg_plans, &output, &result_code](
-            [[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
-            if (baseline_files.empty() || variant_files.empty()) {
-                result_code = 1;
-                co_return;
-            }
-
-            output.baseline_file_count =
-                baseline_results[0][0].total_files_processed;
-            output.variant_file_count =
-                variant_results[0][0].total_files_processed;
-
-            auto start_time = std::chrono::high_resolution_clock::now();
-
-            for (std::size_t ni = 0; ni < agg_plans.size(); ++ni) {
-                const auto& plan = agg_plans[ni];
-                std::vector<ComparisonVisitorPair> pairs;
-                pairs.reserve(plan.specs.size());
-
-                for (std::size_t vi = 0; vi < plan.specs.size(); ++vi) {
-                    // Compute metadata once from the first node/visitor so
-                    // process_count, thread_count, and makespan reflect the
-                    // full trace rather than whichever node happens to be last.
-                    if (ni == 0 && vi == 0) {
-                        auto b_files =
-                            baseline_results[0][0].total_files_processed;
-                        auto v_files =
-                            variant_results[0][0].total_files_processed;
-                        output.baseline_meta = extract_metadata(
-                            baseline_results[ni][vi].strings(),
-                            baseline_results[ni][vi].aggregations, b_files);
-                        output.variant_meta = extract_metadata(
-                            variant_results[ni][vi].strings(),
-                            variant_results[ni][vi].aggregations, v_files);
-                    }
-
-                    ComparisonVisitorPair pair;
-                    pair.baseline = std::move(baseline_results[ni][vi]);
-                    pair.variant = std::move(variant_results[ni][vi]);
-                    pair.node = *plan.specs[vi].visitor;
-                    pairs.push_back(std::move(pair));
-                }
-
-                ComparisonUtilityInput cmp_input;
-                cmp_input.visitors = std::move(pairs);
-                cmp_input.root_node = plan.root;
-                cmp_input.baseline_file_count =
-                    baseline_results[ni][0].total_files_processed;
-                cmp_input.variant_file_count =
-                    variant_results[ni][0].total_files_processed;
-
-                ComparisonUtility cmp;
-                auto cmp_output = co_await cmp(cmp_input);
-                output.nodes.push_back(std::move(cmp_output->result));
-            }
-
-            auto meta_rows = build_metadata_metrics(output.baseline_meta,
-                                                    output.variant_meta);
-            for (auto& n : output.nodes) {
-                n.summary.metrics.insert(n.summary.metrics.begin(),
-                                         meta_rows.begin(), meta_rows.end());
-            }
-
-            auto end_time = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double, std::milli> duration =
-                end_time - start_time;
-            output.execution_time_ms = duration.count();
-
-            render_comparison_output(output, config);
-
-            co_return;
-        },
-        "Compare");
-
-    if (same_files) {
-        compare_task->depends_on(agg_base);
-    } else {
-        compare_task->depends_on({agg_base, agg_var});
-    }
-
-    if (shared_index) {
-        pipeline.set_source(enum_index_base);
-    } else {
-        pipeline.set_source({enum_index_base, enum_index_var});
-    }
-    pipeline.set_destination(compare_task);
+    const bool shared_index = baseline_index_path == variant_index_path;
+    const bool same_files = shared_index && config.baseline == config.variant;
 
     try {
-        pipeline.execute();
-    } catch (const PipelineError& e) {
-        DFTRACER_UTILS_LOG_ERROR("Pipeline failed: %s", e.what());
-        result_code = 1;
+        return binaries::run_on_pool(
+            "DFTracer Comparator", cli->runtime_args,
+            [&](coro::Scope&) -> coro::CoroTask<int> {
+                if (shared_index) {
+                    co_await index_and_aggregate_shared(state, same_files);
+                } else {
+                    // The two sides run at once on one executor, so each plans
+                    // for half of its threads. Each holds buffers per planned
+                    // worker.
+                    const std::size_t side_threads =
+                        std::max<std::size_t>(1, config.executor_threads / 2);
+                    auto baseline_task = index_and_aggregate_side(
+                        state, /*is_baseline=*/true, side_threads);
+                    auto variant_task = index_and_aggregate_side(
+                        state, /*is_baseline=*/false, side_threads);
+                    co_await coro::when_all(std::move(baseline_task),
+                                            std::move(variant_task));
+                }
+                co_return co_await compare_sides(state, same_files);
+            });
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_ERROR("Run failed: %s", e.what());
+        return 1;
     }
-
-    return result_code;
 }
 
 int main(int argc, char** argv) {
-    return cli::cli_main<ComparatorArgParse>(
+    return binaries::cli_main<ComparatorArgParse>(
         argc, argv, "dftracer_comparator",
         "Compare DFTracer trace metrics between baseline and variant",
         [](ComparatorArgParse& cli) { return run_comparator(&cli); });

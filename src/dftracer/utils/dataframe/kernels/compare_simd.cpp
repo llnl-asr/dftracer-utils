@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/compare_simd.h>
@@ -15,7 +16,6 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
 // `op` is validated at the ABI boundary (dftu_series_compare) before dispatch;
 // the trailing return is unreachable and satisfies -Wreturn-type.
@@ -23,19 +23,19 @@ template <class D, class V>
 auto compare_mask(D, V v, V vr, std::int32_t op) {
     switch (static_cast<CmpOp>(op)) {
         case CmpOp::Gt:
-            return hn::Gt(v, vr);
+            return hwy::HWY_NAMESPACE::Gt(v, vr);
         case CmpOp::Ge:
-            return hn::Ge(v, vr);
+            return hwy::HWY_NAMESPACE::Ge(v, vr);
         case CmpOp::Lt:
-            return hn::Lt(v, vr);
+            return hwy::HWY_NAMESPACE::Lt(v, vr);
         case CmpOp::Le:
-            return hn::Le(v, vr);
+            return hwy::HWY_NAMESPACE::Le(v, vr);
         case CmpOp::Eq:
-            return hn::Eq(v, vr);
+            return hwy::HWY_NAMESPACE::Eq(v, vr);
         case CmpOp::Ne:
-            return hn::Ne(v, vr);
+            return hwy::HWY_NAMESPACE::Ne(v, vr);
     }
-    return hn::Ne(v, vr);
+    return hwy::HWY_NAMESPACE::Ne(v, vr);
 }
 
 template <class T>
@@ -64,19 +64,21 @@ bool compare_scalar(T a, T b, std::int32_t op) {
 template <class T>
 void compare_bits(const T* p, std::int64_t n, T r, std::int32_t op,
                   std::uint8_t* out) {
-    const hn::ScalableTag<T> d;
-    const std::size_t lanes = hn::Lanes(d);
-    const auto vr = hn::Set(d, r);
+    const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto vr = hwy::HWY_NAMESPACE::Set(d, r);
     const std::uint64_t lane_mask =
         lanes >= 64 ? ~std::uint64_t{0} : ((std::uint64_t{1} << lanes) - 1);
     std::int64_t i = 0;
     for (; i + 64 <= n; i += 64) {
         std::uint64_t bits = 0;
         for (std::size_t c = 0; c < 64; c += lanes) {
-            const auto v = hn::LoadU(d, p + i + static_cast<std::int64_t>(c));
+            const auto v = hwy::HWY_NAMESPACE::LoadU(
+                d, p + i + static_cast<std::int64_t>(c));
             const auto m = compare_mask(d, v, vr, op);
             std::uint64_t cb = 0;
-            hn::StoreMaskBits(d, m, reinterpret_cast<std::uint8_t*>(&cb));
+            hwy::HWY_NAMESPACE::StoreMaskBits(
+                d, m, reinterpret_cast<std::uint8_t*>(&cb));
             bits |= (cb & lane_mask) << c;
         }
         std::memcpy(out + (i >> 3), &bits, 8);
@@ -136,19 +138,22 @@ void CompareI8(const void* p, std::int64_t n, dftu_scalar r, std::int32_t op,
 // a time so each block store is byte-aligned; the tail is packed scalar.
 void PackFlags(const char* flags, std::int64_t n, std::uint8_t* out) {
     const std::uint8_t* f = reinterpret_cast<const std::uint8_t*>(flags);
-    const hn::ScalableTag<std::uint8_t> d;
-    const std::size_t lanes = hn::Lanes(d);
-    const auto zero = hn::Zero(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto zero = hwy::HWY_NAMESPACE::Zero(d);
     const std::uint64_t lane_mask =
         lanes >= 64 ? ~std::uint64_t{0} : ((std::uint64_t{1} << lanes) - 1);
     std::int64_t i = 0;
     for (; i + 64 <= n; i += 64) {
         std::uint64_t bits = 0;
         for (std::size_t c = 0; c < 64; c += lanes) {
-            const auto m = hn::Ne(
-                hn::LoadU(d, f + i + static_cast<std::int64_t>(c)), zero);
+            const auto m = hwy::HWY_NAMESPACE::Ne(
+                hwy::HWY_NAMESPACE::LoadU(d,
+                                          f + i + static_cast<std::int64_t>(c)),
+                zero);
             std::uint64_t cb = 0;
-            hn::StoreMaskBits(d, m, reinterpret_cast<std::uint8_t*>(&cb));
+            hwy::HWY_NAMESPACE::StoreMaskBits(
+                d, m, reinterpret_cast<std::uint8_t*>(&cb));
             bits |= (cb & lane_mask) << c;
         }
         std::memcpy(out + (i >> 3), &bits, 8);
@@ -171,15 +176,17 @@ std::int32_t sorted_impl(const void* vp, std::int64_t n,
                          std::int32_t descending) {
     const T* p = static_cast<const T*>(vp);
     if (n < 2) return 1;
-    const hn::ScalableTag<T> d;
-    const std::int64_t lanes = static_cast<std::int64_t>(hn::Lanes(d));
+    const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+    const std::int64_t lanes =
+        static_cast<std::int64_t>(hwy::HWY_NAMESPACE::Lanes(d));
     const std::int64_t last = n - 1;  // last valid pair index is n-2
     std::int64_t i = 0;
     for (; i + lanes <= last; i += lanes) {
-        const auto a = hn::LoadU(d, p + i);
-        const auto b = hn::LoadU(d, p + i + 1);
-        const auto bad = descending ? hn::Lt(a, b) : hn::Gt(a, b);
-        if (!hn::AllFalse(d, bad)) return 0;
+        const auto a = hwy::HWY_NAMESPACE::LoadU(d, p + i);
+        const auto b = hwy::HWY_NAMESPACE::LoadU(d, p + i + 1);
+        const auto bad = descending ? hwy::HWY_NAMESPACE::Lt(a, b)
+                                    : hwy::HWY_NAMESPACE::Gt(a, b);
+        if (!hwy::HWY_NAMESPACE::AllFalse(d, bad)) return 0;
     }
     for (; i < last; ++i)
         if (descending ? p[i] < p[i + 1] : p[i] > p[i + 1]) return 0;
@@ -222,20 +229,25 @@ std::int32_t SortedU8(const void* p, std::int64_t n, std::int32_t desc) {
 // nn keeps the O(n * nn) broadcast cheaper than a hash probe.
 void is_in_f64(const double* p, std::int64_t n, const double* needles, int nn,
                std::uint8_t* out) {
-    const hn::ScalableTag<double> d;
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     const std::uint64_t lane_mask =
         lanes >= 64 ? ~std::uint64_t{0} : ((std::uint64_t{1} << lanes) - 1);
     std::int64_t i = 0;
     for (; i + 64 <= n; i += 64) {
         std::uint64_t bits = 0;
         for (std::size_t c = 0; c < 64; c += lanes) {
-            const auto v = hn::LoadU(d, p + i + static_cast<std::int64_t>(c));
-            auto m = hn::Eq(v, hn::Set(d, needles[0]));
+            const auto v = hwy::HWY_NAMESPACE::LoadU(
+                d, p + i + static_cast<std::int64_t>(c));
+            auto m = hwy::HWY_NAMESPACE::Eq(
+                v, hwy::HWY_NAMESPACE::Set(d, needles[0]));
             for (int k = 1; k < nn; ++k)
-                m = hn::Or(m, hn::Eq(v, hn::Set(d, needles[k])));
+                m = hwy::HWY_NAMESPACE::Or(
+                    m, hwy::HWY_NAMESPACE::Eq(
+                           v, hwy::HWY_NAMESPACE::Set(d, needles[k])));
             std::uint64_t cb = 0;
-            hn::StoreMaskBits(d, m, reinterpret_cast<std::uint8_t*>(&cb));
+            hwy::HWY_NAMESPACE::StoreMaskBits(
+                d, m, reinterpret_cast<std::uint8_t*>(&cb));
             bits |= (cb & lane_mask) << c;
         }
         std::memcpy(out + (i >> 3), &bits, 8);
@@ -288,23 +300,24 @@ bool is_in_f64_simd(const dftu_series& v, const dftu_series& values,
     // Only the clean case: both FLAT Float64 with no nulls (read_f64 is
     // identity there, so equality is exact), and a small needle set worth
     // broadcasting.
-    if (v.encoding != Encoding::Flat || v.type != TypeId::Float64 || v.validity)
+    if (v.encoding != Encoding::Flat || v.type != TypeId::Float64 ||
+        v.validity.block())
         return false;
     if (values.encoding != Encoding::Flat || values.type != TypeId::Float64 ||
-        values.validity)
+        values.validity.block())
         return false;
     const std::int64_t nn = values.length;
     if (nn <= 0 || nn > 32) return false;
     HWY_DYNAMIC_DISPATCH(is_in_f64)
-    (reinterpret_cast<const double*>(v.data->data()), v.length,
-     reinterpret_cast<const double*>(values.data->data()), static_cast<int>(nn),
+    (reinterpret_cast<const double*>(v.data.data()), v.length,
+     reinterpret_cast<const double*>(values.data.data()), static_cast<int>(nn),
      out);
     return true;
 }
 
 bool is_sorted_numeric(const dftu_series& v, bool descending, bool* out) {
-    if (v.encoding != Encoding::Flat || v.validity) return false;
-    const void* p = v.data->data();
+    if (v.encoding != Encoding::Flat || v.validity.block()) return false;
+    const void* p = v.data.data();
     const std::int64_t n = v.length;
     const std::int32_t desc = descending ? 1 : 0;
     switch (v.type) {
@@ -345,7 +358,7 @@ bool is_sorted_numeric(const dftu_series& v, bool descending, bool* out) {
 
 bool compare(const dftu_series& v, std::int32_t op, dftu_scalar rhs,
              std::uint8_t* out) {
-    return compare(v.type, v.data->data(), v.length, op, rhs, out);
+    return compare(v.type, v.data.data(), v.length, op, rhs, out);
 }
 
 bool compare(TypeId type, const void* p, std::int64_t n, std::int32_t op,

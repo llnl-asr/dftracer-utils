@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Series.rank leaves a float NaN unranked, as it does a null (pandas rank)."""
 
 import math

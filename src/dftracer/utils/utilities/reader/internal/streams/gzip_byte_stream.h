@@ -1,12 +1,14 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_BYTE_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_BYTE_STREAM_H
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 
 #include <cstddef>
-#include <span>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -22,7 +24,7 @@ class GzipByteStream : public GzipStream {
     using GzipStream::read_async;
 
     void initialize(
-        const std::string &gz_path, std::size_t start_bytes,
+        const dstd::String &gz_path, std::size_t start_bytes,
         std::size_t end_bytes,
         dftracer::utils::index::gzip::CheckpointIndexer &indexer) override {
         GzipStream::initialize(gz_path, start_bytes, end_bytes, indexer);
@@ -37,10 +39,10 @@ class GzipByteStream : public GzipStream {
         }
     }
 
-    coro::CoroTask<std::span<const char>> read_async() override {
+    coro::CoroTask<dstd::Span<const char>> read_async() override {
         co_await ensure_initialized();
         if (!decompression_initialized_) {
-            throw ReaderError(ReaderError::INITIALIZATION_ERROR,
+            throw ReaderError(ReaderError::InitializationError,
                               "Streaming session not properly initialized");
         }
 
@@ -59,7 +61,7 @@ class GzipByteStream : public GzipStream {
             read_size, current_position_);
 
         bool result = co_await inflater_.read(
-            fd_, file_offset_,
+            fd_.native_handle(), file_offset_,
             reinterpret_cast<unsigned char *>(buffer_.data()), read_size,
             bytes_read);
 
@@ -71,9 +73,9 @@ class GzipByteStream : public GzipStream {
         // A decode failure must not pass for clean EOF (which would silently
         // drop the rest of the file).
         if (!result) {
-            throw ReaderError(ReaderError::COMPRESSION_ERROR,
+            throw ReaderError(ReaderError::CompressionError,
                               "gzip decode failed mid-stream at position " +
-                                  std::to_string(current_position_));
+                                  dstd::to_string(current_position_));
         }
         if (bytes_read == 0) {
             is_finished_ = true;
@@ -86,7 +88,7 @@ class GzipByteStream : public GzipStream {
             "Streamed (zero-copy) %zu bytes (position: %zu / %zu)", bytes_read,
             current_position_, target_end_bytes_);
 
-        co_return std::span<const char>(buffer_.data(), bytes_read);
+        co_return dstd::Span<const char>(buffer_.data(), bytes_read);
     }
 };
 

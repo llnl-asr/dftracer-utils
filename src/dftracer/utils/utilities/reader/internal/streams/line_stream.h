@@ -1,23 +1,23 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_LINE_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_LINE_STREAM_H
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 
 #include <cstring>
-#include <memory>
-#include <span>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
 class LineStream : public ReaderStream {
    private:
-    std::unique_ptr<internal::ReaderStream> underlying_stream_;
-    std::span<const char> current_span_;
-    std::string line_accumulator_;
-    std::string current_line_;
+    dstd::UniquePtr<internal::ReaderStream> underlying_stream_;
+    dstd::Span<const char> current_span_;
+    dstd::String line_accumulator_;
+    dstd::String current_line_;
     bool is_finished_;
     bool has_pending_line_;
     std::size_t current_line_number_;
@@ -27,7 +27,7 @@ class LineStream : public ReaderStream {
     std::size_t output_position_;
     std::size_t span_pos_;
 
-    enum class ParseResult { HAS_LINE, NEED_MORE_DATA, FINISHED };
+    enum class ParseResult { HasLine, NeedMoreData, Finished };
 
     struct DirectOutputResult {
         std::size_t bytes_written;
@@ -36,7 +36,7 @@ class LineStream : public ReaderStream {
     };
 
    public:
-    explicit LineStream(std::unique_ptr<ReaderStream> underlying_stream,
+    explicit LineStream(dstd::UniquePtr<ReaderStream> underlying_stream,
                         std::size_t start_line = 0, std::size_t end_line = 0,
                         std::size_t initial_line = 1)
         : underlying_stream_(std::move(underlying_stream)),
@@ -55,7 +55,7 @@ class LineStream : public ReaderStream {
 
     ~LineStream() override { reset(); }
 
-    coro::CoroTask<std::span<const char>> read_async() override {
+    coro::CoroTask<dstd::Span<const char>> read_async() override {
         if (!underlying_stream_ || is_finished_) {
             co_return {};
         }
@@ -63,18 +63,18 @@ class LineStream : public ReaderStream {
         while (true) {
             auto result = try_parse_next_line();
 
-            if (result == ParseResult::HAS_LINE) {
-                co_return std::span<const char>(current_line_.data(),
-                                                current_line_.size());
+            if (result == ParseResult::HasLine) {
+                co_return dstd::Span<const char>(current_line_.data(),
+                                                 current_line_.size());
             }
-            if (result == ParseResult::FINISHED) {
+            if (result == ParseResult::Finished) {
                 co_return {};
             }
 
             if (underlying_stream_->done()) {
                 if (handle_eof_line()) {
-                    co_return std::span<const char>(current_line_.data(),
-                                                    current_line_.size());
+                    co_return dstd::Span<const char>(current_line_.data(),
+                                                     current_line_.size());
                 }
                 is_finished_ = true;
                 co_return {};
@@ -114,10 +114,10 @@ class LineStream : public ReaderStream {
 
             if (!direct.need_more_data) {
                 auto result = try_parse_next_line();
-                if (result == ParseResult::HAS_LINE) {
+                if (result == ParseResult::HasLine) {
                     co_return output_pending_line(buffer, buffer_size);
                 }
-                if (result == ParseResult::FINISHED) {
+                if (result == ParseResult::Finished) {
                     co_return 0;
                 }
             }
@@ -147,7 +147,7 @@ class LineStream : public ReaderStream {
         }
         line_accumulator_.clear();
         current_line_.clear();
-        current_span_ = std::span<const char>();
+        current_span_ = dstd::Span<const char>();
         is_finished_ = false;
         has_pending_line_ = false;
         current_line_number_ = initial_line_;
@@ -187,7 +187,7 @@ class LineStream : public ReaderStream {
     ParseResult try_parse_next_line() {
         if (is_beyond_range()) {
             is_finished_ = true;
-            return ParseResult::FINISHED;
+            return ParseResult::Finished;
         }
 
         while (has_data_in_span()) {
@@ -195,16 +195,16 @@ class LineStream : public ReaderStream {
 
             if (!newline_ptr) {
                 accumulate_remaining_span();
-                return ParseResult::NEED_MORE_DATA;
+                return ParseResult::NeedMoreData;
             }
 
             std::size_t newline_pos = newline_ptr - current_span_.data();
             if (process_complete_line(newline_pos)) {
-                return ParseResult::HAS_LINE;
+                return ParseResult::HasLine;
             }
         }
 
-        return ParseResult::NEED_MORE_DATA;
+        return ParseResult::NeedMoreData;
     }
 
     DirectOutputResult try_direct_output(char* buffer,
@@ -229,9 +229,9 @@ class LineStream : public ReaderStream {
             }
 
             std::size_t newline_pos = newline_ptr - current_span_.data();
-            std::size_t line_length = newline_pos - span_pos_ + 1;
+            std::size_t line_size = newline_pos - span_pos_ + 1;
 
-            if (line_length > buffer_size) {
+            if (line_size > buffer_size) {
                 return {0, false, false};
             }
 
@@ -246,9 +246,9 @@ class LineStream : public ReaderStream {
 
             if (should_output) {
                 std::memcpy(buffer, current_span_.data() + span_pos_,
-                            line_length);
+                            line_size);
                 span_pos_ = newline_pos + 1;
-                return {line_length, false, false};
+                return {line_size, false, false};
             }
 
             span_pos_ = newline_pos + 1;
@@ -270,25 +270,25 @@ class LineStream : public ReaderStream {
         return false;
     }
 
-    void finalize_line_with_accumulator(std::size_t line_length) {
-        line_accumulator_.append(current_span_.data() + span_pos_, line_length);
+    void finalize_line_with_accumulator(std::size_t line_size) {
+        line_accumulator_.append(current_span_.data() + span_pos_, line_size);
         line_accumulator_.push_back('\n');
         current_line_ = std::move(line_accumulator_);
         line_accumulator_.clear();
     }
 
-    void finalize_line_direct(std::size_t line_length) {
-        current_line_.assign(current_span_.data() + span_pos_, line_length);
+    void finalize_line_direct(std::size_t line_size) {
+        current_line_.assign(current_span_.data() + span_pos_, line_size);
         current_line_.push_back('\n');
     }
 
     bool process_complete_line(std::size_t newline_pos) {
-        std::size_t line_length = newline_pos - span_pos_;
+        std::size_t line_size = newline_pos - span_pos_;
 
         if (!line_accumulator_.empty()) {
-            finalize_line_with_accumulator(line_length);
+            finalize_line_with_accumulator(line_size);
         } else {
-            finalize_line_direct(line_length);
+            finalize_line_direct(line_size);
         }
 
         span_pos_ = newline_pos + 1;

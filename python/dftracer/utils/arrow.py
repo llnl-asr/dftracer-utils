@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Arrow data interchange and I/O for DFTracer.
 
 Provides:
@@ -18,14 +19,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Iterator, List, Optional, Union
 
 if TYPE_CHECKING:
-    import pandas as pd  # ty: ignore[unresolved-import]
-    import polars as pl  # ty: ignore[unresolved-import]
-    import pyarrow as pa  # ty: ignore[unresolved-import]
+    import pandas as pd  # ty: ignore[import-not-found]
+    import polars as pl  # ty: ignore[import-not-found]
+    import pyarrow as pa  # ty: ignore[import-not-found]
 
 _HAS_PYARROW = False
 
 try:
-    import pyarrow as pa  # ty: ignore[unresolved-import]
+    import pyarrow as pa  # ty: ignore[import-not-found]
 
     _HAS_PYARROW = True
 except ImportError:
@@ -199,7 +200,7 @@ class ArrowTable:
             ImportError: If polars is not installed.
         """
         try:
-            import polars as pl  # type: ignore[import-not-found]  # ty: ignore[unresolved-import]
+            import polars as pl  # type: ignore[import-not-found]  # ty: ignore[import-not-found]
         except ImportError:
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"

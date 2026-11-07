@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Tests for TraceViewer.join: the generic LazyFrame join of two aggregated
 views on their group key."""
 

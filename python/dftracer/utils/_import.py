@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Imports of NumPy, pandas and polars data into native columns, with no pyarrow.
 
 Each function returns a native ``_Series`` or raises ``TypeError`` for data it

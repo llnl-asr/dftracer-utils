@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_JSON_CANONICAL_H
+#define DFTRACER_UTILS_JSON_CANONICAL_H
+
+#include <dftracer/utils/dstd/string.h>
+#include <simdjson.h>
+
+namespace dftracer::utils::json {
+
+/// Appends `v` to `out` as canonical JSON: no whitespace, object keys in byte
+/// order (repeated keys keep their order), integers exact and doubles in
+/// their shortest round-trip form, so an integral double reads like the
+/// integer. Two values with the same content give the same text.
+void append_canonical_json(dstd::String& out, simdjson::dom::element v);
+
+/// The canonical form of the JSON text `text`, or `text` itself when it does
+/// not parse.
+dstd::String canonical_json_text(dstd::StringView text);
+
+}  // namespace dftracer::utils::json
+
+#endif  // DFTRACER_UTILS_JSON_CANONICAL_H

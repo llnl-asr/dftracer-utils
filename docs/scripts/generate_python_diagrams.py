@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Generate Mermaid collaboration diagrams for the Python API reference.
 
 Parses the package's Python sources with ast and, for each api page, draws the
@@ -40,7 +41,6 @@ PAGE_CLASSES = {
     "duql": ["Field", "Expr"],
     "runtime": ["Runtime", "TaskHandle"],
     "indexer": ["Indexer", "AggregationConfig", "IndexStatus", "CheckpointIndexer"],
-    "reader": ["JsonDictValue"],
     "dfanalyzer": ["DFAnalyzerAggregatedTraceViewer", "HLMConfig"],
 }
 
@@ -53,7 +53,6 @@ PAGE_MODULE = {
     "duql": "duql",
     "runtime": "runtime",
     "indexer": "indexer",
-    "reader": "reader",
     "dfanalyzer": "dfanalyzer",
 }
 

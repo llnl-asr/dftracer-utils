@@ -1,6 +1,12 @@
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/spill_dir.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/fold_adapter/state.h>
 #include <unistd.h>
@@ -8,14 +14,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <iterator>
-#include <memory>
-#include <string>
-#include <system_error>
 #include <utility>
-#include <vector>
 
 // Tier-2 mergeable state: a plugin registers a dftu_state_desc from its
 // factory and the host drives it exactly as it drives a dftu_agg accumulator -
@@ -25,17 +25,16 @@
 namespace dftracer::utils::plugins {
 namespace {
 
-namespace fs = std::filesystem;
-
 const char* err_text(const ::dftu_error& e) {
     return e.message ? e.message : "(no message)";
 }
 
 }  // namespace
 
-const std::string& SpillDir::path() {
+const dstd::Path& SpillDir::path() {
     if (!dir_) {
-        auto made = dftracer::utils::ScopedSpillSubdir::create("dftu_state");
+        auto made =
+            dftracer::utils::common::ScopedSpillSubdir::create("dftu_state");
         if (!made) {
             DFTRACER_UTILS_LOG_ERROR("Plugin state spill directory: %s",
                                      made.error().format().c_str());
@@ -46,13 +45,18 @@ const std::string& SpillDir::path() {
     return dir_->path();
 }
 
-const std::string& StateAccum::dir_path() {
-    if (!dir_) dir_ = std::make_shared<SpillDir>();
+void SpillDir::charge(std::uint64_t bytes) noexcept {
+    if (dir_) dir_->charge().add(bytes);
+}
+
+const dstd::Path& StateAccum::dir_path() {
+    if (!dir_) dir_ = dstd::make_shared<SpillDir>();
     return dir_->path();
 }
 
 StateAccum::StateAccum(const RegisteredState& reg, std::uint64_t budget)
-    : reg_(&reg), budget_(dftracer::utils::resolve_spill_budget(budget)) {
+    : reg_(&reg),
+      budget_(dftracer::utils::memory::resolve_spill_budget(budget)) {
     state_ = reg.desc.init(reg.self);
     if (!state_)
         DFTRACER_UTILS_LOG_ERROR("Plugin state '%s' init returned null",
@@ -75,7 +79,7 @@ void StateAccum::update(const ::dftu_dataframe* df) {
 }
 
 void StateAccum::maybe_spill() {
-    if (!state_ || budget_ == dftracer::utils::NO_SPILL_BUDGET) return;
+    if (!state_ || budget_ == dftracer::utils::memory::NO_SPILL_BUDGET) return;
     // Without a size hook the host has no measure of the state at all, so it
     // cannot claim the state is over budget, let alone bound it.
     if (!reg_->desc.bytes) return;
@@ -102,16 +106,15 @@ void StateAccum::maybe_spill() {
         return;
     }
 
-    const std::string dir = dir_path();
+    const dstd::Path& dir = dir_path();
     bool written = false;
     if (!dir.empty()) {
-        const std::string path =
-            dir + "/run_" + std::to_string(runs_.size()) + ".bin";
-        std::ofstream os(path, std::ios::binary | std::ios::trunc);
-        os.write(static_cast<const char*>(out.data),
-                 static_cast<std::streamsize>(out.len));
-        os.close();
-        if (os) {
+        const dstd::Path path =
+            dir.view() / ("run_" + dstd::to_string(runs_.size()) + ".bin");
+        const dstd::StringView blob(static_cast<const char*>(out.data),
+                                    static_cast<std::size_t>(out.len));
+        if (dstd::fs::write_file(path, blob)) {
+            dir_->charge(out.len);
             runs_.push_back(path);
             written = true;
         }
@@ -148,22 +151,21 @@ void StateAccum::adopt_runs(StateAccum& other) {
     // them over along with the in-memory half; the worker's temp directory has
     // to outlive the worker, hence the shared handle.
     if (other.dir_) adopted_dirs_.push_back(other.dir_);
-    for (std::string& r : other.runs_) runs_.push_back(std::move(r));
+    for (dstd::Path& r : other.runs_) runs_.push_back(std::move(r));
     other.runs_.clear();
 }
 
 void StateAccum::drain_runs() {
     if (!state_ || runs_.empty() || !reg_->desc.deserialize) return;
-    for (const std::string& path : runs_) {
-        std::ifstream is(path, std::ios::binary);
-        std::string buf((std::istreambuf_iterator<char>(is)),
-                        std::istreambuf_iterator<char>());
-        if (!is && !is.eof()) {
+    for (const dstd::Path& path : runs_) {
+        const auto read = dstd::fs::read_file(path.view());
+        if (!read) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Plugin state '%s' could not read run '%s'", reg_->name.c_str(),
                 path.c_str());
             continue;
         }
+        const dstd::String& buf = *read;
         ::dftu_bytes in{buf.data(), static_cast<std::uint64_t>(buf.size()),
                         nullptr, nullptr};
         ::dftu_error err{};
@@ -194,7 +196,7 @@ bool StateAccum::finalize(::dftu_result_value* out) {
 }
 
 void PluginFold::states_update(const ::dftu_dataframe* df) {
-    for (std::unique_ptr<StateAccum>& s : state_accums_) s->update(df);
+    for (dstd::UniquePtr<StateAccum>& s : state_accums_) s->update(df);
 }
 
 void PluginFold::states_merge(PluginFold& other) {
@@ -205,7 +207,7 @@ void PluginFold::states_merge(PluginFold& other) {
 }
 
 void PluginFold::states_finalize() {
-    for (std::unique_ptr<StateAccum>& s : state_accums_) {
+    for (dstd::UniquePtr<StateAccum>& s : state_accums_) {
         ::dftu_result_value v{};
         if (s->finalize(&v)) result_emit(s->name().c_str(), &v);
     }
@@ -213,14 +215,14 @@ void PluginFold::states_finalize() {
 
 std::size_t PluginFold::state_spill_runs(const char* name) const {
     if (!name) return 0;
-    for (const std::unique_ptr<StateAccum>& s : state_accums_)
+    for (const dstd::UniquePtr<StateAccum>& s : state_accums_)
         if (s->name() == name) return s->runs();
     return 0;
 }
 
 bool PluginFold::state_spill_refused(const char* name) const {
     if (!name) return false;
-    for (const std::unique_ptr<StateAccum>& s : state_accums_)
+    for (const dstd::UniquePtr<StateAccum>& s : state_accums_)
         if (s->name() == name) return s->spill_refused();
     return false;
 }

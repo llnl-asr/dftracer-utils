@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Example plugins built as loadable modules against the public plugin ABI only
 # (the include/ headers); they deliberately link none of the internal libraries,
 # so a broken build here is real ABI rot in abi.h / plugin.h.

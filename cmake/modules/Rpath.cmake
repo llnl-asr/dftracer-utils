@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 macro(add_rpath)
   set(CMAKE_SKIP_BUILD_RPATH OFF)
   set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)

@@ -1,14 +1,21 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 
-#include <map>
-#include <set>
-#include <string>
-#include <vector>
-
-#include "test_view_common.h"
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
 
 namespace {
 
@@ -21,29 +28,32 @@ const char* op_of(int i) {
 
 // NDJSON records of no trace format: `op` cycles read/write/close, `lat` is
 // i % 50, `io.off` is i * 4096 and `name` cycles x0..x4.
-std::string write_ndjson(TestEnvironment& env, const std::string& name) {
-    const std::string plain = env.get_dir() + "/" + name + ".ndjson";
+dstd::String write_ndjson(TestEnvironment& env, const dstd::String& name) {
+    const dstd::String plain = env.dir() + "/" + name + ".ndjson";
     {
-        std::ofstream out(plain);
+        dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i)
             out << R"({"op":")" << op_of(i) << R"(","host":"n)" << i % 4
                 << R"(","t":)" << 1000 + i * 10 << R"(,"lat":)" << i % 50
                 << R"(,"io":{"off":)" << static_cast<std::int64_t>(i) * 4096
                 << R"(},"name":"x)" << i % 5 << R"("})" << "\n";
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    fs::remove(plain);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    (void)dstd::fs::remove(plain);
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
+        .build();
     return gz;
 }
 
-View view_of(const std::string& gz) {
-    return View::from_file(gz, determine_index_path(gz, ""));
+View view_of(const dstd::String& gz) {
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-std::set<std::string> names_of(const dataframe::DataFrame& df) {
+dstd::Set<dstd::String> names_of(const dataframe::DataFrame& df) {
     return {df.names.begin(), df.names.end()};
 }
 
@@ -53,8 +63,8 @@ TEST_SUITE("GenericView") {
     TEST_CASE("rows are named by path and filter on paths") {
         TestEnvironment env(10);
         const auto gz = write_ndjson(env, "g");
-        const std::set<std::string> paths{"host", "io.off", "lat",
-                                          "name", "op",     "t"};
+        const dstd::Set<dstd::String> paths{"host", "io.off", "lat",
+                                            "name", "op",     "t"};
 
         auto all = view_of(gz).collect().get();
         CHECK(all.num_rows() == RECORDS);
@@ -71,8 +81,9 @@ TEST_SUITE("GenericView") {
             view_of(gz).duql("io.off > 12000000").collect().get().num_rows() ==
             deep);
 
-        std::set<std::string> schema;
-        for (const auto& c : view_of(gz).column_info()) schema.insert(c.name);
+        dstd::Set<dstd::String> schema;
+        for (const auto& c : view_of(gz).column_info())
+            schema.insert(dstd::String(c.name));
         CHECK(schema == paths);
     }
 
@@ -81,7 +92,7 @@ TEST_SUITE("GenericView") {
         const auto gz = write_ndjson(env, "s");
         auto sel =
             run(view_of(gz).select({"op", "lat", "io.off"}).lazy().collect());
-        CHECK(sel.names == std::vector<std::string>{"op", "lat", "io.off"});
+        CHECK(sel.names == dstd::Vector<dstd::String>{"op", "lat", "io.off"});
         CHECK(sel.num_rows() == RECORDS);
 
         auto top = run(view_of(gz).topk("lat", 3).lazy().collect());
@@ -97,7 +108,7 @@ TEST_SUITE("GenericView") {
     TEST_CASE("group_by and aggregates read paths") {
         TestEnvironment env(10);
         const auto gz = write_ndjson(env, "a");
-        std::map<std::string, double> sum;
+        dstd::Map<dstd::String, double> sum;
         for (int i = 0; i < RECORDS; ++i) sum[op_of(i)] += i % 50;
 
         for (bool streamed : {false, true}) {
@@ -111,7 +122,7 @@ TEST_SUITE("GenericView") {
             REQUIRE(df.num_rows() == 3);
             double total = 0;
             for (std::int64_t r = 0; r < 3; ++r) {
-                const std::string op = bstr(df, r, "op");
+                const dstd::String op = bstr(df, r, "op");
                 CAPTURE(op);
                 CHECK(bnum(df, r, "s") == sum[op]);
                 total += bnum(df, r, "n");
@@ -132,12 +143,12 @@ TEST_SUITE("GenericView") {
     TEST_CASE("trace operations need roles the schema binds") {
         TestEnvironment env(10);
         const auto gz = write_ndjson(env, "r");
-        auto fails_with = [](auto&& fn, const std::string& text) {
+        auto fails_with = [](auto&& fn, const dstd::String& text) {
             try {
                 fn();
             } catch (const std::exception& e) {
                 CAPTURE(e.what());
-                CHECK(std::string(e.what()).find(text) != std::string::npos);
+                CHECK(dstd::String(e.what()).find(text) != dstd::String::npos);
                 return;
             }
             FAIL("no error");
@@ -158,69 +169,79 @@ TEST_SUITE("GenericView") {
         TestEnvironment env(10);
         const auto gz = write_ndjson(env, "m");
         const auto dft = create_mixed_trace(env, 5, 5);
-        dftracer::utils::index::Indexer::open({dft}).build();
-        View v = View::from_files({{gz, determine_index_path(gz, "")},
-                                   {dft, determine_index_path(dft, "")}});
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(dft))})
+            .build();
+        View v = View::from_files(
+            {{dstd::String(gz),
+              dstd::String(dstd::String(determine_index_path(gz, "")))},
+             {dstd::String(dft),
+              dstd::String(dstd::String(determine_index_path(dft, "")))}});
         try {
             v.collect().get();
             FAIL("no error");
         } catch (const std::exception& e) {
-            const std::string what = e.what();
+            const dstd::String what = e.what();
             CAPTURE(what);
-            CHECK(what.find("dftracer") != std::string::npos);
-            CHECK(what.find("generic") != std::string::npos);
+            CHECK(what.find("dftracer") != dstd::String::npos);
+            CHECK(what.find("generic") != dstd::String::npos);
         }
     }
 
     TEST_CASE("from_directory finds JSON lines files") {
         TestEnvironment env(10);
         write_ndjson(env, "d");
-        View v = run(View::from_directory(env.get_dir()));
+        View v = run(View::from_directory(dstd::String(env.dir())));
         CHECK(v.collect().get().num_rows() == RECORDS);
     }
 
     TEST_CASE("files without records take no vote") {
         TestEnvironment env(10);
         const auto dft = create_mixed_trace(env, 5, 5);
-        const auto dir = fs::path(dft).parent_path();
-        std::ofstream(dir / "rank_1.pfw.gz");
+        const dstd::Path dir(dstd::PathView(dft).parent().str());
+        dftu_utils_test::FileOut(dir / "rank_1.pfw.gz");
         {
-            const auto meta = (dir / "rank_2.pfw").string();
-            std::ofstream(meta)
+            const dstd::String meta((dir / "rank_2.pfw").str());
+            dftu_utils_test::FileOut(meta)
                 << R"({"name":"HH","cat":"dftracer","pid":2,"tid":2,)"
                    R"("ph":"M","args":{"name":"host","value":"h1"}})"
                 << "\n";
             REQUIRE(dftu_utils_test::compress_file_to_gzip(meta, meta + ".gz"));
-            fs::remove(meta);
+            (void)dstd::fs::remove(meta);
         }
         // Unindexed, then indexed with each file's own detection.
         auto rows = [&] {
-            return run(View::from_directory(dir.string()))
+            return run(View::from_directory(
+                           dstd::String(dstd::String(dir.str()))))
                 .collect()
                 .get()
                 .num_rows();
         };
         CHECK(rows() == 10);
-        dftracer::utils::index::Indexer::open({dir.string()}).build();
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(dstd::String(dir.str())))})
+            .build();
         CHECK(rows() == 10);
 
         TestEnvironment empty_env(10);
-        std::ofstream(empty_env.get_dir() + "/a.pfw.gz");
-        std::ofstream(empty_env.get_dir() + "/b.pfw.gz");
-        View empty = run(View::from_directory(empty_env.get_dir()));
+        dftu_utils_test::FileOut(empty_env.dir() + "/a.pfw.gz");
+        dftu_utils_test::FileOut(empty_env.dir() + "/b.pfw.gz");
+        View empty = run(View::from_directory(dstd::String(empty_env.dir())));
         CHECK(empty.collect().get().num_rows() == 0);
     }
 
-    TEST_CASE("from_directory reads plain files as an error, not as empty") {
+    TEST_CASE(
+        "from_directory reads a non-gzip .gz file as an error, not as empty") {
         TestEnvironment env(10);
-        std::ofstream(env.get_dir() + "/plain.jsonl") << R"({"k":1})" << "\n";
+        dftu_utils_test::FileOut(env.dir() + "/plain.jsonl.gz")
+            << R"({"k":1})" << "\n";
         try {
-            run(View::from_directory(env.get_dir())).collect().get();
+            run(View::from_directory(dstd::String(env.dir()))).collect().get();
             FAIL("no error");
         } catch (const std::exception& e) {
             CAPTURE(e.what());
-            CHECK(std::string(e.what()).find("Not a gzip trace") !=
-                  std::string::npos);
+            CHECK(dstd::String(e.what()).find("plain.jsonl.gz is not gzip") !=
+                  dstd::String::npos);
         }
     }
 }

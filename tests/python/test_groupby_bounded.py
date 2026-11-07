@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Many-group aggregation over long string keys: the results do not depend on how the rows are
 streamed into the groups (blocks of rows, column batches)."""
 

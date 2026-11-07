@@ -1,10 +1,12 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <set>
-#include <string>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::index::extensions;
 
@@ -15,7 +17,7 @@ TEST_SUITE("BloomFilter") {
         SUBCASE("Empty filter contains nothing") {
             CHECK_FALSE(bf.possibly_contains("hello"));
             CHECK_FALSE(bf.possibly_contains("world"));
-            CHECK(bf.num_entries() == 0);
+            CHECK(bf.entry_count() == 0);
         }
 
         SUBCASE("Added elements are found (no false negatives)") {
@@ -28,13 +30,13 @@ TEST_SUITE("BloomFilter") {
             CHECK(bf.possibly_contains("world"));
             CHECK(bf.possibly_contains("foo"));
             CHECK(bf.possibly_contains("bar"));
-            CHECK(bf.num_entries() == 4);
+            CHECK(bf.entry_count() == 4);
         }
 
         SUBCASE("Single entry") {
             bf.add("only_one");
             CHECK(bf.possibly_contains("only_one"));
-            CHECK(bf.num_entries() == 1);
+            CHECK(bf.entry_count() == 1);
         }
     }
 
@@ -44,19 +46,19 @@ TEST_SUITE("BloomFilter") {
 
         // Insert N elements
         for (std::size_t i = 0; i < N; ++i) {
-            bf.add("item_" + std::to_string(i));
+            bf.add("item_" + dstd::to_string(i));
         }
 
         // Verify no false negatives
         for (std::size_t i = 0; i < N; ++i) {
-            REQUIRE(bf.possibly_contains("item_" + std::to_string(i)));
+            REQUIRE(bf.possibly_contains("item_" + dstd::to_string(i)));
         }
 
         // Check false positive rate with elements we didn't add
         std::size_t false_positives = 0;
         const std::size_t test_count = 10000;
         for (std::size_t i = 0; i < test_count; ++i) {
-            if (bf.possibly_contains("absent_" + std::to_string(i))) {
+            if (bf.possibly_contains("absent_" + dstd::to_string(i))) {
                 false_positives++;
             }
         }
@@ -82,9 +84,9 @@ TEST_SUITE("BloomFilter") {
         CHECK(bf2.possibly_contains("alpha"));
         CHECK(bf2.possibly_contains("beta"));
         CHECK(bf2.possibly_contains("gamma"));
-        CHECK(bf2.num_entries() == 3);
-        CHECK(bf2.num_hash_functions() == bf.num_hash_functions());
-        CHECK(bf2.num_bits() == bf.num_bits());
+        CHECK(bf2.entry_count() == 3);
+        CHECK(bf2.hash_function_count() == bf.hash_function_count());
+        CHECK(bf2.bit_count() == bf.bit_count());
     }
 
     TEST_CASE("BloomFilter - Merge correctness") {
@@ -106,21 +108,21 @@ TEST_SUITE("BloomFilter") {
         CHECK(a.possibly_contains("x3"));
         CHECK(a.possibly_contains("y1"));
         CHECK(a.possibly_contains("y2"));
-        CHECK(a.num_entries() == 5);
+        CHECK(a.entry_count() == 5);
     }
 
     TEST_CASE("BloomFilter - Size parameters") {
         SUBCASE("Default parameters") {
             BloomFilter bf;
-            CHECK(bf.num_bits() > 0);
+            CHECK(bf.bit_count() > 0);
             CHECK(bf.size_bytes() > 0);
-            CHECK(bf.num_hash_functions() > 0);
+            CHECK(bf.hash_function_count() > 0);
         }
 
         SUBCASE("Custom parameters") {
             BloomFilter bf(2048, 0.001);
-            CHECK(bf.num_bits() > 0);
-            CHECK(bf.num_hash_functions() > 0);
+            CHECK(bf.bit_count() > 0);
+            CHECK(bf.hash_function_count() > 0);
         }
     }
 

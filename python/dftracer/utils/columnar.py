@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The unified expression DSL: one ``F`` for both column values and row filters.
 
 ``F.dur`` (or ``col("dur")`` / ``F("args.level")``) is an :class:`Expr` leaf.
@@ -57,7 +58,7 @@ from .series import (
 )
 
 if TYPE_CHECKING:
-    import pyarrow as pa  # ty: ignore[unresolved-import]
+    import pyarrow as pa  # ty: ignore[import-not-found]
 
     from ._expr_ops import ColumnOp
     from .lazyframe import LazyFrame, LazyGroupBy

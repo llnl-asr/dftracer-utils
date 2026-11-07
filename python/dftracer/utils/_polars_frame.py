@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The polars frame spellings that the pandas surface does not already
 cover, each a thin name over an engine op or an Arrow export: the
 horizontal reductions, the stacks, `partition_by`, `gather_every`,
@@ -242,14 +243,14 @@ class _FramePolarsMixin:
     # -- writers, through pyarrow -------------------------------------------------
     def write_parquet(self, path: str, **kwargs: object) -> None:
         pa = _require_pyarrow()
-        import pyarrow.parquet as pq  # ty: ignore[unresolved-import]
+        import pyarrow.parquet as pq  # ty: ignore[import-not-found]
 
         pq.write_table(self._frame()._arrow_for_parquet(), path, **kwargs)  # type: ignore[arg-type]
         del pa
 
     def write_csv(self, path: str, **kwargs: object) -> None:
         _require_pyarrow()
-        import pyarrow.csv as pcsv  # ty: ignore[unresolved-import]
+        import pyarrow.csv as pcsv  # ty: ignore[import-not-found]
 
         pcsv.write_csv(self._frame().to_arrow(), path, **kwargs)  # type: ignore[arg-type]
 

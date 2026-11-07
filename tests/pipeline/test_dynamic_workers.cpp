@@ -1,10 +1,13 @@
+// SPDX-License-Identifier: MIT
 // Phase-1 mechanism test for the elastic runtime: add_worker/retire_worker on
 // ThreadPoolExecutor must be safe under a live stream of work - no stranded
 // task, no crash, no UB. Run under the asan/tsan presets for the real value:
 // worker churn while the shared run queue is being drained.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/pipeline/thread_pool_executor.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -108,6 +111,35 @@ TEST_SUITE("DynamicWorkers") {
         CHECK(exec->live_workers() == 4);
     }
 
+    TEST_CASE("nested blocking regions keep every permit") {
+        Runtime rt(ExecutorConfig{.thread_count = 2}, false);
+        auto nested = []() -> coro::CoroTask<void> {
+            {
+                coro::BlockingRegion outer;
+                coro::BlockingRegion inner;
+            }
+            co_return;
+        };
+        for (int round = 0; round < 4; ++round) rt.block_on(nested());
+
+        // A lost permit leaves room for one task at a time.
+        std::atomic<int> arrived{0};
+        auto meet = [](std::atomic<int>& count) -> coro::CoroTask<bool> {
+            count.fetch_add(1, std::memory_order_acq_rel);
+            const auto limit =
+                std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (count.load(std::memory_order_acquire) < 2 &&
+                   std::chrono::steady_clock::now() < limit) {
+                std::this_thread::yield();
+            }
+            co_return count.load(std::memory_order_acquire) >= 2;
+        };
+        auto first = rt.submit(meet(arrived));
+        auto second = rt.submit(meet(arrived));
+        CHECK(first.get());
+        CHECK(second.get());
+    }
+
     TEST_CASE("retire while idle (parked worker observes retire)") {
         Runtime rt(4);
         auto* exec = static_cast<ThreadPoolExecutor*>(rt.executor());
@@ -121,7 +153,7 @@ TEST_SUITE("DynamicWorkers") {
 
     TEST_CASE("elastic pool grows under load and shrinks when idle") {
         // Floor 1, cap 4: starts small (HPC politeness), grows on demand.
-        Runtime rt(ExecutorConfig{.num_threads = 4, .min_workers = 1});
+        Runtime rt(ExecutorConfig{.thread_count = 4, .min_workers = 1});
         auto* exec = static_cast<ThreadPoolExecutor*>(rt.executor());
         REQUIRE(exec->live_workers() == 1);  // starts at the floor
 
@@ -144,7 +176,7 @@ TEST_SUITE("DynamicWorkers") {
         // A long keep-alive holds grown workers parked-and-ready across idle
         // gaps instead of retiring them, for near-eager latency.
         Runtime rt(
-            ExecutorConfig{.num_threads = 4,
+            ExecutorConfig{.thread_count = 4,
                            .min_workers = 1,
                            .elastic_keepalive = std::chrono::seconds(30)});
         auto* exec = static_cast<ThreadPoolExecutor*>(rt.executor());

@@ -1,13 +1,12 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PYTHON_SERIES_DETAIL_H
 #define DFTRACER_UTILS_PYTHON_SERIES_DETAIL_H
 
 #include <Python.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
-
-#include <string>
 
 // Private seam shared by the Series extension translation units (series.cpp
 // plus series/{arith,math,window,stats,reduce,string,arrow}.cpp). series.cpp
@@ -15,8 +14,6 @@
 // family TU calls them and defines the method bodies referenced by the
 // PyMethodDef table back in series.cpp.
 namespace dftracer::utils::python::series_detail {
-
-namespace dataframe = dftracer::utils::dataframe;
 
 using dataframe::Series;
 using dataframe::TypeId;
@@ -60,7 +57,7 @@ PyObject* series_reduce_scalar(PyObject* self, PyObject*) {
     if (!a) return nullptr;
     try {
         return scalar_to_py((a->*Method)());
-    } catch (const dftracer::utils::DFTUtilsException& e) {
+    } catch (const dftracer::utils::common::DFTUtilsException& e) {
         PyErr_SetString(PyExc_TypeError, e.what());
         return nullptr;
     }
@@ -71,7 +68,7 @@ PyObject* series_reduce_f64(PyObject* self, PyObject*) {
     if (!a) return nullptr;
     try {
         return PyFloat_FromDouble((a->*Method)());
-    } catch (const dftracer::utils::DFTUtilsException& e) {
+    } catch (const dftracer::utils::common::DFTUtilsException& e) {
         PyErr_SetString(PyExc_TypeError, e.what());
         return nullptr;
     }
@@ -223,8 +220,8 @@ PyObject* vec_from_list(PyObject* self, PyObject* args);
 // `s` (or its materialization) read as `type` with the given parameters,
 // sharing its buffers; an invalid Series when the widths differ.
 Series retype_series(const Series& s, TypeId type, dataframe::TimeUnit unit,
-                     const std::string& zone, int precision, int scale,
-                     int width);
+                     const dftracer::utils::dstd::String& zone, int precision,
+                     int scale, int width);
 PyObject* Series_physical(PyObject* self, PyObject*);
 PyObject* Series_get_nbytes(PyObject* self, void*);
 PyObject* Series_to_bytes(PyObject* self, PyObject*);

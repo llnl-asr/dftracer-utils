@@ -126,9 +126,10 @@ re-reading or re-parsing anything.
 Why the parsed event, not raw bytes, is what is shared
 ------------------------------------------------------------
 
-The scan hands each branch the already-parsed event (and, where useful, the
-raw JSON bytes for verbatim passthrough) rather than making every branch
-re-parse the JSON itself. Parsing is not free at trace scale, and it is the
+The scan hands each branch the event, parsed once and read on demand, so a
+branch decodes only the fields it asks for (and, where useful, the raw JSON
+bytes for verbatim passthrough), rather than making every branch re-parse the
+JSON itself. Parsing is not free at trace scale, and it is the
 part of the per-event cost that is identical no matter which analytic is
 looking at the event - so it is the part that is done once and shared, while
 each branch's own accumulation logic (which fields it reads, what it keeps)

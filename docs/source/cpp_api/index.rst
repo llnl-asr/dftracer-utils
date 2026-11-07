@@ -11,7 +11,7 @@ stable C ABI, see :doc:`../c_api/index`.
 Architecture
 ------------
 
-The five layered libraries and how they build on one another. ``core`` is the
+The five layered libraries and how they build on one another. ``runtime`` is the
 foundation; each arrow points to the library built on top, up to the top domain
 layer that composes all below it.
 
@@ -23,8 +23,7 @@ layer that composes all below it.
 
    runtime
    coro
-   io
-   task_graph
+   store
 
 .. toctree::
    :maxdepth: 1
@@ -32,13 +31,11 @@ layer that composes all below it.
 
    dataframe
    duql
-   arrow
 
 .. toctree::
    :maxdepth: 1
    :caption: Traces
 
-   reader
    indexer
    trace
 
@@ -47,5 +44,4 @@ layer that composes all below it.
    :caption: Extending and serving
 
    plugins
-   server
    utilities

@@ -1,29 +1,33 @@
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/file_decompressor_utility.h>
-#include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/host_ops.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #endif
 
 #include <cstdint>
 #include <mutex>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::utilities {
 namespace {
 
 using dataframe::Series;
 
-std::string to_string(const char* p, std::int32_t n) {
-    return (p && n > 0) ? std::string(p, static_cast<std::size_t>(n))
-                        : std::string();
+dstd::String to_string(const char* p, std::int32_t n) {
+    return (p && n > 0) ? dstd::String(p, static_cast<std::size_t>(n))
+                        : dstd::String();
 }
 
 // The utilities are coroutines; a registry op is synchronous. Drive one to
@@ -32,61 +36,72 @@ std::string to_string(const char* p, std::int32_t n) {
 template <class Fn>
 bool run_sync(const char* name, Fn body) {
     try {
-        default_runtime().run_blocking(name, std::move(body));
+        default_runtime().block_on(
+            coro::named(name, coro::with_scope(std::move(body))));
         return true;
     } catch (const std::exception&) {
         return false;
     }
 }
 
-dftu_series* paths_column(const std::vector<filesystem::FileEntry>& entries,
-                          bool files_only) {
-    std::vector<std::string> paths;
-    paths.reserve(entries.size());
-    for (const filesystem::FileEntry& e : entries) {
-        if (files_only && !e.is_regular_file) continue;
-        paths.push_back(e.path.string());
-    }
-    return Series::strings(paths).release();
+dftu_series* paths_column(const dstd::Vector<dstd::Path>& paths) {
+    dstd::Vector<dstd::StringView> views;
+    views.reserve(paths.size());
+    for (const dstd::Path& path : paths) views.emplace_back(path.str());
+    return Series::strings(views).release();
 }
 
-dftu_series* scan_dir(const char* root, std::int32_t root_len) {
-    filesystem::DirectoryScannerUtilityInput input{
-        fs::path(to_string(root, root_len))};
-    std::vector<filesystem::FileEntry> entries;
-    if (!run_sync("dftu.fs.scan_dir",
-                  [&](CoroScope& scope) -> coro::CoroTask<void> {
-                      filesystem::DirectoryScannerUtility scanner;
-                      entries = co_await scanner(scope, input);
-                  })) {
+dftu_series* scan_dir(const char* root, std::int32_t root_size) {
+    const dstd::String dir = to_string(root, root_size);
+    dstd::Vector<dstd::Path> paths;
+    if (!run_sync(
+            "dftu.fs.scan_dir", [&](coro::Scope&) -> coro::CoroTask<void> {
+                auto listing_task = runtime::fs::list_dir(dstd::PathView(dir));
+                auto listing = co_await std::move(listing_task);
+                if (!listing) throw common::DFTUtilsException(listing.error());
+                for (auto& entry : *listing)
+                    paths.push_back(std::move(entry.path));
+            })) {
         return nullptr;
     }
-    return paths_column(entries, false);
+    return paths_column(paths);
 }
 
-dftu_series* scan_dir_pattern(const char* root, std::int32_t root_len,
-                              const char* pattern, std::int32_t pattern_len) {
-    filesystem::PatternDirectoryScannerUtilityInput input(
-        to_string(root, root_len), {to_string(pattern, pattern_len)});
-    std::vector<filesystem::FileEntry> entries;
+dftu_series* scan_dir_pattern(const char* root, std::int32_t root_size,
+                              const char* pattern, std::int32_t pattern_size) {
+    const dstd::String dir = to_string(root, root_size);
+    runtime::fs::FindOptions options;
+    options.recursive = false;
+    options.with_stat = false;
+    dstd::String name = to_string(pattern, pattern_size);
+    if (!name.empty()) {
+        if (name.front() == '.') name.insert(0, 1, '*');
+        options.patterns.push_back(std::move(name));
+    }
+    dstd::Vector<dstd::Path> paths;
     if (!run_sync("dftu.fs.scan_dir_pattern",
-                  [&](CoroScope& scope) -> coro::CoroTask<void> {
-                      filesystem::PatternDirectoryScannerUtility scanner;
-                      entries = co_await scanner(scope, input);
+                  [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                      auto found_task = runtime::fs::find_all(
+                          scope, dstd::PathView(dir), options);
+                      auto found = co_await std::move(found_task);
+                      if (!found)
+                          throw common::DFTUtilsException(found.error());
+                      for (auto& file : *found)
+                          paths.push_back(std::move(file.path));
                   })) {
         return nullptr;
     }
-    return paths_column(entries, true);
+    return paths_column(paths);
 }
 
-std::int32_t compress(const char* in, std::int32_t in_len, const char* out,
-                      std::int32_t out_len) {
+std::int32_t compress(const char* in, std::int32_t in_size, const char* out,
+                      std::int32_t out_size) {
     fileio::FileCompressionUtilityInput input =
-        fileio::FileCompressionUtilityInput::from_file(to_string(in, in_len))
-            .with_output(to_string(out, out_len));
+        fileio::FileCompressionUtilityInput::from_file(to_string(in, in_size))
+            .with_output(to_string(out, out_size));
     bool ok = false;
     if (!run_sync("dftu.file.compress",
-                  [&](CoroScope&) -> coro::CoroTask<void> {
+                  [&](coro::Scope&) -> coro::CoroTask<void> {
                       fileio::FileCompressorUtility compressor;
                       ok = (co_await compressor(input)).has_value();
                   })) {
@@ -95,14 +110,14 @@ std::int32_t compress(const char* in, std::int32_t in_len, const char* out,
     return ok ? 1 : 0;
 }
 
-std::int32_t decompress(const char* in, std::int32_t in_len, const char* out,
-                        std::int32_t out_len) {
+std::int32_t decompress(const char* in, std::int32_t in_size, const char* out,
+                        std::int32_t out_size) {
     fileio::FileDecompressionUtilityInput input =
-        fileio::FileDecompressionUtilityInput::from_file(to_string(in, in_len))
-            .with_output(to_string(out, out_len));
+        fileio::FileDecompressionUtilityInput::from_file(to_string(in, in_size))
+            .with_output(to_string(out, out_size));
     bool ok = false;
     if (!run_sync("dftu.file.decompress",
-                  [&](CoroScope&) -> coro::CoroTask<void> {
+                  [&](coro::Scope&) -> coro::CoroTask<void> {
                       fileio::FileDecompressorUtility decompressor;
                       ok = (co_await decompressor(input)).has_value();
                   })) {
@@ -112,8 +127,8 @@ std::int32_t decompress(const char* in, std::int32_t in_len, const char* out,
 }
 
 dftu_series* line_filter(const dftu_series* lines, const char* needle,
-                         std::int32_t needle_len) {
-    dftu_series* mask = dftu_series_str_contains(lines, needle, needle_len);
+                         std::int32_t needle_size) {
+    dftu_series* mask = dftu_series_str_contains(lines, needle, needle_size);
     if (!mask) return nullptr;
     dftu_series* selected = dftu_series_filter(lines, mask);
     dftu_series_free(mask);

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Emit llms.txt and llms-full.txt at the end of an HTML build.
 
 ``llms.txt`` is a nested map linking to the rendered pages; ``llms-full.txt``

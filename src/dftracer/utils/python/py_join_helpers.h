@@ -1,13 +1,14 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PYTHON_PY_JOIN_HELPERS_H
 #define DFTRACER_UTILS_PYTHON_PY_JOIN_HELPERS_H
 
 #include <Python.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/py_seq_helpers.h>
 
 #include <cstring>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::python {
 
@@ -49,10 +50,10 @@ inline bool join_how_from_str(const char* how, dataframe::JoinHow& out) {
 /// (a str or sequence) names both sides, else `left_on` / `right_on` (each a
 /// str or sequence) name each side. A cross join takes none. Returns false
 /// with a Python error set when the combination is invalid.
-inline bool join_keys_from_objs(PyObject* on, PyObject* left_on,
-                                PyObject* right_on, dataframe::JoinHow how,
-                                std::vector<std::string>& l,
-                                std::vector<std::string>& r) {
+inline bool join_keys_from_objs(
+    PyObject* on, PyObject* left_on, PyObject* right_on, dataframe::JoinHow how,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& l,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& r) {
     auto is_set = [](PyObject* o) { return o && o != Py_None; };
     if (how == dataframe::JoinHow::Cross) {
         if (is_set(on) || is_set(left_on) || is_set(right_on)) {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Compound clock form for durations >= 1 minute: the two most significant
 // units among d/h/m/s (e.g. 400000s -> "4d15h", 3661s -> "1h1m", 90s -> "1m30s").
 export function formatClock(us: number): string {

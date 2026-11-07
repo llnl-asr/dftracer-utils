@@ -1,13 +1,15 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/utilities/reader/internal/trace_reader_prefilter.h>
 #include <simdjson.h>
 
 #include <cstring>
-#include <optional>
-#include <string>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -19,18 +21,18 @@ namespace {
 // evaluator does, top level first and then under "args"; "args.<key>" reads
 // args only. Other dotted paths may name a nested object or a flat dotted
 // key, so they are left to the full evaluator (returns false).
-bool compile_eq_leaf(const duql::CompareNode& n, CompiledEqProbe& out) {
-    if (n.op != duql::CompareOp::EQ) return false;
-    const std::string& path = n.field.path;
+bool compile_eq_leaf(const duql::detail::CompareNode& n, CompiledEqProbe& out) {
+    if (n.op != duql::CompareOp::Eq) return false;
+    const dstd::String& path = n.field.path;
     const auto dot = path.find('.');
-    if (dot == std::string::npos) {
-        out.top_key = path;
+    if (dot == dstd::String::npos) {
+        out.top_key.assign(path);
         out.nested_key.clear();
         out.args_fallback = true;
     } else if (path.compare(0, dot, "args") == 0 &&
-               path.find('.', dot + 1) == std::string::npos) {
+               path.find('.', dot + 1) == dstd::String::npos) {
         out.top_key = "args";
-        out.nested_key = path.substr(dot + 1);
+        out.nested_key.assign(dstd::StringView(path).substr(dot + 1));
         out.args_fallback = false;
     } else {
         return false;
@@ -38,9 +40,9 @@ bool compile_eq_leaf(const duql::CompareNode& n, CompiledEqProbe& out) {
     return std::visit(
         [&out](auto&& v) -> bool {
             using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::string>) {
+            if constexpr (std::is_same_v<T, dstd::String>) {
                 out.kind = CompiledEqProbe::Kind::String;
-                out.s_val = v;
+                out.s_val.assign(v);
                 return true;
             } else if constexpr (std::is_same_v<T, std::int64_t>) {
                 out.kind = CompiledEqProbe::Kind::Int64;
@@ -69,9 +71,9 @@ bool probe_matches_value(const CompiledEqProbe& p,
                          simdjson::ondemand::value val) {
     switch (p.kind) {
         case CompiledEqProbe::Kind::String: {
-            auto r = val.get_string();
-            if (r.error()) return false;
-            auto sv = r.value_unsafe();
+            const auto r = json::detail::get_string_or_raw(val);
+            if (!r) return false;
+            const auto sv = *r;
             return sv.size() == p.s_val.size() &&
                    std::memcmp(sv.data(), p.s_val.data(), sv.size()) == 0;
         }
@@ -105,9 +107,8 @@ bool probe_matches_value(const CompiledEqProbe& p,
             return n.get_double() == static_cast<double>(p.u64_val);
         }
         case CompiledEqProbe::Kind::Double: {
-            auto r = val.get_double();
-            if (r.error()) return false;
-            return r.value_unsafe() == p.d_val;
+            const auto r = json::detail::get_double_or_refused(val);
+            return r && *r == p.d_val;
         }
         case CompiledEqProbe::Kind::Bool: {
             auto r = val.get_bool();
@@ -122,44 +123,55 @@ bool probe_matches_value(const CompiledEqProbe& p,
 
 // Try to compile the query AST as an AND of EQ leaves. nullopt on
 // unsupported shapes; the ValueMap path handles those.
-std::optional<std::vector<CompiledEqProbe>> try_compile_eq_probes(
-    const duql::QueryNode& node) {
+dstd::Optional<dstd::Vector<CompiledEqProbe>> try_compile_eq_probes(
+    const duql::detail::QueryNode& node) {
     using namespace duql;
     return std::visit(
-        [&](const auto& n) -> std::optional<std::vector<CompiledEqProbe>> {
+        [&](const auto& n) -> dstd::Optional<dstd::Vector<CompiledEqProbe>> {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, CompareNode>) {
+            if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
                 CompiledEqProbe p;
-                if (n.field.any || !compile_eq_leaf(n, p)) return std::nullopt;
-                return std::vector<CompiledEqProbe>{std::move(p)};
-            } else if constexpr (std::is_same_v<T, AndNode>) {
+                if (n.field.any || !compile_eq_leaf(n, p)) return dstd::nullopt;
+                return dstd::Vector<CompiledEqProbe>{std::move(p)};
+            } else if constexpr (std::is_same_v<T, duql::detail::AndNode>) {
                 auto l = try_compile_eq_probes(*n.left);
-                if (!l) return std::nullopt;
+                if (!l) return dstd::nullopt;
                 auto r = try_compile_eq_probes(*n.right);
-                if (!r) return std::nullopt;
+                if (!r) return dstd::nullopt;
                 l->insert(l->end(), std::make_move_iterator(r->begin()),
                           std::make_move_iterator(r->end()));
                 return l;
             } else {
-                return std::nullopt;
+                return dstd::nullopt;
             }
         },
         node.data);
 }
 
 // Evaluate compiled AND-of-EQ probes by directly probing simdjson fields.
-bool eval_compiled_eq(const std::vector<CompiledEqProbe>& probes,
-                      simdjson::ondemand::document_reference doc) {
+bool eval_compiled_eq(const dstd::Vector<CompiledEqProbe>& probes,
+                      simdjson::ondemand::document_reference doc,
+                      bool& broken) {
     // The value of `key` in `obj`: nullopt when absent, an empty value when
     // it is null.
-    using Found = std::optional<std::optional<simdjson::ondemand::value>>;
-    auto field = [](auto&& obj, const std::string& key) -> Found {
-        auto r = obj.find_field_unordered(std::string_view(key));
-        if (r.error()) return std::nullopt;
+    // A syntax error leaves the iterator unusable and drops the line; no
+    // rewind follows it.
+    bool& bad = broken;
+    bad = false;
+    using Found = dstd::Optional<dstd::Optional<simdjson::ondemand::value>>;
+    auto field = [&bad](auto&& obj, const dstd::String& key) -> Found {
+        auto r = obj.find_field_unordered(dstd::StringView(key));
+        if (r.error()) {
+            bad = r.error() != simdjson::NO_SUCH_FIELD;
+            return dstd::nullopt;
+        }
         simdjson::ondemand::value v = r.value_unsafe();
         bool null = false;
-        if (v.is_null().get(null) != simdjson::SUCCESS || null)
-            return Found{std::in_place};
+        if (v.is_null().get(null) != simdjson::SUCCESS) {
+            bad = true;
+            return dstd::nullopt;
+        }
+        if (null) return Found{std::in_place};
         return Found{v};
     };
     for (const auto& p : probes) {
@@ -169,16 +181,16 @@ bool eval_compiled_eq(const std::vector<CompiledEqProbe>& probes,
                 if (!*v || !probe_matches_value(p, **v)) return false;
                 continue;
             }
-            if (!p.args_fallback) return false;
+            if (bad || !p.args_fallback) return false;
             doc.rewind();
         }
         auto args = field(doc, "args");
-        if (!args || !*args) return false;
+        if (bad || !args || !*args) return false;
         auto obj = (*args)->get_object();
         if (obj.error()) return false;
         auto v = field(obj.value_unsafe(),
                        p.nested_key.empty() ? p.top_key : p.nested_key);
-        if (!v || !*v || !probe_matches_value(p, **v)) return false;
+        if (bad || !v || !*v || !probe_matches_value(p, **v)) return false;
     }
     return true;
 }

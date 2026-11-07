@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Wall-clock of the dataframe engine against pandas, polars and DuckDB on
 the same data and the same ops. Two tables: a generic one (filter,
 group-by, sort, join, rolling mean, a string predicate, a prefix scan, a

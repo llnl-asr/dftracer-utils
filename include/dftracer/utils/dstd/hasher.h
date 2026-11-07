@@ -1,0 +1,136 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_DSTD_HASHER_H
+#define DFTRACER_UTILS_DSTD_HASHER_H
+
+#include <dftracer/utils/dstd/hash/hash_combine.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/ptr_hash.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/tuple.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <string_view>
+#include <type_traits>
+
+namespace dftracer::utils::dstd {
+
+/// The default hasher of HashMap and HashSet. Every specialization avalanches,
+/// so the table uses the value as it is.
+template <class T, class = void>
+struct Hash;
+
+/// One hasher for String, std::string_view and const char*, so a table keyed
+/// by any of them finds by the others without building a key.
+struct StringHash {
+    using is_transparent = void;
+    using is_avalanching = void;
+
+    // XXH3: FNV-1a in dstd/hash/ reads one byte per step.
+    std::size_t operator()(StringView s) const noexcept {
+        return static_cast<std::size_t>(hash::xxh3_64(s));
+    }
+};
+
+template <>
+struct Hash<String> : StringHash {};
+
+template <>
+struct Hash<StringView> : StringHash {};
+
+template <>
+struct Hash<const char*> : StringHash {};
+
+/// Compares String, std::string_view and const char* by their text, as
+/// @ref StringHash hashes them; std::equal_to<> compares two const char* by
+/// address.
+struct StringEqual {
+    using is_transparent = void;
+
+    bool operator()(StringView a, StringView b) const noexcept {
+        return a == b;
+    }
+};
+
+/// The default equality of HashMap and HashSet for key type @p T.
+template <class T>
+using Equal = std::conditional_t<std::is_same_v<T, String> ||
+                                     std::is_same_v<T, StringView> ||
+                                     std::is_same_v<T, const char*>,
+                                 StringEqual, std::equal_to<>>;
+
+template <class T>
+struct Hash<T, std::enable_if_t<std::is_integral_v<T>>> {
+    using is_avalanching = void;
+
+    std::size_t operator()(T value) const noexcept {
+        return static_cast<std::size_t>(
+            hash::splitmix64(static_cast<std::uint64_t>(value)));
+    }
+};
+
+/// Hashes the bit pattern, with -0.0 taken as 0.0 so values that compare
+/// equal hash equal.
+template <class T>
+struct Hash<T, std::enable_if_t<std::is_floating_point_v<T>>> {
+    using is_avalanching = void;
+
+    std::size_t operator()(T value) const noexcept {
+        if (value == T{0}) value = T{0};
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(T));
+        return static_cast<std::size_t>(hash::splitmix64(bits));
+    }
+};
+
+template <class T>
+struct Hash<T*, void> : PtrHash {};
+
+/// Hashes the underlying integer.
+template <class T>
+struct Hash<T, std::enable_if_t<std::is_enum_v<T>>> {
+    using is_avalanching = void;
+
+    std::size_t operator()(T value) const noexcept {
+        return Hash<std::underlying_type_t<T>>{}(
+            static_cast<std::underlying_type_t<T>>(value));
+    }
+};
+
+/// Combines the element hashes in order, then avalanches the result.
+template <class A, class B>
+struct Hash<Pair<A, B>, void> {
+    using is_avalanching = void;
+
+    std::size_t operator()(const Pair<A, B>& p) const
+        noexcept(noexcept(Hash<A>{}(p.first)) &&
+                 noexcept(Hash<B>{}(p.second))) {
+        std::size_t seed = Hash<A>{}(p.first);
+        hash_combine(seed, Hash<B>{}(p.second));
+        return static_cast<std::size_t>(hash::splitmix64(seed));
+    }
+};
+
+/// Combines the element hashes in order, then avalanches the result.
+template <class... Ts>
+struct Hash<Tuple<Ts...>, void> {
+    using is_avalanching = void;
+
+    std::size_t operator()(const Tuple<Ts...>& t) const {
+        std::size_t seed = 0;
+        std::apply(
+            [&seed](const Ts&... elems) {
+                (hash_combine(seed, Hash<Ts>{}(elems)), ...);
+            },
+            t);
+        return static_cast<std::size_t>(hash::splitmix64(seed));
+    }
+};
+
+}  // namespace dftracer::utils::dstd
+
+#endif  // DFTRACER_UTILS_DSTD_HASHER_H

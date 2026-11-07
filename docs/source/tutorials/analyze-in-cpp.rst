@@ -200,7 +200,7 @@ wraps that into a ``dataframe::LazyResult<T>`` you drive like any other plan.
 .. code-block:: cpp
 
    #include <dftracer/utils/dataframe/field.h>
-   #include <dftracer/utils/json/json_value.h>
+   #include <dftracer/utils/json/value.h>
    #include <dftracer/utils/trace/views/view.h>
 
    #include <cstdio>
@@ -208,7 +208,7 @@ wraps that into a ``dataframe::LazyResult<T>`` you drive like any other plan.
    using namespace dftracer::utils::trace::views;
    using dftracer::utils::dataframe::field::F;
    using dftracer::utils::dataframe::LazyResult;
-   using dftracer::utils::json::JsonValue;
+   using dftracer::utils::json::Value;
 
    int main() {
        View view = View::from_file("trace.pfw.gz");
@@ -217,9 +217,9 @@ wraps that into a ``dataframe::LazyResult<T>`` you drive like any other plan.
            [](ViewSession& session) {
                return session.fold<double>(
                    F("cat") == "POSIX",
-                   [](double& acc, const JsonValue& jv,
-                      std::string_view /*raw*/) {
-                       acc += jv["dur"].get<double>(0.0);
+                   [](double& acc, Value& event, std::string_view /*raw*/) {
+                       auto dur = event.find("dur");
+                       acc += dur ? dur->as_double().value_or(0.0) : 0.0;
                    },
                    [](double&& a, double&& b) { return a + b; });
            });

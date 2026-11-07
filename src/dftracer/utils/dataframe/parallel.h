@@ -1,10 +1,12 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_PARALLEL_H
 #define DFTRACER_UTILS_DATAFRAME_PARALLEL_H
+
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 // A parallelism seam for the dataframe kernels. dataframe is a leaf library
 // with no runtime dependency, so it runs serial by default; a host (the core
@@ -64,7 +66,7 @@ T parallel_reduce(std::int64_t n, std::int64_t grain, T identity, Map&& map,
     if (n <= 0) return identity;
     const std::int64_t chunks = (n + grain - 1) / grain;
     if (chunks <= 1) return combine(std::move(identity), map(0, n));
-    std::vector<T> partials(static_cast<std::size_t>(chunks), identity);
+    dstd::Vector<T> partials(static_cast<std::size_t>(chunks), identity);
     parallel_for(n, grain, [&](std::int64_t b, std::int64_t e) {
         partials[static_cast<std::size_t>(b / grain)] = map(b, e);
     });
@@ -90,11 +92,11 @@ void parallel_prefix_scan(std::int64_t n, std::int64_t grain, T identity,
         return;
     }
     const std::int64_t chunks = (n + grain - 1) / grain;
-    std::vector<T> totals(static_cast<std::size_t>(chunks));
+    dstd::Vector<T> totals(static_cast<std::size_t>(chunks));
     parallel_for(n, grain, [&](std::int64_t b, std::int64_t e) {
         totals[static_cast<std::size_t>(b / grain)] = local(b, e);
     });
-    std::vector<T> offsets(static_cast<std::size_t>(chunks));
+    dstd::Vector<T> offsets(static_cast<std::size_t>(chunks));
     T acc = identity;
     for (std::int64_t c = 0; c < chunks; ++c) {
         offsets[static_cast<std::size_t>(c)] = acc;

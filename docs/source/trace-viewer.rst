@@ -15,7 +15,7 @@ Start the server on a trace directory and open the printed URL:
 
 .. code-block:: bash
 
-    dftracer_server -d /path/to/traces
+    dftracer_server /path/to/traces
     # then open http://127.0.0.1:8080/
 
 The server also serves:

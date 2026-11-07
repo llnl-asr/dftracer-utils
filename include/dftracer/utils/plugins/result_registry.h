@@ -1,8 +1,14 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_RESULT_REGISTRY_H
 #define DFTRACER_UTILS_PLUGINS_RESULT_REGISTRY_H
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/ops.h>
 #include <dftracer/utils/plugins/owned_arrow.h>
 
@@ -11,11 +17,6 @@
 #include <cstring>
 #include <initializer_list>
 #include <mutex>
-#include <span>
-#include <string>
-#include <unordered_map>
-#include <variant>
-#include <vector>
 
 // Host-side named result channel backing dft.ext.result. Policy-free: it moves
 // opaque bytes or a user-schema Arrow array and never interprets either.
@@ -24,7 +25,8 @@ namespace dftracer::utils::plugins {
 /// A native columnar result carried across the ABI as a dftu_dataframe handle
 /// (the dataframe engine's own boundary type), freed via the dataframe C ABI.
 /// Lets an engine-backed result (the aggregation accumulator) cross as our own
-/// DataFrame with no Arrow round-trip.
+/// @ref dftracer::utils::dataframe::DataFrame "DataFrame" with no Arrow
+/// round-trip.
 struct OwnedDataFrame {
     dftu_dataframe* handle = nullptr;
     OwnedDataFrame() = default;
@@ -68,10 +70,11 @@ struct OwnedDataFrame {
 /// dftu_lazyframe_* ABI directly, the same indirection dftu_svc_ops already
 /// uses for column/frame ops. Every method BORROWS `*this` and returns a new
 /// plan, leaving this one usable - the same contract as the layers beneath,
-/// where dftu_lazyframe_* takes a const handle and LazyFrame's own methods are
-/// const. A method that fails for any reason (no ops extension wired up, an
-/// unregistered name, or a kind/arity/shape/argument rejection) returns an
-/// EMPTY OwnedLazyFrame (`!out.handle`); every method short-circuits on an
+/// where dftu_lazyframe_* takes a const handle and @ref
+/// dftracer::utils::dataframe::LazyFrame "LazyFrame"'s own methods are const. A
+/// method that fails for any reason (no ops extension wired up, an unregistered
+/// name, or a kind/arity/shape/argument rejection) returns an EMPTY
+/// OwnedLazyFrame (`!out.handle`); every method short-circuits on an
 /// already-empty OwnedLazyFrame, so a failure partway through a chain
 /// propagates to the end without corrupting or leaking anything, and the
 /// caller checks `handle` once at the end of the chain rather than after
@@ -187,18 +190,18 @@ struct OwnedLazyFrame {
         return apply("dftu.lazy.sample",
                      dataframe::OpArgs().i64(1, n).u64(2, seed));
     }
-    OwnedLazyFrame take(std::span<const std::int64_t> idx) const {
+    OwnedLazyFrame take(dstd::Span<const std::int64_t> idx) const {
         return apply("dftu.lazy.take", dataframe::OpArgs().i64list(1, idx));
     }
 
     OwnedLazyFrame select(std::initializer_list<const char*> names) const {
-        std::vector<const char*> v(names);
+        dstd::Vector<const char*> v(names);
         return apply("dftu.lazy.select",
                      dataframe::OpArgs().strlist(
                          1, v.data(), static_cast<std::int32_t>(v.size())));
     }
     OwnedLazyFrame rename(std::initializer_list<const char*> names) const {
-        std::vector<const char*> v(names);
+        dstd::Vector<const char*> v(names);
         return apply("dftu.lazy.rename",
                      dataframe::OpArgs().strlist(
                          1, v.data(), static_cast<std::int32_t>(v.size())));
@@ -206,7 +209,7 @@ struct OwnedLazyFrame {
     OwnedLazyFrame unpivot(
         std::initializer_list<const char*> id_vars,
         std::initializer_list<const char*> value_vars) const {
-        std::vector<const char*> ids(id_vars), vals(value_vars);
+        dstd::Vector<const char*> ids(id_vars), vals(value_vars);
         return apply(
             "dftu.lazy.unpivot",
             dataframe::OpArgs()
@@ -216,7 +219,7 @@ struct OwnedLazyFrame {
     }
     OwnedLazyFrame melt(std::initializer_list<const char*> id_vars,
                         std::initializer_list<const char*> value_vars) const {
-        std::vector<const char*> ids(id_vars), vals(value_vars);
+        dstd::Vector<const char*> ids(id_vars), vals(value_vars);
         return apply(
             "dftu.lazy.melt",
             dataframe::OpArgs()
@@ -226,8 +229,8 @@ struct OwnedLazyFrame {
     }
     OwnedLazyFrame group_by(std::initializer_list<const char*> keys,
                             std::initializer_list<dftu_group_agg> aggs) const {
-        std::vector<const char*> k(keys);
-        std::vector<dftu_group_agg> a(aggs);
+        dstd::Vector<const char*> k(keys);
+        dstd::Vector<dftu_group_agg> a(aggs);
         return apply(
             "dftu.lazy.group_by",
             dataframe::OpArgs()
@@ -236,7 +239,7 @@ struct OwnedLazyFrame {
     }
     OwnedLazyFrame sort_by_multi(std::initializer_list<const char*> by,
                                  bool descending) const {
-        std::vector<const char*> v(by);
+        dstd::Vector<const char*> v(by);
         return apply(
             "dftu.lazy.sort_by_multi",
             dataframe::OpArgs()
@@ -277,8 +280,8 @@ struct OwnedLazyFrame {
                         const char* suffix = nullptr,
                         bool nulls_equal = false) const {
         if (left_on.size() != right_on.size()) return OwnedLazyFrame{};
-        std::vector<const char*> l(left_on);
-        std::vector<const char*> r(right_on);
+        dstd::Vector<const char*> l(left_on);
+        dstd::Vector<const char*> r(right_on);
         const dftu_lazyframe* in[2] = {handle, other.handle};
         return apply(
             "dftu.lazy.join", in, 2,
@@ -300,7 +303,7 @@ struct OwnedLazyFrame {
 
     OwnedLazyFrame group_by_dynamic(const char* time_col, std::int64_t every,
                                     std::int64_t period,
-                                    std::span<const dftu_group_agg> aggs,
+                                    dstd::Span<const dftu_group_agg> aggs,
                                     std::int64_t origin,
                                     bool origin_min) const {
         return apply("dftu.lazy.group_by_dynamic",
@@ -343,8 +346,8 @@ struct OwnedLazyFrame {
     void* host_ = nullptr;
 };
 
-using NamedResult = std::variant<std::vector<std::byte>, OwnedArrow,
-                                 OwnedDataFrame, OwnedLazyFrame>;
+using NamedResult = dstd::Variant<dstd::Vector<std::byte>, OwnedArrow,
+                                  OwnedDataFrame, OwnedLazyFrame>;
 
 class NamedResultRegistry {
    public:
@@ -361,7 +364,7 @@ class NamedResultRegistry {
 
     void emit_blob(const char* name, const void* data, std::uint64_t len) {
         if (!name) return;
-        std::vector<std::byte> bytes(static_cast<std::size_t>(len));
+        dstd::Vector<std::byte> bytes(static_cast<std::size_t>(len));
         if (len && data)
             std::memcpy(bytes.data(), data, static_cast<std::size_t>(len));
         std::lock_guard<std::mutex> lock(mutex_);
@@ -391,7 +394,7 @@ class NamedResultRegistry {
 
     /// Take ownership of a native dftu_lazyframe (deferred) result; the host
     /// collects it at the Python edge. The plan must be self-contained (see
-    /// OwnedLazyFrame). A null handle is a no-op.
+    /// @ref OwnedLazyFrame). A null handle is a no-op.
     void emit_lazyframe(const char* name, dftu_lazyframe* handle) {
         if (!name || !handle) return;
         std::lock_guard<std::mutex> lock(mutex_);
@@ -404,11 +407,11 @@ class NamedResultRegistry {
     }
 
     /// Drained after the scan completes, so no lock is needed by the reader.
-    std::unordered_map<std::string, NamedResult>& results() { return results_; }
+    dstd::HashMap<dstd::String, NamedResult>& results() { return results_; }
 
    private:
     std::mutex mutex_;
-    std::unordered_map<std::string, NamedResult> results_;
+    dstd::HashMap<dstd::String, NamedResult> results_;
 };
 
 }  // namespace dftracer::utils::plugins

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """set_union(typed=True) returns a list of the values in their own type; the
 default stays the separator-joined text."""
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """duql `session` against a plain-Python reference."""
 
 import gzip

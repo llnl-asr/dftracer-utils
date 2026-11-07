@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/json/json_value.h>
 
-#include <cstring>
+#include <cstddef>
 
 namespace dftracer::utils::json {
 
@@ -33,7 +34,7 @@ JsonValue JsonValue::at(const char* path) const {
 
         const char* start = p;
         while (*p && *p != '.' && *p != '[') ++p;
-        std::string_view key_sv(start, static_cast<std::size_t>(p - start));
+        dstd::StringView key_sv(start, static_cast<std::size_t>(p - start));
 
         JsonValue next = current[key_sv];
         // A numeric segment addresses an array element when the object-key
@@ -61,7 +62,7 @@ JsonValue JsonValue::at(const char* path) const {
             const char* run_end = p;
             while (*run_end && *run_end != '[') ++run_end;
             for (const char* end = run_end; end > p;) {
-                std::string_view cand(start,
+                dstd::StringView cand(start,
                                       static_cast<std::size_t>(end - start));
                 JsonValue c = current[cand];
                 if (c.exists()) {
@@ -80,12 +81,8 @@ JsonValue JsonValue::at(const char* path) const {
     return current;
 }
 
-JsonValue JsonValue::at(const std::string& path) const {
-    return at(path.c_str());
-}
-
-JsonValue JsonValue::at(std::string_view path) const {
-    std::string path_str(path);
+JsonValue JsonValue::at(dstd::StringView path) const {
+    const dstd::String path_str(path);
     return at(path_str.c_str());
 }
 

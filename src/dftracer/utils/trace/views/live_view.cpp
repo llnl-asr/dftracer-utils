@@ -1,15 +1,24 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/exception_helpers.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/live_view.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/utilities/fileio/compress/zng_stream.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <zlib.h>
+#include <zlib-ng.h>
 
 #include <algorithm>
 #include <array>
@@ -17,11 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <set>
-#include <string_view>
 #include <utility>
 
 namespace dftracer::utils::trace::views {
@@ -32,27 +37,17 @@ constexpr std::size_t CHUNK = std::size_t{1} << 20;
 constexpr std::size_t HEAD = 64;
 constexpr std::array<unsigned char, 3> MAGIC = {0x1f, 0x8b, 0x08};
 
-[[noreturn]] void throw_io(const std::string& what, const std::string& path) {
-    throw DFTUtilsException::cat(ErrorCode::IO, what, " ", path, ": ",
-                                 std::strerror(errno));
+[[noreturn]] void throw_io(dstd::StringView what, dstd::StringView path) {
+    throw common::DFTUtilsException::cat(common::ErrorCode::Io, what, " ", path,
+                                         ": ", std::strerror(errno));
 }
 
-class Fd {
-   public:
-    explicit Fd(int fd) : fd_(fd) {}
-    ~Fd() {
-        if (fd_ >= 0) ::close(fd_);
-    }
-    Fd(const Fd&) = delete;
-    Fd& operator=(const Fd&) = delete;
-    int get() const { return fd_; }
-
-   private:
-    int fd_;
-};
+[[noreturn]] void throw_error(const dstd::Error& error) {
+    throw common::DFTUtilsException(error);
+}
 
 /// Reads at most `n` bytes at `off`; 0 at end of file.
-std::size_t read_at(int fd, const std::string& path, unsigned char* buf,
+std::size_t read_at(int fd, const dstd::String& path, unsigned char* buf,
                     std::size_t n, std::uint64_t off) {
     for (;;) {
         const ssize_t got = ::pread(fd, buf, n, static_cast<off_t>(off));
@@ -63,25 +58,25 @@ std::size_t read_at(int fd, const std::string& path, unsigned char* buf,
 
 class Walker {
    public:
-    Walker(int fd, std::string path, std::uint64_t size)
+    Walker(int fd, dstd::String path, std::uint64_t size)
         : fd_(fd),
           path_(std::move(path)),
           size_(size),
-          in_(std::make_unique_for_overwrite<unsigned char[]>(CHUNK)),
-          out_(std::make_unique_for_overwrite<unsigned char[]>(CHUNK)) {}
+          in_(dstd::make_unique_for_overwrite<unsigned char[]>(CHUNK)),
+          out_(dstd::make_unique_for_overwrite<unsigned char[]>(CHUNK)) {}
 
     /// End offset of the whole gzip member at `offset`, CRC verified, or
     /// nullopt when it is undecodable or not fully written.
-    std::optional<std::uint64_t> member_end(std::uint64_t offset) {
-        z_stream zs{};
+    dstd::Optional<std::uint64_t> member_end(std::uint64_t offset) {
+        zng_stream zs{};
         // 31: a gzip wrapper, whose trailer inflate checks.
-        if (inflateInit2(&zs, 31) != Z_OK) {
-            throw DFTUtilsException(ErrorCode::COMPRESSION,
-                                    "failed to allocate inflate state");
+        if (utilities::fileio::compress::open_inflate_stream(zs, 31) != Z_OK) {
+            throw common::DFTUtilsException(common::ErrorCode::Compression,
+                                            "failed to allocate inflate state");
         }
         struct End {
-            z_stream* zs;
-            ~End() { inflateEnd(zs); }
+            zng_stream* zs;
+            ~End() { zng_inflateEnd(zs); }
         } end{&zs};
         std::uint64_t pos = offset;
         while (pos < size_) {
@@ -90,24 +85,24 @@ class Walker {
                         static_cast<std::size_t>(
                             std::min<std::uint64_t>(CHUNK, size_ - pos)),
                         pos);
-            if (got == 0) return std::nullopt;
+            if (got == 0) return dstd::nullopt;
             pos += got;
             zs.next_in = in_.get();
-            zs.avail_in = static_cast<uInt>(got);
+            zs.avail_in = static_cast<std::uint32_t>(got);
             do {
                 zs.next_out = out_.get();
-                zs.avail_out = static_cast<uInt>(CHUNK);
-                const int rc = inflate(&zs, Z_NO_FLUSH);
+                zs.avail_out = static_cast<std::uint32_t>(CHUNK);
+                const int rc = zng_inflate(&zs, Z_NO_FLUSH);
                 if (rc == Z_STREAM_END) return pos - zs.avail_in;
-                if (rc != Z_OK && rc != Z_BUF_ERROR) return std::nullopt;
+                if (rc != Z_OK && rc != Z_BUF_ERROR) return dstd::nullopt;
             } while (zs.avail_in > 0 || zs.avail_out == 0);
         }
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     /// Offset of the first whole, decodable gzip member at or after `start`.
-    std::optional<std::uint64_t> next_member(std::uint64_t start) {
-        const auto buf = std::make_unique_for_overwrite<unsigned char[]>(
+    dstd::Optional<std::uint64_t> next_member(std::uint64_t start) {
+        const auto buf = dstd::make_unique_for_overwrite<unsigned char[]>(
             CHUNK + MAGIC.size());
         std::size_t held = 0;
         std::uint64_t pos = start;
@@ -118,12 +113,12 @@ class Walker {
                             std::min<std::uint64_t>(CHUNK, size_ - pos)),
                         pos);
             if (got == 0) break;
-            const std::string_view hay(reinterpret_cast<const char*>(buf.get()),
+            const dstd::StringView hay(reinterpret_cast<const char*>(buf.get()),
                                        held + got);
-            const std::string_view magic(
+            const dstd::StringView magic(
                 reinterpret_cast<const char*>(MAGIC.data()), MAGIC.size());
             const std::uint64_t base = pos - held;
-            for (std::size_t i = hay.find(magic); i != std::string_view::npos;
+            for (std::size_t i = hay.find(magic); i != dstd::StringView::npos;
                  i = hay.find(magic, i + 1)) {
                 if (member_end(base + i)) return base + i;
             }
@@ -134,65 +129,58 @@ class Walker {
             held = keep;
             pos += got;
         }
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
    private:
     int fd_;
-    std::string path_;
+    dstd::String path_;
     std::uint64_t size_;
-    std::unique_ptr<unsigned char[]> in_;
-    std::unique_ptr<unsigned char[]> out_;
+    dstd::UniquePtr<unsigned char[]> in_;
+    dstd::UniquePtr<unsigned char[]> out_;
 };
 
 /// Directories to remove at process exit.
 class OwnedDirs {
    public:
-    void add(std::string dir) {
+    void add(dstd::String dir) {
         std::lock_guard<std::mutex> lock(mu_);
         dirs_.push_back(std::move(dir));
     }
     ~OwnedDirs() {
-        for (const std::string& d : dirs_) {
-            std::error_code ec;
-            fs::remove_all(d, ec);
-        }
+        for (const dstd::String& d : dirs_) (void)dstd::fs::remove_all(d);
     }
 
    private:
     std::mutex mu_;
-    std::vector<std::string> dirs_;
+    dstd::Vector<dstd::String> dirs_;
 };
 
-std::string make_private_dir() {
+dstd::String make_private_dir() {
     static OwnedDirs owned;
-    std::error_code ec;
-    fs::path base = fs::temp_directory_path(ec);
-    if (ec) base = "/tmp";
-    std::string dir = (base / "dftlive_XXXXXX").string();
+    const dstd::Path path = dstd::fs::temp_directory() / "dftlive_XXXXXX";
+    dstd::String dir(path.str());
     if (!::mkdtemp(dir.data())) throw_io("cannot create", dir);
     owned.add(dir);
     return dir;
 }
 
-std::vector<std::string> trace_files_under(const std::string& dir) {
-    namespace ufs = utilities::filesystem;
-    ufs::PatternDirectoryScannerUtility scanner;
-    ufs::PatternDirectoryScannerUtilityInput input(dir,
-                                                   ufs::trace_file_patterns(),
-                                                   /*recursive=*/true,
-                                                   /*populate_size=*/false);
-    std::vector<ufs::FileEntry> entries;
-    default_runtime().run_blocking(
-        "live_view_scan", [&](CoroScope& scope) -> coro::CoroTask<void> {
-            entries = co_await scanner(scope, input);
-        });
-    std::vector<std::string> out;
-    out.reserve(entries.size());
-    for (const auto& e : entries) {
-        std::string path = e.path.string();
-        if (path.ends_with(".gz")) out.push_back(std::move(path));
-    }
+dstd::Vector<dstd::String> trace_files_under(const dstd::String& dir) {
+    runtime::fs::FindOptions options;
+    options.patterns =
+        runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
+    options.with_stat = false;
+    options.skip_unreadable = true;
+
+    auto scoped = coro::with_scope([&](coro::Scope& scope) {
+        return runtime::fs::find_all(scope, dstd::PathView(dir), options);
+    });
+    auto found = default_runtime().block_on(std::move(scoped));
+    if (!found) throw_error(found.error());
+
+    dstd::Vector<dstd::String> out;
+    out.reserve(found->size());
+    for (const auto& e : *found) out.emplace_back(e.path.str());
     std::sort(out.begin(), out.end());
     return out;
 }
@@ -201,35 +189,36 @@ std::vector<std::string> trace_files_under(const std::string& dir) {
 
 /// One live file and its append-only snapshot.
 struct LiveView::Source {
-    std::string path;
-    std::string snapshot;
+    dstd::String path;
+    dstd::String snapshot;
     std::uint64_t verified = 0;  // bytes of `path` copied and verified whole
-    std::vector<unsigned char> head;  // to detect a replaced file
+    dstd::Vector<unsigned char> head;  // to detect a replaced file
     std::uint64_t skipped_tail = 0;
-    std::optional<LiveHole> hole;
+    dstd::Optional<LiveHole> hole;
 
     void update() {
         hole.reset();
         skipped_tail = 0;
-        Fd fd(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
-        if (fd.get() < 0) {
+        dstd::ScopedFd fd(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
+        if (!fd.valid()) {
             if (errno == ENOENT) {
-                throw DFTUtilsException::cat(ErrorCode::NOT_FOUND,
-                                             "no such trace file: ", path);
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::NotFound, "no such trace file: ", path);
             }
             throw_io("cannot open", path);
         }
-        const std::uint64_t size = fs::file_size(path);
+        const auto sized = dstd::fs::file_size(path);
+        if (!sized) throw_error(sized.error());
+        const std::uint64_t size = *sized;
         if (verified > 0 && replaced(fd.get(), size)) {
             // Dropped now: the new file may have no whole member yet.
             verified = 0;
-            std::error_code ec;
-            fs::remove(snapshot, ec);
+            (void)dstd::fs::remove(snapshot);
         }
         Walker walker(fd.get(), path, size);
         std::uint64_t off = verified;
         while (off < size) {
-            const std::optional<std::uint64_t> end = walker.member_end(off);
+            const dstd::Optional<std::uint64_t> end = walker.member_end(off);
             if (!end) {
                 if (const auto next = walker.next_member(off + 1)) {
                     hole = LiveHole{path, off, *next - off};
@@ -251,7 +240,7 @@ struct LiveView::Source {
    private:
     bool replaced(int fd, std::uint64_t size) const {
         if (size < verified) return true;
-        std::vector<unsigned char> now(head.size());
+        dstd::Vector<unsigned char> now(head.size());
         std::size_t have = 0;
         while (have < now.size()) {
             const std::size_t got =
@@ -265,9 +254,10 @@ struct LiveView::Source {
     void append(int fd, std::uint64_t begin, std::uint64_t end) {
         const int flags =
             O_WRONLY | O_CREAT | O_CLOEXEC | (begin == 0 ? O_TRUNC : 0);
-        Fd out(::open(snapshot.c_str(), flags, 0600));
-        if (out.get() < 0) throw_io("cannot write", snapshot);
-        const auto buf = std::make_unique_for_overwrite<unsigned char[]>(CHUNK);
+        dstd::ScopedFd out(::open(snapshot.c_str(), flags, 0600));
+        if (!out.valid()) throw_io("cannot write", snapshot);
+        const auto buf =
+            dstd::make_unique_for_overwrite<unsigned char[]>(CHUNK);
         for (std::uint64_t pos = begin; pos < end;) {
             const std::size_t got =
                 read_at(fd, path, buf.get(),
@@ -275,8 +265,8 @@ struct LiveView::Source {
                             std::min<std::uint64_t>(CHUNK, end - pos)),
                         pos);
             if (got == 0) {
-                throw DFTUtilsException::cat(ErrorCode::IO, path,
-                                             ": shrank while being read");
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io, path, ": shrank while being read");
             }
             for (std::size_t done = 0; done < got;) {
                 const ssize_t put =
@@ -305,45 +295,47 @@ struct LiveView::Source {
     }
 };
 
-LiveView::LiveView(std::vector<std::string> paths, std::string index_path,
-                   std::string snapshot_dir)
+LiveView::LiveView(dstd::Vector<dstd::String> paths, dstd::String index_path,
+                   dstd::String snapshot_dir)
     : paths_(std::move(paths)),
       index_path_(std::move(index_path)),
       snapshot_dir_(std::move(snapshot_dir)) {
     if (snapshot_dir_.empty()) {
         snapshot_dir_ = make_private_dir();
     } else {
-        fs::create_directories(snapshot_dir_);
+        const auto made = dstd::fs::create_directories(snapshot_dir_);
+        if (!made) throw_error(made.error());
     }
 }
 
 LiveView::~LiveView() = default;
 
 View LiveView::refresh() {
-    std::set<std::string> known;
+    dstd::Set<dstd::String> known;
     for (const auto& s : sources_) known.insert(s->path);
-    const std::string skip = snapshot_dir_ + "/";
-    for (const std::string& p : paths_) {
-        std::error_code ec;
-        std::vector<std::string> files;
-        if (fs::is_directory(p, ec)) {
+    const dstd::String skip = snapshot_dir_ + "/";
+    for (const dstd::String& p : paths_) {
+        dstd::Vector<dstd::String> files;
+        if (dstd::fs::is_directory(p).value_or(false)) {
             files = trace_files_under(p);
         } else {
             files.push_back(p);
         }
-        for (std::string& f : files) {
+        for (dstd::String& f : files) {
             if (f.starts_with(skip) || !known.insert(f).second) continue;
             char prefix[16];
             std::snprintf(prefix, sizeof prefix, "%04zu_", sources_.size());
-            auto src = std::make_unique<Source>();
-            src->snapshot = (fs::path(snapshot_dir_) /
-                             (prefix + fs::path(f).filename().string()))
-                                .string();
+            auto src = dstd::make_unique<Source>();
+            src->snapshot =
+                dstd::String((dstd::Path(snapshot_dir_) /
+                              (dstd::String(prefix) +
+                               dstd::String(dstd::PathView(f).filename())))
+                                 .str());
             src->path = std::move(f);
             sources_.push_back(std::move(src));
         }
     }
-    std::vector<ViewFile> files;
+    dstd::Vector<ViewFile> files;
     files.reserve(sources_.size());
     for (const auto& s : sources_) {
         s->update();
@@ -366,8 +358,8 @@ std::uint64_t LiveView::skipped_tail_bytes() const {
     return n;
 }
 
-std::vector<LiveHole> LiveView::holes() const {
-    std::vector<LiveHole> out;
+dstd::Vector<LiveHole> LiveView::holes() const {
+    dstd::Vector<LiveHole> out;
     for (const auto& s : sources_) {
         if (s->hole) out.push_back(*s->hole);
     }

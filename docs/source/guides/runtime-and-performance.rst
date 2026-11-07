@@ -26,17 +26,17 @@ Tune threads and memory, and build your own concurrent workflows on the coroutin
 
       Fan-out, fan-in, racing tasks and streaming channels.
 
-   .. grid-item-card:: Build a task graph
-      :link: runtime/task-graphs
+   .. grid-item-card:: Add your own I/O backend or file system
+      :link: runtime/custom-io
       :link-type: doc
 
-      Express a computation as a DAG of coroutine tasks.
+      Change how I/O runs or where the bytes live.
 
-   .. grid-item-card:: The pipeline
-      :link: ../pipeline
+   .. grid-item-card:: Store your own data
+      :link: runtime/key-value-store
       :link-type: doc
 
-      The executor, scopes and structured concurrency.
+      Atomic batches, snapshots and merging small files.
 
 .. toctree::
    :hidden:
@@ -44,5 +44,5 @@ Tune threads and memory, and build your own concurrent workflows on the coroutin
    runtime/performance
    runtime/memory-budget
    pipelines/patterns
-   runtime/task-graphs
-   ../pipeline
+   runtime/custom-io
+   runtime/key-value-store

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Typed DataFrame-ops sample: ty checks this clean.
 
 Every enum arg is a valid Literal and every window spec is a well-formed typed

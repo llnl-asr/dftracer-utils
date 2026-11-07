@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Tests for the native ``Series`` ops exposed on the Python wrapper.
 
 The C extension carries the full SIMD kernel surface on ``_Series``; the Python

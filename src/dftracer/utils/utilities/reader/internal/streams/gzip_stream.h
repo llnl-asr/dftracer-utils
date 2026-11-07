@@ -1,6 +1,12 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/hasher.h>
+#include <dftracer/utils/dstd/raw_buffer.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/inflater.h>
@@ -11,14 +17,12 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
 class GzipStream : public StreamBase {
    protected:
-    int fd_ = -1;
+    dstd::File fd_;
     mutable off_t file_offset_ = 0;
     mutable ReaderInflater inflater_;
     std::size_t current_position_;
@@ -28,9 +32,11 @@ class GzipStream : public StreamBase {
     bool is_finished_;
     bool decompression_initialized_;
     bool use_member_;
+    /// The stream starts at a restart piece whose first byte is inside a line.
+    bool mid_line_start_ = false;
 
     // Less frequently accessed members
-    std::string current_gz_path_;
+    dstd::String current_gz_path_;
     dftracer::utils::index::gzip::CheckpointIndexer *indexer_ = nullptr;
     std::size_t start_bytes_;
     dftracer::utils::index::gzip::GzipMemberRecord member_;
@@ -39,14 +45,13 @@ class GzipStream : public StreamBase {
     // read_async(char*, size_t) below. Derived classes fill buffer_ via their
     // zero-copy read_async() override.
     static constexpr std::size_t DEFAULT_BUFFER_SIZE = 64 * 1024;  // 64KB
-    std::vector<char> buffer_;
+    dstd::RawBuffer<char> buffer_;
     std::size_t valid_bytes_;
     std::size_t buffer_pos_;  // Current position in buffer for copy-based reads
 
    public:
     explicit GzipStream(std::size_t buffer_size = DEFAULT_BUFFER_SIZE)
         : StreamBase(),
-          fd_(-1),
           file_offset_(0),
           current_position_(0),
           target_end_bytes_(0),
@@ -56,13 +61,13 @@ class GzipStream : public StreamBase {
           decompression_initialized_(false),
           use_member_(false),
           start_bytes_(0),
-          buffer_(buffer_size, 0),
+          buffer_(buffer_size),
           valid_bytes_(0),
           buffer_pos_(0) {}
 
     virtual ~GzipStream() { reset(); }
 
-    bool matches(const std::string &gz_path, std::size_t /*start_bytes*/,
+    bool matches(const dstd::String &gz_path, std::size_t /*start_bytes*/,
                  std::size_t end_bytes) const {
         // Reuse the stream if same file and same end position.
         // For POSIX-style sequential reads, the stream continues from
@@ -72,7 +77,7 @@ class GzipStream : public StreamBase {
 
     bool done() const override { return is_finished_; }
 
-    coro::CoroTask<std::span<const char>> read_async() override = 0;
+    coro::CoroTask<dstd::Span<const char>> read_async() override = 0;
 
     // Copy-drain adapter over the zero-copy read_async(): serves the caller's
     // buffer from buffer_, refilling via the derived read_async() when empty.
@@ -127,35 +132,33 @@ class GzipStream : public StreamBase {
         max_file_bytes_ = 0;
         is_active_ = false;
         is_finished_ = false;
-        if (fd_ >= 0) {
-            ::close(fd_);
-            fd_ = -1;
-        }
+        (void)fd_.close();
         file_offset_ = 0;
         inflater_.reset();
         member_ = dftracer::utils::index::gzip::GzipMemberRecord();
         use_member_ = false;
+        mid_line_start_ = false;
         decompression_initialized_ = false;
     }
 
    protected:
-    int open_file(const std::string &path) {
-        int fd = ::open(path.c_str(), O_RDONLY);
-        if (fd < 0) {
-            throw ReaderError(ReaderError::FILE_IO_ERROR,
+    dstd::File open_file(const dstd::String &path) {
+        auto file = dstd::File::open(dstd::PathView(path), {});
+        if (!file) {
+            throw ReaderError(ReaderError::FileIoError,
                               "Failed to open file: " + path);
         }
 #ifdef __linux__
-        posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+        posix_fadvise(file->native_handle(), 0, 0, POSIX_FADV_SEQUENTIAL);
 #endif
-        return fd;
+        return std::move(*file);
     }
 
     /// Records the request only. Opening and seeking happen on the first
     /// read, so a stream is built without blocking a caller who is going to
     /// await the data anyway.
     void initialize(
-        const std::string &gz_path, std::size_t start_bytes,
+        const dstd::String &gz_path, std::size_t start_bytes,
         std::size_t end_bytes,
         dftracer::utils::index::gzip::CheckpointIndexer &indexer) override {
         if (is_active_) {
@@ -165,7 +168,7 @@ class GzipStream : public StreamBase {
         start_bytes_ = start_bytes;
         target_end_bytes_ = end_bytes;
         indexer_ = &indexer;
-        max_file_bytes_ = indexer.get_max_bytes();
+        max_file_bytes_ = indexer.max_bytes();
         is_active_ = true;
         is_finished_ = false;
     }
@@ -180,8 +183,14 @@ class GzipStream : public StreamBase {
         // cache is configured (server). Keyed by a stable per-path token so
         // different fds to the same file coalesce.
         if (auto *cache = global_member_decode_cache()) {
-            inflater_.set_cache(cache,
-                                std::hash<std::string>{}(current_gz_path_));
+            inflater_.set_cache(
+                cache, dstd::Hash<dstd::StringView>{}(current_gz_path_));
+        }
+
+        if (indexer_) {
+            inflater_.set_member_bound(static_cast<std::size_t>(
+                std::max<std::uint64_t>(indexer_->checkpoint_size(), 1)));
+            inflater_.set_index_hint(indexer_->piece_heads());
         }
 
         // A range starting past the end of the file yields nothing, so skip
@@ -198,8 +207,9 @@ class GzipStream : public StreamBase {
         use_member_ = false;
         if (indexer_ && indexer_->find_member(start_bytes_, member_)) {
             use_member_ = co_await inflater_.seek_to_member(
-                fd_, file_offset_, member_, member_window(),
+                fd_.native_handle(), file_offset_, member_, member_window(),
                 expected_out_bytes());
+            mid_line_start_ = use_member_ && piece_starts_mid_line();
             if (use_member_)
                 DFTRACER_UTILS_LOG_DEBUG(
                     "Using member %" PRIu64 " at uncompressed offset %" PRIu64
@@ -209,17 +219,18 @@ class GzipStream : public StreamBase {
 
         if (!use_member_ &&
             member_.kind !=
-                dftracer::utils::index::gzip::GzipRecordKind::MEMBER) {
+                dftracer::utils::index::gzip::GzipRecordKind::Member) {
             throw ReaderError(
-                ReaderError::COMPRESSION_ERROR,
+                ReaderError::CompressionError,
                 "Failed to start at a restart point of " + current_gz_path_);
         }
         if (!use_member_) {
-            if (!co_await inflater_.initialize(
-                    fd_, file_offset_, 0,
-                    constants::indexer::ZLIB_GZIP_WINDOW_BITS,
-                    expected_out_bytes())) {
-                throw ReaderError(ReaderError::COMPRESSION_ERROR,
+            const auto initialize_ok = co_await inflater_.initialize(
+                fd_.native_handle(), file_offset_, 0,
+                common::constants::indexer::ZLIB_GZIP_WINDOW_BITS,
+                expected_out_bytes());
+            if (!initialize_ok) {
+                throw ReaderError(ReaderError::CompressionError,
                                   "Failed to initialize inflater");
             }
         }
@@ -240,7 +251,7 @@ class GzipStream : public StreamBase {
     coro::CoroTask<void> skip(std::size_t target_position) {
         std::size_t current_pos = seek_anchor_offset();
         if (target_position > current_pos) {
-            co_await inflater_.skip_bytes(fd_, file_offset_,
+            co_await inflater_.skip_bytes(fd_.native_handle(), file_offset_,
                                           target_position - current_pos);
         }
     }
@@ -249,11 +260,22 @@ class GzipStream : public StreamBase {
         return current_position_ >= target_end_bytes_;
     }
 
-    std::string member_window() const {
+    /// A restart piece starts where the inflater stopped, and the byte before
+    /// it is the last of its window. It is inside a line unless that byte is a
+    /// newline.
+    bool piece_starts_mid_line() const {
+        if (member_.kind !=
+            dftracer::utils::index::gzip::GzipRecordKind::Restart)
+            return false;
+        const dstd::String window = member_window();
+        return window.empty() || window.back() != '\n';
+    }
+
+    dstd::String member_window() const {
         using dftracer::utils::index::gzip::GzipRecordKind;
-        return member_.kind == GzipRecordKind::RESTART
+        return member_.kind == GzipRecordKind::Restart
                    ? indexer_->restart_window(member_.member_idx)
-                   : std::string();
+                   : dstd::String();
     }
 
     // Decode-buffer size hint (uncompressed span); 0 for an unbounded end.
@@ -267,18 +289,23 @@ class GzipStream : public StreamBase {
     coro::CoroTask<void> restart_compression() {
         inflater_.reset();
         if (use_member_) {
-            if (!co_await inflater_.seek_to_member(fd_, file_offset_, member_,
-                                                   member_window(),
-                                                   expected_out_bytes())) {
-                throw ReaderError(ReaderError::COMPRESSION_ERROR,
+            // GCC 12 lays the frame out differently in the ramp and the
+            // actor when a temporary lives in the condition of an `if` across
+            // the co_await, so the result goes through a local.
+            const bool restarted = co_await inflater_.seek_to_member(
+                fd_.native_handle(), file_offset_, member_, member_window(),
+                expected_out_bytes());
+            if (!restarted) {
+                throw ReaderError(ReaderError::CompressionError,
                                   "Failed to reinitialize from member");
             }
         } else {
-            if (!co_await inflater_.initialize(
-                    fd_, file_offset_, 0,
-                    constants::indexer::ZLIB_GZIP_WINDOW_BITS,
-                    expected_out_bytes())) {
-                throw ReaderError(ReaderError::COMPRESSION_ERROR,
+            const auto initialize_ok = co_await inflater_.initialize(
+                fd_.native_handle(), file_offset_, 0,
+                common::constants::indexer::ZLIB_GZIP_WINDOW_BITS,
+                expected_out_bytes());
+            if (!initialize_ok) {
+                throw ReaderError(ReaderError::CompressionError,
                                   "Failed to initialize inflater");
             }
         }

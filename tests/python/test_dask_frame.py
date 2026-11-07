@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """DaskFrame: map, combine, shuffle, join and seams, in process and on a cluster.
 
 Every test runs twice: with no client (in memory) and on a LocalCluster of four

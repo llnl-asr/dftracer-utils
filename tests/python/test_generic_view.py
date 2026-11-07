@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """TraceViewer over JSON lines files of no trace format (the generic schema)."""
 
 import gzip

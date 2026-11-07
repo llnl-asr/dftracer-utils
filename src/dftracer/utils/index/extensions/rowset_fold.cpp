@@ -1,28 +1,32 @@
-#include <dftracer/utils/core/common/config.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/index/extensions/rowset_fold.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/event_source.h>
 
-#include <string_view>
 #include <utility>
 
 namespace dftracer::utils::index::extensions {
 
 namespace {
 
-namespace df = dftracer::utils::dataframe;
-namespace views = trace::views::detail;
-
 // Whether `n` is `ph in ["M", 4]` or `ph == "M"`: the metadata phase.
-bool metadata_phase(const duql::QueryNode& n) {
-    const auto* in = std::get_if<duql::InNode>(&n.data);
+bool metadata_phase(const duql::detail::QueryNode& n) {
+    const auto* in = std::get_if<duql::detail::InNode>(&n.data);
     if (in) {
         if (in->field.any || in->field.path != "ph" || in->values.set)
             return false;
         for (const auto& v : in->values.elements) {
-            const auto* s = std::get_if<std::string>(&v.value);
+            const auto* s = std::get_if<dstd::String>(&v.value);
             const auto* i = std::get_if<std::int64_t>(&v.value);
             const auto* u = std::get_if<std::uint64_t>(&v.value);
             if (!(s && *s == "M") && !(i && *i == 4) && !(u && *u == 4))
@@ -30,16 +34,16 @@ bool metadata_phase(const duql::QueryNode& n) {
         }
         return true;
     }
-    const auto* c = std::get_if<duql::CompareNode>(&n.data);
-    const auto* s = c ? std::get_if<std::string>(&c->value.value) : nullptr;
-    return c && c->op == duql::CompareOp::EQ && !c->field.any &&
+    const auto* c = std::get_if<duql::detail::CompareNode>(&n.data);
+    const auto* s = c ? std::get_if<dstd::String>(&c->value.value) : nullptr;
+    return c && c->op == duql::CompareOp::Eq && !c->field.any &&
            c->field.path == "ph" && s && *s == "M";
 }
 
 // The top-level `and` terms of `n` that compare a field with a string.
-void equalities(const duql::QueryNode& n,
-                std::vector<std::pair<std::string, std::string>>& out) {
-    if (const auto* a = std::get_if<duql::AndNode>(&n.data)) {
+void equalities(const duql::detail::QueryNode& n,
+                dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& out) {
+    if (const auto* a = std::get_if<duql::detail::AndNode>(&n.data)) {
         equalities(*a->left, out);
         equalities(*a->right, out);
         return;
@@ -48,35 +52,37 @@ void equalities(const duql::QueryNode& n,
         out.emplace_back("ph", "M");
         return;
     }
-    const auto* c = std::get_if<duql::CompareNode>(&n.data);
-    if (!c || c->op != duql::CompareOp::EQ || c->field.any) return;
-    if (const auto* s = std::get_if<std::string>(&c->value.value))
-        out.emplace_back(c->field.path, *s);
+    const auto* c = std::get_if<duql::detail::CompareNode>(&n.data);
+    if (!c || c->op != duql::CompareOp::Eq || c->field.any) return;
+    if (const auto* s = std::get_if<dstd::String>(&c->value.value))
+        out.emplace_back(dstd::String(c->field.path), dstd::String(*s));
 }
 
 // `n` without its top-level `and` terms that test the metadata phase; null
 // when nothing else is left.
-duql::QueryNodePtr without_phase(const duql::QueryNode& n) {
-    if (const auto* a = std::get_if<duql::AndNode>(&n.data)) {
+duql::detail::QueryNodePtr without_phase(const duql::detail::QueryNode& n) {
+    if (const auto* a = std::get_if<duql::detail::AndNode>(&n.data)) {
         auto l = without_phase(*a->left);
         auto r = without_phase(*a->right);
         if (!l) return r;
         if (!r) return l;
-        return duql::make_node(duql::AndNode{std::move(l), std::move(r)});
+        return duql::detail::make_node(
+            duql::detail::AndNode{std::move(l), std::move(r)});
     }
     if (metadata_phase(n)) return nullptr;
     return duql::clone(n);
 }
 
-RowSetFold::Value cell(const views::PodSource& src, std::string_view path) {
+RowSetFold::Value cell(const trace::views::detail::PodSource& src,
+                       dstd::StringView path) {
     using V = RowSetFold::Value;
     if (const auto* sp = src.special(path)) {
         switch (*sp) {
-            case views::FoldEvent::Special::FALSE_VALUE:
+            case trace::views::detail::FoldEvent::Special::FalseValue:
                 return false;
-            case views::FoldEvent::Special::TRUE_VALUE:
+            case trace::views::detail::FoldEvent::Special::TrueValue:
                 return true;
-            case views::FoldEvent::Special::NULL_VALUE:
+            case trace::views::detail::FoldEvent::Special::NullValue:
                 return V{};
             default:
                 return src.value(path);
@@ -85,11 +91,11 @@ RowSetFold::Value cell(const views::PodSource& src, std::string_view path) {
     if (!src.has(path)) return V{};
     if (const auto n = src.number_typed(path)) {
         switch (n->domain) {
-            case df::FieldStatDomain::I64:
+            case dataframe::FieldStatDomain::I64:
                 return n->i;
-            case df::FieldStatDomain::U64:
+            case dataframe::FieldStatDomain::U64:
                 return n->u;
-            case df::FieldStatDomain::F64:
+            case dataframe::FieldStatDomain::F64:
                 return n->d;
         }
     }
@@ -97,71 +103,74 @@ RowSetFold::Value cell(const views::PodSource& src, std::string_view path) {
 }
 
 std::uint64_t value_bytes(const RowSetFold::Value& v) {
-    if (const auto* s = std::get_if<std::string>(&v)) return s->size() + 8;
+    if (const auto* s = std::get_if<dstd::String>(&v)) return s->size() + 8;
     return 8;
 }
 
-std::string text_of(const RowSetFold::Value& v) {
+dstd::String text_of(const RowSetFold::Value& v) {
     return std::visit(
-        [](const auto& x) -> std::string {
+        [](const auto& x) -> dstd::String {
             using T = std::decay_t<decltype(x)>;
-            if constexpr (std::is_same_v<T, std::monostate>)
+            if constexpr (std::is_same_v<T, dstd::Monostate>)
                 return {};
             else if constexpr (std::is_same_v<T, bool>)
                 return x ? "true" : "false";
-            else if constexpr (std::is_same_v<T, std::string>)
-                return x;
+            else if constexpr (std::is_same_v<T, dstd::String>)
+                return dstd::String(x);
             else
-                return std::to_string(x);
+                return dstd::to_string(x);
         },
         v);
 }
 
-std::vector<std::uint8_t> validity(const std::vector<RowSetFold::Value>& c) {
-    std::vector<std::uint8_t> bits((c.size() + 7) / 8, 0);
+dstd::Vector<std::uint8_t> validity(const dstd::Vector<RowSetFold::Value>& c) {
+    dstd::Vector<std::uint8_t> bits((c.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < c.size(); ++i)
-        if (!std::holds_alternative<std::monostate>(c[i]))
+        if (!std::holds_alternative<dstd::Monostate>(c[i]))
             bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     return bits;
 }
 
 // One column: the type all its values share; integers and doubles together
 // as doubles; any other mix as text.
-df::Series series_of(const std::vector<RowSetFold::Value>& c) {
+dataframe::Series series_of(const dstd::Vector<RowSetFold::Value>& c) {
     const auto n = static_cast<std::int64_t>(c.size());
     std::size_t kind = 0;
     bool mixed = false;
     bool numbers = true;
     for (const auto& v : c) {
-        if (std::holds_alternative<std::monostate>(v)) continue;
+        if (std::holds_alternative<dstd::Monostate>(v)) continue;
         const std::size_t k = v.index();
         numbers = numbers && k >= 2 && k <= 4;
         if (kind && kind != k) mixed = true;
         kind = k;
     }
     const auto bits = validity(c);
-    if (kind == 0) return df::Series::nulls(df::TypeId::String, n);
+    if (kind == 0)
+        return dataframe::Series::nulls(dataframe::TypeId::String, n);
     if (!mixed && kind == 1) {
-        std::vector<std::uint8_t> on((c.size() + 7) / 8, 0);
+        dstd::Vector<std::uint8_t> on((c.size() + 7) / 8, 0);
         for (std::size_t i = 0; i < c.size(); ++i)
             if (const auto* b = std::get_if<bool>(&c[i]); b && *b)
                 on[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        return df::Series::flat(df::TypeId::Bool, on.data(), n, bits.data());
+        return dataframe::Series::flat(dataframe::TypeId::Bool, on.data(), n,
+                                       bits.data());
     }
     if (!mixed && kind == 2) {
-        std::vector<std::int64_t> v(c.size(), 0);
+        dstd::Vector<std::int64_t> v(c.size(), 0);
         for (std::size_t i = 0; i < c.size(); ++i)
             if (const auto* x = std::get_if<std::int64_t>(&c[i])) v[i] = *x;
-        return df::Series::flat_i64(v.data(), n, bits.data());
+        return dataframe::Series::flat_i64(v.data(), n, bits.data());
     }
     if (!mixed && kind == 3) {
-        std::vector<std::uint64_t> v(c.size(), 0);
+        dstd::Vector<std::uint64_t> v(c.size(), 0);
         for (std::size_t i = 0; i < c.size(); ++i)
             if (const auto* x = std::get_if<std::uint64_t>(&c[i])) v[i] = *x;
-        return df::Series::flat(df::TypeId::Uint64, v.data(), n, bits.data());
+        return dataframe::Series::flat(dataframe::TypeId::Uint64, v.data(), n,
+                                       bits.data());
     }
     if (numbers) {
-        std::vector<double> v(c.size(), 0);
+        dstd::Vector<double> v(c.size(), 0);
         for (std::size_t i = 0; i < c.size(); ++i)
             std::visit(
                 [&](const auto& x) {
@@ -171,19 +180,19 @@ df::Series series_of(const std::vector<RowSetFold::Value>& c) {
                         v[i] = static_cast<double>(x);
                 },
                 c[i]);
-        return df::Series::flat_f64(v.data(), n, bits.data());
+        return dataframe::Series::flat_f64(v.data(), n, bits.data());
     }
-    std::vector<std::string> text;
+    dstd::Vector<dstd::String> text;
     text.reserve(c.size());
     for (const auto& v : c) text.push_back(text_of(v));
-    const std::vector<std::string_view> views(text.begin(), text.end());
-    return df::Series::strings(views, bits.data());
+    const dstd::Vector<dstd::StringView> views(text.begin(), text.end());
+    return dataframe::Series::strings(views, bits.data());
 }
 
 }  // namespace
 
-RowSetFold::RowSetFold(dftracer::utils::StringIntern& intern,
-                       std::vector<IndexedRowSet> rowsets,
+RowSetFold::RowSetFold(dftracer::utils::dstd::StringIntern& intern,
+                       dstd::Vector<IndexedRowSet> rowsets,
                        std::uint64_t budget_bytes)
     : intern_(&intern),
       rowsets_(std::move(rowsets)),
@@ -195,29 +204,32 @@ RowSetFold::RowSetFold(dftracer::utils::StringIntern& intern,
         pending_[r].columns.resize(rowsets_[r].columns.size());
         sealed_[r].columns.resize(rowsets_[r].columns.size());
         Guard g;
-        std::vector<std::pair<std::string, std::string>> eq;
-        if (rowsets_[r].filter) equalities(rowsets_[r].filter->root(), eq);
+        dstd::Vector<dstd::Pair<dstd::String, dstd::String>> eq;
+        if (rowsets_[r].filter)
+            equalities(duql::detail::QueryAccess::root(*rowsets_[r].filter),
+                       eq);
         for (const auto& [field, value] : eq) {
             if (field == "ph" && value == "M")
-                g.phase = trace::RecordPhase::METADATA;
+                g.phase = trace::RecordPhase::Metadata;
             if (field == "name") g.name = intern_->get_or_insert(value);
         }
         if (g.phase) {
-            if (auto rest = without_phase(rowsets_[r].filter->root()))
-                g.rest = duql::Query::from_node(std::move(rest));
+            if (auto rest = without_phase(
+                    duql::detail::QueryAccess::root(*rowsets_[r].filter)))
+                g.rest = duql::detail::QueryAccess::from_node(std::move(rest));
         }
         guards_.push_back(std::move(g));
     }
 }
 
-std::unique_ptr<trace::views::detail::Fold> RowSetFold::slice() const {
-    return std::make_unique<RowSetFold>(*intern_, rowsets_, budget_);
+dstd::UniquePtr<trace::views::detail::Fold> RowSetFold::slice() const {
+    return dstd::make_unique<RowSetFold>(*intern_, rowsets_, budget_);
 }
 
 void RowSetFold::step(const trace::views::detail::FoldBatch& batch) {
     if (abandoned_ || rowsets_.empty()) return;
     for (const auto& e : batch.events) {
-        const views::PodSource src(e, *intern_);
+        const trace::views::detail::PodSource src(e, *intern_);
         for (std::size_t r = 0; r < rowsets_.size(); ++r) {
             const Guard& g = guards_[r];
             if (!e.by_path) {
@@ -229,7 +241,8 @@ void RowSetFold::step(const trace::views::detail::FoldBatch& batch) {
                                             ? (g.rest ? &*g.rest : nullptr)
                                         : rs.filter ? &*rs.filter
                                                     : nullptr;
-            if (filter && !views::pod_matches(*filter, e, *intern_, scratch_))
+            if (filter && !trace::views::detail::pod_matches(
+                              *filter, e, *intern_, scratch_))
                 continue;
             auto& cols = pending_[r].columns;
             for (std::size_t c = 0; c < rs.columns.size(); ++c) {
@@ -261,7 +274,7 @@ void RowSetFold::absorb(std::size_t r, Rows& from) {
         }
         return;
     }
-    std::string key;
+    dstd::String key;
     for (std::size_t i = 0; i < rows; ++i) {
         key.clear();
         for (const auto& col : from.columns) {
@@ -297,19 +310,19 @@ void RowSetFold::merge(trace::views::detail::Fold& slice) {
         absorb(r, other.sealed_[r]);
 }
 
-void RowSetFold::write(index::store::IndexWrite& w, int file_id) const {
+void RowSetFold::write(index::FileBuild& build) const {
     if (abandoned_ || rowsets_.empty()) return;
     for (std::size_t r = 0; r < rowsets_.size(); ++r) {
-        df::DataFrame f;
+        dataframe::DataFrame f;
         for (std::size_t c = 0; c < rowsets_[r].columns.size(); ++c) {
-            f.names.push_back(rowsets_[r].columns[c].first);
+            const auto& name = rowsets_[r].columns[c].first;
+            f.names.emplace_back(name.data(), name.size());
             f.columns.push_back(series_of(sealed_[r].columns[c]));
         }
-        index::store::records::put_rowset(w, file_id, rowsets_[r].name,
-                                          df::frame_to_native(f));
+        index::put_rowset(build, rowsets_[r].name,
+                          dataframe::frame_to_native(f));
     }
-    index::store::records::put_manifest(
-        w, file_id, index::store::IndexExtension::ROWSET, 0);
+    build.finish(index::store::IndexExtension::Rowset, 0);
 }
 
 }  // namespace dftracer::utils::index::extensions

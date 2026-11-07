@@ -1,13 +1,14 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_TEMPORAL_ARITH_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_TEMPORAL_ARITH_H
 
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -39,7 +40,7 @@ struct TemporalResult {
     TypeId id;
     TimeUnit unit;
     /// Timestamp only; empty means naive (no timezone).
-    std::string timezone;
+    dstd::String timezone;
 };
 
 /// Result of a Timestamp/Duration/Time64 column-column arithmetic op; see
@@ -52,48 +53,48 @@ struct TemporalResult {
 /// TimeUnit to reconcile against a Duration tick, and Time32's Int32
 /// physical storage would need cross-width widening this pass does not
 /// build.
-inline std::optional<TemporalResult> temporal_binop_result(
-    TypeId a_id, TimeUnit a_unit, std::string_view a_tz, TypeId b_id,
-    TimeUnit b_unit, std::string_view b_tz, TemporalOp op) {
+inline dstd::Optional<TemporalResult> temporal_binop_result(
+    TypeId a_id, TimeUnit a_unit, dstd::StringView a_tz, TypeId b_id,
+    TimeUnit b_unit, dstd::StringView b_tz, TemporalOp op) {
     auto is_ts = [](TypeId t) { return t == TypeId::Timestamp; };
     auto is_dur = [](TypeId t) { return t == TypeId::Duration; };
     auto is_time64 = [](TypeId t) { return t == TypeId::Time64; };
 
     if (!((is_ts(a_id) || is_dur(a_id) || is_time64(a_id)) &&
           (is_ts(b_id) || is_dur(b_id) || is_time64(b_id))))
-        return std::nullopt;
+        return dstd::nullopt;
 
     const TimeUnit unit = finer_unit(a_unit, b_unit);
 
     if (op == TemporalOp::Add) {
         if (is_ts(a_id) && is_dur(b_id))
-            return TemporalResult{TypeId::Timestamp, unit, std::string(a_tz)};
+            return TemporalResult{TypeId::Timestamp, unit, dstd::String(a_tz)};
         if (is_dur(a_id) && is_ts(b_id))
-            return TemporalResult{TypeId::Timestamp, unit, std::string(b_tz)};
+            return TemporalResult{TypeId::Timestamp, unit, dstd::String(b_tz)};
         if (is_dur(a_id) && is_dur(b_id))
             return TemporalResult{TypeId::Duration, unit, ""};
         if (is_time64(a_id) && is_dur(b_id))
             return TemporalResult{TypeId::Time64, unit, ""};
         if (is_dur(a_id) && is_time64(b_id))
             return TemporalResult{TypeId::Time64, unit, ""};
-        return std::nullopt;
+        return dstd::nullopt;
     }
     if (op == TemporalOp::Sub) {
         if (is_ts(a_id) && is_ts(b_id)) {
-            if (a_tz != b_tz) return std::nullopt;
+            if (a_tz != b_tz) return dstd::nullopt;
             return TemporalResult{TypeId::Duration, unit, ""};
         }
         if (is_ts(a_id) && is_dur(b_id))
-            return TemporalResult{TypeId::Timestamp, unit, std::string(a_tz)};
+            return TemporalResult{TypeId::Timestamp, unit, dstd::String(a_tz)};
         if (is_time64(a_id) && is_time64(b_id))
             return TemporalResult{TypeId::Duration, unit, ""};
         if (is_time64(a_id) && is_dur(b_id))
             return TemporalResult{TypeId::Time64, unit, ""};
         if (is_dur(a_id) && is_dur(b_id))
             return TemporalResult{TypeId::Duration, unit, ""};
-        return std::nullopt;
+        return dstd::nullopt;
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 /// Result of a Duration-by-scalar Mul/Div (the only defined temporal-scalar
@@ -101,26 +102,26 @@ inline std::optional<TemporalResult> temporal_binop_result(
 /// number does not change what a tick means. Timestamp and Time64 stay
 /// refused for every scalar op (Add/Sub included): a bare scalar carries no
 /// unit, so "timestamp + 5" cannot mean anything without guessing one.
-inline std::optional<TemporalResult> temporal_scalarop_result(TypeId a_id,
-                                                              TimeUnit a_unit,
-                                                              TemporalOp op) {
+inline dstd::Optional<TemporalResult> temporal_scalarop_result(TypeId a_id,
+                                                               TimeUnit a_unit,
+                                                               TemporalOp op) {
     if (a_id == TypeId::Duration &&
         (op == TemporalOp::Mul || op == TemporalOp::Div))
         return TemporalResult{TypeId::Duration, a_unit, ""};
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 /// Rescales `n` int64 ticks in `from` up to the finer `to` (multiplying by
 /// the exact integer ratio between the two granularities), checked for
 /// int64 overflow. Only called when `from != to`, coarse-to-fine (see
 /// finer_unit): the caller never asks this to divide, which would truncate.
-inline std::optional<std::vector<std::int64_t>> rescale_ticks_up(
+inline dstd::Optional<dstd::Vector<std::int64_t>> rescale_ticks_up(
     const std::int64_t* p, std::size_t n, TimeUnit from, TimeUnit to) {
     const std::int64_t ratio = nanos_per_unit(from) / nanos_per_unit(to);
-    std::vector<std::int64_t> out(n);
+    dstd::Vector<std::int64_t> out(n);
     for (std::size_t i = 0; i < n; ++i) {
         std::int64_t r;
-        if (__builtin_mul_overflow(p[i], ratio, &r)) return std::nullopt;
+        if (__builtin_mul_overflow(p[i], ratio, &r)) return dstd::nullopt;
         out[i] = r;
     }
     return out;

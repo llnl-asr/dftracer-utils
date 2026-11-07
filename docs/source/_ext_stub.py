@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """RTD/offline stub for the native ``dftracer_utils_ext`` module.
 
 Installs a lightweight pure-Python stand-in so the docs build (autodoc) works
@@ -25,6 +26,7 @@ def install_extension_stub() -> None:
 
     class _BaseNative:
         """RTD stub for native extension classes."""
+
         pass
 
     class DFTUtilsError(RuntimeError):
@@ -85,37 +87,6 @@ def install_extension_stub() -> None:
         def __arrow_c_stream__(self, requested_schema: object = None) -> object:
             return None
 
-    class JsonDictValue(_BaseNative):
-        """Zero-copy wrapper over a parsed DFTracer JSON event.
-
-        Supports dict-like access: ``event['name']``, ``event['args']['ret']``.
-        Call ``.to_dict()`` to materialize a regular Python dict.
-        """
-
-        def __getitem__(self, key: str) -> object:
-            raise KeyError(key)
-
-        def __len__(self) -> int:
-            return 0
-
-        def __contains__(self, key: str) -> bool:
-            return False
-
-        def keys(self) -> list[str]:
-            return []
-
-        def values(self) -> list[object]:
-            return []
-
-        def items(self) -> list[tuple[str, object]]:
-            return []
-
-        def get(self, key: str, default: object = None) -> object:
-            return default
-
-        def to_dict(self) -> dict[str, object]:
-            return {}
-
     class IndexerCheckpoint(_BaseNative):
         """Information about a checkpoint in the index."""
 
@@ -137,9 +108,6 @@ def install_extension_stub() -> None:
         def __init__(self, threads: int = 0, io_threads: int = 0) -> None:
             self._threads = threads
             self._io_threads = io_threads
-
-        def shutdown(self) -> None:
-            return None
 
         def wait_all(self) -> None:
             return None
@@ -186,11 +154,9 @@ def install_extension_stub() -> None:
             require_checkpoint: bool = True,
             require_bloom: bool = True,
             require_manifest: bool = True,
-            require_aggregation: bool = False,
-            time_interval_ms: float = 5000.0,
+            time_interval_ms: float = 1000.0,
             group_keys: list[str] | None = None,
-            custom_metric_fields: list[str] | None = None,
-            compute_percentiles: bool = False,
+            compute_percentiles: bool = True,
             checkpoint_size: int = 32 * 1024 * 1024,
             parallelism: int = 0,
             force_rebuild: bool = False,
@@ -208,10 +174,9 @@ def install_extension_stub() -> None:
                 require_checkpoint: If True, build checkpoint index (tier 1).
                 require_bloom: If True, build bloom filter data (tier 2).
                 require_manifest: If True, build manifest data (tier 2).
-                require_aggregation: If True, build aggregation data (tier 3).
-                time_interval_ms: Time interval for aggregation in milliseconds.
+                time_interval_ms: Time interval for the aggregation tier, which
+                    every build makes, in milliseconds.
                 group_keys: Keys to group by for aggregation.
-                custom_metric_fields: Custom metric fields for aggregation.
                 compute_percentiles: If True, compute percentiles during aggregation.
                 parallelism: Number of parallel indexers. 0 = auto.
                 force_rebuild: If True, rebuild indices even if they exist.
@@ -263,32 +228,33 @@ def install_extension_stub() -> None:
             """
             return None
 
-        def query_file_pids(self, file_id: int) -> set:
+        def query_file_pids(self, path: str) -> set:
             """Query PIDs observed in a specific file.
 
             Args:
-                file_id: File identifier (0-based index).
+                path: Path of the trace file, as given to the indexer.
 
             Returns:
-                Set of PIDs (int) observed in the file.
+                Set of PIDs (int) observed in the file, empty when the index
+                holds no entry for the file.
             """
             return set()
 
-        def query_all_file_pids(self) -> dict[int, set]:
+        def query_all_file_pids(self) -> dict[str, set]:
             """Query all file-to-PIDs mappings.
 
             Returns:
-                Dict mapping file_id to set of PIDs observed in that file.
+                Dict mapping trace path to set of PIDs observed in that file.
             """
             return {}
 
-        def query_file_info(self) -> tuple[dict[int, str], dict[int, set]]:
-            """Query file ID to path mapping and per-file PIDs in one call.
+        def query_file_info(self) -> dict[str, set]:
+            """Query every indexed file with its PIDs in one call.
 
             Returns:
-                Tuple of (file_id_to_path, file_pids).
+                Dict mapping trace path to set of PIDs observed in that file.
             """
-            return ({}, {})
+            return {}
 
     class CheckpointIndexer(_BaseNative):
         """Checkpoint indexer for single-file checkpoint-level operations."""
@@ -351,11 +317,7 @@ def install_extension_stub() -> None:
             return None
 
         def close(self) -> None:
-            """Release this Python wrapper's native indexer handle.
-
-            This does not force-close the shared RocksDB instance for the same
-            ``.dftindex`` path.
-            """
+            """Release this Python wrapper's native indexer handle."""
             return None
 
         @property
@@ -393,11 +355,7 @@ def install_extension_stub() -> None:
             exc_val: BaseException | None,
             exc_tb: TracebackType | None,
         ) -> None:
-            """Release this Python wrapper on context exit.
-
-            This does not force-close the shared RocksDB instance for the same
-            ``.dftindex`` path.
-            """
+            """Release this Python wrapper on context exit."""
             return None
 
     class TaskHandle(_BaseNative, Generic[_T]):
@@ -443,122 +401,26 @@ def install_extension_stub() -> None:
         ) -> dict[str, object]:
             return {}
 
-    class Aggregator(_BaseNative):
-        def __init__(self, runtime: Runtime | None = None) -> None:
-            self.runtime = runtime
+    class Index(_BaseNative):
+        """Handle to a .dftindex index root.
 
-        def process(
-            self,
-            directory: str,
-            time_interval_ms: float = 5000.0,
-            group_keys: list[str] | None = None,
-            categories: list[str] | None = None,
-            names: list[str] | None = None,
-            index_dir: str = "",
-            checkpoint_size: int = 33554432,
-            force_rebuild: bool = False,
-            chunk_size_mb: int = 64,
-            batch_size_mb: int = 4,
-            event_batch_size: int = 10000,
-            custom_metric_fields: list[str] | None = None,
-            compute_percentiles: bool = False,
-        ) -> object:
-            return None
-
-        def __call__(
-            self,
-            directory: str,
-            time_interval_ms: float = 5000.0,
-            group_keys: list[str] | None = None,
-            categories: list[str] | None = None,
-            names: list[str] | None = None,
-            index_dir: str = "",
-            checkpoint_size: int = 33554432,
-            force_rebuild: bool = False,
-            chunk_size_mb: int = 64,
-            batch_size_mb: int = 4,
-            event_batch_size: int = 10000,
-            custom_metric_fields: list[str] | None = None,
-            compute_percentiles: bool = False,
-        ) -> object:
-            return None
-
-        def iter_arrow(
-            self,
-            directory: str,
-            time_interval_ms: float = 5000.0,
-            group_keys: list[str] | None = None,
-            categories: list[str] | None = None,
-            names: list[str] | None = None,
-            index_dir: str = "",
-            checkpoint_size: int = 33554432,
-            force_rebuild: bool = False,
-            chunk_size_mb: int = 64,
-            batch_size_mb: int = 4,
-            event_batch_size: int = 10000,
-            custom_metric_fields: list[str] | None = None,
-            compute_percentiles: bool = False,
-        ) -> Iterator[object]:
-            return iter(())
-
-    class IndexDatabase(_BaseNative):
-        """Handle to a .dftindex RocksDB store.
-
-        Used by the distributed indexer coordinator to assign file ids,
-        reserve file_id ranges and bulk-ingest worker-produced SSTs.
+        Used by the distributed indexer coordinator to check staleness and to
+        record the aggregation of a distributed build.
         """
 
         def __init__(self, index_path: str) -> None:
             self._index_path = index_path
 
-        def init_schema(self) -> None:
-            return None
-
-        def assign_file_ids(self, paths: list[str]) -> list[int]:
-            """The file_id of each path (parallel to `paths`): its registered
-            id, or a newly reserved one. The file record is written with the
-            file's index data."""
-            return []
-
-        def reserve_file_id_range(self, count: int) -> int:
-            """Atomically reserve `count` contiguous file_ids; return first."""
-            return 0
-
-        def bulk_ingest(
-            self,
-            registry: "SstArtifactRegistry",
-            skip_cfs: object = None,
-        ) -> None:
-            """Ingest all SSTs collected in the registry.
-
-            skip_cfs is an optional iterable of CF names whose SSTs are left
-            outside the unified DB. Distributed builds pass
-            {"aggregation", "system_metrics"} to keep per-worker AGG/SYS SSTs
-            addressable via `agg_manifest.json` for parallel reads at analyze
-            time. See `dftracer.utils.dask.consolidate_index` to fold them
-            back into the unified DB later.
-            """
-            return None
+        def find_stale_files(self, paths: list[str]) -> dict[str, object]:
+            """Stat-only (mtime + size) staleness check of `paths` against the
+            index. Returns a dict with keys `changed`, `added`, `removed`
+            (lists of paths) and `stale` (bool)."""
+            return {}
 
         def write_agg_config(self, aggregation_config: object) -> None:
             """Record the aggregation config a distributed build aggregated its
             files with (a ``dftracer.utils.indexer.AggregationConfig``). Each
-            file's ``dftracer.agg`` entry comes with its SSTs."""
-            return None
-
-        def write_aggregation_tracker(self, blobs: list[bytes]) -> None:
-            """Merge serialized AssociationTracker blobs and write the result
-            to the aggregation tier."""
-            return None
-
-    class SstArtifactRegistry(_BaseNative):
-        """Thread-safe collector for SST artifact paths produced by workers."""
-
-        def __init__(self) -> None:
-            pass
-
-        def append(self, artifacts_dict: dict[str, str | None]) -> None:
-            """Add a per-batch Artifacts dict as returned by `build_sst_batch`."""
+            file's ``dftracer.agg`` entry comes with its data."""
             return None
 
     def merge_flamegraph_partials(partials: list[bytes]) -> object:
@@ -568,10 +430,6 @@ def install_extension_stub() -> None:
     def get_default_runtime() -> Runtime:
         """Return the process-wide default runtime."""
         return Runtime()
-
-    def set_default_runtime(runtime: Runtime | None = None) -> None:
-        """Replace or clear the process-wide default runtime."""
-        return None
 
     def peek_default_runtime() -> Runtime | None:
         """Return the process-wide default runtime without creating one."""
@@ -614,30 +472,23 @@ def install_extension_stub() -> None:
         """
         return {}
 
-    def build_sst_batch(
+    def build_index_batch(
         files: list[str],
-        file_ids: list[int],
-        staging_dir: str,
-        batch_id: str,
-        index_dir: str = "",
+        index_dir: str,
         checkpoint_size: int = 33554432,
-        build_manifest: bool = False,
         force_rebuild: bool = False,
+        build_bloom: bool = True,
         bloom_dimensions: list[str] | None = None,
         parallelism: int = 0,
-        flush_every_files: int = 0,
         runtime: Runtime | object | None = None,
         aggregation_config: object = None,
-        file_slices: object = None,
-    ) -> tuple[list[dict[str, str | None]], bytes]:
-        """Run the indexer pipeline with an SST sink. Returns
-        `(artifact_dicts, tracker_blob)`. `tracker_blob` is the serialized
-        merged AssociationTracker for the batch (empty bytes when
-        `aggregation_config` is None). `file_slices` enables intra-file
-        parallelism; entries are `None` (whole file) or
-        `(member_begin, member_end, checkpoint_idx_base,
-        skip_file_scoped_writes, members)`."""
-        return ([], b"")
+        progress: object = None,
+    ) -> None:
+        """Run the indexer pipeline on `files` into the index at `index_dir`,
+        which this worker writes directly and numbers its own files in. Its
+        aggregation folds are always created; `aggregation_config` customizes
+        them and defaults to the standard config."""
+        return None
 
     def plan_lpt_partition(
         entries: list[tuple[str, int]], num_workers: int
@@ -653,7 +504,9 @@ def install_extension_stub() -> None:
         runtime: Runtime | object | None = None,
     ) -> list[tuple[str, int]]:
         """Parallel directory scan returning (path, size) tuples for regular
-        files matching the patterns."""
+        files whose name matches one of the patterns: ``*`` is any run of
+        characters and ``?`` is one character. A pattern that starts with ``.``
+        is a suffix, as ``*`` plus the pattern. No patterns lists every file."""
         return []
 
     def enable_aggregation_deterministic_ids() -> None:
@@ -661,30 +514,16 @@ def install_extension_stub() -> None:
         so the same string maps to the same 32-bit id in every worker process."""
         return None
 
-    def move_artifacts(
-        artifacts: dict[str, str | None], dest_dir: str
-    ) -> dict[str, str | None]:
-        """Move every populated SST in `artifacts` into `dest_dir` via the
-        C++ rename/copy helper, returning a fresh dict with the new paths."""
-        return {}
+    def write_shard_set(index_root: str, shard_dirs: list[str]) -> None:
+        """Catalog ``shard_dirs`` as the shards of the index root, in the root's
+        ``shards.json``. A shard under the root is stored relative to it."""
+        return None
 
-    def enumerate_gzip_members(
-        files: list[str],
-        runtime: Runtime | object | None = None,
-    ) -> list[list[tuple[int, int]]]:
-        """Cooperative async scan of gzip member offsets. Returns lists of
-        `(c_offset, c_size)` parallel to `files`; empty for non-gzip files."""
-        return []
-
-    def plan_work_units(
-        member_map: list[list[tuple[int, int]]],
-        num_workers: int,
-        target_c_size: int = 0,
-    ) -> list[list[tuple[int, int, int, int]]]:
-        """Deterministic LPT assignment of intra-file gzip-member slices across
-        workers. Returns per-worker lists of
-        `(file_idx, member_begin, member_end, c_size)`."""
-        return []
+    def consolidate_shard_set(index_root: str) -> int:
+        """Merge the shards the root's ``shards.json`` names into the root's own
+        store by moving their data files, then remove the manifest and the shard
+        directories. Returns the number of trace files the shards indexed."""
+        return 0
 
     class _Series(_BaseNative):
         """Native columnar Series handle (SIMD ops + Arrow C Data Interface).
@@ -773,33 +612,29 @@ def install_extension_stub() -> None:
         "DFTUtilsDuqlError",
         "DFTUtilsReaderError",
         "DFTUtilsValueError",
-        "IndexDatabase",
+        "Index",
         "Indexer",
         "IndexerCheckpoint",
-        "JsonDictValue",
         "Runtime",
-        "SstArtifactRegistry",
         "TaskHandle",
     ]
     _function_symbols = [
         "_dataframe_from_arrow",
         "_series_from_arrow",
         "_series_from_numpy",
-        "build_sst_batch",
+        "build_index_batch",
         "peek_default_runtime",
         "enable_aggregation_deterministic_ids",
-        "enumerate_gzip_members",
+        "write_shard_set",
+        "consolidate_shard_set",
         "get_default_runtime",
         "get_log_level",
         "jit_run_op",
         "memory_budget_advice",
         "merge_flamegraph_partials",
-        "move_artifacts",
         "plan_lpt_partition",
-        "plan_work_units",
         "read_arrow_files_parallel",
         "scan_files",
-        "set_default_runtime",
         "set_log_color",
         "set_log_level",
         "vec_eval",
@@ -820,6 +655,7 @@ def install_extension_stub() -> None:
     # Module constants accessed by name.
     ext.NUM_SHARDS = 0
     ext.PLUGIN_ABI_VERSION = 0
+    ext.INPUT_FILE_PATTERNS = ("*.gz",)
 
     # Fallback: any other native symbol (the _Native*/_TraceViewer handles, the
     # arrow ops _join/_window/..., future additions) resolves to a permissive

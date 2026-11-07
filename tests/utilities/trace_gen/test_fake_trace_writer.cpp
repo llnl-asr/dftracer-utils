@@ -1,15 +1,17 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <dftracer/utils/utilities/trace_gen/fake_trace_writer.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::reader;
 using namespace dftracer::utils::utilities::trace_gen;
 using namespace dftracer::utils::coro;
@@ -17,9 +19,9 @@ using namespace dftu_utils_test;
 
 namespace {
 
-CoroTask<std::vector<std::string>> collect_lines(
+CoroTask<dstd::Vector<dstd::String>> collect_lines(
     AsyncGenerator<dftracer::utils::utilities::fileio::lines::Line> gen) {
-    std::vector<std::string> lines;
+    dstd::Vector<dstd::String> lines;
     while (auto line = co_await gen.next()) {
         lines.emplace_back(line->content);
     }
@@ -31,7 +33,7 @@ CoroTask<std::vector<std::string>> collect_lines(
 TEST_SUITE("trace_gen::TraceWriter") {
     TEST_CASE("writes a gzip trace that TraceReader can read back") {
         TestEnvironment env(0);
-        const std::string gz_path = env.get_dir() + "/fake.pfw.gz";
+        const dstd::String gz_path = env.dir() + "/fake.pfw.gz";
 
         constexpr int NUM_EVENTS = 8;
         {
@@ -54,10 +56,10 @@ TEST_SUITE("trace_gen::TraceWriter") {
             writer.write("]\n");
         }  // writer flushes and closes on scope exit
 
-        REQUIRE(fs::exists(gz_path));
-        CHECK(fs::file_size(gz_path) > 0);
+        REQUIRE(dstd::fs::exists(gz_path).value());
+        CHECK(dstd::fs::file_size(gz_path).value() > 0);
 
-        TraceReader reader({.file_path = gz_path});
+        TraceReader reader({.file_path = dstd::String(gz_path)});
         CHECK_FALSE(reader.has_index());
 
         auto lines = collect_lines(reader.read_lines()).get();
@@ -65,10 +67,33 @@ TEST_SUITE("trace_gen::TraceWriter") {
         std::size_t event_lines = 0;
         bool saw_metadata = false;
         for (const auto& l : lines) {
-            if (l.find(R"("ph":1)") != std::string::npos) ++event_lines;
-            if (l.find(R"("ph":4)") != std::string::npos) saw_metadata = true;
+            if (l.find(R"("ph":1)") != dstd::String::npos) ++event_lines;
+            if (l.find(R"("ph":4)") != dstd::String::npos) saw_metadata = true;
         }
         CHECK(event_lines == NUM_EVENTS);
         CHECK(saw_metadata);
+    }
+
+    TEST_CASE("escapes control characters in string fields") {
+        TestEnvironment env(0);
+        const dstd::String gz_path = env.dir() + "/escaped.pfw.gz";
+        {
+            TraceWriter writer(gz_path);
+            EventArgs a;
+            a.id = 1;
+            a.name =
+                "a\nb\x01"
+                "c\td";
+            a.cat = "POSIX";
+            a.hhash = "hh0";
+            emit_event(writer, a);
+        }
+
+        TraceReader reader({.file_path = dstd::String(gz_path)});
+        auto lines = collect_lines(reader.read_lines()).get();
+
+        REQUIRE(lines.size() == 1);
+        CHECK(lines[0].find(R"("name":"a\nb\u0001c\td")") !=
+              dstd::String::npos);
     }
 }

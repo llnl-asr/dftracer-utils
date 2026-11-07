@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Series and DataFrame row ranges equal pyarrow's slice for every layout."""
 
 import pytest

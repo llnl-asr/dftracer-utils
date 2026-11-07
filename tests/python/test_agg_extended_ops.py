@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """The extended aggregate ops (argmin, bit_or, distinct, the ordered-list and
 sketch ops, and the two-variable co-moments) through the columnar group-by
 surface."""

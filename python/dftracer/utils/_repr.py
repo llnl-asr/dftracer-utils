@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Plain-text and HTML rendering of frames and series, shaped like pandas' default
 ``repr`` and built from only the rows that are shown."""
 

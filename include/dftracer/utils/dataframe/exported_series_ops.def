@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Built-in dataframe column ops seeded into the op registry, one per line.
  * APPEND ONLY - a name is a stable public key; never rename or repurpose one.
  *
@@ -9,8 +10,8 @@
  *                   plugin registering one is refused at the plugin seam, so
  *                   a plugin can never shadow a host op. <family> is the
  *                   source module the utility comes from (hash ->
- *                   core/common/hash, hex -> the scalar hex codecs, text ->
- *                   utilities/text, fs -> utilities/filesystem, file ->
+ *                   dstd/hash, hex -> the scalar hex codecs, text ->
+ *                   utilities/text, fs -> runtime/fs, file ->
  *                   utilities/fileio). A leaf drops the family word when it
  *                   would repeat it (hex64_parse -> dftu.hex.parse64).
  *     fn          - the dftu_* C ABI function implementing it.

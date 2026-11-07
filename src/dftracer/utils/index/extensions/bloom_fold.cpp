@@ -1,35 +1,42 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/index/build/index_write_lock.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
-#include <dftracer/utils/index/store/index_write.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
 #include <cmath>
 #include <exception>
-#include <map>
+#include <limits>
 #include <mutex>
-#include <string_view>
 #include <system_error>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::index::extensions {
 
 namespace {
 
 using BV = index::schemas::dft::BloomCore;
-constexpr std::uint32_t NO_ID = dftracer::utils::StringIntern::NO_ID;
+constexpr std::uint32_t NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
 
-std::string_view resolve_or_empty(const dftracer::utils::StringIntern& intern,
-                                  std::uint32_t id) {
-    return id == NO_ID ? std::string_view{} : intern.resolve(id);
+dstd::StringView resolve_or_empty(
+    const dftracer::utils::dstd::StringIntern& intern, std::uint32_t id) {
+    return id == NO_ID ? dstd::StringView{} : intern.resolve(id);
 }
 
 // What a stored evidence record costs besides its path and payload.
@@ -37,38 +44,92 @@ constexpr std::uint64_t RECORD_BYTES = 32;
 
 // The bits of a chunk bloom sized for `values`, as write_chunk sizes it.
 std::uint64_t bloom_bytes(std::size_t values, double false_positive_rate) {
-    return BloomFilter::optimal_num_bits(values + 1, false_positive_rate) / 8;
+    return BloomFilter::optimal_bit_count(values + 1, false_positive_rate) / 8;
 }
 
 }  // namespace
 
 namespace {
 
-std::string capture_path(const std::string& dim) { return "args." + dim; }
+dstd::String capture_path(const dstd::String& dim) { return "args." + dim; }
 
 }  // namespace
 
-BloomFold::BloomFold(dftracer::utils::StringIntern& intern,
+BloomFold::BloomFold(dftracer::utils::dstd::StringIntern& intern,
                      index::schemas::dft::BloomCore::ChunkIndexerConfig config)
     : intern_(&intern), config_(std::move(config)) {
     config_.validate();
     extra_keys_.reserve(config_.extra_dimensions.size());
-    for (const std::string& dim : config_.extra_dimensions)
+    for (const dstd::String& dim : config_.extra_dimensions)
         extra_keys_.push_back(intern_->get_or_insert(
             captures_nested() && trace::views::detail::is_nested_path(dim)
                 ? capture_path(dim)
                 : dim));
     auto_skip_.insert(extra_keys_.begin(), extra_keys_.end());
-    for (const std::string& dim : config_.extra_dimensions)
+    for (const dstd::String& dim : config_.extra_dimensions)
         auto_skip_.insert(intern_->get_or_insert(dim));
     auto_skip_.insert(intern_->get_or_insert("cmd_hash"));
     auto_skip_.insert(intern_->get_or_insert("exec_hash"));
     // An args key named like a fixed dimension would be written under the
     // fixed dimension's path and replace its data.
     if (config_.fixed_dimensions)
-        for (std::string_view dim : BV::fixed_dimension_names())
+        for (dstd::StringView dim : BV::fixed_dimension_names())
             auto_skip_.insert(intern_->get_or_insert(dim));
     dur_key_ = intern_->get_or_insert("dur");
+}
+
+BloomFold::Catalog BloomFold::file_catalog(const dstd::String& file) {
+    auto it = files_.find(file);
+    if (it == files_.end()) return {};
+    flush_shapes(it->second);
+    return catalog(it->second);
+}
+
+void BloomFold::observe_shape(FileState& fs,
+                              dstd::Span<const SchemaLeaf> leaves) {
+    if (leaves.empty()) return;
+    auto same = [&](const Shape& s) {
+        return std::equal(leaves.begin(), leaves.end(), s.leaves.begin(),
+                          s.leaves.end());
+    };
+    if (fs.last_shape < fs.shapes.size() && same(fs.shapes[fs.last_shape])) {
+        ++fs.shapes[fs.last_shape].events;
+        return;
+    }
+    std::uint64_t h = leaves.size();
+    for (const auto& [id, tag] : leaves)
+        h = dstd::hash::splitmix64(h ^ ((std::uint64_t{id} << 8) | tag));
+    for (;; ++h) {
+        auto [it, fresh] = fs.shape_ids.try_emplace(
+            h, static_cast<std::uint32_t>(fs.shapes.size()));
+        if (fresh) {
+            Shape& s = fs.shapes.emplace_back();
+            s.leaves.assign(leaves.begin(), leaves.end());
+        } else if (!same(fs.shapes[it->second]))
+            continue;
+        fs.last_shape = it->second;
+        ++fs.shapes[it->second].events;
+        return;
+    }
+}
+
+void BloomFold::flush_shapes(FileState& fs) {
+    dstd::HashMap<std::uint64_t, std::uint64_t> total;
+    for (Shape& s : fs.shapes) {
+        if (s.events == 0) continue;
+        for (const auto& [id, tag] : s.leaves)
+            total[(std::uint64_t{id} << 8) | tag] += s.events;
+        s.events = 0;
+    }
+    for (const auto& [key, n] : total) {
+        const auto tag = static_cast<std::uint8_t>(key & 0xFF);
+        auto& stat = fs.paths[static_cast<std::uint32_t>(key >> 8)];
+        observe_catalog_path(stat, tag);
+        ++catalog_observations_;
+        if (static_cast<index::store::PathType>(tag) !=
+            index::store::PathType::NullValue)
+            stat.count += n - 1;
+    }
 }
 
 BloomFold::Catalog BloomFold::catalog(const FileState& fs) const {
@@ -128,12 +189,17 @@ void BloomFold::summarize(PathEvidence& ev, const AutoField& f) const {
 }
 
 BloomFold::AutoKeys BloomFold::select_auto_keys(
-    const std::string& file, const FileState& fs, std::uint64_t data_chunks,
-    const std::map<std::string, std::uint32_t>& keys) const {
-    std::error_code ec;
-    const auto file_bytes = fs::file_size(file, ec);
+    dstd::CStringView file, const FileState& fs, std::uint64_t data_chunks,
+    const dstd::Map<dstd::String, std::uint32_t>& keys) const {
+    std::uint64_t file_bytes = 0;
+    if (file_bytes_) {
+        file_bytes = *file_bytes_;
+    } else {
+        dftracer::utils::common::InputFileStat st;
+        if (dftracer::utils::common::stat_input(file, st)) file_bytes = st.size;
+    }
     const auto share = static_cast<std::uint64_t>(
-        config_.stats_share * static_cast<double>(ec ? 0 : file_bytes));
+        config_.stats_share * static_cast<double>(file_bytes));
     const std::uint64_t cap = std::max(index::build::STATS_FLOOR_BYTES, share);
     const double fpr = config_.false_positive_rate;
     const std::uint64_t file_bloom_floor =
@@ -141,7 +207,7 @@ BloomFold::AutoKeys BloomFold::select_auto_keys(
     std::uint64_t used = data_chunks * config_.extra_dimensions.size() *
                          (2 * RECORD_BYTES + file_bloom_floor);
 
-    std::vector<std::pair<std::uint64_t, const std::string*>> ranked;
+    dstd::Vector<dstd::Pair<std::uint64_t, const dstd::String*>> ranked;
     ranked.reserve(keys.size());
     for (const auto& [name, k] : keys) {
         auto it =
@@ -180,7 +246,7 @@ BloomFold::AutoKeys BloomFold::select_auto_keys(
 }
 
 BloomFold::ChunkState BloomFold::assemble_chunk(
-    FileState& fs, std::uint64_t cp, const std::vector<std::string>& dims,
+    FileState& fs, std::uint64_t cp, const dstd::Vector<dstd::String>& dims,
     const AutoKeys& keys) {
     ChunkState out;
     if (auto base = fs.chunks.find(cp); base != fs.chunks.end()) {
@@ -228,45 +294,78 @@ BloomFold::ChunkState BloomFold::assemble_chunk(
     return out;
 }
 
-BloomFold::AutoKeys BloomFold::auto_keys(const std::string& file,
+BloomFold::AutoKeys BloomFold::auto_keys(dstd::CStringView file,
                                          FileState& fs) {
+    flush_shapes(fs);
     std::uint64_t data_chunks = 0;
     for (const auto& chunk : fs.spill.keys)
         if (chunk.events > 0) ++data_chunks;
     for (const auto& [cp, chunk] : fs.chunks)
         if (chunk.statistics.total_events > 0) ++data_chunks;
-    std::map<std::string, std::uint32_t> keys;
+    dstd::Map<dstd::String, std::uint32_t> keys;
     for (const auto& [cp, ac] : fs.auto_chunks)
         for (const auto& [k, f] : ac) {
-            keys.emplace(std::string(intern_->resolve(k)), k);
+            keys.emplace(dstd::String(intern_->resolve(k)), k);
             summarize(fs.evidence[k], f);
         }
     for (std::uint32_t k : fs.spill.key_union)
-        keys.emplace(std::string(intern_->resolve(k)), k);
+        keys.emplace(dstd::String(intern_->resolve(k)), k);
     return select_auto_keys(file, fs, data_chunks, keys);
 }
 
-std::vector<std::string> BloomFold::dims_of(const AutoKeys& keys) const {
-    std::vector<std::string> dims = config_.extra_dimensions;
+dstd::Vector<dstd::String> BloomFold::dims_of(const AutoKeys& keys) const {
+    dstd::Vector<dstd::String> dims = config_.extra_dimensions;
     for (const AutoKey& key : keys) dims.push_back(key.name);
     return dims;
 }
 
-void BloomFold::write_file(index::store::IndexWrite& w, int file_id,
-                           const std::string& file, FileState& fs) {
-    // A whole-file read fills every checkpoint, so any gap is an empty chunk
-    // for an unobserved member. One chunk is assembled at a time.
-    const std::uint64_t end = fs.chunks.rbegin()->first + 1;
+void BloomFold::write_pending(index::FileBuild& build, FileState& fs) {
+    auto& sp = fs.spill;
+    if (!sp.acc) sp.acc.emplace(config_);
+    for (auto& pc : sp.pending)
+        BV::write_chunk(build, pc.checkpoint, pc.chunk, pc.dims, config_,
+                        *sp.acc);
+    sp.pending.clear();
+}
+
+void BloomFold::write_file(index::FileBuild& build, dstd::CStringView file,
+                           FileState& fs) {
+    auto& sp = fs.spill;
+    write_pending(build, fs);
+    // A whole-file read fills every checkpoint, so any gap below the last one
+    // is an empty chunk for an unobserved member, unless its run wrote it
+    // already. One chunk is assembled at a time.
+    const std::uint64_t end =
+        fs.chunks.empty() ? sp.next
+                          : std::max(sp.next, fs.chunks.rbegin()->first + 1);
     const AutoKeys keys = auto_keys(file, fs);
     const auto dims = dims_of(keys);
-    for (auto ext : BV::tier_extensions(config_))
-        index::store::records::clear_file(w, ext, file_id);
-    BV::FileAccumulator acc(config_);
-    for (std::uint64_t cp = 0; cp < end; ++cp)
-        BV::write_chunk(w, file_id, cp, assemble_chunk(fs, cp, dims, keys),
-                        dims, config_, acc);
+    // The runs hold every candidate path's evidence. The paths the selection
+    // did not keep are erased from them.
+    dstd::HashSet<std::uint32_t> kept;
+    for (const AutoKey& key : keys)
+        if (!key.absence_only) kept.insert(key.id);
+    for (std::uint32_t k : sp.key_union)
+        if (!kept.contains(k))
+            for (auto ext : {index::store::IndexExtension::Zonemap,
+                             index::store::IndexExtension::Bloom,
+                             index::store::IndexExtension::Counts})
+                index::erase_path(build, ext, intern_->resolve(k));
+    for (std::uint64_t cp = sp.next; cp < end; ++cp)
+        BV::write_chunk(build, cp, assemble_chunk(fs, cp, dims, keys), dims,
+                        config_, *sp.acc);
+    // A run wrote the records of every auto key it met; one the selection kept
+    // only as absence entries still owes the chunks that lacked it.
+    for (const auto& spilled : sp.keys) {
+        dstd::HashSet<std::uint32_t> had(spilled.keys.begin(),
+                                         spilled.keys.end());
+        for (const AutoKey& key : keys)
+            if (!had.contains(key.id))
+                BV::write_absent_extra(build, spilled.checkpoint, key.name,
+                                       spilled.events, config_);
+    }
     fs.auto_chunks.clear();
-    BV::finish_file(w, file_id, acc, config_, dims, catalog(fs));
+    BV::finish_file(build, *sp.acc, config_, dims, catalog(fs));
 }
 
 std::uint64_t BloomFold::resident_bytes(const FileState& fs,
@@ -306,15 +405,43 @@ std::uint64_t BloomFold::resident_bytes(const FileState& fs,
     return n;
 }
 
-void BloomFold::enable_spill(std::uint64_t share, std::string dir,
-                             int file_id) {
+void BloomFold::enable_spill(std::uint64_t share, index::FileBuild& build) {
     spill_share_ = share;
-    spill_dir_ = std::move(dir);
-    spill_file_id_ = file_id;
+    build_ = &build;
+}
+
+coro::CoroTask<void> BloomFold::write_run() {
+    spill_pending_ = false;
+    if (files_.empty()) co_return;
+    FileState& fs = files_.begin()->second;
+    auto& sp = fs.spill;
+    if (sp.pending.empty()) co_return;
+    auto held = co_await index::claim(*build_);
+    if (!held) co_return;
+    write_pending(held->build(), fs);
+    auto staged = co_await held->stage();
+    if (staged) {
+        ++sp.runs;
+        sp.run_bytes = 0;
+    }
 }
 
 std::size_t BloomFold::spill_runs() const {
-    return files_.empty() ? 0 : files_.begin()->second.spill.runs.size();
+    if (files_.empty()) return 0;
+    const auto& sp = files_.begin()->second.spill;
+    return sp.runs + (sp.run_bytes > 0 ? 1 : 0);
+}
+
+std::uint64_t BloomFold::run_limit(std::uint64_t share,
+                                   std::size_t runs) noexcept {
+    const std::uint64_t base = std::max<std::uint64_t>(
+        share / 4, common::constants::file_admission::MIN_SPILL_RUN_BYTES);
+    const std::size_t doublings = std::min(
+        runs / common::constants::file_admission::SPILL_RUNS_PER_DOUBLING,
+        common::constants::file_admission::MAX_SPILL_DOUBLINGS);
+    return base > (std::numeric_limits<std::uint64_t>::max() >> doublings)
+               ? std::numeric_limits<std::uint64_t>::max()
+               : base << doublings;
 }
 
 void BloomFold::chunk_started(FileState& fs, std::uint64_t cp) {
@@ -328,21 +455,12 @@ void BloomFold::chunk_started(FileState& fs, std::uint64_t cp) {
 void BloomFold::spill(FileState& fs, std::uint64_t upto) {
     auto& sp = fs.spill;
     if (!sp.acc) sp.acc.emplace(config_);
-    auto open_run = [&] {
-        return std::make_unique<index::store::IndexDatabaseSstWriterContext>(
-            spill_dir_, "run_" + std::to_string(sp.runs.size()));
-    };
-    auto run = open_run();
-    if (sp.runs.empty())
-        for (auto ext : BV::tier_extensions(config_))
-            index::store::records::clear_file(*run, ext, spill_file_id_);
-    std::uint64_t buffered = 0;
     for (std::uint64_t cp = sp.next; cp < upto; ++cp) {
-        buffered += resident_bytes(fs, cp);
+        sp.run_bytes += resident_bytes(fs, cp);
         AutoKeys own;
         if (auto ac = fs.auto_chunks.find(cp); ac != fs.auto_chunks.end()) {
             for (const auto& [k, f] : ac->second) {
-                own.push_back({std::string(intern_->resolve(k)), k, false});
+                own.push_back({dstd::String(intern_->resolve(k)), k, false});
                 summarize(fs.evidence[k], f);
             }
             std::sort(own.begin(), own.end(),
@@ -350,132 +468,25 @@ void BloomFold::spill(FileState& fs, std::uint64_t upto) {
                           return a.name < b.name;
                       });
         }
-        const ChunkState chunk = assemble_chunk(fs, cp, dims_of(own), own);
-        BV::write_chunk(*run, spill_file_id_, cp, chunk, dims_of(own), config_,
-                        *sp.acc);
+        ChunkState chunk = assemble_chunk(fs, cp, dims_of(own), own);
         sp.events += chunk.statistics.total_events;
-        std::vector<std::uint32_t> ids;
+        dstd::Vector<std::uint32_t> ids;
         ids.reserve(own.size());
         for (const AutoKey& key : own) {
             ids.push_back(key.id);
             sp.key_union.insert(key.id);
         }
         sp.keys.push_back({cp, chunk.statistics.total_events, std::move(ids)});
-        if (buffered > spill_share_ / 4 && cp + 1 < upto) {
-            sp.runs.push_back(run->commit());
-            run = open_run();
-            buffered = 0;
-        }
+        sp.pending.push_back({cp, dims_of(own), std::move(chunk)});
     }
-    sp.runs.push_back(run->commit());
     sp.next = upto;
     sp.resident = 0;
+    if (sp.run_bytes > run_limit(spill_share_, sp.runs)) spill_pending_ = true;
 }
 
-std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>
-BloomFold::finish_spilled(int file_id) {
-    using Run = index::store::IndexDatabaseSstWriterContext;
-    const std::string& file = files_.begin()->first;
-    FileState& fs = files_.begin()->second;
-    auto& sp = fs.spill;
-    const std::uint64_t end =
-        fs.chunks.empty() ? sp.next
-                          : std::max(sp.next, fs.chunks.rbegin()->first + 1);
-    const AutoKeys keys = auto_keys(file, fs);
-    const auto dims = dims_of(keys);
-    std::size_t next_run = sp.runs.size();
-    auto open_run = [&] {
-        return std::make_unique<Run>(spill_dir_,
-                                     "run_" + std::to_string(next_run++));
-    };
-
-    ankerl::unordered_dense::set<std::uint32_t> full;
-    for (const AutoKey& key : keys)
-        if (!key.absence_only) full.insert(key.id);
-    // The runs hold every candidate path's evidence; this run's range deletes
-    // cover them, since each file of one ingest gets its own sequence number,
-    // and spare the runs after it.
-    if (!sp.acc) sp.acc.emplace(config_);
-    {
-        auto deletes = open_run();
-        // A file that never spilled clears its tier here, as its first spill
-        // run would have.
-        if (sp.runs.empty())
-            for (auto ext : BV::tier_extensions(config_))
-                index::store::records::clear_file(*deletes, ext, file_id);
-        for (std::uint32_t k : sp.key_union)
-            if (!full.contains(k))
-                for (auto ext : {index::store::IndexExtension::ZONEMAP,
-                                 index::store::IndexExtension::BLOOM,
-                                 index::store::IndexExtension::COUNTS})
-                    index::store::records::clear_path(*deletes, ext, file_id,
-                                                      intern_->resolve(k));
-        auto run = deletes->commit();
-        if (!run.empty()) sp.runs.push_back(std::move(run));
-    }
-
-    // The chunks go to several runs that sort and write at once. They are
-    // written in order, since each one also folds into the file accumulator.
-    const std::uint64_t left = end - sp.next;
-    const std::size_t parts =
-        static_cast<std::size_t>(std::clamp<std::uint64_t>(
-            std::max(left, std::uint64_t{sp.keys.size()}) / FINISH_PART_CHUNKS,
-            1, FINISH_PARTS));
-    std::vector<std::unique_ptr<Run>> runs;
-    for (std::size_t p = 0; p < parts; ++p) {
-        runs.push_back(open_run());
-        sp.runs.emplace_back();
-    }
-    auto part_of = [parts](std::uint64_t i, std::uint64_t n) {
-        return static_cast<std::size_t>(i * parts /
-                                        std::max<std::uint64_t>(n, 1));
-    };
-    for (std::uint64_t cp = sp.next; cp < end; ++cp)
-        BV::write_chunk(*runs[part_of(cp - sp.next, left)], file_id, cp,
-                        assemble_chunk(fs, cp, dims, keys), dims, config_,
-                        *sp.acc);
-    const std::size_t first = sp.runs.size() - parts;
-    default_runtime().parallel_for(
-        static_cast<std::int64_t>(parts), 1,
-        [&](std::int64_t b, std::int64_t e) {
-            for (auto p = static_cast<std::size_t>(b);
-                 p < static_cast<std::size_t>(e); ++p) {
-                for (std::size_t i = 0; i < sp.keys.size(); ++i) {
-                    if (part_of(i, sp.keys.size()) != p) continue;
-                    const auto& chunk = sp.keys[i];
-                    ankerl::unordered_dense::set<std::uint32_t> had(
-                        chunk.keys.begin(), chunk.keys.end());
-                    for (const AutoKey& key : keys)
-                        if (!had.contains(key.id))
-                            BV::write_absent_extra(*runs[p], file_id,
-                                                   chunk.checkpoint, key.name,
-                                                   chunk.events, config_);
-                }
-                sp.runs[first + p] = runs[p]->commit();
-            }
-        });
-
-    std::erase_if(sp.runs, [](const Run::Artifacts& r) { return r.empty(); });
-
-    auto last = open_run();
-    BV::finish_file(*last, file_id, *sp.acc, config_, dims, catalog(fs));
-    sp.runs.push_back(last->commit());
-    sp.handed_off = true;
-    return std::move(sp.runs);
-}
-
-BloomFold::~BloomFold() {
-    if (spill_dir_.empty()) return;
-    for (const auto& [file, fs] : files_)
-        if (!fs.spill.runs.empty() && !fs.spill.handed_off) {
-            std::error_code ec;
-            fs::remove_all(spill_dir_, ec);
-        }
-}
-
-std::vector<std::string> BloomFold::extra_captures() const {
-    std::vector<std::string> out;
-    for (const std::string& dim : config_.extra_dimensions)
+dstd::Vector<dstd::String> BloomFold::extra_captures() const {
+    dstd::Vector<dstd::String> out;
+    for (const dstd::String& dim : config_.extra_dimensions)
         if (captures_nested() && trace::views::detail::is_nested_path(dim))
             out.push_back(capture_path(dim));
     return out;
@@ -486,8 +497,14 @@ void BloomFold::step(const trace::views::detail::FoldBatch& batch) {
 }
 
 BloomFold::Lane BloomFold::open(const trace::views::detail::FoldBatch& batch) {
-    FileState& fs = files_[batch.unit.file_path];
-    if (fs.index_path.empty()) fs.index_path = batch.unit.index_path;
+    const dstd::StringView file = batch.unit.file_path;
+    if (!last_state_ || last_file_ != file) {
+        last_state_ = &files_[file];
+        last_file_.assign(file);
+    }
+    FileState& fs = *last_state_;
+    if (fs.index_path.empty())
+        fs.index_path.assign(dstd::StringView(batch.unit.index_path));
 
     const std::uint64_t cp = batch.unit.checkpoint_idx;
     auto it = fs.chunks.find(cp);
@@ -495,16 +512,14 @@ BloomFold::Lane BloomFold::open(const trace::views::detail::FoldBatch& batch) {
         it = fs.chunks.emplace(cp, ChunkState{}).first;
         BV::init_chunk_state(it->second, config_, config_.extra_dimensions);
     }
-    if (!spill_dir_.empty() && cp >= SPILL_LAG)
-        chunk_started(fs, cp - SPILL_LAG);
+    if (spills() && cp >= SPILL_LAG) chunk_started(fs, cp - SPILL_LAG);
     Lane lane;
     lane.chunk_ = &it->second;
     lane.auto_chunk_ = &fs.auto_chunks[cp];
 
     for (const auto& e : batch.events)
-        if (e.phase != trace::RecordPhase::METADATA)
-            for (const auto& [leaf_id, tag] : e.schema_leaves)
-                observe_catalog_path(fs.paths[leaf_id], tag);
+        if (e.phase != trace::RecordPhase::Metadata)
+            observe_shape(fs, e.schema_leaves);
     return lane;
 }
 
@@ -512,10 +527,12 @@ void BloomFold::observe(const Lane& lane,
                         const trace::views::detail::FoldBatch& batch) {
     ChunkState& chunk = *lane.chunk_;
     AutoChunk& auto_chunk = *lane.auto_chunk_;
-    BV::PidTidCache pidtid;
+    // A parse never suspends, so no two observes share a thread's cache.
+    thread_local BV::EventCache cache;
+    cache.clear();
 
     for (const auto& e : batch.events) {
-        if (e.phase == trace::RecordPhase::METADATA) {
+        if (e.phase == trace::RecordPhase::Metadata) {
             BV::observe_metadata(chunk, resolve_or_empty(*intern_, e.name_id));
             for (const char* p : {"name", "ph", "pid", "tid", "ts"})
                 BV::observe_metadata_path(chunk, p);
@@ -526,16 +543,16 @@ void BloomFold::observe(const Lane& lane,
             if (e.hhash_id != NO_ID) BV::observe_metadata_path(chunk, "hhash");
             for (const auto& [k, v] : e.args)
                 BV::observe_metadata_path(
-                    chunk, "args." + std::string(intern_->resolve(k)));
+                    chunk, "args." + dstd::String(intern_->resolve(k)));
             continue;
         }
 
-        const std::string_view name = resolve_or_empty(*intern_, e.name_id);
-        const std::string_view cat = resolve_or_empty(*intern_, e.cat_id);
-        const std::string_view hhash = resolve_or_empty(*intern_, e.hhash_id);
-        const std::string_view fhash = resolve_or_empty(*intern_, e.fhash_id);
+        const dstd::StringView name = resolve_or_empty(*intern_, e.name_id);
+        const dstd::StringView cat = resolve_or_empty(*intern_, e.cat_id);
+        const dstd::StringView hhash = resolve_or_empty(*intern_, e.hhash_id);
+        const dstd::StringView fhash = resolve_or_empty(*intern_, e.fhash_id);
 
-        std::string_view shash;
+        dstd::StringView shash;
         for (const auto& [k, v] : e.args) {
             const auto* id = std::get_if<std::uint32_t>(&v);
             if (!id) continue;
@@ -549,14 +566,15 @@ void BloomFold::observe(const Lane& lane,
         }
 
         if (config_.fixed_dimensions) {
-            BV::observe_data(chunk, pidtid, name, cat, e.pid, e.tid, e.ts,
-                             e.dur, e.has_dur, hhash, fhash, shash);
+            BV::observe_data(chunk, cache, e.name_id, e.cat_id, name, cat,
+                             e.pid, e.tid, e.ts, e.dur, e.has_dur, hhash, fhash,
+                             shash);
             // A record without a top-level dur (an aggregated one) matches
             // `dur` on args.dur, so the dur zone covers it too.
             if (!e.has_dur)
                 for (const auto& [k, v] : e.args) {
                     if (k != dur_key_) continue;
-                    auto& ds = chunk.fixed_dim_stats[BV::FD_DUR];
+                    auto& ds = chunk.fixed_dim_stats[BV::FdDur];
                     // Durations are not negative, so the uint range holds.
                     if (const auto* i = std::get_if<std::int64_t>(&v);
                         i && *i >= 0)
@@ -600,7 +618,9 @@ void BloomFold::drop_unit(const trace::views::detail::ScanUnit& unit) {
 
 void BloomFold::merge(trace::views::detail::Fold& slice) {
     auto& other = static_cast<BloomFold&>(slice);
+    last_state_ = nullptr;
     for (auto& [file, ofs] : other.files_) {
+        flush_shapes(ofs);
         FileState& fs = files_[file];
         if (fs.index_path.empty()) fs.index_path = ofs.index_path;
         for (auto& [cp, ochunk] : ofs.chunks) {
@@ -642,49 +662,75 @@ coro::CoroTask<bool> BloomFold::finalize(
     const trace::views::detail::CoverageSet& covered) {
     bool wrote = false;
 
+    dstd::HashMap<dstd::String, index::Snapshot> snapshots;
     for (auto& [file, fs] : files_) {
         if (fs.index_path.empty() || fs.chunks.empty()) continue;
         // A chunk missing from a partial read would persist as an empty pruner
         // entry that later reads as "no events".
         if (!covered.covers_file(file)) continue;
 
-        int file_id = -1;
+        const dstd::String logical =
+            index::store::internal::get_logical_path(file);
         try {
-            index::store::IndexDatabase ro(
-                fs.index_path, index::store::IndexOpenMode::ReadOnly);
-            file_id = ro.get_file_info_id(
-                index::store::internal::get_logical_path(file));
-            if (file_id < 0 || ro.pruning_tier_current(file_id)) continue;
+            auto at = snapshots.find(dstd::StringView(fs.index_path));
+            if (at == snapshots.end()) {
+                const auto opened = common::unwrap(index::Index::open(
+                    index::normalize_index_root(fs.index_path)));
+                at = snapshots
+                         .emplace(dstd::String(fs.index_path),
+                                  common::unwrap(opened.snapshot()))
+                         .first;
+            }
+            const index::Snapshot& snapshot = at->second;
+            const auto ref = snapshot.file(logical);
+            if (!ref ||
+                index::extension_current(snapshot, *ref,
+                                         index::store::IndexExtension::Stats))
+                continue;
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN("bloom delta check failed for %s: %s",
                                     fs.index_path.c_str(), e.what());
             continue;
         }
 
-        std::unique_lock<std::mutex> lk(
-            index::build::index_write_mutex(fs.index_path));
-        try {
-            index::store::IndexDatabase db(fs.index_path);
-            auto writer = db.begin_write();
-            write_file(*writer, file_id, file, fs);
-            writer->commit();
-            wrote = true;
-        } catch (const std::exception& e) {
-            // A locked or read-only index persists nothing rather than failing
-            // the query.
-            DFTRACER_UTILS_LOG_WARN("bloom materialization skipped for %s: %s",
-                                    fs.index_path.c_str(), e.what());
+        // A locked or read-only index persists nothing rather than failing the
+        // query.
+        auto opened =
+            index::Index::open(index::normalize_index_root(fs.index_path));
+        auto build = opened
+                         ? index::rebuild(*opened, logical)
+                         : dstd::Expected<index::FileBuild, dstd::Error>(
+                               dstd::Unexpected<dstd::Error>(opened.error()));
+        dstd::String failure;
+        if (build) {
+            try {
+                write_file(*build, file, fs);
+            } catch (const std::exception& e) {
+                failure = e.what();
+            }
+        } else {
+            failure = dstd::String(build.error().message());
         }
+        if (failure.empty()) {
+            auto committed = co_await build->commit();
+            if (!committed) failure = dstd::String(committed.error().message());
+        }
+        if (!failure.empty()) {
+            DFTRACER_UTILS_LOG_WARN("bloom materialization skipped for %s: %s",
+                                    fs.index_path.c_str(), failure.c_str());
+            continue;
+        }
+        wrote = true;
     }
 
     co_return wrote;
 }
 
-void BloomFold::write(index::store::IndexWrite& w, int file_id) {
+void BloomFold::write(index::FileBuild& build) {
     if (files_.empty()) return;
     FileState& fs = files_.begin()->second;
-    if (fs.chunks.empty()) return;
-    write_file(w, file_id, files_.begin()->first, fs);
+    if (fs.chunks.empty() && fs.spill.next == 0) return;
+    write_file(build, files_.begin()->first, fs);
 }
 
 }  // namespace dftracer::utils::index::extensions

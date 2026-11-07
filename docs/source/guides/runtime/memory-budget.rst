@@ -135,49 +135,76 @@ memory (auto-detected and cgroup-aware when you pass ``0`` or omit it). It
 returns whether the footprint fits, the peak it expects, and how many nodes
 would spread that peak under the available limit.
 
-.. tab-set::
+.. code-block:: python
 
-   .. tab-item:: C++
+   from dftracer.utils.dftracer_utils_ext import memory_budget_advice
 
-      .. code-block:: cpp
-
-         #include <dftracer/utils/core/common/memory_budget.h>
-         using namespace dftracer::utils;
-
-         MemoryBudgetAdvice advice =
-             memory_budget_advice(/*required_bytes=*/40ull * 1024 * 1024 * 1024);
-
-         if (!advice.fits) {
-             std::cerr << format_memory_budget_warning(advice) << '\n';
-             // advice.suggested_nodes: nodes to spread the peak under available
-         }
-
-   .. tab-item:: Python
-
-      .. code-block:: python
-
-         from dftracer.utils.dftracer_utils_ext import memory_budget_advice
-
-         advice = memory_budget_advice(required_bytes=40 * 1024**3)
-         # dict: fits, required_bytes, peak_bytes, available_bytes,
-         #       suggested_nodes, warning
-         if not advice["fits"]:
-             print(advice["warning"])
-             print("spread across", advice["suggested_nodes"], "nodes")
+   advice = memory_budget_advice(required_bytes=40 * 1024**3)
+   # dict: fits, required_bytes, peak_bytes, available_bytes,
+   #       suggested_nodes, warning
+   if not advice["fits"]:
+       print(advice["warning"])
+       print("spread across", advice["suggested_nodes"], "nodes")
 
 The returned advice carries ``fits`` (peak within available), ``required_bytes``
 (what you passed), ``peak_bytes`` (required times a peak factor),
-``available_bytes`` (what it judged against), and ``suggested_nodes``. The C++
-struct is ``MemoryBudgetAdvice``; the Python function returns the same fields as
-a dict plus a ``warning`` string (empty when it fits).
+``available_bytes`` (what it judged against), and ``suggested_nodes``. The Python
+function returns these fields as a dict plus a ``warning`` string (empty when it
+fits).
 
-.. note::
+Count your own allocations
+--------------------------
 
-   ``compute_memory_budget`` and ``estimate_per_file_bytes`` (same C++ header)
-   compute a budget and a per-file estimate from a list of file sizes. They are
-   C++-only; the viewer calls ``compute_memory_budget`` internally to pick a
-   default. Only ``memory_budget_advice`` is exposed as a standalone Python
-   function.
+``memory::Pool`` (in ``dftracer/utils/memory/pool.h``) is one node of the pool
+tree that the budget counts. Open a child of ``memory::root_pool()`` with
+``child(name, kind, limits)``. ``limits.bytes`` caps the **reservations** of the
+pool and of the pools below it. It does not cap single allocations: blocks
+that a ``PoolAllocator`` hands out are counted in ``live()`` and ``peak()``
+but never refused.
+
+So reserve first. ``try_reserve(bytes)`` returns a ``memory::Reservation``. It
+is empty when this pool or a pool above it has no room, and then you skip the
+work or wait. The reservation gives its bytes back when it is destroyed or when
+you call ``release()``. It must not outlive its pool. Close each child handle
+before its parent. When the pool table is full the handle is empty and
+``status()`` says why.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/dstd/vector.h>
+   #include <dftracer/utils/memory/allocator.h>
+   #include <dftracer/utils/memory/pool.h>
+
+   #include <cstdio>
+
+   using namespace dftracer::utils;
+
+   memory::PoolHandle handle = memory::root_pool().child(
+       "my scan", memory::PoolKind::Scratch, {64ull * 1024 * 1024});
+   if (!handle) return;  // handle.status() is the reason
+
+   constexpr std::size_t N = 1'000'000;
+   memory::Reservation room = handle->try_reserve(N * sizeof(int));
+   if (!room) return;  // no room: skip the work or wait
+
+   {
+       dstd::PoolVector<int> values{memory::PoolAllocator<int>(*handle)};
+       values.resize(N);
+       std::printf("live=%zu\n", handle->live());  // at least 4 MB; peak() records it
+   }
+   room.release();
+   // handle->live() is 0 again. handle->peak() is the largest live() a read saw.
+
+What the budget counts
+----------------------
+
+The budget bounds the memory dftracer-utils tracks, not the resident memory of the whole process.
+It counts the blocks of its own allocator, including the state of zlib-ng, zstd and libdeflate, and the bytes each scan, file and spill reserves.
+It does not count the program and its libraries, the thread stacks, the partly used pages each thread's heap keeps, or the up to 64 MiB of freed pages the allocator keeps for reuse.
+In our measurements an index build used up to about 60 MB more than a 256 MB budget, and up to about 160 MB more than a 128 MB budget.
+DuckDB, Velox and Trino treat their memory limits the same way.
+
+To hold the whole process under a hard limit, run it in a job or a cgroup with that limit, and set the budget well below it, for example at three quarters of the limit.
 
 See also
 --------

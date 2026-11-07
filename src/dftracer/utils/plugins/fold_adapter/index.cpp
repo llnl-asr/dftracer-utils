@@ -1,4 +1,5 @@
-#include <dftracer/utils/core/common/logging.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/plugins/abi/index.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>

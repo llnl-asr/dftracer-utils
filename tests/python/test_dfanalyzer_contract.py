@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Freeze the dftracer-utils surface dfanalyzer depends on.
 
 dfanalyzer co-versions with dftracer-utils and imports a fixed set of helpers

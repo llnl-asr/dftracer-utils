@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # CompilerWarnings.cmake Function to enable comprehensive compiler warnings for
 # a target
 

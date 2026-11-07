@@ -1,0 +1,28 @@
+== component_cycles
+components 13
+cycles 2
+components_in_cycles 4
+cycle 01 size 3
+cycle 01 member alpha/c1
+cycle 01 member alpha/c2
+cycle 01 member alpha/c3
+cycle 02 size 1
+cycle 02 member alpha/selfie
+== header_map
+class public 1
+class public-transitive 1
+class to-src 1
+class private-but-other-tests 1
+class dead 1
+class src-crossmodule 1
+class keep-abi 1
+header public include/dftracer/utils/runtime/api.h users=alpha tests=
+header public-transitive include/dftracer/utils/runtime/helper.h users= tests=
+header to-src include/dftracer/utils/runtime/local.h users= tests=
+header private-but-other-tests include/dftracer/utils/runtime/testonly.h users= tests=alpha
+header dead include/dftracer/utils/runtime/orphan.h users= tests=
+header src-crossmodule src/dftracer/utils/beta/shared.h users=alpha tests=
+header keep-abi include/dftracer/utils/plugins/abi/plug.h users= tests=
+== library_report
+library dftracer_utils_fixture symbols>=3 yes bytes>0 yes
+public_headers 6

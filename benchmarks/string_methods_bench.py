@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Wall-clock of the expression string methods: the native expression
 (SIMD kernels) against the same kernels with the byte-at-a-time reference
 forced (DFTRACER_UTILS_STRING_SCALAR), the eager ``Series.str`` call and

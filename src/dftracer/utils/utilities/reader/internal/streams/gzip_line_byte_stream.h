@@ -1,27 +1,31 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_LINE_BYTE_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_LINE_BYTE_STREAM_H
 
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <span>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
 class GzipLineByteStream : public GzipStream {
    private:
     static constexpr std::size_t SEARCH_BUFFER_SIZE = 2048;
-    static constexpr std::size_t LINE_SEARCH_LOOKBACK = 512;
 
-    std::vector<char> partial_line_buffer_;
+    dstd::Vector<char> partial_line_buffer_;
     std::size_t actual_start_bytes_;
     std::size_t bytes_returned_;  // Track how many bytes we've returned to user
     bool extend_to_line_boundary_ = false;
+    bool open_at_earlier_piece_ = false;
 
    public:
     GzipLineByteStream(std::size_t buffer_size = DEFAULT_BUFFER_SIZE)
@@ -35,8 +39,13 @@ class GzipLineByteStream : public GzipStream {
 
     void set_extend_to_line_boundary(bool v) { extend_to_line_boundary_ = v; }
 
+    /// Start at the line holding the target even when that line opens in an
+    /// earlier piece, so adjacent ranges that each leave their last partial
+    /// line to the next one return every line once.
+    void set_open_at_earlier_piece(bool v) { open_at_earlier_piece_ = v; }
+
     void initialize(
-        const std::string &gz_path, std::size_t start_bytes,
+        const dstd::String &gz_path, std::size_t start_bytes,
         std::size_t end_bytes,
         dftracer::utils::index::gzip::CheckpointIndexer &indexer) override {
         GzipStream::initialize(gz_path, start_bytes, end_bytes, indexer);
@@ -51,42 +60,61 @@ class GzipLineByteStream : public GzipStream {
     }
 
     coro::CoroTask<std::size_t> find_line_start(std::size_t target_start) {
-        std::size_t current_pos = seek_anchor_offset();
-        std::size_t actual_start = target_start;
+        // Unless asked for the line under the target, a piece that starts
+        // inside a line owns its lines from the first newline on: the caller
+        // counts lines from there, or the piece before finishes the line.
+        if (mid_line_start_ && !open_at_earlier_piece_) {
+            const std::size_t first = co_await first_line_start_after_anchor();
+            co_await restart_compression();
+            if (target_start < first) {
+                if (first > seek_anchor_offset()) co_await skip(first);
+                co_return first;
+            }
+        }
 
-        // If target is at the start of the file, no adjustment needed
-        if (target_start <= current_pos) {
+        if (!mid_line_start_ && target_start <= seek_anchor_offset()) {
             co_return target_start;
         }
 
-        std::size_t search_start = (target_start >= LINE_SEARCH_LOOKBACK)
-                                       ? target_start - LINE_SEARCH_LOOKBACK
-                                       : current_pos;
-
-        if (search_start > current_pos) {
-            co_await skip(search_start);
-            current_pos = search_start;
-        }
-
-        // Use stack allocation for small search buffer
-        alignas(DFTRACER_OPTIMAL_ALIGNMENT) unsigned char
-            search_buffer[SEARCH_BUFFER_SIZE];
-        std::size_t search_bytes;
-        if (co_await inflater_.read(fd_, file_offset_, search_buffer,
-                                    sizeof(search_buffer) - 1, search_bytes)) {
-            std::size_t relative_target = target_start - current_pos;
-            if (relative_target < search_bytes) {
-                // Always use backward search to find line start
-                // This ensures we start at the beginning of a complete line
-                for (int64_t i = static_cast<int64_t>(relative_target); i >= 0;
-                     i--) {
-                    if (i == 0 || search_buffer[i - 1] == '\n') {
-                        actual_start =
-                            current_pos + static_cast<std::size_t>(i);
+        // A line has no size limit, so only the data from the anchor can show
+        // where the line holding the target opens. A skip decodes it anyway.
+        // A range ending inside a line leaves that line to the next range, so
+        // a line that opens before this piece is read from an earlier one.
+        std::size_t actual_start = seek_anchor_offset();
+        while (true) {
+            std::size_t current_pos = seek_anchor_offset();
+            bool found = false;
+            while (current_pos < target_start) {
+                std::size_t got = 0;
+                const bool read_ok = co_await inflater_.read(
+                    fd_.native_handle(), file_offset_,
+                    reinterpret_cast<unsigned char *>(buffer_.data()),
+                    std::min(buffer_.size(), target_start - current_pos), got);
+                if (!read_ok) {
+                    throw ReaderError(
+                        ReaderError::CompressionError,
+                        "gzip decode failed mid-stream at position " +
+                            dstd::to_string(current_pos));
+                }
+                if (got == 0) break;
+                for (std::size_t i = got; i > 0; --i) {
+                    if (buffer_[i - 1] == '\n') {
+                        actual_start = current_pos + i;
+                        found = true;
                         break;
                     }
                 }
+                current_pos += got;
             }
+            if (found || !mid_line_start_) break;
+            if (!indexer_->find_member(seek_anchor_offset() - 1, member_)) {
+                throw ReaderError(ReaderError::CompressionError,
+                                  "Failed to find the piece before position " +
+                                      dstd::to_string(seek_anchor_offset()));
+            }
+            co_await restart_compression();
+            mid_line_start_ = piece_starts_mid_line();
+            actual_start = seek_anchor_offset();
         }
 
         co_await restart_compression();
@@ -98,9 +126,33 @@ class GzipLineByteStream : public GzipStream {
     }
 
    private:
+    /// Uncompressed offset just past the first newline of the piece the
+    /// stream sits at, read from its start. The end of the file when there is
+    /// none. Leaves the stream past that data, so the caller restarts it.
+    coro::CoroTask<std::size_t> first_line_start_after_anchor() {
+        std::size_t pos = seek_anchor_offset();
+        alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) unsigned char
+            chunk[SEARCH_BUFFER_SIZE];
+        while (pos < max_file_bytes_) {
+            std::size_t got = 0;
+            const bool ok = co_await inflater_.read(
+                fd_.native_handle(), file_offset_, chunk, sizeof(chunk), got);
+            if (!ok || got == 0) break;
+            const void *nl = std::memchr(chunk, '\n', got);
+            if (nl) {
+                co_return pos +
+                    static_cast<std::size_t>(
+                        static_cast<const unsigned char *>(nl) - chunk) +
+                    1;
+            }
+            pos += got;
+        }
+        co_return max_file_bytes_;
+    }
+
     coro::CoroTask<std::size_t> read_line_aligned_data() {
         if (!decompression_initialized_) {
-            throw ReaderError(ReaderError::INITIALIZATION_ERROR,
+            throw ReaderError(ReaderError::InitializationError,
                               "Streaming session not properly initialized");
         }
 
@@ -108,38 +160,39 @@ class GzipLineByteStream : public GzipStream {
             if (extend_to_line_boundary_ && !partial_line_buffer_.empty() &&
                 current_position_ < max_file_bytes_) {
                 std::size_t partial_size = partial_line_buffer_.size();
-                if (partial_size <= buffer_.size()) {
-                    std::memcpy(buffer_.data(), partial_line_buffer_.data(),
-                                partial_size);
-                    std::size_t avail = buffer_.size() - partial_size;
+                grow_buffer_past(partial_size);
+                std::memcpy(buffer_.data(), partial_line_buffer_.data(),
+                            partial_size);
+                std::size_t total = partial_size;
+                std::size_t emit = 0;
+                while (emit == 0 && current_position_ < max_file_bytes_) {
+                    if (total == buffer_.size()) grow_buffer_past(total);
                     std::size_t cap = static_cast<std::size_t>(
                         max_file_bytes_ - current_position_);
-                    std::size_t to_read = std::min(avail, cap);
+                    std::size_t to_read = std::min(buffer_.size() - total, cap);
                     std::size_t got = 0;
                     bool ok = co_await inflater_.read(
-                        fd_, file_offset_,
+                        fd_.native_handle(), file_offset_,
                         reinterpret_cast<unsigned char *>(buffer_.data() +
-                                                          partial_size),
+                                                          total),
                         to_read, got);
-                    if (ok && got > 0) {
-                        current_position_ += got;
-                        std::size_t total = partial_size + got;
-                        std::size_t emit = 0;
-                        for (std::size_t i = partial_size; i < total; ++i) {
-                            if (buffer_[i] == '\n') {
-                                emit = i + 1;
-                                break;
-                            }
+                    if (!ok || got == 0) break;
+                    current_position_ += got;
+                    for (std::size_t i = total; i < total + got; ++i) {
+                        if (buffer_[i] == '\n') {
+                            emit = i + 1;
+                            break;
                         }
-                        partial_line_buffer_.clear();
-                        is_finished_ = true;
-                        if (emit > 0) {
-                            bytes_returned_ += emit;
-                            co_return emit;
-                        }
-                        co_return 0;
                     }
+                    total += got;
                 }
+                partial_line_buffer_.clear();
+                is_finished_ = true;
+                if (emit > 0) {
+                    bytes_returned_ += emit;
+                    co_return emit;
+                }
+                co_return 0;
             }
             is_finished_ = true;
             co_return 0;
@@ -147,20 +200,13 @@ class GzipLineByteStream : public GzipStream {
 
         // Copy partial line buffer to internal buffer (if exists)
         std::size_t partial_size = partial_line_buffer_.size();
-        std::size_t available_buffer_space = buffer_.size();
 
         if (partial_size > 0) {
-            // A line that fills the buffer can never complete in it.
-            if (partial_size >= buffer_.size()) {
-                throw ReaderError(ReaderError::READ_ERROR,
-                                  "a line is longer than the read buffer (" +
-                                      std::to_string(buffer_.size()) +
-                                      " bytes)");
-            }
+            grow_buffer_past(partial_size);
             std::memcpy(buffer_.data(), partial_line_buffer_.data(),
                         partial_size);
-            available_buffer_space -= partial_size;
         }
+        std::size_t available_buffer_space = buffer_.size() - partial_size;
 
         // Read data directly into internal buffer - stay strictly within target
         // bounds
@@ -171,7 +217,7 @@ class GzipLineByteStream : public GzipStream {
         std::size_t bytes_read = 0;
         if (bytes_to_read > 0) {
             bool status =
-                co_await inflater_.read(fd_, file_offset_,
+                co_await inflater_.read(fd_.native_handle(), file_offset_,
                                         reinterpret_cast<unsigned char *>(
                                             buffer_.data() + partial_size),
                                         bytes_to_read, bytes_read);
@@ -179,9 +225,9 @@ class GzipLineByteStream : public GzipStream {
             // A decode failure must not pass for clean EOF (which would
             // silently drop the rest of the file).
             if (!status) {
-                throw ReaderError(ReaderError::COMPRESSION_ERROR,
+                throw ReaderError(ReaderError::CompressionError,
                                   "gzip decode failed mid-stream at position " +
-                                      std::to_string(current_position_));
+                                      dstd::to_string(current_position_));
             }
             if (bytes_read == 0) {
                 is_finished_ = true;
@@ -242,7 +288,7 @@ class GzipLineByteStream : public GzipStream {
         }
 
         // Return view to the data in buffer_
-        co_return std::span<const char>(buffer_.data(), valid_bytes_);
+        co_return dstd::Span<const char>(buffer_.data(), valid_bytes_);
     }
 
     void reset() override {
@@ -253,6 +299,15 @@ class GzipLineByteStream : public GzipStream {
         buffer_pos_ = 0;
         actual_start_bytes_ = 0;
         bytes_returned_ = 0;
+    }
+
+    /// A line has no size limit: a partial line that fills the buffer doubles
+    /// it, and the buffer keeps that size for the lines after.
+    void grow_buffer_past(std::size_t partial_size) {
+        if (partial_size < buffer_.size()) return;
+        std::size_t size = buffer_.size();
+        while (size <= partial_size) size *= 2;
+        buffer_.resize(size);
     }
 
     void update_partial_buffer(const char *buffer, std::size_t adjusted_size,

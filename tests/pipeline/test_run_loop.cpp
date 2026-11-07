@@ -1,12 +1,18 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/run_loop.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/coro/async_mutex.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/run_loop.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
+#include <atomic>
+#include <chrono>
 #include <numeric>
+#include <thread>
 #include <vector>
 
 using namespace dftracer::utils;
@@ -18,9 +24,9 @@ namespace {
 
 coro::CoroTask<int> spawn_and_sum(int n) {
     std::vector<int> results(n, 0);
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (int i = 0; i < n; ++i) {
-            scope.spawn([&results, i](CoroScope&) -> coro::CoroTask<void> {
+            scope.spawn([&results, i]() -> coro::CoroTask<void> {
                 results[i] = i + 1;
                 co_return;
             });
@@ -37,10 +43,10 @@ coro::CoroTask<int> produce_consume(int producers, int per_producer) {
     auto channel = coro::make_channel<int>(2);
     int total = 0;
 
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (int p = 0; p < producers; ++p) {
-            scope.spawn([ch = channel->producer(), per_producer](
-                            CoroScope&) mutable -> coro::CoroTask<void> {
+            scope.spawn([ch = channel->producer(),
+                         per_producer]() mutable -> coro::CoroTask<void> {
                 auto guard = ch.guard();
                 for (int i = 0; i < per_producer; ++i) {
                     if (!co_await ch.send(1)) co_return;
@@ -48,7 +54,7 @@ coro::CoroTask<int> produce_consume(int producers, int per_producer) {
             });
         }
 
-        scope.spawn([&channel, &total](CoroScope&) -> coro::CoroTask<void> {
+        scope.spawn([&channel, &total]() -> coro::CoroTask<void> {
             while (auto item = co_await channel->receive()) {
                 total += *item;
             }
@@ -90,9 +96,73 @@ TEST_SUITE("RunLoop") {
         rt.shutdown();
     }
 
+    TEST_CASE("A mutex waiter resumes on the thread of its own loop") {
+        coro::AsyncMutex mutex;
+        std::atomic<bool> holder_has_lock{false};
+        std::atomic<bool> release{false};
+        std::atomic<bool> waiter_started{false};
+        std::thread::id waiter_thread;
+        std::thread::id resumed_thread;
+
+        std::thread holder([&] {
+            auto task = [&]() -> coro::CoroTask<void> {
+                co_await mutex.lock();
+                holder_has_lock.store(true);
+                while (!release.load()) std::this_thread::yield();
+                mutex.unlock();
+            };
+            task().get();
+        });
+        while (!holder_has_lock.load()) std::this_thread::yield();
+
+        std::thread waiter([&] {
+            waiter_thread = std::this_thread::get_id();
+            auto task = [&]() -> coro::CoroTask<void> {
+                waiter_started.store(true);
+                co_await mutex.lock();
+                resumed_thread = std::this_thread::get_id();
+                mutex.unlock();
+            };
+            task().get();
+        });
+        while (!waiter_started.load()) std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        release.store(true);
+
+        holder.join();
+        waiter.join();
+        CHECK(resumed_thread == waiter_thread);
+    }
+
     TEST_CASE("A stalled loop reports instead of hanging") {
-        RunLoop loop;
+        coro::RunLoop loop;
         bool done = false;
         CHECK_THROWS(loop.drive_until([&] { return done; }));
+    }
+
+    TEST_CASE("A timeout on a RunLoop fires") {
+        // Static, and the thread detached, so a loop that never fires its
+        // timers fails the check below instead of hanging the test.
+        static std::atomic<bool> timed_out{false};
+        static std::atomic<bool> finished{false};
+        std::thread([] {
+            auto task = []() -> coro::CoroTask<void> {
+                try {
+                    co_await coro::timeout(std::chrono::milliseconds(20),
+                                           coro::Executor::current()->timers());
+                } catch (const common::DFTUtilsException&) {
+                    timed_out.store(true);
+                }
+            };
+            task().get();
+            finished.store(true);
+        }).detach();
+
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!finished.load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(finished.load());
+        CHECK(timed_out.load());
     }
 }

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The polars spellings: the expression column ops (``cum_sum``,
 ``rolling_mean``, ``sort``, ``rank``, ``over``, ``.str`` / ``.dt``), an
 aggregate's ``over``, and the frame names, each checked against polars on

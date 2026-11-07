@@ -31,7 +31,7 @@ process start (full list: :doc:`../../environment`):
 .. code-block:: console
 
    $ DFTRACER_UTILS_MONITOR=tree DFTRACER_UTILS_LOG_LEVEL=debug \
-       dftracer_view -d traces/ --duql 'cat == "POSIX"'
+       dftracer_view traces/ -q 'cat == "POSIX"'
 
 From Python, ``Runtime.get_progress()`` returns a live snapshot (per-worker
 state and per-task durations) you can poll while a run is in flight, without
@@ -150,9 +150,7 @@ spill instead of scaling threads further:
 
 Check a footprint before committing to a run with ``memory_budget_advice`` -
 it tells you whether a required byte footprint fits and how many nodes to
-spread it across if not. Full detail, including the C++-only
-``compute_memory_budget``/``estimate_per_file_bytes`` helpers:
-:doc:`../runtime/memory-budget`.
+spread it across if not. See :doc:`../runtime/memory-budget` for the full detail.
 
 5. When to materialize instead of re-scanning
 ----------------------------------------------------
@@ -165,9 +163,10 @@ aggregation) so a later matching query is served from it instead of
 rescanning. ``View::materialize(group_by, agg)`` (C++) is the build-only form
 when you only want the side effect. This trades one-time build cost for repeated-query speed. Reach for
 it once step 1-4 confirm the per-query cost itself is already as low as it
-can go, not as a first move. Results live in ``.dftindex-cache`` beside the
-index, capped per store by ``DFTRACER_CACHE_MAX_BYTES`` (least recently used
-entries go first); deleting the folder only costs a rebuild. See
+can go, not as a first move. Results live in the ``rollups/`` and ``views/``
+directories of the index root, capped per store by
+``DFTRACER_UTILS_CACHE_MAX_BYTES`` (least recently used
+entries go first); deleting those directories only costs a rebuild. See
 "Materialized views" in
 :doc:`../analysis/views` and :doc:`../analysis/aggregation`.
 

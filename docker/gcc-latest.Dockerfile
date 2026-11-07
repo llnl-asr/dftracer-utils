@@ -2,7 +2,7 @@
 # dftracer-utils against an up-to-date compiler/stdlib. Build tree lives in a
 # bind-mounted build/build-docker-latest so rebuilds are incremental.
 #
-#   docker build -t dftracer-latest -f docker/gcc-latest.Dockerfile .
+#   docker build -t dftracer-latest - < docker/gcc-latest.Dockerfile
 #   (or: scripts/docker-test.sh latest)
 FROM ubuntu:24.04
 

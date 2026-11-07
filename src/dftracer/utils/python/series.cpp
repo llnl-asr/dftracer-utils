@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A native vec column exposed to Python: the DSL and pipeline operate on our
 // own SIMD columnar format (dataframe::Series, Highway kernels) and only cross
 // to Arrow at the edges - construction from a pyarrow array and export via the
@@ -8,7 +9,7 @@
 // file-statics. The method bodies live in series/{arith,math,window,stats,
 // reduce,string,arrow}.cpp and are declared in series_detail.h.
 
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/python/py_method.h>

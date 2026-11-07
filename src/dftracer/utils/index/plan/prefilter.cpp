@@ -1,6 +1,12 @@
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/duql/ast.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/detail/ast.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/prefilter.h>
@@ -14,68 +20,69 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include <optional>
 #include <type_traits>
-#include <unordered_map>
 #include <variant>
 
 namespace dftracer::utils::index::plan {
 
 namespace {
 
-using Clauses = std::vector<std::vector<std::string>>;
+using Clauses = dstd::Vector<dstd::Vector<dstd::String>>;
 
 // Past this many clauses an `or` distributes into, it adds none.
 constexpr std::size_t MAX_CLAUSES = 16;
 constexpr std::size_t MIN_NEEDLE = 3;
 // Letters from rarest to most common in English text, which key names follow;
 // the rarest letter of a key is the one memchr stops on least.
-constexpr std::string_view LETTERS_BY_RARITY = "zqxjkvbpygfwmucldrhsnioate";
+constexpr dstd::StringView LETTERS_BY_RARITY = "zqxjkvbpygfwmucldrhsnioate";
 
 std::size_t letter_rank(char c) {
     const char lower =
         (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
     const auto i = LETTERS_BY_RARITY.find(lower);
-    return i == std::string_view::npos ? 0 : i;
+    return i == dstd::StringView::npos ? 0 : i;
 }
 
-bool safe(std::string_view v) {
+// A reader repairs a bad byte in a string to '?', so a '?' of the value need
+// not be in the text.
+bool safe(dstd::StringView v) {
     for (unsigned char c : v)
-        if (c < 0x20 || c > 0x7E || c == '"' || c == '\\' || c == '/')
+        if (c < 0x20 || c > 0x7E || c == '"' || c == '\\' || c == '/' ||
+            c == '?')
             return false;
     return true;
 }
 
-std::optional<std::string> needle(const duql::LiteralNode& lit) {
-    std::string out;
-    if (const auto* s = std::get_if<std::string>(&lit.value)) {
-        if (!safe(*s)) return std::nullopt;
+dstd::Optional<dstd::String> needle(const duql::LiteralNode& lit) {
+    dstd::String out;
+    if (const auto* s = std::get_if<dstd::String>(&lit.value)) {
+        if (!safe(*s)) return dstd::nullopt;
         out = "\"" + *s + "\"";
     } else if (const auto* i = std::get_if<std::int64_t>(&lit.value)) {
-        out = std::to_string(*i);
+        out = dstd::to_string(*i);
     } else if (const auto* u = std::get_if<std::uint64_t>(&lit.value)) {
-        out = std::to_string(*u);
+        out = dstd::to_string(*u);
     } else {
-        return std::nullopt;
+        return dstd::nullopt;
     }
-    if (out.size() < MIN_NEEDLE) return std::nullopt;
+    if (out.size() < MIN_NEEDLE) return dstd::nullopt;
     return out;
 }
 
 // The clauses a line matching `node` must satisfy; empty when nothing can be
 // required of its bytes.
-Clauses clauses_of(const duql::QueryNode& node) {
+Clauses clauses_of(const duql::detail::QueryNode& node) {
     return std::visit(
         [](auto&& n) -> Clauses {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, duql::CompareNode>) {
-                if (n.op != duql::CompareOp::EQ) return {};
+            if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
+                if (n.op != duql::CompareOp::Eq) return {};
                 auto s = needle(n.value);
                 if (!s) return {};
                 return {{std::move(*s)}};
-            } else if constexpr (std::is_same_v<T, duql::InNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::InNode>) {
                 if (n.values.elements.size() > SEMI_JOIN_CAP) return {};
-                std::vector<std::string> any;
+                dstd::Vector<dstd::String> any;
                 for (const auto& e : n.values.elements) {
                     auto s = needle(e);
                     if (!s) return {};
@@ -83,25 +90,25 @@ Clauses clauses_of(const duql::QueryNode& node) {
                 }
                 if (any.empty()) return {};
                 return {std::move(any)};
-            } else if constexpr (std::is_same_v<T, duql::MatchNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::MatchNode>) {
                 // A case-sensitive pattern's required literals sit in the
                 // value's bytes unless JSON escaping hides them.
                 if (n.negated || !n.compiled ||
-                    (n.op != duql::MatchOp::LIKE &&
-                     n.op != duql::MatchOp::REGEX))
+                    (n.op != duql::MatchOp::Like &&
+                     n.op != duql::MatchOp::Regex))
                     return {};
                 Clauses out;
                 for (const auto& lit : duql::required_literals(*n.compiled))
                     if (lit.size() >= MIN_NEEDLE && safe(lit))
-                        out.push_back({lit});
+                        out.push_back({dstd::String(lit)});
                 return out;
-            } else if constexpr (std::is_same_v<T, duql::AndNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::AndNode>) {
                 Clauses out = clauses_of(*n.left);
                 Clauses right = clauses_of(*n.right);
                 out.insert(out.end(), std::make_move_iterator(right.begin()),
                            std::make_move_iterator(right.end()));
                 return out;
-            } else if constexpr (std::is_same_v<T, duql::OrNode>) {
+            } else if constexpr (std::is_same_v<T, duql::detail::OrNode>) {
                 // (a1 and a2) or (b1 and b2) holds each ai-or-bj clause.
                 const Clauses l = clauses_of(*n.left);
                 const Clauses r = clauses_of(*n.right);
@@ -123,7 +130,7 @@ Clauses clauses_of(const duql::QueryNode& node) {
 
 // A segment a key can end in: not an array index, no byte a JSON key would
 // escape.
-bool plain_key(std::string_view k) {
+bool plain_key(dstd::StringView k) {
     bool digits_only = true;
     for (unsigned char c : k) {
         if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -136,19 +143,19 @@ bool plain_key(std::string_view k) {
 
 // The ranges a line matching `node` must satisfy: numeric order leaves
 // joined by `and`.
-void ranges_of(const duql::QueryNode& node,
-               std::vector<Prefilter::Range>& out) {
-    if (const auto* a = std::get_if<duql::AndNode>(&node.data)) {
+void ranges_of(const duql::detail::QueryNode& node,
+               dstd::Vector<Prefilter::Range>& out) {
+    if (const auto* a = std::get_if<duql::detail::AndNode>(&node.data)) {
         ranges_of(*a->left, out);
         ranges_of(*a->right, out);
         return;
     }
-    const auto* n = std::get_if<duql::CompareNode>(&node.data);
+    const auto* n = std::get_if<duql::detail::CompareNode>(&node.data);
     // An any() key is followed by an array, not the number a range reads.
-    if (!n || n->field.any || n->op == duql::CompareOp::NE) return;
-    const std::string& path = n->field.path;
-    const std::string_view key =
-        std::string_view(path).substr(path.rfind('.') + 1);
+    if (!n || n->field.any || n->op == duql::CompareOp::Ne) return;
+    const dstd::String path(n->field.path);
+    const dstd::StringView key =
+        dstd::StringView(path).substr(path.rfind('.') + 1);
     if (!plain_key(key)) return;
     Prefilter::Bound bound{n->op};
     if (const auto* i = std::get_if<std::int64_t>(&n->value.value)) {
@@ -163,11 +170,11 @@ void ranges_of(const duql::QueryNode& node,
         return;
     }
     // A number equals the bound when it is at both ends of [bound, bound].
-    std::vector<Prefilter::Bound> bounds{bound};
-    if (n->op == duql::CompareOp::EQ) {
-        bounds[0].op = duql::CompareOp::GE;
+    dstd::Vector<Prefilter::Bound> bounds{bound};
+    if (n->op == duql::CompareOp::Eq) {
+        bounds[0].op = duql::CompareOp::Ge;
         bounds.push_back(bounds[0]);
-        bounds[1].op = duql::CompareOp::LE;
+        bounds[1].op = duql::CompareOp::Le;
     }
     for (auto& r : out)
         if (r.path == path) {
@@ -177,18 +184,18 @@ void ranges_of(const duql::QueryNode& node,
     std::size_t pivot = 0;
     for (std::size_t i = 1; i < key.size(); ++i)
         if (letter_rank(key[i]) < letter_rank(key[pivot])) pivot = i;
-    out.push_back({path, std::string(key) + "\"", std::move(bounds), pivot});
+    out.push_back({path, dstd::String(key) + "\"", std::move(bounds), pivot});
 }
 
 bool holds(duql::CompareOp op, int cmp) {
     switch (op) {
-        case duql::CompareOp::GT:
+        case duql::CompareOp::Gt:
             return cmp > 0;
-        case duql::CompareOp::GE:
+        case duql::CompareOp::Ge:
             return cmp >= 0;
-        case duql::CompareOp::LT:
+        case duql::CompareOp::Lt:
             return cmp < 0;
-        case duql::CompareOp::LE:
+        case duql::CompareOp::Le:
             return cmp <= 0;
         default:
             return true;
@@ -214,10 +221,10 @@ bool number_holds(const char* p, const char* end, const Prefilter::Range& r) {
     std::int64_t iv = 0;
     double dv = 0;
     if (integer) {
-        auto [q, ec] = std::from_chars(tok, p, iv);
+        auto [q, ec] = dstd::from_chars(tok, p, iv);
         if (ec != std::errc() || q != p) return true;
     } else {
-        auto [q, ec] = from_chars_double(tok, p, dv);
+        auto [q, ec] = dstd::from_chars_double(tok, p, dv);
         if (ec != std::errc() || q != p || std::fabs(dv) >= EXACT_DOUBLE)
             return true;
     }
@@ -242,8 +249,8 @@ bool number_holds(const char* p, const char* end, const Prefilter::Range& r) {
 
 // A key ending in the segment of `r` sits at `start`, preceded by its opening
 // quote or a dot, followed by the closing quote, spaces and a colon.
-bool Prefilter::range_may_hold(std::string_view line, const Range& r) {
-    const std::string& seg = r.segment;
+bool Prefilter::range_may_hold(dstd::StringView line, const Range& r) {
+    const dstd::String& seg = r.segment;
     const std::size_t n = seg.size() - 1;
     const char* begin = line.data();
     const char* end = begin + line.size();
@@ -276,7 +283,7 @@ int rarity(unsigned char c) {
     return 3;
 }
 
-std::size_t pivot_of(const std::string& n) {
+std::size_t pivot_of(const dstd::String& n) {
     std::size_t best = 0;
     for (std::size_t i = 1; i < n.size(); ++i)
         if (rarity(static_cast<unsigned char>(n[i])) >
@@ -287,7 +294,7 @@ std::size_t pivot_of(const std::string& n) {
 
 // memchr on the pivot byte, then compare: several times faster than memmem
 // or string_view::find, which cost more per line than parsing it.
-bool contains(std::string_view line, const std::string& n, std::size_t p) {
+bool contains(dstd::StringView line, const dstd::String& n, std::size_t p) {
     if (line.size() < n.size()) return false;
     const char* begin = line.data();
     const char* last = begin + (line.size() - n.size()) + p;
@@ -325,7 +332,7 @@ int on_hit(unsigned id, unsigned long long, unsigned long long, unsigned,
 
 // hs_alloc_scratch allocates and checks on every call, so scan first and
 // grow the scratch only when the scan reports it missing or too small.
-hs_error_t scan_grow(const hs_database_t* db, std::string_view s, Hits& hits) {
+hs_error_t scan_grow(const hs_database_t* db, dstd::StringView s, Hits& hits) {
     thread_local ThreadScratch ts;
     const auto n = static_cast<unsigned>(s.size());
     hs_error_t rc = hs_scan(db, s.data(), n, 0, ts.scratch, on_hit, &hits);
@@ -337,8 +344,9 @@ hs_error_t scan_grow(const hs_database_t* db, std::string_view s, Hits& hits) {
 }  // namespace
 #endif
 
-Prefilter::Prefilter(const duql::Query& q) : clauses_(clauses_of(q.root())) {
-    ranges_of(q.root(), ranges_);
+Prefilter::Prefilter(const duql::Query& q)
+    : clauses_(clauses_of(duql::detail::QueryAccess::root(q))) {
+    ranges_of(duql::detail::QueryAccess::root(q), ranges_);
     pivots_.reserve(clauses_.size());
     for (const auto& clause : clauses_) {
         auto& p = pivots_.emplace_back();
@@ -349,9 +357,9 @@ Prefilter::Prefilter(const duql::Query& q) : clauses_(clauses_of(q.root())) {
     for (const auto& clause : clauses_)
         widest = std::max(widest, clause.size());
     if (widest < HS_MIN_ALTERNATIVES) return;
-    std::unordered_map<std::string, unsigned> seen;
-    std::vector<const char*> exprs;
-    std::vector<std::size_t> lens;
+    dstd::HashMap<dstd::String, unsigned> seen;
+    dstd::Vector<const char*> exprs;
+    dstd::Vector<std::size_t> lens;
     ids_.reserve(clauses_.size());
     for (const auto& clause : clauses_) {
         auto& ids = ids_.emplace_back();
@@ -367,8 +375,8 @@ Prefilter::Prefilter(const duql::Query& q) : clauses_(clauses_of(q.root())) {
     }
     distinct_ = exprs.size();
     if (exprs.empty()) return;
-    std::vector<unsigned> flags(exprs.size(), HS_FLAG_SINGLEMATCH);
-    std::vector<unsigned> idv(exprs.size());
+    dstd::Vector<unsigned> flags(exprs.size(), HS_FLAG_SINGLEMATCH);
+    dstd::Vector<unsigned> idv(exprs.size());
     for (std::size_t i = 0; i < idv.size(); ++i)
         idv[i] = static_cast<unsigned>(i);
     hs_database_t* db = nullptr;
@@ -379,11 +387,11 @@ Prefilter::Prefilter(const duql::Query& q) : clauses_(clauses_of(q.root())) {
         hs_free_compile_error(err);
         return;
     }
-    db_ = std::shared_ptr<hs_database>(db, hs_free_database);
+    db_ = dstd::adopt_shared_ptr(db, hs_free_database);
 #endif
 }
 
-bool Prefilter::may_match_per_needle(std::string_view line) const {
+bool Prefilter::may_match_per_needle(dstd::StringView line) const {
     for (std::size_t c = 0; c < clauses_.size(); ++c) {
         bool any = false;
         for (std::size_t k = 0; k < clauses_[c].size(); ++k)
@@ -398,11 +406,11 @@ bool Prefilter::may_match_per_needle(std::string_view line) const {
     return true;
 }
 
-bool Prefilter::may_match(std::string_view line) const {
+bool Prefilter::may_match(dstd::StringView line) const {
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
     if (!db_ || line.size() > std::numeric_limits<unsigned>::max())
         return may_match_per_needle(line);
-    thread_local std::vector<std::uint64_t> bits;
+    thread_local dstd::Vector<std::uint64_t> bits;
     bits.assign((distinct_ + 63) >> 6, 0);
     Hits hits{bits.data(), distinct_};
     if (!line.empty()) {
@@ -427,7 +435,7 @@ bool Prefilter::may_match(std::string_view line) const {
 #endif
 }
 
-bool Prefilter::Gate::may_match(std::string_view line) {
+bool Prefilter::Gate::may_match(dstd::StringView line) {
     if (!on_) return true;
     const bool pass = p_->may_match(line);
     passed_ += pass ? 1 : 0;

@@ -1,23 +1,26 @@
-#include <dftracer/utils/core/common/filesystem_info.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/parallel/layout.h>
 
 #include <algorithm>
 
 namespace dftracer::utils::utilities::fileio::parallel {
 
-LayoutInfo detect_layout(const std::string& path) noexcept {
+LayoutInfo detect_layout(dstd::CStringView path) noexcept {
     LayoutInfo info{};
-    info.layout = FileLayout::STRIPED;
-    info.fs = filesystem_kind(path);
+    info.layout = FileLayout::Striped;
+    info.fs = common::filesystem_kind(path);
     info.stripe_size = 0;
     info.stripe_count = 0;
 
     // NFS lacks a cheap atomic-offset write, so shard into per-writer files.
-    if (info.fs == FilesystemKind::NFS) {
-        info.layout = FileLayout::SHARDED;
+    if (info.fs == common::FilesystemKind::Nfs) {
+        info.layout = FileLayout::Sharded;
     }
-    if (info.fs == FilesystemKind::LUSTRE) {
-        const StripeInfo stripe = lustre_stripe(path);
+    if (info.fs == common::FilesystemKind::Lustre) {
+        const common::StripeInfo stripe = common::lustre_stripe(path);
         info.stripe_size = stripe.size;
         info.stripe_count = stripe.count;
     }
@@ -30,9 +33,9 @@ WriterSizing compute_writer_sizing(const LayoutInfo& info,
                                    std::size_t buffer_headroom_bytes,
                                    bool padded_layout) noexcept {
     WriterSizing s{};
-    s.num_workers = baseline_workers == 0 ? 1 : baseline_workers;
+    s.worker_count = baseline_workers == 0 ? 1 : baseline_workers;
     if (!padded_layout && info.stripe_count > 0) {
-        s.num_workers = std::min(s.num_workers, info.stripe_count);
+        s.worker_count = std::min(s.worker_count, info.stripe_count);
     }
     if (padded_layout && info.stripe_size > 0) {
         // Uncompressed flush sized to one stripe; compressed fits easily.
@@ -45,7 +48,7 @@ WriterSizing compute_writer_sizing(const LayoutInfo& info,
 }
 
 bool uses_padded_layout(const LayoutInfo& info, bool gzip) noexcept {
-    return info.layout == FileLayout::STRIPED && gzip &&
+    return info.layout == FileLayout::Striped && gzip &&
            info.stripe_size >= MIN_PADDED_STRIPE_BYTES;
 }
 

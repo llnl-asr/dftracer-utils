@@ -1,5 +1,9 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -11,12 +15,10 @@
 #include <algorithm>
 #include <atomic>
 #include <fstream>
-#include <memory>
 #include <random>
 #include <sstream>
 #include <string>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::gzip;
@@ -24,34 +26,34 @@ using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftu_utils_test;
 
 // Helper function to create a test file with variable line lengths
-static std::string create_variable_line_test_file(
-    const std::string& test_dir, std::size_t num_lines,
-    std::size_t min_line_length = 50, std::size_t max_line_length = 500) {
-    std::string txt_file = test_dir + "/variable_lines_multi.txt";
-    std::string gz_file = test_dir + "/variable_lines_multi.gz";
+static dstd::String create_variable_line_test_file(
+    const dstd::String& test_dir, std::size_t line_count,
+    std::size_t min_line_size = 50, std::size_t max_line_size = 500) {
+    dstd::String txt_file = test_dir + "/variable_lines_multi.txt";
+    dstd::String gz_file = test_dir + "/variable_lines_multi.gz";
 
     // Create text file with variable line lengths
-    std::ofstream f(txt_file);
+    dftu_utils_test::FileOut f(txt_file);
     if (!f.is_open()) {
         return "";
     }
 
     std::mt19937 rng(12345);  // Fixed seed for reproducibility
-    std::uniform_int_distribution<std::size_t> dist(min_line_length,
-                                                    max_line_length);
+    std::uniform_int_distribution<std::size_t> dist(min_line_size,
+                                                    max_line_size);
 
-    for (std::size_t i = 1; i <= num_lines; ++i) {
-        std::size_t line_length = dist(rng);
+    for (std::size_t i = 1; i <= line_count; ++i) {
+        std::size_t line_size = dist(rng);
 
         // Create JSON line with variable padding to reach desired length
-        std::ostringstream line;
+        dftu_utils_test::TextOut line;
         line << "{\"id\":" << i << ",\"name\":\"event_" << i
              << "\",\"data\":\"";
 
         // Fill with padding to reach target length
-        std::size_t current_len = line.str().length();
-        std::size_t padding_needed = (line_length > current_len + 10)
-                                         ? (line_length - current_len - 10)
+        std::size_t current_size = line.str().length();
+        std::size_t padding_needed = (line_size > current_size + 10)
+                                         ? (line_size - current_size - 10)
                                          : 0;
 
         for (std::size_t j = 0; j < padding_needed; ++j) {
@@ -69,7 +71,7 @@ static std::string create_variable_line_test_file(
         return "";
     }
 
-    fs::remove(txt_file);
+    (void)dstd::fs::remove(txt_file);
     return gz_file;
 }
 
@@ -78,11 +80,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         TestEnvironment env(valgrind_scale(1000, 10));
         REQUIRE(env.is_valid());
 
-        std::string gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(1000, 10));
+        dstd::String gz_file =
+            create_variable_line_test_file(env.dir(), valgrind_scale(1000, 10));
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         // Build index
         {
@@ -96,18 +98,18 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         REQUIRE(reader != nullptr);
         REQUIRE(reader->is_valid());
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         auto stream =
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::MULTI_LINES_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
+                               .stream_type(StreamType::MultiLinesBytes)
+                               .range_type(RangeType::ByteRange)
                                .from(0)
                                .to(max_bytes));
         REQUIRE(stream != nullptr);
 
         // Read entire file
-        std::vector<char> buffer(1024 * 1024);  // 1MB buffer
-        std::string result;
+        dstd::Vector<char> buffer(1024 * 1024);  // 1MB buffer
+        dstd::String result;
 
         while (!stream->done()) {
             std::size_t bytes_read = stream->read(buffer.data(), buffer.size());
@@ -129,11 +131,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         TestEnvironment env(valgrind_scale(10000, 100));
         REQUIRE(env.is_valid());
 
-        std::string gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(10000, 100), 100, 300);
+        dstd::String gz_file = create_variable_line_test_file(
+            env.dir(), valgrind_scale(10000, 100), 100, 300);
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
@@ -144,20 +146,20 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         std::size_t chunk_size = max_bytes / 2;  // Split file in half
 
         // Read first chunk
         auto stream1 =
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::MULTI_LINES_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
+                               .stream_type(StreamType::MultiLinesBytes)
+                               .range_type(RangeType::ByteRange)
                                .from(0)
                                .to(chunk_size));
         REQUIRE(stream1 != nullptr);
 
-        std::vector<char> buffer(1024 * 1024);
-        std::string chunk1;
+        dstd::Vector<char> buffer(1024 * 1024);
+        dstd::String chunk1;
         while (!stream1->done()) {
             std::size_t bytes_read =
                 stream1->read(buffer.data(), buffer.size());
@@ -169,13 +171,13 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         // Read second chunk
         auto stream2 =
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::MULTI_LINES_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
+                               .stream_type(StreamType::MultiLinesBytes)
+                               .range_type(RangeType::ByteRange)
                                .from(chunk_size)
                                .to(max_bytes));
         REQUIRE(stream2 != nullptr);
 
-        std::string chunk2;
+        dstd::String chunk2;
         while (!stream2->done()) {
             std::size_t bytes_read =
                 stream2->read(buffer.data(), buffer.size());
@@ -193,10 +195,10 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         auto chunk1_last_newline = chunk1.rfind('\n');
         auto chunk2_first_newline = chunk2.find('\n');
 
-        if (chunk1_last_newline != std::string::npos &&
-            chunk2_first_newline != std::string::npos) {
-            std::string last_line1 = chunk1.substr(chunk1_last_newline + 1);
-            std::string first_line2 = chunk2.substr(0, chunk2_first_newline);
+        if (chunk1_last_newline != dstd::String::npos &&
+            chunk2_first_newline != dstd::String::npos) {
+            dstd::String last_line1 = chunk1.substr(chunk1_last_newline + 1);
+            dstd::String first_line2 = chunk2.substr(0, chunk2_first_newline);
 
             // They should be different (no overlap)
             CHECK(last_line1 != first_line2);
@@ -207,11 +209,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         TestEnvironment env(valgrind_scale(5000, 50));
         REQUIRE(env.is_valid());
 
-        std::string gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(5000, 50), 80, 250);
+        dstd::String gz_file = create_variable_line_test_file(
+            env.dir(), valgrind_scale(5000, 50), 80, 250);
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         {
             auto indexer =
@@ -222,19 +224,19 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         std::size_t mid_point = max_bytes / 2;
 
-        std::vector<char> buffer(512 * 1024);
+        dstd::Vector<char> buffer(512 * 1024);
 
         // Read first half
         auto stream1 =
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::MULTI_LINES_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
+                               .stream_type(StreamType::MultiLinesBytes)
+                               .range_type(RangeType::ByteRange)
                                .from(0)
                                .to(mid_point));
-        std::string chunk1;
+        dstd::String chunk1;
         while (!stream1->done()) {
             std::size_t bytes_read =
                 stream1->read(buffer.data(), buffer.size());
@@ -246,11 +248,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         // Read second half
         auto stream2 =
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::MULTI_LINES_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
+                               .stream_type(StreamType::MultiLinesBytes)
+                               .range_type(RangeType::ByteRange)
                                .from(mid_point)
                                .to(max_bytes));
-        std::string chunk2;
+        dstd::String chunk2;
         while (!stream2->done()) {
             std::size_t bytes_read =
                 stream2->read(buffer.data(), buffer.size());
@@ -262,11 +264,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         // Read full file
         auto stream_full =
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::MULTI_LINES_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
+                               .stream_type(StreamType::MultiLinesBytes)
+                               .range_type(RangeType::ByteRange)
                                .from(0)
                                .to(max_bytes));
-        std::string full;
+        dstd::String full;
         while (!stream_full->done()) {
             std::size_t bytes_read =
                 stream_full->read(buffer.data(), buffer.size());
@@ -276,19 +278,19 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         }
 
         // Concatenate chunks
-        std::string concatenated = chunk1 + chunk2;
+        dstd::String concatenated = chunk1 + chunk2;
 
         // Sort both for comparison (to handle potential ordering differences)
-        std::vector<std::string> concat_lines, full_lines;
+        dstd::Vector<dstd::String> concat_lines, full_lines;
 
-        std::istringstream concat_stream(concatenated);
-        std::string line;
-        while (std::getline(concat_stream, line)) {
+        dftu_utils_test::LineStream concat_stream(concatenated);
+        dstd::String line;
+        while (concat_stream.next(line)) {
             concat_lines.push_back(line);
         }
 
-        std::istringstream full_stream(full);
-        while (std::getline(full_stream, line)) {
+        dftu_utils_test::LineStream full_stream(full);
+        while (full_stream.next(line)) {
             full_lines.push_back(line);
         }
 
@@ -308,11 +310,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         TestEnvironment env(valgrind_scale(3000, 30));
         REQUIRE(env.is_valid());
 
-        std::string gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(3000, 30));
+        dstd::String gz_file =
+            create_variable_line_test_file(env.dir(), valgrind_scale(3000, 30));
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
@@ -323,28 +325,28 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
-        std::size_t num_chunks = 8;
-        std::size_t chunk_size = max_bytes / num_chunks;
+        std::size_t max_bytes = reader->max_bytes();
+        std::size_t chunk_count = 8;
+        std::size_t chunk_size = max_bytes / chunk_count;
 
-        std::vector<std::string> chunks;
-        std::vector<char> buffer(256 * 1024);
+        dstd::Vector<dstd::String> chunks;
+        dstd::Vector<char> buffer(256 * 1024);
 
         // Read all chunks
-        for (std::size_t i = 0; i < num_chunks; ++i) {
+        for (std::size_t i = 0; i < chunk_count; ++i) {
             std::size_t start = i * chunk_size;
             std::size_t end =
-                (i == num_chunks - 1) ? max_bytes : (i + 1) * chunk_size;
+                (i == chunk_count - 1) ? max_bytes : (i + 1) * chunk_size;
 
             auto stream =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::MultiLinesBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(start)
                                    .to(end));
             REQUIRE(stream != nullptr);
 
-            std::string chunk;
+            dstd::String chunk;
             while (!stream->done()) {
                 std::size_t bytes_read =
                     stream->read(buffer.data(), buffer.size());
@@ -357,11 +359,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         }
 
         // Extract all lines from all chunks
-        std::vector<std::string> all_lines;
+        dstd::Vector<dstd::String> all_lines;
         for (const auto& chunk : chunks) {
-            std::istringstream stream(chunk);
-            std::string line;
-            while (std::getline(stream, line)) {
+            dftu_utils_test::LineStream stream(chunk);
+            dstd::String line;
+            while (stream.next(line)) {
                 if (!line.empty()) {
                     all_lines.push_back(line);
                 }
@@ -369,7 +371,7 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         }
 
         // Check for duplicates (sort and check unique)
-        std::vector<std::string> sorted_lines = all_lines;
+        dstd::Vector<dstd::String> sorted_lines = all_lines;
         std::sort(sorted_lines.begin(), sorted_lines.end());
 
         auto last = std::unique(sorted_lines.begin(), sorted_lines.end());
@@ -390,11 +392,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
         TestEnvironment env(valgrind_scale(10000, 100));
         REQUIRE(env.is_valid());
 
-        std::string gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(10000, 100), 100, 400);
+        dstd::String gz_file = create_variable_line_test_file(
+            env.dir(), valgrind_scale(10000, 100), 100, 400);
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
@@ -406,19 +408,19 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
         {
             auto reader = ReaderFactory::create(gz_file, idx_file);
             REQUIRE(reader != nullptr);
-            max_bytes = reader->get_max_bytes();
+            max_bytes = reader->max_bytes();
         }
 
-        const int num_threads = valgrind_threads(4);
-        std::size_t chunk_size = max_bytes / num_threads;
+        const int thread_count = valgrind_threads(4);
+        std::size_t chunk_size = max_bytes / thread_count;
 
-        std::vector<std::string> chunks(num_threads);
-        std::vector<std::thread> threads;
+        dstd::Vector<dstd::String> chunks(thread_count);
+        dstd::Vector<dstd::Thread> threads;
         std::atomic<bool> error_occurred{false};
 
         // Launch threads to read different chunks in parallel
         // Each thread creates its own reader to avoid sharing indexer
-        for (int i = 0; i < num_threads; ++i) {
+        for (int i = 0; i < thread_count; ++i) {
             threads.emplace_back([&, i]() {
                 try {
                     // Create separate reader per thread
@@ -429,14 +431,14 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
                     }
 
                     std::size_t start = i * chunk_size;
-                    std::size_t end = (i == num_threads - 1)
+                    std::size_t end = (i == thread_count - 1)
                                           ? max_bytes
                                           : (i + 1) * chunk_size;
 
                     auto stream = reader->stream(
                         StreamConfig()
-                            .stream_type(StreamType::MULTI_LINES_BYTES)
-                            .range_type(RangeType::BYTE_RANGE)
+                            .stream_type(StreamType::MultiLinesBytes)
+                            .range_type(RangeType::ByteRange)
                             .from(start)
                             .to(end));
                     if (!stream) {
@@ -444,8 +446,8 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
                         return;
                     }
 
-                    std::vector<char> buffer(512 * 1024);
-                    std::string& chunk = chunks[i];
+                    dstd::Vector<char> buffer(512 * 1024);
+                    dstd::String& chunk = chunks[i];
 
                     while (!stream->done()) {
                         std::size_t bytes_read =
@@ -473,11 +475,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
         }
 
         // Collect all lines from all chunks
-        std::vector<std::string> all_lines;
+        dstd::Vector<dstd::String> all_lines;
         for (const auto& chunk : chunks) {
-            std::istringstream stream(chunk);
-            std::string line;
-            while (std::getline(stream, line)) {
+            dftu_utils_test::LineStream stream(chunk);
+            dstd::String line;
+            while (stream.next(line)) {
                 if (!line.empty()) {
                     all_lines.push_back(line);
                 }
@@ -485,7 +487,7 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
         }
 
         // Sort and check for duplicates
-        std::vector<std::string> sorted_lines = all_lines;
+        dstd::Vector<dstd::String> sorted_lines = all_lines;
         std::sort(sorted_lines.begin(), sorted_lines.end());
 
         auto last = std::unique(sorted_lines.begin(), sorted_lines.end());
@@ -502,11 +504,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
         TestEnvironment env(valgrind_scale(20000, 200));
         REQUIRE(env.is_valid());
 
-        std::string gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(20000, 200), 80, 350);
+        dstd::String gz_file = create_variable_line_test_file(
+            env.dir(), valgrind_scale(20000, 200), 80, 350);
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
@@ -518,18 +520,18 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
         {
             auto reader = ReaderFactory::create(gz_file, idx_file);
             REQUIRE(reader != nullptr);
-            max_bytes = reader->get_max_bytes();
+            max_bytes = reader->max_bytes();
         }
 
-        const int num_threads = valgrind_threads(16);
-        std::size_t chunk_size = max_bytes / num_threads;
+        const int thread_count = valgrind_threads(16);
+        std::size_t chunk_size = max_bytes / thread_count;
 
-        std::vector<std::string> chunks(num_threads);
-        std::vector<std::thread> threads;
+        dstd::Vector<dstd::String> chunks(thread_count);
+        dstd::Vector<dstd::Thread> threads;
         std::atomic<int> errors{0};
         std::atomic<int> completed{0};
 
-        for (int i = 0; i < num_threads; ++i) {
+        for (int i = 0; i < thread_count; ++i) {
             threads.emplace_back([&, i]() {
                 try {
                     // Create separate reader per thread
@@ -540,14 +542,14 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
                     }
 
                     std::size_t start = i * chunk_size;
-                    std::size_t end = (i == num_threads - 1)
+                    std::size_t end = (i == thread_count - 1)
                                           ? max_bytes
                                           : (i + 1) * chunk_size;
 
                     auto stream = reader->stream(
                         StreamConfig()
-                            .stream_type(StreamType::MULTI_LINES_BYTES)
-                            .range_type(RangeType::BYTE_RANGE)
+                            .stream_type(StreamType::MultiLinesBytes)
+                            .range_type(RangeType::ByteRange)
                             .from(start)
                             .to(end));
                     if (!stream) {
@@ -555,8 +557,8 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
                         return;
                     }
 
-                    std::vector<char> buffer(256 * 1024);
-                    std::string& chunk = chunks[i];
+                    dstd::Vector<char> buffer(256 * 1024);
+                    dstd::String& chunk = chunks[i];
 
                     while (!stream->done()) {
                         std::size_t bytes_read =
@@ -581,14 +583,14 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
         INFO("Errors: ", errors.load());
 
         CHECK(errors == 0);
-        CHECK(completed == num_threads);
+        CHECK(completed == thread_count);
 
         // Verify completeness
-        std::vector<std::string> all_lines;
+        dstd::Vector<dstd::String> all_lines;
         for (const auto& chunk : chunks) {
-            std::istringstream stream(chunk);
-            std::string line;
-            while (std::getline(stream, line)) {
+            dftu_utils_test::LineStream stream(chunk);
+            dstd::String line;
+            while (stream.next(line)) {
                 if (!line.empty()) {
                     all_lines.push_back(line);
                 }
@@ -610,11 +612,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
         TestEnvironment env(valgrind_scale(10000, 100));
         REQUIRE(env.is_valid());
 
-        std::string gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(10000, 100), 450, 550);
+        dstd::String gz_file = create_variable_line_test_file(
+            env.dir(), valgrind_scale(10000, 100), 450, 550);
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
@@ -625,22 +627,22 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         // 4MB at full scale; mid-file when scaled down under Valgrind
         std::size_t boundary = (max_bytes > 4194304) ? 4194304 : max_bytes / 2;
 
         // Only test if file is large enough
         if (max_bytes > boundary) {
-            std::vector<char> buffer(512 * 1024);
+            dstd::Vector<char> buffer(512 * 1024);
 
             // Read chunk 1: [0, 4194304)
             auto stream1 =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::MultiLinesBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(0)
                                    .to(boundary));
-            std::string chunk1;
+            dstd::String chunk1;
             while (!stream1->done()) {
                 std::size_t bytes_read =
                     stream1->read(buffer.data(), buffer.size());
@@ -652,11 +654,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
             // Read chunk 2: [4194304, end)
             auto stream2 =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::MultiLinesBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(boundary)
                                    .to(max_bytes));
-            std::string chunk2;
+            dstd::String chunk2;
             while (!stream2->done()) {
                 std::size_t bytes_read =
                     stream2->read(buffer.data(), buffer.size());
@@ -669,15 +671,15 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
             CHECK(!chunk2.empty());
 
             // Check for overlap by looking at last/first lines
-            std::vector<std::string> lines1, lines2;
-            std::istringstream s1(chunk1);
-            std::string line;
-            while (std::getline(s1, line)) {
+            dstd::Vector<dstd::String> lines1, lines2;
+            dftu_utils_test::LineStream s1(chunk1);
+            dstd::String line;
+            while (s1.next(line)) {
                 if (!line.empty()) lines1.push_back(line);
             }
 
-            std::istringstream s2(chunk2);
-            while (std::getline(s2, line)) {
+            dftu_utils_test::LineStream s2(chunk2);
+            while (s2.next(line)) {
                 if (!line.empty()) lines2.push_back(line);
             }
 
@@ -687,7 +689,7 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
             }
 
             // Check for no duplicates overall
-            std::vector<std::string> all_lines = lines1;
+            dstd::Vector<dstd::String> all_lines = lines1;
             all_lines.insert(all_lines.end(), lines2.begin(), lines2.end());
             std::sort(all_lines.begin(), all_lines.end());
             auto last = std::unique(all_lines.begin(), all_lines.end());
@@ -700,11 +702,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
         TestEnvironment env(valgrind_scale(5000, 50));
         REQUIRE(env.is_valid());
 
-        std::string gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(5000, 50), 230, 350);
+        dstd::String gz_file = create_variable_line_test_file(
+            env.dir(), valgrind_scale(5000, 50), 230, 350);
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
@@ -715,27 +717,27 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
         // Prime offset; large prime at full scale, smaller when scaled down
         std::size_t boundary = (max_bytes > 1299709) ? 1299709 : 10007;
 
         if (max_bytes > boundary) {
-            std::vector<char> buffer(256 * 1024);
+            dstd::Vector<char> buffer(256 * 1024);
 
             auto stream1 =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::MultiLinesBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(0)
                                    .to(boundary));
             auto stream2 =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::MultiLinesBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(boundary)
                                    .to(max_bytes));
 
-            std::string chunk1, chunk2;
+            dstd::String chunk1, chunk2;
 
             while (!stream1->done()) {
                 std::size_t bytes_read =
@@ -750,16 +752,16 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
             }
 
             // Concatenate and verify completeness
-            std::string concat = chunk1 + chunk2;
+            dstd::String concat = chunk1 + chunk2;
 
             // Read full file for comparison
             auto stream_full =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::MultiLinesBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(0)
                                    .to(max_bytes));
-            std::string full;
+            dstd::String full;
             while (!stream_full->done()) {
                 std::size_t bytes_read =
                     stream_full->read(buffer.data(), buffer.size());
@@ -767,14 +769,14 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
             }
 
             // Sort and compare to handle ordering differences
-            std::vector<std::string> concat_sorted, full_sorted;
-            std::istringstream cs(concat);
-            std::string line;
-            while (std::getline(cs, line)) {
+            dstd::Vector<dstd::String> concat_sorted, full_sorted;
+            dftu_utils_test::LineStream cs(concat);
+            dstd::String line;
+            while (cs.next(line)) {
                 if (!line.empty()) concat_sorted.push_back(line);
             }
-            std::istringstream fs(full);
-            while (std::getline(fs, line)) {
+            dftu_utils_test::LineStream fs(full);
+            while (fs.next(line)) {
                 if (!line.empty()) full_sorted.push_back(line);
             }
 
@@ -792,11 +794,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
         TestEnvironment env(valgrind_scale(15000, 150));
         REQUIRE(env.is_valid());
 
-        std::string gz_file = create_variable_line_test_file(
-            env.get_dir(), valgrind_scale(15000, 150), 90, 280);
+        dstd::String gz_file = create_variable_line_test_file(
+            env.dir(), valgrind_scale(15000, 150), 90, 280);
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
@@ -807,17 +809,17 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
 
-        std::size_t max_bytes = reader->get_max_bytes();
+        std::size_t max_bytes = reader->max_bytes();
 
         // Read full file once for reference
         auto stream_ref =
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::MULTI_LINES_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
+                               .stream_type(StreamType::MultiLinesBytes)
+                               .range_type(RangeType::ByteRange)
                                .from(0)
                                .to(max_bytes));
-        std::vector<char> buffer(512 * 1024);
-        std::string full_content;
+        dstd::Vector<char> buffer(512 * 1024);
+        dstd::String full_content;
         while (!stream_ref->done()) {
             std::size_t bytes_read =
                 stream_ref->read(buffer.data(), buffer.size());
@@ -826,23 +828,23 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
             }
         }
 
-        std::vector<std::string> reference_lines;
-        std::istringstream ref_stream(full_content);
-        std::string line;
-        while (std::getline(ref_stream, line)) {
+        dstd::Vector<dstd::String> reference_lines;
+        dftu_utils_test::LineStream ref_stream(full_content);
+        dstd::String line;
+        while (ref_stream.next(line)) {
             if (!line.empty()) reference_lines.push_back(line);
         }
         std::sort(reference_lines.begin(), reference_lines.end());
 
         // Test with different worker counts
         for (int raw_workers : {2, 4, 8, 16}) {
-            int num_workers = valgrind_threads(raw_workers);
-            std::size_t chunk_size = max_bytes / num_workers;
+            int worker_count = valgrind_threads(raw_workers);
+            std::size_t chunk_size = max_bytes / worker_count;
 
-            std::vector<std::string> chunks(num_workers);
-            std::vector<std::thread> threads;
+            dstd::Vector<dstd::String> chunks(worker_count);
+            dstd::Vector<dstd::Thread> threads;
 
-            for (int i = 0; i < num_workers; ++i) {
+            for (int i = 0; i < worker_count; ++i) {
                 threads.emplace_back([&, i]() {
                     // Create separate reader per thread
                     auto thread_reader =
@@ -850,19 +852,19 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
                     if (!thread_reader) return;
 
                     std::size_t start = i * chunk_size;
-                    std::size_t end = (i == num_workers - 1)
+                    std::size_t end = (i == worker_count - 1)
                                           ? max_bytes
                                           : (i + 1) * chunk_size;
 
                     auto stream = thread_reader->stream(
                         StreamConfig()
-                            .stream_type(StreamType::MULTI_LINES_BYTES)
-                            .range_type(RangeType::BYTE_RANGE)
+                            .stream_type(StreamType::MultiLinesBytes)
+                            .range_type(RangeType::ByteRange)
                             .from(start)
                             .to(end));
                     if (!stream) return;
 
-                    std::vector<char> buf(256 * 1024);
+                    dstd::Vector<char> buf(256 * 1024);
                     while (!stream->done()) {
                         std::size_t br = stream->read(buf.data(), buf.size());
                         if (br > 0) chunks[i].append(buf.data(), br);
@@ -875,11 +877,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
             }
 
             // Collect and sort lines
-            std::vector<std::string> worker_lines;
+            dstd::Vector<dstd::String> worker_lines;
             for (const auto& chunk : chunks) {
-                std::istringstream s(chunk);
-                std::string l;
-                while (std::getline(s, l)) {
+                dftu_utils_test::LineStream s(chunk);
+                dstd::String l;
+                while (s.next(l)) {
                     if (!l.empty()) worker_lines.push_back(l);
                 }
             }
@@ -890,7 +892,7 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
             std::size_t unique_count =
                 std::distance(worker_lines.begin(), last);
 
-            INFO("Workers: ", num_workers);
+            INFO("Workers: ", worker_count);
             INFO("Total lines: ", worker_lines.size());
             INFO("Unique lines: ", unique_count);
 
@@ -907,11 +909,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
         TestEnvironment env(n_buf_lines);
         REQUIRE(env.is_valid());
 
-        std::string gz_file = create_variable_line_test_file(
-            env.get_dir(), n_buf_lines, 100, 300);
+        dstd::String gz_file =
+            create_variable_line_test_file(env.dir(), n_buf_lines, 100, 300);
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
@@ -922,19 +924,19 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
         auto reference_reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reference_reader != nullptr);
 
-        std::size_t max_bytes = reference_reader->get_max_bytes();
+        std::size_t max_bytes = reference_reader->max_bytes();
 
         // Read full file with default buffer to get reference
         auto ref_stream = reference_reader->stream(
             StreamConfig()
-                .stream_type(StreamType::MULTI_LINES_BYTES)
-                .range_type(RangeType::BYTE_RANGE)
+                .stream_type(StreamType::MultiLinesBytes)
+                .range_type(RangeType::ByteRange)
                 .from(0)
                 .to(max_bytes)
                 .buffer_size(0));  // Use default
 
-        std::vector<char> buffer(512 * 1024);
-        std::string reference_content;
+        dstd::Vector<char> buffer(512 * 1024);
+        dstd::String reference_content;
         while (!ref_stream->done()) {
             std::size_t bytes_read =
                 ref_stream->read(buffer.data(), buffer.size());
@@ -943,10 +945,10 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
             }
         }
 
-        std::vector<std::string> reference_lines;
-        std::istringstream ref_stream_str(reference_content);
-        std::string line;
-        while (std::getline(ref_stream_str, line)) {
+        dstd::Vector<dstd::String> reference_lines;
+        dftu_utils_test::LineStream ref_stream_str(reference_content);
+        dstd::String line;
+        while (ref_stream_str.next(line)) {
             if (!line.empty()) reference_lines.push_back(line);
         }
         std::sort(reference_lines.begin(), reference_lines.end());
@@ -954,7 +956,7 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
         CHECK(reference_lines.size() == n_buf_lines);
 
         // Test with various buffer sizes
-        std::vector<std::size_t> buffer_sizes = {
+        dstd::Vector<std::size_t> buffer_sizes = {
             32 * 1024,        // 32KB (smaller than default 64KB)
             64 * 1024,        // 64KB (default)
             256 * 1024,       // 256KB
@@ -972,13 +974,13 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
             // Test reading full file with this buffer size
             auto stream =
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES_BYTES)
-                                   .range_type(RangeType::BYTE_RANGE)
+                                   .stream_type(StreamType::MultiLinesBytes)
+                                   .range_type(RangeType::ByteRange)
                                    .from(0)
                                    .to(max_bytes)
                                    .buffer_size(buf_size));
 
-            std::string content;
+            dstd::String content;
             while (!stream->done()) {
                 std::size_t bytes_read =
                     stream->read(buffer.data(), buffer.size());
@@ -987,9 +989,9 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
                 }
             }
 
-            std::vector<std::string> lines;
-            std::istringstream stream_str(content);
-            while (std::getline(stream_str, line)) {
+            dstd::Vector<dstd::String> lines;
+            dftu_utils_test::LineStream stream_str(content);
+            while (stream_str.next(line)) {
                 if (!line.empty()) lines.push_back(line);
             }
             std::sort(lines.begin(), lines.end());
@@ -1004,11 +1006,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
         TestEnvironment env(n_chunk_lines);
         REQUIRE(env.is_valid());
 
-        std::string gz_file = create_variable_line_test_file(
-            env.get_dir(), n_chunk_lines, 80, 200);
+        dstd::String gz_file =
+            create_variable_line_test_file(env.dir(), n_chunk_lines, 80, 200);
         REQUIRE(!gz_file.empty());
 
-        std::string idx_file = env.get_index_path(gz_file);
+        dstd::String idx_file = env.get_index_path(gz_file);
 
         {
             auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
@@ -1019,12 +1021,12 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
         std::size_t max_bytes;
         {
             auto reader = ReaderFactory::create(gz_file, idx_file);
-            max_bytes = reader->get_max_bytes();
+            max_bytes = reader->max_bytes();
         }
 
         std::size_t mid_point = max_bytes / 2;
 
-        std::vector<std::size_t> buffer_sizes = {
+        dstd::Vector<std::size_t> buffer_sizes = {
             64 * 1024,        // 64KB
             512 * 1024,       // 512KB
             2 * 1024 * 1024,  // 2MB
@@ -1034,20 +1036,20 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
         for (std::size_t buf_size : buffer_sizes) {
             INFO("Testing chunked read with buffer size: ", buf_size, " bytes");
 
-            std::vector<char> read_buffer(512 * 1024);
+            dstd::Vector<char> read_buffer(512 * 1024);
 
             // Read first half
             {
                 auto reader = ReaderFactory::create(gz_file, idx_file);
-                auto stream1 = reader->stream(
-                    StreamConfig()
-                        .stream_type(StreamType::MULTI_LINES_BYTES)
-                        .range_type(RangeType::BYTE_RANGE)
-                        .from(0)
-                        .to(mid_point)
-                        .buffer_size(buf_size));
+                auto stream1 =
+                    reader->stream(StreamConfig()
+                                       .stream_type(StreamType::MultiLinesBytes)
+                                       .range_type(RangeType::ByteRange)
+                                       .from(0)
+                                       .to(mid_point)
+                                       .buffer_size(buf_size));
 
-                std::string chunk1;
+                dstd::String chunk1;
                 while (!stream1->done()) {
                     std::size_t bytes_read =
                         stream1->read(read_buffer.data(), read_buffer.size());
@@ -1061,15 +1063,15 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
             // Read second half
             {
                 auto reader = ReaderFactory::create(gz_file, idx_file);
-                auto stream2 = reader->stream(
-                    StreamConfig()
-                        .stream_type(StreamType::MULTI_LINES_BYTES)
-                        .range_type(RangeType::BYTE_RANGE)
-                        .from(mid_point)
-                        .to(max_bytes)
-                        .buffer_size(buf_size));
+                auto stream2 =
+                    reader->stream(StreamConfig()
+                                       .stream_type(StreamType::MultiLinesBytes)
+                                       .range_type(RangeType::ByteRange)
+                                       .from(mid_point)
+                                       .to(max_bytes)
+                                       .buffer_size(buf_size));
 
-                std::string chunk2;
+                dstd::String chunk2;
                 while (!stream2->done()) {
                     std::size_t bytes_read =
                         stream2->read(read_buffer.data(), read_buffer.size());
@@ -1083,15 +1085,15 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
             // Read full file
             {
                 auto reader = ReaderFactory::create(gz_file, idx_file);
-                auto stream_full = reader->stream(
-                    StreamConfig()
-                        .stream_type(StreamType::MULTI_LINES_BYTES)
-                        .range_type(RangeType::BYTE_RANGE)
-                        .from(0)
-                        .to(max_bytes)
-                        .buffer_size(buf_size));
+                auto stream_full =
+                    reader->stream(StreamConfig()
+                                       .stream_type(StreamType::MultiLinesBytes)
+                                       .range_type(RangeType::ByteRange)
+                                       .from(0)
+                                       .to(max_bytes)
+                                       .buffer_size(buf_size));
 
-                std::string full;
+                dstd::String full;
                 while (!stream_full->done()) {
                     std::size_t bytes_read = stream_full->read(
                         read_buffer.data(), read_buffer.size());
@@ -1100,10 +1102,10 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
                     }
                 }
 
-                std::vector<std::string> full_lines;
-                std::istringstream full_stream(full);
-                std::string line;
-                while (std::getline(full_stream, line)) {
+                dstd::Vector<dstd::String> full_lines;
+                dftu_utils_test::LineStream full_stream(full);
+                dstd::String line;
+                while (full_stream.next(line)) {
                     if (!line.empty()) full_lines.push_back(line);
                 }
 

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/server/cancel.h>
 #include <dftracer/utils/server/signal_handler.h>
 #include <sys/socket.h>
@@ -45,12 +49,11 @@ bool CancelToken::cancelled() const {
 }
 
 CancelRegistry& CancelRegistry::instance() {
-    static CancelRegistry registry;
-    return registry;
+    return dstd::Singleton<CancelRegistry>::get();
 }
 
-CancelToken CancelRegistry::create(const std::string& id, int peer_fd) {
-    auto state = std::make_shared<CancelState>();
+CancelToken CancelRegistry::create(const dstd::String& id, int peer_fd) {
+    auto state = dstd::make_shared<CancelState>();
     state->peer_fd = peer_fd;
     if (!id.empty()) {
         std::lock_guard<std::mutex> lock(mu_);
@@ -59,15 +62,15 @@ CancelToken CancelRegistry::create(const std::string& id, int peer_fd) {
     return CancelToken(state);
 }
 
-void CancelRegistry::remove(const std::string& id) {
+void CancelRegistry::remove(const dstd::String& id) {
     if (id.empty()) return;
     std::lock_guard<std::mutex> lock(mu_);
     tokens_.erase(id);
 }
 
-bool CancelRegistry::cancel(const std::string& id) {
+bool CancelRegistry::cancel(const dstd::String& id) {
     if (id.empty()) return false;
-    std::shared_ptr<CancelState> state;
+    dstd::SharedPtr<CancelState> state;
     {
         std::lock_guard<std::mutex> lock(mu_);
         auto it = tokens_.find(id);

@@ -1,0 +1,54 @@
+// SPDX-License-Identifier: MIT
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <doctest/doctest.h>
+
+#if defined(__linux__)
+#include <sched.h>
+
+#include <cstdlib>
+
+using namespace dftracer::utils;
+#endif
+
+TEST_CASE("the default worker count is never 0") {
+    CHECK(dftracer::utils::common::hardware_concurrency() >= 1);
+}
+
+#if defined(__linux__)
+TEST_CASE("the default worker count follows the CPU affinity") {
+    // The override wins over the affinity, and the Valgrind runner sets it.
+    constexpr const char* OVERRIDE = "DFTRACER_UTILS_HW_CONCURRENCY";
+    dstd::Optional<dstd::String> kept;
+    if (const auto v = dftracer::utils::common::Env::get(OVERRIDE))
+        kept = dstd::String(*v);
+    ::unsetenv(OVERRIDE);
+
+    cpu_set_t saved;
+    CPU_ZERO(&saved);
+    REQUIRE(sched_getaffinity(0, sizeof(saved), &saved) == 0);
+    int first = -1;
+    for (int c = 0; c < CPU_SETSIZE; ++c) {
+        if (CPU_ISSET(c, &saved)) {
+            first = c;
+            break;
+        }
+    }
+    REQUIRE(first >= 0);
+
+    cpu_set_t one;
+    CPU_ZERO(&one);
+    CPU_SET(first, &one);
+    REQUIRE(sched_setaffinity(0, sizeof(one), &one) == 0);
+    const auto narrowed = dftracer::utils::common::hardware_concurrency();
+    REQUIRE(sched_setaffinity(0, sizeof(saved), &saved) == 0);
+
+    CHECK(narrowed == 1);
+    CHECK(dftracer::utils::common::hardware_concurrency() ==
+          static_cast<std::size_t>(CPU_COUNT(&saved)));
+    if (kept) ::setenv(OVERRIDE, kept->c_str(), 1);
+}
+#endif

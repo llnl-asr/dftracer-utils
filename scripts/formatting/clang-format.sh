@@ -1,4 +1,5 @@
 #! /bin/sh
+# SPDX-License-Identifier: MIT
 # Run clang-format 19, the major version .clang-format is written for and CI
 # installs. Other versions disagree on DerivePointerAlignment ties, so a file
 # formatted by one fails the check of another. Without a local clang-format 19,

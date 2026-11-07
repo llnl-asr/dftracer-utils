@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // dftu_source_vt::schema_types lets a provider declare each column's type
 // (dftu_schema_add_field/add_child_field), which ProviderSource::schema()
 // reports instead of the TypeId::Unknown every column got before. Exercises
@@ -10,28 +11,22 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <vector>
 
-using dftracer::utils::dataframe::col;
-using dftracer::utils::dataframe::DataType;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::make_provider_source;
-using dftracer::utils::dataframe::Schema;
-using dftracer::utils::dataframe::Source;
-using dftracer::utils::dataframe::TimeUnit;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
-dftu_dataframe* empty_frame(const std::vector<std::string>& names) {
-    std::vector<const char*> cnames;
-    std::vector<dftu_series*> cols;
-    for (const std::string& n : names) {
+dftu_dataframe* empty_frame(const dstd::Vector<dstd::String>& names) {
+    dstd::Vector<const char*> cnames;
+    dstd::Vector<dftu_series*> cols;
+    for (const dstd::String& n : names) {
         cnames.push_back(n.c_str());
         std::int64_t v = 0;
         cols.push_back(dftu_series_new_flat(DFTU_TYPE_INT64, &v, 0, nullptr));
@@ -71,15 +66,15 @@ const dftu_cursor_vt CURSOR_VT = {cursor_next, cursor_destroy, nullptr, nullptr,
 // morsel. `schema_types` is the vtable's optional type-declaration callback;
 // pass nullptr for a provider that declares nothing.
 struct Fixture {
-    std::vector<std::string> names;
+    dstd::Vector<dstd::String> names;
     void (*schema_types)(void*, dftu_schema*);
 };
 
 int32_t fixture_schema(void* self, const char* const** out_names) {
     auto* fx = static_cast<Fixture*>(self);
-    static thread_local std::vector<const char*> storage;
+    static thread_local dstd::Vector<const char*> storage;
     storage.clear();
-    for (const std::string& n : fx->names) storage.push_back(n.c_str());
+    for (const dstd::String& n : fx->names) storage.push_back(n.c_str());
     *out_names = storage.data();
     return static_cast<int32_t>(storage.size());
 }
@@ -95,7 +90,7 @@ void* fixture_scan(void* self, const dftu_scan_request*, int32_t*,
 
 void fixture_destroy(void*) {}
 
-std::shared_ptr<Source> make_fixture(Fixture& fx) {
+dstd::SharedPtr<Source> make_fixture(Fixture& fx) {
     dftu_source_vt vt{};
     vt.schema = fixture_schema;
     vt.scan = fixture_scan;

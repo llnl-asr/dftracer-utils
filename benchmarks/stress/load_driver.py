@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Concurrent load driver for the dftracer server viz endpoints.
 
 Models a dashboard / multi-user session: N workers fire random overlapping

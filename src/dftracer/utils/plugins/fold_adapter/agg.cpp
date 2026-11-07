@@ -1,15 +1,17 @@
-#include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/logging.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/reserved_names.h>
 
 #include <cstdint>
-#include <memory>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -53,12 +55,12 @@ const dftu_svc_agg g_agg = {host_agg_new, host_agg_accumulate, host_agg_result,
     if (!acc.state) return nullptr;
     try {
         dataframe::DataFrame out = acc.spiller.drain(*acc.state, acc.key_names);
-        std::vector<dftu_series*> handles;
+        dstd::Vector<dftu_series*> handles;
         handles.reserve(out.columns.size());
         for (dataframe::Series& c : out.columns) handles.push_back(c.release());
-        std::vector<const char*> names;
+        dstd::Vector<const char*> names;
         names.reserve(out.names.size());
-        for (const std::string& n : out.names) names.push_back(n.c_str());
+        for (const dstd::String& n : out.names) names.push_back(n.c_str());
         return dftu_dataframe_new(names.data(), handles.data(),
                                   static_cast<std::int32_t>(handles.size()));
     } catch (...) {
@@ -82,11 +84,11 @@ const void* detail::agg_ext_vtable() { return &g_agg; }
             name);
         return nullptr;
     }
-    std::uint64_t key = dftracer::utils::hash::fnv1a_hash(name);
-    if (std::unique_ptr<AggAccum>* slot = aggs_.find(key))
+    std::uint64_t key = dftracer::utils::dstd::hash::fnv1a_hash(name);
+    if (dstd::UniquePtr<AggAccum>* slot = aggs_.find(key))
         return reinterpret_cast<::dftu_agg*>(slot->get());
 
-    std::vector<std::string> value_names;
+    dstd::Vector<dstd::String> value_names;
     auto column_index = [&](const char* col) -> std::int32_t {
         if (!col) return -1;
         for (std::size_t i = 0; i < value_names.size(); ++i)
@@ -95,7 +97,7 @@ const void* detail::agg_ext_vtable() { return &g_agg; }
         return static_cast<std::int32_t>(value_names.size() - 1);
     };
 
-    std::vector<dataframe::AggSpec> aspecs;
+    dstd::Vector<dataframe::AggSpec> aspecs;
     aspecs.reserve(spec_n);
     for (std::uint32_t i = 0; i < spec_n; ++i) {
         if (specs[i].op < DFTU_AGG_COUNT || specs[i].op > DFTU_AGG_REGR_R2) {
@@ -119,8 +121,8 @@ const void* detail::agg_ext_vtable() { return &g_agg; }
         aspecs.push_back(std::move(s));
     }
 
-    std::unique_ptr<AggAccum>* slot = aggs_.get_or_create(key, [&] {
-        auto acc = std::make_unique<AggAccum>();
+    dstd::UniquePtr<AggAccum>* slot = aggs_.get_or_create(key, [&] {
+        auto acc = dstd::make_unique<AggAccum>();
         acc->name = name;
         acc->key_names.reserve(key_n);
         for (std::uint32_t i = 0; i < key_n; ++i)
@@ -140,25 +142,25 @@ void PluginFold::agg_accumulate(::dftu_agg* a, const ::dftu_dataframe* df) {
 
     // Series wraps and frees each shared handle; a missing column yields a null
     // handle, so skip the whole batch rather than accumulate a partial key.
-    std::vector<dataframe::Series> owned;
+    dstd::Vector<dataframe::Series> owned;
     owned.reserve(acc.key_names.size() + acc.value_names.size());
-    auto column = [&](const std::string& n) -> const dataframe::Series* {
+    auto column = [&](const auto& n) -> const dataframe::Series* {
         dftu_series* h = dftu_dataframe_column(df, n.c_str());
         if (!h) return nullptr;
         owned.emplace_back(h);
         return &owned.back();
     };
 
-    std::vector<const dataframe::Series*> keys;
+    dstd::Vector<const dataframe::Series*> keys;
     keys.reserve(acc.key_names.size());
-    for (const std::string& n : acc.key_names) {
+    for (const dstd::String& n : acc.key_names) {
         const dataframe::Series* c = column(n);
         if (!c) return;
         keys.push_back(c);
     }
-    std::vector<const dataframe::Series*> values;
+    dstd::Vector<const dataframe::Series*> values;
     values.reserve(acc.value_names.size());
-    for (const std::string& n : acc.value_names) {
+    for (const dstd::String& n : acc.value_names) {
         const dataframe::Series* c = column(n);
         if (!c) return;
         values.push_back(c);
@@ -182,24 +184,25 @@ void PluginFold::agg_accumulate(::dftu_agg* a, const ::dftu_dataframe* df) {
 // own partial state.
 ::dftu_dataframe* PluginFold::agg_result(const char* name) const {
     if (!name || !results_) return nullptr;
-    auto it = results_->aggs.find(dftracer::utils::hash::fnv1a_hash(name));
+    auto it =
+        results_->aggs.find(dftracer::utils::dstd::hash::fnv1a_hash(name));
     if (it == results_->aggs.end() || !it->second) return nullptr;
     return finalize_to_frame(*it->second);
 }
 
 std::size_t PluginFold::agg_spill_runs(const char* name) const {
     if (!name) return 0;
-    const std::uint64_t key = dftracer::utils::hash::fnv1a_hash(name);
+    const std::uint64_t key = dftracer::utils::dstd::hash::fnv1a_hash(name);
     auto it = aggs_.index().find(key);
     if (it == aggs_.index().end()) return 0;
-    const std::unique_ptr<AggAccum>& acc = aggs_[it->second];
+    const dstd::UniquePtr<AggAccum>& acc = aggs_[it->second];
     return acc ? acc->spiller.runs() : 0;
 }
 
 void PluginFold::publish_aggs() {
     if (!results_) return;
     for (const auto& [key, idx] : aggs_.index()) {
-        std::unique_ptr<AggAccum>& acc = aggs_[idx];
+        dstd::UniquePtr<AggAccum>& acc = aggs_[idx];
         if (!acc || !acc->state) continue;
         auto owner = results_->owners.find(key);
         if (owner != results_->owners.end() && owner->second != plugin_name_) {
@@ -218,7 +221,7 @@ void PluginFold::publish_aggs() {
 
 void PluginFold::materialize_aggs() {
     if (!named_results_) return;
-    for (std::unique_ptr<AggAccum>& acc : aggs_) {
+    for (dstd::UniquePtr<AggAccum>& acc : aggs_) {
         if (!acc) continue;
         if (::dftu_dataframe* h = finalize_to_frame(*acc))
             named_results_->emit_frame(acc->name.c_str(), h);

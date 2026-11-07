@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import type { DensityBlock, ProcTreeNode, TraceEvent } from "../data/types";
 import { planAggregate } from "./aggregate";
 import { colorFor, colorSlot, contrastText, DENSITY_GREY, sliceKey } from "./color";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
@@ -8,11 +9,11 @@
 #include <dftracer/utils/dataframe/kernels/comparison.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include <string_view>
 #include <type_traits>
 
 namespace dftracer::utils::dataframe {
@@ -281,37 +282,49 @@ dftu_series* dftu_series_compare(const dftu_series* v, dftu_cmp_op op,
     DFTU_PER_CHUNK(v, dftu_series_compare, op, rhs);
     using dftracer::utils::dataframe::CmpOp;
     if (rhs.kind == DFTU_SCALAR_TAG_STR) {
-        const std::string_view r(rhs.value.s,
-                                 static_cast<std::size_t>(rhs.len));
+        const dftracer::utils::dstd::StringView r(
+            rhs.value.s, static_cast<std::size_t>(rhs.len));
         switch (static_cast<CmpOp>(op)) {
             case CmpOp::Eq:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s == r; });
+                    v, [r](dftracer::utils::dstd::StringView s) {
+                        return s == r;
+                    });
             case CmpOp::Ne:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s != r; });
+                    v, [r](dftracer::utils::dstd::StringView s) {
+                        return s != r;
+                    });
             case CmpOp::Lt:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s < r; });
+                    v,
+                    [r](dftracer::utils::dstd::StringView s) { return s < r; });
             case CmpOp::Le:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s <= r; });
+                    v, [r](dftracer::utils::dstd::StringView s) {
+                        return s <= r;
+                    });
             case CmpOp::Gt:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s > r; });
+                    v,
+                    [r](dftracer::utils::dstd::StringView s) { return s > r; });
             case CmpOp::Ge:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s >= r; });
+                    v, [r](dftracer::utils::dstd::StringView s) {
+                        return s >= r;
+                    });
         }
         return nullptr;
     }
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_compare(flat_v, op, rhs));
 
-    using dftracer::utils::dataframe::Buffer;
     using dftracer::utils::dataframe::buffer_bytes;
+    using dftracer::utils::dataframe::BufferView;
     using dftracer::utils::dataframe::compare_impl;
     using dftracer::utils::dataframe::Encoding;
+    using dftracer::utils::dataframe::new_buffer;
     using dftracer::utils::dataframe::TypeId;
+    using dftracer::utils::dataframe::writable;
 
     if (v->encoding != Encoding::Flat) return nullptr;
     const TypeId phys = physical_type(v->type);
@@ -331,10 +344,10 @@ dftu_series* dftu_series_compare(const dftu_series* v, dftu_cmp_op op,
     out->validity = v->validity;  // shared: nulls propagate
 
     std::size_t bytes = buffer_bytes(TypeId::Bool, v->length);
-    out->data = Buffer::allocate(bytes);
-    std::memset(out->data->data(), 0, bytes);
-    std::uint8_t* bits = out->data->data();
-    const void* data = v->data->data();
+    out->data = new_buffer(bytes);
+    std::memset(writable(out->data), 0, bytes);
+    std::uint8_t* bits = writable(out->data);
+    const void* data = v->data.data();
     std::int64_t n = v->length;
 
     // Chunks of whole 64-bit words: each writes its own bytes of the bitmap,
@@ -347,7 +360,8 @@ dftu_series* dftu_series_compare(const dftu_series* v, dftu_cmp_op op,
             std::uint8_t* pb = bits + (b >> 3);
             if (!dftracer::utils::dataframe::compare(v->type, pd, e - b, op,
                                                      rhs, pb)) {
-                DF_NUMERIC_DISPATCH(phys, compare_impl, pd, e - b, op, rhs, pb)
+                DFTRACER_UTILS_NUMERIC_DISPATCH(phys, compare_impl, pd, e - b,
+                                                op, rhs, pb)
             }
         });
     return out;
@@ -394,14 +408,16 @@ dftu_series* dftu_series_compare_series(const dftu_series* a,
     if (!a || !b || a->length != b->length) return nullptr;
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_compare_series(flat_a, b, op));
     DFTU_FLAT_OPERAND(b, flat_b, dftu_series_compare_series(a, flat_b, op));
-    using dftracer::utils::dataframe::Buffer;
     using dftracer::utils::dataframe::buffer_bytes;
+    using dftracer::utils::dataframe::BufferView;
     using dftracer::utils::dataframe::Encoding;
     using dftracer::utils::dataframe::narrow_varwidth_type;
+    using dftracer::utils::dataframe::new_buffer;
     using dftracer::utils::dataframe::read_bytes;
     using dftracer::utils::dataframe::read_f64;
     using dftracer::utils::dataframe::Series;
     using dftracer::utils::dataframe::TypeId;
+    using dftracer::utils::dataframe::writable;
     if (op < static_cast<int32_t>(CmpOp::Gt) ||
         op > static_cast<int32_t>(CmpOp::Ne))
         return nullptr;
@@ -421,16 +437,18 @@ dftu_series* dftu_series_compare_series(const dftu_series* a,
     out->encoding = Encoding::Flat;
     out->length = n;
     const std::size_t bytes = buffer_bytes(TypeId::Bool, n);
-    out->data = Buffer::allocate(bytes);
-    std::memset(out->data->data(), 0, bytes);
-    std::uint8_t* bits = out->data->data();
+    out->data = new_buffer(bytes);
+    std::memset(writable(out->data), 0, bytes);
+    std::uint8_t* bits = writable(out->data);
 
     // Null where either side is null: the AND of the two bitmaps.
-    if (a->validity || b->validity) {
-        out->validity = Buffer::allocate(bytes);
-        std::uint8_t* v = out->validity->data();
-        const std::uint8_t* va = a->validity ? a->validity->data() : nullptr;
-        const std::uint8_t* vb = b->validity ? b->validity->data() : nullptr;
+    if (a->validity.block() || b->validity.block()) {
+        out->validity = new_buffer(bytes);
+        std::uint8_t* v = writable(out->validity);
+        const std::uint8_t* va =
+            a->validity.block() ? a->validity.data() : nullptr;
+        const std::uint8_t* vb =
+            b->validity.block() ? b->validity.data() : nullptr;
         std::int64_t nulls = 0;
         for (std::size_t i = 0; i < bytes; ++i)
             v[i] = static_cast<std::uint8_t>((va ? va[i] : 0xFF) &
@@ -453,10 +471,10 @@ dftu_series* dftu_series_compare_series(const dftu_series* a,
                 sa.release();
                 sb.release();
             } else if (ta == tb) {
-                const void* pa = a->data->data();
-                const void* pb = b->data->data();
-                DF_NUMERIC_DISPATCH(ta, compare_series_impl, pa, pb, lo, hi, op,
-                                    bits)
+                const void* pa = a->data.data();
+                const void* pb = b->data.data();
+                DFTRACER_UTILS_NUMERIC_DISPATCH(ta, compare_series_impl, pa, pb,
+                                                lo, hi, op, bits)
             } else {
                 Series sa{const_cast<dftu_series*>(a)};
                 Series sb{const_cast<dftu_series*>(b)};

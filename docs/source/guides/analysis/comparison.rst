@@ -13,28 +13,6 @@ Compare two views
 
 .. tab-set::
 
-   .. tab-item:: C++
-
-      ``CompareView`` (``dftracer/utils/trace/comparator/compare_view.h``) wraps
-      two ``View`` sources; ``group_by``/``agg`` set the shared aggregation and
-      ``collect()`` returns the comparison ``DataFrame``.
-
-      .. code-block:: cpp
-
-         #include <dftracer/utils/trace/comparator/compare_view.h>
-         #include <dftracer/utils/trace/views/view.h>
-
-         using namespace dftracer::utils::trace;
-
-         auto cmp = comparator::CompareView::of(
-                        views::View::from_file("baseline.pfw.gz"),
-                        views::View::from_file("variant.pfw.gz"))
-                        .group_by({views::GroupKey::cat()})
-                        .agg({{views::AggOp::Count, "", "count"},
-                              {views::AggOp::Mean, "dur", "dur"}})
-                        .collect()
-                        .get();
-
    .. tab-item:: Python
 
       ``TraceViewer.compare(other)`` compares against another viewer and

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A column expression can cast to text, as the eager astype can."""
 
 import pytest

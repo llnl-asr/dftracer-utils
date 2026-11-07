@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Struct columns concatenate by field name, not by position.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -6,50 +7,46 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
 #include <utility>
-#include <vector>
 
-using dftracer::utils::dataframe::concat;
-using dftracer::utils::dataframe::concat_columns;
-using dftracer::utils::dataframe::ConcatHow;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
-Series i64s(const std::vector<std::int64_t>& v) {
+Series i64s(const dstd::Vector<std::int64_t>& v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
                             nullptr);
 }
 
-Series f64s(const std::vector<double>& v) {
+Series f64s(const dstd::Vector<double>& v) {
     return Series::flat_f64(v.data(), static_cast<std::int64_t>(v.size()),
                             nullptr);
 }
 
-Series st(std::vector<std::string> names, std::vector<Series> f) {
+Series st(dstd::Vector<dstd::String> names, dstd::Vector<Series> f) {
     return Series::structs(std::move(names), std::move(f));
 }
 
-std::vector<Series> one(Series s) {
-    std::vector<Series> v;
+dstd::Vector<Series> one(Series s) {
+    dstd::Vector<Series> v;
     v.push_back(std::move(s));
     return v;
 }
 
-std::vector<Series> two(Series a, Series b) {
-    std::vector<Series> v;
+dstd::Vector<Series> two(Series a, Series b) {
+    dstd::Vector<Series> v;
     v.push_back(std::move(a));
     v.push_back(std::move(b));
     return v;
 }
 
-std::int64_t field_index(const Series& s, const std::string& name) {
+std::int64_t field_index(const Series& s, const dstd::String& name) {
     for (std::int64_t f = 0; f < s.num_children(); ++f)
         if (s.field_name(f) == name) return f;
     return -1;

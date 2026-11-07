@@ -1,36 +1,17 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-// nanoarrow.h must precede arrow.h: arrow.h (via plugins/arrow_abi.h) defines
-// ArrowSchema/ArrowArray under the ARROW_C_DATA_INTERFACE guard but not
-// ArrowArrayStream, which nanoarrow.h's inline helpers then need complete.
-#include <nanoarrow/nanoarrow.h>
 #include <dftracer/utils/dataframe/arrow.h>
-// clang-format on
+#include <dftracer/utils/dstd/string.h>
+#include <nanoarrow/nanoarrow.h>
 
-using dftracer::utils::dataframe::DataType;
-using dftracer::utils::dataframe::decimal128;
-using dftracer::utils::dataframe::duration_of;
-using dftracer::utils::dataframe::fixed_size_binary;
-using dftracer::utils::dataframe::fixed_size_list_of;
-using dftracer::utils::dataframe::large_list_of;
-using dftracer::utils::dataframe::list_of;
-using dftracer::utils::dataframe::map_of;
-using dftracer::utils::dataframe::OwnedArrow;
-using dftracer::utils::dataframe::scalar;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::struct_of;
-using dftracer::utils::dataframe::time_of;
-using dftracer::utils::dataframe::timestamp;
-using dftracer::utils::dataframe::TimeUnit;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -48,7 +29,7 @@ struct BuiltArrow {
 void append_i64(ArrowArray* a, std::int64_t v) {
     REQUIRE(ArrowArrayAppendInt(a, v) == NANOARROW_OK);
 }
-void append_str(ArrowArray* a, const std::string& s) {
+void append_str(ArrowArray* a, const dstd::String& s) {
     ArrowStringView sv{s.data(), static_cast<std::int64_t>(s.size())};
     REQUIRE(ArrowArrayAppendString(a, sv) == NANOARROW_OK);
 }
@@ -221,7 +202,7 @@ TEST_SUITE("dataframe_arrow_types") {
         CHECK(s.data_type().fixed_size() == 4);
         const char* d = s.data<char>();
         REQUIRE(d != nullptr);
-        CHECK(std::string(d, 4) == "abcd");
+        CHECK(dstd::String(d, 4) == "abcd");
 
         OwnedArrow out = s.to_arrow();
         Series back = Series::from_arrow(out.schema(), out.array());
@@ -249,7 +230,7 @@ TEST_SUITE("dataframe_arrow_types") {
         // check the raw byte buffer directly.
         const char* d = s.data<char>();
         REQUIRE(d != nullptr);
-        CHECK(std::string(d, 23) == "hellolarge string world");
+        CHECK(dstd::String(d, 23) == "hellolarge string world");
 
         OwnedArrow out = s.to_arrow();
         Series back = Series::from_arrow(out.schema(), out.array());
@@ -258,7 +239,7 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(back.length() == 2);
         const char* d2 = back.data<char>();
         REQUIRE(d2 != nullptr);
-        CHECK(std::string(d2, 23) == "hellolarge string world");
+        CHECK(dstd::String(d2, 23) == "hellolarge string world");
 
         // Confirm the exported array is a genuine 64-bit-offset Arrow array
         // (not a copy down to 32-bit offsets): read its offsets buffer raw.

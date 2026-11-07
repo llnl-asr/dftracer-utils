@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Regenerates docs/doxygen/xml, the source of truth for
 # scripts/check_op_parity_doxygen.py. Output is gitignored and cheap to
 # rebuild (a couple of seconds), so this is not wired into the CMake build -

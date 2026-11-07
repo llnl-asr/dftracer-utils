@@ -1,4 +1,6 @@
-#include <dftracer/utils/core/common/logging.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -8,7 +10,6 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
-#include <thread>
 
 namespace dftracer::utils::utilities::replay {
 
@@ -17,8 +18,8 @@ namespace {
 /**
  * Create directory path if it doesn't exist
  */
-bool ensure_directory_exists(const std::string& path) {
-    std::string dir_path = path.substr(0, path.find_last_of('/'));
+bool ensure_directory_exists(dstd::StringView path) {
+    dstd::String dir_path(path.substr(0, path.rfind('/')));
     if (dir_path.empty() || dir_path == path) return true;
 
     struct stat st;
@@ -38,7 +39,7 @@ bool ensure_directory_exists(const std::string& path) {
 // =============================================================================
 
 bool PosixExecutor::execute(const Trace& trace, const ReplayConfig& config) {
-    std::string_view func_name = trace.func_name;
+    dstd::StringView func_name = trace.func_name;
 
     if (config.dry_run) {
         DFTRACER_UTILS_LOG_DEBUG("DRY RUN: Would execute POSIX %.*s",
@@ -79,7 +80,7 @@ bool PosixExecutor::execute_open(const Trace& trace,
     DFTRACER_UTILS_LOG_DEBUG("Executing POSIX open");
 
     if (!trace.fhash.empty()) {
-        std::string file_path;
+        dstd::String file_path;
         if (config.output_directory.empty()) {
             file_path.reserve(12 + trace.fhash.size());
             file_path = "replay_file_";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_svc_compose ABI: this translation unit is
  * compiled by the C compiler and sees only <dftracer/utils/plugins/abi.h>, so
  * it proves the compose ABI is callable from C (no C++ leakage). The C++ test

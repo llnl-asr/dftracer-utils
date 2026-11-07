@@ -90,6 +90,7 @@ was copied.
 - `src/dftracer/utils/runtime/scheduler/run_queues.h` and `run_queues.cpp` take the algorithm of the work-stealing queue in [Tokio](https://github.com/tokio-rs/tokio) under `MIT`, Copyright (c) Tokio Contributors.
 - `src/dftracer/utils/runtime/scheduler/thread_pool_executor.cpp` takes its wake and fairness rules from the [Go](https://github.com/golang/go) runtime scheduler under `BSD-3-Clause`, Copyright 2009 The Go Authors, and from the Tokio scheduler.
 - `include/dftracer/utils/coro/detail/channel_queue.h` takes the bounded ring and its mark bit, and the linked blocks of the unbounded queue with their backoff, from [crossbeam-channel](https://github.com/crossbeam-rs/crossbeam) under `MIT OR Apache-2.0`. The ring is itself after the bounded MPMC queue of Dmitry Vyukov.
+- `src/dftracer/utils/runtime/io/io_uring_wrapper.h` and `io_uring_backend.cpp` take the ring setup and the SQE preparation helpers from [liburing](https://github.com/axboe/liburing) under `MIT`, Copyright 2020 Jens Axboe.
 - `python/dftracer/utils/store_codec.py` takes its byte layout from the [FoundationDB](https://github.com/apple/foundationdb) tuple layer under `Apache-2.0`, Copyright Apple Inc. and the FoundationDB project authors.
 - `python/dftracer/utils/store_codec.py` also takes its method detection for store-aware classes from [cereal](https://uscilab.github.io/cereal/serialization_functions.html) under `BSD-3-Clause`, Copyright (c) 2013-2022, Randolph Voorhies, Shane Grant.
 

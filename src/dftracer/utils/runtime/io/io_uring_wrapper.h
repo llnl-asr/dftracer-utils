@@ -168,7 +168,9 @@ class Ring {
 };
 
 // ============================================================================
-// SQE preparation helpers (inline, match liburing API names)
+// SQE preparation helpers, after the prep helpers and ring setup of liburing,
+// https://github.com/axboe/liburing (MIT), Copyright 2020 Jens Axboe, file
+// src/include/liburing.h.
 // ============================================================================
 
 inline void prep_read(struct io_uring_sqe* sqe, int fd, void* buf, unsigned len,

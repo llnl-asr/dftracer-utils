@@ -1069,6 +1069,9 @@ class _LiveTraceViewer:
     def snapshot(self) -> "_TraceViewer":
         """Index what was written since the last call; a _TraceViewer of every whole member."""
         ...
+    def new_rows(self) -> Optional["_TraceViewer"]:
+        """As snapshot; a _TraceViewer of the rows no earlier call returned, or None."""
+        ...
     def status(self) -> List[Tuple[str, str, int, int, int]]:
         """(path, state, verified_bytes, skipped_bytes, hole_bytes) per file."""
         ...

@@ -270,3 +270,36 @@ def test_record_schema_survives_snapshots_and_an_empty_start(tmp_path, members):
     assert _count(live.snapshot()) == 0
     p.write_bytes(members[0])
     assert _count(live.snapshot()) == ROWS
+
+
+def test_new_rows_returns_each_row_once(tmp_path, members):
+    p = tmp_path / "a.pfw.gz"
+    p.write_bytes(members[0])
+    live = LiveTraceViewer(str(p))
+    first = live.new_rows()
+    assert first is not None and _count(first) == ROWS
+    assert live.new_rows() is None
+
+    p.write_bytes(b"".join(members[:3]))
+    second = live.new_rows()
+    assert second is not None
+    assert _count(second) == 2 * ROWS and _agg_total(second) == 2 * ROWS
+    assert live.new_rows() is None
+    assert _count(live.snapshot()) == 3 * ROWS
+    assert _count(first) == ROWS
+
+
+def test_follow_yields_only_new_rows(tmp_path, members):
+    p = tmp_path / "a.pfw.gz"
+    p.write_bytes(members[0])
+    following = LiveTraceViewer(str(p)).follow(interval=0.01)
+    assert _count(next(following)) == ROWS
+    p.write_bytes(b"".join(members[:2]))
+    assert _count(next(following)) == ROWS
+
+
+def test_follow_refuses_an_interval_that_never_waits(tmp_path, members):
+    p = tmp_path / "a.pfw.gz"
+    p.write_bytes(members[0])
+    with pytest.raises(ValueError):
+        next(LiveTraceViewer(str(p)).follow(interval=0))

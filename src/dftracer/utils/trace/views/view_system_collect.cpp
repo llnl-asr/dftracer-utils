@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -45,11 +46,11 @@ dstd::Optional<index::Snapshot> covering_index(const ViewPlan& plan) {
     const dstd::String& index_path = plan.files.front().index_path;
     if (index_path.empty()) return dstd::nullopt;
     try {
-        auto snapshot = common::unwrap(index::plan::open_snapshot(index_path));
+        auto snapshot = common::unwrap(snapshot_of(plan, index_path));
         const auto config = common::unwrap(
             index::schemas::dft::agg::tier::read_config(snapshot));
         if (!config) return dstd::nullopt;
-        dstd::Set<dstd::String, std::less<>> current;
+        dstd::HashSet<dstd::String> current;
         for (const auto& file : common::unwrap(snapshot.files())) {
             if (snapshot.extension(file, index::store::IndexExtension::Agg,
                                    config->params_hash) ==

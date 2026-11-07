@@ -332,6 +332,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Add `trace::views::LiveView` and its Python adaptor `LiveTraceViewer`, which follow gzip traces that are still being written.
   `snapshot()` indexes the members written since the last call and returns a `View` or `TraceViewer` of every whole member, with no copy of the trace.
   An old snapshot keeps its rows, and `status()` reports each file as whole, tail or hole.
+- Add `LiveTraceViewer.new_rows()` and `follow()`, which return only the rows that an earlier call did not return.
 - Add a public key-value store API in `store/store.h`, a C ABI in `store/abi.h` and `dftracer.utils.Store` in Python.
 - Add `Batch::erase` and `Batch::erase_range`, which apply in the same record as the puts of the batch.
 - Add `Store::pack`, which merges small closed data files into one and deletes the files it replaced after a keep time.

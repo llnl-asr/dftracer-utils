@@ -224,8 +224,9 @@ void add_line_starts(dstd::Vector<std::uint64_t>& candidates,
 coro::CoroTask<dstd::Result<PruneResult>> prune_file(PruneRequest request) {
     Reads reads(request);
     auto pruned = co_await prune_chunks(request, reads);
+    // Only a later chunk can open on a line that starts in an earlier one.
     if (!pruned || pruned->all_chunks || pruned->candidates.empty() ||
-        request.index_path.empty())
+        request.index_path.empty() || pruned->candidates.back() == 0)
         co_return pruned;
     try {
         const index::Snapshot& snapshot = *common::unwrap(reads.get());

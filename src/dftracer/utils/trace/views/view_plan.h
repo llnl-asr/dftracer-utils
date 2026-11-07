@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -19,6 +20,7 @@ namespace dftracer::utils::index::extensions {}
 
 namespace dftracer::utils::index {
 struct RecordSchema;
+class Snapshot;
 }  // namespace dftracer::utils::index
 
 namespace dftracer::utils::index::plan {
@@ -187,7 +189,18 @@ struct ViewPlan {
     /// The files' record_schema, memoized by plan_record_schema.
     mutable dstd::SharedPtr<const dftracer::utils::index::RecordSchema>
         record_schema;
+
+    /// Index snapshots by index path, taken where the pins of the files were
+    /// read. Every read of those indexes goes through them, so a refresh that
+    /// commits later cannot show a view rows past its pin.
+    dstd::Vector<dstd::Pair<
+        dstd::String, dstd::SharedPtr<const dftracer::utils::index::Snapshot>>>
+        index_snapshots;
 };
+
+/// The snapshot `plan` holds for `index_path`, else a new one.
+dstd::Result<dftracer::utils::index::Snapshot> snapshot_of(
+    const ViewPlan& plan, dstd::StringView index_path);
 
 /// True when a file of `plan` has a pin (@ref ViewFile::pinned_c_end).
 bool has_pin(const ViewPlan& plan);

@@ -1276,6 +1276,13 @@ PyObject* ltv_snapshot(PyObject* self, PyObject*) {
     return guarded([&] { return make_viewer(std::move(tv)); });
 }
 
+PyObject* ltv_new_rows(PyObject* self, PyObject*) {
+    dstd::Optional<View> tv;
+    if (!run_blocking([&] { tv = live_of(self).new_rows(); })) return nullptr;
+    if (!tv) Py_RETURN_NONE;
+    return guarded([&] { return make_viewer(std::move(*tv)); });
+}
+
 const char* live_state_name(trace::views::LiveFileState state) {
     switch (state) {
         case trace::views::LiveFileState::Whole:
@@ -1312,6 +1319,9 @@ PyMethodDef ltv_methods[] = {
     {"snapshot", ltv_snapshot, METH_NOARGS,
      "Index what was written since the last call; a _TraceViewer of every "
      "whole member."},
+    {"new_rows", ltv_new_rows, METH_NOARGS,
+     "As snapshot; a _TraceViewer of the rows no earlier call returned, or "
+     "None."},
     {"status", ltv_status, METH_NOARGS,
      "(path, state, verified_bytes, skipped_bytes, hole_bytes) per file."},
     {nullptr, nullptr, 0, nullptr}};

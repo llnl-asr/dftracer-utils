@@ -197,6 +197,9 @@ struct ViewFile {
     /// must not change.
     std::uint64_t pinned_c_end = 0;
     std::uint64_t pinned_uc_end = 0;
+    /// With a pin, the view also leaves out the bytes before this uncompressed
+    /// offset, which must be the start of a line.
+    std::uint64_t pinned_uc_begin = 0;
 };
 
 struct ExportStats {

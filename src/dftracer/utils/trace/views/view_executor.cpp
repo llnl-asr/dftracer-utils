@@ -407,7 +407,7 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
 
     BootstrapStores stores;
     co_await open_bootstrap_stores(plan, stores);
-    dstd::Map<dstd::String, std::size_t> slot_of;
+    dstd::HashMap<dstd::String, std::size_t> slot_of;
     for (std::size_t r = 0; r < stores.roots.size(); ++r)
         slot_of.emplace(stores.roots[r]->index_path, r);
 
@@ -493,7 +493,6 @@ namespace {
 ViewPlan redirect_reads(const ViewPlan& plan, bool* redirected = nullptr) {
     plan_record_schema(plan);
     ViewPlan eff = plan;
-    if (has_pin(plan)) return eff;
     if (auto mv = dftracer::utils::index::cache::find_subsuming_view(plan)) {
         eff.files = std::move(*mv);
         if (redirected) *redirected = true;
@@ -1090,7 +1089,6 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
 // engine collect path and the session so the two agree on what a rollup
 // answers.
 dstd::Optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
-    if (has_pin(plan)) return dstd::nullopt;
     const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (!rdir.empty()) plan_record_schema(plan);
@@ -1149,33 +1147,47 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
             auto at = snapshots.find(f.index_path);
             if (at == snapshots.end())
                 at = snapshots
-                         .emplace(f.index_path,
-                                  common::unwrap(
-                                      index::plan::open_snapshot(f.index_path)))
+                         .emplace(f.index_path, common::unwrap(snapshot_of(
+                                                    plan, f.index_path)))
                          .first;
             const index::Snapshot& snapshot = at->second;
             const auto file = snapshot.file(
                 dftracer::utils::index::store::internal::get_logical_path(
                     f.file_path));
             if (!file) continue;
+            const bool is_past =
+                f.pinned_c_end > 0 &&
+                (f.pinned_uc_begin > 0 || file->stat().size != f.pinned_c_end);
+            dstd::Vector<index::gzip::ChunkSpan> spans;
+            if (is_past) spans = common::unwrap(index::spans(snapshot, *file));
+            const auto is_in_view = [&](std::uint64_t chunk) {
+                return !is_past ||
+                       (chunk < spans.size() &&
+                        spans[chunk].uc_offset < f.pinned_uc_end &&
+                        spans[chunk].uc_offset + spans[chunk].uc_size >
+                            f.pinned_uc_begin);
+            };
             if (by_path) {
-                const auto r = index::extensions::kinds::file_value_range(
-                    snapshot, *file, roles.time);
-                if (r && r->first >= 0)
+                dstd::Optional<double> lowest;
+                for (const auto& [chunk, range] :
+                     index::extensions::kinds::chunk_value_ranges(
+                         snapshot, *file, roles.time)) {
+                    if (is_in_view(chunk))
+                        lowest =
+                            std::min(lowest.value_or(range.first), range.first);
+                }
+                if (lowest && *lowest >= 0)
                     global_min = std::min(
                         global_min,
                         static_cast<std::uint64_t>(std::llround(
-                            r->first * index::micros_per(roles.time_unit))));
+                            *lowest * index::micros_per(roles.time_unit))));
                 continue;
             }
-            if (f.pinned_c_end > 0 && file->stat().size != f.pinned_c_end) {
-                const auto spans =
-                    common::unwrap(index::spans(snapshot, *file));
-                const auto chunks = index::extensions::kinds::chunk_time_bounds(
-                    snapshot, *file);
-                for (const auto& [chunk, bounds] : chunks)
-                    if (chunk < spans.size() &&
-                        spans[chunk].uc_offset < f.pinned_uc_end)
+            if (is_past) {
+                for (const auto& [chunk, bounds] :
+                     index::extensions::kinds::chunk_time_bounds(snapshot,
+                                                                 *file))
+                    if (is_in_view(chunk))
                         global_min = std::min(global_min, bounds.first);
                 continue;
             }
@@ -2056,9 +2068,8 @@ coro::CoroTask<ExportStats> run_session(
         }
     }
     plan_record_schema(plan);
-    if (!has_pin(plan))
-        if (auto mv = dftracer::utils::index::cache::find_subsuming_view(plan))
-            scan_plan.files = std::move(*mv);
+    if (auto mv = dftracer::utils::index::cache::find_subsuming_view(plan))
+        scan_plan.files = std::move(*mv);
     ViewDefinition avdef = make_vdef(scan_plan, /*for_aggregation=*/true);
     // Streamed morsels hold the intern their ids resolve through, and outlive
     // this scan in their consumers' hands.

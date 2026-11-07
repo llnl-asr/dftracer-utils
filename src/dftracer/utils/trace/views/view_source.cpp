@@ -621,7 +621,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     dstd::SharedPtr<coro::AsyncSemaphore> gate_;
     std::size_t head_ = 0;
     dstd::Map<std::size_t, dstd::Deque<Morsel>> held_;
-    dstd::Set<std::size_t> ended_;
+    dstd::HashSet<std::size_t> ended_;
     bool drained_ = false;
 };
 
@@ -879,6 +879,8 @@ dstd::Optional<dstd::String> ViewSource::batch_key() const {
         key += f.index_path;
         key += '\0';
         key += dstd::to_string(f.pinned_c_end);
+        key += '\0';
+        key += dstd::to_string(f.pinned_uc_begin);
         key += '\0';
     }
     if (p.time_range)

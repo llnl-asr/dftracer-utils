@@ -7,7 +7,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -765,7 +765,7 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
     for (const dstd::String& f : key_fields) add_field(f);
     for (const ComputedColumn& c : plan.computed)
         for (const dstd::String& in : c.inputs) add_select(in);
-    dstd::Set<dstd::String> masked_computed;
+    dstd::HashSet<dstd::String> masked_computed;
     for (const auto& s : plan.agg) {
         if (win && is_occupancy_op(s.op)) continue;
         if (win && s.op == AggOp::Count && s.field.empty())
@@ -1210,7 +1210,6 @@ namespace {
 
 // A paginated result is never cached.
 void persist_rollup(const ViewPlan& plan, const dataframe::AggState& state) {
-    if (has_pin(plan)) return;
     const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (rdir.empty()) return;

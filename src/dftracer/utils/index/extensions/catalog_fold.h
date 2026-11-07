@@ -19,15 +19,24 @@ namespace dftracer::utils::index::extensions {
 /// the build and the scans write.
 void observe_catalog_path(index::store::PathStat& stat, std::uint8_t tag);
 
+/// Adds `stat` to the entry of `path` in `paths`.
+void add_path_stat(dstd::HashMap<dstd::String, index::store::PathStat>& paths,
+                   dstd::StringView path, const index::store::PathStat& stat);
+
 /// Writes each file's path catalog from the schema leaves of a full scan, so
 /// the first query on a trace leaves the catalog a full index build would.
 /// Needs no metadata records: they never enter the catalog.
 class CatalogFold : public trace::views::detail::Fold {
    public:
     /// `params_hash` is the CATALOG hash of the config a full build uses.
+    /// With `should_write` false, @ref finalize writes nothing and only
+    /// @ref paths holds the result, for a scan that does not cover a whole
+    /// file.
     CatalogFold(dftracer::utils::dstd::StringIntern& intern,
-                std::uint64_t params_hash)
-        : intern_(&intern), params_hash_(params_hash) {}
+                std::uint64_t params_hash, bool should_write = true)
+        : intern_(&intern),
+          params_hash_(params_hash),
+          should_write_(should_write) {}
 
     /// A filtered or windowed scan misses records, so its catalog would
     /// differ from the build's.
@@ -39,7 +48,8 @@ class CatalogFold : public trace::views::detail::Fold {
     bool wants_metadata() const override { return false; }
 
     dstd::UniquePtr<trace::views::detail::Fold> slice() const override {
-        return dstd::make_unique<CatalogFold>(*intern_, params_hash_);
+        return dstd::make_unique<CatalogFold>(*intern_, params_hash_,
+                                              should_write_);
     }
 
     void step(const trace::views::detail::FoldBatch& batch) override;
@@ -51,6 +61,9 @@ class CatalogFold : public trace::views::detail::Fold {
     coro::CoroTask<bool> finalize(
         const trace::views::detail::CoverageSet& covered) override;
 
+    /// The stats of every path the scan saw, summed over its files.
+    dstd::HashMap<dstd::String, index::store::PathStat> paths() const;
+
    private:
     struct FileState {
         dstd::String index_path;
@@ -59,6 +72,7 @@ class CatalogFold : public trace::views::detail::Fold {
 
     dftracer::utils::dstd::StringIntern* intern_;
     std::uint64_t params_hash_;
+    bool should_write_;
     dstd::Map<dstd::String, FileState> files_;
 };
 

@@ -343,7 +343,7 @@ dstd::String rollup_cache_path(const trace::views::detail::ViewPlan& plan) {
         if (gk.kind == trace::views::GroupKey::Kind::Rank) return {};
     // A caller-set root anchors a cross-file rollup (dask sets it for a
     // multi-file query, whose per-file index paths differ).
-    if (plan.build_step) return {};
+    if (plan.build_step || trace::views::detail::has_pin(plan)) return {};
     if (!plan.rollup_root.empty())
         return dstd::String(dstd::StringView(plan.rollup_root));
     const dstd::String dir = cache_dir(plan);

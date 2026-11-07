@@ -554,6 +554,7 @@ void register_view(dstd::StringView dir,
 
 dstd::Optional<dstd::Vector<trace::views::ViewFile>> find_subsuming_view(
     const trace::views::detail::ViewPlan& plan) {
+    if (trace::views::detail::has_pin(plan)) return dstd::nullopt;
     const dstd::String root = views_root(plan);
     if (root.empty()) return dstd::nullopt;
     const auto root_is_dir = dstd::fs::is_directory(dstd::PathView(root));

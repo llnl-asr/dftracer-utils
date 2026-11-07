@@ -41,6 +41,13 @@ dstd::HashSet<std::uint64_t> chunks_without_starts(
 index::gzip::TimeBounds file_time_bounds(const index::Snapshot& snapshot,
                                          const index::FileRef& file);
 
+/// Per chunk, [min, max] of the numeric zonemap of `path`, in the path's own
+/// unit; chunks without numeric bounds are absent, and so is every chunk when
+/// the zonemap is not current.
+dstd::HashMap<std::uint64_t, dstd::Pair<double, double>> chunk_value_ranges(
+    const index::Snapshot& snapshot, const index::FileRef& file,
+    dstd::StringView path);
+
 /// [min, max] over the file of the numeric zonemap of `path`, in the path's
 /// own unit; nullopt when the zonemap is not current or holds no numeric
 /// bounds for the path.

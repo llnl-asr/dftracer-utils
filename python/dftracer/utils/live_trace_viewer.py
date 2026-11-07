@@ -6,7 +6,8 @@ is native (``trace::views::LiveView``); this is its Python adaptor.
 from __future__ import annotations
 
 import os
-from typing import Any, List, NamedTuple, Optional, Sequence, Union
+import time
+from typing import Any, Iterator, List, NamedTuple, Optional, Sequence, Union
 
 from . import dftracer_utils_ext as _ext
 from .schemas import schema_id
@@ -60,7 +61,30 @@ class LiveTraceViewer:
         """Add the members written since the last call to the index, once each,
         and return a viewer of every whole member. Each file stops at its first
         short or bad member."""
-        native = self._live.snapshot()
+        return self._viewer(self._live.snapshot())
+
+    def new_rows(self) -> Optional[TraceViewer]:
+        """As :meth:`snapshot`, and return a viewer of only the rows that no
+        earlier call of this method returned, or ``None`` when there are none. A
+        file that a new file replaced starts over. A file whose last whole member
+        ends inside a line is held back until a later member ends that line."""
+        native = self._live.new_rows()
+        return None if native is None else self._viewer(native)
+
+    def follow(self, interval: float = 1.0) -> Iterator[TraceViewer]:
+        """Yield a viewer of the new rows each time there are some, waiting
+        ``interval`` seconds between looks when there are none. It does not end:
+        stop iterating to stop following. No background thread runs."""
+        if interval <= 0:
+            raise ValueError("interval must be positive")
+        while True:
+            viewer = self.new_rows()
+            if viewer is None:
+                time.sleep(interval)
+            else:
+                yield viewer
+
+    def _viewer(self, native: Any) -> TraceViewer:
         if self._record_schema is not None:
             native = native.record_schema(schema_id(self._record_schema))
         viewer = TraceViewer(native)

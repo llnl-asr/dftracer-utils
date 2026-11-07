@@ -2,11 +2,18 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_LIVE_VIEW_H
 #define DFTRACER_UTILS_TRACE_VIEWS_LIVE_VIEW_H
 
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstdint>
+
+namespace dftracer::utils::index {
+class Snapshot;
+}  // namespace dftracer::utils::index
 
 namespace dftracer::utils::trace::views {
 
@@ -53,13 +60,38 @@ class LiveView {
     /// valid after later calls. Throws when a named file does not exist.
     View snapshot();
 
+    /// As @ref snapshot, and returns a View of only the rows that no earlier
+    /// call of this function returned, or nullopt when there are none. A file
+    /// that a new file replaced starts over. A file whose last whole member
+    /// ends inside a line is held back until a later member ends that line.
+    dstd::Optional<View> new_rows();
+
     /// One entry per file, from the last @ref snapshot.
     const dstd::Vector<LiveFileStatus>& status() const { return status_; }
 
    private:
+    /// The end of what @ref new_rows returned from one file.
+    struct ReturnedEnd {
+        std::uint64_t c_end = 0;
+        std::uint64_t uc_end = 0;
+        std::uint64_t hash = 0;
+    };
+
+    /// A pinned file as the last refresh found it.
+    struct PinnedFile {
+        ViewFile file;
+        /// The index snapshot the pin was read from.
+        dstd::SharedPtr<const index::Snapshot> index;
+        std::uint64_t hash = 0;
+        bool has_open_line = false;
+    };
+
+    dstd::Vector<PinnedFile> refresh();
+
     dstd::Vector<dstd::String> paths_;
     dstd::String index_path_;
     dstd::Vector<LiveFileStatus> status_;
+    dstd::HashMap<dstd::String, ReturnedEnd> returned_;
 };
 
 }  // namespace dftracer::utils::trace::views

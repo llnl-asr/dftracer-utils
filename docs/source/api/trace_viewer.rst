@@ -349,9 +349,16 @@ In C++ the same calls are ``trace::views::LiveView::snapshot()`` and ``status()`
    for f in live.status():                # LiveFileStatus per file
        print(f.path, f.state, f.verified_bytes)
 
+   for new in live.follow(interval=5):    # a viewer of only the new rows
+       print(new.group_by("name").agg("count").collect())
+
 Nothing is copied.
 The index lives where ``TraceViewer`` puts it, or at ``index_path`` when you give one.
 A snapshot stays fixed, so an old snapshot keeps its rows after the file grows.
+``new_rows()`` returns a viewer of the rows no earlier call returned, or ``None``.
+``follow()`` yields those viewers, sleeps when there is nothing new and has no end, so stop iterating to stop.
+A file that a new file replaced starts over.
+A file whose last whole member ends inside a line is held back until a later member ends that line.
 A file stops at its first short or bad member.
 ``status()`` reports ``state`` as ``"whole"``, ``"tail"`` or ``"hole"``, with ``verified_bytes``, ``skipped_bytes`` and ``hole_bytes``.
 A file that is named and missing raises at ``snapshot()``.

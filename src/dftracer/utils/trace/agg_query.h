@@ -24,6 +24,10 @@
 // member, as in the index fold, so a member cut inside a line neither doubles
 // nor drops that line.
 
+namespace dftracer::utils::index {
+class Snapshot;
+}  // namespace dftracer::utils::index
+
 namespace dftracer::utils::trace {
 
 struct AggQuerySource {
@@ -35,6 +39,9 @@ struct AggQuerySource {
     /// config.params_hash(). A caller that does not know the build config
     /// reads the hash off the index.
     dstd::Optional<std::uint64_t> params_hash;
+    /// Read in place of a new snapshot of `index_path`, so the query sees the
+    /// index its caller checked.
+    dstd::SharedPtr<const index::Snapshot> snapshot;
 };
 
 /// The parts of a row that a query keeps. A part left out reads as absent and

@@ -66,6 +66,10 @@ struct Source {
         if (path.empty() ||
             !dftracer::utils::common::input_exists(index::store_of(path)))
             return;
+        if (s.snapshot) {
+            snapshot.emplace(*s.snapshot);
+            return;
+        }
         snapshot.emplace(common::unwrap(index::plan::open_snapshot(path)));
     }
 

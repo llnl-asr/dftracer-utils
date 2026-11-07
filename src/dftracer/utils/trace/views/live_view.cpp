@@ -6,7 +6,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -22,6 +22,8 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/live_view.h>
+#include <dftracer/utils/trace/views/view_plan.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
 
 #include <algorithm>
 #include <utility>
@@ -55,7 +57,7 @@ dstd::Vector<dstd::String> trace_files_under(const dstd::String& dir) {
 }
 
 dstd::Vector<dstd::String> files_of(const dstd::Vector<dstd::String>& paths) {
-    dstd::Set<dstd::String> seen;
+    dstd::HashSet<dstd::String> seen;
     dstd::Vector<dstd::String> out;
     for (const dstd::String& p : paths) {
         if (dstd::fs::is_directory(p).value_or(false)) {
@@ -68,12 +70,72 @@ dstd::Vector<dstd::String> files_of(const dstd::Vector<dstd::String>& paths) {
     return out;
 }
 
+/// A View of `pinned` that reads each index through the snapshot its pin came
+/// from, so a later refresh cannot show it rows past the pin.
+View pinned_view(
+    dstd::Vector<ViewFile> files,
+    const dstd::Vector<dstd::SharedPtr<const index::Snapshot>>& snapshots) {
+    auto plan = dstd::make_shared<detail::ViewPlan>(
+        *detail::scan::from_files(std::move(files)));
+    for (std::size_t i = 0; i < plan->files.size(); ++i) {
+        const dstd::String& root = plan->files[i].index_path;
+        const bool is_known = std::any_of(
+            plan->index_snapshots.begin(), plan->index_snapshots.end(),
+            [&](const auto& s) { return s.first == root; });
+        if (!is_known) plan->index_snapshots.emplace_back(root, snapshots[i]);
+    }
+    return detail::view_of(std::move(plan));
+}
+
 }  // namespace
 
 LiveView::LiveView(dstd::Vector<dstd::String> paths, dstd::String index_path)
     : paths_(std::move(paths)), index_path_(std::move(index_path)) {}
 
 View LiveView::snapshot() {
+    dstd::Vector<PinnedFile> refreshed = refresh();
+    if (refreshed.empty()) return View();
+    dstd::Vector<ViewFile> pinned;
+    dstd::Vector<dstd::SharedPtr<const index::Snapshot>> snapshots;
+    pinned.reserve(refreshed.size());
+    snapshots.reserve(refreshed.size());
+    for (PinnedFile& p : refreshed) {
+        pinned.push_back(std::move(p.file));
+        snapshots.push_back(std::move(p.index));
+    }
+    return pinned_view(std::move(pinned), snapshots);
+}
+
+dstd::Optional<View> LiveView::new_rows() {
+    dstd::Vector<PinnedFile> refreshed = refresh();
+    dstd::Vector<ViewFile> fresh;
+    dstd::Vector<dstd::SharedPtr<const index::Snapshot>> snapshots;
+    for (PinnedFile& p : refreshed) {
+        if (p.has_open_line) continue;
+        ViewFile& f = p.file;
+        const auto seen = returned_.find(f.file_path);
+        if (seen != returned_.end()) {
+            index::SourceStat stored;
+            stored.size = seen->second.c_end;
+            stored.hash = seen->second.hash;
+            const bool is_same = f.pinned_c_end == seen->second.c_end &&
+                                 p.hash == seen->second.hash;
+            if (is_same) continue;
+            if (index::is_append_of(f.file_path, f.pinned_c_end, stored))
+                f.pinned_uc_begin = seen->second.uc_end;
+        }
+        returned_.insert_or_assign(
+            f.file_path, ReturnedEnd{f.pinned_c_end, f.pinned_uc_end, p.hash});
+        if (f.pinned_uc_end > f.pinned_uc_begin) {
+            fresh.push_back(std::move(f));
+            snapshots.push_back(std::move(p.index));
+        }
+    }
+    if (fresh.empty()) return dstd::nullopt;
+    return pinned_view(std::move(fresh), snapshots);
+}
+
+dstd::Vector<LiveView::PinnedFile> LiveView::refresh() {
     const dstd::Vector<dstd::String> files = files_of(paths_);
     dstd::Vector<common::InputFileStat> stats(files.size());
     for (std::size_t i = 0; i < files.size(); ++i) {
@@ -109,8 +171,11 @@ View LiveView::snapshot() {
 
     status_.clear();
     status_.reserve(files.size());
-    dstd::Vector<ViewFile> pinned;
+    dstd::Vector<PinnedFile> pinned;
     pinned.reserve(files.size());
+    dstd::Vector<
+        dstd::Pair<dstd::String, dstd::SharedPtr<const index::Snapshot>>>
+        opened;
     for (std::size_t i = 0; i < files.size(); ++i) {
         const dstd::String& path = files[i];
         LiveFileStatus st;
@@ -118,8 +183,19 @@ View LiveView::snapshot() {
         const dstd::String root =
             internal::determine_index_path(path, index_path_);
         std::uint64_t uc_end = 0;
+        std::size_t members = 0;
+        std::uint64_t hash = 0;
+        bool has_open_line = false;
+        dstd::SharedPtr<const index::Snapshot> held;
         if (common::input_exists(index::store_of(root))) {
-            const auto snap = common::unwrap(index::plan::open_snapshot(root));
+            for (const auto& [r, s] : opened)
+                if (r == root) held = s;
+            if (!held) {
+                held = dstd::make_shared<const index::Snapshot>(
+                    common::unwrap(index::plan::open_snapshot(root)));
+                opened.emplace_back(root, held);
+            }
+            const index::Snapshot& snap = *held;
             const auto ref =
                 snap.file(index::store::internal::get_logical_path(path));
             // A record of old bytes that a new file replaced holds no rows of
@@ -128,9 +204,14 @@ View LiveView::snapshot() {
                 (stats[i].size == ref->stat().size ||
                  index::is_append_of(path, stats[i].size, ref->stat()))) {
                 st.verified_bytes = ref->stat().size;
+                hash = ref->stat().hash;
                 const auto meta =
                     common::unwrap(index::file_metadata(snap, *ref));
-                if (meta) uc_end = meta->max_bytes;
+                if (meta) {
+                    uc_end = meta->max_bytes;
+                    has_open_line = meta->has_open_line;
+                }
+                members = common::unwrap(index::members(snap, *ref)).size();
             }
         }
         st.skipped_bytes = stats[i].size - st.verified_bytes;
@@ -151,11 +232,15 @@ View LiveView::snapshot() {
             ViewFile vf{path, root};
             vf.pinned_c_end = st.verified_bytes;
             vf.pinned_uc_end = uc_end;
-            pinned.push_back(std::move(vf));
+            // From the pinned index, so a scan plans the chunks the pin saw.
+            vf.uncompressed_size = uc_end;
+            vf.checkpoint_count = members;
+            pinned.push_back(PinnedFile{std::move(vf), std::move(held), hash,
+                                        has_open_line});
         }
         status_.push_back(std::move(st));
     }
-    return pinned.empty() ? View() : View::from_files(std::move(pinned));
+    return pinned;
 }
 
 }  // namespace dftracer::utils::trace::views

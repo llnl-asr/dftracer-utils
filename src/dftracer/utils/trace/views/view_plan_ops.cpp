@@ -20,6 +20,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/cache/mv_store.h>
+#include <dftracer/utils/index/extensions/catalog_fold.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
@@ -66,11 +67,18 @@ bool has_pin(const ViewPlan& plan) {
     return false;
 }
 
+dstd::Result<index::Snapshot> snapshot_of(const ViewPlan& plan,
+                                          dstd::StringView index_path) {
+    for (const auto& [path, snapshot] : plan.index_snapshots)
+        if (path == index_path) return *snapshot;
+    return index::plan::open_snapshot(index_path);
+}
+
 bool is_past_pin(const ViewPlan& plan) {
     for (const auto& f : plan.files) {
         if (f.pinned_c_end == 0) continue;
-        const auto snapshot =
-            common::unwrap(index::plan::open_snapshot(f.index_path));
+        if (f.pinned_uc_begin > 0) return true;
+        const auto snapshot = common::unwrap(snapshot_of(plan, f.index_path));
         const auto file = snapshot.file(
             index::store::internal::get_logical_path(f.file_path));
         if (file && file->stat().size != f.pinned_c_end) return true;
@@ -191,7 +199,7 @@ void check_keys(const detail::ViewPlan& p, dstd::Vector<GroupKey>& keys) {
 
 namespace {
 
-using Snapshots = dstd::Map<dstd::String, dftracer::utils::index::Snapshot>;
+using Snapshots = dstd::HashMap<dstd::String, dftracer::utils::index::Snapshot>;
 
 struct FileIndex {
     const dftracer::utils::index::Snapshot* snapshot = nullptr;
@@ -200,13 +208,15 @@ struct FileIndex {
 
 // One snapshot per index root. A root with no store opens empty and holds no
 // file, so the file is read whole. A damaged index throws and fails the call.
-FileIndex find_file_index(Snapshots& snapshots, const ViewFile& f) {
+FileIndex find_file_index(const ViewPlan* plan, Snapshots& snapshots,
+                          const ViewFile& f) {
     auto at = snapshots.find(f.index_path);
     if (at == snapshots.end())
         at = snapshots
-                 .emplace(
-                     f.index_path,
-                     common::unwrap(index::plan::open_snapshot(f.index_path)))
+                 .emplace(f.index_path,
+                          common::unwrap(
+                              plan ? snapshot_of(*plan, f.index_path)
+                                   : index::plan::open_snapshot(f.index_path)))
                  .first;
     return {
         &at->second,
@@ -290,7 +300,7 @@ void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
             }
             FileIndex found;
             try {
-                found = find_file_index(snapshots, f);
+                found = find_file_index(nullptr, snapshots, f);
             } catch (const common::DFTUtilsException&) {
                 continue;
             }
@@ -441,12 +451,12 @@ void fold_col_map(ColTypeMap& into, const ColTypeMap& from) {
 }
 
 // Path-decoded files: the union of each file's catalog paths as written.
-ColTypeMap harvest_path_types(const dstd::Vector<ViewFile>& files) {
+ColTypeMap harvest_path_types(const ViewPlan& plan) {
     ColTypeMap merged;
     Snapshots snapshots;
-    for (const auto& f : files) {
+    for (const auto& f : plan.files) {
         if (f.index_path.empty()) continue;
-        const FileIndex found = find_file_index(snapshots, f);
+        const FileIndex found = find_file_index(&plan, snapshots, f);
         if (!found.file) continue;
         ColTypeMap one;
         for (auto& [path, t] :
@@ -461,7 +471,8 @@ ColTypeMap harvest_path_types(const dstd::Vector<ViewFile>& files) {
 // Union the column types of the view's own files, reading each distinct index
 // root in parallel. An index root also holds files the view does not read, so
 // only the view's files contribute. Seeds the base axis fields.
-ColTypeMap harvest_column_types(const dstd::Vector<ViewFile>& files) {
+ColTypeMap harvest_column_types(const ViewPlan& plan) {
+    const dstd::Vector<ViewFile>& files = plan.files;
     // Distinct index roots (many files often share one index), each with the
     // logical paths of the view's files in it.
     dstd::Vector<dstd::String> roots;
@@ -493,9 +504,8 @@ ColTypeMap harvest_column_types(const dstd::Vector<ViewFile>& files) {
             [&](std::int64_t begin, std::int64_t end) {
                 ColTypeMap local;
                 for (std::int64_t i = begin; i < end; ++i) {
-                    const index::Snapshot snapshot =
-                        common::unwrap(index::plan::open_snapshot(
-                            roots[static_cast<std::size_t>(i)]));
+                    const index::Snapshot snapshot = common::unwrap(
+                        snapshot_of(plan, roots[static_cast<std::size_t>(i)]));
                     for (const dstd::String& logical :
                          root_files[static_cast<std::size_t>(i)]) {
                         const auto file = snapshot.file(logical);
@@ -553,8 +563,8 @@ void overlay_declared(ColTypeMap& m,
 }
 
 ColTypeMap harvest_plan_types(const ScanPlan& plan) {
-    if (!detail::plan_by_path(*plan)) return harvest_column_types(plan->files);
-    ColTypeMap m = harvest_path_types(plan->files);
+    if (!detail::plan_by_path(*plan)) return harvest_column_types(*plan);
+    ColTypeMap m = harvest_path_types(*plan);
     overlay_declared(m, detail::plan_record_schema(*plan));
     return m;
 }
@@ -603,7 +613,7 @@ dstd::Optional<dstd::String> file_without_catalog(const ScanPlan& plan) {
     Snapshots snapshots;
     for (const auto& f : plan->files) {
         if (f.index_path.empty()) return f.file_path;
-        const FileIndex found = find_file_index(snapshots, f);
+        const FileIndex found = find_file_index(plan.get(), snapshots, f);
         if (!found.file || !dftracer::utils::index::extension_state(
                                *found.snapshot, *found.file,
                                index::store::IndexExtension::Catalog))
@@ -612,12 +622,34 @@ dstd::Optional<dstd::String> file_without_catalog(const ScanPlan& plan) {
     return dstd::nullopt;
 }
 
+namespace {
+
+// The plan of a scan that reads only records and no ops of `plan`.
+dstd::SharedPtr<detail::ViewPlan> catalog_scan_plan(const ScanPlan& plan) {
+    auto only = dstd::make_shared<detail::ViewPlan>();
+    only->record_schema = plan->record_schema;
+    only->all_records = true;
+    only->rollup_root = plan->rollup_root;
+    only->views_root = plan->views_root;
+    only->memory_budget = plan->memory_budget;
+    only->cancelled = plan->cancelled;
+    return only;
+}
+
+bool is_file_past_pin(const ViewFile& f, const index::FileRef& file) {
+    return f.pinned_c_end > 0 &&
+           (f.pinned_uc_begin > 0 || file.stat().size != f.pinned_c_end);
+}
+
+}  // namespace
+
 void ensure_catalog(const ScanPlan& plan) {
     Snapshots snapshots;
-    auto only = dstd::make_shared<detail::ViewPlan>();
+    auto only = catalog_scan_plan(plan);
     for (const auto& f : plan->files) {
         if (f.index_path.empty()) continue;
-        const FileIndex found = find_file_index(snapshots, f);
+        const FileIndex found = find_file_index(plan.get(), snapshots, f);
+        if (found.file && is_file_past_pin(f, *found.file)) continue;
         if (!found.file || !dftracer::utils::index::extension_current(
                                *found.snapshot, *found.file,
                                index::store::IndexExtension::Catalog))
@@ -625,12 +657,6 @@ void ensure_catalog(const ScanPlan& plan) {
     }
     snapshots.clear();
     if (only->files.empty()) return;
-    only->record_schema = plan->record_schema;
-    only->all_records = true;
-    only->rollup_root = plan->rollup_root;
-    only->views_root = plan->views_root;
-    only->memory_budget = plan->memory_budget;
-    only->cancelled = plan->cancelled;
     dftracer::utils::dstd::StringIntern intern;
     default_runtime().block_on(
         coro::named("view_ensure_catalog", [&]() -> coro::CoroTask<void> {
@@ -644,21 +670,33 @@ dstd::Vector<SchemaLeaf> schema_tree(const ScanPlan& plan) {
 }
 
 dstd::Vector<SchemaLeaf> catalog_tree(const ScanPlan& plan) {
-    dstd::Map<dstd::String, index::store::PathStat> merged;
+    dstd::HashMap<dstd::String, index::store::PathStat> merged;
     Snapshots snapshots;
+    auto past_pin = catalog_scan_plan(plan);
     for (const auto& f : plan->files) {
         if (f.index_path.empty()) continue;
-        const FileIndex found = find_file_index(snapshots, f);
+        const FileIndex found = find_file_index(plan.get(), snapshots, f);
         if (!found.file) continue;
-        for (auto& [path, stat] :
-             common::unwrap(dftracer::utils::index::catalog(*found.snapshot,
-                                                            *found.file))) {
-            auto [pos, inserted] = merged.try_emplace(
-                dstd::String(path.data(), path.size()), stat);
-            if (inserted) continue;
-            pos->second.type = index::store::join(pos->second.type, stat.type);
-            pos->second.count += stat.count;
+        if (is_file_past_pin(f, *found.file)) {
+            past_pin->files.push_back(f);
+            continue;
         }
+        for (auto& [path, stat] : common::unwrap(
+                 dftracer::utils::index::catalog(*found.snapshot, *found.file)))
+            index::extensions::add_path_stat(merged, path, stat);
+    }
+    if (!past_pin->files.empty()) {
+        // The stored catalog also counts the rows after the pin.
+        dftracer::utils::dstd::StringIntern intern;
+        index::extensions::CatalogFold fold(intern, 0, false);
+        const dstd::Vector<detail::Fold*> folds{&fold};
+        default_runtime().block_on(
+            coro::named("view_scan_catalog", [&]() -> coro::CoroTask<void> {
+                co_await detail::run_folds(*past_pin, folds, intern, nullptr,
+                                           nullptr);
+            }()));
+        for (const auto& [path, stat] : fold.paths())
+            index::extensions::add_path_stat(merged, path, stat);
     }
     dstd::Map<dstd::String, SchemaLeaf> leaves;
     for (auto& [path, stat] : merged)
@@ -710,8 +748,8 @@ dstd::SharedPtr<const detail::JsonColumns> json_columns(
     using CT = dftracer::utils::index::store::ColumnType;
     const bool by_path = detail::plan_by_path(plan);
     const auto& schema = detail::plan_record_schema(plan);
-    ColTypeMap m = by_path ? harvest_path_types(plan.files)
-                           : harvest_column_types(plan.files);
+    ColTypeMap m =
+        by_path ? harvest_path_types(plan) : harvest_column_types(plan);
     if (by_path) overlay_declared(m, schema);
     auto out = dstd::make_shared<detail::JsonColumns>();
     for (const auto& [name, t] : m) {

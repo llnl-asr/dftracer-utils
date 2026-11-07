@@ -1663,8 +1663,6 @@ TEST_CASE("uring register: a BPF filter that denies NOP refuses it") {
     CHECK(all[0].res < 0);
 }
 
-#endif  // DFTRACER_UTILS_HAVE_IO_URING
-
 TEST_CASE("uring register: a destroyed ring gives its registered slot back") {
     // A thread has 16 slots, so this count runs out if a slot stays taken.
     for (int round = 0; round < 40; ++round) {
@@ -1677,3 +1675,5 @@ TEST_CASE("uring register: a destroyed ring gives its registered slot back") {
         ring.enter_through_index(index);
     }
 }
+
+#endif  // DFTRACER_UTILS_HAVE_IO_URING

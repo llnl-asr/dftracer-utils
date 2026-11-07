@@ -21,7 +21,6 @@
 #include <cstring>
 
 using namespace dftracer::utils;
-namespace uring = runtime::io::uring;
 
 namespace {
 
@@ -56,29 +55,32 @@ const Setup SETUPS[] = {
 };
 
 struct Prepared {
-    uring::Ring ring;
+    runtime::io::uring::Ring ring;
     int file_arg = -1;
     bool is_usable = false;
 };
 
 bool prepare(Prepared& out, const Setup& setup, int fd, dstd::Vector<char>& buf,
              unsigned batch) {
-    uring::RingOptions options;
+    runtime::io::uring::RingOptions options;
     options.flags = setup.flags;
     if (!out.ring.init(RING_ENTRIES, options)) return false;
     if ((setup.flags & IORING_SETUP_R_DISABLED) != 0) out.ring.enable();
     out.file_arg = fd;
     if (setup.has_fixed_file) {
-        if (uring::register_files(out.ring, &fd, 1) < 0) return false;
+        if (runtime::io::uring::register_files(out.ring, &fd, 1) < 0)
+            return false;
         out.file_arg = 0;
     }
     if (setup.has_fixed_buffer) {
         struct iovec whole{buf.data(), READ_BYTES * batch};
-        if (uring::register_buffers(out.ring, &whole, 1) < 0) return false;
+        if (runtime::io::uring::register_buffers(out.ring, &whole, 1) < 0)
+            return false;
     }
     if (setup.has_ring_index) {
         unsigned index = 0;
-        if (uring::register_ring_fd(out.ring, index) < 0) return false;
+        if (runtime::io::uring::register_ring_fd(out.ring, index) < 0)
+            return false;
         out.ring.enter_through_index(index);
     }
     return true;
@@ -88,7 +90,7 @@ bool prepare(Prepared& out, const Setup& setup, int fd, dstd::Vector<char>& buf,
 double run_round(Prepared& prepared, const Setup& setup,
                  dstd::Vector<char>& buf, unsigned batch,
                  std::uint64_t& position) {
-    uring::Ring& ring = prepared.ring;
+    runtime::io::uring::Ring& ring = prepared.ring;
     const auto begin = std::chrono::steady_clock::now();
     std::uint64_t done = 0;
     while (done < READS_PER_ROUND) {
@@ -98,11 +100,12 @@ double run_round(Prepared& prepared, const Setup& setup,
             char* const target = buf.data() + std::size_t{i} * READ_BYTES;
             position = (position + 7 * READ_BYTES) % (FILE_BYTES - READ_BYTES);
             if (setup.has_fixed_buffer) {
-                uring::prep_read_fixed(sqe, prepared.file_arg, target,
-                                       READ_BYTES, position, 0);
+                runtime::io::uring::prep_read_fixed(
+                    sqe, prepared.file_arg, target, READ_BYTES, position, 0);
             } else {
-                uring::prep_read(sqe, prepared.file_arg, target, READ_BYTES,
-                                 static_cast<off_t>(position));
+                runtime::io::uring::prep_read(sqe, prepared.file_arg, target,
+                                              READ_BYTES,
+                                              static_cast<off_t>(position));
             }
             if (setup.has_fixed_file) sqe->flags |= IOSQE_FIXED_FILE;
             sqe->user_data = i;

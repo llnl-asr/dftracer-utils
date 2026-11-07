@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """LiveTraceViewer: reading a gzip trace that is still being written."""
 
 import gzip

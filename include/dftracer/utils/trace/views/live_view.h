@@ -1,18 +1,19 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_LIVE_VIEW_H
 #define DFTRACER_UTILS_TRACE_VIEWS_LIVE_VIEW_H
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::trace::views {
 
 /// Zero or unreadable bytes of a live file with a whole gzip member after them.
 struct LiveHole {
-    std::string path;
+    dstd::String path;
     std::uint64_t offset = 0;
     std::uint64_t length = 0;
 };
@@ -39,9 +40,9 @@ struct LiveHole {
 /// Not thread safe.
 class LiveView {
    public:
-    explicit LiveView(std::vector<std::string> paths,
-                      std::string index_path = "",
-                      std::string snapshot_dir = "");
+    explicit LiveView(dstd::Vector<dstd::String> paths,
+                      dstd::String index_path = "",
+                      dstd::String snapshot_dir = "");
     ~LiveView();
     LiveView(const LiveView&) = delete;
     LiveView& operator=(const LiveView&) = delete;
@@ -56,14 +57,14 @@ class LiveView {
     /// unfinished tail, or a hole and what follows it), summed over the files.
     std::uint64_t skipped_tail_bytes() const;
     /// The hole at which each file was cut short by the last refresh().
-    std::vector<LiveHole> holes() const;
+    dstd::Vector<LiveHole> holes() const;
 
    private:
     struct Source;
-    std::vector<std::string> paths_;
-    std::string index_path_;
-    std::string snapshot_dir_;
-    std::vector<std::unique_ptr<Source>> sources_;
+    dstd::Vector<dstd::String> paths_;
+    dstd::String index_path_;
+    dstd::String snapshot_dir_;
+    dstd::Vector<dstd::UniquePtr<Source>> sources_;
 };
 
 }  // namespace dftracer::utils::trace::views

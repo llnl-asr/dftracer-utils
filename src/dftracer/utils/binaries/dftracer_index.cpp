@@ -167,9 +167,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     dstd::Optional<plugins::Plugins> loaded;
     if (!cli->plugins.empty()) {
         auto builder = plugins::Plugins::builder();
-        for (const auto& path : cli->plugins)
-            builder.add(
-                dftracer::utils::dstd::String(path.data(), path.size()));
+        for (const auto& path : cli->plugins) builder.add(dstd::String(path));
         auto built = builder.build();
         if (!built) {
             DFTRACER_UTILS_LOG_ERROR("Failed to load plugins: %s",

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """``LiveTraceViewer``: a :class:`~dftracer.utils.TraceViewer` over traces that
 are still being written. The work is native (``trace::views::LiveView``); this
 is its Python adaptor.

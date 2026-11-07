@@ -198,4 +198,5 @@ dftracer/utils/trace/time_metric.h
 dftracer/utils/trace/trace_config.h
 dftracer/utils/trace/views/abi.h
 dftracer/utils/trace/views/join_type.h
+dftracer/utils/trace/views/live_view.h
 dftracer/utils/trace/views/view.h

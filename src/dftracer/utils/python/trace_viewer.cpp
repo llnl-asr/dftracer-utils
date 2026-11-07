@@ -1226,7 +1226,7 @@ PyMethodDef module_methods[] = {
 
 // -- _LiveTraceViewer -------------------------------------------------------
 
-views::LiveView& live_of(PyObject* self) {
+trace::views::LiveView& live_of(PyObject* self) {
     return *reinterpret_cast<LiveTraceViewerObject*>(self)->live;
 }
 
@@ -1238,7 +1238,7 @@ PyObject* ltv_new(PyTypeObject* type, PyObject*, PyObject*) {
 }
 
 void ltv_dealloc(LiveTraceViewerObject* self) {
-    delete self->live;
+    dstd::UniquePtr<trace::views::LiveView>(self->live).reset();
     Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
 }
 
@@ -1252,27 +1252,28 @@ int ltv_init(LiveTraceViewerObject* self, PyObject* args, PyObject* kwds) {
                                      const_cast<char**>(kwlist), &files,
                                      &index_obj, &snapshot_obj))
         return -1;
-    std::vector<std::string> paths;
-    if (!py::parse_string_seq(files, "files must be a sequence of paths",
-                              paths))
+    dstd::Vector<dstd::String> paths;
+    if (!python::parse_string_seq(files, "files must be a sequence of paths",
+                                  paths))
         return -1;
-    std::string index_dir;
-    std::string snapshot_dir;
-    for (auto [obj, out] : {std::pair{index_obj, &index_dir},
-                            std::pair{snapshot_obj, &snapshot_dir}}) {
+    dstd::String index_dir;
+    dstd::String snapshot_dir;
+    for (auto [obj, out] : {dstd::Pair{index_obj, &index_dir},
+                            dstd::Pair{snapshot_obj, &snapshot_dir}}) {
         if (!obj || obj == Py_None) continue;
         const char* s = as_utf8(obj);
         if (!s) return -1;
         *out = s;
     }
-    views::LiveView* live = nullptr;
+    dstd::UniquePtr<trace::views::LiveView> live;
     if (!run_blocking([&] {
-            live =
-                new views::LiveView(std::move(paths), index_dir, snapshot_dir);
+            live = dstd::make_unique<trace::views::LiveView>(
+                std::move(paths), std::move(index_dir),
+                std::move(snapshot_dir));
         }))
         return -1;
-    delete self->live;
-    self->live = live;
+    dstd::UniquePtr<trace::views::LiveView>(self->live).reset();
+    self->live = live.release();
     return 0;
 }
 
@@ -1291,7 +1292,7 @@ PyObject* ltv_skipped_tail_bytes(PyObject* self, PyObject*) {
 }
 
 PyObject* ltv_holes(PyObject* self, PyObject*) {
-    const std::vector<views::LiveHole> holes = live_of(self).holes();
+    const dstd::Vector<trace::views::LiveHole> holes = live_of(self).holes();
     PyObject* out = PyList_New(static_cast<Py_ssize_t>(holes.size()));
     if (!out) return nullptr;
     for (std::size_t i = 0; i < holes.size(); ++i) {

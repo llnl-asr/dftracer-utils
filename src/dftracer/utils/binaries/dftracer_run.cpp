@@ -188,8 +188,7 @@ static dstd::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
     for (const auto& block : plugin_args.blocks) {
         if (block_has_config(plugin_args.shared, block)) {
             try {
-                builder.add(dftracer::utils::dstd::String(block.path.data(),
-                                                          block.path.size()),
+                builder.add(dstd::String(block.path),
                             build_config(plugin_args.shared, block));
             } catch (const std::exception& e) {
                 return common::make_error(
@@ -198,15 +197,13 @@ static dstd::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
                                     "' config error: ", e.what()));
             }
         } else {
-            builder.add(dftracer::utils::dstd::String(block.path.data(),
-                                                      block.path.size()));
+            builder.add(dstd::String(block.path));
         }
     }
     return builder.build();
 }
 
-static std::string join_or_none(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& names) {
+static dstd::String join_or_none(const dstd::Vector<dstd::String>& names) {
     if (names.empty()) return "(none)";
     dstd::String out;
     for (const auto& name : names) {

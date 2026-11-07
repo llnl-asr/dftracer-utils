@@ -3,10 +3,10 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/byte_view.h>
-#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
 
 namespace dftracer::utils::utilities::fileio {
@@ -23,8 +23,11 @@ ChunkWriter::~ChunkWriter() {
 
 coro::CoroTask<void> ChunkWriter::open() {
     const dstd::PathView output_dir(config_.output_dir);
-    if (!common::unwrap(dstd::fs::exists(output_dir))) {
-        common::unwrap(dstd::fs::create_directories(output_dir));
+    auto checking = runtime::fs::exists(output_dir);
+    const bool found = common::unwrap(co_await std::move(checking));
+    if (!found) {
+        auto creating = runtime::fs::create_directories(output_dir);
+        common::unwrap(co_await std::move(creating));
     }
     GzipWriterOptions opts;
     opts.member_size = config_.member_size_bytes;

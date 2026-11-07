@@ -121,7 +121,8 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
     const int in_fd = in_file.native_handle();
 
     struct stat st;
-    if (::fstat(in_fd, &st) != 0) {
+    const ssize_t stat_result = co_await runtime::io::fstat(in_fd, &st);
+    if (stat_result != 0) {
         throw common::DFTUtilsException(common::ErrorCode::Io,
                                         "Cannot stat file: " + in_path);
     }

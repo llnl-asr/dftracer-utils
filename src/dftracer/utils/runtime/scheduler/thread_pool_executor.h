@@ -101,6 +101,8 @@ class ThreadPoolExecutor final : public TaskExecutor {
         // Lazy handoff state (BLK_*). Worker and sysmon race a CAS out of
         // SYSCALL: exactly one of keep-on-exit and reclaim wins.
         std::atomic<int> blk_state{0};
+        // Regions open on this worker. Touched only by its own thread.
+        int blocking_depth{0};
         std::atomic<std::int64_t> blocking_since_ns{0};
 
         dstd::Thread thread;

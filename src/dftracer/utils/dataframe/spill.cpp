@@ -8,6 +8,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
@@ -583,17 +584,23 @@ dstd::Vector<Series> PartFile::append(const dstd::Vector<Series>& cols) {
         return out;
     }
     const std::uint64_t base = file_->reserve(region_bytes, page);
-    for (const ColumnPlan& cp : plans)
-        for (const Piece* p : {&cp.validity, &cp.offsets, &cp.data})
-            if (p->bytes != 0)
-                common::unwrap(file_->write_at(base + p->at, p->src, p->bytes));
-    // The last bytes may be padding: extend so the mapped pages exist.
-    if (::ftruncate(file_->fd(), static_cast<off_t>(base + region_bytes)) != 0)
-        throw std::runtime_error(("spill: cannot extend the spill file (" +
-                                  dstd::String(std::strerror(errno)) +
-                                  "); set " + common::constants::SPILL_DIR_ENV +
-                                  " to a directory with free space")
-                                     .c_str());
+    {
+        coro::BlockingRegion blocking;
+        for (const ColumnPlan& cp : plans)
+            for (const Piece* p : {&cp.validity, &cp.offsets, &cp.data})
+                if (p->bytes != 0)
+                    common::unwrap(
+                        file_->write_at(base + p->at, p->src, p->bytes));
+        // The last bytes may be padding: extend so the mapped pages exist.
+        if (::ftruncate(file_->fd(), static_cast<off_t>(base + region_bytes)) !=
+            0)
+            throw std::runtime_error(("spill: cannot extend the spill file (" +
+                                      dstd::String(std::strerror(errno)) +
+                                      "); set " +
+                                      common::constants::SPILL_DIR_ENV +
+                                      " to a directory with free space")
+                                         .c_str());
+    }
     void* map = ::mmap(nullptr, region_bytes, PROT_READ, MAP_SHARED,
                        file_->fd(), static_cast<off_t>(base));
     if (map == MAP_FAILED)
@@ -683,6 +690,11 @@ bool spill_compression_on(const dstd::String& path) {
 // A morsel smaller than this is not worth a compression call.
 constexpr std::size_t COMPRESS_MIN_BYTES = 4096;
 
+std::FILE* open_file(const dstd::String& path, const char* mode) {
+    coro::BlockingRegion blocking;
+    return std::fopen(path.c_str(), mode);
+}
+
 }  // namespace
 
 struct Writer::Codec {
@@ -696,7 +708,7 @@ struct Reader::Codec {
 };
 
 Writer::Writer(const dstd::String& path)
-    : os_(std::fopen(path.c_str(), "wb")),
+    : os_(open_file(path, "wb")),
       charge_(common::ScopedSpillSubdir::charge_for(dstd::PathView(path))) {
     if (!os_)
         throw std::runtime_error(
@@ -729,6 +741,7 @@ void Writer::write(const dstd::Vector<Series>& cols, std::int64_t rows) {
         }
     }
     const std::size_t payload_bytes = static_cast<std::size_t>(stored);
+    coro::BlockingRegion blocking;
     if (std::fwrite(&stored, sizeof(stored), 1, os_.get()) != 1 ||
         std::fwrite(&raw, sizeof(raw), 1, os_.get()) != 1 ||
         std::fwrite(payload, 1, payload_bytes, os_.get()) != payload_bytes)
@@ -740,6 +753,7 @@ void Writer::write(const dstd::Vector<Series>& cols, std::int64_t rows) {
 }
 
 void Writer::close() {
+    coro::BlockingRegion blocking;
     std::FILE* f = os_.release();
     if (!f || std::fclose(f) != 0)
         throw std::runtime_error(
@@ -783,7 +797,7 @@ void HashPartitions::close() {
     for (Writer& w : writers_) w.close();
 }
 
-Reader::Reader(const dstd::String& path) : is_(std::fopen(path.c_str(), "rb")) {
+Reader::Reader(const dstd::String& path) : is_(open_file(path, "rb")) {
     if (!is_)
         throw std::runtime_error(
             ("spill: cannot open run file " + path).c_str());
@@ -803,8 +817,11 @@ void Reader::seek(std::uint64_t pos) {
 coro::CoroTask<dstd::Optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
     if (seek_failed_) co_return dstd::nullopt;
     std::int64_t sizes[2] = {0, 0};
-    const std::size_t got_sizes =
-        std::fread(sizes, 1, sizeof(sizes), is_.get());
+    std::size_t got_sizes = 0;
+    {
+        coro::BlockingRegion blocking;
+        got_sizes = std::fread(sizes, 1, sizeof(sizes), is_.get());
+    }
     if (got_sizes == 0) co_return dstd::nullopt;
     if (got_sizes != sizeof(sizes))
         throw std::runtime_error("spill: short run read");
@@ -823,11 +840,15 @@ coro::CoroTask<dstd::Optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
     std::size_t got = 0;
     if (stored == raw) {
         grow(raw_, raw_cap_, raw);
+        coro::BlockingRegion blocking;
         got = std::fread(raw_.get(), 1, raw, is_.get());
     } else {
         if (!codec_) codec_ = dstd::make_unique<Codec>();
         grow(stored_, stored_cap_, stored);
-        got = std::fread(stored_.get(), 1, stored, is_.get());
+        {
+            coro::BlockingRegion blocking;
+            got = std::fread(stored_.get(), 1, stored, is_.get());
+        }
         if (got != stored) throw std::runtime_error("spill: short run read");
         if (ZSTD_getFrameContentSize(stored_.get(), stored) != raw)
             throw std::runtime_error(
@@ -917,7 +938,7 @@ dstd::UniquePtr<Cursor> Spool::reverse_reader() {
 
 void write_agg_run(AggState& state, const dstd::String& path) {
     agg_sort_groups(state);
-    dstd::ScopedFile os(std::fopen(path.c_str(), "wb"));
+    dstd::ScopedFile os(open_file(path, "wb"));
     if (!os)
         throw std::runtime_error(
             ("agg spill: cannot open run " + path).c_str());
@@ -936,13 +957,14 @@ void write_agg_run(AggState& state, const dstd::String& path) {
                 ("agg spill: cannot write run " + path).c_str());
         if (charge) charge->add(sizeof(len) + blob.size());
     }
+    coro::BlockingRegion blocking;
     if (std::fclose(os.release()) != 0)
         throw std::runtime_error(
             ("agg spill: cannot write run " + path).c_str());
 }
 
 AggRunReader::AggRunReader(const dstd::String& path)
-    : is_(std::fopen(path.c_str(), "rb")) {
+    : is_(open_file(path, "rb")) {
     if (!is_)
         throw std::runtime_error(
             ("agg spill: cannot open run " + path).c_str());

@@ -132,8 +132,11 @@ coro::CoroTask<dstd::Expected<dstd::File, dstd::Error>> open_file(
     auto flags = dstd::File::native_open_flags(options);
     if (!flags) co_return dstd::Unexpected(flags.error());
     const dstd::internal::PathCString c_path(path.str());
-    const ssize_t fd = co_await open(c_path.c_str(), *flags,
-                                     static_cast<mode_t>(options.mode));
+    ssize_t fd = -EINTR;
+    while (fd == -EINTR) {
+        fd = co_await open(c_path.c_str(), *flags,
+                           static_cast<mode_t>(options.mode));
+    }
     if (fd < 0) {
         co_return dstd::Unexpected(
             dstd::internal::errno_error(static_cast<int>(-fd), path.str()));

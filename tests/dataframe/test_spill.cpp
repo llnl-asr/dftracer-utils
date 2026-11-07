@@ -12,9 +12,15 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <thread>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -317,5 +323,43 @@ TEST_SUITE("spill errors") {
                 CHECK(firsts == dstd::Vector<std::int64_t>{40, 30, 20, 10, 0});
             }
         }
+    }
+
+    TEST_CASE(
+        "opening a run file that blocks leaves the worker to other tasks") {
+        spill::Dir dir;
+        const dstd::String path = dir.run_path(0);
+        REQUIRE(::mkfifo(path.c_str(), 0600) == 0);
+
+        // One worker: the open of a FIFO blocks until a writer appears, so the
+        // second task runs only if the open handed its permit away.
+        Runtime rt(1);
+        std::atomic<bool> opened{false};
+        std::atomic<bool> other_ran{false};
+        const auto open_task = [&]() -> dftracer::utils::coro::CoroTask<void> {
+            spill::Reader r(path);
+            opened.store(true);
+            co_return;
+        };
+        const auto other_task = [&]() -> dftracer::utils::coro::CoroTask<void> {
+            other_ran.store(true);
+            co_return;
+        };
+        rt.submit(open_task(), "open");
+        rt.submit(other_task(), "other");
+
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!other_ran.load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        const bool ran_while_blocked = other_ran.load() && !opened.load();
+
+        const int writer = ::open(path.c_str(), O_WRONLY);
+        rt.wait_all();
+        if (writer >= 0) ::close(writer);
+        ::unlink(path.c_str());
+
+        CHECK(ran_while_blocked);
+        CHECK(opened.load());
     }
 }

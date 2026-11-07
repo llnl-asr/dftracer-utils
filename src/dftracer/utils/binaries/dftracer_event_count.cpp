@@ -168,13 +168,16 @@ class StreamCounter {
 };
 
 coro::CoroTask<std::size_t> stream_count(dstd::String path) {
-    auto file = dstd::File::open(path, {});
+    const dstd::OpenOptions open_options;
+    auto opening = runtime::io::open_file(dstd::PathView(path), open_options);
+    auto file = co_await std::move(opening);
     if (!file)
         throw common::DFTUtilsException::cat(common::ErrorCode::Io,
                                              "cannot open ", path);
     const int fd = file->native_handle();
     struct stat st;
-    if (::fstat(fd, &st) != 0)
+    const ssize_t stat_result = co_await runtime::io::fstat(fd, &st);
+    if (stat_result != 0)
         throw common::DFTUtilsException::cat(common::ErrorCode::Io,
                                              "cannot stat ", path);
     const auto size = static_cast<std::uint64_t>(st.st_size);

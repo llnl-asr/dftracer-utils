@@ -4,6 +4,8 @@
 // task, no crash, no UB. Run under the asan/tsan presets for the real value:
 // worker churn while the shared run queue is being drained.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
 #include <doctest/doctest.h>
@@ -107,6 +109,35 @@ TEST_SUITE("DynamicWorkers") {
         CHECK(exec->live_workers() == 4);
         exec->add_worker();  // at cap -> no-op
         CHECK(exec->live_workers() == 4);
+    }
+
+    TEST_CASE("nested blocking regions keep every permit") {
+        Runtime rt(ExecutorConfig{.thread_count = 2}, false);
+        auto nested = []() -> coro::CoroTask<void> {
+            {
+                coro::BlockingRegion outer;
+                coro::BlockingRegion inner;
+            }
+            co_return;
+        };
+        for (int round = 0; round < 4; ++round) rt.block_on(nested());
+
+        // A lost permit leaves room for one task at a time.
+        std::atomic<int> arrived{0};
+        auto meet = [](std::atomic<int>& count) -> coro::CoroTask<bool> {
+            count.fetch_add(1, std::memory_order_acq_rel);
+            const auto limit =
+                std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (count.load(std::memory_order_acquire) < 2 &&
+                   std::chrono::steady_clock::now() < limit) {
+                std::this_thread::yield();
+            }
+            co_return count.load(std::memory_order_acquire) >= 2;
+        };
+        auto first = rt.submit(meet(arrived));
+        auto second = rt.submit(meet(arrived));
+        CHECK(first.get());
+        CHECK(second.get());
     }
 
     TEST_CASE("retire while idle (parked worker observes retire)") {

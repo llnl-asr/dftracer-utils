@@ -3,7 +3,6 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/scratch.h>
-#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -22,6 +21,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
@@ -120,9 +120,10 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         for (const auto& file : result.all_files) {
             auto root =
                 trace::internal::determine_index_path(file, input.index_dir);
-            if (common::unwrap(
-                    dstd::fs::exists(dstd::PathView(index::store_dir(root)))))
-                stale_tiers.insert(std::move(root));
+            const dstd::String store_path = index::store_dir(root);
+            auto checking = runtime::fs::exists(dstd::PathView(store_path));
+            const bool has_store = common::unwrap(co_await std::move(checking));
+            if (has_store) stale_tiers.insert(std::move(root));
         }
     for (const auto& root : stale_tiers) clear_aggregation(root);
 
@@ -187,9 +188,13 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         // should_stage is cheap for the common local destination and short
         // circuits before any mount probing; only a network destination reaches
         // the single-root and size checks below.
-        if (!common::unwrap(dstd::fs::exists(
-                dstd::PathView(index::store_dir(result.index_path)))) &&
-            common::should_stage(result.index_path)) {
+        const dstd::String result_store_path =
+            index::store_dir(result.index_path);
+        auto checking_store =
+            runtime::fs::exists(dstd::PathView(result_store_path));
+        const bool has_result_store =
+            common::unwrap(co_await std::move(checking_store));
+        if (!has_result_store && common::should_stage(result.index_path)) {
             dstd::Set<dstd::String> roots;
             for (const auto& f : files_needing_work)
                 roots.insert(
@@ -370,14 +375,17 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         "the aggregation tier of %zu index(es) is corrupt (%s); clearing it "
         "and aggregating again",
         roots.size(), failure.c_str());
-    for (const auto& root : roots)
-        if (common::unwrap(
-                dstd::fs::exists(dstd::PathView(index::store_dir(root))))) {
+    for (const auto& root : roots) {
+        const dstd::String store_path = index::store_dir(root);
+        auto checking = runtime::fs::exists(dstd::PathView(store_path));
+        const bool has_store = common::unwrap(co_await std::move(checking));
+        if (has_store) {
             index::release_root(root);
             auto target = common::unwrap(
                 index::Index::open(index::normalize_index_root(root)));
             index::schemas::dft::agg::tier::clear(target);
         }
+    }
     dstd::String retry_failure;
     try {
         co_return co_await resolve_and_build_once(std::move(input));

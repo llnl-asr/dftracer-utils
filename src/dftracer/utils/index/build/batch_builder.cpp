@@ -28,6 +28,7 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -190,13 +191,19 @@ static coro::CoroTask<void> parse_and_write_worker(
                 admitted = true;
             }
             if (!input_fd) {
-                auto opened = dstd::File::open(pf.file_path, {});
+                const dstd::OpenOptions open_options;
+                auto opening = runtime::io::open_file(
+                    dstd::PathView(pf.file_path), open_options);
+                auto opened = co_await std::move(opening);
                 if (opened)
                     input_fd =
                         dstd::make_shared<dstd::File>(std::move(*opened));
             }
             const int fd = input_fd ? input_fd->native_handle() : -1;
-            if (fd >= 0 && ::fstat(fd, &input_stat) == 0) {
+            ssize_t stat_result = -1;
+            if (fd >= 0)
+                stat_result = co_await runtime::io::fstat(fd, &input_stat);
+            if (stat_result == 0) {
                 pf.file_size = static_cast<std::uint64_t>(input_stat.st_size);
                 pf.file_mtime = static_cast<std::uint64_t>(input_stat.st_mtime);
                 pf.file_mtime_ns = common::stat_mtime_ns(input_stat);

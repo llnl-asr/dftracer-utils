@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/io/ops.h>
 
 #include <algorithm>
 #include <atomic>
@@ -404,6 +405,50 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> write_owned(
     co_return co_await std::move(closing);
 }
 
+template <typename Fn>
+struct IoCall {
+    Fn* fn;
+    dstd::Optional<std::invoke_result_t<Fn&>> result;
+
+    static ssize_t run(void* context) noexcept {
+        auto* call = static_cast<IoCall*>(context);
+        call->result.emplace((*call->fn)());
+        return 0;
+    }
+};
+
+template <typename Fn>
+coro::CoroTask<std::invoke_result_t<Fn&>> on_io(Fn fn) {
+    IoCall<Fn> call{&fn, dstd::nullopt};
+    runtime::io::IoAwaitable op =
+        runtime::io::call(&IoCall<Fn>::run, static_cast<void*>(&call));
+    co_await op;
+    co_return std::move(*call.result);
+}
+
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> exists_owned(
+    dstd::Path path) {
+    auto fn = [&path]() noexcept { return dstd::fs::exists(path.view()); };
+    auto call = on_io(fn);
+    co_return co_await std::move(call);
+}
+
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> create_directories_owned(
+    dstd::Path path) {
+    auto fn = [&path]() noexcept {
+        return dstd::fs::create_directories(path.view());
+    };
+    auto call = on_io(fn);
+    co_return co_await std::move(call);
+}
+
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> remove_owned(
+    dstd::Path path) {
+    auto fn = [&path]() noexcept { return dstd::fs::remove(path.view()); };
+    auto call = on_io(fn);
+    co_return co_await std::move(call);
+}
+
 struct StatSlice {
     std::size_t begin = 0;
     std::size_t stop = 0;
@@ -429,6 +474,19 @@ coro::CoroTask<dstd::Expected<dstd::String, dstd::Error>> read_file(
 coro::CoroTask<dstd::Expected<void, dstd::Error>> write_file(
     dstd::PathView path, dstd::StringView data) {
     return write_owned(dstd::Path(path.str()), data);
+}
+
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> exists(dstd::PathView path) {
+    return exists_owned(dstd::Path(path.str()));
+}
+
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> create_directories(
+    dstd::PathView path) {
+    return create_directories_owned(dstd::Path(path.str()));
+}
+
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> remove(dstd::PathView path) {
+    return remove_owned(dstd::Path(path.str()));
 }
 
 coro::CoroTask<dstd::Vector<dstd::Expected<dstd::fs::FileStat, dstd::Error>>>

@@ -357,7 +357,9 @@ void ThreadPoolExecutor::ensure_running_worker() {
 
 void ThreadPoolExecutor::enter_blocking() {
     auto* ctx = static_cast<WorkerContext*>(current_worker_context());
-    if (!ctx || !ctx->holds_permit) return;
+    if (!ctx) return;
+    // A worker that waits inside a region can run a task that enters another.
+    if (ctx->blocking_depth++ != 0 || !ctx->holds_permit) return;
     // No thief takes from the LIFO slot and this thread stops running it.
     flush_lifo(*ctx->core);
     ctx->blocking_since_ns.store(common::steady_now_ns(),
@@ -375,6 +377,7 @@ void ThreadPoolExecutor::enter_blocking() {
 void ThreadPoolExecutor::exit_blocking() {
     auto* ctx = static_cast<WorkerContext*>(current_worker_context());
     if (!ctx) return;
+    if (--ctx->blocking_depth != 0 || !ctx->holds_permit) return;
     blocked_workers_.fetch_sub(1, std::memory_order_acq_rel);
     int expected = BLK_SYSCALL;
     if (ctx->blk_state.compare_exchange_strong(expected, BLK_NONE,

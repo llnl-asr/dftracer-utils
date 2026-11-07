@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Add `runtime::fs::exists`, `create_directories` and `remove`, and run the per-file checks of the indexer and the tools off the worker, so they no longer hold a worker thread.
+- Let another worker run while a store commit or a spill file blocks on slow storage, so a tool keeps its full parallelism during long writes.
 - Give each executor worker its own io_uring ring for positional reads and writes, `close` and `fsync`.
   With io_uring these run 1.25 to 4.5 times faster in `io_bench`, and a read of cached data now ends with no thread woken.
   The backend now needs Linux 5.11 or later and otherwise falls back to the thread pool.

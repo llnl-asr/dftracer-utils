@@ -6,14 +6,15 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/dstd/byte_view.h>
-#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/path.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/io/ops.h>
 
+#include <cerrno>
 #include <cstddef>
-#include <cstdio>
-#include <stdexcept>
+#include <utility>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -37,7 +38,8 @@ namespace dftracer::utils::utilities::fileio {
  */
 inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
     dstd::Path path, std::size_t chunk_size = 64 * 1024) {
-    const auto found = dstd::fs::exists(path.view());
+    auto checking = runtime::fs::exists(path.view());
+    const auto found = co_await std::move(checking);
     if (!found) throw common::DFTUtilsException(found.error());
     if (!*found) {
         throw common::DFTUtilsException(
@@ -45,28 +47,33 @@ inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
             common::str_cat("File does not exist: ", path.str()));
     }
 
-    dstd::ScopedFile file(std::fopen(path.c_str(), "rb"));
-    if (!file) {
+    const dstd::OpenOptions open_options;
+    auto opening = runtime::io::open_file(path.view(), open_options);
+    auto opened = co_await std::move(opening);
+    if (!opened) {
         throw common::DFTUtilsException(
             common::ErrorCode::Io,
             common::str_cat("Cannot open file: ", path.str()));
     }
+    const dstd::File file = std::move(*opened);
 
     dstd::Vector<unsigned char> buffer(chunk_size);
 
     while (true) {
-        const std::size_t bytes_read =
-            std::fread(buffer.data(), 1, chunk_size, file.get());
+        // Sequential, as the path may be a FIFO.
+        const ssize_t bytes_read = co_await runtime::io::read(
+            file.native_handle(), buffer.data(), chunk_size);
+        if (bytes_read == -EINTR) continue;
+        if (bytes_read < 0) {
+            throw common::DFTUtilsException(
+                common::ErrorCode::Io,
+                common::str_cat("Error reading file: ", path.str()));
+        }
 
         if (bytes_read == 0) break;
 
-        co_yield dstd::ByteView(buffer.data(), bytes_read);
-    }
-
-    if (std::ferror(file.get())) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::Io,
-            common::str_cat("Error reading file: ", path.str()));
+        co_yield dstd::ByteView(buffer.data(),
+                                static_cast<std::size_t>(bytes_read));
     }
 }
 

@@ -931,7 +931,8 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
     std::uint64_t& recovered_bytes) {
     struct stat st;
-    if (::fstat(fd, &st) != 0) co_return false;
+    const ssize_t stat_result = co_await runtime::io::fstat(fd, &st);
+    if (stat_result != 0) co_return false;
     const std::uint64_t file_size = static_cast<std::uint64_t>(st.st_size);
 
     // Pre-scanned slice path: caller supplied the member map and a range.
@@ -981,7 +982,10 @@ build_gzip_index_artifacts(dstd::CStringView gz_path, std::uint64_t ckpt_size,
                            const CheckpointIndexer::VisitorList& visitors,
                            coro::Scope* scope, const GzipMemberSlice* slice,
                            std::size_t ways) {
-    auto file = dstd::File::open(dstd::PathView(gz_path), {});
+    const dstd::OpenOptions open_options;
+    auto opening =
+        runtime::io::open_file(dstd::PathView(gz_path), open_options);
+    auto file = co_await std::move(opening);
     if (!file) {
         co_return dstd::nullopt;
     }
@@ -997,8 +1001,9 @@ build_gzip_index_artifacts(int fd, dstd::CStringView gz_path,
                            coro::Scope* scope, const GzipMemberSlice* slice,
                            std::size_t ways) {
     struct stat fst{};
+    const ssize_t fst_result = co_await runtime::io::fstat(fd, &fst);
     const std::uint64_t compressed_bytes =
-        ::fstat(fd, &fst) == 0 ? static_cast<std::uint64_t>(fst.st_size) : 0;
+        fst_result == 0 ? static_cast<std::uint64_t>(fst.st_size) : 0;
     if (!visitors.empty()) {
         const std::size_t estimated = static_cast<std::size_t>(
             compressed_bytes / (ckpt_size > 0 ? ckpt_size : 1));
@@ -1030,7 +1035,8 @@ build_gzip_index_artifacts(int fd, dstd::CStringView gz_path,
             gz_path.c_str(), static_cast<unsigned long long>(recovered_bytes));
     } else if (slice == nullptr && members.empty() && compressed_bytes > 0) {
         unsigned char magic[2] = {0, 0};
-        if (::pread(fd, magic, 2, 0) != 2) magic[0] = 0;
+        const ssize_t magic_read = co_await runtime::io::pread(fd, magic, 2, 0);
+        if (magic_read != 2) magic[0] = 0;
         if (magic[0] == 0x1F && magic[1] == 0x8B) {
             DFTRACER_UTILS_LOG_WARN(
                 "Indexer: no gzip member of %s could be decoded; it is "

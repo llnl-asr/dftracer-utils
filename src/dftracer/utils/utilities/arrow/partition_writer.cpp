@@ -2,10 +2,10 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/partition_writer.h>
 #include <nanoarrow/nanoarrow.h>
@@ -74,7 +74,9 @@ coro::CoroTask<int> PartitionWriter::open(dstd::StringView output_dir,
                                           IpcCompression compression) {
     if (is_open_) co_return -1;
 
-    if (!dstd::fs::create_directories(dstd::PathView(output_dir))) co_return -1;
+    auto creating = runtime::fs::create_directories(dstd::PathView(output_dir));
+    auto created = co_await std::move(creating);
+    if (!created) co_return -1;
 
     output_dir_ = output_dir;
     chunk_size_bytes_ = chunk_size_bytes;

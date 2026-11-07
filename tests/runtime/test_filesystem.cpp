@@ -252,3 +252,50 @@ TEST_CASE("file system: a file:// path and a plain path are one local file") {
     rt.block_on(body());
     ::unlink(name);
 }
+
+TEST_CASE(
+    "file system: exists, create_directories and remove run off the worker") {
+    char root[] = "/tmp/dftu_fs_ops_XXXXXX";
+    REQUIRE(::mkdtemp(root) != nullptr);
+    const dstd::String dir = dstd::String(root) + "/a/b";
+    const dstd::String file = dstd::String(root) + "/file";
+    Runtime rt(ExecutorConfig{.thread_count = 2}, false);
+    auto body = [&]() -> coro::CoroTask<void> {
+        auto missing = co_await runtime::fs::exists(dstd::PathView(dir));
+        REQUIRE(missing.has_value());
+        CHECK_FALSE(*missing);
+
+        auto made =
+            co_await runtime::fs::create_directories(dstd::PathView(dir));
+        REQUIRE(made.has_value());
+        CHECK(*made);
+        auto present = co_await runtime::fs::exists(dstd::PathView(dir));
+        REQUIRE(present.has_value());
+        CHECK(*present);
+        auto again =
+            co_await runtime::fs::create_directories(dstd::PathView(dir));
+        REQUIRE(again.has_value());
+        CHECK_FALSE(*again);
+
+        auto written =
+            co_await runtime::fs::write_file(dstd::PathView(file), "x");
+        REQUIRE(written.has_value());
+        auto under_file = co_await runtime::fs::create_directories(
+            dstd::PathView(file + "/sub"));
+        CHECK_FALSE(under_file.has_value());
+
+        auto removed = co_await runtime::fs::remove(dstd::PathView(file));
+        REQUIRE(removed.has_value());
+        CHECK(*removed);
+        auto gone = co_await runtime::fs::remove(dstd::PathView(file));
+        REQUIRE(gone.has_value());
+        CHECK_FALSE(*gone);
+        auto not_empty = co_await runtime::fs::remove(
+            dstd::PathView(dstd::String(root) + "/a"));
+        CHECK_FALSE(not_empty.has_value());
+    };
+    rt.block_on(body());
+    ::rmdir(dir.c_str());
+    ::rmdir((dstd::String(root) + "/a").c_str());
+    ::rmdir(root);
+}

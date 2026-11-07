@@ -226,7 +226,10 @@ coro::detail::Coro Committer::run() {
             std::lock_guard<std::mutex> lock(queue_mutex_);
             if (stopping_) break;
         }
-        commit_pending();
+        {
+            coro::BlockingRegion blocking;
+            commit_pending();
+        }
     }
     finish_loop();
 }

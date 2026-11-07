@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
@@ -212,6 +213,9 @@ struct BootstrapSource {
 
 BootstrapSource open_bootstrap_source(dstd::StringView file,
                                       dstd::SharedPtr<dstd::ScopedFd> shared) {
+    // A region, not an async op: a task that resumes on another worker frees
+    // its memory away from the owning heap, and the view's peak grows.
+    coro::BlockingRegion blocking;
     BootstrapSource out;
     if (!shared)
         shared = dstd::make_shared<dstd::ScopedFd>(
@@ -721,6 +725,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     std::uint64_t compressed = 0;
     if (f.uncompressed_size == 0) {
         // A file never indexed has no size in the index.
+        coro::BlockingRegion blocking;
         if (!f.fd)
             f.fd = dstd::make_shared<dstd::ScopedFd>(
                 ::open(f.file_path.c_str(), O_RDONLY));

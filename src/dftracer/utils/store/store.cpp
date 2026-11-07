@@ -804,7 +804,10 @@ coro::CoroTask<dstd::Expected<PackReport, dstd::Error>> Store::State::pack_task(
     auto closed_before = co_await close_task(self);
     if (!closed_before) co_return Failure(closed_before.error());
 
-    auto view = engine::Snapshot::open(self->dir.str());
+    auto view = [&] {
+        coro::BlockingRegion blocking;
+        return engine::Snapshot::open(self->dir.str());
+    }();
     if (!view) co_return Failure(view.error());
     auto plan = view->pack_plan(options.small_file_bytes, options.dead_ratio);
     if (!plan) co_return Failure(plan.error());
@@ -818,7 +821,10 @@ coro::CoroTask<dstd::Expected<PackReport, dstd::Error>> Store::State::pack_task(
     if (!rewritten) co_return Failure(rewritten.error());
     if (!closed_after) co_return Failure(closed_after.error());
 
-    auto after = engine::Snapshot::open(self->dir.str());
+    auto after = [&] {
+        coro::BlockingRegion blocking;
+        return engine::Snapshot::open(self->dir.str());
+    }();
     if (!after) co_return Failure(after.error());
     // Every file counts as small, so this reads no segment block: only the
     // list of replaced files is used.
@@ -829,6 +835,7 @@ coro::CoroTask<dstd::Expected<PackReport, dstd::Error>> Store::State::pack_task(
                          std::chrono::system_clock::now().time_since_epoch())
                          .count();
     const std::uint64_t keep_ns = options.keep_seconds * 1000000000ULL;
+    coro::BlockingRegion blocking;
     for (const engine::ReplacedFile& file : settled->replaced) {
         bool old_enough = true;
         for (const dstd::String& name : file.replaced_by) {

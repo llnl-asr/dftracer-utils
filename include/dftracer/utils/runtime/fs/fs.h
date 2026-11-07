@@ -68,6 +68,14 @@ coro::CoroTask<dstd::Expected<dstd::String, dstd::Error>> read_file(
 coro::CoroTask<dstd::Expected<void, dstd::Error>> write_file(
     dstd::PathView path, dstd::StringView data);
 
+/// Local paths only. Same results as @ref dstd::fs::exists,
+/// @ref dstd::fs::create_directories and @ref dstd::fs::remove, off the worker.
+/// @p path is copied.
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> exists(dstd::PathView path);
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> create_directories(
+    dstd::PathView path);
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> remove(dstd::PathView path);
+
 /// One result per path, in the order of @p paths, which must stay valid until
 /// the task ends and name one file system. Follows symlinks. @p limit is the
 /// calls in flight at most, 0 uses the concurrency of the executor.

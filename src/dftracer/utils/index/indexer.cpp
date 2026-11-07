@@ -202,6 +202,12 @@ T block_on(Runtime& rt, const char* name, Fn fn) {
     return out;
 }
 
+coro::CoroTask<bool> has_store(dstd::String index_path) {
+    const dstd::String store_path = store_of(index_path);
+    auto checking = runtime::fs::exists(dstd::PathView(store_path));
+    co_return common::unwrap(co_await std::move(checking));
+}
+
 }  // namespace
 
 Indexer::Indexer(dstd::SharedPtr<Impl> impl) : impl_(std::move(impl)) {}
@@ -338,9 +344,9 @@ coro::CoroTask<IndexStatus> Indexer::rebuild(coro::Scope& scope) {
 coro::CoroTask<dstd::Vector<IndexedFile>> Indexer::files(coro::Scope&) const {
     dstd::Vector<IndexedFile> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!common::unwrap(
-                dstd::fs::exists(dstd::PathView(store_of(index_path)))))
-            continue;
+        auto checking = has_store(index_path);
+        const bool store_present = co_await std::move(checking);
+        if (!store_present) continue;
         const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
         for (const auto* p : traces) {
             const auto logical = store::internal::get_logical_path(*p);
@@ -366,9 +372,9 @@ coro::CoroTask<dstd::Vector<FileManifest>> Indexer::manifest(
     const auto config = impl_->bloom_config();
     dstd::Vector<FileManifest> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!common::unwrap(
-                dstd::fs::exists(dstd::PathView(store_of(index_path)))))
-            continue;
+        auto checking = has_store(index_path);
+        const bool store_present = co_await std::move(checking);
+        if (!store_present) continue;
         const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
         const std::uint64_t agg_params =
             impl_->options.aggregation.params_hash();
@@ -423,8 +429,9 @@ coro::CoroTask<dstd::Vector<FileExplain>> Indexer::explain(
             "Indexer::explain: ", parsed.error().format());
     dstd::Vector<FileExplain> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!common::unwrap(
-                dstd::fs::exists(dstd::PathView(store_of(index_path))))) {
+        auto checking = has_store(index_path);
+        const bool store_present = co_await std::move(checking);
+        if (!store_present) {
             for (const auto* p : traces) {
                 FileExplain f;
                 f.path = *p;
@@ -471,9 +478,9 @@ coro::CoroTask<IndexStatus> Indexer::drop_extension(coro::Scope& scope,
                                                     dstd::String extension) {
     const auto ext = tier_extension(extension);
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!common::unwrap(
-                dstd::fs::exists(dstd::PathView(store_of(index_path)))))
-            continue;
+        auto checking = has_store(index_path);
+        const bool store_present = co_await std::move(checking);
+        if (!store_present) continue;
         if (ext == store::IndexExtension::Plugin) {
             co_await drop_plugin_extension(index_path, extension, traces);
             continue;

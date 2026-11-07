@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -222,6 +223,7 @@ class GroupByCursor : public Cursor {
             result_ = to_morsel(r);
         } else {
             if (agg_group_count(*state) > 0) spill_state(*state);
+            coro::BlockingRegion blocking;
             for (std::size_t p = 0; p < part_out_.size(); ++p) {
                 std::FILE* f = part_out_[p].release();
                 if (!f || std::fclose(f) != 0)
@@ -241,6 +243,7 @@ class GroupByCursor : public Cursor {
     void spill_state(const AggState& state) {
         if (!spilled_) {
             spilled_ = true;
+            coro::BlockingRegion blocking;
             for (std::size_t p = 0; p < GROUP_SPILL_PARTS; ++p) {
                 part_paths_.push_back(dir_.run_path(dir_.next_run()));
                 part_out_.emplace_back(
@@ -264,6 +267,7 @@ class GroupByCursor : public Cursor {
                     common::ErrorCode::Io,
                     "group_by spill: a part holds over 4 GiB of group states");
             const auto len = static_cast<std::uint32_t>(blob.size());
+            coro::BlockingRegion blocking;
             std::FILE* f = out[p].get();
             if (!f || std::fwrite(&len, sizeof len, 1, f) != 1 ||
                 std::fwrite(blob.data(), 1, blob.size(), f) != blob.size())
@@ -280,17 +284,22 @@ class GroupByCursor : public Cursor {
     template <class F>
     static void read_batches(const dstd::String& path, std::uint64_t limit,
                              F&& fn) {
-        dstd::ScopedFile is(std::fopen(path.c_str(), "rb"));
-        if (!is)
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::Io, "group_by spill: cannot open part file ",
-                path);
-        const auto sized = dstd::fs::file_size(dstd::PathView(path));
-        if (!sized)
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::Io, "group_by spill: cannot stat part file ",
-                path);
-        const std::uint64_t file_size = *sized;
+        dstd::ScopedFile is;
+        std::uint64_t file_size = 0;
+        {
+            coro::BlockingRegion blocking;
+            is = dstd::ScopedFile(std::fopen(path.c_str(), "rb"));
+            if (!is)
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io,
+                    "group_by spill: cannot open part file ", path);
+            const auto sized = dstd::fs::file_size(dstd::PathView(path));
+            if (!sized)
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io,
+                    "group_by spill: cannot stat part file ", path);
+            file_size = *sized;
+        }
         std::uint64_t consumed = 0;
         dstd::Vector<dstd::String> raw;
         std::uint64_t have = 0;
@@ -309,17 +318,24 @@ class GroupByCursor : public Cursor {
             return fn(states);
         };
         std::uint32_t len = 0;
-        while (std::fread(&len, 1, sizeof len, is.get()) == sizeof len) {
-            consumed += sizeof len;
-            if (len > file_size - consumed)
-                throw common::DFTUtilsException::cat(
-                    common::ErrorCode::Io, "group_by spill: corrupt part file");
-            consumed += len;
-            dstd::String blob(len, '\0');
-            if (std::fread(blob.data(), 1, len, is.get()) != len)
-                throw common::DFTUtilsException::cat(
-                    common::ErrorCode::Io,
-                    "group_by spill: truncated part file");
+        while (true) {
+            dstd::String blob;
+            {
+                coro::BlockingRegion blocking;
+                if (std::fread(&len, 1, sizeof len, is.get()) != sizeof len)
+                    break;
+                consumed += sizeof len;
+                if (len > file_size - consumed)
+                    throw common::DFTUtilsException::cat(
+                        common::ErrorCode::Io,
+                        "group_by spill: corrupt part file");
+                consumed += len;
+                blob.assign(len, '\0');
+                if (std::fread(blob.data(), 1, len, is.get()) != len)
+                    throw common::DFTUtilsException::cat(
+                        common::ErrorCode::Io,
+                        "group_by spill: truncated part file");
+            }
             have += len;
             raw.push_back(std::move(blob));
             if (have >= limit && !flush()) return;
@@ -349,9 +365,12 @@ class GroupByCursor : public Cursor {
         dstd::Vector<dstd::String> paths;
         dstd::Vector<dstd::ScopedFile> out;
         dstd::Vector<std::uint64_t> bytes(GROUP_SPILL_PARTS, 0);
-        for (std::size_t p = 0; p < GROUP_SPILL_PARTS; ++p) {
-            paths.push_back(dir_.run_path(dir_.next_run()));
-            out.emplace_back(std::fopen(paths.back().c_str(), "wb"));
+        {
+            coro::BlockingRegion blocking;
+            for (std::size_t p = 0; p < GROUP_SPILL_PARTS; ++p) {
+                paths.push_back(dir_.run_path(dir_.next_run()));
+                out.emplace_back(std::fopen(paths.back().c_str(), "wb"));
+            }
         }
         AggStatePtr acc = agg_new(specs_, dyn_specs_);
         read_batches(part.path, batch_bytes(),
@@ -368,6 +387,7 @@ class GroupByCursor : public Cursor {
                      });
         if (agg_group_count(*acc) > 0)
             write_split(*acc, out, bytes, part.depth + 1);
+        coro::BlockingRegion blocking;
         for (std::size_t p = 0; p < out.size(); ++p) {
             std::FILE* f = out[p].release();
             if (!f || std::fclose(f) != 0)

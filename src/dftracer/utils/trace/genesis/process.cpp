@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/spill_file.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
@@ -735,6 +736,7 @@ class GroupReader {
             if (last) c.mem.shrink_to_fit();
             cur_ = {};
         } else {
+            coro::BlockingRegion blocking;
             auto file = mem_->spill_file();
             if (!file) return dstd::Unexpected(file.error());
             auto at = (*file)->append(cur_.data(), bytes);
@@ -1296,7 +1298,9 @@ coro::CoroTask<ReaderSize> reader_size(const dstd::String& file) {
     if (!opened) co_return out;
     const dstd::File guard = std::move(*opened);
     struct stat st{};
-    if (::fstat(guard.native_handle(), &st) != 0) co_return out;
+    const ssize_t stat_result =
+        co_await runtime::io::fstat(guard.native_handle(), &st);
+    if (stat_result != 0) co_return out;
     out.file_bytes = static_cast<std::uint64_t>(st.st_size);
     if (st.st_size < 18) {
         out.slots = 1;
@@ -1465,6 +1469,7 @@ GResult<void> replay_chunks(dstd::Vector<FilePart>& parts,
             auto file = mem.spill_file();
             if (!file) return dstd::Unexpected(file.error());
             scratch.resize(chunk.count);
+            coro::BlockingRegion blocking;
             auto got = (*file)->read(chunk.offset, scratch.data(),
                                      chunk.count * sizeof(Call));
             if (!got) return fail_from(got.error());

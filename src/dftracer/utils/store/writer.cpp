@@ -1076,6 +1076,7 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Writer::flush() {
         extent_bytes_.latch();
         co_return idle;
     }
+    coro::BlockingRegion blocking;
     co_return committer_.commit_pending();
 }
 
@@ -1101,13 +1102,21 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Writer::close() {
         extent_bytes_.latch();
         if (!first) first = idle.error();
     }
-    auto committed = committer_.commit_pending();
+    dstd::Expected<void, dstd::Error> committed;
+    {
+        coro::BlockingRegion blocking;
+        committed = committer_.commit_pending();
+    }
     if (!committed && !first) first = committed.error();
 
     auto stopped = co_await committer_.stop();
     if (!stopped && !first) first = stopped.error();
 
-    auto file_closed = file_.close();
+    dstd::Expected<void, dstd::Error> file_closed;
+    {
+        coro::BlockingRegion blocking;
+        file_closed = file_.close();
+    }
     if (!file_closed && !first) first = file_closed.error();
 
     if (first) co_return dstd::Unexpected<dstd::Error>(*first);

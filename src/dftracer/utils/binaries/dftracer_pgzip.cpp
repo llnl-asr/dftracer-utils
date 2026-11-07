@@ -8,6 +8,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -66,20 +68,27 @@ static coro::CoroTask<FileResult> compress_file_parallel(
     result.input_path = file_path;
     result.output_path = file_path + ".gz";
 
+    bool remove_output = false;
     try {
-        if (!common::unwrap(dstd::fs::exists(dstd::PathView(file_path)))) {
+        auto checking = runtime::fs::exists(dstd::PathView(file_path));
+        const bool present = common::unwrap(co_await std::move(checking));
+        if (!present) {
             result.error_message = "File does not exist: " + file_path;
             co_return result;
         }
 
+        auto input_stat = runtime::fs::stat(dstd::PathView(file_path));
         result.original_size = static_cast<std::size_t>(
-            common::unwrap(dstd::fs::file_size(dstd::PathView(file_path))));
+            common::unwrap(co_await std::move(input_stat)).size);
         if (result.original_size == 0) {
             result.error_message = "Empty file: " + file_path;
             co_return result;
         }
 
-        auto input = dstd::File::open(dstd::PathView(file_path), {});
+        const dstd::OpenOptions open_options;
+        auto opening =
+            runtime::io::open_file(dstd::PathView(file_path), open_options);
+        auto input = co_await std::move(opening);
         if (!input) {
             result.error_message = "Cannot open file: " + file_path;
             co_return result;
@@ -132,12 +141,18 @@ static coro::CoroTask<FileResult> compress_file_parallel(
         }
 
         common::unwrap(co_await writer.close(carry));
-        result.compressed_size = static_cast<std::size_t>(common::unwrap(
-            dstd::fs::file_size(dstd::PathView(result.output_path))));
+        auto output_stat =
+            runtime::fs::stat(dstd::PathView(result.output_path));
+        result.compressed_size = static_cast<std::size_t>(
+            common::unwrap(co_await std::move(output_stat)).size);
         result.success = true;
     } catch (const std::exception& e) {
         result.error_message = dstd::String("Compression failed: ") + e.what();
-        (void)dstd::fs::remove(dstd::PathView(result.output_path));
+        remove_output = true;
+    }
+    if (remove_output) {
+        auto removing = runtime::fs::remove(dstd::PathView(result.output_path));
+        (void)co_await std::move(removing);
     }
 
     co_return result;

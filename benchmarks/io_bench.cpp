@@ -7,12 +7,18 @@
 //   open_close   4x threads tasks open and close one file in a loop.
 //   lone_pread   one task reads, so that every read finds the ring or the pool
 //                asleep.
+//   stat_op      4x threads tasks stat one file with the statx operation.
+//   stat_call    the same with a blocking stat on the thread pool.
+//   mkdir_op     4x threads tasks make and remove their own directory with the
+//                mkdir and rmdir operations.
+//   mkdir_call   the same with blocking calls on the thread pool.
 //
 //   io_bench --threads N [--reps R] [--scale F] [--case NAME]
 //   io_bench --smoke   (small sizes; exits nonzero on a failed operation)
 //
 // Each row prints the median ns per op. DFTRACER_UTILS_IO_BACKEND picks the
 // backend.
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/string.h>
@@ -20,6 +26,7 @@
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -99,6 +106,68 @@ coro::CoroTask<void> opener(Shared& shared, std::size_t rounds) {
     }
 }
 
+#ifdef __linux__
+coro::CoroTask<void> stat_op_task(Shared& shared, std::size_t rounds) {
+    runtime::io::Statx info;
+    for (std::size_t i = 0; i < rounds; ++i) {
+        const ssize_t got = co_await runtime::io::statx(
+            AT_FDCWD, shared.path, 0, runtime::io::STATX_BASIC_MASK, &info);
+        if (got != 0) shared.failures.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+#endif
+
+ssize_t blocking_stat(void* context) noexcept {
+    struct stat info;
+    return ::stat(static_cast<const char*>(context), &info);
+}
+
+coro::CoroTask<void> stat_call_task(Shared& shared, std::size_t rounds) {
+    for (std::size_t i = 0; i < rounds; ++i) {
+        const ssize_t got = co_await runtime::io::call(
+            blocking_stat, const_cast<char*>(shared.path));
+        if (got != 0) shared.failures.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+dstd::String task_dir(const Shared& shared, std::size_t seed) {
+    return common::str_cat(shared.path, ".d", seed);
+}
+
+coro::CoroTask<void> mkdir_op_task(Shared& shared, std::size_t rounds,
+                                   std::size_t seed) {
+    const dstd::String name = task_dir(shared, seed);
+    for (std::size_t i = 0; i < rounds; ++i) {
+        const ssize_t made = co_await runtime::io::mkdir(name.c_str());
+        const ssize_t removed = co_await runtime::io::rmdir(name.c_str());
+        if (made != 0 || removed != 0) {
+            shared.failures.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
+ssize_t blocking_mkdir(void* context) noexcept {
+    return ::mkdir(static_cast<const char*>(context), 0777);
+}
+
+ssize_t blocking_rmdir(void* context) noexcept {
+    return ::rmdir(static_cast<const char*>(context));
+}
+
+coro::CoroTask<void> mkdir_call_task(Shared& shared, std::size_t rounds,
+                                     std::size_t seed) {
+    dstd::String name = task_dir(shared, seed);
+    for (std::size_t i = 0; i < rounds; ++i) {
+        const ssize_t made =
+            co_await runtime::io::call(blocking_mkdir, name.data());
+        const ssize_t removed =
+            co_await runtime::io::call(blocking_rmdir, name.data());
+        if (made != 0 || removed != 0) {
+            shared.failures.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
 using Run = std::uint64_t (*)(const Config&, Runtime&, Shared&);
 
 template <typename Make>
@@ -137,15 +206,51 @@ std::uint64_t lone_pread(const Config& config, Runtime& rt, Shared& shared) {
                    [&](std::size_t) { return reader(shared, rounds, 1); });
 }
 
+#ifdef __linux__
+std::uint64_t stat_op(const Config& config, Runtime& rt, Shared& shared) {
+    const std::size_t rounds = scaled(config, 5000);
+    return fan_out(rt, 4 * config.threads, rounds,
+                   [&](std::size_t) { return stat_op_task(shared, rounds); });
+}
+#endif
+
+std::uint64_t stat_call(const Config& config, Runtime& rt, Shared& shared) {
+    const std::size_t rounds = scaled(config, 5000);
+    return fan_out(rt, 4 * config.threads, rounds,
+                   [&](std::size_t) { return stat_call_task(shared, rounds); });
+}
+
+std::uint64_t mkdir_op(const Config& config, Runtime& rt, Shared& shared) {
+    const std::size_t rounds = scaled(config, 2000);
+    return fan_out(rt, 4 * config.threads, rounds,
+                   [&](std::size_t i) {
+                       return mkdir_op_task(shared, rounds, i);
+                   }) *
+           2;
+}
+
+std::uint64_t mkdir_call(const Config& config, Runtime& rt, Shared& shared) {
+    const std::size_t rounds = scaled(config, 2000);
+    return fan_out(rt, 4 * config.threads, rounds,
+                   [&](std::size_t i) {
+                       return mkdir_call_task(shared, rounds, i);
+                   }) *
+           2;
+}
+
 struct Case {
     const char* name;
     Run run;
 };
 
-constexpr Case CASES[] = {{"pread_4k", pread_4k},
-                          {"pwrite_4k", pwrite_4k},
-                          {"open_close", open_close},
-                          {"lone_pread", lone_pread}};
+constexpr Case CASES[] = {
+    {"pread_4k", pread_4k},     {"pwrite_4k", pwrite_4k},
+    {"open_close", open_close}, {"lone_pread", lone_pread},
+#ifdef __linux__
+    {"stat_op", stat_op},
+#endif
+    {"stat_call", stat_call},   {"mkdir_op", mkdir_op},
+    {"mkdir_call", mkdir_call}};
 
 }  // namespace
 

@@ -16,6 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Give each executor worker its own io_uring ring for positional reads and writes, `close` and `fsync`.
   With io_uring these run 1.25 to 4.5 times faster in `io_bench`, and a read of cached data now ends with no thread woken.
   The backend needs Linux 5.6 or later and otherwise falls back to the thread pool.
+- Add the async operations `runtime::io::statx`, `unlink`, `rmdir`, `rename`, `mkdir`, `fallocate`, `fadvise`, `sync_file_range` and `splice`, and run `ftruncate` on the ring too.
+  The io_uring backend asks the kernel which of them it has and sends the rest to the thread pool, and `runtime::fs::stat`, `exists`, `remove` and `create_directories` use them on Linux.
+- Add the async operations `runtime::io::linkat`, `symlinkat`, `socket`, `connect`, `bind`, `listen`, `shutdown`, `sendmsg`, `recvmsg`, `madvise`, `waitid` and `poll_add`, and on Linux `openat2`, `getxattr`, `setxattr`, `fgetxattr`, `fsetxattr`, `tee`, `pipe`, `futex_wait`, `futex_wake`, `futex_waitv`, `epoll_ctl` and `epoll_wait`.
+  The io_uring backend runs each on the ring when the kernel has its opcode and on the thread pool otherwise.
+  Where it cannot end a wait on the pool, the doc comment of the call says so.
+- Add `DFTRACER_UTILS_IO_URING_SQPOLL_IDLE_MS` to run the io_uring backend with a kernel polling thread.
+  It is off by default, because that thread holds a core while I/O runs.
 - Run coroutines on one queue per worker, with stealing between workers, in place of one shared queue.
   Scheduling is faster, most of all when one worker wakes another task, and an idle pool no longer wakes on a short timer.
 - List every `*.gz` file when a tool, an indexer or a viewer discovers the traces in a folder, and no longer list plain `.pfw`, `.jsonl` or `.ndjson` files, so gzip them first; the Python constant `TRACE_FILE_PATTERNS` becomes `INPUT_FILE_PATTERNS`.

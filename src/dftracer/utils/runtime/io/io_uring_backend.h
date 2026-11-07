@@ -33,18 +33,34 @@ namespace dftracer::utils::runtime::io {
  *
  * Features come from the kernel's answer to the ring setup, never its version.
  * A ring with no timed enter ends a timed wait with a timeout request.
+ *
+ * With SQPOLL the owner's ring is the only ring, and a kernel thread takes its
+ * requests with no system call. That thread spins for `sq_poll_idle_ms`, so it
+ * holds a core while I/O runs.
  */
 class IoUringBackend : public ThreadPoolFileOps {
    public:
-    /// `masked_features` hides IORING_FEAT_* bits, so a test can run the path
-    /// of an older kernel on a newer one.
+    /// `masked_features` hides IORING_FEAT_* bits and `masked_kinds` hides the
+    /// kinds whose bit `1 << kind` is set, so a test can run the path of an
+    /// older kernel on a newer one. A `sq_poll_idle_ms` above 0 asks for
+    /// SQPOLL, and a kernel that refuses it runs without.
     explicit IoUringBackend(std::size_t pool_size = 4,
                             IoPoolOptions pool_options = {},
-                            unsigned masked_features = 0);
+                            unsigned masked_features = 0,
+                            std::uint64_t masked_kinds = 0,
+                            unsigned sq_poll_idle_ms = 0);
     ~IoUringBackend() override;
 
-    /// Whether this kernel has what the backend needs.
+    /// Whether this kernel has what the backend needs. Also reads which
+    /// opcodes it has.
     bool probe();
+
+    /// Whether the ring runs this kind. The others run on the thread pool.
+    /// Answers from the opcodes that @ref probe or @ref start read.
+    bool has_opcode(IoOpKind kind) const noexcept;
+
+    /// Whether a kernel thread takes the requests. Set by @ref start.
+    bool is_sq_polled() const noexcept { return is_sq_polled_; }
 
     /// Throws when the kernel refuses a ring, because no operation could end.
     void start() override;
@@ -69,6 +85,7 @@ class IoUringBackend : public ThreadPoolFileOps {
    private:
     struct WorkerRing;
 
+    void read_opcodes(uring::Ring& ring) noexcept;
     WorkerRing* calling_worker_ring(IoOpKind kind) noexcept;
     void fill_worker(WorkerRing& worker) noexcept;
     void flush_worker(WorkerRing& worker) noexcept;
@@ -86,6 +103,12 @@ class IoUringBackend : public ThreadPoolFileOps {
     void cancel_waiting() noexcept;
 
     const unsigned masked_features_;
+    const std::uint64_t masked_kinds_;
+    const unsigned sq_poll_idle_ms_;
+    // Set in start(), before any operation.
+    bool is_sq_polled_ = false;
+    // Bit `1 << kind` for each kind with an opcode the kernel probe lists.
+    std::uint64_t probed_kinds_ = 0;
     // Set in start(), before any worker parks.
     bool timed_enter_ = false;
     bool should_enable_ring_ = false;

@@ -55,6 +55,10 @@ inline constexpr bool DEFAULT_REPORT = false;
 namespace io_settings {
 /// auto, io_uring, epoll, kqueue or threadpool.
 inline constexpr const char* BACKEND_ENV = "DFTRACER_UTILS_IO_BACKEND";
+/// Above 0, io_uring asks for SQPOLL with this idle time in milliseconds.
+inline constexpr const char* SQPOLL_IDLE_ENV =
+    "DFTRACER_UTILS_IO_URING_SQPOLL_IDLE_MS";
+inline constexpr std::uint64_t DEFAULT_SQPOLL_IDLE_MS = 0;
 }  // namespace io_settings
 
 namespace executor_settings {

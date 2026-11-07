@@ -164,6 +164,271 @@ IoAwaitable fstat(dstd::NativeHandle fd, struct stat* buf) noexcept {
     return dispatch(op);
 }
 
+IoAwaitable unlink(const char* path) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Unlink, -1);
+    op.path = path;
+    return dispatch(op);
+}
+
+IoAwaitable rmdir(const char* path) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Unlink, -1);
+    op.path = path;
+    op.flags = AT_REMOVEDIR;
+    return dispatch(op);
+}
+
+IoAwaitable rename(const char* from, const char* to) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Rename, -1);
+    op.path = from;
+    op.path2 = to;
+    return dispatch(op);
+}
+
+IoAwaitable mkdir(const char* path, mode_t mode) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Mkdir, -1);
+    op.path = path;
+    op.mode = mode;
+    return dispatch(op);
+}
+
+IoAwaitable fadvise(dstd::NativeHandle fd, std::uint64_t offset,
+                    std::uint64_t length, int advice) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Fadvise, fd);
+    op.offset = static_cast<std::int64_t>(offset);
+    op.length = static_cast<std::size_t>(length);
+    op.flags = advice;
+    return dispatch(op);
+}
+
+IoAwaitable linkat(dstd::NativeHandle from_dirfd, const char* from,
+                   dstd::NativeHandle to_dirfd, const char* to,
+                   int flags) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Linkat, from_dirfd);
+    op.path = from;
+    op.path2 = to;
+    op.out_handle = to_dirfd;
+    op.flags = flags;
+    return dispatch(op);
+}
+
+IoAwaitable symlinkat(const char* target, dstd::NativeHandle dirfd,
+                      const char* link) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Symlinkat, dirfd);
+    op.path = target;
+    op.path2 = link;
+    return dispatch(op);
+}
+
+IoAwaitable socket(int domain, int type, int protocol) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Socket, domain);
+    op.offset = type;
+    op.flags = protocol;
+    return dispatch(op);
+}
+
+IoAwaitable connect(dstd::NativeHandle fd, const struct sockaddr* addr,
+                    socklen_t addrlen) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Connect, fd);
+    op.addr = const_cast<struct sockaddr*>(addr);
+    op.length = addrlen;
+    return dispatch(op);
+}
+
+IoAwaitable bind(dstd::NativeHandle fd, const struct sockaddr* addr,
+                 socklen_t addrlen) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Bind, fd);
+    op.addr = const_cast<struct sockaddr*>(addr);
+    op.length = addrlen;
+    return dispatch(op);
+}
+
+IoAwaitable listen(dstd::NativeHandle fd, int backlog) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Listen, fd);
+    op.flags = backlog;
+    return dispatch(op);
+}
+
+IoAwaitable shutdown(dstd::NativeHandle fd, int how) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Shutdown, fd);
+    op.flags = how;
+    return dispatch(op);
+}
+
+IoAwaitable sendmsg(dstd::NativeHandle fd, const struct msghdr* msg,
+                    int flags) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Sendmsg, fd);
+    op.msg = const_cast<struct msghdr*>(msg);
+    op.flags = flags;
+    return dispatch(op);
+}
+
+IoAwaitable recvmsg(dstd::NativeHandle fd, struct msghdr* msg,
+                    int flags) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Recvmsg, fd);
+    op.msg = msg;
+    op.flags = flags;
+    return dispatch(op);
+}
+
+IoAwaitable madvise(void* addr, std::size_t length, int advice) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Madvise, -1);
+    op.buffer = addr;
+    op.length = length;
+    op.flags = advice;
+    return dispatch(op);
+}
+
+IoAwaitable waitid(int idtype, id_t id, siginfo_t* info, int options) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Waitid, static_cast<int>(id));
+    op.info = info;
+    op.idtype = idtype;
+    op.flags = options;
+    return dispatch(op);
+}
+
+IoAwaitable poll_add(dstd::NativeHandle fd, unsigned events) noexcept {
+    IoAwaitable op = make_op(IoOpKind::PollAdd, fd);
+    op.flags = static_cast<int>(events);
+    return dispatch(op);
+}
+
+#ifdef __linux__
+IoAwaitable statx(dstd::NativeHandle dirfd, const char* path, int flags,
+                  std::uint32_t mask, Statx* out) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Statx, dirfd);
+    op.path = path;
+    op.flags = flags;
+    op.statx_mask = mask;
+    op.statx_out = out;
+    return dispatch(op);
+}
+
+IoAwaitable fallocate(dstd::NativeHandle fd, int mode, std::uint64_t offset,
+                      std::uint64_t length) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Fallocate, fd);
+    op.offset = static_cast<std::int64_t>(offset);
+    op.length = static_cast<std::size_t>(length);
+    op.flags = mode;
+    return dispatch(op);
+}
+
+IoAwaitable sync_file_range(dstd::NativeHandle fd, std::uint64_t offset,
+                            std::uint64_t length, unsigned flags) noexcept {
+    IoAwaitable op = make_op(IoOpKind::SyncFileRange, fd);
+    op.offset = static_cast<std::int64_t>(offset);
+    op.length = static_cast<std::size_t>(length);
+    op.flags = static_cast<int>(flags);
+    return dispatch(op);
+}
+
+IoAwaitable splice(dstd::NativeHandle in_fd, std::int64_t in_offset,
+                   dstd::NativeHandle out_fd, std::int64_t out_offset,
+                   std::size_t length, unsigned flags) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Splice, in_fd);
+    op.offset = in_offset;
+    op.out_offset = out_offset;
+    op.out_handle = out_fd;
+    op.length = length;
+    op.flags = static_cast<int>(flags);
+    return dispatch(op);
+}
+
+IoAwaitable openat2(dstd::NativeHandle dirfd, const char* path,
+                    const OpenHow& how) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Openat2, dirfd);
+    op.path = path;
+    op.how = &how;
+    return dispatch(op);
+}
+
+IoAwaitable getxattr(const char* path, const XattrArgs& args) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Getxattr, -1);
+    op.path = path;
+    op.xattr = &args;
+    return dispatch(op);
+}
+
+IoAwaitable setxattr(const char* path, const XattrArgs& args) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Setxattr, -1);
+    op.path = path;
+    op.xattr = &args;
+    return dispatch(op);
+}
+
+IoAwaitable fgetxattr(dstd::NativeHandle fd, const XattrArgs& args) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Fgetxattr, fd);
+    op.xattr = &args;
+    return dispatch(op);
+}
+
+IoAwaitable fsetxattr(dstd::NativeHandle fd, const XattrArgs& args) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Fsetxattr, fd);
+    op.xattr = &args;
+    return dispatch(op);
+}
+
+IoAwaitable tee(dstd::NativeHandle in_fd, dstd::NativeHandle out_fd,
+                std::size_t length, unsigned flags) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Tee, in_fd);
+    op.out_handle = out_fd;
+    op.length = length;
+    op.flags = static_cast<int>(flags);
+    return dispatch(op);
+}
+
+IoAwaitable pipe(int* fds, int flags) noexcept {
+    IoAwaitable op = make_op(IoOpKind::Pipe, -1);
+    op.pipe_fds = fds;
+    op.flags = flags;
+    return dispatch(op);
+}
+
+IoAwaitable futex_wait(const std::uint32_t* uaddr, std::uint32_t expected,
+                       std::uint64_t mask, unsigned futex_flags) noexcept {
+    IoAwaitable op = make_op(IoOpKind::FutexWait, -1);
+    op.futex = const_cast<std::uint32_t*>(uaddr);
+    op.offset = expected;
+    op.futex_mask = mask;
+    op.flags = static_cast<int>(futex_flags);
+    return dispatch(op);
+}
+
+IoAwaitable futex_wake(std::uint32_t* uaddr, std::uint32_t count,
+                       std::uint64_t mask, unsigned futex_flags) noexcept {
+    IoAwaitable op = make_op(IoOpKind::FutexWake, -1);
+    op.futex = uaddr;
+    op.offset = count;
+    op.futex_mask = mask;
+    op.flags = static_cast<int>(futex_flags);
+    return dispatch(op);
+}
+
+IoAwaitable futex_waitv(const FutexWaitv* waiters, unsigned count) noexcept {
+    IoAwaitable op = make_op(IoOpKind::FutexWaitv, -1);
+    op.futex_waitv = waiters;
+    op.length = count;
+    return dispatch(op);
+}
+
+IoAwaitable epoll_ctl(dstd::NativeHandle epfd, int op_code,
+                      dstd::NativeHandle fd,
+                      struct epoll_event* event) noexcept {
+    IoAwaitable op = make_op(IoOpKind::EpollCtl, epfd);
+    op.epoll_events = event;
+    op.flags = op_code;
+    op.offset = fd;
+    return dispatch(op);
+}
+
+IoAwaitable epoll_wait(dstd::NativeHandle epfd, struct epoll_event* events,
+                       int max_events) noexcept {
+    IoAwaitable op = make_op(IoOpKind::EpollWait, epfd);
+    op.epoll_events = events;
+    op.flags = max_events;
+    return dispatch(op);
+}
+#endif
+
 IoAwaitable call(BlockingFn fn, void* context) noexcept {
     IoAwaitable op = make_op(IoOpKind::Call, -1);
     op.call = fn;

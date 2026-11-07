@@ -81,6 +81,18 @@ IoBackendType backend_from_env(bool& forced) {
                      "threadpool)");
 }
 
+#ifdef DFTRACER_UTILS_HAVE_IO_URING
+dstd::UniquePtr<IoUringBackend> make_io_uring(std::size_t pool_size,
+                                              IoPoolOptions pool_options) {
+    const auto idle = common::Env::get<std::uint64_t>(
+        common::constants::io_settings::SQPOLL_IDLE_ENV);
+    return dstd::make_unique<IoUringBackend>(
+        pool_size, pool_options, 0U, 0U,
+        static_cast<unsigned>(idle.value_or(
+            common::constants::io_settings::DEFAULT_SQPOLL_IDLE_MS)));
+}
+#endif
+
 }  // namespace
 
 dstd::UniquePtr<IoBackend> make_io_backend(std::size_t pool_size,
@@ -121,7 +133,7 @@ dstd::UniquePtr<IoBackend> make_io_backend(std::size_t pool_size,
 
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
     if (backend_type == IoBackendType::IoUring) {
-        auto uring = dstd::make_unique<IoUringBackend>(pool_size, pool_options);
+        auto uring = make_io_uring(pool_size, pool_options);
         if (uring->probe()) {
             DFTRACER_UTILS_LOG_INFO("%s", "I/O backend: using io_uring");
             return uring;
@@ -143,7 +155,7 @@ dstd::UniquePtr<IoBackend> make_io_backend(std::size_t pool_size,
 #if defined(DFTRACER_UTILS_HAVE_IO_URING) && \
     !defined(DFTRACER_UTILS_VALGRIND_MODE)
     {
-        auto uring = dstd::make_unique<IoUringBackend>(pool_size, pool_options);
+        auto uring = make_io_uring(pool_size, pool_options);
         if (uring->probe()) {
             DFTRACER_UTILS_LOG_INFO("%s", "I/O backend: using io_uring");
             return uring;

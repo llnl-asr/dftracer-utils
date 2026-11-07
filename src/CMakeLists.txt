@@ -139,6 +139,7 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
     # Async I/O
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/filesystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/fs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/local_stat.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs_on_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_awaitable.cpp
@@ -152,7 +153,8 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
 # Conditionally add io_uring backend sources
 if(DFTRACER_UTILS_HAVE_IO_URING)
   list(APPEND DFTRACER_UTILS_RUNTIME_SOURCES
-       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_uring_backend.cpp)
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_uring_backend.cpp
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_uring_register.cpp)
 endif()
 
 # Linux: add epoll+threadpool backend
@@ -2414,11 +2416,15 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/spill_harness.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/ring_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/store_bench.cpp)
 
   foreach(bench ${DFTRACER_UTILS_BENCHMARKS})
     get_filename_component(bench_name ${bench} NAME_WE)
     add_executable(${bench_name} ${bench})
+    if(DFTRACER_UTILS_HAVE_IO_URING)
+      target_compile_definitions(${bench_name} PRIVATE DFTRACER_UTILS_HAVE_IO_URING)
+    endif()
     target_add_rpath(${bench_name})
     target_link_libraries(${bench_name} PRIVATE dftracer_utils)
     target_include_directories(

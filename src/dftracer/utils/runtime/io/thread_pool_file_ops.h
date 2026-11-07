@@ -37,7 +37,10 @@ class ThreadPoolFileOps : public IoBackend {
     }
 
     /// Reads, accepts and sends that wait on a peer complete with -ECANCELED;
-    /// operations that finish by themselves run to the end.
+    /// operations that finish by themselves run to the end. So do futex waits
+    /// and waitid, which have no descriptor to poll, and connect, which ends at
+    /// the kernel's timeout. A splice or tee that loses its ready end to
+    /// another thread after the wait can block until a peer acts.
     void cancel_pending() override { pool_.cancel(); }
 
    protected:

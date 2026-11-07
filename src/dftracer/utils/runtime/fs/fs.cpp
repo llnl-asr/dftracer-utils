@@ -5,11 +5,14 @@
 #include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/os.h>
 #include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/fs/local_stat.h>
 #include <dftracer/utils/runtime/io/ops.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <type_traits>
 #include <utility>
 
@@ -426,6 +429,106 @@ coro::CoroTask<std::invoke_result_t<Fn&>> on_io(Fn fn) {
     co_return std::move(*call.result);
 }
 
+#ifdef __linux__
+
+// The path without trailing separators, so lstat names a symlink itself.
+dstd::StringView strip_trailing_separators(dstd::StringView path) noexcept {
+    const std::size_t root =
+        dstd::path_detail::root_size(path, dstd::HOST_PATH_STYLE);
+    std::size_t end = path.size();
+    while (
+        end > root && end > 1 &&
+        dstd::path_detail::is_separator(path[end - 1], dstd::HOST_PATH_STYLE)) {
+        --end;
+    }
+    return path.substr(0, end);
+}
+
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> exists_owned(
+    dstd::Path path) {
+    auto stat_call = local_stat(path.view(), true);
+    auto found = co_await std::move(stat_call);
+    if (found) co_return true;
+    if (found.error().is(dstd::Condition::NotFound)) co_return false;
+    co_return dstd::Unexpected(found.error());
+}
+
+// True when the directory was created, false when it already existed.
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> create_directory_owned(
+    dstd::StringView prefix) {
+    const dstd::internal::PathCString name(prefix);
+    runtime::io::IoAwaitable make = runtime::io::mkdir(name.c_str(), 0777);
+    const ssize_t made = co_await make;
+    if (made == 0) co_return true;
+    if (made != -EEXIST) {
+        co_return dstd::Unexpected(
+            dstd::internal::errno_error(static_cast<int>(-made), prefix));
+    }
+    auto stat_call = local_stat(dstd::PathView(prefix), true);
+    auto found = co_await std::move(stat_call);
+    if (!found) co_return dstd::Unexpected(found.error());
+    if (found->kind != FileKind::Directory) {
+        co_return dstd::Unexpected(
+            dstd::Error(dstd::Condition::Io,
+                        dstd::internal::make_message(
+                            prefix, {}, "exists and is not a directory")));
+    }
+    co_return false;
+}
+
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> create_directories_owned(
+    dstd::Path path) {
+    const dstd::StringView bytes = path.str();
+    if (bytes.empty()) {
+        co_return dstd::Unexpected(
+            dstd::Error(dstd::Condition::InvalidArgument,
+                        "empty path, no directory to create"));
+    }
+    const std::size_t root =
+        dstd::path_detail::root_size(bytes, dstd::HOST_PATH_STYLE);
+    std::size_t end = bytes.size();
+    while (end > root && dstd::path_detail::is_separator(
+                             bytes[end - 1], dstd::HOST_PATH_STYLE)) {
+        --end;
+    }
+    bool created = false;
+    for (std::size_t at = root + 1; at <= end; ++at) {
+        if (at < end && !dstd::path_detail::is_separator(
+                            bytes[at], dstd::HOST_PATH_STYLE)) {
+            continue;
+        }
+        const dstd::StringView prefix = bytes.substr(0, at);
+        if (prefix.size() <= root) continue;
+        auto make_call = create_directory_owned(prefix);
+        auto made = co_await std::move(make_call);
+        if (!made) co_return dstd::Unexpected(made.error());
+        created = created || *made;
+    }
+    co_return created;
+}
+
+coro::CoroTask<dstd::Expected<bool, dstd::Error>> remove_owned(
+    dstd::Path path) {
+    const dstd::StringView bytes = strip_trailing_separators(path.str());
+    auto stat_call = local_stat(dstd::PathView(bytes), false);
+    auto found = co_await std::move(stat_call);
+    if (!found) {
+        if (found.error().is(dstd::Condition::NotFound)) co_return false;
+        co_return dstd::Unexpected(found.error());
+    }
+    const dstd::internal::PathCString name(bytes);
+    runtime::io::IoAwaitable removal = found->kind == FileKind::Directory
+                                           ? runtime::io::rmdir(name.c_str())
+                                           : runtime::io::unlink(name.c_str());
+    const ssize_t removed = co_await removal;
+    if (removed == 0) co_return true;
+    if (removed == -ENOENT || removed == -ENOTDIR) co_return false;
+    co_return dstd::Unexpected(
+        dstd::internal::errno_error(static_cast<int>(-removed), path.str()));
+}
+
+#else
+
 coro::CoroTask<dstd::Expected<bool, dstd::Error>> exists_owned(
     dstd::Path path) {
     auto fn = [&path]() noexcept { return dstd::fs::exists(path.view()); };
@@ -448,6 +551,8 @@ coro::CoroTask<dstd::Expected<bool, dstd::Error>> remove_owned(
     auto call = on_io(fn);
     co_return co_await std::move(call);
 }
+
+#endif
 
 struct StatSlice {
     std::size_t begin = 0;

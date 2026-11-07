@@ -8,6 +8,7 @@
 #include <dftracer/utils/runtime/fs/filesystem.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/fs/fs_probes.h>
+#include <dftracer/utils/runtime/fs/local_stat.h>
 #include <dftracer/utils/runtime/io/ops.h>
 
 #include <atomic>
@@ -47,19 +48,20 @@ dstd::PathView local_path(dstd::PathView path) noexcept {
 
 // A later layer that asks for this input through common::stat_input makes no
 // second syscall.
+void keep_input(dstd::PathView path, const dstd::fs::FileStat& found) noexcept {
+    common::InputFileStat kept;
+    kept.size = found.size;
+    kept.mtime = static_cast<std::int64_t>(found.mtime_ns / NANOS_PER_SECOND);
+    kept.mtime_ns = static_cast<std::int64_t>(found.mtime_ns);
+    kept.is_directory = found.kind == FileKind::Directory;
+    kept.is_regular_file = found.kind == FileKind::File;
+    common::remember_input(path.str(), kept);
+}
+
 dstd::Expected<dstd::fs::FileStat, dstd::Error> stat_and_keep(
     dstd::PathView path) noexcept {
     auto found = dstd::fs::stat(path);
-    if (found) {
-        common::InputFileStat kept;
-        kept.size = found->size;
-        kept.mtime =
-            static_cast<std::int64_t>(found->mtime_ns / NANOS_PER_SECOND);
-        kept.mtime_ns = static_cast<std::int64_t>(found->mtime_ns);
-        kept.is_directory = found->kind == FileKind::Directory;
-        kept.is_regular_file = found->kind == FileKind::File;
-        common::remember_input(path.str(), kept);
-    }
+    if (found) keep_input(path, *found);
     return found;
 }
 
@@ -177,9 +179,16 @@ class LocalFileSystem final : public FileSystem {
     coro::CoroTask<dstd::Expected<dstd::fs::FileStat, dstd::Error>> stat(
         dstd::PathView path) override {
         const dstd::PathView local = local_path(path);
+#ifdef __linux__
+        auto call = local_stat(local, true);
+        auto found = co_await std::move(call);
+        if (found) keep_input(local, *found);
+        co_return found;
+#else
         auto fn = [local]() noexcept { return stat_and_keep(local); };
         auto call = on_io(fn);
         co_return co_await std::move(call);
+#endif
     }
 
     coro::CoroTask<dstd::Expected<dstd::Vector<Entry>, dstd::Error>> list(

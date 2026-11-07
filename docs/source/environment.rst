@@ -35,6 +35,12 @@ Runtime and scheduler
      - hardware concurrency
      - Fixes the I/O backend (io_uring/kqueue) thread-pool size independently
        of the compute pool. Same parsing rule as ``DFTRACER_UTILS_THREADS``.
+   * - ``DFTRACER_UTILS_IO_URING_SQPOLL_IDLE_MS``
+     - ``0``
+     - Above 0, asks the io_uring backend for SQPOLL: one ring, and a kernel
+       thread that takes requests with no system call. That thread spins for this
+       many milliseconds after its last request, so it holds a core while I/O
+       runs. A kernel that refuses it, such as one before 5.11, runs without it.
    * - ``DFTRACER_UTILS_IO_BACKEND``
      - ``auto``
      - Forces the I/O backend of every runtime that would pick one itself:

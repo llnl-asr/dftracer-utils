@@ -7,6 +7,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/runtime/io/io_uring_backend.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -28,29 +29,76 @@ namespace dftracer::utils::runtime::io {
 
 namespace uring {
 
-bool Ring::init(unsigned entries, unsigned setup_flags) {
+bool Ring::init(unsigned entries, unsigned setup_flags, unsigned sq_idle_ms) {
+    return init(entries,
+                RingOptions{.flags = setup_flags, .sq_idle_ms = sq_idle_ms});
+}
+
+bool Ring::init(unsigned entries, const RingOptions& options) {
+    const unsigned setup_flags = options.flags;
     struct io_uring_params params;
     std::memset(&params, 0, sizeof(params));
     params.flags = setup_flags;
+    params.sq_thread_idle = options.sq_idle_ms;
+    params.cq_entries = options.cq_entries;
+    params.sq_thread_cpu = options.sq_cpu;
+    if (options.attach_fd >= 0) {
+        params.wq_fd = static_cast<unsigned>(options.attach_fd);
+    }
+    is_sq_polled_ = (setup_flags & IORING_SETUP_SQPOLL) != 0;
     deferred_ = (setup_flags & IORING_SETUP_DEFER_TASKRUN) != 0;
+    is_iopoll_ = (setup_flags & IORING_SETUP_IOPOLL) != 0;
+    sqe_shift_ = (setup_flags & IORING_SETUP_SQE128) != 0 ? 1U : 0U;
+    cqe_shift_ = (setup_flags & IORING_SETUP_CQE32) != 0 ? 1U : 0U;
+    is_sqe_mixed_ = (setup_flags & IORING_SETUP_SQE_MIXED) != 0;
+    is_cqe_mixed_ = (setup_flags & IORING_SETUP_CQE_MIXED) != 0;
+    is_sq_rewound_ = (setup_flags & IORING_SETUP_SQ_REWIND) != 0;
+    is_fd_registered_ = (setup_flags & IORING_SETUP_REGISTERED_FD_ONLY) != 0;
+    enter_flags_ = is_fd_registered_ ? IORING_ENTER_REGISTERED_RING : 0U;
+
+    const bool has_own_memory = (setup_flags & IORING_SETUP_NO_MMAP) != 0;
+    if (has_own_memory && !map_own_memory(entries, options, params)) {
+        return false;
+    }
 
     ring_fd_ = sys_io_uring_setup(entries, &params);
     if (ring_fd_ < 0) {
+        if (has_own_memory) unmap_own_memory();
         return false;
     }
+    enter_fd_ = ring_fd_;
     features_ = params.features;
     cq_entries_ = params.cq_entries;
     pending_ = 0;
 
+    const bool has_sq_array = (setup_flags & IORING_SETUP_NO_SQARRAY) == 0;
+    sq_ring_size_ =
+        params.sq_off.array +
+        (has_sq_array ? params.sq_entries * sizeof(unsigned) : std::size_t{0});
+    cq_ring_size_ =
+        params.cq_off.cqes + (std::size_t{params.cq_entries} << cqe_shift_) *
+                                 sizeof(struct io_uring_cqe);
+    // The kernel keeps both rings in one region and either offset maps it.
+    const bool is_single_mapping =
+        (params.features & IORING_FEAT_SINGLE_MMAP) != 0;
+    if (is_single_mapping) {
+        sq_ring_size_ = std::max(sq_ring_size_, cq_ring_size_);
+        cq_ring_size_ = sq_ring_size_;
+    }
+
     // Map SQ ring
-    sq_ring_size_ = params.sq_off.array + params.sq_entries * sizeof(unsigned);
-    sq_ring_ptr_ =
-        ::mmap(nullptr, sq_ring_size_, PROT_READ | PROT_WRITE,
-               MAP_SHARED | MAP_POPULATE, ring_fd_, IORING_OFF_SQ_RING);
-    if (sq_ring_ptr_ == MAP_FAILED) {
-        ::close(ring_fd_);
-        ring_fd_ = -1;
-        return false;
+    if (has_own_memory) {
+        sq_ring_size_ = own_ring_size_;
+        cq_ring_size_ = own_ring_size_;
+    } else {
+        sq_ring_ptr_ =
+            ::mmap(nullptr, sq_ring_size_, PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_POPULATE, ring_fd_, IORING_OFF_SQ_RING);
+        if (sq_ring_ptr_ == MAP_FAILED) {
+            ::close(ring_fd_);
+            ring_fd_ = -1;
+            return false;
+        }
     }
 
     auto* sq_base = static_cast<char*>(sq_ring_ptr_);
@@ -60,14 +108,22 @@ bool Ring::init(unsigned entries, unsigned setup_flags) {
         reinterpret_cast<unsigned*>(sq_base + params.sq_off.ring_mask);
     sq_ring_entries_ =
         reinterpret_cast<unsigned*>(sq_base + params.sq_off.ring_entries);
-    sq_array_ = reinterpret_cast<unsigned*>(sq_base + params.sq_off.array);
+    if (has_sq_array) {
+        auto* const sq_array =
+            reinterpret_cast<unsigned*>(sq_base + params.sq_off.array);
+        for (unsigned i = 0; i < params.sq_entries; ++i) sq_array[i] = i;
+    }
+    sqe_tail_ = 0;
     sq_flags_ = reinterpret_cast<unsigned*>(sq_base + params.sq_off.flags);
 
     // Map SQEs
-    sqes_size_ = params.sq_entries * sizeof(struct io_uring_sqe);
-    sqes_ = static_cast<struct io_uring_sqe*>(
-        ::mmap(nullptr, sqes_size_, PROT_READ | PROT_WRITE,
-               MAP_SHARED | MAP_POPULATE, ring_fd_, IORING_OFF_SQES));
+    if (!has_own_memory) {
+        sqes_size_ = (std::size_t{params.sq_entries} << sqe_shift_) *
+                     sizeof(struct io_uring_sqe);
+        sqes_ = static_cast<struct io_uring_sqe*>(
+            ::mmap(nullptr, sqes_size_, PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_POPULATE, ring_fd_, IORING_OFF_SQES));
+    }
     if (sqes_ == MAP_FAILED) {
         ::munmap(sq_ring_ptr_, sq_ring_size_);
         ::close(ring_fd_);
@@ -78,11 +134,11 @@ bool Ring::init(unsigned entries, unsigned setup_flags) {
     }
 
     // Map CQ ring
-    cq_ring_size_ =
-        params.cq_off.cqes + params.cq_entries * sizeof(struct io_uring_cqe);
     cq_ring_ptr_ =
-        ::mmap(nullptr, cq_ring_size_, PROT_READ | PROT_WRITE,
-               MAP_SHARED | MAP_POPULATE, ring_fd_, IORING_OFF_CQ_RING);
+        is_single_mapping || has_own_memory
+            ? sq_ring_ptr_
+            : ::mmap(nullptr, cq_ring_size_, PROT_READ | PROT_WRITE,
+                     MAP_SHARED | MAP_POPULATE, ring_fd_, IORING_OFF_CQ_RING);
     if (cq_ring_ptr_ == MAP_FAILED) {
         ::munmap(sqes_, sqes_size_);
         ::munmap(sq_ring_ptr_, sq_ring_size_);
@@ -94,6 +150,9 @@ bool Ring::init(unsigned entries, unsigned setup_flags) {
         return false;
     }
 
+    cq_seen_ = 0;
+    cq_committed_ = 0;
+    cq_visible_tail_ = 0;
     auto* cq_base = static_cast<char*>(cq_ring_ptr_);
     cq_head_ = reinterpret_cast<unsigned*>(cq_base + params.cq_off.head);
     cq_tail_ = reinterpret_cast<unsigned*>(cq_base + params.cq_off.tail);
@@ -105,11 +164,80 @@ bool Ring::init(unsigned entries, unsigned setup_flags) {
     return true;
 }
 
-void Ring::destroy() {
-    if (cq_ring_ptr_ && cq_ring_ptr_ != MAP_FAILED) {
-        ::munmap(cq_ring_ptr_, cq_ring_size_);
-        cq_ring_ptr_ = nullptr;
+bool Ring::map_own_memory(unsigned entries, const RingOptions& options,
+                          struct io_uring_params& params) {
+    // Layout after liburing's io_uring_alloc_huge. The kernel wants each region
+    // inside one folio, so a region past a page needs a huge page.
+    constexpr std::size_t RING_HEADER_BYTES = 64;
+    constexpr std::size_t HUGE_PAGE_BYTES = std::size_t{2} << 20;
+    const std::size_t page = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
+    std::size_t sq_entries = 1;
+    while (sq_entries < entries) sq_entries <<= 1;
+    const std::size_t cq_entries = (options.flags & IORING_SETUP_CQSIZE) != 0
+                                       ? options.cq_entries
+                                       : 2 * sq_entries;
+    const std::size_t sqes_bytes =
+        (sq_entries << sqe_shift_) * sizeof(struct io_uring_sqe);
+    std::size_t ring_bytes =
+        RING_HEADER_BYTES +
+        (cq_entries << cqe_shift_) * sizeof(struct io_uring_cqe);
+    if ((options.flags & IORING_SETUP_NO_SQARRAY) == 0) {
+        ring_bytes += sq_entries * sizeof(unsigned);
     }
+    const auto map_region = [&](std::size_t bytes, std::size_t& mapped) {
+        const bool is_huge = bytes > page;
+        mapped = is_huge ? HUGE_PAGE_BYTES : page;
+        if (bytes > mapped) return MAP_FAILED;
+        return ::mmap(nullptr, mapped, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS | (is_huge ? MAP_HUGETLB : 0),
+                      -1, 0);
+    };
+    void* const sqes = map_region(sqes_bytes, sqes_size_);
+    if (sqes == MAP_FAILED) return false;
+    void* const rings = map_region(ring_bytes, own_ring_size_);
+    if (rings == MAP_FAILED) {
+        ::munmap(sqes, sqes_size_);
+        return false;
+    }
+    sqes_ = static_cast<struct io_uring_sqe*>(sqes);
+    sq_ring_ptr_ = rings;
+    // user_addr sits in the last word of each block. An older header names it
+    // resv2 or resv, so it is written by offset.
+    constexpr std::size_t USER_ADDR_OFFSET = 32;
+    const std::uint64_t sqes_addr = reinterpret_cast<std::uint64_t>(sqes);
+    const std::uint64_t rings_addr = reinterpret_cast<std::uint64_t>(rings);
+    std::memcpy(reinterpret_cast<char*>(&params.sq_off) + USER_ADDR_OFFSET,
+                &sqes_addr, sizeof(sqes_addr));
+    std::memcpy(reinterpret_cast<char*>(&params.cq_off) + USER_ADDR_OFFSET,
+                &rings_addr, sizeof(rings_addr));
+    return true;
+}
+
+void Ring::unmap_own_memory() {
+    if (sqes_ != nullptr) ::munmap(sqes_, sqes_size_);
+    if (sq_ring_ptr_ != nullptr) ::munmap(sq_ring_ptr_, own_ring_size_);
+    sqes_ = nullptr;
+    sq_ring_ptr_ = nullptr;
+}
+
+void Ring::enter_through_index(unsigned index) {
+    enter_fd_ = static_cast<int>(index);
+    enter_flags_ |= IORING_ENTER_REGISTERED_RING;
+}
+
+int Ring::register_call(unsigned opcode, void* arg, unsigned count) {
+    return sys_io_uring_register(
+        ring_fd_,
+        is_fd_registered_ ? opcode | REGISTER_USE_REGISTERED_RING : opcode, arg,
+        count);
+}
+
+void Ring::destroy() {
+    if (cq_ring_ptr_ && cq_ring_ptr_ != MAP_FAILED &&
+        cq_ring_ptr_ != sq_ring_ptr_) {
+        ::munmap(cq_ring_ptr_, cq_ring_size_);
+    }
+    cq_ring_ptr_ = nullptr;
     if (sqes_ && sqes_ != MAP_FAILED) {
         ::munmap(sqes_, sqes_size_);
         sqes_ = nullptr;
@@ -119,7 +247,19 @@ void Ring::destroy() {
         sq_ring_ptr_ = nullptr;
     }
     if (ring_fd_ >= 0) {
-        ::close(ring_fd_);
+        if (is_fd_registered_) {
+            RsrcUpdate update{};
+            update.offset = static_cast<unsigned>(ring_fd_);
+            (void)register_call(UNREGISTER_RING_FDS, &update, 1);
+        } else {
+            // A registered slot holds the ring open until the thread exits.
+            if ((enter_flags_ & IORING_ENTER_REGISTERED_RING) != 0) {
+                RsrcUpdate update{};
+                update.offset = static_cast<unsigned>(enter_fd_);
+                (void)register_call(UNREGISTER_RING_FDS, &update, 1);
+            }
+            ::close(ring_fd_);
+        }
         ring_fd_ = -1;
     }
 }
@@ -127,71 +267,166 @@ void Ring::destroy() {
 struct io_uring_sqe* Ring::get_sqe() {
     const unsigned head =
         std::atomic_ref<unsigned>(*sq_head_).load(std::memory_order_acquire);
-    const unsigned tail = *sq_tail_;
-    if (tail - head >= *sq_ring_entries_) return nullptr;
-    const unsigned index = tail & *sq_ring_mask_;
-    sq_array_[index] = index;
-    std::atomic_ref<unsigned>(*sq_tail_).store(tail + 1,
-                                               std::memory_order_release);
+    if (sqe_tail_ - head >= *sq_ring_entries_) return nullptr;
+    const unsigned index = sqe_tail_ & *sq_ring_mask_;
+    ++sqe_tail_;
     ++pending_;
-    return &sqes_[index];
+    return &sqes_[index << sqe_shift_];
+}
+
+struct io_uring_sqe* Ring::get_sqe128() {
+    if (!is_sqe_mixed_) return sqe_shift_ != 0 ? get_sqe() : nullptr;
+    const unsigned head =
+        std::atomic_ref<unsigned>(*sq_head_).load(std::memory_order_acquire);
+    const unsigned entries = *sq_ring_entries_;
+    const unsigned index = sqe_tail_ & *sq_ring_mask_;
+    // Both slots must be neighbours, so the last slot gets a padding NOP.
+    const unsigned pad = index + 1 == entries ? 1U : 0U;
+    if (sqe_tail_ - head + pad + 2 > entries) return nullptr;
+    if (pad != 0) {
+        struct io_uring_sqe* const nop = get_sqe();
+        prep_nop(nop);
+        nop->flags |= IOSQE_CQE_SKIP_SUCCESS;
+    }
+    const unsigned first = sqe_tail_ & *sq_ring_mask_;
+    sqe_tail_ += 2;
+    pending_ += 2;
+    return &sqes_[first];
+}
+
+void Ring::publish_sqes() {
+    std::atomic_ref<unsigned>(*sq_tail_).store(sqe_tail_,
+                                               std::memory_order_release);
+}
+
+// After __io_uring_flush_sq and sq_ring_needs_enter in liburing, src/queue.c,
+// https://github.com/axboe/liburing (MIT), Copyright 2020 Jens Axboe.
+// Sequentially consistent: the kernel thread sets NEED_WAKEUP and then reads
+// the tail, so either it sees these SQEs or this reads the flag.
+int Ring::enter_polled(bool wait) {
+    std::atomic_ref<unsigned>(*sq_tail_).store(sqe_tail_,
+                                               std::memory_order_seq_cst);
+    unsigned flags = wait ? IORING_ENTER_GETEVENTS : 0U;
+    if ((std::atomic_ref<unsigned>(*sq_flags_).load(std::memory_order_seq_cst) &
+         IORING_SQ_NEED_WAKEUP) != 0) {
+        flags |= IORING_ENTER_SQ_WAKEUP;
+    }
+    const unsigned head =
+        std::atomic_ref<unsigned>(*sq_head_).load(std::memory_order_acquire);
+    if (sqe_tail_ - head >= *sq_ring_entries_) flags |= IORING_ENTER_SQ_WAIT;
+    const unsigned taken = pending_;
+    pending_ = 0;
+    if (flags == 0) return static_cast<int>(taken);
+    if (sys_io_uring_enter(enter_fd_, taken, wait ? 1 : 0,
+                           flags | enter_flags_) < 0) {
+        return -errno;
+    }
+    if ((flags & IORING_ENTER_SQ_WAIT) == 0) return static_cast<int>(taken);
+    // A kernel may end the wait before it publishes the head it moved.
+    while (sqe_tail_ - std::atomic_ref<unsigned>(*sq_head_).load(
+                           std::memory_order_acquire) >=
+           *sq_ring_entries_) {
+        ::sched_yield();
+        if (sys_io_uring_enter(enter_fd_, 0, 0,
+                               IORING_ENTER_SQ_WAIT | enter_flags_) < 0) {
+            return -errno;
+        }
+    }
+    return static_cast<int>(taken);
 }
 
 int Ring::enter(bool wait) {
+    if (is_sq_polled_) return enter_polled(wait);
     if (pending_ == 0 && !wait) return 0;
-    const int taken =
-        sys_io_uring_enter(ring_fd_, pending_, wait ? 1 : 0,
-                           wait || deferred_ ? IORING_ENTER_GETEVENTS : 0);
+    if (!is_sq_rewound_) publish_sqes();
+    const int taken = sys_io_uring_enter(
+        enter_fd_, pending_, wait ? 1 : 0,
+        (wait || deferred_ || is_iopoll_ ? IORING_ENTER_GETEVENTS : 0U) |
+            enter_flags_);
     if (taken < 0) return -errno;
     pending_ -= static_cast<unsigned>(taken);
+    // This mode reads from slot 0 at each enter and keeps the rings' head and
+    // tail at 0.
+    if (is_sq_rewound_) sqe_tail_ = pending_;
     return taken;
 }
 
 int Ring::enter_wait(std::int64_t timeout_ms) {
+    if (!is_sq_rewound_) publish_sqes();
     KernelTimespec timeout{timeout_ms / 1000, (timeout_ms % 1000) * 1000000};
     GeteventsArg arg{};
     arg.sigmask_sz = _NSIG / 8;
     arg.ts = reinterpret_cast<std::uint64_t>(&timeout);
-    const int taken = static_cast<int>(syscall(
-        __NR_io_uring_enter, ring_fd_, pending_, 1,
-        IORING_ENTER_GETEVENTS | IORING_ENTER_EXT_ARG, &arg, sizeof(arg)));
+    const int taken = static_cast<int>(
+        syscall(__NR_io_uring_enter, enter_fd_, pending_, 1,
+                IORING_ENTER_GETEVENTS | IORING_ENTER_EXT_ARG | enter_flags_,
+                &arg, sizeof(arg)));
     if (taken < 0) return -errno;
     pending_ -= static_cast<unsigned>(taken);
+    if (is_sq_rewound_) sqe_tail_ = pending_;
     return taken;
 }
 
 bool Ring::enable() {
-    return sys_io_uring_register(ring_fd_, IORING_REGISTER_ENABLE_RINGS,
-                                 nullptr, 0) == 0;
+    return register_call(IORING_REGISTER_ENABLE_RINGS, nullptr, 0) == 0;
 }
 
-void Ring::run_deferred() {
-    if (!deferred_ ||
+void Ring::flush_completions() {
+    const unsigned wanted =
+        IORING_SQ_CQ_OVERFLOW | (deferred_ ? IORING_SQ_TASKRUN : 0U);
+    if (!is_iopoll_ &&
         (std::atomic_ref<unsigned>(*sq_flags_).load(std::memory_order_acquire) &
-         IORING_SQ_TASKRUN) == 0) {
+         wanted) == 0) {
         return;
     }
-    (void)sys_io_uring_enter(ring_fd_, 0, 0, IORING_ENTER_GETEVENTS);
+    (void)sys_io_uring_enter(enter_fd_, 0, 0,
+                             IORING_ENTER_GETEVENTS | enter_flags_);
+}
+
+bool Ring::probe(Probe& out) {
+    std::memset(&out, 0, sizeof(out));
+    return register_call(REGISTER_PROBE, &out, PROBE_OPS) == 0;
 }
 
 void Ring::limit_kernel_workers(unsigned bounded) {
     unsigned limits[2] = {bounded, 0};
     // Older kernels refuse it and keep their default.
-    (void)sys_io_uring_register(ring_fd_, REGISTER_IOWQ_MAX_WORKERS, limits, 2);
+    (void)register_call(REGISTER_IOWQ_MAX_WORKERS, limits, 2);
+}
+
+bool Ring::has_cqe() const {
+    return std::atomic_ref<unsigned>(*cq_head_).load(
+               std::memory_order_acquire) !=
+           std::atomic_ref<unsigned>(*cq_tail_).load(std::memory_order_acquire);
 }
 
 struct io_uring_cqe* Ring::peek_cqe() {
-    const unsigned head =
-        std::atomic_ref<unsigned>(*cq_head_).load(std::memory_order_acquire);
-    const unsigned tail =
-        std::atomic_ref<unsigned>(*cq_tail_).load(std::memory_order_acquire);
-    return head == tail ? nullptr : &cqes_[head & *cq_ring_mask_];
+    if (cq_seen_ == cq_visible_tail_) {
+        if (cq_committed_ != cq_seen_) {
+            std::atomic_ref<unsigned>(*cq_head_).store(
+                cq_seen_, std::memory_order_release);
+            cq_committed_ = cq_seen_;
+        }
+        cq_visible_tail_ = std::atomic_ref<unsigned>(*cq_tail_).load(
+            std::memory_order_acquire);
+        if (cq_seen_ == cq_visible_tail_) return nullptr;
+    }
+    struct io_uring_cqe* const cqe =
+        &cqes_[(cq_seen_ & *cq_ring_mask_) << cqe_shift_];
+    // A mixed CQ pads its last slot when a big entry would wrap.
+    if (is_cqe_mixed_ && (cqe->flags & IORING_CQE_F_SKIP) != 0) {
+        ++cq_seen_;
+        return peek_cqe();
+    }
+    return cqe;
 }
 
 void Ring::cqe_seen() {
-    std::atomic_ref<unsigned> head(*cq_head_);
-    head.store(head.load(std::memory_order_relaxed) + 1,
-               std::memory_order_release);
+    if (is_cqe_mixed_ &&
+        (cqes_[cq_seen_ & *cq_ring_mask_].flags & IORING_CQE_F_32) != 0) {
+        ++cq_seen_;
+    }
+    ++cq_seen_;
 }
 
 }  // namespace uring
@@ -212,6 +447,10 @@ constexpr unsigned WORKER_RING_ENTRIES = 64;
 // per CPU would multiply by the workers.
 constexpr unsigned WORKER_RING_KERNEL_WORKERS = 4;
 
+// The CQ room a worker's ops leave for its wake and timeout requests, so that a
+// worker in a long task never needs an enter to show a completion to a thief.
+constexpr unsigned WORKER_CQ_RESERVE = 2;
+
 // Values of user_data that name no operation, which an IoOp address never is.
 void* const WAKE_TAG = reinterpret_cast<void*>(std::uintptr_t{1});
 void* const CANCEL_TAG = reinterpret_cast<void*>(std::uintptr_t{2});
@@ -224,31 +463,113 @@ unsigned rw_length(const IoOp& op) noexcept {
     return static_cast<unsigned>(std::min(op.length, MAX_RW_BYTES));
 }
 
-bool has_opcode(IoOpKind kind) noexcept {
+// The kinds that need a probe, because an old kernel lacks their opcode.
+constexpr IoOpKind PROBED_KINDS[] = {
+    IoOpKind::Ftruncate, IoOpKind::Statx,         IoOpKind::Unlink,
+    IoOpKind::Rename,    IoOpKind::Mkdir,         IoOpKind::Fallocate,
+    IoOpKind::Fadvise,   IoOpKind::SyncFileRange, IoOpKind::Splice,
+    IoOpKind::Openat2,   IoOpKind::Linkat,        IoOpKind::Symlinkat,
+    IoOpKind::Getxattr,  IoOpKind::Setxattr,      IoOpKind::Fgetxattr,
+    IoOpKind::Fsetxattr, IoOpKind::Socket,        IoOpKind::Connect,
+    IoOpKind::Bind,      IoOpKind::Listen,        IoOpKind::Shutdown,
+    IoOpKind::Sendmsg,   IoOpKind::Recvmsg,       IoOpKind::Tee,
+    IoOpKind::Pipe,      IoOpKind::Madvise,       IoOpKind::Waitid,
+    IoOpKind::FutexWait, IoOpKind::FutexWake,     IoOpKind::FutexWaitv,
+    IoOpKind::EpollCtl,  IoOpKind::EpollWait,     IoOpKind::PollAdd,
+};
+
+unsigned probed_opcode(IoOpKind kind) noexcept {
     switch (kind) {
-        case IoOpKind::Read:
-        case IoOpKind::Write:
-        case IoOpKind::Pread:
-        case IoOpKind::Pwrite:
-        case IoOpKind::Open:
-        case IoOpKind::Close:
-        case IoOpKind::Fsync:
-        case IoOpKind::Accept:
-        case IoOpKind::Recv:
-        case IoOpKind::Send:
-        case IoOpKind::Readv:
-        case IoOpKind::Writev:
-        case IoOpKind::Preadv:
-        case IoOpKind::Pwritev:
-            return true;
         case IoOpKind::Ftruncate:
-        case IoOpKind::Fstat:
-        case IoOpKind::Lseek:
-        case IoOpKind::Sendfile:
-        case IoOpKind::Call:
-            return false;
+            return uring::OP_FTRUNCATE;
+        case IoOpKind::Statx:
+            return uring::OP_STATX;
+        case IoOpKind::Unlink:
+            return uring::OP_UNLINKAT;
+        case IoOpKind::Rename:
+            return uring::OP_RENAMEAT;
+        case IoOpKind::Mkdir:
+            return uring::OP_MKDIRAT;
+        case IoOpKind::Fallocate:
+            return uring::OP_FALLOCATE;
+        case IoOpKind::Fadvise:
+            return uring::OP_FADVISE;
+        case IoOpKind::SyncFileRange:
+            return uring::OP_SYNC_FILE_RANGE;
+        case IoOpKind::Splice:
+            return uring::OP_SPLICE;
+        case IoOpKind::Openat2:
+            return uring::OP_OPENAT2;
+        case IoOpKind::Linkat:
+            return uring::OP_LINKAT;
+        case IoOpKind::Symlinkat:
+            return uring::OP_SYMLINKAT;
+        case IoOpKind::Getxattr:
+            return uring::OP_GETXATTR;
+        case IoOpKind::Setxattr:
+            return uring::OP_SETXATTR;
+        case IoOpKind::Fgetxattr:
+            return uring::OP_FGETXATTR;
+        case IoOpKind::Fsetxattr:
+            return uring::OP_FSETXATTR;
+        case IoOpKind::Socket:
+            return uring::OP_SOCKET;
+        case IoOpKind::Connect:
+            return uring::OP_CONNECT;
+        case IoOpKind::Bind:
+            return uring::OP_BIND;
+        case IoOpKind::Listen:
+            return uring::OP_LISTEN;
+        case IoOpKind::Shutdown:
+            return uring::OP_SHUTDOWN;
+        case IoOpKind::Sendmsg:
+            return uring::OP_SENDMSG;
+        case IoOpKind::Recvmsg:
+            return uring::OP_RECVMSG;
+        case IoOpKind::Tee:
+            return uring::OP_TEE;
+        case IoOpKind::Pipe:
+            return uring::OP_PIPE;
+        case IoOpKind::Madvise:
+            return uring::OP_MADVISE;
+        case IoOpKind::Waitid:
+            return uring::OP_WAITID;
+        case IoOpKind::FutexWait:
+            return uring::OP_FUTEX_WAIT;
+        case IoOpKind::FutexWake:
+            return uring::OP_FUTEX_WAKE;
+        case IoOpKind::FutexWaitv:
+            return uring::OP_FUTEX_WAITV;
+        case IoOpKind::EpollCtl:
+            return uring::OP_EPOLL_CTL;
+        case IoOpKind::EpollWait:
+            return uring::OP_EPOLL_WAIT;
+        case IoOpKind::PollAdd:
+            return uring::OP_POLL_ADD;
+        default:
+            return uring::PROBE_OPS;
     }
-    return false;
+}
+
+constexpr std::uint64_t kind_bit(IoOpKind kind) noexcept {
+    return std::uint64_t{1} << static_cast<unsigned>(kind);
+}
+
+// The SQE holds a 32 bit length.
+bool can_fit_request(const IoOp& op) noexcept {
+    switch (op.kind) {
+        case IoOpKind::Fadvise:
+        case IoOpKind::SyncFileRange:
+        case IoOpKind::Madvise:
+            return op.length <= std::numeric_limits<std::uint32_t>::max();
+        case IoOpKind::Getxattr:
+        case IoOpKind::Setxattr:
+        case IoOpKind::Fgetxattr:
+        case IoOpKind::Fsetxattr:
+            return op.xattr->size <= std::numeric_limits<std::uint32_t>::max();
+        default:
+            return true;
+    }
 }
 
 bool can_wait_for_peer(IoOpKind kind) noexcept {
@@ -258,6 +579,16 @@ bool can_wait_for_peer(IoOpKind kind) noexcept {
         case IoOpKind::Recv:
         case IoOpKind::Accept:
         case IoOpKind::Send:
+        case IoOpKind::Splice:
+        case IoOpKind::Connect:
+        case IoOpKind::Sendmsg:
+        case IoOpKind::Recvmsg:
+        case IoOpKind::PollAdd:
+        case IoOpKind::Waitid:
+        case IoOpKind::FutexWait:
+        case IoOpKind::FutexWaitv:
+        case IoOpKind::EpollWait:
+        case IoOpKind::Tee:
             return true;
         default:
             return false;
@@ -274,6 +605,28 @@ bool runs_on_worker_ring(IoOpKind kind) noexcept {
         case IoOpKind::Pwritev:
         case IoOpKind::Close:
         case IoOpKind::Fsync:
+        case IoOpKind::Ftruncate:
+        case IoOpKind::Statx:
+        case IoOpKind::Unlink:
+        case IoOpKind::Rename:
+        case IoOpKind::Mkdir:
+        case IoOpKind::Fallocate:
+        case IoOpKind::Fadvise:
+        case IoOpKind::SyncFileRange:
+        case IoOpKind::Linkat:
+        case IoOpKind::Symlinkat:
+        case IoOpKind::Getxattr:
+        case IoOpKind::Setxattr:
+        case IoOpKind::Fgetxattr:
+        case IoOpKind::Fsetxattr:
+        case IoOpKind::Socket:
+        case IoOpKind::Bind:
+        case IoOpKind::Listen:
+        case IoOpKind::Shutdown:
+        case IoOpKind::Pipe:
+        case IoOpKind::Madvise:
+        case IoOpKind::EpollCtl:
+        case IoOpKind::FutexWake:
             return true;
         default:
             return false;
@@ -335,6 +688,140 @@ void prepare(struct io_uring_sqe* sqe, IoOp& op) noexcept {
                                static_cast<unsigned>(op.iov_count), op.offset);
             break;
         case IoOpKind::Ftruncate:
+            uring::prep_ftruncate(sqe, op.handle, op.offset);
+            break;
+        case IoOpKind::Statx:
+            uring::prep_statx(sqe, op.handle, op.path, op.flags, op.statx_mask,
+                              op.statx_out);
+            break;
+        case IoOpKind::Unlink:
+            uring::prep_unlinkat(sqe, AT_FDCWD, op.path, op.flags);
+            break;
+        case IoOpKind::Rename:
+            uring::prep_renameat(sqe, AT_FDCWD, op.path, AT_FDCWD, op.path2, 0);
+            break;
+        case IoOpKind::Mkdir:
+            uring::prep_mkdirat(sqe, AT_FDCWD, op.path, op.mode);
+            break;
+        case IoOpKind::Fallocate:
+            uring::prep_fallocate(sqe, op.handle, op.flags,
+                                  static_cast<std::uint64_t>(op.offset),
+                                  static_cast<std::uint64_t>(op.length));
+            break;
+        case IoOpKind::Fadvise:
+            uring::prep_fadvise(
+                sqe, op.handle, static_cast<std::uint64_t>(op.offset),
+                static_cast<std::uint32_t>(op.length), op.flags);
+            break;
+        case IoOpKind::SyncFileRange:
+            uring::prep_sync_file_range(
+                sqe, op.handle, static_cast<unsigned>(op.length),
+                static_cast<std::uint64_t>(op.offset), op.flags);
+            break;
+        case IoOpKind::Splice:
+            uring::prep_splice(sqe, op.handle, op.offset, op.out_handle,
+                               op.out_offset, rw_length(op),
+                               static_cast<unsigned>(op.flags));
+            break;
+        case IoOpKind::Openat2:
+            uring::prep_openat2(sqe, op.handle, op.path, op.how,
+                                sizeof(OpenHow));
+            break;
+        case IoOpKind::Linkat:
+            uring::prep_linkat(sqe, op.handle, op.path, op.out_handle, op.path2,
+                               op.flags);
+            break;
+        case IoOpKind::Symlinkat:
+            uring::prep_symlinkat(sqe, op.path, op.handle, op.path2);
+            break;
+        case IoOpKind::Getxattr:
+            uring::prep_getxattr(sqe, op.xattr->name,
+                                 static_cast<char*>(op.xattr->value), op.path,
+                                 static_cast<unsigned>(op.xattr->size));
+            break;
+        case IoOpKind::Setxattr:
+            uring::prep_setxattr(sqe, op.xattr->name,
+                                 static_cast<const char*>(op.xattr->value),
+                                 op.path, op.xattr->flags,
+                                 static_cast<unsigned>(op.xattr->size));
+            break;
+        case IoOpKind::Fgetxattr:
+            uring::prep_fgetxattr(sqe, op.handle, op.xattr->name,
+                                  static_cast<char*>(op.xattr->value),
+                                  static_cast<unsigned>(op.xattr->size));
+            break;
+        case IoOpKind::Fsetxattr:
+            uring::prep_fsetxattr(sqe, op.handle, op.xattr->name,
+                                  static_cast<const char*>(op.xattr->value),
+                                  op.xattr->flags,
+                                  static_cast<unsigned>(op.xattr->size));
+            break;
+        case IoOpKind::Socket:
+            uring::prep_socket(sqe, op.handle, static_cast<int>(op.offset),
+                               op.flags, 0);
+            break;
+        case IoOpKind::Connect:
+            uring::prep_connect(sqe, op.handle, op.addr,
+                                static_cast<socklen_t>(op.length));
+            break;
+        case IoOpKind::Bind:
+            uring::prep_bind(sqe, op.handle, op.addr,
+                             static_cast<socklen_t>(op.length));
+            break;
+        case IoOpKind::Listen:
+            uring::prep_listen(sqe, op.handle, op.flags);
+            break;
+        case IoOpKind::Shutdown:
+            uring::prep_shutdown(sqe, op.handle, op.flags);
+            break;
+        case IoOpKind::Sendmsg:
+            uring::prep_sendmsg(sqe, op.handle, op.msg,
+                                static_cast<unsigned>(op.flags));
+            break;
+        case IoOpKind::Recvmsg:
+            uring::prep_recvmsg(sqe, op.handle, op.msg,
+                                static_cast<unsigned>(op.flags));
+            break;
+        case IoOpKind::Tee:
+            uring::prep_tee(sqe, op.handle, op.out_handle, rw_length(op),
+                            static_cast<unsigned>(op.flags));
+            break;
+        case IoOpKind::Pipe:
+            uring::prep_pipe(sqe, op.pipe_fds, op.flags);
+            break;
+        case IoOpKind::Madvise:
+            uring::prep_madvise(sqe, op.buffer,
+                                static_cast<unsigned>(op.length), op.flags);
+            break;
+        case IoOpKind::Waitid:
+            uring::prep_waitid(sqe, op.idtype, op.handle, op.info, op.flags, 0);
+            break;
+        case IoOpKind::FutexWait:
+            uring::prep_futex_wait(
+                sqe, op.futex, static_cast<std::uint32_t>(op.offset),
+                op.futex_mask, static_cast<std::uint32_t>(op.flags), 0);
+            break;
+        case IoOpKind::FutexWake:
+            uring::prep_futex_wake(
+                sqe, op.futex, static_cast<std::uint32_t>(op.offset),
+                op.futex_mask, static_cast<std::uint32_t>(op.flags), 0);
+            break;
+        case IoOpKind::FutexWaitv:
+            uring::prep_futex_waitv(sqe, op.futex_waitv,
+                                    static_cast<unsigned>(op.length), 0);
+            break;
+        case IoOpKind::EpollCtl:
+            uring::prep_epoll_ctl(sqe, op.handle, static_cast<int>(op.offset),
+                                  op.flags, op.epoll_events);
+            break;
+        case IoOpKind::EpollWait:
+            uring::prep_epoll_wait(sqe, op.handle, op.epoll_events, op.flags,
+                                   0);
+            break;
+        case IoOpKind::PollAdd:
+            uring::prep_poll_add(sqe, op.handle,
+                                 static_cast<unsigned>(op.flags));
+            break;
         case IoOpKind::Fstat:
         case IoOpKind::Lseek:
         case IoOpKind::Sendfile:
@@ -401,36 +888,138 @@ thread_local AttachedRing t_attached;
 
 IoUringBackend::IoUringBackend(std::size_t pool_size,
                                IoPoolOptions pool_options,
-                               unsigned masked_features)
+                               unsigned masked_features,
+                               std::uint64_t masked_kinds,
+                               unsigned sq_poll_idle_ms)
     : ThreadPoolFileOps(pool_size, 0, pool_options),
-      masked_features_(masked_features) {}
+      masked_features_(masked_features),
+      masked_kinds_(masked_kinds),
+      sq_poll_idle_ms_(sq_poll_idle_ms) {}
 
 IoUringBackend::~IoUringBackend() = default;
 
 bool IoUringBackend::probe() {
     uring::Ring test_ring;
+    // The size start() asks for, so that a pass here holds there on a kernel
+    // that counts a ring against the locked memory limit.
+    if (!test_ring.init(RING_ENTRIES)) return false;
+    read_opcodes(test_ring);
     // The ring runs sequential reads and writes at the file position.
-    return test_ring.init(32) && (test_ring.features() & ~masked_features_ &
-                                  IORING_FEAT_RW_CUR_POS) != 0;
+    return (test_ring.features() & ~masked_features_ &
+            IORING_FEAT_RW_CUR_POS) != 0;
+}
+
+void IoUringBackend::read_opcodes(uring::Ring& ring) noexcept {
+    probed_kinds_ = 0;
+    uring::Probe probe;
+    if (!ring.probe(probe)) return;
+    for (const IoOpKind kind : PROBED_KINDS) {
+        if (probe.has(probed_opcode(kind))) probed_kinds_ |= kind_bit(kind);
+    }
+}
+
+bool IoUringBackend::has_opcode(IoOpKind kind) const noexcept {
+    if ((masked_kinds_ & kind_bit(kind)) != 0) return false;
+    switch (kind) {
+        case IoOpKind::Read:
+        case IoOpKind::Write:
+        case IoOpKind::Pread:
+        case IoOpKind::Pwrite:
+        case IoOpKind::Open:
+        case IoOpKind::Close:
+        case IoOpKind::Fsync:
+        case IoOpKind::Accept:
+        case IoOpKind::Recv:
+        case IoOpKind::Send:
+        case IoOpKind::Readv:
+        case IoOpKind::Writev:
+        case IoOpKind::Preadv:
+        case IoOpKind::Pwritev:
+            return true;
+        case IoOpKind::Ftruncate:
+        case IoOpKind::Statx:
+        case IoOpKind::Unlink:
+        case IoOpKind::Rename:
+        case IoOpKind::Mkdir:
+        case IoOpKind::Fallocate:
+        case IoOpKind::Fadvise:
+        case IoOpKind::SyncFileRange:
+        case IoOpKind::Splice:
+        case IoOpKind::Openat2:
+        case IoOpKind::Linkat:
+        case IoOpKind::Symlinkat:
+        case IoOpKind::Getxattr:
+        case IoOpKind::Setxattr:
+        case IoOpKind::Fgetxattr:
+        case IoOpKind::Fsetxattr:
+        case IoOpKind::Socket:
+        case IoOpKind::Connect:
+        case IoOpKind::Bind:
+        case IoOpKind::Listen:
+        case IoOpKind::Shutdown:
+        case IoOpKind::Sendmsg:
+        case IoOpKind::Recvmsg:
+        case IoOpKind::Tee:
+        case IoOpKind::Pipe:
+        case IoOpKind::Madvise:
+        case IoOpKind::Waitid:
+        case IoOpKind::FutexWait:
+        case IoOpKind::FutexWake:
+        case IoOpKind::FutexWaitv:
+        case IoOpKind::EpollCtl:
+        case IoOpKind::EpollWait:
+        case IoOpKind::PollAdd:
+            return (probed_kinds_ & kind_bit(kind)) != 0;
+        case IoOpKind::Fstat:
+        case IoOpKind::Lseek:
+        case IoOpKind::Sendfile:
+        case IoOpKind::Call:
+            return false;
+    }
+    return false;
 }
 
 void IoUringBackend::start() {
     cancelling_.store(false, std::memory_order_release);
     cancel_requested_.store(false, std::memory_order_release);
     stopping_.store(false, std::memory_order_release);
+    // A polled ring needs no fixed files only since 5.11, and an older kernel
+    // also asks for privileges. So this asks and says when it runs without.
+    is_sq_polled_ =
+        sq_poll_idle_ms_ != 0 &&
+        ring_.init(RING_ENTRIES, IORING_SETUP_SQPOLL, sq_poll_idle_ms_) &&
+        (ring_.features() & ~masked_features_ & IORING_FEAT_SQPOLL_NONFIXED) !=
+            0;
+    if (sq_poll_idle_ms_ != 0 && !is_sq_polled_) {
+        ring_.destroy();
+        DFTRACER_UTILS_LOG_INFO("%s",
+                                "io_uring: this kernel refuses SQPOLL, "
+                                "running without it");
+    }
     // Only the ring thread enters this ring, so completions can wait for it.
     // The thread takes the ring when it enables it. A kernel before 6.1 refuses
     // these flags.
-    should_enable_ring_ = ring_.init(
-        RING_ENTRIES, IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
-                          IORING_SETUP_TASKRUN_FLAG | IORING_SETUP_R_DISABLED);
-    if (!should_enable_ring_ && !ring_.init(RING_ENTRIES)) {
+    should_enable_ring_ =
+        !is_sq_polled_ &&
+        ring_.init(RING_ENTRIES,
+                   IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
+                       IORING_SETUP_TASKRUN_FLAG | IORING_SETUP_R_DISABLED);
+    if (!is_sq_polled_ && !should_enable_ring_ && !ring_.init(RING_ENTRIES)) {
         throw common::DFTUtilsException(
             common::ErrorCode::Internal,
             common::str_cat("io_uring setup failed: ", std::strerror(errno)));
     }
     timed_enter_ =
         (ring_.features() & ~masked_features_ & IORING_FEAT_EXT_ARG) != 0;
+    {
+        // Not ring_, which may start disabled and refuse a register call.
+        uring::Ring probe_ring;
+        if (probe_ring.init(2)) {
+            read_opcodes(probe_ring);
+        } else {
+            probed_kinds_ = 0;
+        }
+    }
     // Blocking, because the ring gets -EAGAIN from a non-blocking eventfd
     // instead of waiting for it.
     wake_fd_.reset(::eventfd(0, EFD_CLOEXEC));
@@ -506,7 +1095,9 @@ void IoUringBackend::attach_thread() {
 
 IoUringBackend::WorkerRing* IoUringBackend::calling_worker_ring(
     IoOpKind kind) noexcept {
-    if (t_attached.backend != this || !runs_on_worker_ring(kind)) {
+    // Each polled ring costs a kernel thread that spins, so there is only one.
+    if (t_attached.backend != this || is_sq_polled_ ||
+        !runs_on_worker_ring(kind)) {
         return nullptr;
     }
     auto* worker = static_cast<WorkerRing*>(t_attached.ring);
@@ -533,7 +1124,7 @@ IoUringBackend::WorkerRing* IoUringBackend::calling_worker_ring(
 void IoUringBackend::fill_worker(WorkerRing& worker) noexcept {
     while (worker.backlog_head != nullptr &&
            worker.in_ring.load(std::memory_order_relaxed) <
-               worker.ring.cq_entries()) {
+               worker.ring.cq_entries() - WORKER_CQ_RESERVE) {
         struct io_uring_sqe* sqe = worker.ring.get_sqe();
         if (sqe == nullptr) {
             if (worker.ring.enter(false) <= 0) return;
@@ -577,7 +1168,7 @@ std::size_t IoUringBackend::drain_worker(WorkerRing& worker) noexcept {
 }
 
 std::size_t IoUringBackend::reap_worker(WorkerRing& worker) noexcept {
-    if (worker.ring.peek_cqe() == nullptr) return 0;
+    if (!worker.ring.has_cqe()) return 0;
     // A completion that submits and flushes lands here on its own ring, and the
     // drain further up takes what that added.
     if (!worker.try_lock()) return 0;
@@ -597,6 +1188,7 @@ void IoUringBackend::flush_worker(WorkerRing& worker) noexcept {
                                      std::strerror(-entered));
         }
     }
+    worker.ring.flush_completions();
     reap_worker(worker);
 }
 
@@ -707,11 +1299,12 @@ void IoUringBackend::unpark(void* token) noexcept {
 void IoUringBackend::finish_park(void* token) {
     auto& worker = *static_cast<WorkerRing*>(token);
     worker.parked.store(false, std::memory_order_seq_cst);
+    worker.ring.flush_completions();
     reap_worker(worker);
 }
 
 void IoUringBackend::submit(IoOp& op) {
-    if (!has_opcode(op.kind)) {
+    if (!has_opcode(op.kind) || !can_fit_request(op)) {
         ThreadPoolFileOps::submit(op);
         return;
     }
@@ -920,7 +1513,7 @@ void IoUringBackend::ring_loop() noexcept {
         if (!enabled) return;
     }
     for (;;) {
-        ring_.run_deferred();
+        ring_.flush_completions();
         const bool reaped = reap() != 0;
         take_incoming();
         if (cancel_requested_.load(std::memory_order_seq_cst)) {
@@ -941,8 +1534,7 @@ void IoUringBackend::ring_loop() noexcept {
             !reaped && !backlog_can_move &&
             incoming_.load(std::memory_order_seq_cst) == nullptr &&
             !cancel_requested_.load(std::memory_order_seq_cst) &&
-            !stopping_.load(std::memory_order_seq_cst) &&
-            ring_.peek_cqe() == nullptr;
+            !stopping_.load(std::memory_order_seq_cst) && !ring_.has_cqe();
         if (!wait) parked_.store(false, std::memory_order_relaxed);
         const int entered = ring_.enter(wait);
         parked_.store(false, std::memory_order_relaxed);

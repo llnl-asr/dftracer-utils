@@ -283,6 +283,8 @@ set(TEST_CPP_SOURCES
     runtime/test_frame_heap.cpp
     runtime/test_io_backend_env.cpp
     runtime/test_io_op.cpp
+    runtime/test_io_uring_ring.cpp
+    runtime/test_io_uring_setup.cpp
     runtime/test_io_thread_pool.cpp
     runtime/test_watchdog.cpp
     runtime/test_executor_wakeups.cpp
@@ -610,6 +612,8 @@ endforeach()
 
 if(DFTRACER_UTILS_HAVE_IO_URING)
   target_compile_definitions(runtime_test_io_op PRIVATE DFTRACER_UTILS_HAVE_IO_URING)
+  target_compile_definitions(runtime_test_io_uring_ring PRIVATE DFTRACER_UTILS_HAVE_IO_URING)
+  target_compile_definitions(runtime_test_io_uring_setup PRIVATE DFTRACER_UTILS_HAVE_IO_URING)
 endif()
 
 # +++++++++++++++++++++++++++++++++++++++++

@@ -297,6 +297,28 @@ TEST_SUITE("IndexBuilder") {
         }
     }
 
+    TEST_CASE("The member scan accepts the OS byte zlib writes on macOS") {
+        const dstd::Vector<dstd::String> texts = {
+            dftu_lines(0, 40), dftu_lines(40, 25), dftu_lines(65, 35)};
+        auto [gz_file, c_offsets] = write_multi_member_gz(texts);
+        auto fd_file = dstd::File::open(
+            gz_file, dstd::OpenOptions{.access = dstd::Access::ReadWrite});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
+        const unsigned char macos = 19;
+        for (const std::uint64_t at : c_offsets)
+            REQUIRE(::pwrite(fd, &macos, 1, static_cast<off_t>(at + 9)) == 1);
+        const std::uint64_t file_size = dstd::fs::file_size(gz_file).value();
+        dstd::Vector<dftracer::utils::index::gzip::GzipMember> found;
+        bool ok = false;
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            ok = co_await dftracer::utils::index::gzip::
+                enumerate_gzip_member_candidates(fd, file_size, found);
+        });
+        REQUIRE(ok);
+        CHECK(found.size() == c_offsets.size());
+    }
+
     TEST_CASE("Pruner chunks are gzip members") {
         const dstd::Vector<dstd::String> texts = {
             dftu_lines(0, 40), dftu_lines(40, 25, "rare"), dftu_lines(65, 35)};

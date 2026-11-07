@@ -481,6 +481,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix the parallel inflate of a gzip trace written by zlib on macOS, which ran on one worker because the member scan rejected its OS byte.
 - Fix higher peak memory in `dftracer_index` and other trace tools: a thread now returns a freed block above 32 KiB to the thread that allocated it at once.
 - Stop the false "cannot be read" warning when a store reader opens a data file that another process has just created.
 - Fix a link failure for static `pkg-config` users of a Debug build, where the archive was named `libyaml-cppd.a`.

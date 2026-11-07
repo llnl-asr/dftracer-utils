@@ -37,7 +37,8 @@ inline bool gzip_header_looks_valid(const unsigned char* buf) noexcept {
     const unsigned char xfl = buf[8];
     if (xfl != 0 && xfl != 2 && xfl != 4) return false;
     const unsigned char os = buf[9];
-    if (os > 13 && os != 255) return false;
+    // zlib writes 19, past the RFC 1952 table, on macOS.
+    if (os > 13 && os != 19 && os != 255) return false;
     return true;
 }
 

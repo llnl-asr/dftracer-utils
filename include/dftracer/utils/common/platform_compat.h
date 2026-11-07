@@ -162,4 +162,10 @@ extern "C" void __tsan_release(void *);
 #define DFTRACER_UTILS_CPU_PAUSE() ((void)0)
 #endif
 
+/// As a default argument, the file and line of the caller. Unlike the consteval
+/// std::source_location::current, GCC 13 and later accept them in a
+/// coroutine's get_return_object.
+#define DFTRACER_UTILS_CALLER_FILE() __builtin_FILE()
+#define DFTRACER_UTILS_CALLER_LINE() __builtin_LINE()
+
 #endif  // DFTRACER_UTILS_COMMON_PLATFORM_COMPAT_H

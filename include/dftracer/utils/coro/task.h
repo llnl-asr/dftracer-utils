@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/detail/frame.h>
@@ -19,11 +20,8 @@
 
 #include <atomic>
 #include <coroutine>
-#include <exception>
-#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
 #include <cstdint>
-#include <source_location>
-#endif
+#include <exception>
 #include <stdexcept>
 #include <tuple>
 #include <type_traits>
@@ -262,12 +260,13 @@ class CoroTask {
 
         CoroTask<T> get_return_object(
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
-            std::source_location loc = std::source_location::current()
+            const char* file = DFTRACER_UTILS_CALLER_FILE(),
+            std::uint_least32_t line = DFTRACER_UTILS_CALLER_LINE()
 #endif
         ) {
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
-            this->trace_file = loc.file_name();
-            this->trace_line = loc.line();
+            this->trace_file = file;
+            this->trace_line = line;
 #endif
             return CoroTask{
                 std::coroutine_handle<promise_type>::from_promise(*this)};

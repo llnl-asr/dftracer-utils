@@ -3,7 +3,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/extensions/bloom_filter.h>
+#include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_planner_utility.h>
@@ -39,11 +39,11 @@ static void populate_test_idx(const dstd::String& index_path,
         {{"forward"}, {"compute", "ai_framework"}},
     };
 
-    BloomFilter file_name_bloom(100, 0.01);
-    BloomFilter file_cat_bloom(100, 0.01);
+    ScalableBloomFilter file_name_bloom(100, 0.01);
+    ScalableBloomFilter file_cat_bloom(100, 0.01);
 
     for (int ckpt = 0; ckpt < 4; ++ckpt) {
-        BloomFilter name_bloom(100, 0.01);
+        ScalableBloomFilter name_bloom(100, 0.01);
         for (const auto& n : chunks[ckpt].names) {
             name_bloom.add(n);
             file_name_bloom.add(n);
@@ -53,7 +53,7 @@ static void populate_test_idx(const dstd::String& index_path,
             writer, static_cast<std::uint64_t>(ckpt), "name", name_blob,
             name_bloom.entry_count());
 
-        BloomFilter cat_bloom(100, 0.01);
+        ScalableBloomFilter cat_bloom(100, 0.01);
         for (const auto& c : chunks[ckpt].cats) {
             cat_bloom.add(c);
             file_cat_bloom.add(c);
@@ -278,7 +278,7 @@ TEST_SUITE("ViewPlannerUtility") {
             auto writer = dftu_utils_test::register_test_file(
                 index, dftu_utils_test::index_key(file_path), 10000);
 
-            BloomFilter fhash_bloom(100, 0.01);
+            ScalableBloomFilter fhash_bloom(100, 0.01);
             fhash_bloom.add("hash123");
             auto blob = fhash_bloom.serialize();
 

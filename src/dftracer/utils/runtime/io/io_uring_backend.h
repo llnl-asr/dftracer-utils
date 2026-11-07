@@ -30,11 +30,17 @@ namespace dftracer::utils::runtime::io {
  *
  * A worker reaps its own ring. A worker that runs long or blocks leaves
  * completions behind, so idle workers and the sysmon reap them through poll().
+ *
+ * Features come from the kernel's answer to the ring setup, never its version.
+ * A ring with no timed enter ends a timed wait with a timeout request.
  */
 class IoUringBackend : public ThreadPoolFileOps {
    public:
+    /// `masked_features` hides IORING_FEAT_* bits, so a test can run the path
+    /// of an older kernel on a newer one.
     explicit IoUringBackend(std::size_t pool_size = 4,
-                            IoPoolOptions pool_options = {});
+                            IoPoolOptions pool_options = {},
+                            unsigned masked_features = 0);
     ~IoUringBackend() override;
 
     /// Whether this kernel has what the backend needs.
@@ -78,6 +84,10 @@ class IoUringBackend : public ThreadPoolFileOps {
     void fail(IoOp& op, ssize_t result) noexcept;
     void unlink_waiting(IoOp& op) noexcept;
     void cancel_waiting() noexcept;
+
+    const unsigned masked_features_;
+    // Set in start(), before any worker parks.
+    bool timed_enter_ = false;
 
     // Only the ring thread touches these.
     uring::Ring ring_;

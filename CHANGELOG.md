@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Let another worker run while a store commit or a spill file blocks on slow storage, so a tool keeps its full parallelism during long writes.
 - Give each executor worker its own io_uring ring for positional reads and writes, `close` and `fsync`.
   With io_uring these run 1.25 to 4.5 times faster in `io_bench`, and a read of cached data now ends with no thread woken.
-  The backend now needs Linux 5.11 or later and otherwise falls back to the thread pool.
+  The backend needs Linux 5.6 or later and otherwise falls back to the thread pool.
 - Run coroutines on one queue per worker, with stealing between workers, in place of one shared queue.
   Scheduling is faster, most of all when one worker wakes another task, and an idle pool no longer wakes on a short timer.
 - List every `*.gz` file when a tool, an indexer or a viewer discovers the traces in a folder, and no longer list plain `.pfw`, `.jsonl` or `.ndjson` files, so gzip them first; the Python constant `TRACE_FILE_PATTERNS` becomes `INPUT_FILE_PATTERNS`.

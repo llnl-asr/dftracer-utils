@@ -188,6 +188,17 @@ inline void prep_cancel(struct io_uring_sqe* sqe, void* target) {
     sqe->addr = reinterpret_cast<__u64>(target);
 }
 
+// Ends with -ETIME after `timeout`, which must live until the kernel takes the
+// request.
+inline void prep_timeout(struct io_uring_sqe* sqe,
+                         const KernelTimespec* timeout) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_TIMEOUT;
+    sqe->fd = -1;
+    sqe->addr = reinterpret_cast<__u64>(timeout);
+    sqe->len = 1;
+}
+
 inline void prep_close(struct io_uring_sqe* sqe, int fd) {
     std::memset(sqe, 0, sizeof(*sqe));
     sqe->opcode = IORING_OP_CLOSE;

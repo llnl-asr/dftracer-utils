@@ -608,6 +608,10 @@ foreach(test_file ${TEST_CPP_SOURCES})
   endif()
 endforeach()
 
+if(DFTRACER_UTILS_HAVE_IO_URING)
+  target_compile_definitions(runtime_test_io_op PRIVATE DFTRACER_UTILS_HAVE_IO_URING)
+endif()
+
 # +++++++++++++++++++++++++++++++++++++++++
 # C API tests
 # +++++++++++++++++++++++++++++++++++++++++

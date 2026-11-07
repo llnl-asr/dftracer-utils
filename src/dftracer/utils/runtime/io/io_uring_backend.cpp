@@ -15,7 +15,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
+#include <limits>
 #include <thread>
 
 namespace dftracer::utils::runtime::io {
@@ -195,6 +197,7 @@ constexpr unsigned WORKER_RING_KERNEL_WORKERS = 4;
 // Values of user_data that name no operation, which an IoOp address never is.
 void* const WAKE_TAG = reinterpret_cast<void*>(std::uintptr_t{1});
 void* const CANCEL_TAG = reinterpret_cast<void*>(std::uintptr_t{2});
+void* const TIMEOUT_TAG = reinterpret_cast<void*>(std::uintptr_t{3});
 
 // The most bytes one read or write moves, as read(2) and write(2) define it.
 constexpr std::size_t MAX_RW_BYTES = 0x7ffff000;
@@ -326,6 +329,9 @@ void prepare(struct io_uring_sqe* sqe, IoOp& op) noexcept {
 }  // namespace
 
 struct IoUringBackend::WorkerRing {
+    static constexpr std::int64_t NO_TIMEOUT =
+        std::numeric_limits<std::int64_t>::max();
+
     // The one reader of the CQ. A parked ring keeps its reader, because the
     // wake request must not vanish between the check and the sleep.
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) std::atomic<bool> reaping{false};
@@ -336,9 +342,12 @@ struct IoUringBackend::WorkerRing {
     std::atomic<unsigned> in_ring{0};
     // Read under `reaping` or by the ring's thread.
     bool wake_armed = false;
+    // When the soonest armed timeout ends, as far as one is known to be armed.
+    std::int64_t soonest_timeout_ms = NO_TIMEOUT;
 
     // Only the ring's thread touches these.
     uring::Ring ring;
+    uring::KernelTimespec park_timeout{};
     IoOp* backlog_head = nullptr;
     IoOp* backlog_tail = nullptr;
     bool ring_failed = false;
@@ -373,17 +382,18 @@ thread_local AttachedRing t_attached;
 }  // namespace
 
 IoUringBackend::IoUringBackend(std::size_t pool_size,
-                               IoPoolOptions pool_options)
-    : ThreadPoolFileOps(pool_size, 0, pool_options) {}
+                               IoPoolOptions pool_options,
+                               unsigned masked_features)
+    : ThreadPoolFileOps(pool_size, 0, pool_options),
+      masked_features_(masked_features) {}
 
 IoUringBackend::~IoUringBackend() = default;
 
 bool IoUringBackend::probe() {
     uring::Ring test_ring;
-    // The ring runs sequential reads and writes at the file position, and a
-    // driver waits for its own ring with a timeout.
-    constexpr unsigned NEEDED = IORING_FEAT_RW_CUR_POS | IORING_FEAT_EXT_ARG;
-    return test_ring.init(32) && (test_ring.features() & NEEDED) == NEEDED;
+    // The ring runs sequential reads and writes at the file position.
+    return test_ring.init(32) && (test_ring.features() & ~masked_features_ &
+                                  IORING_FEAT_RW_CUR_POS) != 0;
 }
 
 void IoUringBackend::start() {
@@ -395,6 +405,8 @@ void IoUringBackend::start() {
             common::ErrorCode::Internal,
             common::str_cat("io_uring setup failed: ", std::strerror(errno)));
     }
+    timed_enter_ =
+        (ring_.features() & ~masked_features_ & IORING_FEAT_EXT_ARG) != 0;
     // Blocking, because the ring gets -EAGAIN from a non-blocking eventfd
     // instead of waiting for it.
     wake_fd_.reset(::eventfd(0, EFD_CLOEXEC));
@@ -507,6 +519,10 @@ std::size_t IoUringBackend::drain_worker(WorkerRing& worker) noexcept {
             worker.wake_armed = false;
             continue;
         }
+        if (data == TIMEOUT_TAG) {
+            worker.soonest_timeout_ms = WorkerRing::NO_TIMEOUT;
+            continue;
+        }
         ++reaped;
         auto& op = *static_cast<IoOp*>(data);
         DFTRACER_UTILS_TSAN_ACQUIRE(&op);
@@ -566,6 +582,7 @@ void IoUringBackend::detach_thread() {
         worker->live.store(false, std::memory_order_release);
         worker->ring.destroy();
         worker->wake_armed = false;
+        worker->soonest_timeout_ms = WorkerRing::NO_TIMEOUT;
         worker->in_ring.store(0, std::memory_order_relaxed);
         worker->unlock();
         worker->parked.store(false, std::memory_order_seq_cst);
@@ -610,7 +627,32 @@ void IoUringBackend::park(void* token, std::int64_t timeout_ms) {
     auto& worker = *static_cast<WorkerRing*>(token);
     fill_worker(worker);
     // -ETIME, -EINTR and a full CQ all come back to the caller's checks.
-    (void)worker.ring.enter_wait(timeout_ms);
+    if (timed_enter_) {
+        (void)worker.ring.enter_wait(timeout_ms);
+        return;
+    }
+    const std::int64_t now_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    // One armed by an earlier park that ends sooner only ends this wait early,
+    // which those checks allow. One that ends later must not hold this wait, so
+    // it keeps running and its completion is dropped.
+    if (now_ms + timeout_ms < worker.soonest_timeout_ms) {
+        struct io_uring_sqe* sqe = worker.ring.get_sqe();
+        if (sqe == nullptr) {
+            worker.ring.enter(false);
+            sqe = worker.ring.get_sqe();
+        }
+        if (sqe == nullptr) return;
+        worker.park_timeout = {timeout_ms / 1000,
+                               (timeout_ms % 1000) * 1000000};
+        uring::prep_timeout(sqe, &worker.park_timeout);
+        uring::sqe_set_data(sqe, TIMEOUT_TAG);
+        worker.soonest_timeout_ms = now_ms + timeout_ms;
+        worker.in_ring.fetch_add(1, std::memory_order_relaxed);
+    }
+    (void)worker.ring.enter(true);
 }
 
 void IoUringBackend::unpark(void* token) noexcept {

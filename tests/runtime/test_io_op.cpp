@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
+#include <dftracer/utils/runtime/io/io_uring_backend.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/io/thread_pool_file_ops.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -33,8 +36,9 @@ using runtime::io::IoOpKind;
 
 class TempFile {
    public:
-    TempFile() {
-        std::snprintf(path_, sizeof(path_), "/tmp/dftu_io_op_XXXXXX");
+    TempFile() : TempFile(dstd::fs::temp_directory().c_str()) {}
+    explicit TempFile(const char* folder) {
+        std::snprintf(path_, sizeof(path_), "%s/dftu_io_op_XXXXXX", folder);
         fd_ = ::mkstemp(path_);
         REQUIRE(fd_ >= 0);
     }
@@ -45,7 +49,7 @@ class TempFile {
     int fd() const { return fd_; }
 
    private:
-    char path_[64];
+    char path_[512];
     int fd_ = -1;
 };
 
@@ -266,9 +270,29 @@ void sync_done(IoOp& op) noexcept {
         ->fetch_add(op.result == 0 ? 1 : 1000, std::memory_order_release);
 }
 
+struct Completion {
+    dstd::Thread::Id thread{};
+    std::atomic<bool> done{false};
+};
+
 void note_done(IoOp& op) noexcept {
-    *static_cast<dstd::Thread::Id*>(op.context) = dstd::Thread::current_id();
+    auto* completion = static_cast<Completion*>(op.context);
+    completion->thread = dstd::Thread::current_id();
+    completion->done.store(true, std::memory_order_release);
 }
+
+#ifdef DFTRACER_UTILS_HAVE_IO_URING
+// The path of a kernel with no timed enter, whatever this kernel is.
+dstd::UniquePtr<runtime::io::IoBackend> make_no_timed_enter(void*) {
+    return dstd::make_unique<runtime::io::IoUringBackend>(
+        4, runtime::io::IoPoolOptions{}, IORING_FEAT_EXT_ARG);
+}
+
+bool has_ring() {
+    runtime::io::IoUringBackend backend;
+    return backend.probe();
+}
+#endif
 
 constexpr runtime::io::IoBackendType TYPES[] = {
     runtime::io::IoBackendType::Threadpool, runtime::io::IoBackendType::Auto};
@@ -313,7 +337,14 @@ TEST_CASE("io op: a user backend from the options runs the operations") {
 }
 
 TEST_CASE("io op: a cached read on a worker ends inside its flush") {
-    TempFile file;
+    // Not the temp directory, which can be tmpfs: a read there goes to a kernel
+    // worker.
+    const dstd::Path& disk = common::local_spill_root();
+    if (disk.empty()) {
+        MESSAGE("skipped: needs a local disk");
+        return;
+    }
+    TempFile file(disk.c_str());
     char data[64] = {};
     REQUIRE(::pwrite(file.fd(), data, sizeof(data), 0) ==
             static_cast<ssize_t>(sizeof(data)));
@@ -324,7 +355,7 @@ TEST_CASE("io op: a cached read on a worker ends inside its flush") {
         return;
     }
     dstd::Thread::Id worker{};
-    dstd::Thread::Id completed{};
+    Completion completed;
     auto body = [&]() -> coro::CoroTask<void> {
         worker = dstd::Thread::current_id();
         IoOp op;
@@ -336,11 +367,40 @@ TEST_CASE("io op: a cached read on a worker ends inside its flush") {
         op.context = &completed;
         backend.submit(op);
         backend.flush();
-        CHECK(completed == worker);
+        const bool inside_flush =
+            completed.done.load(std::memory_order_acquire);
+        // The op lives in this frame, so it must end before the frame does.
+        while (!completed.done.load(std::memory_order_acquire)) {
+            backend.flush();
+            backend.poll(0);
+        }
+        CHECK(inside_flush);
+        CHECK(completed.thread == worker);
         CHECK(op.result == static_cast<ssize_t>(sizeof(data)));
         co_return;
     };
     rt.block_on(body());
+}
+
+TEST_CASE("io op: a read on tmpfs gives the right bytes") {
+    if (::access("/dev/shm", W_OK) != 0) {
+        MESSAGE("skipped: needs a writable /dev/shm");
+        return;
+    }
+    TempFile file("/dev/shm");
+    const char text[] = "tmpfs";
+    REQUIRE(::pwrite(file.fd(), text, sizeof(text), 0) ==
+            static_cast<ssize_t>(sizeof(text)));
+    Runtime rt(ExecutorConfig{.thread_count = 2}, false);
+    char read_back[sizeof(text)] = {};
+    ssize_t got = 0;
+    auto body = [&]() -> coro::CoroTask<void> {
+        got = co_await runtime::io::pread(file.fd(), read_back,
+                                          sizeof(read_back), 0);
+    };
+    rt.block_on(body());
+    CHECK(got == static_cast<ssize_t>(sizeof(text)));
+    CHECK(std::strcmp(read_back, text) == 0);
 }
 
 TEST_CASE("io op: a parked worker resumes when its own fsync ends") {
@@ -462,6 +522,130 @@ TEST_CASE("io op: new work wakes a worker parked on its own ring") {
     ::close(fds[0]);
     ::close(fds[1]);
 }
+
+#ifdef DFTRACER_UTILS_HAVE_IO_URING
+TEST_CASE("io op: a ring that lacks a feature does not pass the probe") {
+    if (!has_ring()) {
+        MESSAGE("skipped: needs the io_uring backend");
+        return;
+    }
+    runtime::io::IoUringBackend no_position(4, {}, IORING_FEAT_RW_CUR_POS);
+    CHECK_FALSE(no_position.probe());
+    runtime::io::IoUringBackend no_timed_enter(4, {}, IORING_FEAT_EXT_ARG);
+    CHECK(no_timed_enter.probe());
+}
+
+TEST_CASE("io op: a timed park ends with nothing done, with no timed enter") {
+    if (!has_ring()) {
+        MESSAGE("skipped: needs the io_uring backend");
+        return;
+    }
+    Runtime rt(ExecutorConfig{.thread_count = 1,
+                              .io_backend_factory = &make_no_timed_enter},
+               false);
+    runtime::io::IoBackend& backend = rt.executor()->io_backend();
+    REQUIRE(backend.name() == "io_uring");
+    int fds[2];
+    REQUIRE(::pipe(fds) == 0);
+    char byte = 0;
+    std::atomic<int> done{0};
+    IoOp op;
+    op.kind = IoOpKind::Pread;
+    op.handle = fds[0];
+    op.buffer = &byte;
+    op.length = 1;
+    op.offset = -1;
+    op.complete = &sync_done;
+    op.context = &done;
+    auto body = [&]() -> coro::CoroTask<void> {
+        backend.submit(op);
+        backend.flush();
+        // Each round must arm a new timeout, so the last one reaped must not
+        // read as an operation.
+        for (int round = 0; round < 8; ++round) {
+            void* token = backend.prepare_park();
+            REQUIRE(token != nullptr);
+            const auto began = std::chrono::steady_clock::now();
+            backend.park(token, 20);
+            const auto elapsed = std::chrono::steady_clock::now() - began;
+            backend.finish_park(token);
+            // Each timeout expired before the next arms, so none ends it early.
+            CHECK(elapsed >= std::chrono::milliseconds(20));
+            CHECK(elapsed < std::chrono::seconds(5));
+            CHECK(done.load(std::memory_order_acquire) == 0);
+        }
+        co_return;
+    };
+    rt.block_on(body());
+    REQUIRE(::write(fds[1], "x", 1) == 1);
+    while (done.load(std::memory_order_acquire) == 0) ::usleep(100);
+    ::close(fds[0]);
+    ::close(fds[1]);
+}
+
+TEST_CASE("io op: a long armed timeout does not hold a shorter park") {
+    if (!has_ring()) {
+        MESSAGE("skipped: needs the io_uring backend");
+        return;
+    }
+    Runtime rt(ExecutorConfig{.thread_count = 1,
+                              .io_backend_factory = &make_no_timed_enter},
+               false);
+    runtime::io::IoBackend& backend = rt.executor()->io_backend();
+    REQUIRE(backend.name() == "io_uring");
+    int fds[2];
+    REQUIRE(::pipe(fds) == 0);
+    char byte = 0;
+    std::atomic<int> done{0};
+    IoOp op;
+    op.kind = IoOpKind::Pread;
+    op.handle = fds[0];
+    op.buffer = &byte;
+    op.length = 1;
+    op.offset = -1;
+    op.complete = &sync_done;
+    op.context = &done;
+    constexpr auto LONG_MS = 3000;
+    auto body = [&]() -> coro::CoroTask<void> {
+        backend.submit(op);
+        backend.flush();
+        // A wake ends this park, which leaves its long timeout armed.
+        void* token = backend.prepare_park();
+        REQUIRE(token != nullptr);
+        backend.unpark(token);
+        backend.park(token, LONG_MS);
+        backend.finish_park(token);
+
+        token = backend.prepare_park();
+        REQUIRE(token != nullptr);
+        const auto began = std::chrono::steady_clock::now();
+        backend.park(token, 1);
+        const auto elapsed = std::chrono::steady_clock::now() - began;
+        backend.finish_park(token);
+        CHECK(elapsed < std::chrono::milliseconds(LONG_MS / 2));
+        co_return;
+    };
+    rt.block_on(body());
+    REQUIRE(::write(fds[1], "x", 1) == 1);
+    while (done.load(std::memory_order_acquire) == 0) ::usleep(100);
+    ::close(fds[0]);
+    ::close(fds[1]);
+}
+
+TEST_CASE("io op: a parked worker resumes, with no timed enter") {
+    if (!has_ring()) {
+        MESSAGE("skipped: needs the io_uring backend");
+        return;
+    }
+    TempFile file;
+    std::atomic<int> bad{0};
+    Runtime rt(ExecutorConfig{.thread_count = 1,
+                              .io_backend_factory = &make_no_timed_enter},
+               false);
+    rt.block_on(sync_many(file.fd(), 200, bad));
+    CHECK(bad.load() == 0);
+}
+#endif
 
 TEST_CASE("io op: a file write passes reads that wait on a peer") {
     // Before the runtime, whose shutdown completes any read a failure leaves.

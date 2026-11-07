@@ -48,7 +48,9 @@ struct Delete {
 
     Delete() noexcept = default;
     template <class U>
-        requires(std::is_convertible_v<U*, T*> &&
+    // U == T comes first: T can be incomplete where a member UniquePtr<T>
+    // is declared, and the trait below is an error on an incomplete type.
+        requires(!std::is_same_v<U, T> && std::is_convertible_v<U*, T*> &&
                  std::has_virtual_destructor_v<T>)
     Delete(const Delete<U>& /*other*/) noexcept {}
 

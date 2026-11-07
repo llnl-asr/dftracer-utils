@@ -2,7 +2,7 @@
 # coroutine frame-layout bug originates. Build the image once; the build tree
 # lives in a bind-mounted build/build-docker-gcc12 so rebuilds are incremental.
 #
-#   docker build -t dftracer-gcc12 -f docker/gcc12.Dockerfile .
+#   docker build -t dftracer-gcc12 - < docker/gcc12.Dockerfile
 #   (or: scripts/docker-test.sh gcc12)
 FROM ubuntu:22.04
 

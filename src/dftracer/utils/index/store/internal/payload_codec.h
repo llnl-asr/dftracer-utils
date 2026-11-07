@@ -1,35 +1,35 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_INDEX_STORE_INTERNAL_PAYLOAD_CODEC_H
 #define DFTRACER_UTILS_INDEX_STORE_INTERNAL_PAYLOAD_CODEC_H
 
+#include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/error.h>
-#include <dftracer/utils/index/store/key_codec.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <span>
 #include <stdexcept>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::index::store::internal {
 
 inline constexpr std::size_t DECODE_CONTEXT_BUF_SIZE = 256;
-inline thread_local char g_decode_context[DECODE_CONTEXT_BUF_SIZE] = {};
+inline thread_local char t_decode_context[DECODE_CONTEXT_BUF_SIZE] = {};
 
 struct DecodeContextGuard {
     template <typename... Args>
     explicit DecodeContextGuard(const char* fmt, Args... args) {
-        std::memcpy(previous_, g_decode_context, DECODE_CONTEXT_BUF_SIZE);
+        std::memcpy(previous_, t_decode_context, DECODE_CONTEXT_BUF_SIZE);
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
-        std::snprintf(g_decode_context, DECODE_CONTEXT_BUF_SIZE, fmt, args...);
+        std::snprintf(t_decode_context, DECODE_CONTEXT_BUF_SIZE, fmt, args...);
 #pragma GCC diagnostic pop
     }
 
     ~DecodeContextGuard() {
-        std::memcpy(g_decode_context, previous_, DECODE_CONTEXT_BUF_SIZE);
+        std::memcpy(t_decode_context, previous_, DECODE_CONTEXT_BUF_SIZE);
     }
 
     DecodeContextGuard(const DecodeContextGuard&) = delete;
@@ -39,78 +39,61 @@ struct DecodeContextGuard {
     char previous_[DECODE_CONTEXT_BUF_SIZE];
 };
 
-inline void append_u8(std::string& out, std::uint8_t value) {
+inline void append_u8(dstd::String& out, std::uint8_t value) {
     out.push_back(static_cast<char>(value));
 }
 
-inline void append_u32(std::string& out, std::uint32_t value) {
-    index::store::KeyCodec::append_be32(out, value);
-}
-
-inline void append_u64(std::string& out, std::uint64_t value) {
-    index::store::KeyCodec::append_be64(out, value);
-}
-
-inline void append_i64(std::string& out, std::int64_t value) {
-    index::store::KeyCodec::append_be64(out, static_cast<std::uint64_t>(value));
-}
-
-inline void append_double(std::string& out, double value) {
-    static_assert(sizeof(double) == sizeof(std::uint64_t));
-    std::uint64_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    append_u64(out, bits);
-}
-
-inline void append_string(std::string& out, std::string_view value) {
-    append_u32(out, static_cast<std::uint32_t>(value.size()));
+inline void append_string(dstd::String& out, dstd::StringView value) {
+    dstd::append_u32_be(out, static_cast<std::uint32_t>(value.size()));
     out.append(value.data(), value.size());
 }
 
-inline void append_blob(std::string& out, std::span<const unsigned char> blob) {
-    append_u32(out, static_cast<std::uint32_t>(blob.size()));
+inline void append_blob(dstd::String& out,
+                        dstd::Span<const unsigned char> blob) {
+    dstd::append_u32_be(out, static_cast<std::uint32_t>(blob.size()));
     out.append(reinterpret_cast<const char*>(blob.data()), blob.size());
 }
 
 class Cursor {
    public:
-    explicit Cursor(std::string_view data) : data_(data) {}
+    explicit Cursor(dstd::StringView data) : data_(data) {}
 
     std::uint8_t u8() { return static_cast<std::uint8_t>(take(1)[0]); }
 
-    std::uint32_t u32() { return index::store::KeyCodec::decode_be32(take(4)); }
+    std::uint32_t u32() {
+        return dstd::read_u32_be(
+            reinterpret_cast<const std::uint8_t*>(take(4).data()));
+    }
 
-    std::uint64_t u64() { return index::store::KeyCodec::decode_be64(take(8)); }
+    std::uint64_t u64() {
+        return dstd::read_u64_be(
+            reinterpret_cast<const std::uint8_t*>(take(8).data()));
+    }
 
     std::int64_t i64() { return static_cast<std::int64_t>(u64()); }
 
-    double f64() {
-        std::uint64_t bits = u64();
-        double value = 0.0;
-        std::memcpy(&value, &bits, sizeof(value));
-        return value;
-    }
+    double f64() { return dstd::bits_double(u64()); }
 
-    std::string_view str_view() {
+    dstd::StringView str_view() {
         auto len = static_cast<std::size_t>(u32());
         return take(len);
     }
 
-    std::string str() {
+    dstd::String str() {
         auto bytes = str_view();
-        return std::string(bytes.data(), bytes.size());
+        return dstd::String(bytes.data(), bytes.size());
     }
 
-    std::vector<unsigned char> blob() {
+    dstd::Vector<unsigned char> blob() {
         auto len = static_cast<std::size_t>(u32());
         auto bytes = take(len);
-        return std::vector<unsigned char>(bytes.begin(), bytes.end());
+        return dstd::Vector<unsigned char>(bytes.begin(), bytes.end());
     }
 
     // Length-prefixed blob as a non-owning view into the cursor's backing
     // buffer (no copy). Valid only while that buffer outlives the view; use
     // for transient decodes that consume the bytes immediately.
-    std::string_view blob_view() {
+    dstd::StringView blob_view() {
         auto len = static_cast<std::size_t>(u32());
         return take(len);
     }
@@ -119,23 +102,23 @@ class Cursor {
     bool eof() const { return offset_ >= data_.size(); }
 
    private:
-    std::string_view take(std::size_t len) {
+    dstd::StringView take(std::size_t len) {
         if (offset_ + len > data_.size()) {
             char err[DECODE_CONTEXT_BUF_SIZE + 64];
-            if (g_decode_context[0] != '\0') {
-                std::snprintf(err, sizeof(err), "Corrupt RocksDB payload [%s]",
-                              g_decode_context);
+            if (t_decode_context[0] != '\0') {
+                std::snprintf(err, sizeof(err), "Corrupt index payload [%s]",
+                              t_decode_context);
             } else {
-                std::snprintf(err, sizeof(err), "Corrupt RocksDB payload");
+                std::snprintf(err, sizeof(err), "Corrupt index payload");
             }
-            throw IndexerError(IndexerError::Type::DATABASE_ERROR, err);
+            throw IndexerError(IndexerError::Type::DatabaseError, err);
         }
         auto chunk = data_.substr(offset_, len);
         offset_ += len;
         return chunk;
     }
 
-    std::string_view data_;
+    dstd::StringView data_;
     std::size_t offset_ = 0;
 };
 

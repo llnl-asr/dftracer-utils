@@ -1,4 +1,5 @@
 #! /bin/bash
+# SPDX-License-Identifier: MIT
 
 clang_format_exe="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )/clang-format.sh"
 if [ $# -ge 1 ]; then
@@ -70,7 +71,8 @@ check_dir() {
     fi
 
     echo "Check formatting of C/C++ code in '$dir'"
-    find "$dir" \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) -print0 | \
+    find "$dir" \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) \
+        ! -path "*/dftracer/utils/dstd/vendor/*" -print0 | \
         xargs -0 -P "$num_jobs" "$clang_format" --dry-run -Werror
     return $?
 }
@@ -81,9 +83,10 @@ export -f check_dir
 pids=()
 temp_dir=$(mktemp -d)
 
-for dir in src include tests; do
+for dir in src include tests benchmarks examples cmake/tests; do
     # Run check_dir in subshell background so all directories check in parallel
-    (check_dir "$dir" "$clang_format_exe" "$NUM_JOBS" > "$temp_dir/$dir.out" 2>&1; echo $? > "$temp_dir/$dir.rc") &
+    out="$temp_dir/${dir//\//_}"
+    (check_dir "$dir" "$clang_format_exe" "$NUM_JOBS" > "$out.out" 2>&1; echo $? > "$out.rc") &
     pids+=($!)
 done
 
@@ -93,12 +96,13 @@ for pid in "${pids[@]}"; do
 done
 
 # Check results and display output
-for dir in src include tests; do
-    if [ -f "$temp_dir/$dir.out" ]; then
-        cat "$temp_dir/$dir.out"
+for dir in src include tests benchmarks examples cmake/tests; do
+    out="$temp_dir/${dir//\//_}"
+    if [ -f "$out.out" ]; then
+        cat "$out.out"
     fi
-    if [ -f "$temp_dir/$dir.rc" ]; then
-        rc=$(cat "$temp_dir/$dir.rc")
+    if [ -f "$out.rc" ]; then
+        rc=$(cat "$out.rc")
         if [ "$rc" -ne 0 ]; then
             check_rc=1
         fi

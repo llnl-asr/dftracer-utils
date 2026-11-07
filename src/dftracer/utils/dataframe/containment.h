@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_CONTAINMENT_H
 #define DFTRACER_UTILS_DATAFRAME_CONTAINMENT_H
 
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/vector.h>
+
 #include <cstdint>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -15,8 +18,8 @@ namespace dftracer::utils::dataframe {
 // event, so a column sink can push the row index (parent_id) while an arena
 // sink pushes its node index - the walk stays identical.
 //
-// `start(k)`/`end_(k)` read the interval of the k-th event in the sorted lane
-// (end_ is a functor so a caller can clamp a non-positive duration). An event
+// `start(k)`/`end(k)` read the interval of the k-th event in the sorted lane
+// (end is a functor so a caller can clamp a non-positive duration). An event
 // is popped once its end is <= a later event's start. `root` is the parent
 // handle at depth 0. `stack` is caller-owned scratch, cleared here and reused
 // across lanes so a hot loop allocates nothing. O(n): each event is pushed and
@@ -26,16 +29,16 @@ namespace dftracer::utils::dataframe {
 // node). Both are deduced from `stack` and `root`, so the pop comparison uses
 // the same type the caller sorted by.
 template <class Time, class Handle, class Start, class End, class Sink>
-void containment_walk(std::int64_t n, Start&& start, End&& end_, Handle root,
+void containment_walk(std::int64_t n, Start&& start, End&& end, Handle root,
                       Sink&& sink,
-                      std::vector<std::pair<Time, Handle> >& stack) {
+                      dstd::Vector<dstd::Pair<Time, Handle> >& stack) {
     stack.clear();
     for (std::int64_t k = 0; k < n; ++k) {
         const Time s = start(k);
         while (!stack.empty() && stack.back().first <= s) stack.pop_back();
         const std::int64_t level = static_cast<std::int64_t>(stack.size());
         const Handle parent = stack.empty() ? root : stack.back().second;
-        stack.push_back({end_(k), sink(k, level, parent)});
+        stack.push_back({end(k), sink(k, level, parent)});
     }
 }
 

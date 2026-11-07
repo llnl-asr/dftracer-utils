@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Rung 2 of the plugin ladder: a plugin can register itself as a named
 // LazyFrame source (dftu.svc.providers@0), not just consume rows. Drives the
 // real dlopen path through Plugins::Builder against provider_fixture_plugin,
@@ -7,14 +8,15 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dlfcn.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <optional>
 
-using dftracer::utils::plugins::Plugins;
+using namespace dftracer::utils;
 
 #ifndef PROVIDER_FIXTURE_PLUGIN_PATH
 #error "PROVIDER_FIXTURE_PLUGIN_PATH must be defined by CMake"
@@ -22,8 +24,9 @@ using dftracer::utils::plugins::Plugins;
 
 namespace {
 
-std::optional<Plugins> load_fixture() {
-    auto result = Plugins::Builder().add(PROVIDER_FIXTURE_PLUGIN_PATH).build();
+dstd::Optional<plugins::Plugins> load_fixture() {
+    auto result =
+        plugins::Plugins::Builder().add(PROVIDER_FIXTURE_PLUGIN_PATH).build();
     REQUIRE(result.has_value());
     return std::move(result).value();
 }
@@ -45,8 +48,8 @@ struct FixtureAccessors {
     }
 };
 
-std::vector<std::int64_t> read_i64_column(const dftu_dataframe* df,
-                                          const char* name) {
+dstd::Vector<std::int64_t> read_i64_column(const dftu_dataframe* df,
+                                           const char* name) {
     dftu_series* col = dftu_dataframe_column(df, name);
     REQUIRE(col);
     REQUIRE(dftu_series_type(col) == DFTU_TYPE_INT64);
@@ -54,7 +57,7 @@ std::vector<std::int64_t> read_i64_column(const dftu_dataframe* df,
     REQUIRE(flat);
     const auto* data = static_cast<const std::int64_t*>(dftu_series_data(flat));
     const std::int64_t n = dftu_dataframe_num_rows(df);
-    std::vector<std::int64_t> out(data, data + n);
+    dstd::Vector<std::int64_t> out(data, data + n);
     dftu_series_free(flat);
     dftu_series_free(col);
     return out;
@@ -63,7 +66,7 @@ std::vector<std::int64_t> read_i64_column(const dftu_dataframe* df,
 }  // namespace
 
 TEST_CASE("a registered provider backs a LazyFrame that collects its rows") {
-    std::optional<Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::Plugins> plugins = load_fixture();
 
     dftu_lazyframe* lf = dftu_lazyframe_from_provider("provider_fixture.rows");
     REQUIRE(lf);
@@ -72,16 +75,16 @@ TEST_CASE("a registered provider backs a LazyFrame that collects its rows") {
     REQUIRE(out);
     CHECK(dftu_dataframe_num_rows(out) == 5);
     CHECK(read_i64_column(out, "id") ==
-          std::vector<std::int64_t>{1, 2, 3, 4, 5});
+          dstd::Vector<std::int64_t>{1, 2, 3, 4, 5});
     CHECK(read_i64_column(out, "val") ==
-          std::vector<std::int64_t>{10, 20, 30, 40, 50});
+          dstd::Vector<std::int64_t>{10, 20, 30, 40, 50});
 
     dftu_dataframe_free(out);
     dftu_lazyframe_free(lf);
 }
 
 TEST_CASE("an op chained on the provider's LazyFrame composes correctly") {
-    std::optional<Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::Plugins> plugins = load_fixture();
 
     dftu_lazyframe* lf = dftu_lazyframe_from_provider("provider_fixture.rows");
     REQUIRE(lf);
@@ -92,14 +95,14 @@ TEST_CASE("an op chained on the provider's LazyFrame composes correctly") {
     dftu_dataframe* out = dftu_lazyframe_collect(headed, -1);
     REQUIRE(out);
     CHECK(dftu_dataframe_num_rows(out) == 2);
-    CHECK(read_i64_column(out, "id") == std::vector<std::int64_t>{1, 2});
+    CHECK(read_i64_column(out, "id") == dstd::Vector<std::int64_t>{1, 2});
 
     dftu_dataframe_free(out);
     dftu_lazyframe_free(headed);
 }
 
 TEST_CASE("register_provider refuses a dftu.-prefixed and a duplicate name") {
-    std::optional<Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::Plugins> plugins = load_fixture();
     FixtureAccessors fx;
     REQUIRE(fx.handle);
     auto gate_ok = fx.sym<int (*)()>("provider_fixture_gate_ok");
@@ -108,7 +111,7 @@ TEST_CASE("register_provider refuses a dftu.-prefixed and a duplicate name") {
 }
 
 TEST_CASE("a cursor failing mid-stream surfaces as a collect failure") {
-    std::optional<Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::Plugins> plugins = load_fixture();
     FixtureAccessors fx;
     REQUIRE(fx.handle);
     auto next_calls = fx.sym<int (*)()>("provider_fixture_failing_next_calls");
@@ -127,7 +130,7 @@ TEST_CASE("a cursor failing mid-stream surfaces as a collect failure") {
 }
 
 TEST_CASE("source and cursor destroy are each called exactly once per scan") {
-    std::optional<Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::Plugins> plugins = load_fixture();
     FixtureAccessors fx;
     REQUIRE(fx.handle);
     auto cursor_destroys =
@@ -154,7 +157,7 @@ TEST_CASE("a provider is gone once the loading plugin set is destroyed") {
     const int before = source_destroys();
 
     {
-        std::optional<Plugins> plugins = load_fixture();
+        dstd::Optional<plugins::Plugins> plugins = load_fixture();
         dftu_lazyframe* lf =
             dftu_lazyframe_from_provider("provider_fixture.rows");
         CHECK(lf);
@@ -175,7 +178,7 @@ TEST_CASE("a C++ SDK source absorbs a filter and is freed with the plugin") {
     const int filters_before = filters();
 
     {
-        std::optional<Plugins> plugins = load_fixture();
+        dstd::Optional<plugins::Plugins> plugins = load_fixture();
         dftu_lazyframe* lf =
             dftu_lazyframe_from_provider("provider_fixture.sdk");
         REQUIRE(lf);
@@ -192,7 +195,8 @@ TEST_CASE("a C++ SDK source absorbs a filter and is freed with the plugin") {
 
         dftu_dataframe* out = dftu_lazyframe_collect(filtered, -1);
         REQUIRE(out);
-        CHECK(read_i64_column(out, "id") == std::vector<std::int64_t>{7, 8, 9});
+        CHECK(read_i64_column(out, "id") ==
+              dstd::Vector<std::int64_t>{7, 8, 9});
         CHECK(filters() > filters_before);
         dftu_dataframe_free(out);
         dftu_lazyframe_free(filtered);
@@ -204,7 +208,7 @@ TEST_CASE("a C++ SDK source absorbs a filter and is freed with the plugin") {
 
 TEST_CASE("a C++ SDK node runs over a provider and leaves with the plugin") {
     {
-        std::optional<Plugins> plugins = load_fixture();
+        dstd::Optional<plugins::Plugins> plugins = load_fixture();
         dftu_lazyframe* lf =
             dftu_lazyframe_from_provider("provider_fixture.sdk");
         REQUIRE(lf);
@@ -216,10 +220,10 @@ TEST_CASE("a C++ SDK node runs over a provider and leaves with the plugin") {
         dftu_dataframe* out = dftu_lazyframe_collect(doubled, -1);
         REQUIRE(out);
         CHECK(read_i64_column(out, "id") ==
-              std::vector<std::int64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+              dstd::Vector<std::int64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
         CHECK(read_i64_column(out, "val") ==
-              std::vector<std::int64_t>{0, 20, 40, 60, 80, 100, 120, 140, 160,
-                                        180});
+              dstd::Vector<std::int64_t>{0, 20, 40, 60, 80, 100, 120, 140, 160,
+                                         180});
         dftu_dataframe_free(out);
         dftu_lazyframe_free(doubled);
     }

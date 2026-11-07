@@ -1,31 +1,32 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DUQL_GROUP_FOLD_H
 #define DFTRACER_UTILS_DUQL_GROUP_FOLD_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
 enum class FoldOp : std::uint8_t {
-    ENGINE,
-    COUNT_DISTINCT,
-    COLLECT,
-    ARGMAX,
-    ARGMIN,
-    SKETCH,
-    MERGE,
-    MERGE_QUANTILE,
-    PLUGIN,
+    Engine,
+    CountDistinct,
+    Collect,
+    Argmax,
+    Argmin,
+    Sketch,
+    Merge,
+    MergeQuantile,
+    Plugin,
 };
 
 /// One aggregate of a GroupFold; `in` and `by` index a batch's columns.
@@ -39,14 +40,14 @@ enum class FoldOp : std::uint8_t {
 /// filling its operands after the column, null for a group with none.
 /// `type` is the output type.
 struct FoldAgg {
-    FoldOp op = FoldOp::ENGINE;
+    FoldOp op = FoldOp::Engine;
     dataframe::AggOp engine = dataframe::AggOp::Count;
     std::int32_t in = -1;
     std::int32_t by = -1;
     double param = 0;
     dataframe::DataType type;
-    std::string plugin;
-    std::vector<double> params;
+    dstd::String plugin;
+    dstd::Vector<double> params;
 };
 
 /// A group-by over batches whose first `keys` columns are the group keys,
@@ -55,8 +56,8 @@ struct FoldAgg {
 class GroupFold {
    public:
     /// `key_types` are the key columns' output types.
-    GroupFold(std::vector<dataframe::DataType> key_types,
-              std::vector<FoldAgg> aggs);
+    GroupFold(dstd::Vector<dataframe::DataType> key_types,
+              dstd::Vector<FoldAgg> aggs);
     ~GroupFold();
 
     /// Throws std::invalid_argument for a key that holds a list or object.
@@ -64,7 +65,7 @@ class GroupFold {
 
     /// One row per group: the keys, then one column per aggregate, as
     /// `names`.
-    dataframe::DataFrame finish(std::vector<std::string> names);
+    dataframe::DataFrame finish(dstd::Vector<dstd::String> names);
 
    private:
     struct Ord;
@@ -72,43 +73,30 @@ class GroupFold {
     using Sketch = dataframe::MergeSketch;
 
     void arg(std::size_t a, const dataframe::Series& in,
-             const dataframe::Series& by, const std::vector<std::int64_t>& gid);
+             const dataframe::Series& by,
+             const dstd::Vector<std::int64_t>& gid);
     void sketches(std::size_t a, const dataframe::Series& in,
-                  const std::vector<std::int64_t>& gid);
+                  const dstd::Vector<std::int64_t>& gid);
 
-    std::vector<dataframe::DataType> key_types_;
-    std::vector<FoldAgg> aggs_;
-    struct SvHash {
-        using is_transparent = void;
-        using is_avalanching = void;
-        std::uint64_t operator()(std::string_view v) const noexcept {
-            return ankerl::unordered_dense::hash<std::string_view>{}(v);
-        }
-    };
-    struct SvEq {
-        using is_transparent = void;
-        bool operator()(std::string_view a, std::string_view b) const noexcept {
-            return a == b;
-        }
-    };
-    ankerl::unordered_dense::map<std::string, std::int64_t> groups_;
-    ankerl::unordered_dense::map<std::string, std::int64_t, SvHash, SvEq>
-        str_groups_;
+    dstd::Vector<dataframe::DataType> key_types_;
+    dstd::Vector<FoldAgg> aggs_;
+    dstd::HashMap<dstd::String, std::int64_t> groups_;
+    dstd::StringViewMap<std::int64_t> str_groups_;
     std::int64_t null_group_ = -1;
-    std::int64_t num_groups_ = 0;
+    std::int64_t group_count_ = 0;
     std::int64_t rows_ = 0;
-    std::vector<std::vector<dataframe::Series>> key_parts_;
+    dstd::Vector<dstd::Vector<dataframe::Series>> key_parts_;
     dataframe::AggStatePtr engine_;
     struct Distinct {
-        ankerl::unordered_dense::set<std::string, SvHash, SvEq> text;
-        ankerl::unordered_dense::set<std::string, SvHash, SvEq> tagged;
+        dstd::StringViewSet text;
+        dstd::StringViewSet tagged;
     };
-    std::vector<std::vector<Distinct>> distinct_;
-    std::vector<std::vector<dataframe::Series>> parts_;
-    std::vector<std::int64_t> part_rows_;
-    std::vector<std::vector<std::vector<std::int64_t>>> members_;
-    std::vector<std::vector<Arg>> args_;
-    std::vector<std::vector<std::unique_ptr<Sketch>>> sketches_;
+    dstd::Vector<dstd::Vector<Distinct>> distinct_;
+    dstd::Vector<dstd::Vector<dataframe::Series>> parts_;
+    dstd::Vector<std::int64_t> part_rows_;
+    dstd::Vector<dstd::Vector<dstd::Vector<std::int64_t>>> members_;
+    dstd::Vector<dstd::Vector<Arg>> args_;
+    dstd::Vector<dstd::Vector<dstd::UniquePtr<Sketch>>> sketches_;
 };
 
 }  // namespace dftracer::utils::duql

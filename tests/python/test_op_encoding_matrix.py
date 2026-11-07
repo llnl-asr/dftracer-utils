@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Every registered column op, run through the registry (`op_run`) on every
 column encoding the engine produces: FLAT, a filter's SELECTION view, a
 DICTIONARY view, a view over a view, a CHUNKED column (flat, view and

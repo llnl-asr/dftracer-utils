@@ -1,4 +1,7 @@
-#include <dftracer/utils/core/common/error.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -7,21 +10,18 @@
 
 #include <algorithm>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index {
 
 namespace {
 
-namespace syn = duql::syntax;
-
 std::int64_t ns_per(TimeUnit unit) {
     switch (unit) {
-        case TimeUnit::NS:
+        case TimeUnit::Ns:
             return 1;
-        case TimeUnit::US:
+        case TimeUnit::Us:
             return 1000;
-        case TimeUnit::MS:
+        case TimeUnit::Ms:
             return 1'000'000;
         case TimeUnit::S:
             return 1'000'000'000;
@@ -30,28 +30,30 @@ std::int64_t ns_per(TimeUnit unit) {
 }
 
 struct Member {
-    std::string name;
-    std::string text;
+    dstd::String name;
+    dstd::String text;
 };
 
-[[noreturn]] void bad(std::string_view origin, const std::string& why) {
-    throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT, "source of ",
-                                 origin, ": ", why);
+[[noreturn]] void bad(dstd::StringView origin, dstd::StringView why) {
+    throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
+                                         "source of ", origin, ": ", why);
 }
 
-syn::Program parse_members(std::string_view text, std::string_view origin) {
-    auto tree = syn::parse("source s {\n" + std::string(text) + "\n}");
+duql::syntax::Program parse_members(dstd::StringView text,
+                                    dstd::StringView origin) {
+    auto tree =
+        duql::syntax::parse("source s {\n" + dstd::String(text) + "\n}");
     if (!tree) bad(origin, tree.error().format());
     return std::move(*tree);
 }
 
 // The members of `text` in order, each as canonical text.
-std::vector<Member> members(std::string_view text, std::string_view origin) {
-    std::vector<Member> out;
+dstd::Vector<Member> members(dstd::StringView text, dstd::StringView origin) {
+    dstd::Vector<Member> out;
     if (text.empty()) return out;
-    syn::Program tree = parse_members(text, origin);
-    const auto& decl = std::get<syn::SourceDecl>(tree.decls.front());
-    auto add = [&](std::string name, std::string member) {
+    duql::syntax::Program tree = parse_members(text, origin);
+    const auto& decl = std::get<duql::syntax::SourceDecl>(tree.decls.front());
+    auto add = [&](dstd::String name, dstd::String member) {
         for (const auto& m : out)
             if (m.name == name) bad(origin, "'" + name + "' is declared twice");
         out.push_back({std::move(name), std::move(member)});
@@ -62,23 +64,31 @@ std::vector<Member> members(std::string_view text, std::string_view origin) {
         if (r.name == "data") {
             const auto& p = *r.pipeline;
             if (!p.sources.empty() || p.stages.size() != 1 ||
-                !std::holds_alternative<syn::Where>(p.stages.front().node))
+                !std::holds_alternative<duql::syntax::Where>(
+                    p.stages.front().node))
                 bad(origin, "'data' must be one 'where'");
         }
-        add(r.name, r.name + " = " + syn::to_text(*r.pipeline));
+        add(dstd::String(r.name),
+            dstd::String(r.name + " = " + duql::syntax::to_text(*r.pipeline)));
     }
     for (const auto& d : decl.defs) {
-        std::string params;
+        dstd::String params;
         if (!d.params.empty()) {
             params = "(";
-            for (std::size_t i = 0; i < d.params.size(); ++i)
-                params += (i ? ", " : "") + d.params[i];
+            for (std::size_t i = 0; i < d.params.size(); ++i) {
+                if (i) params += ", ";
+                params += d.params[i];
+            }
             params += ")";
         }
-        add(d.name, "def " + d.name + params + " = " +
-                        (std::holds_alternative<syn::PipelinePtr>(d.body)
-                             ? syn::to_text(*std::get<syn::PipelinePtr>(d.body))
-                             : syn::to_text(*std::get<syn::ExprPtr>(d.body))));
+        add(dstd::String(d.name),
+            dstd::String(
+                "def " + d.name + params + " = " +
+                (std::holds_alternative<duql::syntax::PipelinePtr>(d.body)
+                     ? duql::syntax::to_text(
+                           *std::get<duql::syntax::PipelinePtr>(d.body))
+                     : duql::syntax::to_text(
+                           *std::get<duql::syntax::ExprPtr>(d.body)))));
     }
     return out;
 }
@@ -92,24 +102,24 @@ duql::Roles duql_roles(const RecordSchema& s) {
     r.duration = s.roles.duration;
     r.schema = s.id;
     if (const FieldSpec* t = s.field_at(s.roles.time))
-        r.time_text = t->type == FieldType::STRING;
-    auto add = [&](const std::string& key, std::int64_t ns) {
+        r.time_text = t->type == FieldType::String;
+    auto add = [&](const dstd::String& key, std::int64_t ns) {
         if (!key.empty()) r.fields.emplace(key, ns);
     };
     add(s.roles.time, ns_per(s.roles.time_unit));
     add(s.roles.duration, ns_per(s.roles.duration_unit));
     for (const auto& f : s.fields) {
-        if (f.role != Role::TIME && f.role != Role::DURATION) continue;
-        const std::int64_t ns = ns_per(f.unit.value_or(TimeUnit::US));
+        if (f.role != Role::Time && f.role != Role::Duration) continue;
+        const std::int64_t ns = ns_per(f.unit.value_or(TimeUnit::Us));
         add(f.name, ns);
         add(f.path, ns);
     }
     return r;
 }
 
-std::string merge_source(std::string_view parent, std::string_view child,
-                         std::string_view origin) {
-    std::vector<Member> out = members(parent, origin);
+dstd::String merge_source(dstd::StringView parent, dstd::StringView child,
+                          dstd::StringView origin) {
+    dstd::Vector<Member> out = members(parent, origin);
     for (auto& m : members(child, origin)) {
         bool replaced = false;
         for (auto& p : out)
@@ -120,16 +130,18 @@ std::string merge_source(std::string_view parent, std::string_view child,
             }
         if (!replaced) out.push_back(std::move(m));
     }
-    std::string text;
+    dstd::String text;
     for (const auto& m : out) text += (text.empty() ? "" : ";\n") + m.text;
     return text;
 }
 
-void check_source(const RecordSchema& schema, std::string_view origin) {
+void check_source(const RecordSchema& schema, dstd::StringView origin) {
     if (schema.source.empty()) return;
     const duql::Roles roles = duql_roles(schema);
     auto p = duql::compile_program("where true", {}, &roles, schema.source);
-    if (!p) bad(origin, "schema " + schema.id + ": " + p.error().format());
+    if (!p)
+        bad(origin,
+            "schema " + dstd::String(schema.id) + ": " + p.error().format());
     if (schema.never_index.empty()) return;
     // A stored row set reads values from the decoded events, which a
     // listed path does not keep.
@@ -144,26 +156,27 @@ void check_source(const RecordSchema& schema, std::string_view origin) {
         }
 }
 
-std::string data_condition(const RecordSchema& schema) {
+dstd::String data_condition(const RecordSchema& schema) {
     if (schema.source.empty()) return {};
-    syn::Program tree = parse_members(schema.source, schema.id);
-    for (const auto& r : std::get<syn::SourceDecl>(tree.decls.front()).rowsets)
+    duql::syntax::Program tree = parse_members(schema.source, schema.id);
+    for (const auto& r :
+         std::get<duql::syntax::SourceDecl>(tree.decls.front()).rowsets)
         if (r.name == "data")
-            return syn::to_text(
-                *std::get<syn::Where>(r.pipeline->stages.front().node)
-                     .condition);
+            return dstd::String(duql::syntax::to_text(
+                *std::get<duql::syntax::Where>(r.pipeline->stages.front().node)
+                     .condition));
     return {};
 }
 
 bool source_args_fallback(const RecordSchema& schema) {
     if (schema.source.empty()) return false;
-    syn::Program tree = parse_members(schema.source, schema.id);
+    duql::syntax::Program tree = parse_members(schema.source, schema.id);
     return duql::args_fallback(
-        std::get<syn::SourceDecl>(tree.decls.front()).defs);
+        std::get<duql::syntax::SourceDecl>(tree.decls.front()).defs);
 }
 
-std::vector<IndexedRowSet> indexed_rowsets(const RecordSchema& schema) {
-    std::vector<IndexedRowSet> out;
+dstd::Vector<IndexedRowSet> indexed_rowsets(const RecordSchema& schema) {
+    dstd::Vector<IndexedRowSet> out;
     if (schema.source.empty()) return out;
     const duql::Roles roles = duql_roles(schema);
     auto program =
@@ -172,7 +185,7 @@ std::vector<IndexedRowSet> indexed_rowsets(const RecordSchema& schema) {
     for (const auto& side : program->sides) {
         if (!side.rowset) continue;
         const duql::Pipeline& p = side.pipeline;
-        if (p.input.kind != duql::InputKind::ALL) continue;
+        if (p.input.kind != duql::InputKind::All) continue;
         bool reads_sides = false;
         duql::for_each_pipeline_term(p, [&](const duql::Term& t) {
             reads_sides =
@@ -181,7 +194,9 @@ std::vector<IndexedRowSet> indexed_rowsets(const RecordSchema& schema) {
         if (reads_sides) continue;
         IndexedRowSet r;
         r.name = side.name;
-        if (p.filter) r.filter = duql::Query::from_node(duql::clone(*p.filter));
+        if (p.filter)
+            r.filter =
+                duql::detail::QueryAccess::from_node(duql::clone(*p.filter));
         bool plain = true;
         std::size_t stages = p.stages.size();
         if (stages > 0)
@@ -200,7 +215,7 @@ std::vector<IndexedRowSet> indexed_rowsets(const RecordSchema& schema) {
             if (!sel) continue;
             for (const auto& it : sel->items) {
                 const auto* f = std::get_if<duql::TField>(&it.term->node);
-                if (!f || f->root != duql::FieldRoot::RECORD ||
+                if (!f || f->root != duql::FieldRoot::Record ||
                     f->neg_at != f->steps.size()) {
                     plain = false;
                     break;

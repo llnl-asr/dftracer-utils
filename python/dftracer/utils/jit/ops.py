@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The dataframe op registry, as callables.
 
 Every engine column op and reducer lives in one name-keyed registry, alongside

@@ -50,8 +50,7 @@ Specialized tracks
 ------------------
 
 Once the core path feels comfortable, these stand-alone lessons each take one
-audience end to end: C++ callers, the HTTP server, multi-shard scale-out, and
-compiled plugins.
+audience end to end: C++ callers, the HTTP server and compiled plugins.
 
 .. grid:: 1 1 2 2
    :gutter: 3
@@ -71,13 +70,6 @@ compiled plugins.
       Run ``dftracer_server`` over an index and query its REST routes
       (``/api/info``, ``/api/files``, ``/api/viz/*``) from the command line.
 
-   .. grid-item-card:: Scale out
-      :link: scale-out
-      :link-type: doc
-
-      Build independent index shards and query them together with a
-      ``ShardedView``, then point at the Dask path for a real cluster.
-
    .. grid-item-card:: Write a C plugin
       :link: write-a-c-plugin
       :link-type: doc
@@ -95,5 +87,4 @@ compiled plugins.
    find-a-regression
    analyze-in-cpp
    serve-and-explore
-   scale-out
    write-a-c-plugin

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin that stamps a deliberately wrong ABI version, so
  * test_plugin_abi_gate.cpp can exercise the host's version gate through a real
  * dlopen instead of the build_injected_plugins() seam, which skips it.

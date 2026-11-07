@@ -1,12 +1,14 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/pipeline.h>
 
 #include <stdexcept>
-#include <vector>
 
 namespace dftracer::utils::trace::views::detail {
 
 Pipeline lower_fused_folds(const ViewPlan& plan, const ViewDefinition& vdef,
-                           std::span<Fold* const> sinks) {
+                           dstd::Span<Fold* const> sinks) {
     Pipeline p;
     p.source.kind = NodeKind::Source;
     p.source.plan = &plan;
@@ -22,7 +24,7 @@ Pipeline lower_fused_folds(const ViewPlan& plan, const ViewDefinition& vdef,
 }
 
 coro::CoroTask<ExportStats> execute(Pipeline pipeline,
-                                    dftracer::utils::StringIntern& intern,
+                                    dftracer::utils::dstd::StringIntern& intern,
                                     const CoverageSet* covered,
                                     std::uint64_t limit) {
     if (!pipeline.ops.empty())
@@ -31,7 +33,7 @@ coro::CoroTask<ExportStats> execute(Pipeline pipeline,
         pipeline.sinks.empty())
         throw std::logic_error("pipeline: incomplete source or no sink");
 
-    std::vector<Fold*> folds;
+    dstd::Vector<Fold*> folds;
     folds.reserve(pipeline.sinks.size());
     for (const PipelineNode& s : pipeline.sinks) {
         if (s.fold == nullptr)

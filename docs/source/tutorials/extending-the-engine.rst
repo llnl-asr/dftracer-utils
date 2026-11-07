@@ -154,7 +154,7 @@ reduce or threading code.
 
          $ g++ -std=c++20 -shared -fPIC -I/path/to/dftracer-utils/include \
                events_per_pid.cpp -o events_per_pid.so
-         $ dftracer_run --plugin ./events_per_pid.so --files plugin_trace.pfw.gz
+         $ dftracer_run --plugin ./events_per_pid.so plugin_trace.pfw.gz
 
       ``dftracer_run`` folds the plugin over one shared, index-pruned parallel
       scan and reports the scan on stderr:

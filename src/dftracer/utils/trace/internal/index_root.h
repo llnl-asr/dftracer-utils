@@ -1,13 +1,16 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TRACE_INTERNAL_INDEX_ROOT_H
 #define DFTRACER_UTILS_TRACE_INTERNAL_INDEX_ROOT_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/async_mutex.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
+#include <mutex>
 #include <utility>
 
 namespace dftracer::utils::trace::internal {
@@ -15,22 +18,46 @@ namespace dftracer::utils::trace::internal {
 // A file this process built or found current in an index root, by modification
 // time and size.
 struct IndexedFile {
-    std::pair<std::int64_t, std::uint64_t> stamp;
-    std::size_t num_lines = 0;
+    dstd::Pair<std::int64_t, std::uint64_t> stamp;
+    std::size_t line_count = 0;
     std::uint64_t max_bytes = 0;
     std::uint64_t checkpoint_size = 0;
-    std::size_t num_checkpoints = 0;
+    std::size_t checkpoint_count = 0;
 };
 
-// What this process knows of the index at one root. `building` serializes
-// every first build of a file in the root; `current` is held under it.
+// `gate` is a FIFO reader-writer gate. A freshness check holds one permit, and
+// a build or a first-touch bootstrap holds them all. A read-only open that
+// meets a writer fails and reads as a stale index.
 struct IndexRoot {
-    coro::AsyncMutex building;
-    StringViewMap<IndexedFile> current;
+    static constexpr std::uint64_t ALL_PERMITS = std::uint64_t{1} << 32;
+    coro::AsyncSemaphore gate{ALL_PERMITS};
+    std::mutex current_mutex;
+    dstd::StringViewMap<IndexedFile> current;
+};
+
+// Permits of a root's gate, returned when it goes out of scope.
+class RootPermit {
+   public:
+    RootPermit(IndexRoot& root, std::uint64_t permits) noexcept
+        : root_(&root), permits_(permits) {}
+    RootPermit(RootPermit&& other) noexcept
+        : root_(other.root_), permits_(other.permits_) {
+        other.root_ = nullptr;
+    }
+    RootPermit(const RootPermit&) = delete;
+    RootPermit& operator=(const RootPermit&) = delete;
+    RootPermit& operator=(RootPermit&&) = delete;
+    ~RootPermit() {
+        if (root_) root_->gate.release(permits_);
+    }
+
+   private:
+    IndexRoot* root_;
+    std::uint64_t permits_;
 };
 
 // The shared state of the root at `index_path`, keyed by canonical path.
-std::shared_ptr<IndexRoot> index_root(const std::string& index_path);
+dstd::SharedPtr<IndexRoot> index_root(const dstd::String& index_path);
 
 }  // namespace dftracer::utils::trace::internal
 

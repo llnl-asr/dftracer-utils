@@ -1,0 +1,74 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_H
+#define DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_H
+
+#include <dftracer/utils/dstd/hasher.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
+
+namespace dftracer::utils::utilities::fileio {
+
+/**
+ * @brief Configuration for streaming file read operations.
+ */
+struct StreamReadInput {
+    dstd::Path path;
+    std::size_t chunk_size = 64 * 1024;  ///< 64KB default
+
+    StreamReadInput() = default;
+
+    explicit StreamReadInput(dstd::Path p, std::size_t cs = 64 * 1024)
+        : path(std::move(p)), chunk_size(cs) {}
+
+    /// Equality for caching support
+    bool operator==(const StreamReadInput& other) const {
+        return path.str() == other.path.str() && chunk_size == other.chunk_size;
+    }
+
+    bool operator!=(const StreamReadInput& other) const {
+        return !(*this == other);
+    }
+};
+
+/**
+ * @brief Result of a streaming write operation.
+ */
+struct StreamWriteResult {
+    dstd::Path path;
+    std::size_t bytes_written = 0;
+    std::size_t chunks_written = 0;
+    bool success = false;
+
+    StreamWriteResult() = default;
+
+    static StreamWriteResult success_result(dstd::Path p, std::size_t bytes,
+                                            std::size_t chunks) {
+        StreamWriteResult result;
+        result.path = std::move(p);
+        result.bytes_written = bytes;
+        result.chunks_written = chunks;
+        result.success = true;
+        return result;
+    }
+};
+
+}  // namespace dftracer::utils::utilities::fileio
+
+// Hash specializations to enable caching
+namespace dftracer::utils::dstd {
+template <>
+struct Hash<dftracer::utils::utilities::fileio::StreamReadInput> {
+    using is_avalanching = void;
+
+    std::size_t operator()(
+        const dftracer::utils::utilities::fileio::StreamReadInput& req)
+        const noexcept {
+        ::dftracer::utils::utilities::hash::HasherUtility hasher;
+        hasher.update(req.path.str());
+        hasher.update(req.chunk_size);
+        return static_cast<std::size_t>(hash::splitmix64(hasher.hash().value));
+    }
+};
+}  // namespace dftracer::utils::dstd
+
+#endif  // DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_H

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Tests for the logging control bindings."""
 
 import pytest

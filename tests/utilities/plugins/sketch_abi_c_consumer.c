@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_svc_sketch ABI: create a quantile sketch, add
  * samples, read quantiles, and merge - all through the raw vtable from C. */
 #include <dftracer/utils/plugins/abi.h>

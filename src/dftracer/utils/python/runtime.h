@@ -1,13 +1,14 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PYTHON_RUNTIME_H
 #define DFTRACER_UTILS_PYTHON_RUNTIME_H
 
 #include <Python.h>
-#include <dftracer/utils/core/runtime.h>
-
-#include <memory>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 typedef struct {
-    PyObject_HEAD std::shared_ptr<dftracer::utils::Runtime> runtime;
+    PyObject_HEAD dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime>
+        runtime;
 } RuntimeObject;
 
 extern PyTypeObject RuntimeType;

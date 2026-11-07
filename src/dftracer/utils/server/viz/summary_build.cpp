@@ -1,11 +1,16 @@
-#include <dftracer/utils/core/common/hash/constants.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -32,16 +37,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <limits>
-#include <memory>
 #include <mutex>
 #include <numeric>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <unordered_set>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -66,11 +64,12 @@ struct PidTid {
 
 struct PidTidHash {
     std::uint64_t operator()(const PidTid& k) const noexcept {
-        std::uint64_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
+        std::uint64_t h =
+            dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
         h = (h ^ static_cast<std::uint64_t>(k.pid)) *
-            dftracer::utils::hash::FNV1A_PRIME;
+            dftracer::utils::dstd::hash::FNV1A_PRIME;
         h = (h ^ static_cast<std::uint64_t>(k.tid)) *
-            dftracer::utils::hash::FNV1A_PRIME;
+            dftracer::utils::dstd::hash::FNV1A_PRIME;
         return h;
     }
 };
@@ -80,9 +79,9 @@ struct PidTidHash {
 // since every level is an exact 4:1 fold of the one below, workers can sit at
 // different depths and still merge.
 struct FineAcc {
-    ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> slot;
-    std::vector<std::uint64_t> keys;
-    std::vector<VizSummary::Cell> cells;
+    dstd::HashMap<std::uint64_t, std::uint32_t> slot;
+    dstd::Vector<std::uint64_t> keys;
+    dstd::Vector<VizSummary::Cell> cells;
     unsigned demote = 0;
 
     static std::uint64_t key_of(std::uint32_t lane, std::uint64_t bucket) {
@@ -116,9 +115,9 @@ struct FineAcc {
 
     void coarsen() {
         ++demote;
-        ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> ns;
-        std::vector<std::uint64_t> nk;
-        std::vector<VizSummary::Cell> nc;
+        dstd::HashMap<std::uint64_t, std::uint32_t> ns;
+        dstd::Vector<std::uint64_t> nk;
+        dstd::Vector<VizSummary::Cell> nc;
         ns.reserve(keys.size() / 2);
         for (std::size_t i = 0; i < keys.size(); ++i) {
             std::uint64_t k = key_of(static_cast<std::uint32_t>(keys[i] >> 32),
@@ -163,12 +162,12 @@ struct SumBuild {
     std::uint64_t t0 = 0;
 
     std::mutex lane_mtx;
-    ankerl::unordered_dense::map<PidTid, std::uint32_t, PidTidHash> lane_of;
-    std::vector<PidTid> lane_keys;
+    dstd::HashMap<PidTid, std::uint32_t, PidTidHash> lane_of;
+    dstd::Vector<PidTid> lane_keys;
 
-    std::vector<std::atomic<double>> cread;
-    std::vector<std::atomic<double>> cwrite;
-    std::vector<std::atomic<double>> cops;
+    dstd::Vector<std::atomic<double>> cread;
+    dstd::Vector<std::atomic<double>> cwrite;
+    dstd::Vector<std::atomic<double>> cops;
     std::atomic<std::uint64_t> gmax_dur{0};
 
     std::atomic<bool> has_aggregated{false};
@@ -176,86 +175,82 @@ struct SumBuild {
         0};  // cfg.trace_interval_ms, if declared
 
     std::mutex name_mtx;
-    dftracer::utils::StringViewMap<std::uint32_t> name_of;
-    std::vector<std::string> names;
+    dftracer::utils::dstd::StringViewMap<std::uint32_t> name_of;
+    dstd::Vector<dstd::String> names;
 
     // Per-worker caches so the hot path never locks.
-    std::vector<ankerl::unordered_dense::map<PidTid, std::uint32_t, PidTidHash>>
-        lane_cache;
-    std::vector<dftracer::utils::StringViewMap<std::uint32_t>> name_cache;
+    dstd::Vector<dstd::HashMap<PidTid, std::uint32_t, PidTidHash>> lane_cache;
+    dstd::Vector<dftracer::utils::dstd::StringViewMap<std::uint32_t>>
+        name_cache;
 
     // Per-worker simdjson parser + reusable buffer. Frame-local (owned here,
     // constructed on the caller's thread) rather than thread_local, which a
     // coroutine running on a pool thread leaves zero-initialised.
-    std::vector<dftracer::utils::json::RecordParser> parsers;
-    std::vector<std::string> parse_bufs;
+    dstd::Vector<dftracer::utils::json::RecordParser> parsers;
+    dstd::Vector<dstd::String> parse_bufs;
 
-    std::vector<FineAcc> fine;
+    dstd::Vector<FineAcc> fine;
 
     // Per-worker Analyze aggregates (no lock); merged single-threaded after the
     // scan. One map per GroupBy dimension.
-    std::vector<NameMap> g_name, g_cat, g_pid, g_fhash;
+    dstd::Vector<NameMap> g_name, g_cat, g_pid, g_fhash;
 
     // Per-worker FH resolution (file-hash -> path) from metadata records, so
     // the "By file" grouping can show real paths without depending on the
     // client.
-    std::vector<dftracer::utils::StringViewMap<std::string>> fh_parts;
+    dstd::Vector<dftracer::utils::dstd::StringViewMap<dstd::String>> fh_parts;
 
-    std::vector<dftracer::utils::StringViewMap<std::string>> sh_parts;
-    std::vector<ankerl::unordered_dense::map<std::int64_t, std::string>>
-        app_start, app_end;
+    dstd::Vector<dftracer::utils::dstd::StringViewMap<dstd::String>> sh_parts;
+    dstd::Vector<dstd::HashMap<std::int64_t, dstd::String>> app_start, app_end;
 
     // Per-pid application name from the CM "app" config record. Traces that put
     // the app name in CM (not the start event's exec_hash) rely on this for the
     // synthetic app-span label.
-    std::vector<ankerl::unordered_dense::map<std::int64_t, std::string>> cm_app;
+    dstd::Vector<dstd::HashMap<std::int64_t, dstd::String>> cm_app;
 
     // Per-worker events at least one finest-level bucket wide, kept whole (see
     // VizSummary::long_events).
-    std::vector<std::vector<VizSummary::AppSpan>> long_evs;
+    dstd::Vector<dstd::Vector<VizSummary::AppSpan>> long_evs;
 
     // Per-worker column discovery: distinct column names, and the event names
     // already harvested (schema is per event name).
-    std::vector<dftracer::utils::StringViewSet> cols, col_seen;
+    dstd::Vector<dftracer::utils::dstd::StringViewSet> cols, col_seen;
 
     // Per-worker operation-name -> category (first seen); merged after the scan
     // into VizSummary::name_cats for real layer labels.
-    std::vector<dftracer::utils::StringViewMap<std::string>> name_cat;
+    dstd::Vector<dftracer::utils::dstd::StringViewMap<dstd::String>> name_cat;
 
     // Per-worker file-hashes seen on a read/write op (files with real data
     // I/O).
-    std::vector<dftracer::utils::StringViewSet> io_fh;
+    dstd::Vector<dftracer::utils::dstd::StringViewSet> io_fh;
 
     // Per-worker process-hierarchy state (see VizSummary::procs), keyed by pid
     // so it stays small however many events a process emits.
-    std::vector<ankerl::unordered_dense::map<std::int64_t, VizSummary::ProcRow>>
-        procs;
-    std::vector<std::vector<VizSummary::ForkEdge>> forks;
-    std::vector<dftracer::utils::StringViewMap<std::string>> hh_parts;
+    dstd::Vector<dstd::HashMap<std::int64_t, VizSummary::ProcRow>> procs;
+    dstd::Vector<dstd::Vector<VizSummary::ForkEdge>> forks;
+    dstd::Vector<dftracer::utils::dstd::StringViewMap<dstd::String>> hh_parts;
 
     // Per-worker ph="C" counter samples: series key ("name\x1fkey") -> its
     // family cat + a sparse map of fine-bucket -> {sum, count}. ph="C" is rare,
     // so this stays small; merged after the scan into
     // VizSummary::counter_series.
     struct CtrAccum {
-        std::string cat;
+        dstd::String cat;
         std::int64_t pid = 0;
         std::int64_t tid = 0;
-        ankerl::unordered_dense::map<std::uint32_t,
-                                     std::pair<double, std::uint32_t>>
-            byb;
+        dstd::HashMap<std::uint32_t, dstd::Pair<double, std::uint32_t>> byb;
     };
-    std::vector<ankerl::unordered_dense::map<std::string, CtrAccum>> c_series;
+    dstd::Vector<dstd::HashMap<dstd::String, CtrAccum>> c_series;
 
     // Series identity includes pid/tid so a per-process counter keeps one
     // series per emitter (node-level counters emit under pid 0).
-    void fold_counter_sample(std::size_t w, std::string_view name,
-                             std::string_view key, std::string_view cat,
+    void fold_counter_sample(std::size_t w, dstd::StringView name,
+                             dstd::StringView key, dstd::StringView cat,
                              std::int64_t pid, std::int64_t tid,
                              std::uint32_t bucket, double val) {
-        std::string sk;
-        std::string pids = std::to_string(pid);
-        std::string tids = std::to_string(tid);
+        dstd::String sk;
+        dstd::String pids = dstd::to_string(pid);
+        dstd::String tids = dstd::to_string(tid);
         sk.reserve(name.size() + key.size() + pids.size() + tids.size() + 3);
         sk.append(name).push_back('\x1f');
         sk.append(key).push_back('\x1f');
@@ -354,7 +349,7 @@ struct SumBuild {
         if (lv.size() > long_cap * 2) compact_long(w);
     }
 
-    std::uint32_t intern(std::size_t w, std::string_view name) {
+    std::uint32_t intern(std::size_t w, dstd::StringView name) {
         auto& cache = name_cache[w];
         auto ci = cache.find(name);
         if (ci != cache.end()) return ci->second;
@@ -366,9 +361,9 @@ struct SumBuild {
         } else {
             id = static_cast<std::uint32_t>(names.size());
             names.emplace_back(name);
-            name_of.emplace(std::string(name), id);
+            name_of.emplace(dstd::String(name), id);
         }
-        cache.emplace(std::string(name), id);
+        cache.emplace(dstd::String(name), id);
         return id;
     }
 };
@@ -388,10 +383,10 @@ static void atomic_add_double(std::atomic<double>& a, double v) {
 }
 
 // Fold one (key, dur) sample into a group aggregate, mirroring fold_event.
-static void fold_group(NameMap& m, std::string_view key, double dur) {
+static void fold_group(NameMap& m, dstd::StringView key, double dur) {
     auto it = m.find(key);
     if (it == m.end()) {
-        it = m.emplace(std::string(key), NameStat{}).first;
+        it = m.emplace(dstd::String(key), NameStat{}).first;
         it->second.min = dur;
         it->second.max = dur;
     } else {
@@ -402,20 +397,21 @@ static void fold_group(NameMap& m, std::string_view key, double dur) {
     it->second.total += dur;
 }
 
-static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
+static void fold_summary(std::size_t w, dstd::StringView event, SumBuild& b) {
     dftracer::utils::json::RecordParser& parser = b.parsers[w];
-    std::string& buf = b.parse_bufs[w];
+    dstd::String& buf = b.parse_bufs[w];
     // Give simdjson zero-filled trailing padding it can over-read into. Parsing
     // a bare std::string pads it in place, leaving that padding uninitialised.
     buf.assign(event);
     buf.append(simdjson::SIMDJSON_PADDING, '\0');
     auto res =
         parser.parse(buf.data(), event.size(), /*realloc_if_needed=*/false);
+    if (res.error()) res = json::parse_refused(parser, event);
     if (res.error()) return;
     auto root = res.value_unsafe();
     if (!root.is_object()) return;
 
-    std::string_view name0;
+    dstd::StringView name0;
     {
         auto nr = root["name"];
         if (!nr.error() && nr.is_string())
@@ -428,7 +424,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     {
         auto phr = root["ph"];
         if (!phr.error() &&
-            read_phase(phr.value_unsafe()) == RecordPhase::COUNTER) {
+            read_phase(phr.value_unsafe()) == RecordPhase::Counter) {
             auto tr = root["ts"];
             if (tr.error()) return;
             double ts = json_number(tr.value_unsafe());
@@ -437,7 +433,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
             if (bucket < 0) return;
             if (bucket >= static_cast<std::int64_t>(b.nb_fine))
                 bucket = static_cast<std::int64_t>(b.nb_fine) - 1;
-            std::string_view ccat;
+            dstd::StringView ccat;
             auto ccr = root["cat"];
             if (!ccr.error() && ccr.is_string())
                 ccat = ccr.get_string().value_unsafe();
@@ -483,7 +479,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     {
         auto phr = root["ph"];
         if (!phr.error() &&
-            read_phase(phr.value_unsafe()) == RecordPhase::AGGREGATED) {
+            read_phase(phr.value_unsafe()) == RecordPhase::Aggregated) {
             b.has_aggregated.store(true, std::memory_order_relaxed);
             return;
         }
@@ -522,7 +518,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
                     static_cast<std::int64_t>(json_number(pp.value_unsafe()));
                 auto& row = b.proc_of(w, pid);
                 if (row.hhash.empty())
-                    row.hhash = std::string(hr.get_string().value_unsafe());
+                    row.hhash = dstd::String(hr.get_string().value_unsafe());
             }
             auto v = args["value"];
             auto n = args["name"];
@@ -530,8 +526,8 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
                 auto& tbl = name0 == "FH"   ? b.fh_parts[w]
                             : name0 == "SH" ? b.sh_parts[w]
                                             : b.hh_parts[w];
-                tbl.emplace(std::string(v.get_string().value_unsafe()),
-                            std::string(n.get_string().value_unsafe()));
+                tbl.emplace(dstd::String(v.get_string().value_unsafe()),
+                            dstd::String(n.get_string().value_unsafe()));
             }
         }
         return;
@@ -549,7 +545,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
                     static_cast<std::int64_t>(json_number(pp.value_unsafe()));
                 auto& row = b.proc_of(w, pid);
                 if (row.rank.empty())
-                    row.rank = std::string(av.get_string().value_unsafe());
+                    row.rank = dstd::String(av.get_string().value_unsafe());
             }
         }
         return;
@@ -566,7 +562,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
                 auto pid =
                     static_cast<std::int64_t>(json_number(pp.value_unsafe()));
                 b.cm_app[w].emplace(
-                    pid, std::string(av.get_string().value_unsafe()));
+                    pid, dstd::String(av.get_string().value_unsafe()));
             }
         }
         return;
@@ -592,10 +588,10 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
             if (b.fields.by_path && row.label.empty()) {
                 auto ar = root["args"];
                 auto v = ar.error()
-                             ? std::nullopt
+                             ? dstd::nullopt
                              : find_path(ar.value_unsafe(), b.fields.entity);
                 if (v && v->is_string())
-                    row.label = std::string(v->get_string().value_unsafe());
+                    row.label = dstd::String(v->get_string().value_unsafe());
             }
 
             double ret = 0;
@@ -611,10 +607,10 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
                 if (!rr.error()) ret = json_number(rr.value_unsafe());
                 auto hr = args["hhash"];
                 if (!hr.error() && hr.is_string() && row.hhash.empty())
-                    row.hhash = std::string(hr.get_string().value_unsafe());
+                    row.hhash = dstd::String(hr.get_string().value_unsafe());
             }
-            if (ret > 0 && (name0.find("read") != std::string_view::npos ||
-                            name0.find("write") != std::string_view::npos))
+            if (ret > 0 && (name0.find("read") != dstd::StringView::npos ||
+                            name0.find("write") != dstd::StringView::npos))
                 row.bytes += static_cast<std::uint64_t>(ret);
 
             auto cr = root["cat"];
@@ -637,7 +633,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     // name => same keys), so this is O(distinct names), not O(events).
     if (b.col_seen[w].find(name0) == b.col_seen[w].end()) {
         b.col_seen[w].emplace(name0);
-        static const ankerl::unordered_dense::set<std::string_view> SKIP = {
+        static const dstd::HashSet<dstd::StringView> SKIP = {
             "pid", "tid", "ts", "dur", "ph", "id", "args"};
         auto obj = root.get_object();
         if (!obj.error())
@@ -658,7 +654,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
             cr.get_string().value_unsafe() == "dftracer" && !pp.error()) {
             auto p = static_cast<std::int64_t>(json_number(pp.value_unsafe()));
             (name0 == "start" ? b.app_start[w] : b.app_end[w])
-                .emplace(p, std::string(event));
+                .emplace(p, dstd::String(event));
         }
     }
 
@@ -676,24 +672,24 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
         auto nr = root["name"];
         auto cr = root["cat"];
         if (!nr.error() && nr.is_string()) {
-            std::string_view nm = nr.get_string().value_unsafe();
+            dstd::StringView nm = nr.get_string().value_unsafe();
             fold_group(b.g_name[w], nm, dur);
             if (!cr.error() && cr.is_string() &&
                 b.name_cat[w].find(nm) == b.name_cat[w].end())
                 b.name_cat[w].emplace(
-                    std::string(nm),
-                    std::string(cr.get_string().value_unsafe()));
+                    dstd::String(nm),
+                    dstd::String(cr.get_string().value_unsafe()));
         }
         if (!cr.error() && cr.is_string())
             fold_group(b.g_cat[w], cr.get_string().value_unsafe(), dur);
-        thread_local std::string pidkey;
+        thread_local dstd::String pidkey;
         if (b.fields.by_path) {
             auto ar = root["args"];
-            auto v = ar.error() ? std::nullopt
+            auto v = ar.error() ? dstd::nullopt
                                 : find_path(ar.value_unsafe(), b.fields.entity);
-            pidkey.assign(v ? scalar_text(*v) : std::string());
+            pidkey.assign(v ? scalar_text(*v) : dstd::String());
         } else {
-            pidkey.assign(std::to_string(pid));
+            pidkey.assign(dstd::to_string(pid));
         }
         fold_group(b.g_pid[w], pidkey, dur);
         auto ar = root["args"];
@@ -721,7 +717,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
 
     std::uint32_t name_id;
     {
-        std::string_view name;
+        dstd::StringView name;
         auto nr = root["name"];
         if (!nr.error() && nr.is_string())
             name = nr.get_string().value_unsafe();
@@ -735,7 +731,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
         b.push_long(
             w, VizSummary::AppSpan{static_cast<std::uint64_t>(ts),
                                    static_cast<std::uint64_t>(ts + dur), pid,
-                                   tid, name_id, std::string(event)});
+                                   tid, name_id, dstd::String(event)});
     } else {
         auto lane = b.get_lane(w, pid, tid);
         if (lane != SumBuild::NO_LANE) b.fold_cell(w, lane, ts, dur, name_id);
@@ -745,7 +741,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     // Counters: read/write bytes and op counts for POSIX/STDIO/IO events.
     auto cat_r = root["cat"];
     if (cat_r.error() || !cat_r.is_string()) return;
-    std::string_view cat = cat_r.get_string().value_unsafe();
+    dstd::StringView cat = cat_r.get_string().value_unsafe();
     if (cat != "POSIX" && cat != "STDIO" && cat != "IO") return;
     atomic_add_double(b.cops[bi], 1.0);
     double bytes = 0;
@@ -755,11 +751,11 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
         if (!ret.error()) bytes = json_number(ret.value_unsafe());
     }
     if (bytes <= 0) return;
-    std::string_view name;
+    dstd::StringView name;
     auto nr = root["name"];
     if (!nr.error() && nr.is_string()) name = nr.get_string().value_unsafe();
-    bool is_write = name.find("write") != std::string_view::npos;
-    bool is_read = name.find("read") != std::string_view::npos;
+    bool is_write = name.find("write") != dstd::StringView::npos;
+    bool is_read = name.find("read") != dstd::StringView::npos;
     if (is_write)
         atomic_add_double(b.cwrite[bi], bytes);
     else if (is_read)
@@ -767,7 +763,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     if ((is_read || is_write) && !args.error() && args.is_object()) {
         auto fr = args["fhash"];
         if (!fr.error() && fr.is_string())
-            b.io_fh[w].emplace(std::string(fr.get_string().value_unsafe()));
+            b.io_fh[w].emplace(dstd::String(fr.get_string().value_unsafe()));
     }
 }
 
@@ -776,7 +772,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
 // Build the activity summary by scanning every event once. Blocks the caller
 // (the first overview request) for the scan; cached for the server's lifetime.
 static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
-    auto summary = std::make_unique<VizSummary>();
+    auto summary = dstd::make_unique<VizSummary>();
     std::uint64_t gmin = index.global_min_timestamp_us();
     std::uint64_t gmax = index.global_max_timestamp_us();
     if (gmin == std::numeric_limits<std::uint64_t>::max() || gmax <= gmin) {
@@ -788,6 +784,13 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     std::size_t nb = VizSummary::MAX_CELLS / est_lanes;
     nb = std::clamp(nb, VizSummary::MIN_BUCKETS_PER_LANE,
                     VizSummary::MAX_BUCKETS_PER_LANE);
+    // The finest level is 4^EXTRA_LEVELS times nb. Buckets under 1 us hold
+    // nothing more, and each level keeps dense counter vectors, so a short
+    // trace would otherwise cost a lot of memory and cache file.
+    nb = std::min<std::size_t>(
+        nb,
+        std::max<std::size_t>(VizSummary::MIN_BUCKETS_PER_LANE,
+                              (gmax - gmin) >> (2 * VizSummary::EXTRA_LEVELS)));
 
     const TraceFields fields(index.record_schema());
     SumBuild b(fields);
@@ -804,9 +807,9 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     b.enc_threshold_us =
         std::max(b.fine_bucket_us,
                  static_cast<double>(gmax - gmin) / ENC_THRESHOLD_FRACTION);
-    b.cread = std::vector<std::atomic<double>>(b.nb_fine);
-    b.cwrite = std::vector<std::atomic<double>>(b.nb_fine);
-    b.cops = std::vector<std::atomic<double>>(b.nb_fine);
+    b.cread = dstd::Vector<std::atomic<double>>(b.nb_fine);
+    b.cwrite = dstd::Vector<std::atomic<double>>(b.nb_fine);
+    b.cops = dstd::Vector<std::atomic<double>>(b.nb_fine);
     std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
     b.fine_cell_cap =
         std::max<std::size_t>(1, VizSummary::MAX_FINE_CELLS / slots);
@@ -837,15 +840,15 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
 
     // The summary reads the metadata records (hosts, file paths, ranks, app
     // names) along with the data events.
-    std::vector<const TraceIndex::FileInfo*> files;
+    dstd::Vector<const TraceIndex::FileInfo*> files;
     files.reserve(index.files().size());
     for (const auto& f : index.files()) files.push_back(&f);
 
     co_await views::View::from_files(to_view_files(files))
         .phase(views::Phase::Any)  // every record: cells, counters, metadata
         .for_each_batch(
-            [&b](std::size_t w, const std::vector<std::string_view>& events) {
-                b.fields.for_each_event(events, [&](std::string_view ev) {
+            [&b](std::size_t w, const dstd::Vector<dstd::StringView>& events) {
+                b.fields.for_each_event(events, [&](dstd::StringView ev) {
                     fold_summary(w, ev, b);
                 });
             },
@@ -866,7 +869,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     // Merge per-worker ph="C" samples by series key into sparse, ascending
     // fine-bucket series.
     {
-        ankerl::unordered_dense::map<std::string, SumBuild::CtrAccum> merged;
+        dstd::HashMap<dstd::String, SumBuild::CtrAccum> merged;
         for (auto& wm : b.c_series)
             for (auto& [sk, acc] : wm) {
                 auto& m = merged[sk];
@@ -891,7 +894,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             cd.cat = acc.cat;
             cd.pid = acc.pid;
             cd.tid = acc.tid;
-            std::vector<std::uint32_t> bks;
+            dstd::Vector<std::uint32_t> bks;
             bks.reserve(acc.byb.size());
             for (auto& kv : acc.byb) {
                 bks.push_back(kv.first);
@@ -953,7 +956,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     {
         std::size_t total = 0;
         for (auto& acc : b.fine) total += acc.cells.size();
-        std::vector<std::pair<std::uint64_t, VizSummary::Cell>> merged;
+        dstd::Vector<dstd::Pair<std::uint64_t, VizSummary::Cell>> merged;
         merged.reserve(total);
         for (auto& acc : b.fine) {
             for (std::size_t i = 0; i < acc.keys.size(); ++i)
@@ -967,7 +970,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
         std::size_t nb_fine = b.nb_fine >> (2 * demote);
         // Counters were folded at the pre-coarsening resolution; bring them to
         // the merged one, then they ride the same 4:1 folds as the cells.
-        std::vector<double> cread(nb_fine, 0.0), cwrite(nb_fine, 0.0),
+        dstd::Vector<double> cread(nb_fine, 0.0), cwrite(nb_fine, 0.0),
             cops(nb_fine, 0.0);
         for (std::size_t i = 0; i < b.nb_fine; ++i) {
             std::size_t j = i >> (2 * demote);
@@ -1002,8 +1005,8 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
                 }
                 merged.resize(out);
                 nb_fine >>= 2;
-                auto fold = [](const std::vector<double>& src, std::size_t n) {
-                    std::vector<double> dst(n, 0.0);
+                auto fold = [](const dstd::Vector<double>& src, std::size_t n) {
+                    dstd::Vector<double> dst(n, 0.0);
                     for (std::size_t i = 0; i < src.size(); ++i) {
                         std::size_t j = i >> 2;
                         dst[j < n ? j : n - 1] += src[i];
@@ -1057,7 +1060,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     }
 
     {
-        ankerl::unordered_dense::set<std::string> all_cols;
+        dstd::HashSet<dstd::String> all_cols;
         for (auto& c : b.cols)
             for (auto& k : c) all_cols.emplace(k);
         summary->columns.assign(all_cols.begin(), all_cols.end());
@@ -1065,7 +1068,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     }
 
     // Merge the per-worker Analyze aggregates and sort each by total desc.
-    auto finalize_group = [](std::vector<NameMap>& parts) {
+    auto finalize_group = [](dstd::Vector<NameMap>& parts) {
         NameMap merged;
         for (auto& p : parts) {
             for (auto& kv : p) {
@@ -1076,11 +1079,11 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
                     it->second.merge_from(kv.second);
             }
         }
-        std::vector<VizSummary::GroupRow> rows;
+        dstd::Vector<VizSummary::GroupRow> rows;
         rows.reserve(merged.size());
         for (auto& kv : merged)
-            rows.push_back({kv.first, kv.second.count, kv.second.total,
-                            kv.second.min, kv.second.max});
+            rows.push_back({dstd::String(kv.first), kv.second.count,
+                            kv.second.total, kv.second.min, kv.second.max});
         std::sort(rows.begin(), rows.end(),
                   [](const VizSummary::GroupRow& lhs,
                      const VizSummary::GroupRow& rhs) {
@@ -1094,7 +1097,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     summary->by_fhash = finalize_group(b.g_fhash);
 
     // Resolve file-hash keys to real paths where a metadata record was seen.
-    dftracer::utils::StringViewMap<std::string> fh;
+    dftracer::utils::dstd::StringViewMap<dstd::String> fh;
     for (auto& part : b.fh_parts)
         for (auto& kv : part) fh.emplace(kv.first, kv.second);
     for (auto& r : summary->by_fhash) {
@@ -1104,20 +1107,21 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     summary->total_files = fh.size();
 
     {
-        dftracer::utils::StringViewMap<std::string> sh;
+        dftracer::utils::dstd::StringViewMap<dstd::String> sh;
         for (auto& part : b.sh_parts)
             for (auto& kv : part) sh.emplace(kv.first, kv.second);
-        ankerl::unordered_dense::map<std::int64_t, std::string> starts, ends;
+        dstd::HashMap<std::int64_t, dstd::String> starts, ends;
         for (auto& part : b.app_start)
             for (auto& kv : part) starts.emplace(kv.first, kv.second);
         for (auto& part : b.app_end)
             for (auto& kv : part) ends.emplace(kv.first, kv.second);
-        ankerl::unordered_dense::map<std::int64_t, std::string> cm_apps;
+        dstd::HashMap<std::int64_t, dstd::String> cm_apps;
         for (auto& part : b.cm_app)
             for (auto& kv : part) cm_apps.emplace(kv.first, kv.second);
 
-        auto resolve = [](dftracer::utils::StringViewMap<std::string>& tbl,
-                          const std::string& h) -> std::string {
+        auto resolve =
+            [](dftracer::utils::dstd::StringViewMap<dstd::String>& tbl,
+               const dstd::String& h) -> dstd::String {
             auto it = tbl.find(h);
             return it != tbl.end() ? it->second : h;
         };
@@ -1125,9 +1129,11 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
         for (auto& [pid, sjson] : starts) {
             auto eit = ends.find(pid);
             if (eit == ends.end()) continue;
-            std::string sbuf(sjson), ebuf(eit->second);
-            auto sr = sp.parse(sbuf);
-            auto er = ep.parse(ebuf);
+            dstd::String sbuf(sjson), ebuf(eit->second);
+            auto sr = parse_string(sp, sbuf);
+            if (sr.error()) sr = json::parse_refused(sp, sjson);
+            auto er = parse_string(ep, ebuf);
+            if (er.error()) er = json::parse_refused(ep, eit->second);
             if (sr.error() || er.error()) continue;
             auto se = sr.value_unsafe();
             auto ee = er.value_unsafe();
@@ -1137,12 +1143,12 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
                 return v.error() ? 0.0 : json_number(v.value_unsafe());
             };
             auto sarg = [](simdjson::dom::element r,
-                           const char* k) -> std::string {
+                           const char* k) -> dstd::String {
                 auto a = r["args"];
                 if (a.error()) return "";
                 auto v = a[k];
                 return (!v.error() && v.is_string())
-                           ? std::string(v.get_string().value_unsafe())
+                           ? dstd::String(v.get_string().value_unsafe())
                            : "";
             };
             auto narg = [](simdjson::dom::element r, const char* k) -> double {
@@ -1156,18 +1162,19 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             auto end_ts = static_cast<std::uint64_t>(num(ee, "ts"));
             if (end_ts <= start_ts) continue;
             auto tid = static_cast<std::int64_t>(num(se, "tid"));
-            std::string app = resolve(sh, sarg(se, "exec_hash"));
-            std::string cmd = resolve(sh, sarg(se, "cmd_hash"));
-            std::string cwd = resolve(fh, sarg(se, "cwd"));
-            std::string version = sarg(se, "version");
-            std::string date = sarg(se, "date");
+            dstd::String app = resolve(sh, sarg(se, "exec_hash"));
+            dstd::String cmd = resolve(sh, sarg(se, "cmd_hash"));
+            dstd::String cwd = resolve(fh, sarg(se, "cwd"));
+            dstd::String version = sarg(se, "version");
+            dstd::String date = sarg(se, "date");
             auto ppid = static_cast<std::int64_t>(narg(se, "ppid"));
-            auto num_events = static_cast<std::int64_t>(narg(ee, "num_events"));
+            auto event_count =
+                static_cast<std::int64_t>(narg(ee, "num_events"));
             if (app.empty()) {
                 auto ci = cm_apps.find(pid);
                 if (ci != cm_apps.end()) app = ci->second;
             }
-            if (app.empty()) app = "app " + std::to_string(pid);
+            if (app.empty()) app = "app " + dstd::to_string(pid);
 
             auto& jb = scratch_json_builder();
             jb.start_object();
@@ -1183,9 +1190,9 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             jb.append_comma();
             jb.append_key_value("dur", end_ts - start_ts);
             jb.append_comma();
-            jb.append_key_value("ph", phase_to_int(RecordPhase::COMPLETE));
+            jb.append_key_value("ph", phase_to_int(RecordPhase::Complete));
             jb.append_comma();
-            jb.append_key_value("type", event_type_to_int(EventType::DFTRACER));
+            jb.append_key_value("type", event_type_to_int(EventType::Dftracer));
             jb.append_comma();
             jb.escape_and_append_with_quotes("args");
             jb.append_colon();
@@ -1202,22 +1209,22 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             jb.append_comma();
             jb.append_key_value("date", date);
             jb.append_comma();
-            jb.append_key_value("num_events", num_events);
+            jb.append_key_value("num_events", event_count);
             jb.end_object();
             jb.end_object();
             summary->app_spans.push_back(
                 {start_ts, end_ts, pid, tid,
-                 std::numeric_limits<std::uint32_t>::max(), std::string(jb)});
+                 std::numeric_limits<std::uint32_t>::max(), dstd::String(jb)});
         }
     }
 
-    dftracer::utils::StringViewSet io_fh;
+    dftracer::utils::dstd::StringViewSet io_fh;
     for (auto& part : b.io_fh)
         for (auto& k : part) io_fh.emplace(k);
     summary->io_files = io_fh.size();
 
     {
-        ankerl::unordered_dense::map<std::int64_t, VizSummary::ProcRow> procs;
+        dstd::HashMap<std::int64_t, VizSummary::ProcRow> procs;
         for (auto& part : b.procs) {
             for (auto& [pid, src] : part) {
                 auto it = procs.find(pid);
@@ -1253,7 +1260,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
                   [](const VizSummary::ForkEdge& a,
                      const VizSummary::ForkEdge& x) { return a.ts < x.ts; });
 
-        dftracer::utils::StringViewMap<std::string> hh;
+        dftracer::utils::dstd::StringViewMap<dstd::String> hh;
         for (auto& part : b.hh_parts)
             for (auto& kv : part) hh.emplace(kv.first, kv.second);
         summary->hosts.reserve(hh.size());
@@ -1261,7 +1268,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     }
 
     // Merge the per-worker name -> category maps (first writer wins).
-    dftracer::utils::StringViewMap<std::string> nc;
+    dftracer::utils::dstd::StringViewMap<dstd::String> nc;
     for (auto& part : b.name_cat)
         for (auto& kv : part) nc.emplace(kv.first, kv.second);
     summary->name_cats.reserve(nc.size());
@@ -1270,14 +1277,14 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     if (!summary->app_spans.empty()) {
         // Break = dead time between runs: merge app-spans into run clusters and
         // emit every gap between them, no size threshold.
-        std::vector<const VizSummary::AppSpan*> spans;
+        dstd::Vector<const VizSummary::AppSpan*> spans;
         spans.reserve(summary->app_spans.size());
         for (const auto& sp : summary->app_spans) spans.push_back(&sp);
         std::sort(spans.begin(), spans.end(),
                   [](const auto* lhs, const auto* rhs) {
                       return lhs->begin < rhs->begin;
                   });
-        std::vector<std::pair<std::uint64_t, std::uint64_t>> runs;
+        dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> runs;
         for (const auto* sp : spans) {
             if (!runs.empty() && sp->begin <= runs.back().second)
                 runs.back().second = std::max(runs.back().second, sp->end);
@@ -1291,7 +1298,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     } else if (nb > 0 && summary->bucket_us > 0) {
         // No app-spans (malformed trace): fall back to a lane-activity scan,
         // requiring a gap to be a fraction of active (not total) time.
-        std::vector<bool> active(nb, false);
+        dstd::Vector<bool> active(nb, false);
         if (!summary->levels.empty())
             for (const auto& lane : summary->levels.front().lanes)
                 for (std::uint32_t bk : lane.buckets)

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """@jit.op: author a compose op in Python and run it two ways - standalone in
 plain Python (JIT-compiled, driven on a standalone compose host) and inlined
 into a @jit.each_event plugin body."""

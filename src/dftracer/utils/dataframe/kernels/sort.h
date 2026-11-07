@@ -1,15 +1,16 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_KERNELS_SORT_H
 #define DFTRACER_UTILS_DATAFRAME_KERNELS_SORT_H
 
-#include <dftracer/utils/core/common/hash/splitmix64.h>
-#include <dftracer/utils/dataframe/buffer.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <hwy/contrib/sort/vqsort.h>
 
 #include <algorithm>
 #include <cstddef>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -60,13 +61,13 @@ bool bucket_packed_sort(T* data, std::size_t n, std::size_t buckets,
                         KeyOf key_of, Scratch<T>& sorted) {
     constexpr std::size_t GRAIN = std::size_t{1} << 16;
     constexpr std::size_t OVERSAMPLE = 16;
-    std::vector<std::uint64_t> sample;
+    dstd::Vector<std::uint64_t> sample;
     sample.reserve(buckets * OVERSAMPLE);
     for (std::size_t i = 0; i < buckets * OVERSAMPLE; ++i)
         sample.push_back(
-            key_of(data[dftracer::utils::hash::splitmix64(i) % n]));
+            key_of(data[dftracer::utils::dstd::hash::splitmix64(i) % n]));
     std::sort(sample.begin(), sample.end());
-    std::vector<std::uint64_t> splitters;  // buckets - 1 of them, ascending
+    dstd::Vector<std::uint64_t> splitters;  // buckets - 1 of them, ascending
     splitters.reserve(buckets - 1);
     for (std::size_t k = 1; k < buckets; ++k)
         splitters.push_back(sample[k * OVERSAMPLE]);
@@ -78,7 +79,7 @@ bool bucket_packed_sort(T* data, std::size_t n, std::size_t buckets,
     };
 
     const std::size_t chunks = (n + GRAIN - 1) / GRAIN;
-    std::vector<std::size_t> hist(chunks * buckets, 0);
+    dstd::Vector<std::size_t> hist(chunks * buckets, 0);
     Scratch<std::uint16_t> which(n);  // each value's bucket, found once
     parallel_for(static_cast<std::int64_t>(n), static_cast<std::int64_t>(GRAIN),
                  [&](std::int64_t b, std::int64_t e) {
@@ -94,7 +95,7 @@ bool bucket_packed_sort(T* data, std::size_t n, std::size_t buckets,
                  });
     // Bucket starts, and per chunk the write cursor into each bucket
     // (column-major prefix: bucket by bucket, chunk by chunk within it).
-    std::vector<std::size_t> start(buckets + 1, 0);
+    dstd::Vector<std::size_t> start(buckets + 1, 0);
     std::size_t largest = 0;
     for (std::size_t k = 0; k < buckets; ++k) {
         std::size_t total = 0;
@@ -149,7 +150,7 @@ void parallel_packed_sort(T* data, std::size_t n, Less less) {
                          vqsort(data + lo, hi - lo);
                      }
                  });
-    std::vector<T> scratch(n);
+    dstd::Vector<T> scratch(n);
     T* src = data;
     T* dst = scratch.data();
     for (std::size_t width = RUN; width < n; width *= 2) {

@@ -1,5 +1,8 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/little_endian.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 
 #include <algorithm>
@@ -35,11 +38,14 @@ void ScalableBloomFilter::open_level(std::size_t capacity) {
     levels_.push_back(Level{BloomFilter(capacity, rate), capacity, 0});
 }
 
-void ScalableBloomFilter::add(std::string_view value) {
-    if (possibly_contains(value)) return;
+void ScalableBloomFilter::add(dstd::StringView value) {
+    const BloomFilter::Hashes hashes = BloomFilter::hash(value);
+    ++hashed_;
+    for (const auto& level : levels_)
+        if (level.filter.possibly_contains(hashes)) return;
 
     auto& active = levels_.back();
-    active.filter.add(value);
+    active.filter.add(hashes);
     ++active.distinct;
     ++distinct_;
 
@@ -48,9 +54,10 @@ void ScalableBloomFilter::add(std::string_view value) {
     }
 }
 
-bool ScalableBloomFilter::possibly_contains(std::string_view value) const {
+bool ScalableBloomFilter::possibly_contains(dstd::StringView value) const {
+    const BloomFilter::Hashes hashes = BloomFilter::hash(value);
     for (const auto& level : levels_) {
-        if (level.filter.possibly_contains(value)) return true;
+        if (level.filter.possibly_contains(hashes)) return true;
     }
     return false;
 }
@@ -60,9 +67,9 @@ void ScalableBloomFilter::merge_from(const ScalableBloomFilter& other) {
         auto it = std::find_if(
             levels_.begin(), levels_.end(), [&src](const Level& dst) {
                 return dst.capacity == src.capacity &&
-                       dst.filter.num_bits() == src.filter.num_bits() &&
-                       dst.filter.num_hash_functions() ==
-                           src.filter.num_hash_functions();
+                       dst.filter.bit_count() == src.filter.bit_count() &&
+                       dst.filter.hash_function_count() ==
+                           src.filter.hash_function_count();
             });
         if (it != levels_.end()) {
             it->filter.merge_from(src.filter);
@@ -89,27 +96,27 @@ std::size_t ScalableBloomFilter::size_bytes() const {
     return total;
 }
 
-std::vector<unsigned char> ScalableBloomFilter::serialize() const {
-    std::vector<unsigned char> result;
+dstd::Vector<unsigned char> ScalableBloomFilter::serialize() const {
+    dstd::Vector<unsigned char> result;
     serialize_into(result);
     return result;
 }
 
 void ScalableBloomFilter::serialize_into(
-    std::vector<unsigned char>& result) const {
+    dstd::Vector<unsigned char>& result) const {
     result.clear();
     result.insert(result.end(), MAGIC, MAGIC + MAGIC_SIZE);
     result.resize(CHAIN_HEADER_SIZE);
-    write_u32_le(result.data() + MAGIC_SIZE,
-                 static_cast<std::uint32_t>(levels_.size()));
+    dstd::write_u32_le(result.data() + MAGIC_SIZE,
+                       static_cast<std::uint32_t>(levels_.size()));
 
-    std::vector<unsigned char> blob;
+    dstd::Vector<unsigned char> blob;
     for (const auto& level : levels_) {
         level.filter.serialize_into(blob);
         const auto offset = result.size();
         result.resize(offset + sizeof(std::uint32_t) + blob.size());
-        write_u32_le(result.data() + offset,
-                     static_cast<std::uint32_t>(blob.size()));
+        dstd::write_u32_le(result.data() + offset,
+                           static_cast<std::uint32_t>(blob.size()));
         std::memcpy(result.data() + offset + sizeof(std::uint32_t), blob.data(),
                     blob.size());
     }
@@ -122,31 +129,31 @@ ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
 
     if (!has_chain_magic(data, size)) {
         auto legacy = BloomFilter::from_blob(data, size);
-        const auto entries = legacy.num_entries();
+        const auto entries = legacy.entry_count();
         result.levels_.push_back(
             Level{std::move(legacy), entries > 0 ? entries : 1, entries});
         result.distinct_ = entries;
         return result;
     }
 
-    const std::uint32_t count = read_u32_le(data + MAGIC_SIZE);
+    const std::uint32_t count = dstd::read_u32_le(data + MAGIC_SIZE);
     std::size_t cursor = CHAIN_HEADER_SIZE;
     for (std::uint32_t i = 0; i < count; ++i) {
         if (cursor + sizeof(std::uint32_t) > size) {
-            throw DFTUtilsException(
-                ErrorCode::PARSE,
+            throw common::DFTUtilsException(
+                common::ErrorCode::Parse,
                 "ScalableBloomFilter::from_blob: truncated level header");
         }
-        const std::size_t blob_size = read_u32_le(data + cursor);
+        const std::size_t blob_size = dstd::read_u32_le(data + cursor);
         cursor += sizeof(std::uint32_t);
         if (cursor + blob_size > size) {
-            throw DFTUtilsException(
-                ErrorCode::PARSE,
+            throw common::DFTUtilsException(
+                common::ErrorCode::Parse,
                 "ScalableBloomFilter::from_blob: truncated level payload");
         }
         auto filter = BloomFilter::from_blob(data + cursor, blob_size);
         cursor += blob_size;
-        const auto entries = filter.num_entries();
+        const auto entries = filter.entry_count();
         result.distinct_ += entries;
         result.levels_.push_back(
             Level{std::move(filter), entries > 0 ? entries : 1, entries});

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Collect query DSL filter strings from tests, docs and examples.
 
 Prints one JSON string per line on stdout. With --sources, prints

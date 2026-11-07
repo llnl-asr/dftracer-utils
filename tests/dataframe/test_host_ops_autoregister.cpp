@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The host ops must be in the registry from linking the utilities library
 // alone. Nothing here calls register_host_ops(), so a static build that lets
 // the linker drop the initializer's object file fails this and only this test.

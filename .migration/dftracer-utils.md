@@ -17,10 +17,10 @@ Selected: 2026-07-30. Source: git@github.com:llnl/dftracer-utils.git (develop). 
 
 ## Findings
 
-- Workflows converted: `ci.yml` (rocksdb prebuild + os/python test matrix, valgrind shards, web/npm, wheel/cibuildwheel) → single `test` job on `.corona-batch` running `make test` + `make test-py` with gcc/11.2.1 + python/3.13.2 + mvapich2/2.3.7 modules (matrices collapsed, coveralls/paths-filter/web dropped — GitHub-only, noted in header comment). `format-check.yaml` → `lint` job (pip-installs `clang-format==19.*` + `ruff`, runs `scripts/formatting/check-formatting.sh` + `ruff check`/`ruff format --check`). `python-publish.yaml` → `publish-pypi`, `when: manual` on tags; needs CI/CD variable `PYPI_TOKEN` (listed in `.gitlab-ci.yml` header). No docker on corona → cibuildwheel replaced by `python -m build` + twine.
+- Workflows converted: `ci.yml` (dependency prebuild + os/python test matrix, valgrind shards, web/npm, wheel/cibuildwheel) → single `test` job on `.corona-batch` running `make test` + `make test-py` with gcc/11.2.1 + python/3.13.2 + mvapich2/2.3.7 modules (matrices collapsed, coveralls/paths-filter/web dropped — GitHub-only, noted in header comment). `format-check.yaml` → `lint` job (pip-installs `clang-format==19.*` + `ruff`, runs `scripts/formatting/check-formatting.sh` + `ruff check`/`ruff format --check`). `python-publish.yaml` → `publish-pypi`, `when: manual` on tags; needs CI/CD variable `PYPI_TOKEN` (listed in `.gitlab-ci.yml` header). No docker on corona → cibuildwheel replaced by `python -m build` + twine.
 - Sphinx source lives in `docs/source` (not `docs/`); pages job uses `sphinx-build -b html docs/source public` with `pip install -r docs/requirements.txt`. Doxygen/breathe steps in conf.py degrade gracefully when doxygen XML is absent.
 - Dependency scan: NO dftracer-group GitHub deps (cpp-logger/brahma/dftracer/dfanalyzer/dftracer-agents) in pyproject.toml, setup.py, CMakeLists, or cmake/modules/Dependencies.cmake — all CPM deps are third-party. Only `github.com/LLNL/dftracer-utils` self-references (project metadata/docs). **Zero in-place changes made.**
-- Build/pytest smoke not run locally: `make test` compiles RocksDB + full C++ tree from source (hours on a login node; GitHub CI uses prebuilt caches); left to the corona pipeline.
+- Build/pytest smoke not run locally: `make test` compiles the full C++ tree plus its dependencies from source (hours on a login node; GitHub CI uses prebuilt caches); left to the corona pipeline.
 
 ## Executed changes (what to undo on revert)
 

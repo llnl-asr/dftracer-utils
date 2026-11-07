@@ -13,8 +13,7 @@ Generate a DLIO config from traces
    aggregates the traces, simulates the data-loader barrier to refine a percentile
    bound, and emits the YAML.
 
-This is CLI-primary. The pipeline underneath is a C++ library (namespace
-``dftracer::utils::utilities::dlio``); there is no Python binding.
+This is a CLI tool. There is no Python binding.
 
 Command line
 ------------
@@ -22,10 +21,10 @@ Command line
 .. code-block:: bash
 
    # Minimal: read ./traces, write dlio.yaml
-   dftracer_gen_dlio_config -d ./traces -o dlio.yaml
+   dftracer_gen_dlio_config ./traces -o dlio.yaml
 
    # Tune the simulator: more iterations, tighter convergence
-   dftracer_gen_dlio_config -d ./traces -o dlio.yaml \
+   dftracer_gen_dlio_config ./traces -o dlio.yaml \
        --simulation-iterations 20 --target-e2e-error 0.02
 
 ``-o``/``--output`` is required. ``-d``/``--directory`` defaults to ``.`` and

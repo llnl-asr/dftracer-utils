@@ -1,4 +1,5 @@
 #! /bin/bash
+# SPDX-License-Identifier: MIT
 
 clang_format_exe="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )/clang-format.sh"
 if [ $# -ge 1 ]; then
@@ -54,7 +55,8 @@ format_dir() {
     fi
 
     echo "Formatting C/C++ code in '$dir'"
-    find "$dir" \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) -print0 | \
+    find "$dir" \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) \
+        ! -path "*/dftracer/utils/dstd/vendor/*" -print0 | \
         xargs -0 -P "$num_jobs" "$clang_format" -i
 }
 

@@ -1,17 +1,20 @@
-#include <dftracer/utils/core/runtime.h>
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -19,15 +22,16 @@ namespace {
 
 constexpr const char* ROW = "__dftu_row__";
 
-std::int32_t index_of(const LazyFrame& plan, const std::string& name) {
-    const std::vector<std::string> sch = plan.schema();
+std::int32_t index_of(const LazyFrame& plan, const dstd::String& name) {
+    const dstd::Vector<dstd::String> sch = plan.schema();
     auto it = std::find(sch.begin(), sch.end(), name);
     if (it == sch.end())
-        throw std::out_of_range("group_by transform: no column named " + name);
+        throw std::out_of_range(
+            ("group_by transform: no column named " + name).c_str());
     return static_cast<std::int32_t>(it - sch.begin());
 }
 
-Expr ref(const LazyFrame& plan, const std::string& name) {
+Expr ref(const LazyFrame& plan, const dstd::String& name) {
     return expr_col(index_of(plan, name));
 }
 
@@ -49,26 +53,26 @@ dftu_window_spec spec(dftu_window_func func, const char* value, const char* out,
     return s;
 }
 
-LazyFrame window(const LazyFrame& plan, const std::vector<std::string>& part,
-                 const std::vector<std::string>& order,
-                 const std::vector<dftu_window_spec>& specs) {
-    std::vector<const char*> pc;
-    std::vector<const char*> oc;
-    for (const std::string& s : part) pc.push_back(s.c_str());
-    for (const std::string& s : order) oc.push_back(s.c_str());
+LazyFrame window(const LazyFrame& plan, const dstd::Vector<dstd::String>& part,
+                 const dstd::Vector<dstd::String>& order,
+                 const dstd::Vector<dftu_window_spec>& specs) {
+    dstd::Vector<const char*> pc;
+    dstd::Vector<const char*> oc;
+    for (const dstd::String& s : part) pc.push_back(s.c_str());
+    for (const dstd::String& s : order) oc.push_back(s.c_str());
     OpArgs a;
     a.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
         .strlist(2, oc.data(), static_cast<std::int32_t>(oc.size()))
         .winlist(3, specs);
-    std::vector<std::string> names = plan.schema();
+    dstd::Vector<dstd::String> names = plan.schema();
     for (const dftu_window_spec& s : specs) names.emplace_back(s.out);
     return plan.frame_op("dftu.frame.window", a, {}, std::move(names));
 }
 
-std::vector<std::string> value_columns(const LazyFrame& plan,
-                                       const std::vector<std::string>& keys,
-                                       Agg agg) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> value_columns(const LazyFrame& plan,
+                                         const dstd::Vector<dstd::String>& keys,
+                                         Agg agg) {
+    dstd::Vector<dstd::String> out;
     for (const GroupAgg& g : plan.reduce_specs(agg, keys))
         out.push_back(g.column);
     if (out.empty())
@@ -76,12 +80,12 @@ std::vector<std::string> value_columns(const LazyFrame& plan,
     return out;
 }
 
-std::string tmp(const char* stem, std::size_t i) {
-    return std::string("__dftu_") + stem + "_" + std::to_string(i) + "__";
+dstd::String tmp(const char* stem, std::size_t i) {
+    return dstd::String("__dftu_") + stem + "_" + dstd::to_string(i) + "__";
 }
 
-Expr keep_null(const LazyFrame& p, const std::string& c,
-               const std::string& out) {
+Expr keep_null(const LazyFrame& p, const dstd::String& c,
+               const dstd::String& out) {
     return ref(p, out) + (ref(p, c) - ref(p, c));
 }
 
@@ -89,12 +93,12 @@ Expr keep_null(const LazyFrame& p, const std::string& c,
 // `post` under the column's own name.
 template <class Spec, class Post>
 LazyFrame per_column(const LazyFrame& plan,
-                     const std::vector<std::string>& keys,
-                     const std::vector<std::string>& columns, Spec make_spec,
+                     const dstd::Vector<dstd::String>& keys,
+                     const dstd::Vector<dstd::String>& columns, Spec make_spec,
                      Post post) {
     LazyFrame out = plan.with_row_index(ROW);
-    std::vector<std::string> outs;
-    std::vector<dftu_window_spec> specs;
+    dstd::Vector<dstd::String> outs;
+    dstd::Vector<dftu_window_spec> specs;
     for (std::size_t i = 0; i < columns.size(); ++i)
         outs.push_back(tmp("w", i));
     for (std::size_t i = 0; i < columns.size(); ++i)
@@ -105,19 +109,19 @@ LazyFrame per_column(const LazyFrame& plan,
     return out.select(columns);
 }
 
-LazyFrame ranked(const LazyFrame& plan, const std::vector<std::string>& keys,
+LazyFrame ranked(const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
                  RankMethod method, bool ascending) {
-    const std::vector<std::string> columns =
+    const dstd::Vector<dstd::String> columns =
         value_columns(plan, keys, Agg::Sum);
     LazyFrame out = plan.with_row_index(ROW);
     for (std::size_t i = 0; i < columns.size(); ++i) {
-        const std::string& c = columns[i];
-        std::string key = c;
+        const dstd::String& c = columns[i];
+        dstd::String key = c;
         if (!ascending) {
             key = tmp("neg", i);
             out = out.with_column(key, ref(out, c) * lit(std::int64_t{-1}));
         }
-        const std::string rk = tmp("rk", i);
+        const dstd::String rk = tmp("rk", i);
         Expr value = expr_col(0);
         switch (method) {
             // Ties share a rank only when the row index is not part of the
@@ -144,9 +148,9 @@ LazyFrame ranked(const LazyFrame& plan, const std::vector<std::string>& keys,
                 // The max rank is the min rank in the opposite order, mirrored
                 // through the group's count of present values; average is the
                 // mean of the two.
-                const std::string rev = tmp("rev", i);
-                const std::string cnt = tmp("n", i);
-                const std::string rk2 = tmp("rk2", i);
+                const dstd::String rev = tmp("rev", i);
+                const dstd::String cnt = tmp("n", i);
+                const dstd::String rk2 = tmp("rk2", i);
                 out =
                     out.with_column(rev, ref(out, key) * lit(std::int64_t{-1}));
                 out = window(
@@ -172,10 +176,10 @@ LazyFrame ranked(const LazyFrame& plan, const std::vector<std::string>& keys,
     return out.select(columns);
 }
 
-LazyFrame counter(const LazyFrame& plan, const std::vector<std::string>& part,
-                  const std::vector<std::string>& order, dftu_window_func func,
-                  const char* out_name) {
-    const std::string w = "__dftu_rn__";
+LazyFrame counter(const LazyFrame& plan, const dstd::Vector<dstd::String>& part,
+                  const dstd::Vector<dstd::String>& order,
+                  dftu_window_func func, const char* out_name) {
+    const dstd::String w = "__dftu_rn__";
     LazyFrame out = plan.with_row_index(ROW);
     out =
         window(out, part, order, {spec(func, nullptr, w.c_str())}).sort_by(ROW);
@@ -185,18 +189,18 @@ LazyFrame counter(const LazyFrame& plan, const std::vector<std::string>& part,
 
 // The nearest present value before (or, over the reversed row order, after)
 // each row within its group.
-LazyFrame filled(const LazyFrame& plan, const std::vector<std::string>& keys,
+LazyFrame filled(const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
                  bool backward) {
-    const std::vector<std::string> columns =
+    const dstd::Vector<dstd::String> columns =
         value_columns(plan, keys, Agg::First);
     LazyFrame out = plan.with_row_index(ROW);
-    std::string order = ROW;
+    dstd::String order = ROW;
     if (backward) {
         order = "__dftu_rev_row__";
         out = out.with_column(order, ref(out, ROW) * lit(std::int64_t{-1}));
     }
-    std::vector<std::string> outs;
-    std::vector<dftu_window_spec> specs;
+    dstd::Vector<dstd::String> outs;
+    dstd::Vector<dftu_window_spec> specs;
     for (std::size_t i = 0; i < columns.size(); ++i)
         outs.push_back(tmp("w", i));
     for (std::size_t i = 0; i < columns.size(); ++i)
@@ -210,7 +214,7 @@ LazyFrame filled(const LazyFrame& plan, const std::vector<std::string>& keys,
 
 // A trailing frame of `n` rows within the group, null until it holds `n`
 // present values (the FRAME_* minimum count).
-LazyFrame rolling(const LazyFrame& plan, const std::vector<std::string>& keys,
+LazyFrame rolling(const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
                   dftu_window_func func, std::int64_t n) {
     if (n < 1)
         throw std::invalid_argument("rolling: the window must be at least 1");
@@ -222,22 +226,22 @@ LazyFrame rolling(const LazyFrame& plan, const std::vector<std::string>& keys,
             s.param.frame.following = 0;
             return s;
         },
-        [](const LazyFrame& p, const std::string&, const std::string& o) {
+        [](const LazyFrame& p, const dstd::String&, const dstd::String& o) {
             return ref(p, o);
         });
 }
 
 LazyFrame positional(const LazyFrame& plan,
-                     const std::vector<std::string>& keys, CmpOp cmp,
+                     const dstd::Vector<dstd::String>& keys, CmpOp cmp,
                      std::int64_t rn, bool from_end) {
-    const std::vector<std::string> input = plan.schema();
+    const dstd::Vector<dstd::String> input = plan.schema();
     LazyFrame out = plan.with_row_index(ROW);
-    std::string order = ROW;
+    dstd::String order = ROW;
     if (from_end) {
         order = "__dftu_rev_row__";
         out = out.with_column(order, ref(out, ROW) * lit(std::int64_t{-1}));
     }
-    const std::string w = "__dftu_rn__";
+    const dstd::String w = "__dftu_rn__";
     out = window(out, keys, {order},
                  {spec(DFTU_WINDOW_ROW_NUMBER, nullptr, w.c_str())});
     out = out.filter(
@@ -252,106 +256,107 @@ namespace {
 
 // The window plan of a group-wise transform. The parameters carry the names
 // of the LazyGroupBy members the cases below read.
-LazyFrame composed_transform(const LazyFrame& plan_,
-                             const std::vector<std::string>& keys_,
+LazyFrame composed_transform(const LazyFrame& plan,
+                             const dstd::Vector<dstd::String>& keys,
                              GroupwiseOp kind, std::int64_t n,
                              RankMethod method, bool ascending) {
     switch (kind) {
         case GroupwiseOp::CumSum:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Sum),
+                plan, keys, value_columns(plan, keys, Agg::Sum),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_SUM, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumProd:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Sum),
+                plan, keys, value_columns(plan, keys, Agg::Sum),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_PROD, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumMax:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Max),
+                plan, keys, value_columns(plan, keys, Agg::Max),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_MAX, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumMin:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Min),
+                plan, keys, value_columns(plan, keys, Agg::Min),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_MIN, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumCount:
-            return counter(plan_, keys_, {ROW}, DFTU_WINDOW_ROW_NUMBER,
+            return counter(plan, keys, {ROW}, DFTU_WINDOW_ROW_NUMBER,
                            "cumcount");
         case GroupwiseOp::Shift: {
             const dftu_window_func func =
                 n >= 0 ? DFTU_WINDOW_LAG : DFTU_WINDOW_LEAD;
             const std::int64_t offset = n >= 0 ? n : -n;
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::First),
+                plan, keys, value_columns(plan, keys, Agg::First),
                 [func, offset](const char* c, const char* o) {
                     return spec(func, c, o, offset);
                 },
-                [](const LazyFrame& p, const std::string&,
-                   const std::string& o) { return ref(p, o); });
+                [](const LazyFrame& p, const dstd::String&,
+                   const dstd::String& o) { return ref(p, o); });
         }
         case GroupwiseOp::Diff:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Sum),
+                plan, keys, value_columns(plan, keys, Agg::Sum),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_DELTA, c, o);
                 },
-                [](const LazyFrame& p, const std::string&,
-                   const std::string& o) { return ref(p, o); });
+                [](const LazyFrame& p, const dstd::String&,
+                   const dstd::String& o) { return ref(p, o); });
         case GroupwiseOp::PctChange:
             return per_column(
-                plan_, keys_, value_columns(plan_, keys_, Agg::Sum),
+                plan, keys, value_columns(plan, keys, Agg::Sum),
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_LAG, c, o, 1);
                 },
-                [](const LazyFrame& p, const std::string& c,
-                   const std::string& o) {
+                [](const LazyFrame& p, const dstd::String& c,
+                   const dstd::String& o) {
                     return (ref(p, c) - ref(p, o)) / ref(p, o);
                 });
         case GroupwiseOp::Rank:
-            return ranked(plan_, keys_, method, ascending);
+            return ranked(plan, keys, method, ascending);
         case GroupwiseOp::NGroup:
-            if (keys_.empty())
+            if (keys.empty())
                 throw std::invalid_argument("ngroup: the group-by has no keys");
-            return counter(plan_, {}, keys_, DFTU_WINDOW_DENSE_RANK, "ngroup");
+            return counter(plan, {}, keys, DFTU_WINDOW_DENSE_RANK, "ngroup");
         case GroupwiseOp::Head:
-            return positional(plan_, keys_, CmpOp::Le, n, false);
+            return positional(plan, keys, CmpOp::Le, n, false);
         case GroupwiseOp::Tail:
-            return positional(plan_, keys_, CmpOp::Le, n, true);
+            return positional(plan, keys, CmpOp::Le, n, true);
         case GroupwiseOp::Nth:
-            return n >= 0 ? positional(plan_, keys_, CmpOp::Eq, n + 1, false)
-                          : positional(plan_, keys_, CmpOp::Eq, -n, true);
+            return n >= 0 ? positional(plan, keys, CmpOp::Eq, n + 1, false)
+                          : positional(plan, keys, CmpOp::Eq, -n, true);
         case GroupwiseOp::FFill:
-            return filled(plan_, keys_, false);
+            return filled(plan, keys, false);
         case GroupwiseOp::BFill:
-            return filled(plan_, keys_, true);
+            return filled(plan, keys, true);
         case GroupwiseOp::RollingSum:
-            return rolling(plan_, keys_, DFTU_WINDOW_FRAME_SUM, n);
+            return rolling(plan, keys, DFTU_WINDOW_FRAME_SUM, n);
         case GroupwiseOp::RollingMean:
-            return rolling(plan_, keys_, DFTU_WINDOW_FRAME_MEAN, n);
+            return rolling(plan, keys, DFTU_WINDOW_FRAME_MEAN, n);
         case GroupwiseOp::RollingMin:
-            return rolling(plan_, keys_, DFTU_WINDOW_FRAME_MIN, n);
+            return rolling(plan, keys, DFTU_WINDOW_FRAME_MIN, n);
         case GroupwiseOp::RollingMax:
-            return rolling(plan_, keys_, DFTU_WINDOW_FRAME_MAX, n);
+            return rolling(plan, keys, DFTU_WINDOW_FRAME_MAX, n);
     }
-    throw std::invalid_argument("group_by transform: unknown transform " +
-                                std::to_string(static_cast<int>(kind)));
+    throw std::invalid_argument(("group_by transform: unknown transform " +
+                                 dstd::to_string(static_cast<int>(kind)))
+                                    .c_str());
 }
 
 }  // namespace
 
 LazyFrame composed_group_transform(const LazyFrame& plan,
-                                   const std::vector<std::string>& keys,
+                                   const dstd::Vector<dstd::String>& keys,
                                    GroupwiseOp kind, std::int64_t n,
                                    RankMethod method, bool ascending) {
     return composed_transform(plan, keys, kind, n, method, ascending);

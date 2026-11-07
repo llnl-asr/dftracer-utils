@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """
 Common test utilities for  Python bindings tests
 """
@@ -346,7 +347,7 @@ class Environment:
             )
         indexer = Indexer(
             files=files,
-            require_aggregation=AggregationConfig(time_interval_ms=5000),
+            aggregation_config=AggregationConfig(time_interval_ms=5000),
             force_rebuild=True,
         )
         indexer.ensure_indexed()

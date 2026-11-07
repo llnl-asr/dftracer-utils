@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/decorrelate.h>
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/duql/syntax/walk.h>
@@ -20,12 +26,12 @@ constexpr std::array<const char*, std::variant_size_v<StageNode>> STAGE_NAMES =
      "session", "parse",  "use"};
 
 ExprPtr expr_of(ExprNode node) {
-    return std::make_unique<Expr>(Expr{std::move(node), Span{}});
+    return dstd::make_unique<Expr>(Expr{std::move(node), Span{}});
 }
 
-ExprPtr field_of(const std::string& name) {
+ExprPtr field_of(const dstd::String& name) {
     Path p;
-    p.steps.push_back(PathStep{name, false, std::nullopt});
+    p.steps.push_back(PathStep{name, false, dstd::nullopt});
     return expr_of(std::move(p));
 }
 
@@ -35,11 +41,11 @@ ExprPtr bool_literal(bool v) {
     return expr_of(std::move(l));
 }
 
-ExprPtr and_of(std::vector<ExprPtr> terms) {
+ExprPtr and_of(dstd::Vector<ExprPtr> terms) {
     ExprPtr out = std::move(terms.front());
     for (std::size_t i = 1; i < terms.size(); ++i)
         out =
-            expr_of(Binary{BinaryOp::AND, std::move(out), std::move(terms[i])});
+            expr_of(Binary{BinaryOp::And, std::move(out), std::move(terms[i])});
     return out;
 }
 
@@ -49,7 +55,7 @@ ExprPtr and_of(std::vector<ExprPtr> terms) {
 template <class F>
 void enclosing(Expr& e, int quant, F& fn) {
     if (auto* p = std::get_if<Path>(&e.node)) {
-        if (p->root == PathRoot::ENCLOSING && quant == 0) fn(e, *p);
+        if (p->root == PathRoot::Enclosing && quant == 0) fn(e, *p);
         return;
     }
     if (std::holds_alternative<Subquery>(e.node)) return;
@@ -77,7 +83,7 @@ void slots(Stage& s, F&& fn) {
 }
 
 struct Copy {
-    std::string text;
+    dstd::String text;
     PipelinePtr pipeline;
 };
 
@@ -89,13 +95,13 @@ Copy copy_of(const Pipeline& p) {
     return c;
 }
 
-[[noreturn]] void refuse(const std::string& text, Span span,
-                         std::string message) {
+[[noreturn]] void refuse(const dstd::String& text, Span span,
+                         dstd::String message) {
     throw Refusal{text, span, std::move(message)};
 }
 
-void flatten(ExprPtr& e, std::vector<ExprPtr*>& out) {
-    if (auto* b = std::get_if<Binary>(&e->node); b && b->op == BinaryOp::AND) {
+void flatten(ExprPtr& e, dstd::Vector<ExprPtr*>& out) {
+    if (auto* b = std::get_if<Binary>(&e->node); b && b->op == BinaryOp::And) {
         flatten(b->left, out);
         flatten(b->right, out);
         return;
@@ -104,10 +110,10 @@ void flatten(ExprPtr& e, std::vector<ExprPtr*>& out) {
 }
 
 struct Rewrite {
-    std::vector<Stage> stages;
-    std::vector<ExprPtr> outer;
-    std::optional<CorrelatedBound> low;
-    std::optional<CorrelatedBound> high;
+    dstd::Vector<Stage> stages;
+    dstd::Vector<ExprPtr> outer;
+    dstd::Optional<CorrelatedBound> low;
+    dstd::Optional<CorrelatedBound> high;
 };
 
 std::size_t count_enclosing(Expr& e) {
@@ -121,7 +127,7 @@ std::size_t count_enclosing(Expr& e) {
 // the conditions of any() and all().
 bool reads_own(Expr& e, int quant = 0) {
     if (auto* p = std::get_if<Path>(&e.node))
-        return p->root != PathRoot::ENCLOSING && quant == 0;
+        return p->root != PathRoot::Enclosing && quant == 0;
     if (std::holds_alternative<Subquery>(e.node)) return false;
     if (auto* c = std::get_if<Call>(&e.node);
         c && (c->name == "any" || c->name == "all") && c->args.size() == 2)
@@ -148,33 +154,33 @@ ExprPtr clone(const Expr& e, Span span) {
 
 BinaryOp flipped(BinaryOp op) {
     switch (op) {
-        case BinaryOp::LT:
-            return BinaryOp::GT;
-        case BinaryOp::LE:
-            return BinaryOp::GE;
-        case BinaryOp::GT:
-            return BinaryOp::LT;
-        case BinaryOp::GE:
-            return BinaryOp::LE;
+        case BinaryOp::Lt:
+            return BinaryOp::Gt;
+        case BinaryOp::Le:
+            return BinaryOp::Ge;
+        case BinaryOp::Gt:
+            return BinaryOp::Lt;
+        case BinaryOp::Ge:
+            return BinaryOp::Le;
         default:
             return op;
     }
 }
 
 bool comparison(BinaryOp op) {
-    return op == BinaryOp::EQ || op == BinaryOp::LT || op == BinaryOp::LE ||
-           op == BinaryOp::GT || op == BinaryOp::GE;
+    return op == BinaryOp::Eq || op == BinaryOp::Lt || op == BinaryOp::Le ||
+           op == BinaryOp::Gt || op == BinaryOp::Ge;
 }
 
 // Sorts the correlated terms of one `where` into its keys, the bounds of
 // `out` and the terms it keeps.
 class Terms {
    public:
-    Terms(const std::string& text, Rewrite& out, std::string& range)
+    Terms(const dstd::String& text, Rewrite& out, dstd::String& range)
         : text_(text), out_(out), range_(range) {}
 
-    std::vector<ExprPtr> kept;
-    std::vector<Assign> keys;
+    dstd::Vector<ExprPtr> kept;
+    dstd::Vector<Assign> keys;
 
     void add(ExprPtr& t) {
         if (count_enclosing(*t) == 0) {
@@ -184,9 +190,9 @@ class Terms {
         if (auto* b = std::get_if<Between>(&t->node);
             b && !b->negated && count_enclosing(*b->subject) == 0) {
             const Span at = t->span;
-            ExprPtr low = expr_of(Binary{BinaryOp::GE, clone(*b->subject, at),
+            ExprPtr low = expr_of(Binary{BinaryOp::Ge, clone(*b->subject, at),
                                          std::move(b->low)});
-            ExprPtr high = expr_of(Binary{BinaryOp::LE, std::move(b->subject),
+            ExprPtr high = expr_of(Binary{BinaryOp::Le, std::move(b->subject),
                                           std::move(b->high)});
             low->span = at;
             high->span = at;
@@ -194,7 +200,7 @@ class Terms {
             add(high);
             return;
         }
-        const std::string term = to_text(*t);
+        const dstd::String term = to_text(*t);
         auto* b = std::get_if<Binary>(&t->node);
         const bool ok = b && comparison(b->op);
         const std::size_t l = ok ? count_enclosing(*b->left) : 0;
@@ -214,16 +220,16 @@ class Terms {
                    "'" + term +
                        "' mixes the enclosing row with the sub-query's own "
                        "fields on one side; compare an expression of each");
-        auto unroot = [](Expr&, Path& path) { path.root = PathRoot::RECORD; };
+        auto unroot = [](Expr&, Path& path) { path.root = PathRoot::Record; };
         enclosing(*outer, 0, unroot);
-        if (op == BinaryOp::EQ) {
-            keys.push_back(Assign{std::string(CORRELATED_KEY_PREFIX) +
-                                      std::to_string(out_.outer.size()),
+        if (op == BinaryOp::Eq) {
+            keys.push_back(Assign{dstd::String(CORRELATED_KEY_PREFIX) +
+                                      dstd::int_text(out_.outer.size()),
                                   std::move(inner)});
             out_.outer.push_back(std::move(outer));
             return;
         }
-        const std::string bounded = to_text(*inner);
+        const dstd::String bounded = to_text(*inner);
         if (range_.empty()) {
             range_ = bounded;
             keys.push_back(Assign{CORRELATED_RANGE, std::move(inner)});
@@ -234,29 +240,29 @@ class Terms {
                        "'; a correlated range bounds one expression; for "
                        "intervals write 'lookup ... overlap'");
         }
-        const bool lower = op == BinaryOp::GT || op == BinaryOp::GE;
+        const bool lower = op == BinaryOp::Gt || op == BinaryOp::Ge;
         auto& slot = lower ? out_.low : out_.high;
         if (slot)
             refuse(text_, t->span,
                    "'" + term + "' is a second " + (lower ? "lower" : "upper") +
                        " bound of '" + range_ + "'");
         slot = CorrelatedBound{std::move(outer),
-                               op == BinaryOp::GT || op == BinaryOp::LT};
+                               op == BinaryOp::Gt || op == BinaryOp::Lt};
     }
 
    private:
-    const std::string& text_;
+    const dstd::String& text_;
     Rewrite& out_;
-    std::string& range_;
+    dstd::String& range_;
 };
 
-Rewrite split(const std::string& text, Pipeline& p, bool keys_derived) {
+Rewrite split(const dstd::String& text, Pipeline& p, bool keys_derived) {
     Rewrite out;
-    std::string range;
-    std::optional<std::size_t> start;
+    dstd::String range;
+    dstd::Optional<std::size_t> start;
     for (auto& s : p.stages) {
         if (auto* w = std::get_if<Where>(&s.node)) {
-            std::vector<ExprPtr*> terms;
+            dstd::Vector<ExprPtr*> terms;
             flatten(w->condition, terms);
             Terms sorted(text, out, range);
             for (auto* t : terms) sorted.add(*t);
@@ -297,7 +303,7 @@ Rewrite split(const std::string& text, Pipeline& p, bool keys_derived) {
                            std::holds_alternative<Group>(node) ||
                            std::holds_alternative<Agg>(node);
         refuse(text, out.stages[i].span,
-               std::string("'") + STAGE_NAMES[node.index()] +
+               dstd::String("'") + STAGE_NAMES[node.index()] +
                    (named ? "' must be the last stage of a correlated "
                             "sub-query"
                           : "' after a correlated 'where' depends on the "
@@ -317,15 +323,15 @@ bool is_key_derive(const Stage& s) {
 // The inner key expressions when no later `derive` can redefine what they
 // read, taken out of their `derive` stages so the last stage computes them:
 // a group key of a field then keeps the column's JSON type. Empty otherwise.
-std::vector<Assign> inline_keys(Rewrite& r) {
+dstd::Vector<Assign> inline_keys(Rewrite& r) {
     std::size_t first = r.stages.size();
     for (std::size_t i = 0; i < r.stages.size(); ++i)
         if (is_key_derive(r.stages[i]))
             first = std::min(first, i);
         else if (i > first && std::holds_alternative<Derive>(r.stages[i].node))
             return {};
-    std::vector<Assign> out;
-    std::vector<Stage> kept;
+    dstd::Vector<Assign> out;
+    dstd::Vector<Stage> kept;
     for (auto& st : r.stages) {
         if (!is_key_derive(st)) {
             kept.push_back(std::move(st));
@@ -338,7 +344,7 @@ std::vector<Assign> inline_keys(Rewrite& r) {
     return out;
 }
 
-void name_terminal(const Rewrite& r, const std::string& text) {
+void name_terminal(const Rewrite& r, const dstd::String& text) {
     if (r.stages.empty() ||
         !(std::holds_alternative<Select>(r.stages.back().node) ||
           std::holds_alternative<Group>(r.stages.back().node) ||
@@ -349,17 +355,17 @@ void name_terminal(const Rewrite& r, const std::string& text) {
 }
 
 // What a range sub-query's aggregate `e` gives for the rows in range.
-RangeRead range_read(const std::string& text, const Expr& e) {
+RangeRead range_read(const dstd::String& text, const Expr& e) {
     const auto* c = std::get_if<Call>(&e.node);
-    const std::string name = c ? c->name : to_text(e);
+    const dstd::String name = c ? c->name : to_text(e);
     if (c && name == "count") {
-        return c->args.empty() ? RangeRead::COUNT : RangeRead::COUNT_VALUES;
+        return c->args.empty() ? RangeRead::Count : RangeRead::CountValues;
     }
-    if (c && name == "count_if") return RangeRead::COUNT_IF;
-    if (c && name == "sum") return RangeRead::SUM;
-    if (c && name == "min") return RangeRead::MIN;
-    if (c && name == "max") return RangeRead::MAX;
-    if (c && name == "mean") return RangeRead::MEAN;
+    if (c && name == "count_if") return RangeRead::CountIf;
+    if (c && name == "sum") return RangeRead::Sum;
+    if (c && name == "min") return RangeRead::Min;
+    if (c && name == "max") return RangeRead::Max;
+    if (c && name == "mean") return RangeRead::Mean;
     refuse(text, e.span,
            "'" + name +
                "' over a correlated range; use count, count_if, sum, min, "
@@ -368,7 +374,7 @@ RangeRead range_read(const std::string& text, const Expr& e) {
 
 }  // namespace
 
-std::optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
+dstd::Optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
     Copy main = copy_of(p);
     bool reads = false;
     for (auto& s : main.pipeline->stages)
@@ -376,7 +382,7 @@ std::optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
             auto any = [&](Expr&, Path&) { reads = true; };
             if (e) enclosing(*e, 0, any);
         });
-    if (!reads) return std::nullopt;
+    if (!reads) return dstd::nullopt;
 
     Copy empty = copy_of(p);
     Decorrelated d;
@@ -384,17 +390,17 @@ std::optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
     Rewrite r = split(main.text, *main.pipeline, true);
     name_terminal(r, main.text);
     for (std::size_t i = 0; i < r.outer.size(); ++i)
-        d.names.push_back(std::string(CORRELATED_KEY_PREFIX) +
-                          std::to_string(i));
+        d.names.push_back(dstd::String(CORRELATED_KEY_PREFIX) +
+                          dstd::int_text(i));
 
-    std::vector<Assign> inner = inline_keys(r);
-    auto key = [&](const std::string& name) {
+    dstd::Vector<Assign> inner = inline_keys(r);
+    auto key = [&](const dstd::String& name) {
         for (auto& a : inner)
             if (a.name == name && a.value) return std::move(a.value);
         return field_of(name);
     };
     auto keys = [&] {
-        std::vector<Item> items;
+        dstd::Vector<Item> items;
         for (const auto& name : d.names) items.push_back(Item{key(name), name});
         return items;
     };
@@ -413,15 +419,15 @@ std::optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
             refuse(main.text, tail.span,
                    "a sub-query in an expression gives one column; this one "
                    "gives " +
-                       std::to_string(width));
+                       dstd::int_text(width));
         if (auto* s = std::get_if<Select>(&tail.node))
             s->items.front().name = CORRELATED_VALUE;
         else
             std::get<Agg>(tail.node).aggregates.front().name = CORRELATED_VALUE;
     }
     if (r.low || r.high) {
-        std::vector<Item> items;
-        d.read = RangeRead::ROWS;
+        dstd::Vector<Item> items;
+        d.read = RangeRead::Rows;
         if (auto* s = std::get_if<Select>(&tail.node)) {
             items = std::move(s->items);
         } else if (auto* g = std::get_if<Group>(&tail.node);
@@ -460,7 +466,7 @@ std::optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
         name_terminal(e, empty.text);
         std::get<Agg>(e.stages.back().node).aggregates.front().name =
             CORRELATED_VALUE;
-        std::vector<Stage> stages;
+        dstd::Vector<Stage> stages;
         stages.push_back(Stage{Where{bool_literal(false)}, Span{}});
         for (auto& st : e.stages) stages.push_back(std::move(st));
         empty.pipeline->stages = std::move(stages);

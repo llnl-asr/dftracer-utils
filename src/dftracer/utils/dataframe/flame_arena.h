@@ -1,13 +1,13 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_FLAME_ARENA_H
 #define DFTRACER_UTILS_DATAFRAME_FLAME_ARENA_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>  // StringViewMap
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>  // StringViewMap
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <cstring>
-#include <string>
-#include <string_view>
-#include <vector>
 
 // The folded call-tree (flamegraph) arena: the name-path rollup shared by the
 // columnar flamegraph() op, the server /viz/calltree builder, and the CLI/MPI
@@ -22,20 +22,20 @@ namespace dftracer::utils::dataframe {
 /// its arena index (keyed by a view into that child's owned `name`), so a fold
 /// finds-or-creates in O(1); `children` preserves the child index list.
 struct FlameNode {
-    std::string name;
+    dstd::String name;
     double total = 0;
     double self = 0;
     std::uint64_t count = 0;
-    dftracer::utils::StringViewMap<std::uint32_t> kids;
-    std::vector<std::uint32_t> children;
+    dftracer::utils::dstd::StringViewMap<std::uint32_t> kids;
+    dstd::Vector<std::uint32_t> children;
 };
 
 /// Fold one event (`name`, `dur`) as a child of `parent` in `arena`: find or
 /// create the name-path child, add its stats, and return its arena index (the
 /// handle a containment_walk pushes for the event's nested children). Node 0 is
 /// the caller's root sentinel, so its self is left untouched.
-inline std::uint32_t fold_flame_node(std::vector<FlameNode>& arena,
-                                     std::string_view name, double dur,
+inline std::uint32_t fold_flame_node(dstd::Vector<FlameNode>& arena,
+                                     dstd::StringView name, double dur,
                                      std::uint32_t parent) {
     std::uint32_t mi;
     auto it = arena[parent].kids.find(name);
@@ -57,8 +57,8 @@ inline std::uint32_t fold_flame_node(std::vector<FlameNode>& arena,
 
 /// Merge partial tree `src` (subtree `si`) into `dst` (node `di`), summing
 /// stats per name-path. `src` node names stay alive for the whole merge.
-inline void merge_flame_arena(std::vector<FlameNode>& dst, std::uint32_t di,
-                              const std::vector<FlameNode>& src,
+inline void merge_flame_arena(dstd::Vector<FlameNode>& dst, std::uint32_t di,
+                              const dstd::Vector<FlameNode>& src,
                               std::uint32_t si) {
     dst[di].total += src[si].total;
     dst[di].self += src[si].self;
@@ -81,7 +81,7 @@ inline void merge_flame_arena(std::vector<FlameNode>& dst, std::uint32_t di,
 
 namespace flame_detail {
 template <class T>
-inline void put(std::vector<std::uint8_t>& b, const T& v) {
+inline void put(dstd::Vector<std::uint8_t>& b, const T& v) {
     const auto* p = reinterpret_cast<const std::uint8_t*>(&v);
     b.insert(b.end(), p, p + sizeof(T));
 }
@@ -98,9 +98,9 @@ inline T get(const std::uint8_t*& p, const std::uint8_t* end) {
 /// merge (MPI gather / Dask reduce). Only the fields merge_flame_arena reads
 /// are written (name/total/self/count/children); the kids map is rebuilt on
 /// merge. Homogeneous-endianness transport (a cluster of like machines).
-inline std::vector<std::uint8_t> serialize_flame_arena(
-    const std::vector<FlameNode>& arena) {
-    std::vector<std::uint8_t> b;
+inline dstd::Vector<std::uint8_t> serialize_flame_arena(
+    const dstd::Vector<FlameNode>& arena) {
+    dstd::Vector<std::uint8_t> b;
     flame_detail::put<std::uint32_t>(b, 0x464c414du);  // 'FLAM'
     flame_detail::put<std::uint32_t>(b,
                                      static_cast<std::uint32_t>(arena.size()));
@@ -122,9 +122,9 @@ inline std::vector<std::uint8_t> serialize_flame_arena(
 /// Inverse of serialize_flame_arena. Returns an arena mergeable via
 /// merge_flame_arena (kids left empty; the merge does not read src.kids). An
 /// empty/short blob yields an empty arena.
-inline std::vector<FlameNode> deserialize_flame_arena(const std::uint8_t* data,
-                                                      std::size_t len) {
-    std::vector<FlameNode> arena;
+inline dstd::Vector<FlameNode> deserialize_flame_arena(const std::uint8_t* data,
+                                                       std::size_t len) {
+    dstd::Vector<FlameNode> arena;
     const std::uint8_t* p = data;
     const std::uint8_t* end = data + len;
     if (flame_detail::get<std::uint32_t>(p, end) != 0x464c414du) return arena;

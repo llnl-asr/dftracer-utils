@@ -1,17 +1,17 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STRING_LINE_PROCESSOR_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STRING_LINE_PROCESSOR_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/reader/internal/line_processor.h>
-
-#include <string>
 
 namespace dftracer::utils::utilities::reader::internal {
 class StringLineProcessor : public LineProcessor {
    private:
-    std::string& result_;
+    dstd::String& result_;
 
    public:
-    explicit StringLineProcessor(std::string& result) : result_(result) {}
+    explicit StringLineProcessor(dstd::String& result) : result_(result) {}
 
     coro::CoroTask<bool> process(const char* data,
                                  std::size_t length) override {

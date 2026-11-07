@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A group-by over many groups on a long string key or an integer key, large
 enough for the hash-partitioned driver, equals pandas in values and in the
 order the groups first appear."""

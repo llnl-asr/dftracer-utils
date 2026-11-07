@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The pandas ``Series`` surface that is a composition of engine ops, mixed
 into :class:`Series`: spellings (``between``, ``drop_duplicates``,
 ``factorize``), the frame-shaped results (``to_frame``, ``describe``,

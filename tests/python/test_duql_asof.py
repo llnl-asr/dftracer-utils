@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """duql `lookup ... asof` against pandas merge_asof."""
 
 import gzip

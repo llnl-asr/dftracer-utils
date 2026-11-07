@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # ci.yml -> wheel. Runs on the node, not in a container: cibuildwheel drives
 # podman itself. The CIBW_* settings mirror the wheel job's env.
 set -eo pipefail

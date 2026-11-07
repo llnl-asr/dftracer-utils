@@ -1,9 +1,10 @@
+# SPDX-License-Identifier: MIT
 """Indexer utilities for building and managing trace indexes."""
 
 import json
 import os
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Tuple, Type, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Type, Union
 
 from ._units import coerce_bytes, coerce_duration
 from .dftracer_utils_ext import CheckpointIndexer as _NativeCheckpointIndexer
@@ -16,28 +17,29 @@ if TYPE_CHECKING:
 
 DEFAULT_CHECKPOINT_SIZE = 32 * 1024 * 1024  # 32MB
 
-FileInfo = Tuple[Dict[int, str], Dict[int, Set[int]]]
+FileInfo = Dict[str, Set[int]]
 
 
 @dataclass
 class AggregationConfig:
-    """Configuration for aggregation tier indexing.
+    """Configuration for the aggregation tier every index build makes.
+
+    The defaults are the standard config: 1 s windows with the percentile
+    sketches on. A caller may change any field, but the tier is always built.
 
     Attributes:
-        time_interval_ms: Time bucket size in milliseconds (default 5000).
+        time_interval_ms: Time bucket size in milliseconds (default 1000).
         group_keys: Extra grouping dimensions (default None).
-        custom_metric_fields: Extra numeric args fields to aggregate (default None).
-        compute_percentiles: Enable percentile sketch collection (default False).
+        compute_percentiles: Collect percentile sketches (default True).
         group_by_file: Keep the file hash in the aggregation key (default True).
             A trace touching millions of files makes that key nearly as fine as
             the events themselves; turning it off collapses the rows and counts
             distinct files with a sketch instead (`file_nunique`).
     """
 
-    time_interval_ms: Union[float, str] = 5000.0
+    time_interval_ms: Union[float, str] = 1000.0
     group_keys: Optional[List[str]] = None
-    custom_metric_fields: Optional[List[str]] = None
-    compute_percentiles: bool = False
+    compute_percentiles: bool = True
     group_by_file: bool = True
 
 
@@ -119,13 +121,13 @@ class Indexer:
     Supports tiered indexing:
     - Tier 1: Checkpoints (for random access)
     - Tier 2: Bloom filters (for fast filtering)
-    - Tier 3: Aggregation data (config-dependent)
+    - Tier 3: Aggregation data, built by every build
 
     At least one of 'directory' or 'files' must be provided.
 
     Args:
-        directory: Directory containing trace files (.pfw, .jsonl
-            and .ndjson, plain or gzip).
+        directory: Directory containing gzip trace files (.pfw.gz,
+            .jsonl.gz and .ndjson.gz).
         files: List of specific file paths to index.
         index_dir: Directory for .dftindex stores (default: next to files).
         require_checkpoint: Build checkpoint tier (default True).
@@ -133,7 +135,8 @@ class Indexer:
             BloomConfig naming the args fields to index (default True).
         build_bloom: Build the bloom/stats/dimension tier (default True). Off
             for aggregation-only consumers that never read it.
-        require_aggregation: Aggregation config or True for defaults (default None).
+        aggregation_config: Settings of the aggregation tier, which every build
+            builds (default: the standard config).
         parallelism: Number of parallel workers (0 = all cores).
         force_rebuild: Force rebuild even if index exists.
         runtime: Runtime for executor parallelism (default: global runtime).
@@ -156,10 +159,10 @@ class Indexer:
         >>> indexer = Indexer(files=["/path/to/trace1.pfw.gz", "/path/to/trace2.pfw.gz"])
         >>> indexer.ensure_indexed()
 
-        >>> # With aggregation
+        >>> # With a customized aggregation
         >>> indexer = Indexer(
         ...     "/path/to/traces",
-        ...     require_aggregation=AggregationConfig(time_interval_ms=1000),
+        ...     aggregation_config=AggregationConfig(time_interval_ms=5000),
         ... )
         >>> indexer.ensure_indexed()  # fused pass with aggregation
     """
@@ -172,7 +175,7 @@ class Indexer:
         require_checkpoint: bool = True,
         require_bloom: Union[bool, BloomConfig] = True,
         build_bloom: bool = True,
-        require_aggregation: Optional[Union[bool, AggregationConfig]] = None,
+        aggregation_config: Optional[AggregationConfig] = None,
         checkpoint_size: Union[int, str] = DEFAULT_CHECKPOINT_SIZE,
         parallelism: int = 0,
         force_rebuild: bool = False,
@@ -183,13 +186,7 @@ class Indexer:
     ):
         checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
 
-        # Normalize aggregation config
-        if require_aggregation is True:
-            agg_config = AggregationConfig()
-        elif isinstance(require_aggregation, AggregationConfig):
-            agg_config = require_aggregation
-        else:
-            agg_config = None
+        agg_config = aggregation_config if aggregation_config is not None else AggregationConfig()
 
         bloom = require_bloom if isinstance(require_bloom, BloomConfig) else BloomConfig()
 
@@ -202,16 +199,10 @@ class Indexer:
             require_checkpoint=require_checkpoint,
             require_bloom=bool(require_bloom),
             build_bloom=build_bloom,
-            require_aggregation=agg_config is not None,
-            time_interval_ms=(
-                coerce_duration(agg_config.time_interval_ms, 1e3, "time_interval_ms")
-                if agg_config
-                else 5000.0
-            ),
-            group_keys=agg_config.group_keys if agg_config else None,
-            custom_metric_fields=agg_config.custom_metric_fields if agg_config else None,
-            compute_percentiles=agg_config.compute_percentiles if agg_config else False,
-            group_by_file=agg_config.group_by_file if agg_config else True,
+            time_interval_ms=coerce_duration(agg_config.time_interval_ms, 1e3, "time_interval_ms"),
+            group_keys=agg_config.group_keys,
+            compute_percentiles=agg_config.compute_percentiles,
+            group_by_file=agg_config.group_by_file,
             checkpoint_size=checkpoint_size,
             parallelism=parallelism,
             force_rebuild=force_rebuild,
@@ -242,8 +233,8 @@ class Indexer:
         self._closed = True
 
     @property
-    def aggregation_config(self) -> Optional[AggregationConfig]:
-        """Aggregation configuration, if enabled."""
+    def aggregation_config(self) -> AggregationConfig:
+        """The settings the aggregation tier is built with."""
         return self._aggregation_config
 
     def resolve(self) -> IndexStatus:
@@ -357,36 +348,35 @@ class Indexer:
 
         return DataFrame(self._native.rowset(name))
 
-    def query_file_pids(self, file_id: int) -> set:
+    def query_file_pids(self, path: str) -> set:
         """Query PIDs observed in a specific file.
 
         Args:
-            file_id: Integer file ID from index.
+            path: Path of the trace file, as given to the indexer.
 
         Returns:
-            set of PIDs (int) observed in the file.
+            set of PIDs (int) observed in the file, empty when the index
+            holds no entry for the file.
         """
-        return self._native.query_file_pids(file_id)
+        return self._native.query_file_pids(path)
 
-    def query_all_file_pids(self) -> dict:
+    def query_all_file_pids(self) -> Dict[str, Set[int]]:
         """Query PIDs for all indexed files.
 
-        Returns a dictionary mapping file_id to the set of PIDs observed
+        Returns a dictionary mapping trace path to the set of PIDs observed
         in that file. This is useful for distributed aggregation to assign
         files to workers by PID affinity.
 
         Returns:
-            dict mapping file_id (int) to set of PIDs (int).
+            dict mapping trace path (str) to set of PIDs (int).
         """
         return self._native.query_all_file_pids()
 
     def query_file_info(self) -> FileInfo:
-        """Query file distribution info in a single DB open.
+        """Query every indexed file with its PIDs in a single DB open.
 
         Returns:
-            Tuple of (file_id_to_path, file_pids) where:
-            - file_id_to_path: dict[int, str] mapping DB file ID to path
-            - file_pids: dict[int, set[int]] mapping file ID to PIDs
+            dict mapping trace path (str) to set of PIDs (int).
         """
         if self._file_info_cache is None:
             self._file_info_cache = self._native.query_file_info()
@@ -404,6 +394,5 @@ def _open_readonly_indexer(files, index_path: str) -> "Indexer":
         index_dir=os.path.dirname(index_path) if index_path else "",
         require_checkpoint=False,
         require_bloom=False,
-        require_aggregation=False,
         force_rebuild=False,
     )

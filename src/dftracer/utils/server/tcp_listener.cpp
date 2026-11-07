@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: MIT
 #include <arpa/inet.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/io/ops.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/server/signal_handler.h>
 #include <dftracer/utils/server/tcp_listener.h>
 #include <fcntl.h>
@@ -15,7 +18,7 @@
 
 namespace dftracer::utils::server {
 
-TcpListener::TcpListener(const std::string& addr, uint16_t port)
+TcpListener::TcpListener(const dstd::String& addr, uint16_t port)
     : bind_addr_(addr), port_(port) {}
 
 TcpListener::~TcpListener() {
@@ -78,14 +81,18 @@ bool TcpListener::start(int backlog) {
     return true;
 }
 
-coro::CoroTask<void> TcpListener::accept_loop(CoroScope& scope,
+coro::CoroTask<void> TcpListener::accept_loop(coro::Scope& scope,
                                               ConnectionHandler handler) {
+    // Connections run in the caller's scope and can outlive this frame, so
+    // each one shares ownership of the handler.
+    const auto shared_handler =
+        dstd::make_shared<const ConnectionHandler>(std::move(handler));
     while (!stopped_.load(std::memory_order_acquire) &&
            !g_shutdown_requested.load(std::memory_order_acquire)) {
         struct sockaddr_in client_addr{};
         socklen_t addrlen = sizeof(client_addr);
 
-        ssize_t client_fd = co_await io::accept(
+        ssize_t client_fd = co_await runtime::io::accept(
             listen_fd_, reinterpret_cast<struct sockaddr*>(&client_addr),
             &addrlen);
 
@@ -95,9 +102,6 @@ coro::CoroTask<void> TcpListener::accept_loop(CoroScope& scope,
             break;
         }
 
-        // Spawn a coroutine per connection (structured concurrency).
-        // Capture by value: fd and addr are small.
-        auto* handler_ptr = &handler;
         int fd = static_cast<int>(client_fd);
 
         // Ensure the client socket is blocking so recv/send work
@@ -107,18 +111,20 @@ coro::CoroTask<void> TcpListener::accept_loop(CoroScope& scope,
 
         struct sockaddr_in addr_copy = client_addr;
         track_active(fd);
-        scope.spawn([this, fd, addr_copy, handler_ptr](
-                        CoroScope& /*child*/) -> coro::CoroTask<void> {
-            // The close must be awaited, so this cannot be an RAII guard.
-            std::exception_ptr err;
+        scope.spawn([this, fd, addr_copy,
+                     handler = shared_handler]() -> coro::CoroTask<void> {
+            // One failed connection must not end the server, so its error is
+            // logged here instead of reaching the scope's join.
             try {
-                co_await (*handler_ptr)(fd, addr_copy);
+                co_await (*handler)(fd, addr_copy);
+            } catch (const std::exception& e) {
+                DFTRACER_UTILS_LOG_ERROR("connection handler failed: %s",
+                                         e.what());
             } catch (...) {
-                err = std::current_exception();
+                DFTRACER_UTILS_LOG_ERROR("%s", "connection handler failed");
             }
-            co_await io::close(fd);
+            co_await runtime::io::close(fd);
             untrack_active(fd);
-            if (err) std::rethrow_exception(err);
         });
     }
 

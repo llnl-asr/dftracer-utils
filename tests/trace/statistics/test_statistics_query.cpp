@@ -1,16 +1,18 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/statistics/statistics_query_utility.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
 
-#include <string>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace::statistics;
 
 static TraceStatistics make_test_stats() {
     TraceStatistics ts;
     ts.success = true;
-    ts.num_chunks = 2;
+    ts.chunk_count = 2;
     ts.file_path = "/test/file.pfw.gz";
     ts.index_path = "/test/file.pfw.gz.idx";
 
@@ -30,7 +32,7 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::SUMMARY;
+        input.query_type = StatisticsQueryType::Summary;
 
         StatisticsQueryUtility query;
         auto output = query(input).get();
@@ -48,7 +50,7 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::CATEGORIES;
+        input.query_type = StatisticsQueryType::Categories;
 
         StatisticsQueryUtility query;
         auto output = query(input).get();
@@ -66,7 +68,7 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::NAMES;
+        input.query_type = StatisticsQueryType::Names;
 
         StatisticsQueryUtility query;
         auto output = query(input).get();
@@ -82,7 +84,7 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::PID_TIDS;
+        input.query_type = StatisticsQueryType::PidTids;
 
         StatisticsQueryUtility query;
         auto output = query(input).get();
@@ -104,7 +106,7 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::TIME_RANGE;
+        input.query_type = StatisticsQueryType::TimeRange;
 
         StatisticsQueryUtility query;
         auto output = query(input).get();
@@ -119,7 +121,7 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::DURATION_STATS;
+        input.query_type = StatisticsQueryType::DurationStats;
 
         StatisticsQueryUtility query;
         auto output = query(input).get();
@@ -136,7 +138,7 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::TOP_N_NAMES;
+        input.query_type = StatisticsQueryType::TopNNames;
         input.top_n = 2;
 
         StatisticsQueryUtility query;
@@ -154,7 +156,7 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::TOP_N_CATEGORIES;
+        input.query_type = StatisticsQueryType::TopNCategories;
         input.top_n = 1;
 
         StatisticsQueryUtility query;
@@ -169,12 +171,9 @@ TEST_SUITE("StatisticsQueryUtility") {
         auto stats = make_test_stats();
 
         StatisticsQueryType types[] = {
-            StatisticsQueryType::SUMMARY,
-            StatisticsQueryType::CATEGORIES,
-            StatisticsQueryType::NAMES,
-            StatisticsQueryType::TIME_RANGE,
-            StatisticsQueryType::DURATION_STATS,
-            StatisticsQueryType::TOP_N_NAMES,
+            StatisticsQueryType::Summary,       StatisticsQueryType::Categories,
+            StatisticsQueryType::Names,         StatisticsQueryType::TimeRange,
+            StatisticsQueryType::DurationStats, StatisticsQueryType::TopNNames,
         };
 
         StatisticsQueryUtility query;
@@ -186,10 +185,10 @@ TEST_SUITE("StatisticsQueryUtility") {
             input.top_n = 5;
 
             auto output = query(input).get();
-            std::string json = output.to_json();
+            dstd::String json = dstd::String(output.to_json());
 
             simdjson::dom::parser parser;
-            auto result = parser.parse(json);
+            auto result = parser.parse(simdjson::padded_string(json));
             REQUIRE(!result.error());
 
             auto root = result.value_unsafe();

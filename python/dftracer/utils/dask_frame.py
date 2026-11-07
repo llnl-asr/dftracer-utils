@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A partitioned DataFrame over Dask futures, or in memory with no client.
 
 ``DaskFrame`` holds an ordered list of :class:`~dftracer.utils.DataFrame`

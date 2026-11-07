@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """merge_view_partials merges every kind of partial column of a view row."""
 
 import numpy as np

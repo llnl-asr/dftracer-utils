@@ -1,14 +1,14 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/logging.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/build_host.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/state_registry.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
 #include <utility>
 
 namespace dftracer::utils::plugins {
@@ -17,7 +17,7 @@ namespace {
 BuildHost& self_of(void* h) { return *static_cast<BuildHost*>(h); }
 
 ::dftu_error denied_error() {
-    return ::dftu_error{dftracer::utils::CORE_DOMAIN.id,
+    return ::dftu_error{dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
                         static_cast<std::int32_t>(DFTU_COND_UNSUPPORTED),
                         DFTU_COND_UNSUPPORTED,
                         "not available at load: the factory host offers "
@@ -96,16 +96,17 @@ const ::dftu_svc_agg g_build_agg = {build_agg_new, build_agg_accumulate,
 // A port key is a pure hash of the name, so wiring a port up is available at
 // load; moving bytes through one needs a batch that does not exist yet.
 std::uint64_t build_port_key(void*, const char* name) {
-    return name ? dftracer::utils::hash::fnv1a_hash(name) : 0;
+    return name ? dftracer::utils::dstd::hash::fnv1a_hash(name) : 0;
 }
 
 void build_port_publish(void* h, std::uint64_t, const void*, std::uint32_t) {
     self_of(h).deny(DFTU_SVC_PORTS "::publish");
 }
 
-const void* build_port_consume(void* h, std::uint64_t, std::uint32_t* out_len) {
+const void* build_port_consume(void* h, std::uint64_t,
+                               std::uint32_t* out_size) {
     self_of(h).deny(DFTU_SVC_PORTS "::consume");
-    if (out_len) *out_len = 0;
+    if (out_size) *out_size = 0;
     return nullptr;
 }
 
@@ -144,19 +145,19 @@ const ::dftu_svc_index g_build_index = {build_register_index};
 
 const void* build_get_service(void* h, const char* ext_id) {
     if (!ext_id) return nullptr;
-    if (std::string_view{ext_id} == DFTU_SVC_OPS) return &g_build_ops;
-    if (std::string_view{ext_id} == DFTU_SVC_AGG) return &g_build_agg;
-    if (std::string_view{ext_id} == DFTU_SVC_PORTS) return &g_build_ports;
-    if (std::string_view{ext_id} == DFTU_SVC_PROVIDERS)
+    if (dstd::StringView{ext_id} == DFTU_SVC_OPS) return &g_build_ops;
+    if (dstd::StringView{ext_id} == DFTU_SVC_AGG) return &g_build_agg;
+    if (dstd::StringView{ext_id} == DFTU_SVC_PORTS) return &g_build_ports;
+    if (dstd::StringView{ext_id} == DFTU_SVC_PROVIDERS)
         return &g_build_providers;
-    if (std::string_view{ext_id} == DFTU_SVC_NODES) return &g_build_nodes;
-    if (std::string_view{ext_id} == DFTU_SVC_INDEX) return &g_build_index;
+    if (dstd::StringView{ext_id} == DFTU_SVC_NODES) return &g_build_nodes;
+    if (dstd::StringView{ext_id} == DFTU_SVC_INDEX) return &g_build_index;
     self_of(h).deny(ext_id);
     return nullptr;
 }
 
-const char* build_resolve(void* h, dftu_str, std::uint32_t* out_len) {
-    if (out_len) *out_len = 0;
+const char* build_resolve(void* h, dftu_str, std::uint32_t* out_size) {
+    if (out_size) *out_size = 0;
     self_of(h).deny("resolve");
     return nullptr;
 }
@@ -191,7 +192,7 @@ void build_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 
 }  // namespace
 
-BuildHost::BuildHost(std::string plugin_name)
+BuildHost::BuildHost(dstd::String plugin_name)
     : plugin_name_(plugin_name.empty() ? "plugin" : std::move(plugin_name)) {
     host_.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
     host_.h = this;

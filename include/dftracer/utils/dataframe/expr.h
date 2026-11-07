@@ -1,14 +1,16 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_EXPR_H
 #define DFTRACER_UTILS_DATAFRAME_EXPR_H
 
-#include <dftracer/utils/core/common/export.h>
+#include <dftracer/utils/common/export.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <memory>
-#include <string_view>
-#include <vector>
 
 // A native columnar expression engine. Expressions are built as a DAG (col
 // refs, literals, arithmetic, primitives, comparisons, logical ops, casts),
@@ -32,15 +34,15 @@ struct ExprNode;
 class Expr {
    public:
     Expr() = default;
-    explicit Expr(std::shared_ptr<const ExprNode> node)
+    explicit Expr(dstd::SharedPtr<const ExprNode> node)
         : node_(std::move(node)) {}
-    const std::shared_ptr<const ExprNode>& node() const noexcept {
+    const dstd::SharedPtr<const ExprNode>& node() const noexcept {
         return node_;
     }
     bool valid() const noexcept { return node_ != nullptr; }
 
    private:
-    std::shared_ptr<const ExprNode> node_;
+    dstd::SharedPtr<const ExprNode> node_;
 };
 
 /// Binary arithmetic op codes (match dftu_expr_binary).
@@ -83,7 +85,7 @@ bool expr_as_not(const Expr& e, Expr* a);
 /// columns are dropped or reordered (projection pushdown). Returns a new Expr;
 /// unchanged subtrees are shared.
 Expr expr_remap_cols(const Expr& e,
-                     const std::vector<std::int32_t>& old_to_new);
+                     const dstd::Vector<std::int32_t>& old_to_new);
 Expr expr_lit(std::int64_t value);
 Expr expr_lit(double value);
 Expr expr_binary(BinaryOp op, const Expr& a, const Expr& b);
@@ -99,7 +101,7 @@ Expr expr_fillna(const Expr& a, Scalar fill);
 /// str_starts_with / str_ends_with / str_like / str_matches), Bool. The node
 /// owns a copy of `pattern`. Throws at compile time if the operand is not a
 /// String or Binary column.
-Expr expr_str_pred(StrPredOp op, const Expr& a, std::string_view pattern);
+Expr expr_str_pred(StrPredOp op, const Expr& a, dstd::StringView pattern);
 /// As expr_str_pred for `Contains`, `StartsWith` or `EndsWith` (anything else
 /// throws std::invalid_argument), with the needle a String expression: null
 /// where `a` or the needle is null, true for an empty needle.
@@ -121,7 +123,7 @@ Expr expr_round_col(const Expr& a, const Expr& digits);
 /// the group is null, negative, not an integer or past the pattern's groups.
 /// Throws at compile time for a null `p`.
 Expr expr_str_extract_col(const Expr& a,
-                          std::shared_ptr<const duql::CompiledPattern> p,
+                          dstd::SharedPtr<const duql::CompiledPattern> p,
                           const Expr& group);
 /// A String -> String map (Series::to_lowercase / to_uppercase / str_strip /
 /// str_lstrip / str_rstrip). Throws at compile time if the operand is not a
@@ -130,11 +132,11 @@ Expr expr_str_map(StrMapOp op, const Expr& a);
 /// ASCII-lowercase a String column: expr_str_map(StrMapOp::Lower, a).
 Expr expr_lower(const Expr& a);
 /// Per-row length as Int64: bytes, or UTF-8 codepoints when `chars`.
-Expr expr_str_len(const Expr& a, bool chars);
+Expr expr_str_size(const Expr& a, bool chars);
 /// Byte index of the first `needle` per row, or -1, as Int64.
-Expr expr_str_find(const Expr& a, std::string_view needle);
+Expr expr_str_find(const Expr& a, dstd::StringView needle);
 /// Replace the first (or with `all`, every) occurrence of `from` with `to`.
-Expr expr_str_replace(const Expr& a, std::string_view from, std::string_view to,
+Expr expr_str_replace(const Expr& a, dstd::StringView from, dstd::StringView to,
                       bool all);
 /// The UTC calendar field `part` (a dftu_dt_part: year, month, day, hour,
 /// minute, second, millisecond, microsecond, nanosecond, day of week, day of
@@ -149,7 +151,7 @@ Expr expr_date_part(const Expr& a, std::int32_t part, std::int64_t ns_per_unit);
 /// (%Y %y %m %d %H %I %M %S %f %j %a %A %b %B %p %F %T %s %z %Z %%), String.
 /// Throws std::invalid_argument for an unknown directive, a trailing '%' or a
 /// non-positive `ns_per_unit`.
-Expr expr_format_time(const Expr& a, std::string_view fmt,
+Expr expr_format_time(const Expr& a, dstd::StringView fmt,
                       std::int64_t ns_per_unit);
 /// The byte substring [start, start + len) of each row (Series::str_slice).
 Expr expr_str_slice(const Expr& a, std::int64_t start, std::int64_t len);
@@ -159,7 +161,7 @@ Expr expr_str_slice(const Expr& a, std::int64_t start, std::int64_t len);
 /// the operand is not a String column (a List<String> for Join, a String or a
 /// List for Get).
 Expr expr_str_fn(StrFn fn, const Expr& a, const Expr* b = nullptr,
-                 std::string_view text = {}, std::string_view text2 = {},
+                 dstd::StringView text = {}, dstd::StringView text2 = {},
                  std::int64_t i0 = 0, std::int64_t i1 = 0);
 /// Membership: true where the row's value is one of `values`
 /// (Series::is_in), Bool. The node shares `values`. Throws at compile time
@@ -179,7 +181,7 @@ Expr expr_is_null(const Expr& a, bool null = true);
 /// If `e` is `col <str pred> pattern`, fill the parts and return true. Lets a
 /// source push a string predicate down as a query.
 bool expr_as_col_str_pred(const Expr& e, std::int32_t* col, StrPredOp* op,
-                          std::string_view* pattern);
+                          dstd::StringView* pattern);
 /// If `e` is `col is_in values`, fill the parts and return true.
 bool expr_as_col_is_in(const Expr& e, std::int32_t* col, Series* values);
 Expr expr_cmp(CmpOp cmp, const Expr& a, Scalar rhs);
@@ -194,7 +196,7 @@ Expr expr_cast(TypeId type, const Expr& a);
 // wrapped value. Numbers compare exactly across integer and double columns.
 
 /// Literals of the other scalar types. A null literal has type `type`.
-Expr expr_lit_str(std::string_view value);
+Expr expr_lit_str(dstd::StringView value);
 Expr expr_lit_bool(bool value);
 Expr expr_lit_null(TypeId type);
 
@@ -225,15 +227,15 @@ Expr expr_cmp_expr(CmpOp cmp, const Expr& a, const Expr& b);
 
 /// The first operand that is not null in each row; operands are promoted to
 /// one type as arithmetic promotes them (numeric) or must share it.
-Expr expr_coalesce(const std::vector<Expr>& args);
+Expr expr_coalesce(const dstd::Vector<Expr>& args);
 
 /// The least (`least` true) or greatest operand per row; null when any
 /// operand is null. Numeric operands compare exactly; String operands
 /// compare bytewise.
-Expr expr_extreme(const std::vector<Expr>& args, bool least);
+Expr expr_extreme(const dstd::Vector<Expr>& args, bool least);
 
 /// String concatenation of String operands; null when any is null.
-Expr expr_concat(const std::vector<Expr>& args);
+Expr expr_concat(const dstd::Vector<Expr>& args);
 
 /// Round to `digits` decimals, half away from zero; an integer operand with
 /// `digits` >= 0 is returned unchanged.
@@ -255,7 +257,7 @@ Expr expr_str_substr(const Expr& a, std::int64_t start, std::int64_t len);
 /// to it and never equals another tree's. Throws at compile time for a null
 /// `p`.
 Expr expr_str_pattern(const Expr& a,
-                      std::shared_ptr<const duql::CompiledPattern> p);
+                      dstd::SharedPtr<const duql::CompiledPattern> p);
 
 /// String: capture `group` (0 = the whole match) of the first match of a
 /// compiled duql regex in each row; null when nothing matches, the group
@@ -263,7 +265,7 @@ Expr expr_str_pattern(const Expr& a,
 /// Identity as for expr_str_pattern. Throws at compile time for a null `p`
 /// or a group the regex does not have.
 Expr expr_str_extract(const Expr& a,
-                      std::shared_ptr<const duql::CompiledPattern> p,
+                      dstd::SharedPtr<const duql::CompiledPattern> p,
                       std::int64_t group);
 
 /// String: every non-overlapping match of a compiled duql regex in each row
@@ -272,7 +274,7 @@ Expr expr_str_extract(const Expr& a,
 /// reaches the work limit. Identity as for expr_str_pattern. Throws at
 /// compile time for a null `p`.
 Expr expr_str_regex_replace(const Expr& a,
-                            std::shared_ptr<const duql::CompiledPattern> p,
+                            dstd::SharedPtr<const duql::CompiledPattern> p,
                             duql::Substitution sub);
 
 /// duql conversions: `int(x)` (String parses as an integer or a number,
@@ -286,7 +288,7 @@ Expr expr_convert(ConvertOp op, const Expr& a);
 /// List columns: element count, the element at `index` (negative counts from
 /// the end; out of range is null), the sum of numeric elements (null when an
 /// element is not numeric), and whether an element equals `value`.
-Expr expr_list_len(const Expr& a);
+Expr expr_list_size(const Expr& a);
 Expr expr_list_get(const Expr& a, std::int64_t index);
 Expr expr_list_sum(const Expr& a);
 Expr expr_list_contains(const Expr& a, Scalar value);
@@ -360,7 +362,7 @@ inline Expr operator<=(const Expr& a, double v) {
 /// Compile `root` (type inference + CSE + lowering) and evaluate it over
 /// `inputs` in one chunked pass. Throws std::invalid_argument on a malformed
 /// expression or an out-of-range column reference.
-Series eval(const Expr& root, const std::vector<const Series*>& inputs);
+Series eval(const Expr& root, const dstd::Vector<const Series*>& inputs);
 
 /// Compile `roots` into ONE slot program - CSE spans all of them, so a
 /// subexpression shared across outputs (e.g. `a+b` in both `sum(a+b)` and
@@ -368,17 +370,18 @@ Series eval(const Expr& root, const std::vector<const Series*>& inputs);
 /// Only the input columns the program references are materialized (the pruner).
 /// Returns one column per root, aligned to `roots`. Same throwing contract as
 /// eval.
-std::vector<Series> eval_many(const std::vector<Expr>& roots,
-                              const std::vector<const Series*>& inputs);
+dstd::Vector<Series> eval_many(const dstd::Vector<Expr>& roots,
+                               const dstd::Vector<const Series*>& inputs);
 
-/// The DataType `root` would produce over columns typed `input_types`,
+/// The @ref DataType `root` would produce over columns typed `input_types`,
 /// without evaluating data. Shares eval()'s compiler, so the two can never
 /// disagree. A bare column reference reports the input column's full
-/// DataType (including timezone/decimal/fixed_size parameters); every other
-/// form reports a scalar DataType, since no transform here can target a
-/// parameterized type. Reports TypeId::Unknown where the input type is
+/// @ref DataType (including timezone/decimal/fixed_size parameters); every
+/// other form reports a scalar @ref DataType, since no transform here can
+/// target a parameterized type. Reports TypeId::Unknown where the input type is
 /// itself Unknown. Same throwing contract as eval().
-DataType infer_type(const Expr& root, const std::vector<DataType>& input_types);
+DataType infer_type(const Expr& root,
+                    const dstd::Vector<DataType>& input_types);
 
 }  // namespace dftracer::utils::dataframe
 

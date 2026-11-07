@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // "Copy page" / "Download page" control for dftracer-utils docs. Each page's
 // Markdown is written to a sibling <page>.md (see _inject_copy_page in conf.py).
 // Copy fetches it from the same origin - so it works with a private source repo

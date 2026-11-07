@@ -1,9 +1,13 @@
+// SPDX-License-Identifier: MIT
 // Batch-scoped port bus: the FoldPortBus mechanics plus the through-on_batch
 // producer -> consumer handoff wired through real PluginFolds sharing one bus,
 // covering the same-batch delivery, the ordering rule, and the per-batch reset.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
@@ -13,17 +17,8 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <memory>
-#include <span>
-#include <vector>
 
-namespace views = dftracer::utils::trace::views;
-using dftracer::utils::StringIntern;
-using dftracer::utils::plugins::PluginFold;
-using views::detail::FoldBatch;
-using views::detail::FoldEvent;
-using views::detail::FoldPortBus;
-using views::detail::ScanUnit;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -63,9 +58,10 @@ struct ConsumerSlice {
 // Owns a plugin plus a PluginFold bound to `bus`, torn down in the right order.
 struct FoldHolder {
     dftu_plugin* plugin;
-    std::unique_ptr<PluginFold> fold;
-    FoldHolder(dftu_plugin* p, StringIntern& intern, FoldPortBus* bus)
-        : plugin(p), fold(std::make_unique<PluginFold>(p, intern)) {
+    dstd::UniquePtr<plugins::PluginFold> fold;
+    FoldHolder(dftu_plugin* p, dstd::StringIntern& intern,
+               trace::views::detail::FoldPortBus* bus)
+        : plugin(p), fold(dstd::make_unique<plugins::PluginFold>(p, intern)) {
         fold->bind_port_bus(bus);
     }
     ~FoldHolder() {
@@ -74,17 +70,17 @@ struct FoldHolder {
     }
 };
 
-std::vector<FoldEvent> make_events(std::uint64_t with_dur,
-                                   std::uint64_t total) {
-    std::vector<FoldEvent> evs(total);
+dstd::Vector<trace::views::detail::FoldEvent> make_events(
+    std::uint64_t with_dur, std::uint64_t total) {
+    dstd::Vector<trace::views::detail::FoldEvent> evs(total);
     for (std::uint64_t i = 0; i < total; ++i) {
         // step() drops METADATA/UNKNOWN-phase events before it ever reaches
         // on_batch, and plugins::Event::has_dur() is phase() == Complete;
         // COUNTER survives the filter without counting as "has a duration".
         evs[i].has_dur = i < with_dur;
         evs[i].phase = evs[i].has_dur
-                           ? dftracer::utils::trace::RecordPhase::COMPLETE
-                           : dftracer::utils::trace::RecordPhase::COUNTER;
+                           ? dftracer::utils::trace::RecordPhase::Complete
+                           : dftracer::utils::trace::RecordPhase::Counter;
     }
     return evs;
 }
@@ -93,7 +89,7 @@ std::vector<FoldEvent> make_events(std::uint64_t with_dur,
 
 TEST_SUITE("FoldPortBus") {
     TEST_CASE("publish then consume round-trips; absent key is NULL") {
-        FoldPortBus bus;
+        trace::views::detail::FoldPortBus bus;
         std::uint32_t len = 99;
         CHECK(bus.consume(1, &len) == nullptr);
         CHECK(len == 0);
@@ -108,7 +104,7 @@ TEST_SUITE("FoldPortBus") {
     }
 
     TEST_CASE("a second key coexists and clear resets the bus") {
-        FoldPortBus bus;
+        trace::views::detail::FoldPortBus bus;
         std::uint64_t a = 1, b = 2;
         bus.publish(10, &a, sizeof a);
         bus.publish(20, &b, sizeof b);
@@ -124,8 +120,8 @@ TEST_SUITE("FoldPortBus") {
 
 TEST_SUITE("PluginPorts") {
     TEST_CASE("producer before consumer delivers the value for the batch") {
-        StringIntern intern;
-        FoldPortBus bus;
+        dstd::StringIntern intern;
+        trace::views::detail::FoldPortBus bus;
         FoldHolder prod(
             dftracer::utils::plugins::make_plugin<ProducerSlice>(nullptr),
             intern, &bus);
@@ -134,8 +130,9 @@ TEST_SUITE("PluginPorts") {
             intern, &bus);
 
         auto evs = make_events(/*with_dur=*/3, /*total=*/5);
-        ScanUnit unit;
-        FoldBatch fb{std::span<const FoldEvent>(evs), unit};
+        trace::views::detail::ScanUnit unit;
+        trace::views::detail::FoldBatch fb{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         g_present = false;
         g_consumed = 0;
@@ -147,8 +144,8 @@ TEST_SUITE("PluginPorts") {
     }
 
     TEST_CASE("consumer before producer reads NULL (the ordering rule)") {
-        StringIntern intern;
-        FoldPortBus bus;
+        dstd::StringIntern intern;
+        trace::views::detail::FoldPortBus bus;
         FoldHolder prod(
             dftracer::utils::plugins::make_plugin<ProducerSlice>(nullptr),
             intern, &bus);
@@ -157,8 +154,9 @@ TEST_SUITE("PluginPorts") {
             intern, &bus);
 
         auto evs = make_events(3, 5);
-        ScanUnit unit;
-        FoldBatch fb{std::span<const FoldEvent>(evs), unit};
+        trace::views::detail::ScanUnit unit;
+        trace::views::detail::FoldBatch fb{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         g_present = true;
         g_consumed = 123;
@@ -170,8 +168,8 @@ TEST_SUITE("PluginPorts") {
     }
 
     TEST_CASE("a value published in one batch is gone in the next") {
-        StringIntern intern;
-        FoldPortBus bus;
+        dstd::StringIntern intern;
+        trace::views::detail::FoldPortBus bus;
         FoldHolder prod(
             dftracer::utils::plugins::make_plugin<ProducerSlice>(nullptr),
             intern, &bus);
@@ -180,8 +178,9 @@ TEST_SUITE("PluginPorts") {
             intern, &bus);
 
         auto evs = make_events(2, 4);
-        ScanUnit unit;
-        FoldBatch fb{std::span<const FoldEvent>(evs), unit};
+        trace::views::detail::ScanUnit unit;
+        trace::views::detail::FoldBatch fb{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         bus.clear();
         prod.fold->step(fb);

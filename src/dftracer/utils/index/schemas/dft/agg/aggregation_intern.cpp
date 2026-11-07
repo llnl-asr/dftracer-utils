@@ -1,4 +1,10 @@
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 
 #include <atomic>
@@ -9,12 +15,26 @@ namespace dftracer::utils::index::schemas::dft::agg {
 namespace {
 struct Registry {
     std::mutex mutex;
-    StringViewMap<std::weak_ptr<AggInternTable>> tables;
+    dstd::Optional<dstd::StringViewMap<dstd::WeakPtr<AggInternTable>>> slot;
+
+    dstd::StringViewMap<dstd::WeakPtr<AggInternTable>>& tables() {
+        if (!slot) slot.emplace();
+        return *slot;
+    }
 };
 
 Registry& registry() {
-    static Registry r;
-    return r;
+    // A weak reference keeps a table's whole block alive, which the memory
+    // exit check counts as a leak.
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+            Registry& r = dstd::Singleton<Registry>::get();
+            std::lock_guard lock(r.mutex);
+            r.slot.reset();
+        });
+        return true;
+    }();
+    return dstd::Singleton<Registry>::get();
 }
 
 std::atomic<bool>& deterministic_ids() {
@@ -23,7 +43,7 @@ std::atomic<bool>& deterministic_ids() {
 }
 
 AggInternPtr new_table() {
-    auto table = std::make_shared<AggInternTable>();
+    auto table = dstd::make_shared<AggInternTable>();
     if (deterministic_ids().load(std::memory_order_acquire)) {
         table->intern.enable_deterministic_ids();
     }
@@ -31,18 +51,19 @@ AggInternPtr new_table() {
 }
 }  // namespace
 
-AggInternPtr intern_for_index(std::string_view index_path) {
+AggInternPtr intern_for_index(dstd::StringView index_path) {
     if (index_path.empty()) return make_intern_table();
 
     auto& r = registry();
     std::lock_guard lock(r.mutex);
-    auto it = r.tables.find(index_path);
-    if (it != r.tables.end()) {
+    auto& tables = r.tables();
+    auto it = tables.find(index_path);
+    if (it != tables.end()) {
         if (auto existing = it->second.lock()) return existing;
-        r.tables.erase(it);
+        tables.erase(it);
     }
     auto table = new_table();
-    r.tables.emplace(std::string(index_path), table);
+    tables.emplace(dstd::String(index_path), table);
     return table;
 }
 

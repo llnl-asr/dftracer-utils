@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The op registry exposed to Python (dftracer.utils.jit.ops): discovery and one
 generic runner that marshals Python args per an op's signature.
 

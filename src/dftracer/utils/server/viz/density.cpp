@@ -1,14 +1,20 @@
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -35,16 +41,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <limits>
-#include <memory>
 #include <numeric>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <unordered_set>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -56,7 +54,7 @@ using dftracer::utils::json::json_number;
 // flattened with `ts` resolved from the column index. `name` borrows the
 // aggregate's storage.
 struct DensityBlock {
-    std::string_view name;
+    dstd::StringView name;
     std::int64_t pid;
     std::int64_t tid;
     double ts;
@@ -64,13 +62,13 @@ struct DensityBlock {
     std::uint32_t count;
     double total;
     std::uint32_t depth;
-    std::string_view group;  // group_by value; omitted from JSON when empty
+    dstd::StringView group;  // group_by value; omitted from JSON when empty
     bool counter = false;    // ph="C" block: carries a mean counter value
     double value = 0;
 };
 
-template <typename builder_type>
-void tag_invoke(simdjson::serialize_tag, builder_type& b,
+template <typename BuilderType>
+void tag_invoke(simdjson::serialize_tag, BuilderType& b,
                 const DensityBlock& d) {
     b.start_object();
     if (!d.group.empty()) {
@@ -103,14 +101,13 @@ void tag_invoke(simdjson::serialize_tag, builder_type& b,
 
 // Serialize collected density blocks (+ optional individual events) into the
 // /viz/density response body. Shared by the live-scan and summary paths.
-static std::string serialize_density_body(
-    const std::vector<std::string>& big, const DensityMap& dens,
+static dstd::String serialize_density_body(
+    const dstd::Vector<dstd::String>& big, const DensityMap& dens,
     double original_begin, double original_end, double threshold, int limit,
     bool truncated, bool ts_normalized, std::uint64_t display_global_min,
     double max_dur, TraceIndex::TimeMetric metric,
-    const std::vector<std::uint32_t>* big_depth = nullptr,
-    const ankerl::unordered_dense::map<std::string, std::string>* group_names =
-        nullptr) {
+    const dstd::Vector<std::uint32_t>* big_depth = nullptr,
+    const dstd::HashMap<dstd::String, dstd::String>* group_names = nullptr) {
     // Blocks are positioned/sized in native threshold units; scale the visible
     // time fields (block ts/dur, duration sums, max_dur) to microseconds.
     const double us = dftracer::utils::trace::time_metric_us_scale(metric);
@@ -127,7 +124,7 @@ static std::string serialize_density_body(
         // }).
         if (big_depth && i < big_depth->size() && !big[i].empty() &&
             big[i].back() == '}') {
-            b.append_raw(std::string_view(big[i]).substr(0, big[i].size() - 1));
+            b.append_raw(dstd::StringView(big[i]).substr(0, big[i].size() - 1));
             b.append_raw(",\"depth\":");
             b.append(static_cast<std::uint64_t>((*big_depth)[i]));
             b.append_raw("}");
@@ -137,7 +134,7 @@ static std::string serialize_density_body(
     }
     b.end_array();
     b.append_comma();
-    std::vector<DensityBlock> blocks;
+    dstd::Vector<DensityBlock> blocks;
     blocks.reserve(dens.size());
     for (const auto& [k, a] : dens) {
         DensityBlock blk{
@@ -193,7 +190,7 @@ static std::string serialize_density_body(
     }
     b.end_object();
     b.end_object();
-    return std::string(b);
+    return dstd::String(b);
 }
 
 // The summary is unfiltered, so any server-side predicate forces a live scan.
@@ -208,7 +205,7 @@ bool viz_summary_eligible(const QueryParams& params,
              (!params.get("pid").empty() || !params.get("tid").empty()));
 }
 
-coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
+coro::CoroTask<void> append_app_spans(dstd::Vector<dstd::String>& out,
                                       TraceIndex& index, double begin,
                                       double end, const QueryParams& params,
                                       const TraceFields& fields) {
@@ -234,7 +231,7 @@ coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
 
 // Re-aggregate one pyramid level's buckets over [begin_abs, end_abs] into
 // pixel-column density blocks. `begin_abs`/`end_abs` are absolute us.
-static std::string serve_density_from_summary(
+static dstd::String serve_density_from_summary(
     const VizSummary& s, const VizSummary::Level& level,
     const QueryParams& params, double begin_abs, double end_abs,
     double original_begin, double original_end, double threshold,
@@ -245,7 +242,7 @@ static std::string serve_density_from_summary(
     // events aren't shifted off-screen on non-us traces (the us round-trip
     // loses at most sub-us, invisible on the timeline).
     const std::uint64_t native_global_min =
-        dftracer::utils::trace::scale_between(TraceIndex::TimeMetric::US,
+        dftracer::utils::trace::scale_between(TraceIndex::TimeMetric::Us,
                                               metric, display_global_min);
     auto pid_s = params.get("pid");
     auto tid_s = params.get("tid");
@@ -313,7 +310,7 @@ static std::string serve_density_from_summary(
     // Long events at least one pixel wide are drawn as real spans; the rest
     // fold into density blocks, which is the split a live scan makes. The
     // widest win when there are more than a response can carry.
-    std::vector<const VizSummary::AppSpan*> wide;
+    dstd::Vector<const VizSummary::AppSpan*> wide;
     auto fold_span = [&](const VizSummary::AppSpan& sp) {
         auto dur = static_cast<double>(sp.end - sp.begin);
         std::int64_t col = static_cast<std::int64_t>(
@@ -350,8 +347,8 @@ static std::string serve_density_from_summary(
         wide.resize(VizSummary::MAX_RESPONSE_SPANS);
     }
 
-    std::vector<std::string> spans;
-    ankerl::unordered_dense::set<std::int64_t> span_lanes;
+    dstd::Vector<dstd::String> spans;
+    dstd::HashSet<std::int64_t> span_lanes;
     for (const auto& sp : s.app_spans) {
         if (has_pid && sp.pid != want_pid) continue;
         if (has_tid && sp.tid != want_tid) continue;
@@ -389,7 +386,7 @@ static std::string serve_density_from_summary(
         const std::size_t ncols =
             static_cast<std::size_t>((end_abs - begin_abs) / threshold) + 1;
         for (const auto& cd : s.counter_series) {
-            std::string series = cd.name + "." + cd.key;
+            dstd::String series = cd.name + "." + cd.key;
             for (std::size_t i = 0; i < cd.buckets.size(); ++i) {
                 double ts_mid = static_cast<double>(s.t_begin) +
                                 (static_cast<double>(cd.buckets[i]) + 0.5) *
@@ -402,7 +399,7 @@ static std::string serve_density_from_summary(
         }
     }
 
-    std::vector<std::uint32_t> span_depth(napp_spans, 0);
+    dstd::Vector<std::uint32_t> span_depth(napp_spans, 0);
     // Stack counter series above their lane's spans (the summary path skips
     // assign_view_depths, so counters would otherwise pile on depth 0).
     assign_counter_depths(spans, span_depth, dens);
@@ -414,24 +411,24 @@ static std::string serve_density_from_summary(
 
 // The row set column that names the keys a group column holds, for display.
 struct RowSetField {
-    std::string_view rowset;
-    std::string_view key;
-    std::string_view value;
+    dstd::StringView rowset;
+    dstd::StringView key;
+    dstd::StringView value;
 };
 
 // Canonicalize one group column ("args.x" to "x"), and set `rt` when it
 // holds keys of one of the dftracer source's row sets.
-static std::string canonicalize_group_col(std::string col,
-                                          std::optional<RowSetField>& rt) {
-    static constexpr std::pair<std::string_view, RowSetField> KEYS[] = {
+static dstd::String canonicalize_group_col(dstd::String col,
+                                           dstd::Optional<RowSetField>& rt) {
+    static constexpr dstd::Pair<dstd::StringView, RowSetField> KEYS[] = {
         {"fhash", {"files", "fhash", "path"}},
         {"cwd", {"files", "fhash", "path"}},
         {"hhash", {"hosts", "hhash", "name"}},
         {"exec_hash", {"strings", "shash", "value"}},
         {"cmd_hash", {"strings", "shash", "value"}},
     };
-    col = std::string(strip_args_prefix(col));
-    rt = std::nullopt;
+    col = dstd::String(common::strip_args_prefix(col));
+    rt = dstd::nullopt;
     for (const auto& [field, rs] : KEYS)
         if (col == field) rt = rs;
     return col;
@@ -461,7 +458,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // Optional density grouping column. A well-formed name that matches no
     // event field is fine (all blocks land in the client's "(none)" group);
     // only malformed names are rejected.
-    std::string group_col(params.get("group_by"));
+    dstd::String group_col(params.get("group_by"));
     if (group_col.size() > 128)
         co_return HttpResponse::bad_request("group_by too long");
     for (char c : group_col) {
@@ -475,21 +472,21 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // group_by may list several comma-separated columns; canonicalize each
     // and record its row set column so the composite value's components
     // resolve independently.
-    std::vector<std::optional<RowSetField>> resolve_types;
+    dstd::Vector<dstd::Optional<RowSetField>> resolve_types;
     {
-        std::string rebuilt;
+        dstd::String rebuilt;
         std::size_t start = 0;
         while (start <= group_col.size()) {
             auto comma = group_col.find(',', start);
-            std::string part(group_col.substr(
-                start, comma == std::string::npos ? group_col.size() - start
-                                                  : comma - start));
-            std::optional<RowSetField> rt;
-            std::string canon = canonicalize_group_col(std::move(part), rt);
+            dstd::String part(group_col.substr(
+                start, comma == dstd::String::npos ? group_col.size() - start
+                                                   : comma - start));
+            dstd::Optional<RowSetField> rt;
+            dstd::String canon = canonicalize_group_col(std::move(part), rt);
             if (!rebuilt.empty()) rebuilt.push_back(',');
             rebuilt += canon;
             resolve_types.push_back(rt);
-            if (comma == std::string::npos) break;
+            if (comma == dstd::String::npos) break;
             start = comma + 1;
         }
         group_col = std::move(rebuilt);
@@ -514,8 +511,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         duration_threshold(begin, end, static_cast<unsigned>(summary),
                            static_cast<unsigned>(width));
 
-    const std::string cache_key =
-        std::string(req.path) + "?" + params.canonical_key();
+    const dstd::String cache_key =
+        dstd::String(req.path) + "?" + params.canonical_key();
     if (auto hit = index.viz_cache().get(cache_key))
         co_return HttpResponse::ok(std::move(*hit));
 
@@ -559,7 +556,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // long events that enclose the window are never read.
     double lookback = params.get_double("lookback", 0);
     if (lookback < 0) lookback = 0;
-    if (lookback > 0 && index.time_metric() != TraceIndex::TimeMetric::US)
+    if (lookback > 0 && index.time_metric() != TraceIndex::TimeMetric::Us)
         lookback = static_cast<double>(
             index.us_to_native(static_cast<std::uint64_t>(lookback)));
 
@@ -582,7 +579,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             enc_summary = s;
             enc_threshold_us = s->long_threshold_us;
             enc_threshold_native =
-                index.time_metric() == TraceIndex::TimeMetric::US
+                index.time_metric() == TraceIndex::TimeMetric::Us
                     ? enc_threshold_us
                     : static_cast<double>(index.us_to_native(
                           static_cast<std::uint64_t>(enc_threshold_us)));
@@ -600,11 +597,11 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // raw in `big` (with their durations). `max_dur` tracks the longest event
     // seen (folded ones included).
     struct Acc {
-        std::vector<std::string> big;
-        std::vector<double> big_dur;  // parallel to `big`
+        dstd::Vector<dstd::String> big;
+        dstd::Vector<double> big_dur;  // parallel to `big`
         DensityMap dens;
         double max_dur = 0;
-        std::vector<AggRec> agg;      // ph=3 records, kept whole
+        dstd::Vector<AggRec> agg;      // ph=3 records, kept whole
     };
     auto merge_acc = [](Acc&& x, Acc&& y) {
         if (y.max_dur > x.max_dur) x.max_dur = y.max_dur;
@@ -657,10 +654,12 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     Acc ev_out, cs_out, ag_out;
     bool truncated = false;
     auto fold_event = [&group_col, threshold, begin](
-                          Acc& acc, simdjson::dom::element root,
-                          std::string_view raw) {
+                          Acc& acc, json::Value& root, dstd::StringView raw) {
         double dur = 0;
-        if (!fold_density(root, threshold, begin, acc.dens, &dur, group_col)) {
+        const DensityFold folded =
+            fold_density(root, threshold, begin, acc.dens, &dur, group_col);
+        if (folded == DensityFold::Broken) return;
+        if (folded == DensityFold::Individual) {
             acc.big.emplace_back(raw);
             acc.big_dur.push_back(dur);
         }
@@ -669,33 +668,29 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // Every record of a path schema is a data event.
     auto pass1_path = [&](views::ViewSession& p1run) {
         auto ev_h = p1run.fold<Acc>(
-            [&fields, &fold_event](Acc& acc, const auto&,
-                                   std::string_view raw) {
-                fields.with_event(
-                    raw, [&](simdjson::dom::element root, std::string_view ev) {
-                        fold_event(acc, root, ev);
-                    });
+            [&fields, &fold_event](Acc& acc, json::Value&,
+                                   dstd::StringView raw) {
+                fields.with_event(raw,
+                                  [&](json::Value& root, dstd::StringView ev) {
+                                      fold_event(acc, root, ev);
+                                  });
             },
             merge_acc);
-        return std::function<void(const views::ExportStats&)>(
+        return dstd::Function<void(const views::ExportStats&)>(
             [&, ev_h](const views::ExportStats& st) mutable {
                 ev_out = std::move(ev_h.get());
                 truncated = st.truncated;
             });
     };
     auto pass1 = [&](views::ViewSession& p1run) {
-        auto ev_h = p1run.fold<Acc>(
-            duql::parse_or_throw("ph == 1 or ph == \"X\""),
-            [&fold_event](Acc& acc, const auto& jv, std::string_view raw) {
-                fold_event(acc, jv.element(), raw);
-            },
-            merge_acc);
+        auto ev_h =
+            p1run.fold<Acc>(duql::parse_or_throw("ph == 1 or ph == \"X\""),
+                            fold_event, merge_acc);
         auto cs_h = p1run.fold<Acc>(
             duql::parse_or_throw("ph == 2 or ph == \"C\""),
-            [begin, threshold, ncols](Acc& acc, const auto& jv,
-                                      std::string_view) {
-                fold_counter_density(jv.element(), begin, threshold, ncols,
-                                     acc.dens);
+            [begin, threshold, ncols](Acc& acc, json::Value& jv,
+                                      dstd::StringView) {
+                fold_counter_density(jv, begin, threshold, ncols, acc.dens);
             },
             merge_acc);
         // ph=3 SELECTIVE-aggregation records: the individual events were
@@ -704,11 +699,11 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         // window is known.
         auto ag_h = p1run.fold<Acc>(
             duql::parse_or_throw("ph == 3 or ph == \"A\""),
-            [](Acc& acc, const auto& jv, std::string_view raw) {
-                collect_aggregated(jv.element(), raw, acc.agg);
+            [](Acc& acc, json::Value& jv, dstd::StringView raw) {
+                collect_aggregated(jv, raw, acc.agg);
             },
             merge_acc);
-        return std::function<void(const views::ExportStats&)>(
+        return dstd::Function<void(const views::ExportStats&)>(
             [&, ev_h, cs_h, ag_h](const views::ExportStats& st) mutable {
                 ev_out = std::move(ev_h.get());
                 cs_out = std::move(cs_h.get());
@@ -731,8 +726,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         else
             it->second.merge_from(a);
     }
-    std::vector<std::string> big = std::move(ev_out.big);
-    std::vector<double> big_dur = std::move(ev_out.big_dur);
+    dstd::Vector<dstd::String> big = std::move(ev_out.big);
+    dstd::Vector<double> big_dur = std::move(ev_out.big_dur);
     // Longest event scanned (folded ones included); the client feeds it back as
     // `lookback` so deep zooms still catch long enclosing events.
     double max_dur = ev_out.max_dur;
@@ -741,13 +736,13 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // the trace-declared cfg as cross-check and single-window fallback.
     double agg_interval = 0;
     if (trace_has_agg || !ag_out.agg.empty()) {
-        std::vector<double> ats;
+        dstd::Vector<double> ats;
         ats.reserve(ag_out.agg.size());
         for (const auto& r : ag_out.agg) ats.push_back(r.ts);
         agg_interval = infer_agg_interval(std::move(ats));
         double cfg_native = cfg_agg_interval;
         if (cfg_agg_interval > 0 &&
-            index.time_metric() != TraceIndex::TimeMetric::US)
+            index.time_metric() != TraceIndex::TimeMetric::Us)
             cfg_native = static_cast<double>(index.us_to_native(
                 static_cast<std::uint64_t>(cfg_agg_interval)));
         if (agg_interval <= 0) {
@@ -784,20 +779,21 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         Acc agg_back, enc;
         bool back_truncated = false;
         auto back = [&](views::ViewSession& s) {
-            std::optional<views::Deferred<Acc>> agg_h, enc_h;
+            dstd::Optional<views::Deferred<Acc>> agg_h, enc_h;
             if (want_agg)
                 agg_h = s.fold<Acc>(
                     duql::parse_or_throw("ph == 3 or ph == \"A\""),
-                    [agg_lo](Acc& acc, const auto& jv, std::string_view raw) {
+                    [agg_lo](Acc& acc, json::Value& jv, dstd::StringView raw) {
                         double ts = 0, dur = 0;
-                        if (!parse_ts_dur(raw, ts, dur) || ts < agg_lo) return;
-                        collect_aggregated(jv.element(), raw, acc.agg);
+                        if (!parse_ts_dur(jv, ts, dur) || ts < agg_lo) return;
+                        collect_aggregated(jv, raw, acc.agg);
                     },
                     merge_acc);
             auto enclose = [begin, enc_lo, skip_from](Acc& acc,
-                                                      std::string_view raw) {
+                                                      json::Value& event,
+                                                      dstd::StringView raw) {
                 double ts = 0, dur = 0;
-                if (!parse_ts_dur(raw, ts, dur) || ts < enc_lo) return;
+                if (!parse_ts_dur(event, ts, dur) || ts < enc_lo) return;
                 if (dur > acc.max_dur) acc.max_dur = dur;
                 if (ts < begin && ts + dur > begin && dur < skip_from) {
                     acc.big.emplace_back(raw);
@@ -806,22 +802,22 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             };
             if (want_enc && fields.by_path)
                 enc_h = s.fold<Acc>(
-                    [&fields, enclose](Acc& acc, const auto&,
-                                       std::string_view raw) {
-                        fields.with_event(raw, [&](simdjson::dom::element,
-                                                   std::string_view ev) {
-                            enclose(acc, ev);
-                        });
+                    [&fields, enclose](Acc& acc, json::Value&,
+                                       dstd::StringView raw) {
+                        fields.with_event(
+                            raw, [&](json::Value& event, dstd::StringView ev) {
+                                enclose(acc, event, ev);
+                            });
                     },
                     merge_acc);
             else if (want_enc)
                 enc_h = s.fold<Acc>(
                     duql::parse_or_throw("ph == 1 or ph == \"X\""),
-                    [enclose](Acc& acc, const auto&, std::string_view raw) {
-                        enclose(acc, raw);
+                    [enclose](Acc& acc, json::Value& jv, dstd::StringView raw) {
+                        enclose(acc, jv, raw);
                     },
                     merge_acc);
-            return std::function<void(const views::ExportStats&)>(
+            return dstd::Function<void(const views::ExportStats&)>(
                 [&, agg_h, enc_h](const views::ExportStats& st) mutable {
                     if (agg_h) agg_back = std::move(agg_h->get());
                     if (enc_h) enc = std::move(enc_h->get());
@@ -876,21 +872,21 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     const std::size_t cap =
         limit > 0 ? static_cast<std::size_t>(limit) : MAX_DENSITY_EVENTS;
     if (big.size() > cap) {
-        std::vector<std::uint32_t> idx(big.size());
+        dstd::Vector<std::uint32_t> idx(big.size());
         std::iota(idx.begin(), idx.end(), std::uint32_t{0});
         std::nth_element(idx.begin(), idx.begin() + static_cast<long>(cap),
                          idx.end(),
                          [&big_dur](std::uint32_t a, std::uint32_t b) {
                              return big_dur[a] > big_dur[b];
                          });
-        std::vector<std::uint32_t> overflow(
+        dstd::Vector<std::uint32_t> overflow(
             idx.begin() + static_cast<long>(cap), idx.end());
         fold_overflow_events(big, big_dur, overflow, threshold, begin, dens,
                              group_col);
         idx.resize(cap);
         std::sort(idx.begin(), idx.end());
-        std::vector<std::string> kept;
-        std::vector<double> kept_dur;
+        dstd::Vector<dstd::String> kept;
+        dstd::Vector<double> kept_dur;
         kept.reserve(cap);
         kept_dur.reserve(cap);
         for (std::uint32_t i : idx) {
@@ -958,23 +954,23 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // Resolve hash group values (fhash -> path, hhash -> host, ...) for the
     // groups actually present; unresolvable hashes fall back to the raw value
     // on the client.
-    ankerl::unordered_dense::map<std::string, std::string> group_names;
+    dstd::HashMap<dstd::String, dstd::String> group_names;
     if (any_resolve && !group_col.empty()) {
         // Split each composite group key into its per-column components and
         // collect the ones from hash columns; resolve each distinct hash once.
-        ankerl::unordered_dense::map<std::string, RowSetField> to_resolve;
-        auto collect = [&](std::string_view composite) {
+        dstd::HashMap<dstd::String, RowSetField> to_resolve;
+        auto collect = [&](dstd::StringView composite) {
             std::size_t start = 0, idx = 0;
             while (start <= composite.size() && idx < resolve_types.size()) {
                 auto sep = composite.find(GROUP_SEP, start);
                 auto part =
-                    composite.substr(start, sep == std::string_view::npos
+                    composite.substr(start, sep == dstd::StringView::npos
                                                 ? composite.size() - start
                                                 : sep - start);
                 if (resolve_types[idx] && !part.empty())
-                    to_resolve.emplace(std::string(part), *resolve_types[idx]);
+                    to_resolve.emplace(dstd::String(part), *resolve_types[idx]);
                 ++idx;
-                if (sep == std::string_view::npos) break;
+                if (sep == dstd::StringView::npos) break;
                 start = sep + 1;
             }
         };
@@ -992,17 +988,17 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
 
     // Stable per-event/-block depth (computed in absolute space, before ts
     // normalization rewrites the big strings; order is preserved in place).
-    std::vector<std::uint32_t> big_depth =
+    dstd::Vector<std::uint32_t> big_depth =
         assign_view_depths(big, dens, begin, eff_threshold);
     // Counters get their own rows above the lane's events (assign_view_depths
     // leaves every counter block on depth 0).
     assign_counter_depths(big, big_depth, dens);
-    if (global_min > 0 || index.time_metric() != TraceIndex::TimeMetric::US) {
+    if (global_min > 0 || index.time_metric() != TraceIndex::TimeMetric::Us) {
         for (auto& e : big)
             e = normalize_event_ts(e, global_min, index.time_metric());
     }
 
-    std::string body = serialize_density_body(
+    dstd::String body = serialize_density_body(
         big, dens, original_begin, original_end, eff_threshold, limit,
         truncated, global_min > 0,
         index.native_to_us(index.global_min_timestamp_us()), max_dur,

@@ -1,46 +1,38 @@
+// SPDX-License-Identifier: MIT
 // In-process coverage for the plugin ABI surface the host-service suite leaves
 // untested: the config tree, query compile/match and plan_duql event routing,
 // and the coroutine control ops (drive path).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/runtime/runtime.h>
 
-#include <memory>
 // After plugin.h/fold_adapter.h so nanoarrow is already set up for arrow_abi.h.
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/compose.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
 
-#include "testing_utilities.h"
-
-using dftracer::utils::CoroScope;
-using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
-using dftracer::utils::plugins::ConfigTree;
-using dftracer::utils::plugins::PluginFold;
-namespace coro = dftracer::utils::coro;
-namespace views = dftracer::utils::trace::views;
-using dftracer::utils::trace::RecordPhase;
-using views::detail::FoldBatch;
-using views::detail::FoldEvent;
-using views::detail::ScanUnit;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -51,16 +43,16 @@ coro::CoroTask<void>* as_coro(::dftu_task* t) {
 struct ConfigSlice {
     std::int64_t threshold = 0;
     double ratio = 0.0;
-    std::string label;
+    dstd::String label;
     bool enabled = false;
     std::int64_t inner = 0;
     std::int64_t missing = 0;
-    std::vector<std::int64_t> buckets;
+    dstd::Vector<std::int64_t> buckets;
 
     explicit ConfigSlice(const dftracer::utils::plugins::Config& c) {
         threshold = c.get_int("threshold");
         ratio = c.get_double("ratio");
-        label = std::string(c.get("label"));
+        label = dstd::String(c.get("label"));
         enabled = c.get_bool("enabled");
         inner = c.child("nested").get_int("inner");
         missing = c.get_int("missing", -1);
@@ -76,8 +68,8 @@ struct ConfigSlice {
 
 struct CountState {
     std::uint64_t seen = 0;
-    std::vector<std::string> fhashes;
-    std::vector<std::string> hhashes;
+    dstd::Vector<dstd::String> fhashes;
+    dstd::Vector<dstd::String> hhashes;
 };
 CountState g_count;
 
@@ -95,14 +87,15 @@ struct CountSlice {
     void finalize(dftracer::utils::plugins::Host) {}
 };
 
-FoldEvent make_event(StringIntern& intern, const char* fhash,
-                     const char* hhash) {
-    FoldEvent fe;
+trace::views::detail::FoldEvent make_event(dstd::StringIntern& intern,
+                                           const char* fhash,
+                                           const char* hhash) {
+    trace::views::detail::FoldEvent fe;
     fe.cat_id = intern.get_or_insert("POSIX");
     fe.name_id = intern.get_or_insert("read");
     fe.fhash_id = intern.get_or_insert(fhash);
     fe.hhash_id = intern.get_or_insert(hhash);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = trace::RecordPhase::Complete;
     fe.ts = 1;
     fe.dur = 5;
     fe.has_dur = true;
@@ -110,8 +103,8 @@ FoldEvent make_event(StringIntern& intern, const char* fhash,
 }
 
 void inc_fn(void* p) { static_cast<std::atomic<int>*>(p)->fetch_add(1); }
-void append1_fn(void* p) { static_cast<std::vector<int>*>(p)->push_back(1); }
-void append2_fn(void* p) { static_cast<std::vector<int>*>(p)->push_back(2); }
+void append1_fn(void* p) { static_cast<dstd::Vector<int>*>(p)->push_back(1); }
+void append2_fn(void* p) { static_cast<dstd::Vector<int>*>(p)->push_back(2); }
 
 const dftu_svc_coro* coro_ext(dftracer::utils::plugins::Host h) {
     return static_cast<const dftu_svc_coro*>(
@@ -121,7 +114,7 @@ const dftu_svc_coro* coro_ext(dftracer::utils::plugins::Host h) {
 dftracer::utils::plugins::Task fanout_all(dftracer::utils::plugins::Host h,
                                           std::atomic<int>* ran, int n) {
     const dftu_svc_coro* c = coro_ext(h);
-    std::vector<::dftu_task*> kids;
+    dstd::Vector<::dftu_task*> kids;
     for (int i = 0; i < n; ++i)
         kids.push_back(c->spawn(h.raw()->h, inc_fn, ran));
     ::dftu_task* all =
@@ -139,7 +132,7 @@ dftracer::utils::plugins::Task fanout_any(dftracer::utils::plugins::Host h,
 }
 
 dftracer::utils::plugins::Task chain(dftracer::utils::plugins::Host h,
-                                     std::vector<int>* order) {
+                                     dstd::Vector<int>* order) {
     const dftu_svc_coro* c = coro_ext(h);
     ::dftu_task* t = c->spawn(h.raw()->h, append1_fn, order);
     co_await h.await(c->then(h.raw()->h, t, append2_fn, order));
@@ -166,7 +159,7 @@ dftracer::utils::plugins::Task compose_any(dftracer::utils::plugins::Host h,
 dftracer::utils::plugins::Task compose_map(dftracer::utils::plugins::Host h,
                                            std::atomic<int>* ran) {
     const dftu_svc_coro* c = coro_ext(h);
-    std::vector<int> items = {0, 1, 2, 3};
+    dstd::Vector<int> items = {0, 1, 2, 3};
     co_await dftracer::utils::plugins::map(
         h.raw(), items, [&](int) { return c->spawn(h.raw()->h, inc_fn, ran); });
 }
@@ -290,12 +283,12 @@ dftracer::utils::plugins::Task op_all(dftracer::utils::plugins::Host h,
 // it is destroyed first.
 template <class Slice>
 struct FoldFixture {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* plugin;
-    std::unique_ptr<PluginFold> fold;
+    dstd::UniquePtr<plugins::PluginFold> fold;
     explicit FoldFixture(const dftu_value* config)
         : plugin(dftracer::utils::plugins::make_plugin<Slice>(config)),
-          fold(std::make_unique<PluginFold>(plugin, intern)) {}
+          fold(dstd::make_unique<plugins::PluginFold>(plugin, intern)) {}
     dftu_plugin_host& host() { return fold->host(); }
     ~FoldFixture() {
         fold.reset();
@@ -348,9 +341,9 @@ struct QueryFrame {
     QueryFrame(QueryFrame&& o) noexcept : df(o.df) { o.df = nullptr; }
 };
 
-dftu_series* string_column(const std::vector<std::string>& vals) {
-    std::vector<std::int32_t> offsets(vals.size() + 1, 0);
-    std::string data;
+dftu_series* string_column(const dstd::Vector<dstd::String>& vals) {
+    dstd::Vector<std::int32_t> offsets(vals.size() + 1, 0);
+    dstd::String data;
     for (std::size_t i = 0; i < vals.size(); ++i) {
         data += vals[i];
         offsets[i + 1] = static_cast<std::int32_t>(data.size());
@@ -360,8 +353,8 @@ dftu_series* string_column(const std::vector<std::string>& vals) {
                                   nullptr);
 }
 
-QueryFrame cat_name_frame(const std::vector<std::string>& cats,
-                          const std::vector<std::string>& names) {
+QueryFrame cat_name_frame(const dstd::Vector<dstd::String>& cats,
+                          const dstd::Vector<dstd::String>& names) {
     const char* col_names[2] = {"cat", "name"};
     dftu_series* cols[2] = {string_column(cats), string_column(names)};
     QueryFrame f;
@@ -383,26 +376,29 @@ TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
     p.destroy = col_destroy;
     p.on_batch = col_on_batch;
 
-    StringIntern intern;
-    PluginFold fold(&p, intern);
-    std::vector<FoldEvent> evs = {make_event(intern, "f", "h"),
-                                  make_event(intern, "f", "h"),
-                                  make_event(intern, "f", "h")};
-    ScanUnit unit{};
-    fold.step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+    dstd::StringIntern intern;
+    plugins::PluginFold fold(&p, intern);
+    dstd::Vector<trace::views::detail::FoldEvent> evs = {
+        make_event(intern, "f", "h"), make_event(intern, "f", "h"),
+        make_event(intern, "f", "h")};
+    trace::views::detail::ScanUnit unit{};
+    fold.step(trace::views::detail::FoldBatch{
+        dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
     CHECK(g_col_state.dur_sum == 15);  // 3 events x dur 5, SIMD-reduced
 }
 
 TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
     dftu_utils_test::TestEnvironment env(0);
-    std::string path = env.get_dir() + "/config.json";
+    dstd::String path = env.dir() + "/config.json";
     {
-        std::ofstream f(path);
-        f << R"({"threshold":42,"ratio":2.5,"label":"posix","enabled":true,)"
-          << R"("nested":{"inner":7},"buckets":[10,20,30]})";
+        (void)dstd::fs::write_file(
+            dstd::PathView(path),
+            common::str_cat(
+                R"({"threshold":42,"ratio":2.5,"label":"posix","enabled":true,)",
+                R"("nested":{"inner":7},"buckets":[10,20,30]})"));
     }
 
-    ConfigTree tree = ConfigTree::from_json_file(path);
+    plugins::ConfigTree tree = plugins::ConfigTree::from_json_file(path);
     dftu_plugin* p =
         dftracer::utils::plugins::make_plugin<ConfigSlice>(tree.root());
     auto* slice = static_cast<ConfigSlice*>(p->make_slice(p->self));
@@ -430,7 +426,7 @@ TEST_CASE("plugin ABI: duql_compile then duql_matches on known events") {
         host.get_service(host.h, DFTU_SVC_DUQL));
     REQUIRE(qx != nullptr);
 
-    std::string src = "cat == \"POSIX\"";
+    dstd::String src = "cat == \"POSIX\"";
     dftu_duql* q = qx->duql_compile(host.h, src.data(),
                                     static_cast<std::uint32_t>(src.size()));
     REQUIRE(q != nullptr);
@@ -442,7 +438,7 @@ TEST_CASE("plugin ABI: duql_compile then duql_matches on known events") {
     CHECK(qx->duql_matches(host.h, q, frame.df, 1) == 0);
 
     SUBCASE("malformed query source does not compile and match is safe") {
-        std::string bad = "cat ==";
+        dstd::String bad = "cat ==";
         dftu_duql* bq = qx->duql_compile(
             host.h, bad.data(), static_cast<std::uint32_t>(bad.size()));
         CHECK(bq == nullptr);
@@ -454,18 +450,19 @@ TEST_CASE("plugin ABI: duql_compile then duql_matches on known events") {
 TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
     SUBCASE("fhash predicate keeps every match, drops the rest") {
         g_count = CountState{};
-        ConfigTree tree;
+        plugins::ConfigTree tree;
         tree.set("duql", "fhash == \"fhAAA\"");
         FoldFixture<CountSlice> fx(tree.root());
 
-        std::vector<FoldEvent> evs;
+        dstd::Vector<trace::views::detail::FoldEvent> evs;
         evs.push_back(make_event(fx.intern, "fhAAA", "hh1"));
         evs.push_back(make_event(fx.intern, "fhBBB", "hh1"));
         evs.push_back(make_event(fx.intern, "fhAAA", "hh2"));
         evs.push_back(make_event(fx.intern, "fhCCC", "hh2"));
         evs.push_back(make_event(fx.intern, "fhAAA", "hh3"));
-        ScanUnit unit{};
-        FoldBatch batch{std::span<const FoldEvent>(evs), unit};
+        trace::views::detail::ScanUnit unit{};
+        trace::views::detail::FoldBatch batch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         fx.fold->step(batch);
         CHECK(fx.fold->take_pending() == nullptr);
@@ -477,16 +474,17 @@ TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
 
     SUBCASE("hhash predicate routes on a non cat/name field too") {
         g_count = CountState{};
-        ConfigTree tree;
+        plugins::ConfigTree tree;
         tree.set("duql", "hhash == \"hhZ\"");
         FoldFixture<CountSlice> fx(tree.root());
 
-        std::vector<FoldEvent> evs;
+        dstd::Vector<trace::views::detail::FoldEvent> evs;
         evs.push_back(make_event(fx.intern, "fh1", "hhZ"));
         evs.push_back(make_event(fx.intern, "fh2", "hhY"));
         evs.push_back(make_event(fx.intern, "fh3", "hhZ"));
-        ScanUnit unit{};
-        FoldBatch batch{std::span<const FoldEvent>(evs), unit};
+        trace::views::detail::ScanUnit unit{};
+        trace::views::detail::FoldBatch batch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         fx.fold->step(batch);
         CHECK(g_count.seen == 2);
@@ -500,12 +498,16 @@ TEST_CASE("plugin ABI: spawn fan-out joined by when_all runs every child") {
 
     Runtime rt(1);
     std::atomic<int> ran{0};
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host,
-              fanout_all(dftracer::utils::plugins::Host{&host}, &ran, 4));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host,
+                          fanout_all(dftracer::utils::plugins::Host{&host},
+                                     &ran, 4));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     CHECK(ran.load() == 4);
 }
@@ -516,11 +518,16 @@ TEST_CASE("plugin ABI: when_any returns after the first child") {
 
     Runtime rt(1);
     std::atomic<int> ran{0};
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, fanout_any(dftracer::utils::plugins::Host{&host}, &ran));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(
+          coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+              ::dftu_task* d =
+                  dftracer::utils::plugins::detail::drive_coro<int>(
+                      &host,
+                      fanout_any(dftracer::utils::plugins::Host{&host}, &ran));
+              co_await *as_coro(d);
+          }),
+          "caller")
+        .wait();
     rt.shutdown();
     CHECK(ran.load() >= 1);
 }
@@ -531,11 +538,16 @@ TEST_CASE("plugin ABI: compose && joins both tasks (when_all)") {
 
     Runtime rt(1);
     std::atomic<int> ran{0};
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, compose_all(dftracer::utils::plugins::Host{&host}, &ran));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(
+          coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+              ::dftu_task* d =
+                  dftracer::utils::plugins::detail::drive_coro<int>(
+                      &host,
+                      compose_all(dftracer::utils::plugins::Host{&host}, &ran));
+              co_await *as_coro(d);
+          }),
+          "caller")
+        .wait();
     rt.shutdown();
     CHECK(ran.load() == 2);
 }
@@ -546,11 +558,16 @@ TEST_CASE("plugin ABI: compose || races the tasks (when_any)") {
 
     Runtime rt(1);
     std::atomic<int> ran{0};
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, compose_any(dftracer::utils::plugins::Host{&host}, &ran));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(
+          coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+              ::dftu_task* d =
+                  dftracer::utils::plugins::detail::drive_coro<int>(
+                      &host,
+                      compose_any(dftracer::utils::plugins::Host{&host}, &ran));
+              co_await *as_coro(d);
+          }),
+          "caller")
+        .wait();
     rt.shutdown();
     CHECK(ran.load() >= 1);
 }
@@ -561,11 +578,16 @@ TEST_CASE("plugin ABI: compose map joins one task per item (when_all)") {
 
     Runtime rt(1);
     std::atomic<int> ran{0};
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, compose_map(dftracer::utils::plugins::Host{&host}, &ran));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(
+          coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+              ::dftu_task* d =
+                  dftracer::utils::plugins::detail::drive_coro<int>(
+                      &host,
+                      compose_map(dftracer::utils::plugins::Host{&host}, &ran));
+              co_await *as_coro(d);
+          }),
+          "caller")
+        .wait();
     rt.shutdown();
     CHECK(ran.load() == 4);
 }
@@ -576,11 +598,15 @@ TEST_CASE("plugin ABI: compose dftu_op then threads a value through the pipe") {
 
     Runtime rt(1);
     std::int64_t result = 0;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, op_pipe(dftracer::utils::plugins::Host{&host}, &result));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host, op_pipe(dftracer::utils::plugins::Host{&host},
+                                         &result));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     CHECK(result == 20);  // (5*2)+10
 }
@@ -591,11 +617,15 @@ TEST_CASE("plugin ABI: compose dftu_op when_all concatenates outputs") {
 
     Runtime rt(1);
     std::int64_t a = 0, b = 0;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, op_all(dftracer::utils::plugins::Host{&host}, &a, &b));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host, op_all(dftracer::utils::plugins::Host{&host},
+                                        &a, &b));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     CHECK(a == 10);  // 5*2
     CHECK(b == 15);  // 5+10
@@ -607,11 +637,15 @@ TEST_CASE("plugin ABI: compose dftu_op when_any yields the winner's value") {
 
     Runtime rt(1);
     std::int64_t result = 0;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, op_any(dftracer::utils::plugins::Host{&host}, &result));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host, op_any(dftracer::utils::plugins::Host{&host},
+                                        &result));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     CHECK(result == 15);  // both racers compute 5+10
 }
@@ -622,12 +656,16 @@ TEST_CASE("plugin ABI: typed compose Op pipes real values") {
 
     Runtime rt(1);
     std::int64_t result = 0;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host,
-              typed_pipe(dftracer::utils::plugins::Host{&host}, &result));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host,
+                          typed_pipe(dftracer::utils::plugins::Host{&host},
+                                     &result));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     CHECK(result == 20);  // (5*2)+10, fully typed
 }
@@ -645,11 +683,16 @@ TEST_CASE(
 
     Runtime rt(1);
     dftu_series* out = nullptr;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, series_pipe(dftracer::utils::plugins::Host{&host}, &out));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(
+          coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+              ::dftu_task* d =
+                  dftracer::utils::plugins::detail::drive_coro<int>(
+                      &host,
+                      series_pipe(dftracer::utils::plugins::Host{&host}, &out));
+              co_await *as_coro(d);
+          }),
+          "caller")
+        .wait();
     rt.shutdown();
 
     REQUIRE(out != nullptr);
@@ -704,12 +747,16 @@ TEST_CASE("plugin ABI: then chains a continuation after its task") {
     dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
-    std::vector<int> order;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, chain(dftracer::utils::plugins::Host{&host}, &order));
-          co_await *as_coro(d);
-      }).wait();
+    dstd::Vector<int> order;
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host,
+                          chain(dftracer::utils::plugins::Host{&host}, &order));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     REQUIRE(order.size() == 2);
     CHECK(order[0] == 1);

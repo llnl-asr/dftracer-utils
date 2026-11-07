@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Tests for Arrow IPC file output and readback via pyarrow."""
 
 import pytest

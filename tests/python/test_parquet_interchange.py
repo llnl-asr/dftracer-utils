@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Parquet round trips with pandas and Dask: nullable dtypes come back, a Dask
 directory reads without its index marker, and its parts concatenate."""
 

@@ -1,15 +1,16 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_CATALOG_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_CATALOG_FOLD_H
 
-#include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/index/store/types.h>
 #include <dftracer/utils/trace/views/fold.h>
 
 #include <cstdint>
-#include <map>
-#include <memory>
-#include <string>
 
 namespace dftracer::utils::index::extensions {
 
@@ -24,7 +25,7 @@ void observe_catalog_path(index::store::PathStat& stat, std::uint8_t tag);
 class CatalogFold : public trace::views::detail::Fold {
    public:
     /// `params_hash` is the CATALOG hash of the config a full build uses.
-    CatalogFold(dftracer::utils::StringIntern& intern,
+    CatalogFold(dftracer::utils::dstd::StringIntern& intern,
                 std::uint64_t params_hash)
         : intern_(&intern), params_hash_(params_hash) {}
 
@@ -37,8 +38,8 @@ class CatalogFold : public trace::views::detail::Fold {
     bool reads_never_indexed() const override { return false; }
     bool wants_metadata() const override { return false; }
 
-    std::unique_ptr<trace::views::detail::Fold> slice() const override {
-        return std::make_unique<CatalogFold>(*intern_, params_hash_);
+    dstd::UniquePtr<trace::views::detail::Fold> slice() const override {
+        return dstd::make_unique<CatalogFold>(*intern_, params_hash_);
     }
 
     void step(const trace::views::detail::FoldBatch& batch) override;
@@ -52,14 +53,13 @@ class CatalogFold : public trace::views::detail::Fold {
 
    private:
     struct FileState {
-        std::string index_path;
-        ankerl::unordered_dense::map<std::uint32_t, index::store::PathStat>
-            paths;
+        dstd::String index_path;
+        dstd::HashMap<std::uint32_t, index::store::PathStat> paths;
     };
 
-    dftracer::utils::StringIntern* intern_;
+    dftracer::utils::dstd::StringIntern* intern_;
     std::uint64_t params_hash_;
-    std::map<std::string, FileState> files_;
+    dstd::Map<dstd::String, FileState> files_;
 };
 
 }  // namespace dftracer::utils::index::extensions

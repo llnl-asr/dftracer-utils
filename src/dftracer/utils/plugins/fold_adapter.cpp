@@ -1,44 +1,53 @@
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/coro/when_any.h>
-#include <dftracer/utils/core/coro/yield.h>
-#include <dftracer/utils/core/io/ops.h>
-#include <dftracer/utils/core/runtime.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/fold_adapter/state.h>
 #include <dftracer/utils/plugins/plugin/map.h>
+#include <dftracer/utils/runtime/io/ops.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
-#include <simdjson.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
-#include <dftracer/utils/utilities/common/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
 #endif
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-#include <dftracer/utils/utilities/common/arrow/ipc_reader.h>
-#include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/utilities/arrow/ipc_reader.h>
+#include <dftracer/utils/utilities/arrow/ipc_writer.h>
 #endif
 
 #include <cstddef>
@@ -48,7 +57,6 @@
 #include <cstring>
 #include <new>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -58,20 +66,19 @@ namespace {
 
 using duql::Query;
 using trace::RecordPhase;
-namespace parallel = utilities::fileio::parallel;
 
 coro::CoroTask<void>* as_task(::dftu_task* t) {
     return reinterpret_cast<coro::CoroTask<void>*>(t);
 }
 
-const char* host_resolve(void* h, dftu_str id, std::uint32_t* out_len) {
-    if (out_len) *out_len = 0;
+const char* host_resolve(void* h, dftu_str id, std::uint32_t* out_size) {
+    if (out_size) *out_size = 0;
     if (id == DFTU_STR_NONE ||
-        id >= dftracer::utils::StringIntern::FAST_CAPACITY)
+        id >= dftracer::utils::dstd::StringIntern::FAST_CAPACITY)
         return nullptr;
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
-    std::string_view sv = intern.resolve(id);
-    if (out_len) *out_len = static_cast<std::uint32_t>(sv.size());
+    dstd::StringView sv = intern.resolve(id);
+    if (out_size) *out_size = static_cast<std::uint32_t>(sv.size());
     // Interned bytes are stable for the scan, so they outlive the call.
     return sv.data();
 }
@@ -80,7 +87,7 @@ dftu_str host_intern(void* h, const char* s, std::uint32_t len) {
     if (!s) return DFTU_STR_NONE;
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
     try {
-        return intern.get_or_insert(std::string_view{s, len});
+        return intern.get_or_insert(dstd::StringView{s, len});
     } catch (...) {
         return DFTU_STR_NONE;
     }
@@ -118,17 +125,17 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 ::dftu_task* io_open(void* h, const char* path, int flags, int mode,
                      int* out_fd) {
     return static_cast<PluginFold*>(h)->emplace_task(
-        [](std::string p, int fl, int md, int* ofd) -> coro::CoroTask<void> {
-            int fd = static_cast<int>(
-                co_await io::open(p.c_str(), fl, static_cast<mode_t>(md)));
+        [](dstd::String p, int fl, int md, int* ofd) -> coro::CoroTask<void> {
+            int fd = static_cast<int>(co_await runtime::io::open(
+                p.c_str(), fl, static_cast<mode_t>(md)));
             if (ofd) *ofd = fd;
-        }(std::string(path ? path : ""), flags, mode, out_fd));
+        }(dstd::String(path ? path : ""), flags, mode, out_fd));
 }
 
 ::dftu_task* io_close(void* h, int fd, int* out_rc) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, int* orc) -> coro::CoroTask<void> {
-            int rc = static_cast<int>(co_await io::close(f));
+            int rc = static_cast<int>(co_await runtime::io::close(f));
             if (orc) *orc = rc;
         }(fd, out_rc));
 }
@@ -138,7 +145,8 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, void* b, std::uint64_t l,
            std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await io::read(f, b, static_cast<std::size_t>(l));
+            ssize_t n =
+                co_await runtime::io::read(f, b, static_cast<std::size_t>(l));
             if (on) *on = n;
         }(fd, buf, len, out_n));
 }
@@ -148,7 +156,8 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, const void* b, std::uint64_t l,
            std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await io::write(f, b, static_cast<std::size_t>(l));
+            ssize_t n =
+                co_await runtime::io::write(f, b, static_cast<std::size_t>(l));
             if (on) *on = n;
         }(fd, buf, len, out_n));
 }
@@ -158,8 +167,8 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, void* b, std::uint64_t l, std::uint64_t o,
            std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await io::pread(f, b, static_cast<std::size_t>(l),
-                                           static_cast<off_t>(o));
+            ssize_t n = co_await runtime::io::pread(
+                f, b, static_cast<std::size_t>(l), o);
             if (on) *on = n;
         }(fd, buf, len, off, out_n));
 }
@@ -169,8 +178,8 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, const void* b, std::uint64_t l, std::uint64_t o,
            std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await io::pwrite(f, b, static_cast<std::size_t>(l),
-                                            static_cast<off_t>(o));
+            ssize_t n = co_await runtime::io::pwrite(
+                f, b, static_cast<std::size_t>(l), o);
             if (on) *on = n;
         }(fd, buf, len, off, out_n));
 }
@@ -178,7 +187,7 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 ::dftu_task* io_fsync(void* h, int fd, int* out_rc) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, int* orc) -> coro::CoroTask<void> {
-            int rc = static_cast<int>(co_await io::fsync(f));
+            int rc = static_cast<int>(co_await runtime::io::fsync(f));
             if (orc) *orc = rc;
         }(fd, out_rc));
 }
@@ -186,8 +195,7 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 ::dftu_task* io_ftruncate(void* h, int fd, std::uint64_t len, int* out_rc) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, std::uint64_t l, int* orc) -> coro::CoroTask<void> {
-            int rc = static_cast<int>(
-                co_await io::ftruncate(f, static_cast<off_t>(l)));
+            int rc = static_cast<int>(co_await runtime::io::ftruncate(f, l));
             if (orc) *orc = rc;
         }(fd, len, out_rc));
 }
@@ -196,7 +204,7 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, dftu_stat* o) -> coro::CoroTask<void> {
             struct stat st{};
-            ssize_t rc = co_await io::fstat(f, &st);
+            ssize_t rc = co_await runtime::io::fstat(f, &st);
             if (o && rc == 0) {
                 o->size = static_cast<std::uint64_t>(st.st_size);
 #if defined(__APPLE__)
@@ -217,7 +225,7 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, const struct iovec* v, int c,
            std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await io::readv(f, v, c);
+            ssize_t n = co_await runtime::io::readv(f, v, c);
             if (on) *on = n;
         }(fd, iov, iovcnt, out_n));
 }
@@ -227,7 +235,7 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, const struct iovec* v, int c,
            std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await io::writev(f, v, c);
+            ssize_t n = co_await runtime::io::writev(f, v, c);
             if (on) *on = n;
         }(fd, iov, iovcnt, out_n));
 }
@@ -237,7 +245,7 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, const struct iovec* v, int c, std::uint64_t o,
            std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await io::preadv(f, v, c, static_cast<off_t>(o));
+            ssize_t n = co_await runtime::io::preadv(f, v, c, o);
             if (on) *on = n;
         }(fd, iov, iovcnt, off, out_n));
 }
@@ -247,7 +255,7 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, const struct iovec* v, int c, std::uint64_t o,
            std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await io::pwritev(f, v, c, static_cast<off_t>(o));
+            ssize_t n = co_await runtime::io::pwritev(f, v, c, o);
             if (on) *on = n;
         }(fd, iov, iovcnt, off, out_n));
 }
@@ -257,7 +265,7 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, std::int64_t o, int w,
            std::int64_t* oo) -> coro::CoroTask<void> {
-            off_t r = co_await io::lseek(f, static_cast<off_t>(o), w);
+            off_t r = co_await runtime::io::lseek(f, o, w);
             if (oo) *oo = static_cast<std::int64_t>(r);
         }(fd, off, whence, out_off));
 }
@@ -267,8 +275,8 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int ofd, int ifd, std::uint64_t o, std::uint64_t c,
            std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await io::sendfile(ofd, ifd, static_cast<off_t>(o),
-                                              static_cast<std::size_t>(c));
+            ssize_t n = co_await runtime::io::sendfile(
+                ofd, ifd, o, static_cast<std::size_t>(c));
             if (on) *on = n;
         }(out_fd, in_fd, off, count, out_n));
 }
@@ -278,7 +286,7 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, struct sockaddr* a, socklen_t* al,
            int* ofd) -> coro::CoroTask<void> {
-            int cfd = static_cast<int>(co_await io::accept(f, a, al));
+            int cfd = static_cast<int>(co_await runtime::io::accept(f, a, al));
             if (ofd) *ofd = cfd;
         }(fd, addr, addrlen, out_fd));
 }
@@ -288,8 +296,8 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, void* b, std::uint64_t l, int fl,
            std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n =
-                co_await io::recv(f, b, static_cast<std::size_t>(l), fl);
+            ssize_t n = co_await runtime::io::recv(
+                f, b, static_cast<std::size_t>(l), fl);
             if (on) *on = n;
         }(fd, buf, len, flags, out_n));
 }
@@ -299,8 +307,8 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](int f, const void* b, std::uint64_t l, int fl,
            std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n =
-                co_await io::send(f, b, static_cast<std::size_t>(l), fl);
+            ssize_t n = co_await runtime::io::send(
+                f, b, static_cast<std::size_t>(l), fl);
             if (on) *on = n;
         }(fd, buf, len, flags, out_n));
 }
@@ -321,12 +329,12 @@ const dftu_io g_io = {io_open,   io_close,  io_read,      io_write, io_pread,
 }
 
 ::dftu_task* host_when_all(void* h, ::dftu_task* const* ts, std::uint32_t n) {
-    std::vector<coro::CoroTask<void>*> kids;
+    dstd::Vector<coro::CoroTask<void>*> kids;
     kids.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i) kids.push_back(as_task(ts[i]));
     return static_cast<PluginFold*>(h)->emplace_task(
-        [](std::vector<coro::CoroTask<void>*> ks) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<void>> v;
+        [](dstd::Vector<coro::CoroTask<void>*> ks) -> coro::CoroTask<void> {
+            dstd::Vector<coro::CoroTask<void>> v;
             v.reserve(ks.size());
             for (auto* k : ks) v.push_back(std::move(*k));
             co_await coro::when_all(std::move(v));
@@ -334,13 +342,13 @@ const dftu_io g_io = {io_open,   io_close,  io_read,      io_write, io_pread,
 }
 
 ::dftu_task* host_when_any(void* h, ::dftu_task* const* ts, std::uint32_t n) {
-    std::vector<coro::CoroTask<void>*> kids;
+    dstd::Vector<coro::CoroTask<void>*> kids;
     kids.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i) kids.push_back(as_task(ts[i]));
     return static_cast<PluginFold*>(h)->emplace_task(
-        [](std::vector<coro::CoroTask<void>*> ks) -> coro::CoroTask<void> {
+        [](dstd::Vector<coro::CoroTask<void>*> ks) -> coro::CoroTask<void> {
             // when_any needs a non-void result, so wrap each void child.
-            std::vector<coro::CoroTask<int>> v;
+            dstd::Vector<coro::CoroTask<int>> v;
             v.reserve(ks.size());
             for (auto* k : ks)
                 v.push_back(
@@ -371,7 +379,7 @@ const dftu_io g_io = {io_open,   io_close,  io_read,      io_write, io_pread,
 
 void host_run_blocking(void* /*h*/, dftu_work_fn fn, void* arg) {
     if (!fn) return;
-    BlockingRegion block;
+    coro::BlockingRegion block;
     fn(arg);
 }
 
@@ -402,26 +410,27 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
 
 ::dftu_task* host_merge_shards(void* h, const char* target,
                                const char* const* shards, std::uint32_t n) {
-    std::string tgt(target ? target : "");
-    std::vector<std::string> sv;
+    dstd::String tgt(target ? target : "");
+    dstd::Vector<dstd::String> sv;
     sv.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i)
         sv.emplace_back(shards[i] ? shards[i] : "");
     return static_cast<PluginFold*>(h)->emplace_task(
-        [](std::string t, std::vector<std::string> s) -> coro::CoroTask<void> {
-            co_await parallel::merge_shards(t, s);
+        [](dstd::String t,
+           dstd::Vector<dstd::String> s) -> coro::CoroTask<void> {
+            co_await utilities::fileio::parallel::merge_shards(t, s);
         }(std::move(tgt), std::move(sv)));
 }
 
 ::dftu_writer* host_writer_create(void* h, const char* path,
-                                  std::uint32_t num_workers, int gzip) {
-    return static_cast<PluginFold*>(h)->create_writer(path, num_workers, gzip);
+                                  std::uint32_t worker_count, int gzip) {
+    return static_cast<PluginFold*>(h)->make_writer(path, worker_count, gzip);
 }
 
 ::dftu_task* host_writer_open(void* h, ::dftu_writer* w) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](PluginWriter* pw) -> coro::CoroTask<void> {
-            co_await pw->writer->open(pw->path, pw->num_workers, pw->gzip,
+            co_await pw->writer->open(pw->path, pw->worker_count, pw->gzip,
                                       nullptr);
         }(reinterpret_cast<PluginWriter*>(w)));
 }
@@ -431,8 +440,8 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
     return static_cast<PluginFold*>(h)->emplace_task(
         [](PluginWriter* pw, std::uint32_t wk, const void* d,
            std::uint64_t l) -> coro::CoroTask<void> {
-            ByteView bv(static_cast<const unsigned char*>(d),
-                        static_cast<std::size_t>(l));
+            dstd::ByteView bv(static_cast<const unsigned char*>(d),
+                              static_cast<std::size_t>(l));
             co_await pw->writer->write_chunk(static_cast<std::size_t>(wk), bv);
         }(reinterpret_cast<PluginWriter*>(w), worker, data, len));
 }
@@ -445,8 +454,8 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
 }
 
 // DDSketch lacks a mean, so the box tracks the running weighted sum.
-struct SketchBox {
-    utilities::common::statistics::DDSketch sketch;
+struct SketchBox : dstd::HeapObject {
+    dataframe::DDSketch sketch;
     double sum = 0.0;
 };
 
@@ -488,7 +497,7 @@ void host_sketch_free(void*, ::dftu_sketch* s) {
     delete reinterpret_cast<SketchBox*>(s);
 }
 
-void append_json_escaped(std::string& out, std::string_view s) {
+void append_json_escaped(dstd::String& out, dstd::StringView s) {
     for (char c : s) {
         switch (c) {
             case '"':
@@ -525,15 +534,15 @@ void append_json_escaped(std::string& out, std::string_view s) {
 // needs every dyn column, not a lookup by name (see plugins::Batch's
 // per-batch column cache for the per-row-loop counterpart).
 struct DynCols {
-    std::vector<std::pair<std::string_view, dftu_series*>> cols;
+    dstd::Vector<dstd::Pair<dstd::StringView, dftu_series*>> cols;
 
     explicit DynCols(const dftu_dataframe* df) {
-        static constexpr std::string_view ARGS_PREFIX = "args.";
+        static constexpr dstd::StringView ARGS_PREFIX = "args.";
         const std::int32_t n = dftu_dataframe_num_columns(df);
         for (std::int32_t i = 0; i < n; ++i) {
             const char* name = dftu_dataframe_column_name(df, i);
             if (!name) continue;
-            std::string_view nv{name};
+            dstd::StringView nv{name};
             if (nv.substr(0, ARGS_PREFIX.size()) != ARGS_PREFIX) continue;
             cols.emplace_back(nv.substr(ARGS_PREFIX.size()),
                               dftu_dataframe_column(df, name));
@@ -546,9 +555,9 @@ struct DynCols {
     DynCols& operator=(const DynCols&) = delete;
 };
 
-void serialize_row(std::string& out, const dftu_dataframe* df,
+void serialize_row(dstd::String& out, const dftu_dataframe* df,
                    const DynCols& dyn, std::int64_t row, std::uint64_t id) {
-    auto str_col = [&](const char* name, std::string_view* out_sv) {
+    auto str_col = [&](const char* name, dstd::StringView* out_sv) {
         dftu_series* c = dftu_dataframe_column(df, name);
         if (!c) return;
         if (dftu_series_type(c) == DFTU_TYPE_STRING) {
@@ -581,7 +590,7 @@ void serialize_row(std::string& out, const dftu_dataframe* df,
         return v;
     };
 
-    std::string_view name_v, cat_v;
+    dstd::StringView name_v, cat_v;
     str_col("name", &name_v);
     str_col("cat", &cat_v);
     bool has_ph = false;
@@ -592,23 +601,23 @@ void serialize_row(std::string& out, const dftu_dataframe* df,
     const std::uint64_t dur = u64_col("dur");
 
     out += "{\"id\":";
-    out += std::to_string(id);
+    out += dstd::to_string(id);
     out += ",\"name\":\"";
     append_json_escaped(out, name_v);
     out += "\",\"cat\":\"";
     append_json_escaped(out, cat_v);
     out += "\",\"ph\":";
-    out += std::to_string(has_ph ? ph
-                                 : static_cast<std::int64_t>(DFTU_PH_UNKNOWN));
+    out += dstd::to_string(has_ph ? ph
+                                  : static_cast<std::int64_t>(DFTU_PH_UNKNOWN));
     out += ",\"pid\":";
-    out += std::to_string(pid);
+    out += dstd::to_string(pid);
     out += ",\"tid\":";
-    out += std::to_string(tid);
+    out += dstd::to_string(tid);
     out += ",\"ts\":";
-    out += std::to_string(ts);
+    out += dstd::to_string(ts);
     if (has_ph && ph == DFTU_PH_COMPLETE) {
         out += ",\"dur\":";
-        out += std::to_string(dur);
+        out += dstd::to_string(dur);
     }
     bool args_open = false;
     for (const auto& [key, c] : dyn.cols) {
@@ -626,16 +635,16 @@ void serialize_row(std::string& out, const dftu_dataframe* df,
             case DFTU_TYPE_STRING: {
                 std::int64_t n = 0;
                 const char* p = dftu_series_string_at(c, row, &n);
-                const std::string_view sv =
-                    p ? std::string_view{p, static_cast<std::size_t>(n)}
-                      : std::string_view{};
+                const dstd::StringView sv =
+                    p ? dstd::StringView{p, static_cast<std::size_t>(n)}
+                      : dstd::StringView{};
                 out += '"';
                 append_json_escaped(out, sv);
                 out += '"';
                 break;
             }
             case DFTU_TYPE_INT64:
-                out += std::to_string(
+                out += dstd::to_string(
                     static_cast<const std::int64_t*>(dftu_series_data(c))[row]);
                 break;
             case DFTU_TYPE_FLOAT64: {
@@ -660,25 +669,27 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
                          [[maybe_unused]] const char* path) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (!a || !s || !path || !a->release || !s->release) return -1;
-    namespace arr = utilities::common::arrow;
     try {
         nanoarrow::UniqueSchema schema;
         ArrowSchemaMove(s, schema.get());
         nanoarrow::UniqueArray array;
         ArrowArrayMove(a, array.get());
-        arr::ArrowExportResult res(std::move(schema), std::move(array));
+        utilities::arrow::ArrowExportResult res(std::move(schema),
+                                                std::move(array));
         int rc = -1;
-        std::string p(path);
-        dftracer::utils::default_runtime().run_blocking(
-            "dft-plugin-ipc", [&](CoroScope&) -> coro::CoroTask<void> {
-                arr::IpcWriter writer;
-                if (co_await writer.open(p) != 0) co_return;
-                if (co_await writer.write_batch(res) != 0) co_return;
-                if (co_await writer.close() != 0) co_return;
+        dftracer::utils::default_runtime().block_on(
+            coro::named("dft-plugin-ipc", [&]() -> coro::CoroTask<void> {
+                utilities::arrow::IpcWriter writer;
+                const auto open_rc = co_await writer.open(path);
+                if (open_rc != 0) co_return;
+                const auto write_rc = co_await writer.write_batch(res);
+                if (write_rc != 0) co_return;
+                const auto close_rc = co_await writer.close();
+                if (close_rc != 0) co_return;
                 rc = 0;
-            });
-        ArrowSchemaMove(res.get_schema(), s);
-        ArrowArrayMove(res.get_array(), a);
+            }()));
+        ArrowSchemaMove(res.schema(), s);
+        ArrowArrayMove(res.array(), a);
         return rc;
     } catch (...) {
         return -1;
@@ -695,17 +706,16 @@ int host_arrow_read_ipc(void*, [[maybe_unused]] const char* path,
                         [[maybe_unused]] ::ArrowSchema* out_schema) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (!path || !out || !out_schema) return -1;
-    namespace arr = utilities::common::arrow;
     try {
-        arr::IpcReader reader;
-        if (reader.open(std::string(path)) != 0) return -1;
-        if (reader.num_batches() == 0) return -1;
-        arr::ArrowExportResult res = reader.read_batch(0);
-        if (!res.get_array() || !res.get_schema() ||
-            !res.get_array()->release || !res.get_schema()->release)
+        utilities::arrow::IpcReader reader;
+        if (reader.open(path) != 0) return -1;
+        if (reader.batch_count() == 0) return -1;
+        utilities::arrow::ArrowExportResult res = reader.read_batch(0);
+        if (!res.array() || !res.schema() || !res.array()->release ||
+            !res.schema()->release)
             return -1;
-        ArrowArrayMove(res.get_array(), out);
-        ArrowSchemaMove(res.get_schema(), out_schema);
+        ArrowArrayMove(res.array(), out);
+        ArrowSchemaMove(res.schema(), out_schema);
         return 0;
     } catch (...) {
         return -1;
@@ -716,7 +726,7 @@ int host_arrow_read_ipc(void*, [[maybe_unused]] const char* path,
 }
 
 ::dftu_trace_writer* host_trace_open_write(void* h, const char* path) {
-    return static_cast<PluginFold*>(h)->create_trace_writer(path);
+    return static_cast<PluginFold*>(h)->make_trace_writer(path);
 }
 
 int host_trace_write(void*, ::dftu_trace_writer* w, const dftu_dataframe* df) {
@@ -751,45 +761,49 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                     void* ud) {
     if (!path || !on_batch) return -1;
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
-    namespace views = trace::views;
     try {
-        std::string p(path);
-        dftracer::utils::default_runtime().run_blocking(
-            "dft-plugin-trace-read", [&](CoroScope&) -> coro::CoroTask<void> {
-                dftracer::utils::json::RecordParser parser;
-                views::detail::FoldEventBuffer batch_events;
-                namespace ix = dftracer::utils::index;
-                const ix::RecordSchema& schema = ix::detect_file_schema(p);
-                const bool by_path = schema.decoder == ix::Decoder::PATH;
-                const ix::RecordSchema* declared =
+        dstd::String p(path);
+        dftracer::utils::default_runtime().block_on(
+            coro::named("dft-plugin-trace-read", [&]() -> coro::CoroTask<void> {
+                dftracer::utils::json::Document document;
+                dftracer::utils::dstd::InternCache cache(intern);
+                trace::views::detail::FoldEventBuffer batch_events;
+                const index::RecordSchema& schema =
+                    index::detect_file_schema(p);
+                const bool by_path = schema.decoder == index::Decoder::Path;
+                const index::RecordSchema* declared =
                     schema.fields.empty() ? nullptr : &schema;
-                views::View v = views::View::from_file(p);
+                trace::views::View v = trace::views::View::from_file(p);
                 co_await v.for_each_batch(
                     [&](std::size_t,
-                        const std::vector<std::string_view>& events) {
+                        const dstd::Vector<dstd::StringView>& events) {
                         batch_events.clear();
-                        for (std::string_view ev : events) {
-                            simdjson::padded_string ps(ev);
-                            simdjson::dom::element root;
-                            if (parser.parse(ps).get(root)) continue;
+                        for (dstd::StringView ev : events) {
+                            auto parsed = document.parse(ev);
+                            if (!parsed) continue;
+                            json::Value& record = *parsed;
+                            trace::views::detail::FoldEvent& fe =
+                                batch_events.append();
                             if (by_path)
-                                views::detail::decode_record_into(
-                                    batch_events.append(), root, intern,
-                                    /*capture_schema=*/false, nullptr,
-                                    declared);
+                                trace::views::detail::decode_record_into(
+                                    fe, record, intern,
+                                    /*capture_schema=*/false, nullptr, declared,
+                                    nullptr, 0, nullptr, false, &cache);
                             else
-                                views::detail::extract_fold_event_into(
-                                    batch_events.append(), root, intern,
-                                    /*needs_args=*/true);
+                                trace::views::detail::extract_fold_event_into(
+                                    fe, record, intern, /*needs_args=*/true,
+                                    &cache);
+                            if (json::detail::ValueAccess::broken(record))
+                                batch_events.discard_last();
                         }
                         if (batch_events.empty()) return;
                         dataframe::DataFrame df =
-                            views::detail::build_row_frame(
+                            trace::views::detail::build_row_frame(
                                 batch_events.events(), intern, {}, 1.0,
                                 by_path);
-                        std::vector<dftu_series*> handles;
+                        dstd::Vector<dftu_series*> handles;
                         handles.reserve(df.columns.size());
-                        std::vector<const char*> names;
+                        dstd::Vector<const char*> names;
                         names.reserve(df.names.size());
                         for (const auto& c : df.columns)
                             handles.push_back(dftu_series_share(c.handle()));
@@ -801,8 +815,8 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                         on_batch(cdf, ud);
                         dftu_dataframe_free(cdf);
                     },
-                    /*num_slots=*/1, /*limit=*/0);
-            });
+                    /*slot_count=*/1, /*limit=*/0);
+            }()));
         return 0;
     } catch (...) {
         return -1;
@@ -828,7 +842,7 @@ int host_query_matches(void* h, const dftu_duql* q, const dftu_dataframe* df,
 }
 
 std::uint64_t host_port_key(void*, const char* cap_id) {
-    return cap_id ? dftracer::utils::hash::fnv1a_hash(cap_id) : 0;
+    return cap_id ? dftracer::utils::dstd::hash::fnv1a_hash(cap_id) : 0;
 }
 
 void host_port_publish(void* h, std::uint64_t key, const void* data,
@@ -837,8 +851,8 @@ void host_port_publish(void* h, std::uint64_t key, const void* data,
 }
 
 const void* host_port_consume(void* h, std::uint64_t key,
-                              std::uint32_t* out_len) {
-    return static_cast<PluginFold*>(h)->port_consume(key, out_len);
+                              std::uint32_t* out_size) {
+    return static_cast<PluginFold*>(h)->port_consume(key, out_size);
 }
 
 const dftu_svc_ports g_ports = {host_port_key, host_port_publish,
@@ -883,7 +897,7 @@ const void* host_get_service(void*, const char* ext_id) {
 ::dftu_task* PluginFold::emplace_task(coro::CoroTask<void>&& task) {
     try {
         task_arena_.push_back(
-            std::make_unique<coro::CoroTask<void>>(std::move(task)));
+            dstd::make_unique<coro::CoroTask<void>>(std::move(task)));
         return reinterpret_cast<::dftu_task*>(task_arena_.back().get());
     } catch (...) {
         return nullptr;
@@ -897,23 +911,23 @@ namespace {
 coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
                                  const void* in, void* out) {
     using Kind = ComposeOp::Kind;
-    if (op->kind == Kind::LEAF) {
+    if (op->kind == Kind::Leaf) {
         int rc = 0;
         ::dftu_task* t = op->fn ? op->fn(op->state, in, out, &rc) : nullptr;
         if (t) co_await *as_task(t);
         co_return rc;
     }
-    if (op->kind == Kind::THEN) {
+    if (op->kind == Kind::Then) {
         ComposeOp* a = op->children[0];
         ComposeOp* b = op->children[1];
-        std::vector<char> mid(a->out_size);
+        dstd::Vector<char> mid(a->out_size);
         int rc = co_await eval_compose(self, a, in, mid.data());
         if (rc != 0) co_return rc;
         co_return co_await eval_compose(self, b, mid.data(), out);
     }
-    if (op->kind == Kind::WHEN_ALL) {
+    if (op->kind == Kind::WhenAll) {
         // Each child writes its own disjoint slice of the concatenated output.
-        std::vector<coro::CoroTask<int>> kids;
+        dstd::Vector<coro::CoroTask<int>> kids;
         kids.reserve(op->children.size());
         std::size_t off = 0;
         for (ComposeOp* c : op->children) {
@@ -921,14 +935,14 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
             kids.push_back(eval_compose(self, c, in, slot));
             off += c->out_size;
         }
-        std::vector<int> rcs = co_await coro::when_all(std::move(kids));
+        auto rcs = co_await coro::when_all(std::move(kids));
         for (int r : rcs)
             if (r != 0) co_return r;
         co_return 0;
     }
     // WHEN_ANY: each child writes its own buffer; copy the winner into out.
-    std::vector<std::vector<char>> bufs(op->children.size());
-    std::vector<coro::CoroTask<int>> kids;
+    dstd::Vector<dstd::Vector<char>> bufs(op->children.size());
+    dstd::Vector<coro::CoroTask<int>> kids;
     kids.reserve(op->children.size());
     for (std::size_t i = 0; i < op->children.size(); ++i) {
         bufs[i].resize(op->children[i]->out_size);
@@ -948,7 +962,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::LEAF;
+        op.kind = ComposeOp::Kind::Leaf;
         op.fn = fn;
         op.state = state;
         op.free_state = free_state;
@@ -980,7 +994,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::THEN;
+        op.kind = ComposeOp::Kind::Then;
         op.in_ty = oa->in_ty;
         op.out_ty = ob->out_ty;
         op.in_size = oa->in_size;
@@ -995,7 +1009,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
 ::dftu_op* PluginFold::compose_when_all(::dftu_op* const* ops,
                                         std::uint32_t n) {
     if (!ops || n == 0) return nullptr;
-    std::vector<ComposeOp*> kids;
+    dstd::Vector<ComposeOp*> kids;
     kids.reserve(n);
     ComposeOp* first = reinterpret_cast<ComposeOp*>(ops[0]);
     std::uint32_t out_total = 0;
@@ -1015,7 +1029,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::WHEN_ALL;
+        op.kind = ComposeOp::Kind::WhenAll;
         op.in_ty = first->in_ty;
         op.out_ty = DFTU_T_BYTES;
         op.in_size = first->in_size;
@@ -1031,7 +1045,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
                                         std::uint32_t n) {
     if (!ops || n == 0) return nullptr;
     ComposeOp* first = reinterpret_cast<ComposeOp*>(ops[0]);
-    std::vector<ComposeOp*> kids;
+    dstd::Vector<ComposeOp*> kids;
     kids.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i) {
         ComposeOp* c = reinterpret_cast<ComposeOp*>(ops[i]);
@@ -1048,7 +1062,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::WHEN_ANY;
+        op.kind = ComposeOp::Kind::WhenAny;
         op.in_ty = first->in_ty;
         op.out_ty = first->out_ty;
         op.in_size = first->in_size;
@@ -1074,13 +1088,13 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     }(this, graph, in, out, rc));
 }
 
-::dftu_writer* PluginFold::create_writer(const char* path,
-                                         std::uint32_t num_workers, int gzip) {
+::dftu_writer* PluginFold::make_writer(const char* path,
+                                       std::uint32_t worker_count, int gzip) {
     try {
-        auto pw = std::make_unique<PluginWriter>();
-        pw->writer = parallel::make_sharded_writer();
+        auto pw = dstd::make_unique<PluginWriter>();
+        pw->writer = utilities::fileio::parallel::make_sharded_writer();
         pw->path = path ? path : "";
-        pw->num_workers = num_workers ? num_workers : 1;
+        pw->worker_count = worker_count ? worker_count : 1;
         pw->gzip = gzip != 0;
         writers_.push_back(std::move(pw));
         return reinterpret_cast<::dftu_writer*>(writers_.back().get());
@@ -1089,10 +1103,10 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     }
 }
 
-::dftu_trace_writer* PluginFold::create_trace_writer(const char* path) {
+::dftu_trace_writer* PluginFold::make_trace_writer(const char* path) {
     if (!path) return nullptr;
     try {
-        auto tw = std::make_unique<PluginTraceWriter>();
+        auto tw = dstd::make_unique<PluginTraceWriter>();
         tw->path = path;
         trace_writers_.push_back(std::move(tw));
         return reinterpret_cast<::dftu_trace_writer*>(
@@ -1107,22 +1121,24 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
 int PluginFold::close_trace_writer(::dftu_trace_writer* w) {
     auto* tw = reinterpret_cast<PluginTraceWriter*>(w);
     if (!tw) return -1;
-    namespace fio = utilities::fileio;
     int result = -1;
     try {
-        fio::GzipWriterOptions opts;
-        opts.member_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
-        auto writer = unwrap(fio::GzipLineWriterBlocking::open(tw->path, opts));
-        const std::string_view buf = tw->buffer;
+        utilities::fileio::GzipWriterOptions opts;
+        opts.member_size = common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        const std::size_t member_size = opts.member_size;
+        auto writer =
+            common::unwrap(utilities::fileio::GzipLineWriterBlocking::open(
+                tw->path, std::move(opts)));
+        const dstd::StringView buf = tw->buffer;
         const std::size_t end = buf.rfind('\n') + 1;
         std::size_t pos = 0;
         while (pos < end) {
-            std::size_t cut = buf.find('\n', pos + opts.member_size);
-            cut = cut == std::string_view::npos || cut >= end ? end : cut + 1;
-            unwrap(writer.append(buf.substr(pos, cut - pos)));
+            std::size_t cut = buf.find('\n', pos + member_size);
+            cut = cut == dstd::StringView::npos || cut >= end ? end : cut + 1;
+            common::unwrap(writer.append(buf.substr(pos, cut - pos)));
             pos = cut;
         }
-        unwrap(writer.close(buf.substr(end)));
+        common::unwrap(writer.close(buf.substr(end)));
         result = 0;
     } catch (...) {
         result = -1;
@@ -1137,10 +1153,10 @@ int PluginFold::close_trace_writer(::dftu_trace_writer* w) {
 }
 
 PluginFold::PluginFold(const dftu_plugin* plugin,
-                       dftracer::utils::StringIntern& intern,
+                       dftracer::utils::dstd::StringIntern& intern,
                        SharedResultRegistry* results,
                        NamedResultRegistry* named_results,
-                       std::string plugin_name, std::uint64_t memory_budget,
+                       dstd::String plugin_name, std::uint64_t memory_budget,
                        const StateRegistry* states)
     : plugin_(plugin),
       plugin_name_(std::move(plugin_name)),
@@ -1154,7 +1170,7 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
         state_accums_.reserve(states_->size());
         for (const RegisteredState& reg : *states_)
             state_accums_.push_back(
-                std::make_unique<StateAccum>(reg, memory_budget_));
+                dstd::make_unique<StateAccum>(reg, memory_budget_));
     }
 
     host_.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
@@ -1193,7 +1209,7 @@ PluginFold::~PluginFold() {
 
 ::dftu_duql* PluginFold::compile_query(const char* src, std::uint32_t len) {
     if (!src) return nullptr;
-    auto r = Query::from_string(std::string_view{src, len});
+    auto r = Query::from_string(dstd::StringView{src, len});
     if (!r) return nullptr;
     try {
         compiled_queries_.push_back(std::move(*r));
@@ -1206,16 +1222,17 @@ PluginFold::~PluginFold() {
 int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
                             std::int64_t row) {
     match_qmap_.clear();
-    for (std::string_view f : q.fields()) {
+    for (dstd::StringView f : q.fields()) {
         // A path-decoded frame names each column by its path.
-        dftu_series* c = dftu_dataframe_column(df, std::string(f).c_str());
+        dftu_series* c = dftu_dataframe_column(df, dstd::String(f).c_str());
         const bool top = f == "cat" || f == "name" || f == "fhash" ||
                          f == "hhash" || f == "pid" || f == "tid" ||
                          f == "ts" || f == "dur";
-        if (!c && !top)
-            c = dftu_dataframe_column(
-                df, (std::string("args.") + std::string(strip_args_prefix(f)))
-                        .c_str());
+        if (!c && !top) {
+            dstd::String args_name("args.");
+            args_name.append(common::strip_args_prefix(f));
+            c = dftu_dataframe_column(df, args_name.c_str());
+        }
         if (!c) continue;
         if (!dftu_series_is_null(c, row)) {
             switch (dftu_series_type(c)) {
@@ -1234,8 +1251,8 @@ int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
                 case DFTU_TYPE_STRING: {
                     std::int64_t n = 0;
                     if (const char* p = dftu_series_string_at(c, row, &n))
-                        match_qmap_[f] =
-                            std::string(p, static_cast<std::size_t>(n));
+                        match_qmap_[f] = dftracer::utils::dstd::String(
+                            p, static_cast<std::size_t>(n));
                     break;
                 }
                 default:
@@ -1269,19 +1286,18 @@ void PluginFold::step(const FoldBatch& batch) {
     task_arena_.clear();
 
     // A transform sees the whole batch, whatever it declared in reads.
-    static const std::vector<std::string> every_column;
-    const std::vector<std::string>& projection =
+    const dstd::Vector<dstd::String> every_column;
+    const dstd::Vector<dstd::String>& projection =
         has_transform ? every_column : projection_;
 
     dataframe::DataFrame df;
     if (port_bus_ && port_bus_->frame) {
         df = rewritten_batch(*port_bus_->frame, projection);
     } else {
-        namespace views = dftracer::utils::trace::views::detail;
         col_scratch_.clear();
         for (const auto& fe : batch.events) {
-            if (fe.phase == trace::RecordPhase::METADATA ||
-                fe.phase == trace::RecordPhase::UNKNOWN)
+            if (fe.phase == trace::RecordPhase::Metadata ||
+                fe.phase == trace::RecordPhase::Unknown)
                 continue;
             if (query_ && !passes_query(fe)) continue;
             col_scratch_.push_back(fe);
@@ -1289,16 +1305,17 @@ void PluginFold::step(const FoldBatch& batch) {
         if (col_scratch_.empty()) return;
         // An empty projection is build_row_frame's "every column", which for
         // a batch with many arg keys is a Series per key.
-        df = views::build_row_frame(col_scratch_, *intern_, projection, 1.0,
-                                    col_scratch_.front().by_path);
+        df = trace::views::detail::build_row_frame(
+            col_scratch_, *intern_, projection, 1.0,
+            col_scratch_.front().by_path);
     }
     if (df.num_rows() == 0) return;
 
     // dftu_dataframe_new takes ownership of the column handles, so pass shared
     // copies (a refcount bump, no data copy); df keeps its own.
-    std::vector<dftu_series*> handles;
+    dstd::Vector<dftu_series*> handles;
     handles.reserve(df.columns.size());
-    std::vector<const char*> names;
+    dstd::Vector<const char*> names;
     names.reserve(df.names.size());
     for (const auto& c : df.columns)
         handles.push_back(dftu_series_share(c.handle()));
@@ -1341,17 +1358,17 @@ void PluginFold::step(const FoldBatch& batch) {
 // rows pass unfiltered rather than being dropped.
 dataframe::DataFrame PluginFold::rewritten_batch(
     const dataframe::DataFrame& frame,
-    const std::vector<std::string>& projection) {
+    const dstd::Vector<dstd::String>& projection) {
     dataframe::DataFrame df;
     if (projection.empty()) {
         df.names = frame.names;
         for (const dataframe::Series& c : frame.columns)
             df.columns.push_back(c.share());
     } else {
-        for (const std::string& name : projection) {
+        for (const dstd::String& name : projection) {
             for (std::size_t i = 0; i < frame.names.size(); ++i) {
-                if (frame.names[i] != name) continue;
-                df.names.push_back(name);
+                if (dstd::StringView(frame.names[i]) != name) continue;
+                df.names.emplace_back(name);
                 df.columns.push_back(frame.columns[i].share());
                 break;
             }
@@ -1377,8 +1394,8 @@ dataframe::DataFrame PluginFold::rewritten_batch(
 void PluginFold::reclaim_slice() {
     if (!slice_ || !plugin_->bytes) return;
     const std::uint64_t budget =
-        dftracer::utils::resolve_spill_budget(memory_budget_);
-    if (budget == dftracer::utils::NO_SPILL_BUDGET) return;
+        dftracer::utils::memory::resolve_spill_budget(memory_budget_);
+    if (budget == dftracer::utils::memory::NO_SPILL_BUDGET) return;
     const std::uint64_t held = plugin_->bytes(slice_);
     if (held <= budget) return;
     const std::uint64_t freed =
@@ -1410,9 +1427,9 @@ void PluginFold::merge(Fold& other) {
     // the engine's single merge path (agg_merge). An accumulator new to the
     // master is moved in whole; a shared name merges the two AggStates.
     for (const auto& [key, idx] : o.aggs_.index()) {
-        std::unique_ptr<AggAccum>& src = o.aggs_[idx];
+        dstd::UniquePtr<AggAccum>& src = o.aggs_[idx];
         if (!src || !src->state) continue;
-        std::unique_ptr<AggAccum>* dst = aggs_.find(key);
+        dstd::UniquePtr<AggAccum>* dst = aggs_.find(key);
         if (!dst) {
             aggs_.push(key, std::move(src));
         } else if ((*dst)->state) {

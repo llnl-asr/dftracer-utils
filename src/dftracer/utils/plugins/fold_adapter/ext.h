@@ -1,13 +1,15 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_EXT_H
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_EXT_H
 
-#include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_spill.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 
 #include <string>
-#include <string_view>
 #include <vector>
 
 // Private seam shared by the fold_adapter extension translation units
@@ -24,17 +26,17 @@ namespace dftracer::utils::plugins {
 // scan's memory budget, so a high-cardinality key does not grow `state`
 // without limit; it holds the spilled runs and drains them at finalize.
 struct AggAccum {
-    std::string name;
-    std::vector<std::string> key_names;
-    std::vector<std::string> value_names;
+    dstd::String name;
+    dstd::Vector<dstd::String> key_names;
+    dstd::Vector<dstd::String> value_names;
     dataframe::AggStatePtr state;
     dataframe::AggSpiller spiller;
 };
 
-inline std::string_view resolve_id(dftracer::utils::StringIntern& intern,
+inline dstd::StringView resolve_id(dftracer::utils::dstd::StringIntern& intern,
                                    dftu_str id) {
     if (id == DFTU_STR_NONE ||
-        id >= dftracer::utils::StringIntern::FAST_CAPACITY)
+        id >= dftracer::utils::dstd::StringIntern::FAST_CAPACITY)
         return {};
     return intern.resolve(id);
 }

@@ -1,8 +1,13 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/op_dispatch.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstring>
 #include <memory>
@@ -73,24 +78,29 @@ constexpr uint32_t BUILTIN_COUNT =
         #name ": operand 6 did not survive packing");
 #include <dftracer/utils/dataframe/exported_lazy_ops.def>
 
-std::mutex& reg_mutex() {
-    static std::mutex m;
-    return m;
-}
-
 // A user op's name must outlive the plugin that supplied it: the registry, not
 // the plugin, owns it. `desc.name` points at `name`, so the two must stay
 // together and `name` must not move once inserted (hence unique_ptr storage,
 // which also keeps a record's address stable as the vector grows, so a
 // pointer from dftu_op_find stays valid after a later registration).
+// Host ops register during static initialization, before the executable's
+// memory exit check, so this registry stays on std types the check cannot see.
 struct UserOp {
     std::string name;
     dftu_op_desc desc;
 };
 
+struct UserOps {
+    std::mutex mutex;
+    std::vector<std::unique_ptr<UserOp>> ops;
+};
+
+std::mutex& reg_mutex() {
+    return dftracer::utils::dstd::Singleton<UserOps>::get().mutex;
+}
+
 std::vector<std::unique_ptr<UserOp>>& user_ops() {
-    static std::vector<std::unique_ptr<UserOp>> v;
-    return v;
+    return dftracer::utils::dstd::Singleton<UserOps>::get().ops;
 }
 
 const dftu_op_desc* find_locked(const char* name) {
@@ -249,8 +259,8 @@ class PluginJoin {
     }
 
    private:
-    std::vector<dftracer::utils::dataframe::Series> owned_;
-    std::vector<dftu_dataframe*> frames_;
+    dftracer::utils::dstd::Vector<dftracer::utils::dataframe::Series> owned_;
+    dftracer::utils::dstd::Vector<dftu_dataframe*> frames_;
     bool changed_ = false;
 };
 
@@ -281,7 +291,7 @@ uint32_t dftu_op_arity(dftu_op_sig sig) {
 }
 
 const char* dftu_op_signature(dftu_op_sig sig) {
-    static thread_local std::string s;
+    static thread_local dftracer::utils::dstd::String s;
     s = "(";
     bool first = true;
     for (int i = 0; i < DFTU_OP_MAX_ARGS; ++i) {
@@ -349,7 +359,7 @@ dftu_series* dftu_op_run(const dftu_op_desc* op, const dftu_series* const* in,
     if (needs_arg(op->sig) && !a) return nullptr;
     if (is_user_op(op)) {
         PluginJoin j;
-        std::vector<const dftu_series*> joined(in, in + n);
+        dftracer::utils::dstd::Vector<const dftu_series*> joined(in, in + n);
         for (auto& s : joined) s = j.series(s);
         dftu_op_arg ja{};
         if (a) ja = j.args(op->sig, *a);
@@ -550,7 +560,8 @@ dftu_dataframe* dftu_op_run_frame(const dftu_op_desc* op,
     if (n != dftu_op_arity(op->sig)) return nullptr;
     if (is_user_op(op)) {
         PluginJoin j;
-        std::vector<const dftu_dataframe*> joined(frames, frames + n);
+        dftracer::utils::dstd::Vector<const dftu_dataframe*> joined(frames,
+                                                                    frames + n);
         for (auto& f : joined) f = j.frame(f);
         dftu_op_arg ja{};
         if (a) ja = j.args(op->sig, *a);

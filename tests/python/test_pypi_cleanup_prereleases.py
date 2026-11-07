@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The choice of PyPI prereleases that scripts/ci/pypi_cleanup_prereleases.py
 deletes after a release."""
 

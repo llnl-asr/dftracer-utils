@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_RUNTIME_IO_OPS_H
+#define DFTRACER_UTILS_RUNTIME_IO_OPS_H
+
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/runtime/io/awaitable.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+
+#include <cstddef>
+#include <cstdint>
+
+namespace dftracer::utils::runtime::io {
+
+/// Asynchronous read (sequential). If inside an executor worker, submits
+/// to the I/O backend and suspends. Otherwise falls back to blocking
+/// read(). Works on any fd type (pipes, sockets, terminals, files).
+IoAwaitable read(dstd::NativeHandle fd, void* buf, std::size_t len) noexcept;
+
+/// Asynchronous write (sequential). Works on any fd type.
+IoAwaitable write(dstd::NativeHandle fd, const void* buf,
+                  std::size_t len) noexcept;
+
+/// Asynchronous positional read. Only works on seekable fds (regular
+/// files). Uses pread() under the hood.
+IoAwaitable pread(dstd::NativeHandle fd, void* buf, std::size_t len,
+                  std::uint64_t offset) noexcept;
+
+/// Asynchronous positional write. Only works on seekable fds.
+IoAwaitable pwrite(dstd::NativeHandle fd, const void* buf, std::size_t len,
+                   std::uint64_t offset) noexcept;
+
+/// Asynchronous open. Returns fd (>= 0) or negative errno.
+IoAwaitable open(const char* path, int flags, mode_t mode = 0644) noexcept;
+
+/// Asynchronous open of a file as a @ref dstd::File. The error has the shape
+/// @ref dstd::File::open reports. @p path need not end with a NUL byte and
+/// must stay valid until the task ends.
+coro::CoroTask<dstd::Expected<dstd::File, dstd::Error>> open_file(
+    dstd::PathView path, dstd::OpenOptions options);
+
+/// Asynchronous close.
+IoAwaitable close(dstd::NativeHandle fd) noexcept;
+
+/// Asynchronous fsync.
+IoAwaitable fsync(dstd::NativeHandle fd) noexcept;
+
+/// Asynchronous ftruncate.
+IoAwaitable ftruncate(dstd::NativeHandle fd, std::uint64_t length) noexcept;
+
+/// Asynchronous fstat.
+IoAwaitable fstat(dstd::NativeHandle fd, struct stat* buf) noexcept;
+
+/// Runs @p fn with @p context off the worker and gives its result: on an I/O
+/// thread, inline on a backend with none or outside an executor. For a blocking
+/// call that has no op of its own, such as a directory listing. @p context must
+/// stay valid until the await ends.
+IoAwaitable call(BlockingFn fn, void* context) noexcept;
+
+/// Accept a connection on a listening socket. Returns client fd.
+IoAwaitable accept(dstd::NativeHandle listen_fd,
+                   struct sockaddr* addr = nullptr,
+                   socklen_t* addrlen = nullptr) noexcept;
+
+/// Receive data from a connected socket. Returns bytes received.
+IoAwaitable recv(dstd::NativeHandle fd, void* buf, std::size_t len,
+                 int flags = 0) noexcept;
+
+/// Send data to a connected socket. Returns bytes sent.
+IoAwaitable send(dstd::NativeHandle fd, const void* buf, std::size_t len,
+                 int flags = 0) noexcept;
+
+/// Scatter-gather sequential read. Works on any fd type.
+IoAwaitable readv(dstd::NativeHandle fd, const struct iovec* iov,
+                  int iovcnt) noexcept;
+
+/// Scatter-gather sequential write. Works on any fd type. Like writev(2), it
+/// accepts at most IOV_MAX entries and may write fewer bytes than requested;
+/// use writev_all() unless you handle both.
+IoAwaitable writev(dstd::NativeHandle fd, const struct iovec* iov,
+                   int iovcnt) noexcept;
+
+/// writev() until every byte is sent: splits runs longer than IOV_MAX and
+/// resumes after short writes. `iov` is mutated as entries are consumed.
+/// Returns the bytes written, or a negative errno on failure.
+coro::CoroTask<ssize_t> writev_all(dstd::NativeHandle fd, struct iovec* iov,
+                                   int iovcnt);
+
+/// Scatter-gather positional read. Only works on seekable fds.
+IoAwaitable preadv(dstd::NativeHandle fd, const struct iovec* iov, int iovcnt,
+                   std::uint64_t offset) noexcept;
+
+/// Scatter-gather positional write. Only works on seekable fds.
+IoAwaitable pwritev(dstd::NativeHandle fd, const struct iovec* iov, int iovcnt,
+                    std::uint64_t offset) noexcept;
+
+/// Reposition file offset. Returns new offset or negative errno.
+IoAwaitable lseek(dstd::NativeHandle fd, std::int64_t offset,
+                  int whence) noexcept;
+
+/// Zero-copy transfer from in_fd to out_fd. Returns bytes sent.
+/// in_fd must be a regular file. Starts at the given offset.
+IoAwaitable sendfile(dstd::NativeHandle out_fd, dstd::NativeHandle in_fd,
+                     std::uint64_t offset, std::size_t count) noexcept;
+
+}  // namespace dftracer::utils::runtime::io
+
+#endif  // DFTRACER_UTILS_RUNTIME_IO_OPS_H

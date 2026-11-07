@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Runtime wrapper with TaskHandle support for async task submission."""
 
 from __future__ import annotations
@@ -49,17 +50,14 @@ class WorkerProgress(TypedDict):
 
 
 class TaskProgress(TypedDict):
-    """One task's slice of :meth:`Runtime.get_progress` (``children`` recurses)."""
+    """One task's slice of :meth:`Runtime.get_progress`."""
 
     name: str
     state: str
     queued_duration_ms: float
     execution_duration_ms: float
-    total_subtasks: int
-    completed_subtasks: int
     progress_pct: float
     location: str
-    children: List["TaskProgress"]
 
 
 class RuntimeProgress(TypedDict):
@@ -176,7 +174,12 @@ class TaskHandle(Generic[T_co]):
 
 
 class Runtime:
-    """Runtime with async task submission and Python callable support.
+    """A handle to the process runtime with async task submission and Python
+    callable support.
+
+    The process has one native runtime. Making a ``Runtime`` configures it in
+    place (``threads`` and ``io_threads``); ``shutdown()`` and leaving a
+    ``with`` block release this handle and leave the runtime running.
 
     Wraps the C++ Runtime and adds:
 
@@ -191,8 +194,9 @@ class Runtime:
             assert h.get() == 42
 
     Args:
-        threads: Number of C++ executor threads (0 = hardware_concurrency).
-        io_threads: Number of C++ I/O threads (0 = hardware_concurrency).
+        threads: C++ executor threads (0 keeps the current count, the
+            hardware concurrency for a new runtime).
+        io_threads: C++ I/O threads, which only grow (0 keeps the count).
         python_threads: Number of Python ThreadPoolExecutor threads
             (0 = min(32, threads)).
     """
@@ -367,7 +371,9 @@ class Runtime:
         self._on_task_error = callback
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shut down the runtime.
+        """Release this handle: wait for its tasks and stop its Python threads.
+
+        The process runtime keeps running until the process exits.
 
         Args:
             wait: If True (default), wait for all tasks to complete first.
@@ -380,7 +386,6 @@ class Runtime:
         if self._py_pool is not None:
             self._py_pool.shutdown(wait=wait)
             self._py_pool = None
-        self._native.shutdown()
 
     def get_progress(self) -> RuntimeProgress:
         """Return progress dict from C++ executor."""

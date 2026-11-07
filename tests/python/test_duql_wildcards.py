@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """duql wildcard paths run through the TraceViewer and the builder, each
 against the same query with the paths spelled out."""
 

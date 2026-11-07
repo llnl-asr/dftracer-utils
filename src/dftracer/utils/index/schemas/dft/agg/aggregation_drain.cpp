@@ -1,31 +1,34 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
-#include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
-#include <dftracer/utils/index/schemas/dft/agg/event_aggregator.h>
+
+#include <algorithm>
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
-void merge_aggregation_folds(std::vector<AggFoldOutput>& outputs,
-                             EventAggregator* merger) {
-    if (!merger) return;
-
+void merge_aggregation_folds(dstd::Vector<AggFoldOutput>& outputs,
+                             const index::Index& index) {
+    std::uint64_t min_bucket = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t max_bucket = 0;
     for (auto& out : outputs) {
-        for (const auto& k : out.observed_extra_keys)
-            merger->add_observed_extra_key(k);
-        for (const auto& m : out.observed_custom_metrics)
-            merger->add_observed_custom_metric(m);
-
-        // The tracker must be finalized before the merger collects it.
-        if (out.tracker) out.tracker->finalize();
-
-        ChunkAggregationOutput chunk;
-        chunk.file_path = out.file_path;
-        chunk.events_processed = out.events_processed;
-        chunk.success = true;
-        chunk.local_tracker = std::move(out.tracker);
-        chunk.min_time_bucket = out.min_time_bucket;
-        chunk.max_time_bucket = out.max_time_bucket;
-        merger->merge_chunk(std::move(chunk));
+        min_bucket = std::min(min_bucket, out.min_time_bucket);
+        max_bucket = std::max(max_bucket, out.max_time_bucket);
     }
+
+    // min == UINT64_MAX is the only "no events seen" sentinel. A real bucket
+    // range can be [0, 0] (relative time, first bucket).
+    if (min_bucket == std::numeric_limits<std::uint64_t>::max() ||
+        min_bucket > max_bucket)
+        return;
+    if (auto stored = common::unwrap(
+            tier::read_time_bounds(common::unwrap(index.snapshot())))) {
+        min_bucket = std::min(min_bucket, stored->min_bucket);
+        max_bucket = std::max(max_bucket, stored->max_bucket);
+    }
+    tier::write_time_bounds(index, {min_bucket, max_bucket});
 }
 
 }  // namespace dftracer::utils::index::schemas::dft::agg

@@ -1,11 +1,11 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_READER_STREAM_CACHE_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_READER_STREAM_CACHE_H
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
-
-#include <memory>
-#include <string>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -18,16 +18,16 @@ namespace dftracer::utils::utilities::reader::internal {
  */
 class ReaderStreamCache {
    private:
-    std::unique_ptr<ReaderStream> stream_;
+    dstd::UniquePtr<ReaderStream> stream_;
     StreamType type_;
-    std::string path_;
+    dstd::String path_;
     std::size_t start_bytes_;
     std::size_t end_bytes_;
     bool initialized_;
 
    public:
     ReaderStreamCache()
-        : type_(StreamType::BYTES),
+        : type_(StreamType::Bytes),
           start_bytes_(0),
           end_bytes_(0),
           initialized_(false) {}
@@ -42,7 +42,7 @@ class ReaderStreamCache {
      * @param end End byte offset
      * @return true if cached stream can be reused, false otherwise
      */
-    bool can_continue(StreamType type, const std::string& path,
+    bool can_continue(StreamType type, const dstd::String& path,
                       std::size_t start, std::size_t end) const {
         if (!initialized_ || !stream_) return false;
         if (stream_->done()) return false;
@@ -62,8 +62,8 @@ class ReaderStreamCache {
      * @param start Start byte offset
      * @param end End byte offset
      */
-    void update(std::unique_ptr<ReaderStream> new_stream, StreamType type,
-                const std::string& path, std::size_t start, std::size_t end) {
+    void update(dstd::UniquePtr<ReaderStream> new_stream, StreamType type,
+                const dstd::String& path, std::size_t start, std::size_t end) {
         stream_ = std::move(new_stream);
         type_ = type;
         path_ = path;

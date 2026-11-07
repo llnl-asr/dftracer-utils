@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Typed @jit.plugin sample: ty checks this clean with inference only.
 
 No map is annotated; the value/key types are inferred from jit.map's overloads,

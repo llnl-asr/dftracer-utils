@@ -1,7 +1,14 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCAN_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCAN_H
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -9,13 +16,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
 
 // The scan Source: turn a plan into pruned, member-aligned candidate chunks and
 // the per-chunk scanner input. Shared by every terminal, which then feed the
@@ -44,21 +44,21 @@ ScanShape scan_shape(const ViewDefinition& vdef);
 // The index-building folds worth riding along on this scan (dictionary, bloom):
 // those the scan can establish, and only while some file still lacks the pruner
 // bloom, so a repeat scan of an already-built index attaches nothing.
-std::vector<std::unique_ptr<Fold>> select_index_folds(
+dstd::Vector<dstd::UniquePtr<Fold>> select_index_folds(
     const ViewPlan& plan, const ViewDefinition& vdef,
-    dftracer::utils::StringIntern& intern);
+    dftracer::utils::dstd::StringIntern& intern);
 
 // The fold that writes the path catalog of the files that lack one, or null
 // when every file has it or the scan cannot establish it. Its slot is the first
 // full scan of a trace.
-std::unique_ptr<Fold> select_catalog_fold(
+dstd::UniquePtr<Fold> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
-    dftracer::utils::StringIntern& intern);
+    dftracer::utils::dstd::StringIntern& intern);
 
 // One candidate chunk to scan: a byte range within a file's index.
 struct ScanUnit {
-    std::string file_path;
-    std::string index_path;
+    dstd::String file_path;
+    dstd::String index_path;
     std::size_t checkpoint_size = 0;
     std::uint64_t checkpoint_idx = 0;
     std::size_t start_byte = 0;
@@ -67,7 +67,7 @@ struct ScanUnit {
     std::size_t seq = 0;
     // The View query with resolved columns rewritten for this unit's index;
     // null when there was nothing to rewrite.
-    std::shared_ptr<const duql::Query> query;
+    dstd::SharedPtr<const duql::Query> query;
 };
 
 // The record_schema every file of `plan` was indexed under, or is detected as
@@ -82,18 +82,18 @@ const dftracer::utils::index::RecordSchema& plan_record_schema(
 bool plan_by_path(const ViewPlan& plan);
 
 // The trace roles an operation reads. DURATION implies TIME.
-enum class TraceRole : std::uint8_t { TIME, DURATION };
+enum class TraceRole : std::uint8_t { Time, Duration };
 
 // Throws INVALID_ARGUMENT naming `op` when the files' record_schema binds no
 // path to `role` (a time role for TIME; time and duration for DURATION).
-void require_role(const ViewPlan& plan, std::string_view op,
-                  TraceRole role = TraceRole::TIME);
+void require_role(const ViewPlan& plan, dstd::StringView op,
+                  TraceRole role = TraceRole::Time);
 
 // Fold the phase selector into the query: Events -> ph=="X", Counters ->
 // ph=="C", Any -> no constraint. ANDed with any user filter and, for a plan
 // with a build step, the key sets that step gives, which runs it: call it
 // only when executing the plan.
-std::optional<duql::Query> effective_query(const ViewPlan& plan);
+dstd::Optional<duql::Query> effective_query(const ViewPlan& plan);
 
 // Whether `plan`'s rows include metadata records: phase("metadata") or
 // duql's `all`.
@@ -110,19 +110,19 @@ bool is_cancelled(const ViewPlan& plan);
 // `q` applies unless the unit carries its rewritten query.
 ViewScannerInput make_scanner_input(const ScanUnit& u,
                                     const ViewDefinition& vdef,
-                                    const std::optional<duql::Query>& q);
+                                    const dstd::Optional<duql::Query>& q);
 
 // Plan every file in parallel (metadata + prune) and flatten the surviving
 // candidates into a single work list; `skipped_out` gets the pruned-chunk
 // count. Resolved columns are rewritten once per index before planning, and
 // each unit carries the rewritten query. Throws if an index cannot be read
 // for that rewrite.
-coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
-                                                   const ViewDefinition& vdef,
-                                                   std::uint64_t& skipped_out);
+coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(const ViewPlan& plan,
+                                                    const ViewDefinition& vdef,
+                                                    std::uint64_t& skipped_out);
 
 // The shared scan driver: gather candidate chunks and scan them in parallel,
-// handing each decoded batch to `on_batch(slot, events)`. `num_slots` worker
+// handing each decoded batch to `on_batch(slot, events)`. `slot_count` worker
 // coroutines round-robin the units (0 = one worker per unit); `limit`
 // (0 = unlimited) caps total produced events. Every per-slot body a streaming
 // terminal needs (write to a sink, fold into a slot map, ...) is the callback;
@@ -133,12 +133,12 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
 // the fan-out joins. They can only ever slow the consumer by what they do per
 // batch, never by waiting. Returns artifacts_committed set if any fold wrote.
 coro::CoroTask<ExportStats> for_each_scanned_batch(
-    const ViewPlan& plan, const ViewDefinition& vdef, std::size_t num_slots,
+    const ViewPlan& plan, const ViewDefinition& vdef, std::size_t slot_count,
     std::uint64_t limit,
-    const std::function<void(std::size_t,
-                             const std::vector<std::string_view>&)>& on_batch,
-    std::span<Fold* const> folds = {},
-    dftracer::utils::StringIntern* intern = nullptr);
+    const dstd::Function<void(std::size_t,
+                              const dstd::Vector<dstd::StringView>&)>& on_batch,
+    dstd::Span<Fold* const> folds = {},
+    dftracer::utils::dstd::StringIntern* intern = nullptr);
 
 }  // namespace dftracer::utils::trace::views::detail
 

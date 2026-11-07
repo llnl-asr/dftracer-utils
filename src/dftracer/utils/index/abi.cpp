@@ -1,4 +1,7 @@
-#include <dftracer/utils/core/common/error.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/abi.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -7,60 +10,62 @@
 #include <cstring>
 #include <exception>
 #include <new>
-#include <string>
 #include <utility>
-#include <vector>
 
-using dftracer::utils::Condition;
-using dftracer::utils::DFTUtilsException;
+using namespace dftracer::utils;
+
+using dftracer::utils::dstd::Condition;
 using dftracer::utils::index::IndexedFile;
 using dftracer::utils::index::Indexer;
 using dftracer::utils::index::IndexerOptions;
 using dftracer::utils::index::IndexStatus;
 
-struct dftu_indexer {
+struct dftu_indexer : dftracer::utils::dstd::HeapObject {
     Indexer indexer;
-    std::string error;
+    dstd::String error;
 };
 
-struct dftu_indexer_file_list {
-    std::vector<IndexedFile> files;
+struct dftu_indexer_file_list : dftracer::utils::dstd::HeapObject {
+    dstd::Vector<IndexedFile> files;
 };
 
 namespace {
 
-thread_local std::string handle_free_error;
-thread_local std::string schema_error;
+thread_local dstd::String t_handle_free_error;
+thread_local dstd::String t_schema_error;
 
-dftu_error fill_error(std::string& storage, Condition condition,
+dftu_error fill_error(dstd::String& storage, Condition condition,
                       std::uint64_t domain, std::int32_t code,
-                      std::string message) {
+                      dstd::String message) {
     storage = std::move(message);
     return dftu_error{domain, code, static_cast<std::int32_t>(condition),
                       storage.c_str()};
 }
 
-dftu_error current_error(std::string& storage) {
+dftu_error current_error(dstd::String& storage) {
     try {
         throw;
-    } catch (const DFTUtilsException& e) {
+    } catch (const dftracer::utils::common::DFTUtilsException& e) {
         return fill_error(storage, e.condition(), e.domain(), e.code_int(),
                           e.what());
     } catch (const std::exception& e) {
-        return fill_error(
-            storage, Condition::Internal, dftracer::utils::CORE_DOMAIN.id,
-            static_cast<std::int32_t>(Condition::Internal), e.what());
+        return fill_error(storage, Condition::Internal,
+                          dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
+                          static_cast<std::int32_t>(Condition::Internal),
+                          e.what());
     } catch (...) {
-        return fill_error(
-            storage, Condition::Internal, dftracer::utils::CORE_DOMAIN.id,
-            static_cast<std::int32_t>(Condition::Internal), "unknown error");
+        return fill_error(storage, Condition::Internal,
+                          dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
+                          static_cast<std::int32_t>(Condition::Internal),
+                          "unknown error");
     }
 }
 
-dftu_error invalid(std::string& storage, const char* message) {
-    return fill_error(
-        storage, Condition::InvalidArgument, dftracer::utils::CORE_DOMAIN.id,
-        static_cast<std::int32_t>(Condition::InvalidArgument), message);
+dftu_error invalid(dstd::String& storage, const char* message) {
+    return fill_error(storage, Condition::InvalidArgument,
+                      dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
+                      static_cast<std::int32_t>(Condition::InvalidArgument),
+                      message);
 }
 
 dftu_indexer_report to_c(const IndexStatus& s) {
@@ -76,11 +81,11 @@ template <class Fn>
 dftu_indexer_string_result string_call(dftu_indexer* ix, Fn fn) {
     dftu_indexer_string_result r{};
     if (!ix) {
-        r.u.err = invalid(handle_free_error, "indexer is NULL");
+        r.u.err = invalid(t_handle_free_error, "indexer is NULL");
         return r;
     }
     try {
-        const std::string s = fn(ix->indexer);
+        const dstd::String s = fn(ix->indexer);
         char* out = static_cast<char*>(std::malloc(s.size() + 1));
         if (!out) throw std::bad_alloc();
         std::memcpy(out, s.c_str(), s.size() + 1);
@@ -96,7 +101,7 @@ template <class Fn>
 dftu_indexer_status_result status_call(dftu_indexer* ix, Fn fn) {
     dftu_indexer_status_result r{};
     if (!ix) {
-        r.u.err = invalid(handle_free_error, "indexer is NULL");
+        r.u.err = invalid(t_handle_free_error, "indexer is NULL");
         return r;
     }
     try {
@@ -108,26 +113,26 @@ dftu_indexer_status_result status_call(dftu_indexer* ix, Fn fn) {
     return r;
 }
 
-// A schema call: a string result or the error in schema_error.
+// A schema call: a string result or the error in t_schema_error.
 template <class Fn>
 dftu_indexer_string_result schema_call(Fn fn) {
     dftu_indexer_string_result r{};
     try {
-        const std::string s = fn();
+        const dstd::String s = fn();
         char* out = static_cast<char*>(std::malloc(s.size() + 1));
         if (!out) throw std::bad_alloc();
         std::memcpy(out, s.c_str(), s.size() + 1);
         r.u.value = out;
         r.ok = 1;
     } catch (...) {
-        r.u.err = current_error(schema_error);
+        r.u.err = current_error(t_schema_error);
     }
     return r;
 }
 
 dftu_indexer_string_result null_argument(const char* what) {
     dftu_indexer_string_result r{};
-    r.u.err = invalid(schema_error, what);
+    r.u.err = invalid(t_schema_error, what);
     return r;
 }
 
@@ -151,22 +156,25 @@ void dftu_indexer_options_init(dftu_indexer_options* out) {
                                 d.memory_budget,
                                 nullptr,
                                 d.bloom ? d.bloom->path_budget : 0,
-                                d.bloom ? d.bloom->stats_share : 0.05};
+                                d.bloom ? d.bloom->stats_share : 0.05,
+                                d.aggregation.time_interval_us,
+                                d.aggregation.compute_percentiles ? 1 : 0,
+                                d.aggregation.group_by_file ? 1 : 0};
 }
 
 dftu_indexer_open_result dftu_indexer_open(
     const char* const* paths, uint64_t n, const dftu_indexer_options* options) {
     dftu_indexer_open_result r{};
     if (!paths || n == 0) {
-        r.u.err = invalid(handle_free_error, "paths is NULL or empty");
+        r.u.err = invalid(t_handle_free_error, "paths is NULL or empty");
         return r;
     }
     try {
-        std::vector<std::string> list;
+        dstd::Vector<dstd::String> list;
         list.reserve(n);
         for (uint64_t i = 0; i < n; ++i) {
             if (!paths[i]) {
-                r.u.err = invalid(handle_free_error, "a path is NULL");
+                r.u.err = invalid(t_handle_free_error, "a path is NULL");
                 return r;
             }
             list.emplace_back(paths[i]);
@@ -185,14 +193,14 @@ dftu_indexer_open_result dftu_indexer_open(
                 opts.bloom->path_budget = options->bloom_path_budget;
                 opts.bloom->stats_share = options->bloom_stats_share;
                 if (options->bloom_field_count && !options->bloom_fields) {
-                    r.u.err = invalid(handle_free_error,
+                    r.u.err = invalid(t_handle_free_error,
                                       "bloom_fields is NULL with a count");
                     return r;
                 }
                 for (uint32_t i = 0; i < options->bloom_field_count; ++i) {
                     if (!options->bloom_fields[i]) {
-                        r.u.err =
-                            invalid(handle_free_error, "a bloom field is NULL");
+                        r.u.err = invalid(t_handle_free_error,
+                                          "a bloom field is NULL");
                         return r;
                     }
                     opts.bloom->fields.emplace_back(options->bloom_fields[i]);
@@ -200,8 +208,15 @@ dftu_indexer_open_result dftu_indexer_open(
             } else {
                 opts.bloom.reset();
             }
+            if (options->aggregation_time_interval_us)
+                opts.aggregation.time_interval_us =
+                    options->aggregation_time_interval_us;
+            if (options->aggregation_compute_percentiles)
+                opts.aggregation.compute_percentiles = true;
+            if (options->aggregation_group_by_file)
+                opts.aggregation.group_by_file = true;
             if (options->extension_count && !options->extensions) {
-                r.u.err = invalid(handle_free_error,
+                r.u.err = invalid(t_handle_free_error,
                                   "extensions is NULL with a count");
                 return r;
             }
@@ -209,17 +224,17 @@ dftu_indexer_open_result dftu_indexer_open(
             for (uint32_t i = 0; i < options->extension_count; ++i) {
                 if (!options->extensions[i]) {
                     r.u.err =
-                        invalid(handle_free_error, "an extension is NULL");
+                        invalid(t_handle_free_error, "an extension is NULL");
                     return r;
                 }
                 opts.extensions.emplace_back(options->extensions[i]);
             }
         }
         r.u.value = new dftu_indexer{
-            Indexer::open(std::move(list), std::move(opts)), {}};
+            {}, Indexer::open(std::move(list), std::move(opts)), {}};
         r.ok = 1;
     } catch (...) {
-        r.u.err = current_error(handle_free_error);
+        r.u.err = current_error(t_handle_free_error);
     }
     return r;
 }
@@ -283,11 +298,11 @@ void dftu_indexer_string_free(char* s) { std::free(s); }
 dftu_indexer_files_result dftu_indexer_files(dftu_indexer* indexer) {
     dftu_indexer_files_result r{};
     if (!indexer) {
-        r.u.err = invalid(handle_free_error, "indexer is NULL");
+        r.u.err = invalid(t_handle_free_error, "indexer is NULL");
         return r;
     }
     try {
-        r.u.value = new dftu_indexer_file_list{indexer->indexer.files()};
+        r.u.value = new dftu_indexer_file_list{{}, indexer->indexer.files()};
         r.ok = 1;
     } catch (...) {
         r.u.err = current_error(indexer->error);
@@ -305,13 +320,13 @@ dftu_indexer_file_result dftu_indexer_file_list_get(
     const dftu_indexer_file_list* list, uint64_t i) {
     dftu_indexer_file_result r{};
     if (!list || i >= list->files.size()) {
-        r.u.err = invalid(handle_free_error, "file list index out of range");
+        r.u.err = invalid(t_handle_free_error, "file list index out of range");
         return r;
     }
     const auto& f = list->files[i];
-    r.u.value = dftu_indexer_file{
-        f.path.c_str(), f.index_path.c_str(), f.file_id,       f.size_bytes,
-        f.mtime,        f.truncated ? 1 : 0,  f.schema.c_str()};
+    r.u.value = dftu_indexer_file{f.path.c_str(),      f.index_path.c_str(),
+                                  f.size_bytes,        f.mtime,
+                                  f.truncated ? 1 : 0, f.schema.c_str()};
     r.ok = 1;
     return r;
 }

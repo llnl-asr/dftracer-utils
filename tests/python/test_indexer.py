@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """
 Test cases for DFTracer indexer Python bindings
 """
@@ -292,23 +293,20 @@ class TestDirectoryIndexer:
             )
             with dftu_utils.Indexer(
                 env.temp_dir,
-                require_aggregation=agg_config,
+                aggregation_config=agg_config,
             ) as indexer:
                 assert indexer.aggregation_config is not None
                 assert indexer.aggregation_config.time_interval_ms == 1000.0
 
     @pytest.mark.valgrind
-    def test_indexer_aggregation_true(self):
-        """Test indexer with require_aggregation=True uses defaults"""
+    def test_indexer_aggregation_default(self):
+        """Every indexer builds the tier with the standard config by default"""
         with Environment() as env:
             env.create_test_gzip_file()
 
-            with dftu_utils.Indexer(
-                env.temp_dir,
-                require_aggregation=True,
-            ) as indexer:
-                assert indexer.aggregation_config is not None
-                assert indexer.aggregation_config.time_interval_ms == 5000.0
+            with dftu_utils.Indexer(env.temp_dir) as indexer:
+                assert indexer.aggregation_config.time_interval_ms == 1000.0
+                assert indexer.aggregation_config.compute_percentiles
 
     def test_index_status_dataclass(self):
         """Test IndexStatus dataclass"""
@@ -329,7 +327,7 @@ class TestDirectoryIndexer:
             directory = env.create_indexed_traces(pids=[1])
             with dftu_utils.Indexer(
                 directory=directory,
-                require_aggregation=dftu_utils.AggregationConfig(time_interval_ms=5000),
+                aggregation_config=dftu_utils.AggregationConfig(time_interval_ms=5000),
             ) as indexer:
                 indexer.ensure_indexed()
                 assert indexer.resolve().aggregation_interval_us == 5_000_000
@@ -341,7 +339,7 @@ class TestDirectoryIndexer:
             directory = env.create_indexed_traces(pids=[1, 2])
             with dftu_utils.Indexer(
                 directory=directory,
-                require_aggregation=dftu_utils.AggregationConfig(time_interval_ms=1000),
+                aggregation_config=dftu_utils.AggregationConfig(time_interval_ms=1000),
             ) as indexer:
                 indexer.ensure_indexed()
                 status = indexer.resolve()
@@ -360,12 +358,10 @@ class TestDirectoryIndexer:
         config = dftu_utils.AggregationConfig(
             time_interval_ms=2000.0,
             group_keys=["host", "rank"],
-            custom_metric_fields=["bytes"],
             compute_percentiles=True,
         )
         assert config.time_interval_ms == 2000.0
         assert config.group_keys == ["host", "rank"]
-        assert config.custom_metric_fields == ["bytes"]
         assert config.compute_percentiles is True
 
     def test_indexer_with_files_list(self):
@@ -455,9 +451,9 @@ class TestIndexerDfanalyzerAPIs:
                 indexer.rowset("nope")
 
     def test_query_file_pids(self):
-        """Test query_file_pids returns set of PIDs for a file"""
+        """query_file_pids returns the PIDs the index recorded for a path"""
         with Environment() as env:
-            gz_file = env.create_dft_trace_file()
+            gz_file = env.create_dft_trace_file_with_pid("t.pfw.gz", 7)
 
             with dftu_utils.Indexer(
                 files=[gz_file],
@@ -465,17 +461,13 @@ class TestIndexerDfanalyzerAPIs:
             ) as indexer:
                 indexer.ensure_indexed()
 
-                # File ID 1 is typically the first indexed file
-                pids = indexer.query_file_pids(1)
-                assert isinstance(pids, set)
-                # PIDs should be integers
-                for pid in pids:
-                    assert isinstance(pid, int)
+                assert indexer.query_file_pids(gz_file) == {7}
 
-    def test_query_file_pids_nonexistent(self):
-        """Test query_file_pids returns empty set for nonexistent file"""
+    def test_query_file_pids_unindexed_path(self):
+        """query_file_pids returns an empty set for a path not in the index"""
         with Environment() as env:
             gz_file = env.create_dft_trace_file()
+            absent = os.path.join(env.temp_dir, "absent.pfw.gz")
 
             with dftu_utils.Indexer(
                 files=[gz_file],
@@ -483,15 +475,15 @@ class TestIndexerDfanalyzerAPIs:
             ) as indexer:
                 indexer.ensure_indexed()
 
-                pids = indexer.query_file_pids(9999)
+                pids = indexer.query_file_pids(absent)
                 assert isinstance(pids, set)
                 assert len(pids) == 0
 
     def test_query_all_file_pids(self):
-        """Test query_all_file_pids returns dict mapping file_id to PID sets"""
+        """query_all_file_pids keys the PID sets by trace path"""
         with Environment() as env:
-            gz_file1 = env.create_dft_trace_file(filename="trace1.pfw.gz")
-            gz_file2 = env.create_dft_trace_file(filename="trace2.pfw.gz")
+            gz_file1 = env.create_dft_trace_file_with_pid("trace1.pfw.gz", 3)
+            gz_file2 = env.create_dft_trace_file_with_pid("trace2.pfw.gz", 5)
 
             with dftu_utils.Indexer(
                 files=[gz_file1, gz_file2],
@@ -501,12 +493,21 @@ class TestIndexerDfanalyzerAPIs:
 
                 all_pids = indexer.query_all_file_pids()
                 assert isinstance(all_pids, dict)
+                assert all_pids == {gz_file1: {3}, gz_file2: {5}}
 
-                for file_id, pid_set in all_pids.items():
-                    assert isinstance(file_id, int)
-                    assert isinstance(pid_set, set)
-                    for pid in pid_set:
-                        assert isinstance(pid, int)
+    def test_query_file_info(self):
+        """query_file_info returns the same path-keyed PID sets in one call"""
+        with Environment() as env:
+            gz_file = env.create_dft_trace_file_with_pid("t.pfw.gz", 7)
+
+            with dftu_utils.Indexer(
+                files=[gz_file],
+                require_bloom=True,
+            ) as indexer:
+                indexer.ensure_indexed()
+
+                assert indexer.query_file_info() == {gz_file: {7}}
+                assert indexer.query_file_info() == indexer.query_all_file_pids()
 
     def test_query_all_file_pids_empty_index(self):
         """Test query_all_file_pids returns empty dict for unindexed files"""
@@ -659,7 +660,7 @@ class TestOccupancyMetrics:
             f.write("\n".join(lines) + "\n")
         Indexer(
             files=[p],
-            require_aggregation=AggregationConfig(time_interval_ms=interval_ms),
+            aggregation_config=AggregationConfig(time_interval_ms=interval_ms),
             force_rebuild=True,
         ).ensure_indexed()
         return p
@@ -677,7 +678,7 @@ class TestOccupancyMetrics:
             paths.append(p)
         Indexer(
             files=paths,
-            require_aggregation=AggregationConfig(time_interval_ms=interval_ms),
+            aggregation_config=AggregationConfig(time_interval_ms=interval_ms),
             force_rebuild=True,
         ).ensure_indexed()
         return paths
@@ -1032,6 +1033,7 @@ class TestExtensions:
             "core.catalog",
             "core.profile",
             "dft.metadata",
+            "dftracer.agg",
         }
         assert all(e["current"] for e in entry["extensions"])
 

@@ -1,26 +1,34 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/versions.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/plan/prune.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
-#include <dftracer/utils/index/store/column_families.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
+#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::trace::views {
 
@@ -28,87 +36,91 @@ namespace {
 
 // Each shard's aggregate_partial, run concurrently in waves as wide as the
 // spill budget allows, the budget split evenly across a wave.
-coro::CoroTask<std::vector<std::string>> collect_partials(
-    std::vector<View> shards) {
-    std::vector<std::string> partials;
+coro::CoroTask<dstd::Vector<dstd::String>> collect_partials(
+    dstd::Vector<View> shards) {
+    dstd::Vector<dstd::String> partials;
     if (shards.empty()) co_return partials;
     const std::uint64_t configured = shards.front().memory_budget_bytes();
-    const std::size_t ways = concurrent_spill_ways(configured, shards.size());
-    const std::uint64_t share = share_spill_budget(configured, ways);
+    const std::size_t ways =
+        common::concurrent_spill_ways(configured, shards.size());
+    const std::uint64_t share = common::share_spill_budget(configured, ways);
     partials.reserve(shards.size());
     for (std::size_t at = 0; at < shards.size(); at += ways) {
         const std::size_t end = std::min(shards.size(), at + ways);
-        std::vector<dataframe::LazyResult<std::string>> plans;
+        dstd::Vector<dataframe::LazyResult<dstd::String>> plans;
         plans.reserve(end - at);
         for (std::size_t i = at; i < end; ++i)
             plans.push_back(shards[i].memory_budget(share).aggregate_partial());
-        std::vector<coro::CoroTask<std::string>> runs;
+        dstd::Vector<coro::CoroTask<dstd::String>> runs;
         runs.reserve(plans.size());
         for (const auto& p : plans) runs.push_back(p.collect());
-        std::vector<std::string> done =
-            co_await coro::when_all(std::move(runs));
-        for (std::string& d : done) partials.push_back(std::move(d));
+        auto done = co_await coro::when_all(std::move(runs));
+        for (dstd::String& d : done) partials.push_back(std::move(d));
     }
     co_return partials;
 }
 
 }  // namespace
 
-ShardedView ShardedView::from_shard_dirs(std::vector<std::string> shard_dirs) {
+ShardedView ShardedView::from_shard_dirs(
+    dstd::Vector<dstd::String> shard_dirs) {
     return ShardedView(std::move(shard_dirs));
 }
 
-ShardedView ShardedView::from_manifest(const std::string& root) {
+ShardedView ShardedView::from_manifest(const dstd::String& root) {
     auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
     if (!manifest) {
-        throw DFTUtilsException(
-            ErrorCode::IO,
-            "no shard manifest under " + root + " (" +
-                std::string(
-                    dftracer::utils::index::store::SHARD_MANIFEST_FILENAME) +
-                ")");
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            "no shard manifest at " +
+                dftracer::utils::index::shard_manifest_path(root));
     }
+    constexpr std::uint32_t INDEX_FORMAT_VERSION =
+        static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
     if (manifest->format_version !=
-        dftracer::utils::index::store::IndexDatabase::FORMAT_VERSION) {
-        throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+        dstd::Optional<std::uint32_t>(INDEX_FORMAT_VERSION)) {
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
             "shard manifest format version " +
-                std::to_string(manifest->format_version) +
+                (manifest->format_version
+                     ? dstd::to_string(*manifest->format_version)
+                     : dstd::String("(missing)")) +
                 " does not match this build's " +
-                std::to_string(dftracer::utils::index::store::IndexDatabase::
-                                   FORMAT_VERSION));
+                dstd::to_string(INDEX_FORMAT_VERSION));
     }
 
-    std::vector<std::string> dirs;
+    dstd::Vector<dstd::String> dirs;
     dirs.reserve(manifest->shards.size());
     for (const auto& shard : manifest->shards) {
         if (shard.empty()) continue;
-        dirs.push_back((fs::path(root) / shard.path).string());
+        dirs.push_back(dstd::String((dstd::PathView(root) / shard.path).str()));
     }
     return ShardedView(std::move(dirs));
 }
 
-std::vector<ViewFile> ShardedView::shard_view_files(
-    const std::string& shard_dir) const {
-    // The registry stores each file's full canonical path, so it locates the
-    // trace directly - no reconstruction, and the index may live apart from it.
-    dftracer::utils::index::store::IndexDatabase db(
-        shard_dir, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-    std::vector<ViewFile> files;
-    for (const auto& [path, file_id] : db.query_all_file_info_ids()) {
+dstd::Vector<ViewFile> ShardedView::shard_view_files(
+    const dstd::String& shard_dir) const {
+    // A shard's Members scopes store each file's full canonical path, so it
+    // locates the trace directly and the index may live apart from it.
+    auto snapshot =
+        common::unwrap(dftracer::utils::index::plan::open_snapshot(shard_dir));
+    const auto indexed = common::unwrap(snapshot.files());
+    dstd::Vector<ViewFile> files;
+    files.reserve(indexed.size());
+    for (const auto& file : indexed) {
         ViewFile vf;
-        vf.file_path = path;
+        vf.file_path = dstd::String(file.path());
         vf.index_path = shard_dir;
         files.push_back(std::move(vf));
     }
     return files;
 }
 
-std::vector<View> ShardedView::shards(const Configure& configure) const {
-    std::vector<View> out;
+dstd::Vector<View> ShardedView::shards(const Configure& configure) const {
+    dstd::Vector<View> out;
     out.reserve(shard_dirs_.size());
     for (const auto& dir : shard_dirs_) {
-        std::vector<ViewFile> files = shard_view_files(dir);
+        dstd::Vector<ViewFile> files = shard_view_files(dir);
         if (files.empty()) continue;
         out.push_back(configure(View::from_files(std::move(files))));
     }
@@ -117,219 +129,216 @@ std::vector<View> ShardedView::shards(const Configure& configure) const {
 
 coro::CoroTask<dftracer::utils::dataframe::DataFrame> ShardedView::aggregate(
     Configure configure) const {
-    std::vector<View> views = shards(configure);
-    std::vector<std::string> partials =
+    dstd::Vector<View> views = shards(configure);
+    dstd::Vector<dstd::String> partials =
         co_await collect_partials(std::move(views));
 
-    std::vector<std::string_view> pv(partials.begin(), partials.end());
+    dstd::Vector<dstd::StringView> pv(partials.begin(), partials.end());
     co_return configure(View::from_files({})).merge_partials(pv);
 }
 
 coro::CoroTask<ExportStats> ShardedView::aggregate_counters(
     Configure configure, ExportSink& sink) const {
-    std::vector<View> views = shards(configure);
-    std::vector<std::string> partials =
+    dstd::Vector<View> views = shards(configure);
+    dstd::Vector<dstd::String> partials =
         co_await collect_partials(std::move(views));
 
-    std::vector<std::string_view> pv(partials.begin(), partials.end());
+    dstd::Vector<dstd::StringView> pv(partials.begin(), partials.end());
     co_return configure(View::from_files({})).merge_counter_partials(pv, sink);
 }
 
-void write_shard_set(const std::string& root,
-                     const std::vector<std::string>& shard_dirs) {
+void write_shard_set(const dstd::String& root,
+                     const dstd::Vector<dstd::String>& shard_dirs) {
     dftracer::utils::index::store::IndexShardManifest manifest;
     manifest.format_version =
-        dftracer::utils::index::store::IndexDatabase::FORMAT_VERSION;
+        static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
     manifest.shards.reserve(shard_dirs.size());
     for (const auto& dir : shard_dirs) {
-        dftracer::utils::index::store::IndexDatabase db(
-            dir, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        auto registry = db.query_all_file_registry();
+        auto snapshot =
+            common::unwrap(dftracer::utils::index::plan::open_snapshot(dir));
 
         dftracer::utils::index::store::IndexShardEntry entry;
-        entry.num_files = registry.size();
-        std::int64_t lo = -1;
-        std::int64_t hi = -1;
-        for (const auto& [name, file] : registry) {
-            if (lo < 0 || file.file_id < lo) lo = file.file_id;
-            if (file.file_id > hi) hi = file.file_id;
-        }
-        entry.file_id_min = entry.num_files == 0 ? 0 : lo;
-        entry.file_id_max = entry.num_files == 0 ? -1 : hi;
+        entry.file_count =
+            static_cast<std::uint64_t>(common::unwrap(snapshot.files()).size());
 
-        const std::string rel = fs::path(dir).lexically_relative(root).string();
-        entry.path = (rel.empty() || rel.rfind("..", 0) == 0) ? dir : rel;
+        const dstd::Path rel =
+            dstd::relative(dstd::PathView(dir), dstd::PathView(root));
+        entry.path = (rel.empty() || rel.str().rfind("..", 0) == 0)
+                         ? dir
+                         : dstd::String(rel.str());
         manifest.shards.push_back(std::move(entry));
     }
     dftracer::utils::index::store::write_shard_manifest(root, manifest);
 }
 
-coro::CoroTask<std::size_t> consolidate_shard_set(CoroScope* scope,
-                                                  const std::string& root,
-                                                  const std::string& out_root) {
+std::size_t consolidate_shard_set(const dstd::String& root) {
     auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
     if (!manifest) {
-        throw DFTUtilsException(
-            ErrorCode::IO,
-            "no shard manifest under " + root + " (" +
-                std::string(
-                    dftracer::utils::index::store::SHARD_MANIFEST_FILENAME) +
-                ")");
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            "no shard manifest at " +
+                dftracer::utils::index::shard_manifest_path(root));
     }
 
-    std::vector<std::string> files;
+    dstd::Vector<dstd::String> shard_roots;
+    shard_roots.reserve(manifest->shards.size());
+    std::size_t files = 0;
     for (const auto& shard : manifest->shards) {
         if (shard.empty()) continue;
-        const std::string idx = (fs::path(root) / shard.path).string();
-        dftracer::utils::index::store::IndexDatabase db(
-            idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        for (const auto& [path, file_id] : db.query_all_file_info_ids())
-            files.push_back(path);
+        shard_roots.push_back(
+            dstd::String((dstd::PathView(root) / shard.path).str()));
+        files += shard.file_count;
     }
-    if (files.empty()) co_return 0;
 
-    dftracer::utils::index::build::ResolveAndBuildInput in;
-    in.files = files;
-    in.index_dir = out_root;
-    in.require_checkpoints = true;
-    in.require_aggregation = true;
-    in.aggregation_config =
-        dftracer::utils::index::schemas::dft::agg::AggregationConfig{};
-    co_await dftracer::utils::index::build::resolve_and_build_index(
-        scope, std::move(in));
+    dftracer::utils::index::release_root(root);
+    for (const auto& shard_root : shard_roots)
+        dftracer::utils::index::release_root(shard_root);
 
-    const std::string unified =
-        internal::determine_index_path(files.front(), out_root);
-    write_shard_set(out_root, {unified});
-    co_return files.size();
+    const dstd::String target = dftracer::utils::index::store_dir(root);
+    for (const auto& shard_root : shard_roots) {
+        common::unwrap(dftracer::utils::store::Store::adopt(
+            dftracer::utils::index::store_dir(shard_root), target));
+    }
+    dftracer::utils::index::release_root(root);
+
+    // Cleanup after the merge, so a failed removal leaves only stray files.
+    (void)dstd::fs::remove(
+        dstd::PathView(dftracer::utils::index::shard_manifest_path(root)));
+    for (const auto& shard : manifest->shards)
+        (void)dstd::fs::remove_all((dstd::PathView(root) / shard.path).view());
+    (void)dstd::fs::remove(
+        dstd::PathView(dftracer::utils::index::shards_dir(root)));
+    return files;
 }
 
 namespace {
 
-namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace rcf = dftracer::utils::index::store::cf;
+// Copies the partials and column blocks of one file, re-keying their
+// dictionary ids into the consolidated table.
+void copy_agg_data(const index::Snapshot& source_db,
+                   const index::FileRef& source_file, index::FileBuild& build,
+                   const index::schemas::dft::agg::AggInternTable& source,
+                   index::schemas::dft::agg::AggInternTable& target) {
+    dstd::Vector<std::uint32_t> referenced;
+    const auto remap = [&](std::uint32_t id) {
+        const std::uint32_t mapped =
+            target.intern.get_or_insert(source.intern.resolve(id));
+        referenced.push_back(mapped);
+        return mapped;
+    };
+    common::unwrap(index::for_each_agg_partial(
+        source_db, source_file,
+        [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
+            std::uint32_t host, std::uint32_t extra,
+            index::schemas::dft::agg::PartialKind kind,
+            dstd::Span<const std::uint8_t> body) {
+            auto parsed = index::schemas::dft::agg::AggPartial::deserialize(
+                dstd::Span<const std::uint8_t>(body.data(), body.size()));
+            if (!parsed)
+                throw common::DFTUtilsException(
+                    common::ErrorCode::Parse,
+                    "aggregation partial: malformed record");
+            index::put_agg_partial(
+                build, chunk, remap(cat), remap(name), remap(host),
+                remap(extra), static_cast<std::uint8_t>(kind),
+                dstd::StringView(reinterpret_cast<const char*>(body.data()),
+                                 body.size()));
+            return true;
+        }));
+
+    // A column block keeps a block-local table of dictionary ids, which is
+    // rewritten before the copy.
+    dstd::Vector<std::uint8_t> bytes;
+    common::unwrap(index::for_each_agg_chunk_columns(
+        source_db, source_file,
+        [&](std::uint64_t chunk,
+            const index::schemas::dft::agg::ChunkColumns& block) {
+            index::schemas::dft::agg::ChunkColumns mapped = block;
+            for (std::uint32_t& id : mapped.ids) id = remap(id);
+            bytes.clear();
+            index::schemas::dft::agg::encode_chunk_columns(
+                mapped, mapped.columns.size(), bytes);
+            index::put_agg_chunk_columns(
+                build, chunk,
+                dstd::StringView(reinterpret_cast<const char*>(bytes.data()),
+                                 bytes.size()));
+            return true;
+        }));
+
+    std::sort(referenced.begin(), referenced.end());
+    referenced.erase(std::unique(referenced.begin(), referenced.end()),
+                     referenced.end());
+    for (const std::uint32_t id : referenced)
+        index::put_agg_dictionary_entry(build, id, target.intern.resolve(id));
+}
 
 }  // namespace
 
-std::size_t merge_shard_set(const std::string& root,
-                            const std::string& out_root) {
+std::size_t merge_shard_set(const dstd::String& root,
+                            const dstd::String& out_root) {
     auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
     if (!manifest) {
-        throw DFTUtilsException(
-            ErrorCode::IO,
-            "no shard manifest under " + root + " (" +
-                std::string(
-                    dftracer::utils::index::store::SHARD_MANIFEST_FILENAME) +
-                ")");
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            "no shard manifest at " +
+                dftracer::utils::index::shard_manifest_path(root));
     }
 
-    const std::string out_idx = internal::determine_index_path("x", out_root);
+    const dstd::String out_idx = internal::determine_index_path("x", out_root);
 
-    agg::AggInternTable out_intern;
+    index::schemas::dft::agg::AggInternTable out_intern;
     std::size_t files = 0;
-    std::optional<agg::tier::Config> config;
+    dstd::Optional<index::schemas::dft::agg::tier::Config> config;
 
-    {
-        dftracer::utils::index::store::IndexDatabase out_db(
-            out_idx, dftracer::utils::index::store::IndexOpenMode::ReadWrite);
-        out_db.init_schema();
-        auto out = out_db.db();
+    default_runtime().block_on(
+        coro::named("shard merge", [&]() -> coro::CoroTask<void> {
+            index::Index out = common::unwrap(index::Index::open(out_idx));
 
-        for (const auto& shard : manifest->shards) {
-            if (shard.empty()) continue;
-            const std::string idx = (fs::path(root) / shard.path).string();
-            dftracer::utils::index::store::IndexDatabase sdb(
-                idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            auto s = sdb.db();
+            for (const auto& shard : manifest->shards) {
+                if (shard.empty()) continue;
+                const dstd::String idx(
+                    (dstd::PathView(root) / shard.path).str());
+                auto snapshot = common::unwrap(index::plan::open_snapshot(idx));
+                index::schemas::dft::agg::AggInternTable shard_intern;
+                common::unwrap(index::agg_dictionary(snapshot, shard_intern));
 
-            agg::AggInternTable shard_intern;
-            agg::tier::load_dictionary(*s, shard_intern);
-
-            if (auto shard_config = agg::tier::read_config(*s)) {
-                if (!config) {
-                    config = shard_config;
-                    agg::tier::write_config(*out, *config);
-                } else if (config->params_hash != shard_config->params_hash) {
-                    throw DFTUtilsException(
-                        ErrorCode::INVALID_ARGUMENT,
-                        "shard " + shard.path +
-                            " was aggregated with another config than the "
-                            "first shard");
+                const auto shard_config = common::unwrap(
+                    index::schemas::dft::agg::tier::read_config(snapshot));
+                if (shard_config) {
+                    if (!config) {
+                        config = shard_config;
+                        index::schemas::dft::agg::tier::write_config(out,
+                                                                     *config);
+                    } else if (config->params_hash !=
+                               shard_config->params_hash) {
+                        throw common::DFTUtilsException(
+                            common::ErrorCode::InvalidArgument,
+                            "shard " + shard.path +
+                                " was aggregated with another config than the "
+                                "first shard");
+                    }
                 }
-            }
 
-            // Re-key the aggregation tier into the unified intern; the value
-            // (metrics) carries no interned strings, so it copies verbatim and
-            // the merge operator combines groups that recur across shards.
-            // System metrics keys carry raw hhash/name, so they copy verbatim.
-            {
-                agg::tier::Writer w(*out);
-                std::string newkey;
-                agg::tier::for_each_row(
-                    *s, 0, agg::AGG_KEY_NUM_SHARDS,
-                    [&](std::string_view key, std::string_view value) {
-                        agg::AggKeyView kv;
-                        if (!agg::parse_agg_key_view(key, shard_intern.intern,
-                                                     kv,
-                                                     /*want_extra_keys=*/true))
-                            return true;
-                        newkey.clear();
-                        agg::serialize_agg_key_into(
-                            newkey, kv.map_type, kv.cat, kv.name, kv.pid,
-                            kv.tid, kv.hhash, kv.fhash_str, kv.time_bucket,
-                            out_intern.intern, &kv.extra_keys);
-                        w.merge_row(newkey, value);
-                        return true;
-                    });
-                agg::tier::for_each_system_row(
-                    *s, 0, agg::AGG_KEY_NUM_SHARDS,
-                    [&w](std::string_view key, std::string_view value) {
-                        w.merge_system_row(key, value);
-                        return true;
-                    });
-                w.finish();
-            }
+                for (const auto& file : common::unwrap(snapshot.files())) {
+                    auto build =
+                        common::unwrap(out.build(file.path(), file.stat()));
 
-            // A shard file keeps its id, so its dftracer.agg entry does too.
-            if (config) {
-                std::vector<int> aggregated;
-                for (const auto& [path, id] : sdb.query_all_file_info_ids()) {
-                    auto state = sdb.extension_state(
-                        id, dftracer::utils::index::store::IndexExtension::AGG);
-                    if (state && state->ready &&
-                        state->params_hash == config->params_hash)
-                        aggregated.push_back(id);
-                }
-                agg::tier::put_files(*out, aggregated, config->params_hash);
-            }
-
-            // Copy the file registry records so the consolidated index knows
-            // its files; the tier read matches on path, and the per-file ids
-            // the records carry are unused by a tier query.
-            {
-                namespace layout = dftracer::utils::index::store::layout;
-                const auto prefix = layout::kind_prefix(
-                    layout::Ext::HOST, layout::host::FILE_BY_PATH);
-                auto b = out->begin_batch();
-                auto it = s->new_iterator(rcf::DEFAULT);
-                for (it->Seek(prefix); it->Valid(); it->Next()) {
-                    const std::string_view key(it->key().data(),
-                                               it->key().size());
-                    if (!key.starts_with(prefix)) break;
-                    out->put(b, rcf::DEFAULT, key,
-                             std::string_view(it->value().data(),
-                                              it->value().size()));
+                    if (config &&
+                        snapshot.extension(
+                            file, index::store::IndexExtension::Agg,
+                            config->params_hash) == index::Freshness::Current) {
+                        copy_agg_data(snapshot, file, build, shard_intern,
+                                      out_intern);
+                        build.finish(index::store::IndexExtension::Agg,
+                                     config->params_hash);
+                    }
+                    build.finish(index::store::IndexExtension::Members, 0);
+                    common::unwrap(co_await build.commit());
                     ++files;
                 }
-                out->commit_batch(b);
             }
-        }
+        }()));
 
-        agg::tier::flush_dictionary(*out, out_intern);
-        agg::tier::compact(*out);
-    }
-
-    write_shard_set(out_root, {out_idx});
     return files;
 }
 

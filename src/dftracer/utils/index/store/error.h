@@ -1,33 +1,35 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_INDEX_STORE_ERROR_H
 #define DFTRACER_UTILS_INDEX_STORE_ERROR_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <stdexcept>
-#include <string>
 
 namespace dftracer::utils::index::store {
 
-class IndexerError : public DFTUtilsException {
+class IndexerError : public common::DFTUtilsException {
    public:
     enum Type {
-        DATABASE_ERROR,
-        FILE_ERROR,
-        COMPRESSION_ERROR,
-        INVALID_ARGUMENT,
-        BUILD_ERROR,
-        UNKNOWN_ERROR
+        DatabaseError,
+        FileError,
+        CompressionError,
+        InvalidArgument,
+        BuildError,
+        UnknownError
     };
 
-    IndexerError(Type type, const std::string &message)
-        : DFTUtilsException(ErrorCode::INDEXER, format_message(type, message)),
+    IndexerError(Type type, const dstd::String &message)
+        : common::DFTUtilsException(common::ErrorCode::Indexer,
+                                    format_message(type, message)),
           type_(type) {}
 
     inline Type type() const { return type_; }
 
    private:
     Type type_;
-    static std::string format_message(Type type, const std::string &message);
+    static dstd::String format_message(Type type, const dstd::String &message);
 };
 
 }  // namespace dftracer::utils::index::store

@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_SCHEMA_TYPES_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_SCHEMA_TYPES_H
 
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
-#include <vector>
 
 // Definition of the opaque dftu_schema (dataframe/abi.h) the dftu_schema_add_*
 // API builds into. `top` mirrors dataframe::Schema::fields exactly (either can
@@ -15,8 +16,9 @@
 // from the root on every lookup, since a sibling insertion earlier in the
 // schema may have reallocated some vector along the path.
 struct dftu_schema {
-    std::vector<dftracer::utils::dataframe::Field> top;
-    std::vector<std::vector<std::int32_t>> paths;
+    dftracer::utils::dstd::Vector<dftracer::utils::dataframe::Field> top;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Vector<std::int32_t>>
+        paths;
 };
 
 #endif  // DFTRACER_UTILS_DATAFRAME_INTERNAL_SCHEMA_TYPES_H

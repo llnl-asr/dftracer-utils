@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # ci.yml -> test, C++ half. ctest presets already run jobs: 0 (all cores).
 set -eo pipefail
 cd "$CI_PROJECT_DIR"

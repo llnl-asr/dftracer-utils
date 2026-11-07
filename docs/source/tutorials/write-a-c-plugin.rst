@@ -125,7 +125,7 @@ and reports the scan on stderr:
 
 .. code-block:: console
 
-   $ dftracer_run --plugin ./events_per_pid.so --files plugin_trace.pfw.gz
+   $ dftracer_run --plugin ./events_per_pid.so plugin_trace.pfw.gz
    Run: plugins=1 | Files: 1 | Chunks: scanned=1 skipped=0 | Events: matched=300 scanned=300
 
 The 300 scanned events are the fold's input; the per-``pid`` counts (200 for
@@ -145,7 +145,7 @@ What you learned
 - ``Host::agg`` and the ``agg::`` factories give a mergeable per-key
   accumulator over the same ``dftu_dataframe`` ABI the raw scaffold uses, with
   no ``DFTU_AGG_*`` codes to spell.
-- ``dftracer_run --plugin <so> --files <trace>`` (or ``-d <dir>``) runs the
+- ``dftracer_run --plugin <so> <trace>`` (or ``-d <dir>``) runs the
   compiled plugin over one shared scan with no Python involved.
 
 For the plugin ABI in full (the ``reads`` column projection, the whole

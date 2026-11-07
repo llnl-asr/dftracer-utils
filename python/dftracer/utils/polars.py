@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The polars-shaped face of the engine: ``import dftracer.utils.polars as pl``.
 
 ``DataFrame``, ``LazyFrame`` and ``Series`` are the engine's own classes with

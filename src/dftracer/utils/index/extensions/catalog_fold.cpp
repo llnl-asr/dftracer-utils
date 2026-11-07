@@ -1,29 +1,35 @@
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/index/build/index_write_lock.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
-#include <dftracer/utils/index/store/index_write.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/index/tables.h>
 
 #include <exception>
-#include <mutex>
 
 namespace dftracer::utils::index::extensions {
 
 void observe_catalog_path(index::store::PathStat& stat, std::uint8_t tag) {
     const auto t = static_cast<index::store::PathType>(tag);
     stat.type = index::store::join(stat.type, t);
-    if (t <= index::store::PathType::MIXED)
+    if (t <= index::store::PathType::Mixed)
         stat.seen |= static_cast<std::uint8_t>(1U << tag);
-    if (t != index::store::PathType::NULL_VALUE) ++stat.count;
+    if (t != index::store::PathType::NullValue) ++stat.count;
 }
 
 void CatalogFold::step(const trace::views::detail::FoldBatch& batch) {
-    FileState& fs = files_[batch.unit.file_path];
-    if (fs.index_path.empty()) fs.index_path = batch.unit.index_path;
+    const dstd::StringView file = batch.unit.file_path;
+    auto it = files_.find(file);
+    if (it == files_.end()) it = files_.try_emplace(dstd::String(file)).first;
+    FileState& fs = it->second;
+    if (fs.index_path.empty())
+        fs.index_path.assign(dstd::StringView(batch.unit.index_path));
     for (const auto& e : batch.events) {
-        if (e.phase == trace::RecordPhase::METADATA) continue;
+        if (e.phase == trace::RecordPhase::Metadata) continue;
         for (const auto& [leaf_id, tag] : e.schema_leaves)
             observe_catalog_path(fs.paths[leaf_id], tag);
     }
@@ -47,18 +53,27 @@ coro::CoroTask<bool> CatalogFold::finalize(
     const trace::views::detail::CoverageSet& covered) {
     using index::store::IndexExtension;
     bool wrote = false;
+    dstd::HashMap<dstd::String, index::Snapshot> snapshots;
     for (auto& [file, fs] : files_) {
         if (fs.index_path.empty() || fs.paths.empty()) continue;
         if (!covered.covers_file(file)) continue;
 
-        int file_id = -1;
+        const dstd::String logical =
+            index::store::internal::get_logical_path(file);
         try {
-            index::store::IndexDatabase ro(
-                fs.index_path, index::store::IndexOpenMode::ReadOnly);
-            file_id = ro.get_file_info_id(
-                index::store::internal::get_logical_path(file));
-            if (file_id < 0 ||
-                ro.extension_current(file_id, IndexExtension::CATALOG))
+            auto at = snapshots.find(dstd::StringView(fs.index_path));
+            if (at == snapshots.end()) {
+                const auto opened = common::unwrap(index::Index::open(
+                    index::normalize_index_root(fs.index_path)));
+                at = snapshots
+                         .emplace(dstd::String(fs.index_path),
+                                  common::unwrap(opened.snapshot()))
+                         .first;
+            }
+            const index::Snapshot& snapshot = at->second;
+            const auto ref = snapshot.file(logical);
+            if (!ref || index::extension_current(snapshot, *ref,
+                                                 IndexExtension::Catalog))
                 continue;
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN("catalog check failed for %s: %s",
@@ -66,24 +81,28 @@ coro::CoroTask<bool> CatalogFold::finalize(
             continue;
         }
 
-        std::unique_lock<std::mutex> lk(
-            index::build::index_write_mutex(fs.index_path));
-        try {
-            index::store::IndexDatabase db(fs.index_path);
-            auto writer = db.begin_write();
-            index::store::records::clear_file(*writer, IndexExtension::CATALOG,
-                                              file_id);
+        auto opened =
+            index::Index::open(index::normalize_index_root(fs.index_path));
+        auto build = opened
+                         ? index::rebuild(*opened, logical)
+                         : dstd::Expected<index::FileBuild, dstd::Error>(
+                               dstd::Unexpected<dstd::Error>(opened.error()));
+        dstd::String failure;
+        if (build) {
             for (const auto& [id, stat] : fs.paths)
-                index::store::records::put_catalog_path(
-                    *writer, file_id, intern_->resolve(id), stat);
-            index::store::records::put_manifest(
-                *writer, file_id, IndexExtension::CATALOG, params_hash_);
-            writer->commit();
-            wrote = true;
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("catalog write skipped for %s: %s",
-                                    fs.index_path.c_str(), e.what());
+                index::put_catalog_path(*build, intern_->resolve(id), stat);
+            build->finish(IndexExtension::Catalog, params_hash_);
+            auto committed = co_await build->commit();
+            if (!committed) failure = dstd::String(committed.error().message());
+        } else {
+            failure = dstd::String(build.error().message());
         }
+        if (!failure.empty()) {
+            DFTRACER_UTILS_LOG_WARN("catalog write skipped for %s: %s",
+                                    fs.index_path.c_str(), failure.c_str());
+            continue;
+        }
+        wrote = true;
     }
     co_return wrote;
 }

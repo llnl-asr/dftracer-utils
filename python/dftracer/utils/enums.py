@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Typed vocabularies for the TraceViewer builder API.
 
 These are ``str`` enums, so they pass straight into the string-accepting

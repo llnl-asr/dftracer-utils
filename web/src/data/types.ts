@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Chrome Trace Event as returned (raw) by /api/viz/events. Timestamps are
 // normalized to the global minimum by the server, so ts is 0-based microseconds.
 export interface TraceEvent {

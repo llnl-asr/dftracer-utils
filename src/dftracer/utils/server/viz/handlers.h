@@ -1,12 +1,12 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_SERVER_VIZ_HANDLERS_H
 #define DFTRACER_UTILS_SERVER_VIZ_HANDLERS_H
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
-
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -61,7 +61,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
 // any server-side predicate forces a live scan (pid/tid select whole lanes and
 // stay eligible); append_app_spans injects the summary's cached app spans.
 bool viz_summary_eligible(const QueryParams& params, const TraceFields& fields);
-coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
+coro::CoroTask<void> append_app_spans(dstd::Vector<dstd::String>& out,
                                       TraceIndex& index, double begin,
                                       double end, const QueryParams& params,
                                       const TraceFields& fields);

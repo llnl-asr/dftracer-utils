@@ -1,16 +1,31 @@
-#include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/platform_compat.h>
-#include <dftracer/utils/core/coro/async_mutex.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
+#include <dftracer/utils/index/build/file_admission.h>
+#include <dftracer/utils/index/build/file_group.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
@@ -19,41 +34,49 @@
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
-#include <dftracer/utils/index/schemas/dft/agg/view_agg_tier.h>
 #include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/column_families.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/canonical.h>
+#include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/engine_agg_fold.h>
 #include <dftracer/utils/trace/views/fold.h>
+#include <dftracer/utils/trace/views/index_rule_fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/pipeline.h>
 #include <dftracer/utils/trace/views/stream_row_fold.h>
 #include <dftracer/utils/trace/views/typed_collect_fold.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
+#include <dftracer/utils/trace/views/view_agg_partials.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_counter_format.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
-#include <dftracer/utils/utilities/common/serialization/binary_codec.h>
+#include <dftracer/utils/trace/views/view_system_collect.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
-#include <rocksdb/sst_file_writer.h>
+#include <fcntl.h>
 #include <simdjson.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <array>
@@ -61,17 +84,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <functional>
+#include <exception>
 #include <limits>
-#include <map>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <span>
-#include <sstream>
-#include <string>
-#include <string_view>
-#include <vector>
+#include <numeric>
 
 // The View terminals: each lowers a ViewPlan onto the module pieces and runs a
 // pruned parallel scan. The scan Source lives in view_scan (gather_units +
@@ -82,11 +98,18 @@
 // only the shared scan setup is factored out.
 namespace dftracer::utils::trace::views::detail {
 
-// Every file is a clean first touch: it has an index path that does not exist
-// yet, so a bootstrap can build it (and there is nothing to read instead).
+// Every file is a clean first touch: it has an index path with no store yet,
+// so a bootstrap can build it (and there is nothing to read instead).
 static bool all_files_fresh(const ViewPlan& plan) {
-    for (const auto& f : plan.files)
-        if (f.index_path.empty() || fs::exists(f.index_path)) return false;
+    const dstd::String* checked = nullptr;
+    for (const auto& f : plan.files) {
+        if (f.index_path.empty()) return false;
+        if (checked && *checked == f.index_path) continue;
+        if (common::input_exists(
+                dftracer::utils::index::store_of(f.index_path)))
+            return false;
+        checked = &f.index_path;
+    }
     return true;
 }
 
@@ -96,7 +119,7 @@ bool export_bootstrap_eligible(const ViewPlan& plan) {
         plan.files.empty() || plan.cancelled)
         return false;
     // The pass writes every line, or every line but the metadata records.
-    const std::string& data = plan_record_schema(plan).data;
+    const dstd::String& data = plan_record_schema(plan).data;
     if (!plan.all_records && !data.empty() &&
         data != dftracer::utils::index::NO_METADATA)
         return false;
@@ -108,20 +131,22 @@ bool export_bootstrap_eligible(const ViewPlan& plan) {
 // record lacks reads it under `args` when `args_fallback`. `parser` is
 // caller-owned: a thread_local parser is unsafe here because the export emit
 // runs on pooled coroutine threads.
-static std::string project_event(simdjson::dom::parser& parser,
-                                 std::string_view ev,
-                                 const std::vector<std::string>& select,
-                                 bool args_fallback) {
+static dstd::String project_event(simdjson::dom::parser& parser,
+                                  dstd::StringView ev,
+                                  const dstd::Vector<dstd::String>& select,
+                                  bool args_fallback) {
     simdjson::padded_string padded(ev);
     simdjson::dom::element doc;
-    if (parser.parse(padded).get(doc) || !doc.is_object())
-        return std::string(ev);
+    if (parser.parse(padded).get(doc) &&
+        json::parse_refused(parser, ev).get(doc))
+        return dstd::String(ev);
+    if (!doc.is_object()) return dstd::String(ev);
     const json::JsonValue root(doc);
-    std::string out = "{";
+    dstd::String out = "{";
     bool first = true;
     for (const auto& name : select) {
         json::JsonValue val = root.at(name);
-        if (!val.exists() && args_fallback && !has_args_prefix(name))
+        if (!val.exists() && args_fallback && !common::has_args_prefix(name))
             val = root.at("args." + name);
         if (!val.exists()) continue;
         if (!first) out += ',';
@@ -140,7 +165,7 @@ bool collect_bootstrap_eligible(const ViewPlan& plan) {
     if (plan.query && !query_evaluable_by_fold(*plan.query)) return false;
     // The pass applies plan.query, not the schema's data rowset filter that
     // effective_query adds.
-    const std::string& data = plan_record_schema(plan).data;
+    const dstd::String& data = plan_record_schema(plan).data;
     if (!plan.all_records && !data.empty() &&
         data != dftracer::utils::index::NO_METADATA)
         return false;
@@ -156,14 +181,18 @@ namespace {
 // `*arts` and sets `*ok` when it did. A named coroutine with by-value
 // parameters rather than a capturing lambda that holds the visitor list on its
 // frame (CP.51; see the GCC frame notes in the coroutine caveats).
+//
+// The descriptor is the one open_bootstrap_source hashed.
 coro::CoroTask<void> build_bootstrap_artifacts(
-    CoroScope& scope, std::string file,
+    coro::Scope& scope, dstd::String file,
     dftracer::utils::index::gzip::CheckpointIndexer::VisitorList visitors,
     dftracer::utils::index::gzip::GzipBuildArtifacts* arts, bool* ok,
-    std::size_t ways) {
+    std::size_t ways, dstd::SharedPtr<dstd::ScopedFd> source) {
+    const int fd = source->get();
+    if (fd < 0) co_return;
     auto built =
         co_await dftracer::utils::index::gzip::build_gzip_index_artifacts(
-            file,
+            fd, file,
             dftracer::utils::index::gzip::CheckpointIndexer::
                 DEFAULT_CHECKPOINT_SIZE,
             visitors, &scope, nullptr, ways);
@@ -173,50 +202,149 @@ coro::CoroTask<void> build_bootstrap_artifacts(
     }
 }
 
-// Write the index a bootstrap pass produced, in one write: members from the
-// artifacts, bloom and row sets from the folds, each with its manifest entry.
-// `fid` is the file's reserved id, or -1 to take one now. A bloom fold with
-// spill enabled writes its tier as sorted runs, ingested after the write as
-// the batch builder does.
-void persist_bootstrap_index(
-    const std::string& index_path, const std::string& file_path,
+// The file's descriptor, its size and its hash: the build needs them before
+// the folds run, and the artifacts read the same descriptor.
+struct BootstrapSource {
+    dstd::SharedPtr<dstd::ScopedFd> fd;
+    std::uint64_t size = 0;
+    std::uint64_t hash = 0;
+    bool ok = false;
+};
+
+BootstrapSource open_bootstrap_source(dstd::StringView file,
+                                      dstd::SharedPtr<dstd::ScopedFd> shared) {
+    // A region, not an async op: a task that resumes on another worker frees
+    // its memory away from the owning heap, and the view's peak grows.
+    coro::BlockingRegion blocking;
+    BootstrapSource out;
+    if (!shared)
+        shared = dstd::make_shared<dstd::ScopedFd>(
+            ::open(dstd::String(file).c_str(), O_RDONLY));
+    const int fd = shared->get();
+    if (fd < 0) return out;
+    struct stat st{};
+    if (::fstat(fd, &st) != 0) return out;
+    out.fd = std::move(shared);
+    out.size = static_cast<std::uint64_t>(st.st_size);
+    out.hash = dftracer::utils::index::store::internal::calculate_file_hash(
+        fd, out.size);
+    out.ok = true;
+    return out;
+}
+
+struct BootstrapRoot {
+    dstd::String index_path;
+    dstd::Vector<std::size_t> members;
+    dstd::Optional<dftracer::utils::index::Index> index;
+    /// The index before this bootstrap; empty when it could not be read.
+    dstd::Optional<dftracer::utils::index::Snapshot> before;
+    dstd::String index_error;
+};
+
+// Every index root of a bootstrap is held read-write until the last commit.
+struct BootstrapStores {
+    BootstrapStores() = default;
+    BootstrapStores(const BootstrapStores&) = delete;
+    BootstrapStores& operator=(const BootstrapStores&) = delete;
+
+    dstd::Map<trace::internal::IndexRoot*,
+              dstd::SharedPtr<trace::internal::IndexRoot>>
+        held;
+    dstd::Vector<trace::internal::RootPermit> building;
+    dstd::Vector<dstd::UniquePtr<BootstrapRoot>> roots;
+};
+
+// A build holds the root read-write until its last commit. A scan that starts
+// meanwhile would take the root for a built index, so the build is serialized
+// with the metadata reads of the same root.
+coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
+                                           BootstrapStores& out) {
+    const std::size_t n = plan.files.size();
+    dstd::Map<dstd::String, dstd::Vector<std::size_t>> by_index;
+    for (std::size_t i = 0; i < n; ++i)
+        by_index[plan.files[i].index_path].push_back(i);
+    for (const auto& entry : by_index) {
+        auto root = trace::internal::index_root(entry.first);
+        out.held.emplace(root.get(), std::move(root));
+    }
+    for (const auto& entry : out.held) {
+        co_await entry.second->gate.acquire(
+            trace::internal::IndexRoot::ALL_PERMITS);
+        out.building.emplace_back(*entry.second,
+                                  trace::internal::IndexRoot::ALL_PERMITS);
+    }
+    out.roots.reserve(by_index.size());
+    for (const auto& [index_path, members] : by_index) {
+        auto store = dstd::make_unique<BootstrapRoot>();
+        store->index_path = index_path;
+        store->members.assign(members.begin(), members.end());
+        auto opened = dftracer::utils::index::Index::open(
+            dftracer::utils::index::normalize_index_root(index_path));
+        if (opened) {
+            store->index.emplace(std::move(*opened));
+            auto taken = store->index->snapshot();
+            if (taken) store->before.emplace(std::move(*taken));
+        } else
+            store->index_error = dstd::String(opened.error().message());
+        out.roots.push_back(std::move(store));
+    }
+}
+
+// The build of `file`, which must exist before its folds run so one that
+// spills writes its runs into the file it parses. `failure` is set when the
+// index cannot hold it.
+struct BootstrapBuild {
+    dstd::Optional<dftracer::utils::index::FileBuild> build;
+    dstd::String failure;
+    bool fresh = false;
+};
+
+BootstrapBuild open_bootstrap_build(BootstrapRoot& root, dstd::StringView file,
+                                    std::uint64_t mtime,
+                                    const BootstrapSource& source) {
+    BootstrapBuild out;
+    if (!root.index) {
+        out.failure = root.index_error;
+        return out;
+    }
+    const dstd::String logical = index::store::internal::get_logical_path(file);
+    out.fresh = root.before && !root.before->file(logical).has_value();
+    auto started = root.index->build(
+        logical, index::SourceStat{mtime, source.size, source.hash});
+    if (started)
+        out.build.emplace(std::move(*started));
+    else
+        out.failure = dstd::String(started.error().message());
+    return out;
+}
+
+// Puts the file's index, the tier its runs staged included, into its build.
+void fill_bootstrap_file(
+    dftracer::utils::index::FileBuild& build,
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
     const dftracer::utils::index::RecordSchema& schema,
     dftracer::utils::index::extensions::BloomFold& bloom,
-    dftracer::utils::index::extensions::RowSetFold& rowsets, int fid = -1) {
-    dftracer::utils::index::store::IndexDatabase db(index_path);
-    auto logical =
-        dftracer::utils::index::store::internal::get_logical_path(file_path);
-    const auto hash =
-        dftracer::utils::index::store::internal::calculate_file_hash(file_path);
-    const auto mtime = static_cast<std::uint64_t>(
-        dftracer::utils::index::store::internal::get_file_modification_time(
-            file_path));
-    const auto bytes =
-        dftracer::utils::index::store::internal::file_size_bytes(file_path);
-    auto w = db.begin_write();
-    if (fid < 0) fid = w->file_id_for(logical);
-    dftracer::utils::index::store::records::put_file_record(
-        *w, logical, {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
-    dftracer::utils::index::gzip::persist_gzip_index_artifacts(*w, fid, arts);
-    dftracer::utils::index::store::records::put_profile(*w, fid, schema.id,
-                                                        schema.params_hash());
-    std::vector<
-        dftracer::utils::index::store::IndexDatabaseSstWriterContext::Artifacts>
-        runs;
-    if (bloom.writes_runs())
-        runs = bloom.finish_spilled(fid);
-    else
-        bloom.write(*w, fid);
-    try {
-        rowsets.write(*w, fid);
-        w->commit();
-    } catch (...) {
-        dftracer::utils::index::build::remove_spill_runs(runs);
-        throw;
-    }
-    if (!runs.empty())
-        dftracer::utils::index::build::ingest_spill_runs(db, std::move(runs));
+    dftracer::utils::index::extensions::RowSetFold& rowsets, bool fresh) {
+    index::gzip::persist_gzip_index_artifacts(build, arts);
+    // The new members renumber the chunks the old copies describe. A fresh
+    // file has none, and the check costs a store snapshot per file.
+    if (!fresh) index::clear_chunk_copies(build);
+    index::put_profile(build, schema.id);
+    build.finish(index::store::IndexExtension::Profile, schema.params_hash());
+    bloom.write(build);
+    rowsets.write(build);
+}
+
+// Publishes the files of `group` in one record. The lines are already out in
+// the export, so a failed index write is logged and the export stays whole.
+// Returns false when a file did not publish.
+coro::CoroTask<bool> commit_bootstrap(
+    dftracer::utils::index::build::FileGroup& group) {
+    auto result = co_await group.commit();
+    for (const auto& failure : result.failures)
+        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
+                                 failure.path.c_str(), failure.message.c_str());
+    co_return result.failures.empty();
 }
 
 // An IndexVisitor that streams a member's plaintext lines straight to the
@@ -233,16 +361,16 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
                                   std::size_t) override {
         buf_.append(data, len);
         const std::size_t last_nl = buf_.rfind('\n');
-        if (last_nl == std::string::npos) co_return;
+        if (last_nl == dstd::String::npos) co_return;
         if (!drop_metadata_) {
-            sink_->write(std::string_view(buf_.data(), last_nl + 1));
+            sink_->write(dstd::StringView(buf_.data(), last_nl + 1));
         } else {
             kept_.clear();
             std::size_t pos = 0;
             while (pos <= last_nl) {
                 const std::size_t nl = buf_.find('\n', pos);
-                const std::string_view line(buf_.data() + pos, nl - pos);
-                if (phase_of(line) != trace::RecordPhase::METADATA) {
+                const dstd::StringView line(buf_.data() + pos, nl - pos);
+                if (phase_of(line) != trace::RecordPhase::Metadata) {
                     kept_.append(line);
                     kept_.push_back('\n');
                 }
@@ -253,27 +381,19 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
         buf_.erase(0, last_nl + 1);
         co_return;
     }
-    void finalize(dftracer::utils::index::store::IndexDatabaseWriterContext&,
-                  int) override {}
 
    private:
-    trace::RecordPhase phase_of(std::string_view line) {
-        pad_.assign(line);
-        pad_.resize(line.size() + simdjson::SIMDJSON_PADDING);
-        simdjson::ondemand::document doc;
-        if (parser_.iterate(pad_.data(), line.size(), pad_.size()).get(doc))
-            return trace::RecordPhase::UNKNOWN;
-        auto f = doc.find_field_unordered("ph");
-        if (f.error()) return trace::RecordPhase::UNKNOWN;
-        return trace::read_phase(f.value_unsafe());
+    trace::RecordPhase phase_of(dstd::StringView line) {
+        auto parsed = doc_.parse(line);
+        return parsed ? trace::event_phase(*parsed)
+                      : trace::RecordPhase::Unknown;
     }
 
     ExportSink* sink_;
     bool drop_metadata_;
-    std::string buf_;
-    std::string kept_;
-    std::string pad_;
-    simdjson::ondemand::parser parser_;
+    dstd::String buf_;
+    dstd::String kept_;
+    json::Document doc_;
 };
 
 // First-touch full export: for an unindexed, unfiltered whole-trace dump, one
@@ -283,11 +403,32 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
 // so anything else falls through to the streaming scanner path.
 coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
                                           ExportSink& sink) {
-    namespace gzi = dftracer::utils::index::gzip;
     if (!export_bootstrap_eligible(plan)) co_return false;
 
-    for (const auto& f : plan.files) {
-        dftracer::utils::StringIntern intern;
+    BootstrapStores stores;
+    co_await open_bootstrap_stores(plan, stores);
+    dstd::Map<dstd::String, std::size_t> slot_of;
+    for (std::size_t r = 0; r < stores.roots.size(); ++r)
+        slot_of.emplace(stores.roots[r]->index_path, r);
+
+    dstd::Vector<dftracer::utils::index::build::FileGroup> pending(
+        stores.roots.size());
+    for (std::size_t i = 0; i < plan.files.size(); ++i) {
+        const auto& f = plan.files[i];
+        const std::size_t slot = slot_of.find(f.index_path)->second;
+        BootstrapRoot& root = *stores.roots[slot];
+        const auto source = open_bootstrap_source(f.file_path, f.fd);
+        if (!source.ok) {
+            for (auto& group : pending) co_await commit_bootstrap(group);
+            co_return false;
+        }
+        auto started = open_bootstrap_build(
+            root, f.file_path,
+            static_cast<std::uint64_t>(
+                dftracer::utils::index::store::internal::
+                    get_file_modification_time(f.file_path)),
+            source);
+        dftracer::utils::dstd::StringIntern intern;
         const auto& schema = plan_record_schema(plan);
         dftracer::utils::index::extensions::BloomFold bloom(
             intern, dftracer::utils::index::build::for_schema({}, schema));
@@ -295,26 +436,49 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
             intern, dftracer::utils::index::indexed_rowsets(schema));
         std::array<Fold*, 2> folds{&bloom, &rowsets};
         dftracer::utils::index::build::IndexFoldDriver driver(
-            intern, folds, f.file_path, f.index_path);
+            intern, folds, dstd::String(dstd::StringView(f.file_path)),
+            dstd::String(dstd::StringView(f.index_path)));
         driver.set_record_schema(schema);
         // Path-decoded records have no phase: every one is data.
         SinkWriterVisitor writer(sink, !plan.all_records &&
                                            !schema.data.empty() &&
                                            !plan_by_path(plan));
 
-        gzi::GzipBuildArtifacts arts;
+        index::gzip::GzipBuildArtifacts arts;
         bool ok = false;
-        gzi::CheckpointIndexer::VisitorList visitors;
+        index::gzip::CheckpointIndexer::VisitorList visitors;
         visitors.emplace_back(driver);
         visitors.emplace_back(writer);
-        co_await dftracer::utils::run_coro_scope(
-            build_bootstrap_artifacts, f.file_path, std::move(visitors), &arts,
-            &ok, std::size_t{0});
-        if (!ok) co_return false;
+        co_await coro::with_scope([&](coro::Scope& scope) {
+            return build_bootstrap_artifacts(scope, f.file_path,
+                                             std::move(visitors), &arts, &ok,
+                                             std::size_t{0}, source.fd);
+        });
+        if (!ok) {
+            for (auto& group : pending) co_await commit_bootstrap(group);
+            co_return false;
+        }
         driver.seal();
-        persist_bootstrap_index(f.index_path, f.file_path, arts, schema, bloom,
-                                rowsets);
+        if (!started.build) {
+            DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
+                                     f.file_path.c_str(),
+                                     started.failure.c_str());
+            continue;
+        }
+        fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets,
+                            started.fresh);
+        const dstd::String staging = co_await pending[slot].add(
+            std::move(*started.build), 0,
+            dftracer::utils::index::store::internal::get_logical_path(
+                f.file_path));
+        if (!staging.empty()) {
+            DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
+                                     f.file_path.c_str(), staging.c_str());
+            continue;
+        }
+        if (pending[slot].full()) co_await commit_bootstrap(pending[slot]);
     }
+    for (auto& group : pending) co_await commit_bootstrap(group);
     co_return true;
 }
 
@@ -358,17 +522,17 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
     // Build whatever index artifacts this scan can establish along the way.
     // Nothing attaches unless the scan already satisfies it, so this cannot
     // make the read slower than not having it.
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     auto folds = select_index_folds(plan, vdef, intern);
-    std::vector<Fold*> fold_ptrs;
+    dstd::Vector<Fold*> fold_ptrs;
     for (auto& f : folds) fold_ptrs.push_back(f.get());
     // Stream matched events; --select projects each one to the chosen fields
     // (SQL-style), otherwise they are written verbatim. The scan driver owns
     // the gather + fan-out. The projection parser is used under sink_mtx.
     dftracer::utils::json::RecordParser proj_parser;
     ExportStats stats = co_await for_each_scanned_batch(
-        plan, vdef, /*num_slots=*/0, cap,
-        [&](std::size_t, const std::vector<std::string_view>& events) {
+        plan, vdef, /*slot_count=*/0, cap,
+        [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
             std::lock_guard<std::mutex> lk(sink_mtx);
             for (const auto& ev : events) {
                 if (seen++ < plan.offset) continue;
@@ -390,10 +554,9 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
 
 coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
                                              const TraceWriteOptions& opts) {
-    namespace pfw = utilities::fileio::parallel;
     // Member size defaults to the checkpoint granularity (a member == a chunk).
     constexpr std::size_t DEFAULT_FLUSH_BYTES =
-        constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     constexpr std::size_t BUFFER_HEADROOM_BYTES = 1 * 1024 * 1024;
 
     if (opts.build_index)
@@ -404,36 +567,37 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     std::uint64_t skipped = 0;
     auto units = co_await gather_units(plan, vdef, skipped);
 
-    const std::size_t baseline = std::max<std::size_t>(1, opts.num_workers);
+    const std::size_t baseline = std::max<std::size_t>(1, opts.worker_count);
     const auto sizing =
-        pfw::make_writer_for_path(
-            {opts.output_path, baseline,
+        utilities::fileio::parallel::make_writer_for_path(
+            {dstd::String(opts.output_path), baseline,
              opts.member_size ? opts.member_size : DEFAULT_FLUSH_BYTES,
              BUFFER_HEADROOM_BYTES, opts.compress})
             .sizing;
-    const std::size_t num_workers = sizing.num_workers;
+    const std::size_t worker_count = sizing.worker_count;
 
     utilities::fileio::GzipWriterOptions wopts;
     wopts.member_size = sizing.flush_threshold;
     wopts.level = opts.level;
-    wopts.workers = num_workers;
+    wopts.workers = worker_count;
     wopts.compress = opts.compress;
     wopts.ordered = false;
     wopts.memory_budget = plan.memory_budget;
     auto opened = co_await utilities::fileio::GzipLineWriter::open(
-        opts.output_path, std::move(wopts));
+        dstd::String(opts.output_path), std::move(wopts));
     if (!opened) {
-        throw DFTUtilsException(
-            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            "export_trace failed writing " + opts.output_path);
     }
     auto writer = std::move(*opened);
 
-    std::vector<ScanCounts> counts_v(num_workers);
+    dstd::Vector<ScanCounts> counts_v(worker_count);
     bool ok = true;
 
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-        for (std::size_t w = 0; w < num_workers; ++w) {
-            scope.spawn([&, w](CoroScope&) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+        for (std::size_t w = 0; w < worker_count; ++w) {
+            scope.spawn([&, w]() -> coro::CoroTask<void> {
                 auto prod = writer.producer();
                 if (!prod) {
                     ok = false;
@@ -441,13 +605,15 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
                 }
                 bool stop = false;
                 for (std::size_t i = w; !stop && i < units.size();
-                     i += num_workers) {
+                     i += worker_count) {
                     if (is_cancelled(plan)) break;
                     ViewScannerInput sin =
                         make_scanner_input(units[i], vdef, vdef.query);
                     ViewScannerUtility scanner;
                     auto gen = scanner(sin);
-                    while (auto b = co_await gen.next()) {
+                    for (;;) {
+                        auto b = co_await gen.next();
+                        if (!b) break;
                         if (is_cancelled(plan)) {
                             stop = true;
                             break;
@@ -456,33 +622,37 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
                         std::size_t total = 0;
                         for (const auto& ev : b->events) total += ev.size() + 1;
                         if (total == 0) continue;
-                        if (!co_await prod->append_with(
-                                total, [&](char* dst, std::size_t) {
-                                    char* p = dst;
-                                    for (const auto& ev : b->events) {
-                                        std::memcpy(p, ev.data(), ev.size());
-                                        p += ev.size();
-                                        *p++ = '\n';
-                                    }
-                                    return static_cast<std::size_t>(p - dst);
-                                })) {
+                        const auto append_with_ok = co_await prod->append_with(
+                            total, [&](char* dst, std::size_t) {
+                                char* p = dst;
+                                for (const auto& ev : b->events) {
+                                    std::memcpy(p, ev.data(), ev.size());
+                                    p += ev.size();
+                                    *p++ = '\n';
+                                }
+                                return static_cast<std::size_t>(p - dst);
+                            });
+                        if (!append_with_ok) {
                             ok = false;
                             co_return;
                         }
                     }
                 }
-                if (!co_await prod->flush()) ok = false;
+                const auto flush_ok = co_await prod->flush();
+                if (!flush_ok) ok = false;
                 co_return;
             });
         }
         co_return;
     });
 
-    if (!co_await writer.close()) ok = false;
+    const auto close_ok = co_await writer.close();
+    if (!close_ok) ok = false;
 
     if (!ok) {
-        throw DFTUtilsException(
-            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            "export_trace failed writing " + opts.output_path);
     }
 
     ExportStats st;
@@ -492,18 +662,24 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     co_return st;
 }
 
-coro::CoroTask<ExportStats> run_folds(const ViewPlan& plan,
-                                      std::span<Fold* const> folds,
-                                      dftracer::utils::StringIntern& intern,
-                                      DynamicPrune* dyn_prune,
-                                      coro::CoroSemaphore* gate) {
+coro::CoroTask<ExportStats> run_folds(
+    const ViewPlan& plan, dstd::Span<Fold* const> folds,
+    dftracer::utils::dstd::StringIntern& intern, DynamicPrune* dyn_prune,
+    coro::AsyncSemaphore* gate) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     auto catalog = select_catalog_fold(plan, vdef, intern);
-    std::vector<Fold*> all(folds.begin(), folds.end());
+    dstd::Vector<Fold*> all(folds.begin(), folds.end());
     if (catalog) all.push_back(catalog.get());
     co_return co_await fuse(plan, vdef, all, intern, /*covered=*/nullptr,
                             /*limit=*/0, dyn_prune, gate);
 }
+
+#if DFTRACER_UTILS_TEST_PROBES
+BootstrapCounters& bootstrap_counters() {
+    static BootstrapCounters counters;
+    return counters;
+}
+#endif
 
 namespace {
 
@@ -512,95 +688,208 @@ namespace {
 // hash) as a byproduct, so the query never triggers a separate eager index
 // build. Returns false (caller falls through to the indexed path) unless every
 // file is a clean first touch and nothing materialized can answer instead.
-// Files bootstrapped at once; the cores are divided between them for parsing.
-constexpr std::size_t BOOTSTRAP_FILES = 16;
-constexpr std::size_t MAX_PARSE_AHEAD = 16;
 
-// One file's first-touch pass: builds and writes its index and, with
-// `keep_state`, returns its aggregate state. `ok` is false when the build
-// failed. `persist` serializes the index writes, since several files may share
-// one index store.
+// `state` is set with `keep_state`. `ok` is false when the build failed.
 struct BootstrapFile {
     bool ok = false;
     dataframe::AggStatePtr state;
 };
 
-// The spill directory of the bloom chunks of the files bootstrapped into
-// `index_path`.
-std::string bootstrap_spill_root(const std::string& index_path) {
-    return index_path + ".spill";
-}
+struct BootstrapBlock {
+    BootstrapRoot* root;
+    std::size_t begin;
+    std::size_t end;
+};
 
-// `spill_share` bounds the bloom chunks the file holds; NO_SPILL_BUDGET holds
-// them all.
+struct BootstrapRun {
+    const ViewPlan* plan;
+    BootstrapStores* stores;
+    dstd::Vector<BootstrapBlock> blocks;
+    // The merged state of each block's files, in file order.
+    dstd::Vector<dataframe::AggStatePtr> states;
+    dftracer::utils::index::build::FileAdmission* admission = nullptr;
+    bool keep_state;
+    dstd::Optional<AggQuery> rule_query;
+    std::atomic<std::size_t> next_block{0};
+    std::atomic<bool> failed{false};
+    // Shared by every file's fold driver, so a file starts with the capacity
+    // the files before it grew.
+    dftracer::utils::index::build::FoldBufferPool buffers;
+};
+
 coro::CoroTask<BootstrapFile> bootstrap_file(
-    const ViewPlan* plan, ViewFile f, int file_id, std::uint64_t spill_share,
-    std::size_t parse_ahead, bool keep_state, std::mutex* persist) {
-    namespace gzi = dftracer::utils::index::gzip;
+    BootstrapRun* run, ViewFile f, BootstrapRoot* root,
+    dftracer::utils::index::build::FileGroup* group) {
+    const ViewPlan* plan = run->plan;
     BootstrapFile out;
-    dftracer::utils::StringIntern intern;
-    EngineAggFold agg(*plan, intern, /*apply_query=*/true);
+    std::uint64_t compressed = 0;
+    if (f.uncompressed_size == 0) {
+        // A file never indexed has no size in the index.
+        coro::BlockingRegion blocking;
+        if (!f.fd)
+            f.fd = dstd::make_shared<dstd::ScopedFd>(
+                ::open(f.file_path.c_str(), O_RDONLY));
+        struct stat st{};
+        if (f.fd->get() >= 0 && ::fstat(f.fd->get(), &st) == 0)
+            compressed = static_cast<std::uint64_t>(st.st_size);
+    }
+    const std::uint64_t plaintext =
+        dftracer::utils::index::build::FileAdmission::plaintext_estimate(
+            f.uncompressed_size, compressed);
+    auto ticket = co_await run->admission->admit(plaintext);
+#if DFTRACER_UTILS_TEST_PROBES
+    auto& counters = bootstrap_counters();
+    const auto now =
+        counters.in_flight.fetch_add(1, std::memory_order_relaxed) + 1;
+    auto seen = counters.max_in_flight.load(std::memory_order_relaxed);
+    while (now > seen && !counters.max_in_flight.compare_exchange_weak(
+                             seen, now, std::memory_order_relaxed)) {
+    }
+    struct Leave {
+        BootstrapCounters& c;
+        ~Leave() { c.in_flight.fetch_sub(1, std::memory_order_relaxed); }
+    } leave{counters};
+#endif
+    dftracer::utils::dstd::StringIntern intern;
     const auto& schema = plan_record_schema(*plan);
+    const auto source = open_bootstrap_source(f.file_path, f.fd);
+    if (!source.ok) co_return out;
+    auto started = open_bootstrap_build(
+        *root, f.file_path,
+        static_cast<std::uint64_t>(
+            dftracer::utils::index::store::internal::get_file_modification_time(
+                f.file_path)),
+        source);
+    if (!started.build) {
+        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
+                                 f.file_path.c_str(), started.failure.c_str());
+        co_return out;
+    }
+    dstd::UniquePtr<IndexRuleFold> rule_agg;
+    dstd::UniquePtr<EngineAggFold> frame_agg;
+    if (run->rule_query)
+        rule_agg = IndexRuleFold::make(*plan, *run->rule_query, intern,
+                                       /*apply_query=*/true);
+    else
+        frame_agg = dstd::make_unique<EngineAggFold>(*plan, intern,
+                                                     /*apply_query=*/true);
+    Fold* agg = rule_agg ? static_cast<Fold*>(rule_agg.get())
+                         : static_cast<Fold*>(frame_agg.get());
     dftracer::utils::index::extensions::BloomFold bloom(
         intern, dftracer::utils::index::build::for_schema({}, schema));
     dftracer::utils::index::extensions::RowSetFold rowsets(
         intern, dftracer::utils::index::indexed_rowsets(schema));
-    if (spill_share != NO_SPILL_BUDGET)
-        bloom.enable_spill(spill_share,
-                           bootstrap_spill_root(f.index_path) + "/file_" +
-                               std::to_string(file_id),
-                           file_id);
-    std::array<Fold*, 3> folds{&agg, &bloom, &rowsets};
+    if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET)
+        bloom.enable_spill(ticket.elastic_bytes(), *started.build);
+    std::array<Fold*, 3> folds{agg, &bloom, &rowsets};
     dftracer::utils::index::build::IndexFoldDriver driver(
-        intern, folds, f.file_path, f.index_path, extra_capture_fields(*plan));
+        intern, folds, dstd::String(dstd::StringView(f.file_path)),
+        dstd::String(dstd::StringView(f.index_path)),
+        extra_capture_fields(*plan));
     driver.set_record_schema(schema);
-    driver.set_parse_ahead(parse_ahead);
+    driver.share_buffers(run->buffers);
+    driver.set_parse_gate(run->admission->gate());
 
-    gzi::GzipBuildArtifacts arts;
+    index::gzip::GzipBuildArtifacts arts;
     bool built = false;
-    gzi::CheckpointIndexer::VisitorList visitors;
+    index::gzip::CheckpointIndexer::VisitorList visitors;
     visitors.emplace_back(driver);
-    co_await dftracer::utils::run_coro_scope(build_bootstrap_artifacts,
-                                             f.file_path, std::move(visitors),
-                                             &arts, &built, parse_ahead);
+    co_await coro::with_scope([&](coro::Scope& scope) {
+        return build_bootstrap_artifacts(
+            scope, f.file_path, std::move(visitors), &arts, &built,
+            run->admission->inflate_ways(), source.fd);
+    });
     if (!built) co_return out;
     ExportStats read;
     read.chunks_scanned = arts.members.size();
     read.events_scanned = arts.total_lines;
     counted(*plan, read);
     driver.seal();
-    {
-        std::lock_guard<std::mutex> lock(*persist);
-        persist_bootstrap_index(f.index_path, f.file_path, arts, schema, bloom,
-                                rowsets, file_id);
+    fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets,
+                        started.fresh);
+    const dstd::String failure = co_await group->add(
+        std::move(*started.build), 0,
+        dftracer::utils::index::store::internal::get_logical_path(f.file_path));
+    if (!failure.empty()) {
+        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
+                                 f.file_path.c_str(), failure.c_str());
+        co_return out;
     }
-    if (keep_state)
-        out.state =
-            dataframe::agg_deserialize(dataframe::agg_serialize(agg.state()));
+    if (run->keep_state) {
+        if (rule_agg) {
+            CoverageSet none;
+            co_await rule_agg->finalize(none);
+            out.state = rule_agg->take_state();
+        } else {
+            out.state = frame_agg->take_state();
+        }
+    }
     out.ok = true;
     co_return out;
 }
 
-// Bootstraps files [begin, end) of the plan at once into `out`.
-coro::CoroTask<void> bootstrap_wave(CoroScope& scope, const ViewPlan* plan,
-                                    const std::vector<int>* ids,
-                                    std::uint64_t spill_share,
-                                    std::size_t begin, std::size_t end,
-                                    std::size_t parse_ahead, bool keep_state,
-                                    std::mutex* persist,
-                                    std::vector<BootstrapFile>* out) {
-    std::vector<coro::SpawnFuture<BootstrapFile>> files;
-    files.reserve(end - begin);
-    for (std::size_t i = begin; i < end; ++i)
-        files.push_back(
-            scope.spawn([plan, i, id = (*ids)[i], spill_share, parse_ahead,
-                         keep_state, persist](CoroScope&) {
-                return bootstrap_file(plan, plan->files[i], id, spill_share,
-                                      parse_ahead, keep_state, persist);
-            }));
-    auto done = co_await coro::when_all(std::move(files));
-    for (std::size_t i = 0; i < done.size(); ++i)
-        (*out)[begin + i] = std::move(done[i]);
+// False when a file failed. A worker that throws stops the others from taking
+// more files.
+coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
+    try {
+        while (!run->failed.load(std::memory_order_relaxed)) {
+            const std::size_t b =
+                run->next_block.fetch_add(1, std::memory_order_relaxed);
+            if (b >= run->blocks.size()) break;
+            const BootstrapBlock block = run->blocks[b];
+            auto& merged = run->states[b];
+            dftracer::utils::index::build::FileGroup group;
+            // The files finished before a failure still publish.
+            std::exception_ptr error;
+            bool stop = false;
+            for (std::size_t k = block.begin; k < block.end && !stop; ++k) {
+                if (run->failed.load(std::memory_order_relaxed)) break;
+                const std::size_t i = block.root->members[k];
+                BootstrapFile file;
+                try {
+                    file = co_await bootstrap_file(run, run->plan->files[i],
+                                                   block.root, &group);
+                } catch (...) {
+                    error = std::current_exception();
+                    break;
+                }
+                if (!file.ok) {
+                    run->failed.store(true, std::memory_order_relaxed);
+                    break;
+                }
+                if (group.full()) {
+                    const bool published = co_await commit_bootstrap(group);
+                    stop = !published;
+                }
+                if (!file.state) continue;
+                if (!merged)
+                    merged = std::move(file.state);
+                else
+                    dataframe::agg_merge(*merged, *file.state);
+            }
+            const bool published = co_await commit_bootstrap(group);
+            if (error) std::rethrow_exception(error);
+            if (stop || !published ||
+                run->failed.load(std::memory_order_relaxed)) {
+                run->failed.store(true, std::memory_order_relaxed);
+                co_return false;
+            }
+        }
+    } catch (...) {
+        run->failed.store(true, std::memory_order_relaxed);
+        throw;
+    }
+    co_return !run->failed.load(std::memory_order_relaxed);
+}
+
+coro::CoroTask<void> bootstrap_workers(coro::Scope& scope, BootstrapRun* run,
+                                       std::size_t workers) {
+    dstd::Vector<coro::SpawnFuture<bool>> done;
+    done.reserve(workers);
+    for (std::size_t w = 0; w < workers; ++w)
+        done.push_back(
+            scope.spawn_future([run]() { return bootstrap_worker(run); }));
+    co_await coro::when_all(std::move(done));
 }
 
 coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
@@ -623,81 +912,65 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
                     g.kind == GroupKey::Kind::Rank);
         });
 
-    // Files are bootstrapped BOOTSTRAP_FILES at a time; their states merge in
-    // file order, so the result does not depend on which finishes first.
-    const std::size_t n = plan.files.size();
+    BootstrapStores stores;
+    co_await open_bootstrap_stores(plan, stores);
+
+    const std::size_t workers =
+        std::max<std::size_t>(1, common::available_parallelism());
+    BootstrapRun run;
+    run.plan = &plan;
+    run.stores = &stores;
+    run.keep_state = !resolved_transform;
+    if (run.keep_state) run.rule_query = trace_fold_query(plan);
+    for (const auto& store : stores.roots) {
+        dstd::Vector<std::uint64_t> costs;
+        costs.reserve(store->members.size());
+        for (std::size_t i : store->members)
+            costs.push_back(plan.files[i].uncompressed_size);
+        const auto starts = dftracer::utils::index::build::cut_blocks(
+            store->members.size(), costs, workers);
+        for (std::size_t b = 0; b + 1 < starts.size(); ++b)
+            run.blocks.push_back({store.get(), starts[b], starts[b + 1]});
+    }
+    run.states.resize(run.blocks.size());
     const std::size_t at_once =
-        std::max<std::size_t>(1, std::min(n, BOOTSTRAP_FILES));
-    const std::size_t parse_ahead = std::clamp<std::size_t>(
-        available_parallelism() / at_once, 1, MAX_PARSE_AHEAD);
-    std::map<std::string, std::vector<std::size_t>> by_index;
-    for (std::size_t i = 0; i < n; ++i)
-        by_index[plan.files[i].index_path].push_back(i);
-    // Reserving ids creates the index root before the files are in it. A
-    // scan that starts meanwhile would take the root for a built index, so
-    // the build is serialized with the metadata reads of the same root.
-    std::map<trace::internal::IndexRoot*,
-             std::shared_ptr<trace::internal::IndexRoot>>
-        roots;
-    for (const auto& entry : by_index) {
-        auto root = trace::internal::index_root(entry.first);
-        roots.emplace(root.get(), std::move(root));
-    }
-    std::vector<coro::AsyncMutexGuard> building;
-    for (const auto& entry : roots) {
-        co_await entry.second->building.lock();
-        building.emplace_back(entry.second->building);
-    }
-    // A spill run is keyed by the file id, so the ids are reserved before
-    // the build; a reserved id marks no file as indexed.
-    std::vector<int> ids(n, -1);
-    std::vector<dftracer::utils::index::store::IndexDatabase> held;
-    held.reserve(by_index.size());
-    for (const auto& [index_path, members] : by_index) {
-        // A file listed twice takes one id, as file_id_for would give it.
-        std::map<std::string, std::size_t> slot;
-        std::vector<std::string> paths;
-        for (std::size_t i : members)
-            if (slot.emplace(dftracer::utils::index::store::internal::
-                                 get_logical_path(plan.files[i].file_path),
-                             paths.size())
-                    .second)
-                paths.push_back(plan.files[i].file_path);
-        // Held to the end, so a reader that opens the root meanwhile shares
-        // this read-write handle and the persist below needs no upgrade.
-        held.emplace_back(index_path);
-        const auto got = held.back().assign_file_ids(paths);
-        for (std::size_t i : members)
-            ids[i] = got[slot.at(
-                dftracer::utils::index::store::internal::get_logical_path(
-                    plan.files[i].file_path))];
-    }
-    const std::uint64_t spill_share =
-        share_spill_budget(plan.memory_budget, at_once);
-    struct SpillCleanup {
-        const std::map<std::string, std::vector<std::size_t>>& roots;
-        ~SpillCleanup() {
-            std::error_code ec;
-            for (const auto& [index_path, members] : roots)
-                fs::remove(bootstrap_spill_root(index_path), ec);
-        }
-    } spill_cleanup{by_index};
-    std::vector<BootstrapFile> files(n);
-    std::mutex persist;
-    for (std::size_t begin = 0; begin < n; begin += at_once) {
-        const std::size_t end = std::min(n, begin + at_once);
-        co_await dftracer::utils::run_coro_scope(
-            bootstrap_wave, &plan, &ids, spill_share, begin, end, parse_ahead,
-            !resolved_transform, &persist, &files);
-        for (std::size_t i = begin; i < end; ++i)
-            if (!files[i].ok) co_return false;
-    }
+        std::max<std::size_t>(1, std::min(run.blocks.size(), workers));
+    const std::uint64_t budget =
+        plan.memory_budget == memory::NO_SPILL_BUDGET
+            ? memory::NO_SPILL_BUDGET
+            : memory::resolve_spill_budget(plan.memory_budget);
+    const auto sinks = dftracer::utils::index::build::FileAdmission::plan_sinks(
+        budget, workers,
+        dftracer::utils::index::build::g_max_sink_bytes.load(
+            std::memory_order_relaxed));
+    const std::size_t active = std::min(at_once, sinks.workers);
+    dftracer::utils::index::build::FileAdmission admission(
+        budget, sinks.workers,
+        budget == memory::NO_SPILL_BUDGET ? 0 : sinks.sink_bytes * active,
+        plan.files.size());
+    run.admission = &admission;
+    co_await coro::with_scope([&](coro::Scope& scope) {
+        return bootstrap_workers(scope, &run, active);
+    });
+    if (run.failed.load(std::memory_order_relaxed)) co_return false;
     if (!resolved_transform) {
-        for (auto& f : files) {
+        // Blocks are runs of consecutive files, so their first files give
+        // the file order.
+        dstd::Vector<std::size_t> order(run.blocks.size());
+        std::iota(order.begin(), order.end(), std::size_t{0});
+        const auto first_file = [&run](std::size_t b) {
+            return run.blocks[b].root->members[run.blocks[b].begin];
+        };
+        std::sort(order.begin(), order.end(),
+                  [&](std::size_t a, std::size_t b) {
+                      return first_file(a) < first_file(b);
+                  });
+        for (const std::size_t b : order) {
+            if (!run.states[b]) continue;
             if (!merged)
-                merged = std::move(f.state);
+                merged = std::move(run.states[b]);
             else
-                dataframe::agg_merge(*merged, *f.state);
+                dataframe::agg_merge(*merged, *run.states[b]);
         }
     }
     // The index now carries the row sets; a normal engine scan resolves
@@ -706,7 +979,7 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
     // index.
     if (resolved_transform) {
         // The rescan reads the metadata of the files, which waits for the lock.
-        building.clear();
+        stores.building.clear();
         ViewPlan rescan = plan;
         rescan.resolver.reset();
         merged = co_await build_engine_agg_state(rescan);
@@ -718,13 +991,13 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
 // single-flight lock is dropped on every path including a throw from the build.
 class ViewDirLock {
    public:
-    explicit ViewDirLock(int fd) noexcept : fd_(fd) {}
-    ~ViewDirLock() { dftracer::utils::index::cache::unlock_view_dir(fd_); }
+    explicit ViewDirLock(dstd::File file) noexcept : file_(std::move(file)) {}
+    ~ViewDirLock() { dftracer::utils::index::cache::unlock_view_dir(file_); }
     ViewDirLock(const ViewDirLock&) = delete;
     ViewDirLock& operator=(const ViewDirLock&) = delete;
 
    private:
-    int fd_;
+    dstd::File file_;
 };
 
 }  // namespace
@@ -735,26 +1008,30 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
     plan_record_schema(plan);
 
     // Row query (no aggregation): materialize a filtered trace + index into a
-    // slug directory under <index>/cache/views, then record its manifest so a
+    // view root under the index root's views, then record its manifest so a
     // later subsuming query reads it instead of rescanning the base.
     if (plan.group_by.empty() && plan.agg.empty() &&
         !plan.auto_numeric_metrics) {
         if (dftracer::utils::index::cache::view_is_fresh(plan))
             co_return ExportStats{};  // already built
-        const std::string dir =
+        const dstd::String dir =
             dftracer::utils::index::cache::materialize_view_dir(plan);
         if (dir.empty()) co_return ExportStats{};
-        // Single-flight: one builder per slug dir. A loser skips - the winner
+        // Single-flight: one builder per view root. A loser skips - the winner
         // produces the MV. Re-check freshness under the lock in case the winner
         // just finished.
-        const int lock = dftracer::utils::index::cache::lock_view_dir(dir);
-        if (lock < 0) co_return ExportStats{};
-        ViewDirLock lock_guard(lock);
+        dstd::File lock = dftracer::utils::index::cache::lock_view_dir(dir);
+        if (!lock.is_open()) co_return ExportStats{};
+        ViewDirLock lock_guard(std::move(lock));
         if (dftracer::utils::index::cache::view_is_fresh(plan))
             co_return ExportStats{};
         constexpr std::uint64_t DEFAULT_PART_SIZE = 128ull * 1024 * 1024;
         TraceWriteOptions opts;
-        opts.output_path = (fs::path(dir) / "part.pfw.gz").string();
+        opts.output_path = dstd::String(
+            (dstd::PathView(dftracer::utils::index::view_parts_dir(dir)) /
+             "part.pfw.gz")
+                .str());
+        opts.index_path = dir;
         opts.build_index = true;
         opts.compress = true;
         // One gzip member per index checkpoint, so the user's checkpoint_size
@@ -768,15 +1045,16 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         co_return stats;
     }
 
-    const std::string rdir =
+    const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (!rdir.empty()) plan_record_schema(plan);
     // Idempotent prewarm: skip if this view is already materialized.
-    if (!rdir.empty() && fs::exists(fs::path(rdir) / "CURRENT")) {
+    if (!rdir.empty() &&
+        dftracer::utils::index::cache::CacheStore::exists(rdir)) {
         try {
             auto db = dftracer::utils::index::cache::open_rollup_db(
-                rdir, dftracer::utils::index::store::RocksDatabase::OpenMode::
-                          ReadOnly);
+                rdir,
+                dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
             if (db &&
                 dftracer::utils::index::cache::rollup_exists(
                     *db, dftracer::utils::index::cache::plan_signature(plan)))
@@ -786,14 +1064,14 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         }
     }
 
-    // A build wants full coverage: scan through the engine group-by to a
-    // complete mergeable AggState, then persist its per-group partials.
-    auto state = co_await build_engine_agg_state(plan);
+    dataframe::AggStatePtr state;
+    const bool from_partials = co_await partials_collect(plan, state);
+    if (!from_partials) state = co_await build_engine_agg_state(plan);
     if (!rdir.empty()) {
         try {
             auto db = dftracer::utils::index::cache::open_rollup_db(
-                rdir, dftracer::utils::index::store::RocksDatabase::OpenMode::
-                          ReadWrite);
+                rdir,
+                dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
             if (db)
                 dftracer::utils::index::cache::persist_rollup(
                     *db, dftracer::utils::index::cache::plan_signature(plan),
@@ -810,18 +1088,19 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
 // stored AggState partials to `plan`'s grouping and finalize. Shared by the
 // engine collect path and the session so the two agree on what a rollup
 // answers.
-std::optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
-    const std::string rdir =
+dstd::Optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
+    const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (!rdir.empty()) plan_record_schema(plan);
-    if (rdir.empty() || !fs::exists(fs::path(rdir) / "CURRENT"))
-        return std::nullopt;
+    if (rdir.empty() ||
+        !dftracer::utils::index::cache::CacheStore::exists(rdir))
+        return dstd::nullopt;
     // A materialize() query opens ReadWrite so a miss reuses the handle to
     // persist below (avoids a RO-then-RW conflict).
     const auto mode =
         plan.materialize
-            ? dftracer::utils::index::store::RocksDatabase::OpenMode::ReadWrite
-            : dftracer::utils::index::store::RocksDatabase::OpenMode::ReadOnly;
+            ? dftracer::utils::index::cache::CacheStore::Mode::ReadWrite
+            : dftracer::utils::index::cache::CacheStore::Mode::ReadOnly;
     try {
         auto db = dftracer::utils::index::cache::open_rollup_db(rdir, mode);
         if (db)
@@ -832,13 +1111,11 @@ std::optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
         // never fail the query over the cache.
         DFTRACER_UTILS_LOG_WARN("rollup read skipped: %s", e.what());
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
-// The no-scan fast paths: the first-touch raw-gzip bootstrap, then the
-// aggregation tier. On a hit fills `out` (a mergeable engine AggState, finalize
-// with finalize_engine_result) and returns true; false means the query must
-// scan. The AggState rollup is served separately by try_serve_rollup.
+// On a hit fills `out` (a mergeable engine AggState, finalize with
+// finalize_engine_result) and returns true. False means the query must scan.
 coro::CoroTask<bool> try_serve_aggregate_no_scan(const ViewPlan& plan,
                                                  dataframe::AggStatePtr& out) {
     // Named, not awaited in the condition: GCC 12.1 on x86_64 compiled the
@@ -846,9 +1123,9 @@ coro::CoroTask<bool> try_serve_aggregate_no_scan(const ViewPlan& plan,
     // file died with SIGILL.
     const bool bootstrapped = co_await try_collect_bootstrap(plan, out);
     if (bootstrapped) co_return true;
-    if (dftracer::utils::index::schemas::dft::agg::agg_tier_collect(plan, out))
-        co_return true;
-    co_return false;
+    // Named for the same reason.
+    const bool from_partials = co_await partials_collect(plan, out);
+    co_return from_partials;
 }
 
 // Resolve a min-aligned bucket origin to the trace's minimum timestamp, read
@@ -858,33 +1135,40 @@ coro::CoroTask<bool> try_serve_aggregate_no_scan(const ViewPlan& plan,
 // missing/locked index leaves the origin at 0 (absolute).
 ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     if (!plan.bucket_origin_min || plan.time_bucket_us == 0) return plan;
-    namespace ix = dftracer::utils::index;
     std::uint64_t global_min = std::numeric_limits<std::uint64_t>::max();
     const bool by_path = plan_by_path(plan);
-    const ix::Roles& roles = plan_record_schema(plan).roles;
+    const index::Roles& roles = plan_record_schema(plan).roles;
+    dstd::Map<dstd::String, index::Snapshot> snapshots;
     for (const auto& f : plan.files) {
-        if (f.index_path.empty() || !fs::exists(f.index_path)) continue;
+        if (f.index_path.empty() ||
+            !common::input_exists(index::store_of(f.index_path)))
+            continue;
         try {
-            dftracer::utils::index::store::IndexDatabase db(
-                f.index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            const int fid = db.get_file_info_id(
+            auto at = snapshots.find(f.index_path);
+            if (at == snapshots.end())
+                at = snapshots
+                         .emplace(f.index_path,
+                                  common::unwrap(
+                                      index::plan::open_snapshot(f.index_path)))
+                         .first;
+            const index::Snapshot& snapshot = at->second;
+            const auto file = snapshot.file(
                 dftracer::utils::index::store::internal::get_logical_path(
                     f.file_path));
-            if (fid < 0) continue;
+            if (!file) continue;
             if (by_path) {
-                const auto r = ix::extensions::kinds::file_value_range(
-                    db, fid, roles.time);
+                const auto r = index::extensions::kinds::file_value_range(
+                    snapshot, *file, roles.time);
                 if (r && r->first >= 0)
                     global_min = std::min(
                         global_min,
                         static_cast<std::uint64_t>(std::llround(
-                            r->first * ix::micros_per(roles.time_unit))));
+                            r->first * index::micros_per(roles.time_unit))));
                 continue;
             }
             const auto b =
                 dftracer::utils::index::extensions::kinds::file_time_bounds(
-                    db, fid);
+                    snapshot, *file);
             if (b.valid && b.min_timestamp_us < global_min)
                 global_min = b.min_timestamp_us;
         } catch (const std::exception&) {
@@ -906,18 +1190,17 @@ coro::CoroTask<TypedResult> run_collect_typed(const ViewPlan& plan,
                                               const ProgressFn* progress) {
     ensure_schema(plan);
     TypedResult out;
-    if (dftracer::utils::index::schemas::dft::agg::events_profiles_collect(
-            plan, out.regular, out.aggregated, shard_begin, shard_end,
-            progress)) {
-        dftracer::utils::index::schemas::dft::agg::system_collect(
+    const bool from_partials = co_await partials_collect_typed(
+        plan, out.regular, out.aggregated, shard_begin, shard_end, progress);
+    if (from_partials) {
+        const bool from_columns = system_collect(
             plan, out.counters, shard_begin, shard_end, progress);
-        co_return out;
+        if (from_columns) co_return out;
     }
-    // The tier could not answer (a ph/ts predicate it cannot key on, or no tier
-    // built); scan the raw trace so collect_typed
-    // returns rows rather than silently empty.
+    // Scan the raw trace, so collect_typed returns rows rather than silently
+    // none.
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     TypedCollectFold fold(intern);
     std::array<Fold*, 1> folds{&fold};
     co_await fuse(plan, vdef, folds, intern);
@@ -955,13 +1238,13 @@ const FoldEvent::ArgValue* distinct_find_arg(const FoldEvent& ev,
 class DistinctRowFold : public Fold {
    public:
     struct Key {
-        RowKeySource::Kind field = RowKeySource::Kind::ARG;
-        std::uint32_t arg_full = dftracer::utils::StringIntern::NO_ID;
-        std::uint32_t arg_bare = dftracer::utils::StringIntern::NO_ID;
+        RowKeySource::Kind field = RowKeySource::Kind::Arg;
+        std::uint32_t arg_full = dftracer::utils::dstd::StringIntern::NO_ID;
+        std::uint32_t arg_bare = dftracer::utils::dstd::StringIntern::NO_ID;
     };
 
-    DistinctRowFold(const dftracer::utils::StringIntern& intern,
-                    std::vector<std::string> select, std::vector<Key> keys,
+    DistinctRowFold(const dftracer::utils::dstd::StringIntern& intern,
+                    dstd::Vector<dstd::String> select, dstd::Vector<Key> keys,
                     double time_scale, bool keep_metadata, bool by_path)
         : intern_(&intern),
           select_(std::move(select)),
@@ -975,12 +1258,12 @@ class DistinctRowFold : public Fold {
     bool needs_args() const override { return true; }
     bool wants_metadata() const override { return keep_metadata_; }
 
-    std::vector<std::string> extra_captures() const override {
+    dstd::Vector<dstd::String> extra_captures() const override {
         return row_fold_extra_captures(select_);
     }
 
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<DistinctRowFold>(
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<DistinctRowFold>(
             *intern_, select_, keys_, time_scale_, keep_metadata_, by_path_);
     }
 
@@ -992,8 +1275,8 @@ class DistinctRowFold : public Fold {
         }
         for (const FoldEvent& ev : batch.events) {
             const Position pos{seq, row_in_unit_++};
-            if (ev.phase == RecordPhase::UNKNOWN ||
-                (!keep_metadata_ && ev.phase == RecordPhase::METADATA))
+            if (ev.phase == RecordPhase::Unknown ||
+                (!keep_metadata_ && ev.phase == RecordPhase::Metadata))
                 continue;
             scratch_.clear();
             append_key(ev);
@@ -1039,7 +1322,7 @@ class DistinctRowFold : public Fold {
     // two rows with distinct fold keys may still be equal in the built column.
     bool needs_host_pass() const {
         for (std::size_t i = 0; i < keys_.size(); ++i) {
-            if (keys_[i].field != RowKeySource::Kind::ARG) continue;
+            if (keys_[i].field != RowKeySource::Kind::Arg) continue;
             const std::uint8_t m = kinds_[i];
             if ((m & KIND_DBL) || (m & (m - 1))) return true;
         }
@@ -1048,18 +1331,18 @@ class DistinctRowFold : public Fold {
 
     // The distinct candidates in first-position order.
     dataframe::DataFrame build() {
-        std::vector<std::size_t> order(entries_.size());
+        dstd::Vector<std::size_t> order(entries_.size());
         for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
         std::sort(order.begin(), order.end(),
                   [&](std::size_t a, std::size_t b) {
                       return entries_[a].pos < entries_[b].pos;
                   });
-        std::vector<FoldEvent> evs;
+        dstd::Vector<FoldEvent> evs;
         evs.reserve(entries_.size());
         for (std::size_t i : order) evs.push_back(std::move(entries_[i].ev));
         entries_.clear();
         index_.clear();
-        return build_row_frame(std::span<const FoldEvent>(evs), *intern_,
+        return build_row_frame(dstd::Span<const FoldEvent>(evs), *intern_,
                                select_, time_scale_, by_path_);
     }
 
@@ -1081,8 +1364,8 @@ class DistinctRowFold : public Fold {
     static constexpr std::uint8_t KIND_UINT = 4;
     static constexpr std::uint8_t KIND_DBL = 8;
 
-    static void append_id(std::string& out, std::uint32_t id) {
-        if (id == dftracer::utils::StringIntern::NO_ID) {
+    static void append_id(dstd::String& out, std::uint32_t id) {
+        if (id == dftracer::utils::dstd::StringIntern::NO_ID) {
             out.push_back('\0');
             return;
         }
@@ -1090,7 +1373,7 @@ class DistinctRowFold : public Fold {
         out.append(reinterpret_cast<const char*>(&id), sizeof(id));
     }
 
-    static void append_word(std::string& out, char tag, std::uint64_t v) {
+    static void append_word(dstd::String& out, char tag, std::uint64_t v) {
         out.push_back(tag);
         out.append(reinterpret_cast<const char*>(&v), sizeof(v));
     }
@@ -1100,40 +1383,44 @@ class DistinctRowFold : public Fold {
         for (std::size_t j = 0; j < keys_.size(); ++j) {
             const Key& k = keys_[j];
             switch (k.field) {
-                case Kind::NAME:
+                case Kind::Name:
                     append_id(scratch_, ev.name_id);
                     break;
-                case Kind::CAT:
+                case Kind::Cat:
                     append_id(scratch_, ev.cat_id);
                     break;
-                case Kind::FHASH:
+                case Kind::Fhash:
                     append_id(scratch_, ev.fhash_id);
                     break;
-                case Kind::HHASH:
+                case Kind::Hhash:
                     append_id(scratch_, ev.hhash_id);
                     break;
-                case Kind::PID:
+                case Kind::Pid:
                     append_word(scratch_, '\1', ev.pid);
                     break;
-                case Kind::TID:
+                case Kind::Tid:
                     append_word(scratch_, '\1', ev.tid);
                     break;
-                case Kind::TS:
+                case Kind::Ts:
                     append_word(scratch_, '\1', scaled(ev.ts));
                     break;
-                case Kind::DUR:
+                case Kind::Dur:
+                    if (!ev.has_dur) {
+                        scratch_.push_back('\0');
+                        break;
+                    }
                     append_word(scratch_, '\1', scaled(ev.dur));
                     break;
-                case Kind::PH:
+                case Kind::Ph:
                     append_word(scratch_, '\1',
                                 static_cast<std::uint64_t>(ev.phase));
                     break;
-                case Kind::ARG:
-                case Kind::REFUSED: {
+                case Kind::Arg:
+                case Kind::Refused: {
                     const FoldEvent::ArgValue* v =
                         distinct_find_arg(ev, k.arg_full);
-                    if (!v &&
-                        k.arg_bare != dftracer::utils::StringIntern::NO_ID)
+                    if (!v && k.arg_bare !=
+                                  dftracer::utils::dstd::StringIntern::NO_ID)
                         v = distinct_find_arg(ev, k.arg_bare);
                     if (!v) {
                         scratch_.push_back('\0');
@@ -1168,30 +1455,30 @@ class DistinctRowFold : public Fold {
                                           0.5);
     }
 
-    const dftracer::utils::StringIntern* intern_;
-    std::vector<std::string> select_;
-    std::vector<Key> keys_;
-    std::vector<std::uint8_t> kinds_;
+    const dftracer::utils::dstd::StringIntern* intern_;
+    dstd::Vector<dstd::String> select_;
+    dstd::Vector<Key> keys_;
+    dstd::Vector<std::uint8_t> kinds_;
     double time_scale_;
     bool keep_metadata_;
     bool by_path_;
     std::int64_t cur_seq_ = -1;
     std::int64_t row_in_unit_ = 0;
-    std::string scratch_;
-    std::vector<Entry> entries_;
-    ankerl::unordered_dense::map<std::string, std::size_t> index_;
+    dstd::String scratch_;
+    dstd::Vector<Entry> entries_;
+    dstd::HashMap<dstd::String, std::size_t> index_;
 };
 
 }  // namespace
 
 bool distinct_keyable(const ViewPlan& plan,
-                      const std::vector<std::int64_t>& key_idx) {
+                      const dstd::Vector<std::int64_t>& key_idx) {
     const bool by_path = plan_by_path(plan);
     for (std::int64_t at : key_idx) {
         if (at < 0 || static_cast<std::size_t>(at) >= plan.select.size())
             return false;
         if (row_key_source(plan.select[static_cast<std::size_t>(at)], by_path)
-                .kind == RowKeySource::Kind::REFUSED)
+                .kind == RowKeySource::Kind::Refused)
             return false;
     }
     return true;
@@ -1199,11 +1486,11 @@ bool distinct_keyable(const ViewPlan& plan,
 
 coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     const bool by_path = plan_by_path(plan);
     NativeRowFold fold(intern, plan.select, plan.time_scale,
                        metadata_rows(plan), by_path);
-    std::vector<Fold*> folds{&fold};
+    dstd::Vector<Fold*> folds{&fold};
     auto catalog = select_catalog_fold(plan, vdef, intern);
     if (catalog) folds.push_back(catalog.get());
     co_await execute(lower_fused_folds(plan, vdef, folds), intern);
@@ -1227,20 +1514,20 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
 }
 
 coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
-    const ViewPlan& plan, const std::vector<std::int64_t>& key_idx) {
+    const ViewPlan& plan, const dstd::Vector<std::int64_t>& key_idx) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     const bool by_path = plan_by_path(plan);
-    std::vector<DistinctRowFold::Key> keys;
-    std::vector<std::string> subset;
+    dstd::Vector<DistinctRowFold::Key> keys;
+    dstd::Vector<dstd::String> subset;
     keys.reserve(key_idx.size());
     subset.reserve(key_idx.size());
     for (std::int64_t at : key_idx) {
-        const std::string& sel = plan.select[static_cast<std::size_t>(at)];
+        const dstd::String& sel = plan.select[static_cast<std::size_t>(at)];
         const RowKeySource src = row_key_source(sel, by_path);
         DistinctRowFold::Key k;
         k.field = src.kind;
-        if (src.kind == RowKeySource::Kind::ARG) {
+        if (src.kind == RowKeySource::Kind::Arg) {
             k.arg_full = intern.get_or_insert(src.arg_full);
             if (!src.arg_bare.empty())
                 k.arg_bare = intern.get_or_insert(src.arg_bare);
@@ -1250,7 +1537,7 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
     }
     DistinctRowFold fold(intern, plan.select, std::move(keys), plan.time_scale,
                          metadata_rows(plan), by_path);
-    std::vector<Fold*> folds{&fold};
+    dstd::Vector<Fold*> folds{&fold};
     auto catalog = select_catalog_fold(plan, vdef, intern);
     if (catalog) folds.push_back(catalog.get());
     co_await execute(lower_fused_folds(plan, vdef, folds), intern);
@@ -1260,7 +1547,7 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
     // The frame holds only the fold's candidates, already in first-position
     // order, so the host first-occurrence dedup runs over far fewer rows.
     co_return co_await dataframe::LazyFrame::scan(
-        std::make_shared<dataframe::InMemorySource>(std::move(b)))
+        dstd::make_shared<dataframe::InMemorySource>(std::move(b)))
         .unique(std::move(subset))
         .collect();
 }
@@ -1269,11 +1556,11 @@ namespace {
 
 template <class R>
 coro::CoroTask<R> run_containment_terminal(
-    const ViewPlan& plan, std::vector<std::string> partition,
-    std::string ts_field, std::string dur_field, std::string name_field,
-    std::vector<std::string> group, R (ContainmentFold::*build)() const) {
+    const ViewPlan& plan, dstd::Vector<dstd::String> partition,
+    dstd::String ts_field, dstd::String dur_field, dstd::String name_field,
+    dstd::Vector<dstd::String> group, R (ContainmentFold::*build)() const) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     ContainmentFold fold(
         intern, std::move(partition), std::move(ts_field), std::move(dur_field),
         std::move(name_field), plan.time_scale, std::move(group),
@@ -1286,35 +1573,35 @@ coro::CoroTask<R> run_containment_terminal(
 }  // namespace
 
 coro::CoroTask<dataframe::DataFrame> run_call_tree(
-    const ViewPlan& plan, std::vector<std::string> partition,
-    std::string ts_field, std::string dur_field, std::string name_field) {
+    const ViewPlan& plan, dstd::Vector<dstd::String> partition,
+    dstd::String ts_field, dstd::String dur_field, dstd::String name_field) {
     return run_containment_terminal(
         plan, std::move(partition), std::move(ts_field), std::move(dur_field),
         std::move(name_field), {}, &ContainmentFold::call_tree);
 }
 
 coro::CoroTask<dataframe::DataFrame> run_flamegraph(
-    const ViewPlan& plan, std::vector<std::string> partition,
-    std::string ts_field, std::string dur_field, std::string name_field,
-    std::vector<std::string> group) {
+    const ViewPlan& plan, dstd::Vector<dstd::String> partition,
+    dstd::String ts_field, dstd::String dur_field, dstd::String name_field,
+    dstd::Vector<dstd::String> group) {
     return run_containment_terminal(
         plan, std::move(partition), std::move(ts_field), std::move(dur_field),
         std::move(name_field), std::move(group), &ContainmentFold::flamegraph);
 }
 
-coro::CoroTask<std::pair<dataframe::DataFrame, dataframe::DataFrame>>
-run_containment(const ViewPlan& plan, std::vector<std::string> partition,
-                std::string ts_field, std::string dur_field,
-                std::string name_field, std::vector<std::string> group) {
+coro::CoroTask<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>
+run_containment(const ViewPlan& plan, dstd::Vector<dstd::String> partition,
+                dstd::String ts_field, dstd::String dur_field,
+                dstd::String name_field, dstd::Vector<dstd::String> group) {
     return run_containment_terminal(
         plan, std::move(partition), std::move(ts_field), std::move(dur_field),
         std::move(name_field), std::move(group), &ContainmentFold::containment);
 }
 
-coro::CoroTask<std::string> run_flamegraph_partial(
-    const ViewPlan& plan, std::vector<std::string> partition,
-    std::string ts_field, std::string dur_field, std::string name_field,
-    std::vector<std::string> group) {
+coro::CoroTask<dstd::String> run_flamegraph_partial(
+    const ViewPlan& plan, dstd::Vector<dstd::String> partition,
+    dstd::String ts_field, dstd::String dur_field, dstd::String name_field,
+    dstd::Vector<dstd::String> group) {
     return run_containment_terminal(plan, std::move(partition),
                                     std::move(ts_field), std::move(dur_field),
                                     std::move(name_field), std::move(group),
@@ -1329,8 +1616,8 @@ namespace {
 // both emit it); a partial with any other leading byte is rejected loudly.
 enum class AggWireTag : std::uint8_t { AggState = 2 };
 
-std::string encode_agg_partial(const dataframe::AggState& st) {
-    std::string out(1, static_cast<char>(AggWireTag::AggState));
+dstd::String encode_agg_partial(const dataframe::AggState& st) {
+    dstd::String out(1, static_cast<char>(AggWireTag::AggState));
     out += dataframe::agg_serialize(st);
     return out;
 }
@@ -1338,19 +1625,20 @@ std::string encode_agg_partial(const dataframe::AggState& st) {
 // Merge every partial into one AggState. An empty or unknown-tagged blob is
 // rejected, not misparsed.
 dataframe::AggStatePtr decode_partials(
-    const std::vector<std::string_view>& partials) {
+    const dstd::Vector<dstd::StringView>& partials) {
     dataframe::AggStatePtr state;
-    for (std::string_view p : partials) {
+    for (dstd::StringView p : partials) {
         if (p.empty())
-            throw DFTUtilsException::cat(
-                ErrorCode::AGGREGATION,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Aggregation,
                 "aggregate partial: empty (missing wire tag)");
         if (static_cast<std::uint8_t>(p[0]) !=
             static_cast<std::uint8_t>(AggWireTag::AggState))
-            throw DFTUtilsException::cat(ErrorCode::AGGREGATION,
-                                         "aggregate partial: unknown wire tag");
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Aggregation,
+                "aggregate partial: unknown wire tag");
         dataframe::AggStatePtr st =
-            dataframe::agg_deserialize(std::string(p.substr(1)));
+            dataframe::agg_deserialize(dstd::String(p.substr(1)));
         if (!state)
             state = std::move(st);
         else
@@ -1379,9 +1667,9 @@ dataframe::AggStatePtr empty_engine_state(const ViewPlan& plan) {
 // Distributed materialize: combine the rank-local partials and persist the
 // merged rollup.
 coro::CoroTask<void> run_materialize_partials(
-    const ViewPlan& plan, const std::vector<std::string_view>& partials) {
+    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
     ensure_schema(plan);
-    const std::string rdir =
+    const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (!rdir.empty()) plan_record_schema(plan);
     if (rdir.empty()) co_return;
@@ -1389,8 +1677,7 @@ coro::CoroTask<void> run_materialize_partials(
     if (!state) co_return;
     try {
         auto db = dftracer::utils::index::cache::open_rollup_db(
-            rdir,
-            dftracer::utils::index::store::RocksDatabase::OpenMode::ReadWrite);
+            rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
         if (db)
             dftracer::utils::index::cache::persist_rollup(
                 *db, dftracer::utils::index::cache::plan_signature(plan),
@@ -1403,24 +1690,24 @@ coro::CoroTask<void> run_materialize_partials(
     co_return;
 }
 
-std::optional<dataframe::DataFrame> run_reconstruct_if_cached(
+dstd::Optional<dataframe::DataFrame> run_reconstruct_if_cached(
     const ViewPlan& plan) {
-    if (plan.group_by.empty() && plan.agg.empty()) return std::nullopt;
+    if (plan.group_by.empty() && plan.agg.empty()) return dstd::nullopt;
     ensure_schema(plan);
     return try_serve_rollup(plan);
 }
 
 coro::CoroTask<ExportStats> run_scan_batches(
-    const std::shared_ptr<const ViewPlan>& plan_ptr, std::size_t num_slots,
+    const dstd::SharedPtr<const ViewPlan>& plan_ptr, std::size_t slot_count,
     std::uint64_t limit,
-    const std::function<void(std::size_t,
-                             const std::vector<std::string_view>&)>& on_batch) {
+    const dstd::Function<
+        void(std::size_t, const dstd::Vector<dstd::StringView>&)>& on_batch) {
     bool from_mv = false;
     const ViewPlan plan = redirect_reads(*plan_ptr, &from_mv);
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     // map_batches wants a fixed slot count; treat 0 as 1.
     ExportStats stats = co_await for_each_scanned_batch(
-        plan, vdef, num_slots ? num_slots : 1, limit, on_batch);
+        plan, vdef, slot_count ? slot_count : 1, limit, on_batch);
     stats.served_from_mv = from_mv;
     co_return stats;
 }
@@ -1429,32 +1716,33 @@ coro::CoroTask<ExportStats> run_scan_batches(
 // `make` builds it with the scan's intern so ids agree and per-worker slices
 // merge; `finalize` runs after the merge.
 struct FoldFactory {
-    std::function<std::unique_ptr<Fold>(dftracer::utils::StringIntern&)> make;
-    std::function<void()> finalize;
+    dstd::Function<dstd::UniquePtr<Fold>(dftracer::utils::dstd::StringIntern&)>
+        make;
+    dstd::Function<void()> finalize;
 };
 
 struct StreamBranch {
-    std::shared_ptr<const ViewPlan> plan;
-    std::shared_ptr<coro::Channel<dataframe::Morsel>> channel;
-    std::shared_ptr<coro::CoroSemaphore> budget;
-    std::shared_ptr<const std::atomic<bool>> dropped;
+    dstd::SharedPtr<const ViewPlan> plan;
+    dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel;
+    dstd::SharedPtr<coro::AsyncSemaphore> budget;
+    dstd::SharedPtr<const std::atomic<bool>> dropped;
 };
 
 struct ViewSessionState {
-    std::shared_ptr<const ViewPlan> plan;
-    std::vector<BranchHooks> branches;
-    std::vector<FoldFactory> fold_factories;
-    std::vector<StreamBranch> stream_branches;
+    dstd::SharedPtr<const ViewPlan> plan;
+    dstd::Vector<BranchHooks> branches;
+    dstd::Vector<FoldFactory> fold_factories;
+    dstd::Vector<StreamBranch> stream_branches;
     /// A narrowing an attached fold offered for the shared scan, applied by
     /// execute() only when no other branch exists. The scan feeds every
     /// branch, so narrowing it for one would starve the rest; whether that
     /// holds is knowable only here, after every branch has been added.
-    std::optional<duql::Query> proposed_prune;
+    dstd::Optional<duql::Query> proposed_prune;
 };
 
-std::shared_ptr<ViewSessionState> make_view_session_state(
-    std::shared_ptr<const ViewPlan> plan) {
-    auto st = std::make_shared<ViewSessionState>();
+dstd::SharedPtr<ViewSessionState> make_view_session_state(
+    dstd::SharedPtr<const ViewPlan> plan) {
+    auto st = dstd::make_shared<ViewSessionState>();
     st->plan = std::move(plan);
     return st;
 }
@@ -1468,24 +1756,25 @@ void add_branch(ViewSessionState& state, BranchHooks hooks) {
 }
 
 void add_stream_branch(
-    ViewSessionState& state, std::shared_ptr<const ViewPlan> plan,
-    std::shared_ptr<coro::Channel<dataframe::Morsel>> channel,
-    std::shared_ptr<coro::CoroSemaphore> budget,
-    std::shared_ptr<const std::atomic<bool>> dropped) {
+    ViewSessionState& state, dstd::SharedPtr<const ViewPlan> plan,
+    dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel,
+    dstd::SharedPtr<coro::AsyncSemaphore> budget,
+    dstd::SharedPtr<const std::atomic<bool>> dropped) {
     state.stream_branches.push_back({std::move(plan), std::move(channel),
                                      std::move(budget), std::move(dropped)});
 }
 
 void add_fold_factory(
     ViewSessionState& state,
-    std::function<std::unique_ptr<Fold>(dftracer::utils::StringIntern&)> make,
-    std::function<void()> finalize) {
+    dstd::Function<dstd::UniquePtr<Fold>(dftracer::utils::dstd::StringIntern&)>
+        make,
+    dstd::Function<void()> finalize) {
     state.fold_factories.push_back({std::move(make), std::move(finalize)});
 }
 
 void add_fold_branch(ViewSessionState& state, Query predicate,
-                     std::function<BranchConsumer()> make_consumer,
-                     std::function<void()> finalize, bool wants_metadata) {
+                     dstd::Function<BranchConsumer()> make_consumer,
+                     dstd::Function<void()> finalize, bool wants_metadata) {
     BranchHooks h;
     h.wants_metadata = wants_metadata;
     h.predicate = std::move(predicate);
@@ -1495,8 +1784,8 @@ void add_fold_branch(ViewSessionState& state, Query predicate,
 }
 
 void add_fold_branch(ViewSessionState& state,
-                     std::function<BranchConsumer()> make_consumer,
-                     std::function<void()> finalize, bool wants_metadata) {
+                     dstd::Function<BranchConsumer()> make_consumer,
+                     dstd::Function<void()> finalize, bool wants_metadata) {
     BranchHooks h;  // predicate unset = match all scanned events
     h.wants_metadata = wants_metadata;
     h.make_consumer = std::move(make_consumer);
@@ -1505,8 +1794,8 @@ void add_fold_branch(ViewSessionState& state,
 }
 
 void add_selection_fold_branch(ViewSessionState& state,
-                               std::function<BranchConsumer()> make_consumer,
-                               std::function<void()> finalize) {
+                               dstd::Function<BranchConsumer()> make_consumer,
+                               dstd::Function<void()> finalize) {
     if (auto eq = effective_query(*state.plan))
         add_fold_branch(state, std::move(*eq), std::move(make_consumer),
                         std::move(finalize));
@@ -1515,9 +1804,9 @@ void add_selection_fold_branch(ViewSessionState& state,
 }
 
 void add_materialize_branch(ViewSessionState& state,
-                            std::vector<GroupKey> group_by,
-                            std::vector<AggSpec> agg) {
-    auto plan = std::make_shared<ViewPlan>(*state.plan);
+                            dstd::Vector<GroupKey> group_by,
+                            dstd::Vector<AggSpec> agg) {
+    auto plan = dstd::make_shared<ViewPlan>(*state.plan);
     plan->group_by = std::move(group_by);
     plan->agg = std::move(agg);
     plan->schema.reset();
@@ -1529,25 +1818,24 @@ void add_materialize_branch(ViewSessionState& state,
     // session's per-event fold cannot feed, so the materialize branch does no
     // per-event work and (re)builds the rollup through the engine in finalize.
     h.make_consumer = []() -> BranchConsumer {
-        return [](const json::JsonValue&, std::string_view) {};
+        return [](json::Value&, dstd::StringView) {};
     };
     h.finalize = [plan]() {
-        const std::string rdir =
+        const dstd::String rdir =
             dftracer::utils::index::cache::rollup_cache_path(*plan);
         if (!rdir.empty()) plan_record_schema(*plan);
         if (rdir.empty()) return;
         try {
             dataframe::AggStatePtr state_out;
-            dftracer::utils::default_runtime().run_blocking(
-                "session_materialize",
-                [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
+            dftracer::utils::default_runtime().block_on(coro::named(
+                "session_materialize", [&]() -> coro::CoroTask<void> {
                     state_out = co_await build_engine_agg_state(*plan);
                     co_return;
-                });
+                }()));
             if (!state_out) return;
             auto db = dftracer::utils::index::cache::open_rollup_db(
-                rdir, dftracer::utils::index::store::RocksDatabase::OpenMode::
-                          ReadWrite);
+                rdir,
+                dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
             if (db)
                 dftracer::utils::index::cache::persist_rollup(
                     *db, dftracer::utils::index::cache::plan_signature(*plan),
@@ -1562,24 +1850,23 @@ void add_materialize_branch(ViewSessionState& state,
 }
 
 BranchHooks make_export_branch(ExportSink& sink,
-                               std::shared_ptr<ExportStats> out) {
+                               dstd::SharedPtr<ExportStats> out) {
     // The sink is one shared object, so writes still serialize on a mutex; only
     // the count is per worker.
-    auto mtx = std::make_shared<std::mutex>();
+    auto mtx = dstd::make_shared<std::mutex>();
     auto counts =
-        std::make_shared<std::vector<std::shared_ptr<std::uint64_t>>>();
+        dstd::make_shared<dstd::Vector<dstd::SharedPtr<std::uint64_t>>>();
 
     BranchHooks h;
     h.make_consumer = [&sink, mtx, counts]() -> BranchConsumer {
-        auto count = std::make_shared<std::uint64_t>(0);
+        auto count = dstd::make_shared<std::uint64_t>(0);
         counts->push_back(count);
-        return
-            [&sink, mtx, count](const json::JsonValue&, std::string_view raw) {
-                std::lock_guard<std::mutex> lk(*mtx);
-                sink.write(raw);
-                sink.write("\n");
-                ++*count;
-            };
+        return [&sink, mtx, count](json::Value&, dstd::StringView raw) {
+            std::lock_guard<std::mutex> lk(*mtx);
+            sink.write(raw);
+            sink.write("\n");
+            ++*count;
+        };
     };
     h.finalize = [out, counts]() {
         std::uint64_t total = 0;
@@ -1598,37 +1885,44 @@ class BranchDriverFold : public Fold {
    public:
     // `gate_metadata`: the scan carries metadata records only for the
     // branches that read them, so the others must not see them.
-    BranchDriverFold(std::shared_ptr<std::vector<const BranchHooks*>> branches,
+    BranchDriverFold(dstd::SharedPtr<dstd::Vector<const BranchHooks*>> branches,
                      bool gate_metadata)
         : branches_(std::move(branches)), gate_metadata_(gate_metadata) {}
 
     bool accepts(const ScanShape&) const override { return true; }
     bool wants_raw() const override { return true; }
 
-    std::unique_ptr<Fold> slice() const override {
-        auto s = std::make_unique<BranchDriverFold>(branches_, gate_metadata_);
+    dstd::UniquePtr<Fold> slice() const override {
+        auto s = dstd::make_unique<BranchDriverFold>(branches_, gate_metadata_);
         s->consumers_.reserve(branches_->size());
         for (const auto* br : *branches_)
             s->consumers_.push_back(br->make_consumer());
         return s;
     }
 
+    // One on-demand parse per line serves the metadata gate, every predicate
+    // and every consumer, each starting from the beginning of the event.
     void step(const FoldBatch& b) override {
-        for (std::string_view line : b.raw) {
-            buf_.assign(line);
-            auto res = parser_.parse(buf_);
-            if (res.error()) continue;
-            auto root = res.value_unsafe();
-            if (!root.is_object()) continue;
-            json::JsonValue jv(root);
+        for (dstd::StringView line : b.raw) {
+            auto parsed = doc_.parse(line);
+            if (!parsed) continue;
+            json::Value& event = *parsed;
+            if (event.type() != json::Value::Type::Object) continue;
             const bool metadata =
                 gate_metadata_ &&
-                trace::read_phase(jv["ph"]) == trace::RecordPhase::METADATA;
+                trace::event_phase(event) == trace::RecordPhase::Metadata;
+            // A line with a syntax error in a part that is read is dropped.
+            if (json::detail::ValueAccess::broken(event)) continue;
             for (std::size_t i = 0; i < branches_->size(); ++i) {
                 const BranchHooks* br = (*branches_)[i];
                 if (metadata && !br->wants_metadata) continue;
-                if (!br->predicate || br->predicate->evaluate(jv))
-                    consumers_[i](jv, line);
+                if (br->predicate && !br->predicate->matches(event)) {
+                    if (json::detail::ValueAccess::broken(event)) break;
+                    continue;
+                }
+                json::detail::ValueAccess::rewind(event);
+                if (json::detail::ValueAccess::broken(event)) break;
+                consumers_[i](event, line);
             }
         }
     }
@@ -1646,15 +1940,14 @@ class BranchDriverFold : public Fold {
     }
 
    private:
-    std::shared_ptr<std::vector<const BranchHooks*>> branches_;
+    dstd::SharedPtr<dstd::Vector<const BranchHooks*>> branches_;
     bool gate_metadata_;
-    std::vector<BranchConsumer> consumers_;
-    dftracer::utils::json::RecordParser parser_;
-    std::string buf_;
+    dstd::Vector<BranchConsumer> consumers_;
+    json::Document doc_;
 };
 
 coro::CoroTask<ExportStats> run_session(
-    std::shared_ptr<ViewSessionState> state) {
+    dstd::SharedPtr<ViewSessionState> state) {
     const ViewPlan& plan = *state->plan;
 
     // Serve each match-all aggregation branch from a rollup or the aggregation
@@ -1663,15 +1956,16 @@ coro::CoroTask<ExportStats> run_session(
     // EngineAggFold.
     struct ScanBranch {
         const BranchHooks* br;
-        std::shared_ptr<ViewPlan> agg_plan;  // set only for a match-all agg
+        dstd::SharedPtr<ViewPlan> agg_plan;  // set only for a match-all agg
         bool apply_query = false;  // branch EngineAggFold filters per event
     };
-    std::vector<ScanBranch> scan_branches;
+    dstd::Vector<ScanBranch> scan_branches;
     scan_branches.reserve(state->branches.size());
     for (const auto& br : state->branches) {
         if (br.agg && !br.predicate) {
-            auto full = br.agg->plan ? std::make_shared<ViewPlan>(*br.agg->plan)
-                                     : std::make_shared<ViewPlan>(plan);
+            auto full = br.agg->plan
+                            ? dstd::make_shared<ViewPlan>(*br.agg->plan)
+                            : dstd::make_shared<ViewPlan>(plan);
             if (!br.agg->plan) {
                 full->group_by = br.agg->group_by;
                 full->agg = br.agg->agg;
@@ -1688,7 +1982,9 @@ coro::CoroTask<ExportStats> run_session(
                     continue;
                 }
                 dataframe::AggStatePtr served;
-                if (co_await try_serve_aggregate_no_scan(*full, served)) {
+                const auto try_serve_aggregate_no_scan_ok =
+                    co_await try_serve_aggregate_no_scan(*full, served);
+                if (try_serve_aggregate_no_scan_ok) {
                     *br.agg->out = apply_agg_post_ops(
                         finalize_engine_result(*served, *full), *full);
                     continue;
@@ -1716,7 +2012,7 @@ coro::CoroTask<ExportStats> run_session(
     if (scan_branches.empty() && !has_factories && !has_streams)
         co_return ExportStats{};
 
-    std::vector<const ScanBranch*> agg_b, raw_b;
+    dstd::Vector<const ScanBranch*> agg_b, raw_b;
     for (const auto& sb : scan_branches)
         (sb.agg_plan ? agg_b : raw_b).push_back(&sb);
 
@@ -1752,29 +2048,34 @@ coro::CoroTask<ExportStats> run_session(
     ViewDefinition avdef = make_vdef(scan_plan, /*for_aggregation=*/true);
     // Streamed morsels hold the intern their ids resolve through, and outlive
     // this scan in their consumers' hands.
-    auto intern_owner = std::make_shared<dftracer::utils::StringIntern>();
-    dftracer::utils::StringIntern& intern = *intern_owner;
+    auto intern_owner =
+        dstd::make_shared<dftracer::utils::dstd::StringIntern>();
+    dftracer::utils::dstd::StringIntern& intern = *intern_owner;
 
-    std::vector<std::unique_ptr<StreamRowFold>> streams;
+    dstd::Vector<dstd::UniquePtr<StreamRowFold>> streams;
     streams.reserve(state->stream_branches.size());
     for (const StreamBranch& sb : state->stream_branches) {
         const bool keep_metadata = metadata_rows(*sb.plan);
         if (keep_metadata) avdef.include_metadata = true;
-        streams.push_back(std::make_unique<StreamRowFold>(
+        streams.push_back(dstd::make_unique<StreamRowFold>(
             sb.channel, sb.budget, intern_owner, sb.plan->select,
             sb.plan->time_scale, keep_metadata, false, sb.plan, sb.dropped,
             plan_by_path(*sb.plan)));
     }
 
-    std::vector<std::unique_ptr<EngineAggFold>> aggs;
-    aggs.reserve(agg_b.size());
-    for (const auto* sb : agg_b)
-        aggs.push_back(std::make_unique<EngineAggFold>(*sb->agg_plan, intern,
-                                                       sb->apply_query));
+    dstd::Vector<dstd::UniquePtr<EngineAggFold>> aggs(agg_b.size());
+    dstd::Vector<dstd::UniquePtr<IndexRuleFold>> rule_aggs(agg_b.size());
+    for (std::size_t i = 0; i < agg_b.size(); ++i) {
+        rule_aggs[i] = IndexRuleFold::make(*agg_b[i]->agg_plan, intern,
+                                           agg_b[i]->apply_query);
+        if (!rule_aggs[i])
+            aggs[i] = dstd::make_unique<EngineAggFold>(
+                *agg_b[i]->agg_plan, intern, agg_b[i]->apply_query);
+    }
 
-    std::unique_ptr<BranchDriverFold> raw_fold;
+    dstd::UniquePtr<BranchDriverFold> raw_fold;
     if (!raw_b.empty()) {
-        auto branches = std::make_shared<std::vector<const BranchHooks*>>();
+        auto branches = dstd::make_shared<dstd::Vector<const BranchHooks*>>();
         branches->reserve(raw_b.size());
         bool any_metadata = false;
         for (const auto* sb : raw_b) {
@@ -1784,19 +2085,22 @@ coro::CoroTask<ExportStats> run_session(
         const bool gate = any_metadata && !avdef.include_metadata;
         if (gate) avdef.include_metadata = true;
         raw_fold =
-            std::make_unique<BranchDriverFold>(std::move(branches), gate);
+            dstd::make_unique<BranchDriverFold>(std::move(branches), gate);
     }
 
     // Externally-built folds (plugins), constructed with the shared intern so
     // ids agree and per-worker slices merge.
-    std::vector<std::unique_ptr<Fold>> factory_folds;
+    dstd::Vector<dstd::UniquePtr<Fold>> factory_folds;
     factory_folds.reserve(state->fold_factories.size());
     for (auto& ff : state->fold_factories)
         if (auto f = ff.make(intern)) factory_folds.push_back(std::move(f));
 
-    std::vector<Fold*> fold_ptrs;
+    dstd::Vector<Fold*> fold_ptrs;
     fold_ptrs.reserve(aggs.size() + factory_folds.size() + 1);
-    for (auto& a : aggs) fold_ptrs.push_back(a.get());
+    for (std::size_t i = 0; i < agg_b.size(); ++i)
+        fold_ptrs.push_back(rule_aggs[i]
+                                ? static_cast<Fold*>(rule_aggs[i].get())
+                                : static_cast<Fold*>(aggs[i].get()));
     if (raw_fold) fold_ptrs.push_back(raw_fold.get());
     for (auto& f : factory_folds) fold_ptrs.push_back(f.get());
     for (auto& f : streams) fold_ptrs.push_back(f.get());
@@ -1811,15 +2115,16 @@ coro::CoroTask<ExportStats> run_session(
                          nullptr, scan_cap);
 
     for (std::size_t i = 0; i < agg_b.size(); ++i) {
+        dataframe::AggState& branch_state =
+            rule_aggs[i] ? rule_aggs[i]->state() : aggs[i]->state();
         // A partial serializes the mergeable AggState for a distributed merge;
         // a collect finalizes it (rank/resolver relabel) into the DataFrame.
         if (agg_b[i]->br->agg->partial_out) {
-            *agg_b[i]->br->agg->partial_out =
-                encode_agg_partial(aggs[i]->state());
+            *agg_b[i]->br->agg->partial_out = encode_agg_partial(branch_state);
             continue;
         }
         *agg_b[i]->br->agg->out = apply_agg_post_ops(
-            finalize_engine_result(aggs[i]->state(), *agg_b[i]->agg_plan),
+            finalize_engine_result(branch_state, *agg_b[i]->agg_plan),
             *agg_b[i]->agg_plan);
     }
     // Factory folds published their results in Fold::finalize during the fuse;
@@ -1837,7 +2142,7 @@ coro::CoroTask<ExportStats> run_export_counters(const ViewPlan& plan,
                                                 ExportSink& sink) {
     ensure_schema(plan);
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/true);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     EngineAggFold agg(plan, intern);
     std::array<Fold*, 1> folds{&agg};
     ExportStats stats = co_await fuse(plan, vdef, folds, intern);
@@ -1848,7 +2153,7 @@ coro::CoroTask<ExportStats> run_export_counters(const ViewPlan& plan,
 // Rank-local counter aggregation for distributed runs: aggregate this view's
 // (shard of) files in memory and serialize the groups into an opaque partial
 // buffer. The transport (MPI etc.) lives in the caller; only bytes cross ranks.
-coro::CoroTask<std::string> run_aggregate_partial(const ViewPlan& plan) {
+coro::CoroTask<dstd::String> run_aggregate_partial(const ViewPlan& plan) {
     // Index-only fast path: the EVENT-only tier answers without reading traces
     // (a sharded reader merges straight from indexes). Everything else scans;
     // both emit the same mergeable AggState wire partial.
@@ -1857,10 +2162,9 @@ coro::CoroTask<std::string> run_aggregate_partial(const ViewPlan& plan) {
                     [](const AggSpec& s) { return is_occupancy_op(s.op); });
     if (plan.phase != Phase::Counters && !plan.auto_numeric_metrics &&
         !has_occupancy) {
-        dataframe::AggStatePtr tier;
-        if (dftracer::utils::index::schemas::dft::agg::agg_tier_collect(plan,
-                                                                        tier))
-            co_return encode_agg_partial(*tier);
+        dataframe::AggStatePtr served;
+        const bool from_partials = co_await partials_collect(plan, served);
+        if (from_partials) co_return encode_agg_partial(*served);
     }
     auto state = co_await build_engine_agg_state(plan);
     co_return encode_agg_partial(*state);
@@ -1868,7 +2172,7 @@ coro::CoroTask<std::string> run_aggregate_partial(const ViewPlan& plan) {
 
 // Merge partials and emit each combined group as a ph="C" counter event.
 ExportStats merge_counters_partials(
-    const ViewPlan& plan, const std::vector<std::string_view>& partials,
+    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials,
     ExportSink& sink) {
     const ViewPlan p = resolve_bucket_origin(plan);
     ensure_schema(p);
@@ -1877,14 +2181,14 @@ ExportStats merge_counters_partials(
     if (state) {
         emit_counters_from_state(*state, p, sink);
         st.events_matched =
-            static_cast<std::uint64_t>(dataframe::agg_num_groups(*state));
+            static_cast<std::uint64_t>(dataframe::agg_group_count(*state));
     }
     return st;
 }
 
 // Merge partials into a materialized DataFrame (distributed collect()).
 dataframe::DataFrame merge_partials_to_table(
-    const ViewPlan& plan, const std::vector<std::string_view>& partials) {
+    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
     const ViewPlan p = resolve_bucket_origin(plan);
     ensure_schema(p);
     dataframe::AggStatePtr state = decode_partials(partials);

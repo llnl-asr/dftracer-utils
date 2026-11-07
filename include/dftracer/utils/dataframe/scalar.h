@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_SCALAR_H
 #define DFTRACER_UTILS_DATAFRAME_SCALAR_H
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
-#include <string_view>
 #include <type_traits>
 
 namespace dftracer::utils::dataframe {
@@ -39,7 +40,7 @@ inline dftu_scalar boolean(bool v) noexcept { return i64(v ? 1 : 0); }
 
 /// Build a STR-tagged scalar BORROWING `v`. `v` must outlive every call the
 /// scalar is passed to; nothing stores a dftu_scalar past the call.
-inline dftu_scalar str(std::string_view v) noexcept {
+inline dftu_scalar str(dstd::StringView v) noexcept {
     dftu_scalar s;
     s.kind = DFTU_SCALAR_TAG_STR;
     s.len = static_cast<std::uint32_t>(v.size());
@@ -85,35 +86,35 @@ inline T scalar_value(dftu_scalar s) {
 /// `dftu_scalar` and code assigning a reducer result to one keeps compiling.
 /// The typed accessors delegate to scalar_value<T>().
 struct Scalar {
-    dftu_scalar raw_{};
+    dftu_scalar data{};
 
     Scalar() = default;
-    Scalar(dftu_scalar s) noexcept : raw_(s) {}
-    operator dftu_scalar() const noexcept { return raw_; }
+    Scalar(dftu_scalar s) noexcept : data(s) {}
+    operator dftu_scalar() const noexcept { return data; }
 
-    double f64() const { return scalar_value<double>(raw_); }
-    std::int64_t i64() const { return scalar_value<std::int64_t>(raw_); }
-    std::uint64_t u64() const { return scalar_value<std::uint64_t>(raw_); }
+    double f64() const { return scalar_value<double>(data); }
+    std::int64_t i64() const { return scalar_value<std::int64_t>(data); }
+    std::uint64_t u64() const { return scalar_value<std::uint64_t>(data); }
     bool boolean() const { return i64() != 0; }
 
     template <class T>
     T as() const {
-        return scalar_value<T>(raw_);
+        return scalar_value<T>(data);
     }
 
     dftu_scalar_tag tag() const noexcept {
-        return static_cast<dftu_scalar_tag>(raw_.kind);
+        return static_cast<dftu_scalar_tag>(data.kind);
     }
     dftu_scalar_tag kind() const noexcept { return tag(); }
-    dftu_scalar raw() const noexcept { return raw_; }
+    dftu_scalar raw() const noexcept { return data; }
 
     /// The borrowed text of a STR-tagged scalar, empty for every other tag.
     /// The view points at whatever the scalar borrowed, so it is valid only as
     /// long as that is.
-    std::string_view str() const noexcept {
-        return raw_.kind == DFTU_SCALAR_TAG_STR && raw_.value.s != nullptr
-                   ? std::string_view{raw_.value.s, raw_.len}
-                   : std::string_view{};
+    dstd::StringView str() const noexcept {
+        return data.kind == DFTU_SCALAR_TAG_STR && data.value.s != nullptr
+                   ? dstd::StringView{data.value.s, data.len}
+                   : dstd::StringView{};
     }
 };
 

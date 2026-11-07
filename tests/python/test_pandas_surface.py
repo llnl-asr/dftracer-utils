@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The pandas surface added as compositions of engine ops (the frame, Series
 and group-by mixins), each value checked against pandas 2.x on the same
 data."""

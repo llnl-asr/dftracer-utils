@@ -1,10 +1,10 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 
 #include <cstdint>
 #include <cstring>
-#include <string>
 
 namespace {
 

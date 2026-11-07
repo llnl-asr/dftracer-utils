@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Column expressions over chunked collect results equal the joined ones."""
 
 import pytest

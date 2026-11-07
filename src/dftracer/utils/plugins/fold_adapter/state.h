@@ -1,15 +1,17 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_STATE_H
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_STATE_H
 
-#include <dftracer/utils/core/common/spill_dir.h>
+#include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/state_registry.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::plugins {
 
@@ -21,11 +23,13 @@ class SpillDir {
     SpillDir& operator=(const SpillDir&) = delete;
 
     /// The directory, created on first use; empty if it could not be created.
-    const std::string& path();
+    const dstd::Path& path();
+    /// Charge `bytes` written to a file in the directory to the spill gauge.
+    void charge(std::uint64_t bytes) noexcept;
 
    private:
-    std::optional<dftracer::utils::ScopedSpillSubdir> dir_;
-    std::string empty_;
+    dstd::Optional<dftracer::utils::common::ScopedSpillSubdir> dir_;
+    dstd::Path empty_;
 };
 
 /// One live instance of a plugin-registered dftu_state_desc: this slice's
@@ -35,14 +39,14 @@ class SpillDir {
 class StateAccum {
    public:
     /// `budget` is the scan's out-of-core budget in bytes, resolved through
-    /// resolve_spill_budget: 0 means auto and NO_SPILL_BUDGET disables
-    /// spilling.
+    /// memory::resolve_spill_budget: 0 means auto and memory::NO_SPILL_BUDGET
+    /// disables spilling.
     StateAccum(const RegisteredState& reg, std::uint64_t budget);
     ~StateAccum();
     StateAccum(const StateAccum&) = delete;
     StateAccum& operator=(const StateAccum&) = delete;
 
-    const std::string& name() const { return reg_->name; }
+    const dstd::String& name() const { return reg_->name; }
     /// Runs written so far; 0 means the state never left memory.
     std::size_t runs() const { return runs_.size(); }
     /// True once the state ran past the budget with no serialize/deserialize
@@ -61,7 +65,7 @@ class StateAccum {
     void maybe_spill();
     void adopt_runs(StateAccum& other);
     void drain_runs();
-    const std::string& dir_path();
+    const dstd::Path& dir_path();
 
     const RegisteredState* reg_;
     std::uint64_t budget_;
@@ -69,9 +73,9 @@ class StateAccum {
     bool spill_refused_ = false;
     // shared so a worker's directory outlives the worker once a master fold
     // has adopted the runs inside it.
-    std::shared_ptr<SpillDir> dir_;
-    std::vector<std::shared_ptr<SpillDir>> adopted_dirs_;
-    std::vector<std::string> runs_;
+    dstd::SharedPtr<SpillDir> dir_;
+    dstd::Vector<dstd::SharedPtr<SpillDir>> adopted_dirs_;
+    dstd::Vector<dstd::Path> runs_;
 };
 
 }  // namespace dftracer::utils::plugins

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Deliberately-wrong typed DataFrame-ops usage: ty must flag every line below.
 
 Each marked call is a real authoring mistake the typed surface now catches

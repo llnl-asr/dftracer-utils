@@ -1,13 +1,13 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/agg/detail.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -16,8 +16,13 @@ namespace {
 // Set in a FieldStat's domain byte when a nonzero ecarry follows it.
 constexpr std::uint8_t HAS_ECARRY = 0x80;
 
+// A serialized dyn cell is at least its 4-byte id, the domain byte and the
+// compact mask. A count the bytes left cannot hold is corrupt, so it cannot
+// size a vector past the blob.
+constexpr std::uint64_t MIN_DYN_CELL_BYTES = 7;
+
 template <class T>
-void put(std::string& s, T v) {
+void put(dstd::String& s, T v) {
     s.append(reinterpret_cast<const char*>(&v), sizeof(T));
 }
 // A FieldStat is written field by field, never as a raw copy, which would write
@@ -66,14 +71,14 @@ void stat_from_words(const std::uint64_t (&w)[STAT_WORDS], FieldStat& f) {
     f.cm4 = word_double(w[11]);
 }
 
-void put_head(std::string& s, const FieldStat& f) {
+void put_head(dstd::String& s, const FieldStat& f) {
     put(s, static_cast<std::uint8_t>(static_cast<std::uint8_t>(f.domain) |
                                      (f.ecarry ? HAS_ECARRY : 0)));
     if (f.ecarry) put(s, f.ecarry);
 }
 
 // The layout of a stored blob: the first four words, the head, the other eight.
-void put_full(std::string& s, const FieldStat& f) {
+void put_full(dstd::String& s, const FieldStat& f) {
     std::uint64_t w[STAT_WORDS];
     stat_words(f, w);
     for (std::size_t i = 0; i < 4; ++i) put(s, w[i]);
@@ -83,7 +88,7 @@ void put_full(std::string& s, const FieldStat& f) {
 
 // The head, a 16-bit mask of the nonzero words and only those words: most
 // states leave the higher moments at zero.
-void put_compact(std::string& s, const FieldStat& f) {
+void put_compact(dstd::String& s, const FieldStat& f) {
     put_head(s, f);
     std::uint64_t w[STAT_WORDS];
     stat_words(f, w);
@@ -95,13 +100,13 @@ void put_compact(std::string& s, const FieldStat& f) {
         if (w[i]) put(s, w[i]);
 }
 
-void put_stat(std::string& s, const FieldStat& f, bool compact) {
+void put_stat(dstd::String& s, const FieldStat& f, bool compact) {
     if (compact)
         put_compact(s, f);
     else
         put_full(s, f);
 }
-void put_bytes(std::string& s, std::string_view b) {
+void put_bytes(dstd::String& s, dstd::StringView b) {
     put(s, static_cast<std::uint64_t>(b.size()));
     s.append(b);
 }
@@ -153,16 +158,26 @@ struct Reader {
         stat_from_words(w, f);
         return f;
     }
-    std::string get_bytes() {
+    dstd::String get_bytes() {
         std::uint64_t n = get<std::uint64_t>();
         count(n);
-        std::string r(p, n);
+        dstd::String r(p, n);
         p += n;
         return r;
     }
     void skip(std::uint64_t n) {
         count(n);
         p += n;
+    }
+    void count_cells(std::uint64_t n) const {
+        if (n > left() / MIN_DYN_CELL_BYTES) truncated();
+    }
+    // A fixed tag of the dyn section's layout. A blob of an older layout fails
+    // here instead of being misread.
+    void expect(const char (&tag)[4]) {
+        if (left() < sizeof(tag) || std::memcmp(p, tag, sizeof(tag)) != 0)
+            truncated();
+        p += sizeof(tag);
     }
 };
 
@@ -172,9 +187,14 @@ struct Reader {
 // instead of misreading the bytes. A full blob starts with a small spec count.
 constexpr char COMPACT_MAGIC[4] = {'D', 'F', 'T', 'C'};
 
-std::string agg_serialize(const AggState& st_in, bool compact) {
+// The dyn section's tag, after the specs. A blob of an older layout fails here
+// instead of being misread.
+constexpr char DYN_FULL_MAGIC[4] = {'D', 'F', 'T', 'F'};
+constexpr char DYN_LIGHT_MAGIC[4] = {'D', 'F', 'T', 'E'};
+
+dstd::String agg_serialize(const AggState& st_in, bool compact) {
     const AggState& st = settled(st_in);
-    std::string s;
+    dstd::String s;
     if (compact) s.append(COMPACT_MAGIC, sizeof(COMPACT_MAGIC));
     put(s, static_cast<std::uint32_t>(st.specs.size()));
     put(s, static_cast<std::uint32_t>(st.nkeys));
@@ -194,8 +214,8 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
                                              ? st.key_time_unit[k]
                                              : TimeUnit::Micro));
     for (std::size_t k = 0; k < st.nkeys; ++k)
-        put_bytes(
-            s, k < st.key_timezone.size() ? st.key_timezone[k] : std::string());
+        put_bytes(s, k < st.key_timezone.size() ? st.key_timezone[k]
+                                                : dstd::String());
     for (std::size_t k = 0; k < st.nkeys; ++k)
         put(s, k < st.key_byte_width.size() ? st.key_byte_width[k]
                                             : std::int32_t{0});
@@ -224,7 +244,7 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
     put(s, ng);
     for (std::size_t k = 0; k < st.nkeys; ++k) {
         if (st.key_is_bytes[k])
-            for (const std::string& v : st.skey_cols[k]) put_bytes(s, v);
+            for (const dstd::String& v : st.skey_cols[k]) put_bytes(s, v);
         else
             for (std::int64_t v : st.ikey_cols[k]) put(s, v);
         for (std::uint8_t v : st.nkey_cols[k]) put(s, v);
@@ -236,11 +256,11 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
         for (std::uint64_t b : st.fl_last) put(s, b);
         for (std::int64_t x : st.fl_first_idx) put(s, x);
         for (std::int64_t x : st.fl_last_idx) put(s, x);
-        for (const std::string& v : st.fl_first_s) put_bytes(s, v);
-        for (const std::string& v : st.fl_last_s) put_bytes(s, v);
+        for (const dstd::String& v : st.fl_first_s) put_bytes(s, v);
+        for (const dstd::String& v : st.fl_last_s) put_bytes(s, v);
     }
     if (st.has_sketch) {
-        std::vector<std::uint8_t> blob;
+        dstd::Vector<std::uint8_t> blob;
         for (const DDSketch& sk : st.sketches) {
             sk.serialize_into(blob);
             put(s, static_cast<std::uint32_t>(blob.size()));
@@ -248,7 +268,7 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
         }
     }
     if (st.has_msk) {
-        std::vector<std::uint8_t> blob;
+        dstd::Vector<std::uint8_t> blob;
         for (const MergeSketch& sk : st.msk) {
             sk.serialize_into(blob);
             put(s, static_cast<std::uint32_t>(blob.size()));
@@ -259,15 +279,15 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
     if (st.has_arg) {
         for (double b : st.arg_by) put(s, b);
         for (char h : st.arg_has) put(s, static_cast<std::uint8_t>(h));
-        for (const std::string& r : st.arg_repr) put_bytes(s, r);
+        for (const dstd::String& r : st.arg_repr) put_bytes(s, r);
     }
     put(s, static_cast<std::uint8_t>(st.has_set ? 1 : 0));
     if (st.has_set) {
         for (const AggState::StringSet& gset : st.sets) {
             put(s, static_cast<std::uint32_t>(gset.size()));
-            std::vector<std::string_view> sorted(gset.begin(), gset.end());
+            dstd::Vector<dstd::StringView> sorted(gset.begin(), gset.end());
             std::sort(sorted.begin(), sorted.end());
-            for (const std::string_view v : sorted) put_bytes(s, v);
+            for (const dstd::StringView v : sorted) put_bytes(s, v);
         }
     }
     put(s, static_cast<std::uint8_t>(st.has_occ ? 1 : 0));
@@ -293,29 +313,56 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
             put_bytes(s, d.out_prefix);
         }
         put(s, static_cast<std::uint8_t>(st.dyn_has_sketch ? 1 : 0));
-        put(s, static_cast<std::uint32_t>(st.dyn_domain.size()));
-        for (const auto& [name, dom] : st.dyn_domain) {
-            put_bytes(s, name);
-            put(s, static_cast<std::uint8_t>(dom));
-        }
-        for (std::int64_t g = 0; g < ng; ++g) {
-            const std::map<std::string, FieldStat>& gmap =
-                st.dyn_fs[static_cast<std::size_t>(g)];
-            put(s, static_cast<std::uint64_t>(gmap.size()));
-            for (const auto& [name, fs] : gmap) {
-                put_bytes(s, name);
-                put_stat(s, fs, compact);
+        // Tag, name table once (name and domain), then each group's cells by
+        // id.
+        if (st.dyn_light_on) {
+            s.append(DYN_LIGHT_MAGIC, sizeof(DYN_LIGHT_MAGIC));
+            put(s, static_cast<std::uint32_t>(st.dyn_names.size()));
+            for (std::size_t i = 0; i < st.dyn_names.size(); ++i) {
+                put_bytes(s, st.dyn_name(static_cast<std::uint32_t>(i)));
+                put(s, static_cast<std::uint8_t>(st.dyn_domain[i]));
+            }
+            // The record the words are read with, so a reader whose mask rules
+            // differ from the writer's fails here.
+            put(s, st.dyn_light_mask);
+            put(s, static_cast<std::uint8_t>(st.dyn_light_stride));
+            for (std::int64_t g = 0; g < ng; ++g) {
+                const DynLightCells& cells =
+                    st.dyn_light[static_cast<std::size_t>(g)];
+                put(s, static_cast<std::uint64_t>(cells.words.size()));
+                for (std::uint64_t w : cells.words) put(s, w);
+                put(s, static_cast<std::uint64_t>(cells.carry.size()));
+                for (const auto& [id, wrap] : cells.carry) {
+                    put(s, id);
+                    put(s, wrap);
+                }
+            }
+        } else {
+            s.append(DYN_FULL_MAGIC, sizeof(DYN_FULL_MAGIC));
+            put(s, static_cast<std::uint32_t>(st.dyn_names.size()));
+            for (std::size_t i = 0; i < st.dyn_names.size(); ++i) {
+                put_bytes(s, st.dyn_name(static_cast<std::uint32_t>(i)));
+                put(s, static_cast<std::uint8_t>(st.dyn_domain[i]));
+            }
+            for (std::int64_t g = 0; g < ng; ++g) {
+                const dstd::Vector<DynCell>& cells =
+                    st.dyn_fs[static_cast<std::size_t>(g)];
+                put(s, static_cast<std::uint64_t>(cells.size()));
+                for (const DynCell& c : cells) {
+                    put(s, c.id);
+                    put_stat(s, c.stat, compact);
+                }
             }
         }
         if (st.dyn_has_sketch) {
-            std::vector<std::uint8_t> blob;
+            dstd::Vector<std::uint8_t> blob;
             for (std::int64_t g = 0; g < ng; ++g) {
-                const std::map<std::string, DDSketch>& gsk =
+                const dstd::Vector<DynSketchCell>& cells =
                     st.dyn_sketch[static_cast<std::size_t>(g)];
-                put(s, static_cast<std::uint64_t>(gsk.size()));
-                for (const auto& [name, sk] : gsk) {
-                    put_bytes(s, name);
-                    sk.serialize_into(blob);
+                put(s, static_cast<std::uint64_t>(cells.size()));
+                for (const DynSketchCell& c : cells) {
+                    put(s, c.id);
+                    c.sketch.serialize_into(blob);
                     put(s, static_cast<std::uint32_t>(blob.size()));
                     s.append(reinterpret_cast<const char*>(blob.data()),
                              blob.size());
@@ -377,7 +424,7 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
     return s;
 }
 
-AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
+AggStatePtr agg_deserialize(const dstd::String& blob, bool compact) {
     Reader r{blob.data(), blob.data() + blob.size()};
     const bool marked =
         blob.size() >= sizeof(COMPACT_MAGIC) &&
@@ -621,21 +668,84 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
             if (d.op == AggOp::Pct) sketch = true;
         if ((r.get<std::uint8_t>() != 0) != sketch) Reader::truncated();
         st->dyn_has_sketch = sketch;
-        const std::uint32_t ndom = r.get<std::uint32_t>();
-        for (std::uint32_t i = 0; i < ndom; ++i) {
-            std::string name = r.get_bytes();
-            st->dyn_domain.emplace(
-                std::move(name),
-                static_cast<FieldStatDomain>(r.get<std::uint8_t>()));
+        // The light record the specs need is derived after them, as init_layout
+        // saw none.
+        st->dyn_light_layout();
+        if (r.left() < sizeof(DYN_FULL_MAGIC)) Reader::truncated();
+        const bool light_cells =
+            std::memcmp(r.p, DYN_LIGHT_MAGIC, sizeof(DYN_LIGHT_MAGIC)) == 0;
+        r.expect(light_cells ? DYN_LIGHT_MAGIC : DYN_FULL_MAGIC);
+        if (light_cells && !st->dyn_light_ok) Reader::truncated();
+        const std::uint32_t nnames = r.get<std::uint32_t>();
+        r.count(nnames);
+        st->dyn_names.reserve(nnames);
+        st->dyn_domain.reserve(nnames);
+        for (std::uint32_t i = 0; i < nnames; ++i) {
+            const dstd::String name = r.get_bytes();
+            const auto dom =
+                static_cast<FieldStatDomain>(r.get<std::uint8_t>());
+            if (dom > FieldStatDomain::F64) Reader::truncated();
+            // A repeated name would break the id -> name mapping.
+            if (st->dyn_intern(name, dom) != i) Reader::truncated();
         }
         r.count(static_cast<std::size_t>(ng));
-        st->dyn_fs.resize(static_cast<std::size_t>(ng));
-        for (std::int64_t g = 0; g < ng; ++g) {
-            const std::uint64_t cnt = r.get<std::uint64_t>();
-            for (std::uint64_t j = 0; j < cnt; ++j) {
-                std::string name = r.get_bytes();
-                st->dyn_fs[static_cast<std::size_t>(g)].emplace(
-                    std::move(name), r.get_stat(compact));
+        if (light_cells) {
+            const std::uint8_t mask = r.get<std::uint8_t>();
+            const std::uint8_t stride = r.get<std::uint8_t>();
+            if (mask != st->dyn_light_mask || stride != st->dyn_light_stride)
+                Reader::truncated();
+            st->dyn_light_on = true;
+            st->dyn_light.resize(static_cast<std::size_t>(ng));
+            for (std::int64_t g = 0; g < ng; ++g) {
+                DynLightCells& cells =
+                    st->dyn_light[static_cast<std::size_t>(g)];
+                const std::uint64_t nw = r.get<std::uint64_t>();
+                r.count_cells(nw);
+                if (nw % st->dyn_light_stride != 0) Reader::truncated();
+                cells.words.resize(static_cast<std::size_t>(nw));
+                std::uint32_t prev = 0;
+                for (std::uint64_t j = 0; j < nw; ++j) {
+                    cells.words[static_cast<std::size_t>(j)] =
+                        r.get<std::uint64_t>();
+                    if (j % st->dyn_light_stride != 0) continue;
+                    // The cells are written in id order and must stay in it.
+                    const auto id = static_cast<std::uint32_t>(
+                        cells.words[static_cast<std::size_t>(j)] &
+                        DYN_LIGHT_ID);
+                    if (id >= nnames || (j != 0 && id <= prev))
+                        Reader::truncated();
+                    prev = id;
+                }
+                const std::uint64_t nc = r.get<std::uint64_t>();
+                r.count_cells(nc);
+                cells.carry.reserve(static_cast<std::size_t>(nc));
+                for (std::uint64_t j = 0; j < nc; ++j) {
+                    const std::uint32_t id = r.get<std::uint32_t>();
+                    const std::int64_t wrap = r.get<std::int64_t>();
+                    if (id >= nnames || wrap == 0 ||
+                        (!cells.carry.empty() &&
+                         cells.carry.back().first >= id))
+                        Reader::truncated();
+                    cells.carry.emplace_back(id, wrap);
+                }
+            }
+        } else {
+            st->dyn_fs.resize(static_cast<std::size_t>(ng));
+            for (std::int64_t g = 0; g < ng; ++g) {
+                const std::uint64_t cnt = r.get<std::uint64_t>();
+                r.count_cells(cnt);
+                dstd::Vector<DynCell>& cells =
+                    st->dyn_fs[static_cast<std::size_t>(g)];
+                cells.reserve(static_cast<std::size_t>(cnt));
+                for (std::uint64_t j = 0; j < cnt; ++j) {
+                    const std::uint32_t id = r.get<std::uint32_t>();
+                    FieldStat fs = r.get_stat(compact);
+                    // The cells are written in id order and must stay in it.
+                    if (id >= nnames ||
+                        (!cells.empty() && cells.back().id >= id))
+                        Reader::truncated();
+                    cells.push_back(DynCell{std::move(fs), id});
+                }
             }
         }
         if (st->dyn_has_sketch) {
@@ -643,15 +753,21 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
             st->dyn_sketch.resize(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g) {
                 const std::uint64_t cnt = r.get<std::uint64_t>();
+                r.count_cells(cnt);
+                dstd::Vector<DynSketchCell>& cells =
+                    st->dyn_sketch[static_cast<std::size_t>(g)];
+                cells.reserve(static_cast<std::size_t>(cnt));
                 for (std::uint64_t j = 0; j < cnt; ++j) {
-                    std::string name = r.get_bytes();
+                    const std::uint32_t id = r.get<std::uint32_t>();
                     const std::uint32_t blen = r.get<std::uint32_t>();
                     r.count(blen);
-                    st->dyn_sketch[static_cast<std::size_t>(g)].emplace(
-                        std::move(name),
-                        DDSketch::deserialize(
-                            reinterpret_cast<const std::uint8_t*>(r.p), blen));
+                    DDSketch sk = DDSketch::deserialize(
+                        reinterpret_cast<const std::uint8_t*>(r.p), blen);
                     r.p += blen;
+                    if (id >= nnames ||
+                        (!cells.empty() && cells.back().id >= id))
+                        Reader::truncated();
+                    cells.push_back(DynSketchCell{std::move(sk), id});
                 }
             }
         }
@@ -707,7 +823,7 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
         for (std::size_t i = 0; i < sz; ++i) {
             const std::uint32_t cnt = r.get<std::uint32_t>();
             for (std::uint32_t j = 0; j < cnt; ++j) {
-                std::string v = r.get_bytes();
+                dstd::String v = r.get_bytes();
                 st->ss_counters[i].emplace(std::move(v),
                                            r.get<std::uint64_t>());
             }

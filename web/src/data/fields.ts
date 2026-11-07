@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import type { TraceSchema } from "./types";
 
 // The record fields the viewer's duql clauses name: dftracer's own, or a path

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Render plan for a DFTracer aggregated (ph=3) event. Its individual events were
 // dropped at capture time, so their positions inside the window are unknown.
 // When the window is wide enough on screen we place `count` uniformly-spaced

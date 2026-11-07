@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Provenance tab: the lineage graph of a dftracer provenance-mode trace.
 //
 // Data comes from GET /api/prov/graph (trace::provenance::extract_provenance_graph

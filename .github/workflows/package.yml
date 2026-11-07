@@ -73,7 +73,6 @@ jobs:
           tag=${tag#v}
           if [ "$distance" = "0" ]; then v="$tag"; else v="$tag.post$distance.dev0"; fi
           echo "VERSION=$v" >> "$GITHUB_ENV"
-          echo "ROCKSDB_VERSION=$(scripts/ci/rocksdb_version.sh)" >> "$GITHUB_ENV"
 
       - name: Restore dependency installs
         run: |
@@ -91,7 +90,7 @@ jobs:
               set -e
               git config --global --add safe.directory /project
               sh scripts/ci/install_sccache.sh
-              sh scripts/ci/prebuild_wheel_deps.sh /deps
+              /opt/python/cp312-cp312/bin/python -m pip install --quiet cmake ninja
               export PATH=/opt/python/cp312-cp312/bin:$PATH
               scripts/ci/package.sh /deps "/project/package/dftracer-utils-${{ env.VERSION }}-${{ inputs.name }}.tar.gz"
             '
@@ -102,10 +101,8 @@ jobs:
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
           DEPS_BUILD_TYPE: Release
-          ZSTD_STATIC: "1"
         run: |
           for f in cmake ninja; do brew list --versions "$f" >/dev/null || brew install "$f"; done
-          ROCKSDB_PREFIX="$PWD/.deps/rocksdb-$ROCKSDB_VERSION" scripts/ci/build_rocksdb.sh
           scripts/ci/package.sh "$PWD/.deps" "$PWD/package/dftracer-utils-$VERSION-${{ inputs.name }}.tar.gz"
 
       - name: Save dependency installs
@@ -115,6 +112,7 @@ jobs:
         with:
           name: package-${{ inputs.name }}
           path: package/*.tar.gz
+          retention-days: 1
 
       - name: sccache stats
         if: always()

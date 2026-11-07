@@ -21,13 +21,13 @@ Start the server
 .. code-block:: bash
 
    # Serve ./traces on the default 127.0.0.1:8080
-   dftracer_server -d ./traces
+   dftracer_server ./traces
 
    # Expose on all interfaces (see Access token below), custom port
-   dftracer_server -d ./traces -b 0.0.0.0 -p 9000
+   dftracer_server ./traces -b 0.0.0.0 -p 9000
 
    # Keep indexes on fast local disk when traces live on NFS
-   dftracer_server -d ./traces --index-dir /var/cache/dftracer
+   dftracer_server ./traces --index-dir /var/cache/dftracer
 
 The server scans ``-d`` on startup, loads or builds the ``.dftindex`` stores,
 and listens for requests. It also serves the interactive trace viewer at ``/``
@@ -83,7 +83,7 @@ you pass ``-b 0.0.0.0``. When you expose it, set a token:
 
 .. code-block:: bash
 
-   dftracer_server -d ./traces -b 0.0.0.0 --token "$(openssl rand -hex 16)"
+   dftracer_server ./traces -b 0.0.0.0 --token "$(openssl rand -hex 16)"
 
 With ``--token`` set, every request must present the token, either as a
 ``?token=<TOKEN>`` query parameter or an ``Authorization: Bearer <TOKEN>``

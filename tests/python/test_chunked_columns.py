@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Collected chunked columns give the same values through every conversion."""
 
 import numpy as np

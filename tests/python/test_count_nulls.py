@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """``count`` of a column counts its non-null values inside an aggregation
 (openspec change count-skips-nulls); the no-column ``count()`` stays the row
 count, in the dataframe engine and in the trace View."""

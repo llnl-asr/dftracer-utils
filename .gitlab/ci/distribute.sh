@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Publish wheels and HTML docs to the dldl workspace:
 #   pip install dftracer --find-links $DIST_ROOT/wheels        (tagged release)
 #   pip install --pre dftracer --find-links $DIST_ROOT/wheels  (develop build)

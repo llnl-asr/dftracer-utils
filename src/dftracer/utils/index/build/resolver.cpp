@@ -1,136 +1,254 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
+#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
+
+#include <cstdint>
+#include <exception>
+#include <mutex>
 
 namespace dftracer::utils::index::build {
 
 namespace {
 
-using index::store::IndexDatabase;
+using index::FileRef;
+using index::Snapshot;
+using index::store::IndexExtension;
 
 struct PendingFile {
     std::size_t file_index;
-    std::string file_path;
-    std::string logical_path;
+    dstd::String file_path;
+    dstd::String logical_path;
     std::uint64_t mtime;
     std::uint64_t size;
 };
 
 struct ResolveGroupInput {
-    std::string index_path;
-    std::vector<PendingFile> files;
+    dstd::String index_path;
+    dstd::Vector<PendingFile> files;
     bool require_checkpoints;
     bool require_bloom;
-    bool require_aggregation;
     std::size_t checkpoint_size = 0;
-    std::optional<ChunkIndexerConfig> bloom_config;
-    std::string schema;
-    std::optional<index::schemas::dft::agg::AggregationConfig>
-        aggregation_config;
+    dstd::Optional<ChunkIndexerConfig> bloom_config;
+    dstd::String schema;
+    index::schemas::dft::agg::AggregationConfig aggregation_config =
+        index::schemas::dft::agg::standard_aggregation_config();
 };
 
 struct ResolveGroupOutput {
-    std::vector<FileWorkItem> needs_checkpoint;
-    std::vector<FileWorkItem> needs_bloom;
-    std::vector<FileWorkItem> needs_aggregation;
-    std::vector<ResolvedFile> cached;
+    dstd::Vector<FileWorkItem> needs_checkpoint;
+    dstd::Vector<FileWorkItem> needs_bloom;
+    dstd::Vector<FileWorkItem> needs_aggregation;
+    dstd::Vector<ResolvedFile> cached;
 
     bool needs_augmentation = false;
     std::uint64_t stored_time_interval_us = 0;
     bool stale_detected = false;
     bool aggregation_stale = false;
-    bool format_outdated = false;
-    std::string index_path;
+    dstd::String index_path;
 };
 
+// The file's copy of `ext` was built, and with `params_hash`.
+bool ready_with_params(const Snapshot& snapshot, const FileRef& file,
+                       IndexExtension ext, std::uint64_t params_hash) {
+    const auto state = index::extension_state(snapshot, file, ext);
+    return state && state->ready && state->params_hash == params_hash;
+}
+
 // Whether the file's rows are in the tier, built with `params_hash`.
-bool agg_current(const std::optional<index::store::ExtensionState>& state,
+bool agg_current(const Snapshot& snapshot, const FileRef& file,
                  std::uint64_t params_hash) {
-    return state && state->ready &&
-           state->version == index::store::layout::ext_version(
-                                 index::store::IndexExtension::AGG) &&
-           state->params_hash == params_hash;
+    return ready_with_params(snapshot, file, IndexExtension::Agg, params_hash);
 }
 
 // Paths the file's pruning tier indexed by value (bloom) or range (zonemap).
-std::vector<std::string> indexed_paths(const IndexDatabase& db, int file_id) {
-    auto paths =
-        db.extension_paths(file_id, index::store::IndexExtension::BLOOM);
-    for (auto& p :
-         db.extension_paths(file_id, index::store::IndexExtension::ZONEMAP))
-        paths.push_back(std::move(p));
-    return paths;
+dstd::Vector<dstd::String> indexed_paths(const Snapshot& snapshot,
+                                         const FileRef& file) {
+    dstd::Vector<dstd::String> out;
+    for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap})
+        for (auto& p : common::unwrap(index::paths(snapshot, file, ext)))
+            out.emplace_back(p.data(), p.size());
+    return out;
 }
 
-bool covers(const std::vector<std::string>& indexed,
-            const std::vector<std::string>& fields) {
-    for (const std::string& f : fields)
+bool covers(const dstd::Vector<dstd::String>& indexed,
+            const dstd::Vector<dstd::String>& fields) {
+    for (const dstd::String& f : fields)
         if (std::find(indexed.begin(), indexed.end(), f) == indexed.end())
             return false;
     return true;
 }
 
 // The file's recorded schema is current and, when `wanted` is set, is it.
-bool schema_current(const IndexDatabase& db, int file_id,
-                    const std::string& wanted) {
-    auto recorded = db.file_schema(file_id);
-    if (!recorded || (!wanted.empty() && *recorded != wanted)) return false;
-    const RecordSchema* schema = find_schema(*recorded);
-    auto state =
-        db.extension_state(file_id, index::store::IndexExtension::PROFILE);
-    return schema && state && state->params_hash == schema->params_hash();
+bool schema_current(const Snapshot& snapshot, const FileRef& file,
+                    const dstd::String& wanted) {
+    const auto recorded = common::unwrap(index::schema(snapshot, file));
+    if (!recorded) return false;
+    const dstd::String id(recorded->data(), recorded->size());
+    if (!wanted.empty() && id != wanted) return false;
+    const RecordSchema* schema = find_schema(id);
+    if (!schema) return false;
+    const auto state =
+        index::extension_state(snapshot, file, IndexExtension::Profile);
+    return state && state->params_hash == schema->params_hash();
 }
 
 // The tier extensions of the file that are missing or were built with other
 // settings than `base` gives its schema.
 index::store::ExtensionMask stale_tier(
-    const IndexDatabase& db, int file_id,
-    const std::optional<ChunkIndexerConfig>& base, const RecordSchema* schema) {
-    using index::store::IndexExtension;
+    const Snapshot& snapshot, const FileRef& file,
+    const dstd::Optional<ChunkIndexerConfig>& base,
+    const RecordSchema* schema) {
     index::store::ExtensionMask stale;
-    for (auto ext : {IndexExtension::STATS, IndexExtension::CATALOG,
-                     IndexExtension::METADATA})
-        if (!db.extension_current(file_id, ext)) stale.add(ext);
+    for (auto ext : {IndexExtension::Stats, IndexExtension::Catalog,
+                     IndexExtension::Metadata})
+        if (!index::extension_current(snapshot, file, ext)) stale.add(ext);
     if (!base) {
         if (!stale.empty()) stale.add(index::store::PRUNING_EXTENSIONS);
         return stale;
     }
-    const std::optional<ChunkIndexerConfig> config =
+    const dstd::Optional<ChunkIndexerConfig> config =
         schema ? for_schema(*base, *schema) : *base;
     for (auto ext : index::store::ALL_EXTENSIONS) {
         if (!index::store::PRUNING_EXTENSIONS.has(ext) ||
             !config->extensions.has(ext))
             continue;
-        auto state = db.extension_state(file_id, ext);
-        if (!db.extension_current(file_id, ext) ||
-            state->params_hash != config->params_hash(ext))
+        if (!ready_with_params(snapshot, file, ext, config->params_hash(ext)))
             stale.add(ext);
     }
-    const bool paths = config->extensions.has(IndexExtension::BLOOM) ||
-                       config->extensions.has(IndexExtension::ZONEMAP);
+    const bool paths = config->extensions.has(IndexExtension::Bloom) ||
+                       config->extensions.has(IndexExtension::Zonemap);
     if (paths &&
-        !covers(indexed_paths(db, file_id), config->extra_dimensions)) {
-        for (auto ext : {IndexExtension::BLOOM, IndexExtension::ZONEMAP})
+        !covers(indexed_paths(snapshot, file), config->extra_dimensions)) {
+        for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap})
             if (config->extensions.has(ext)) stale.add(ext);
     }
-    for (const auto& ext : index::extensions::plugin_extensions()) {
-        auto state = db.plugin_extension_state(file_id, ext->name);
-        if (!state || !ext->current(*state)) {
-            stale.add(IndexExtension::PLUGIN);
-            break;
+    const auto registered = index::extensions::plugin_extensions();
+    if (!registered.empty()) {
+        const auto copies = common::unwrap(index::plugins(snapshot, file));
+        for (const auto& ext : registered) {
+            const index::PluginCopy* copy = nullptr;
+            for (const auto& candidate : copies)
+                if (dstd::StringView(candidate.name.data(),
+                                     candidate.name.size()) == ext->name)
+                    copy = &candidate;
+            if (copy == nullptr ||
+                !ext->current(index::store::ExtensionState{
+                    copy->version, copy->params_hash, copy->ready})) {
+                stale.add(IndexExtension::Plugin);
+                break;
+            }
         }
     }
     return stale;
+}
+
+// Files per parallel_for chunk of the fresh check.
+constexpr std::int64_t DECIDE_GRAIN = 16;
+
+// What the fresh check found for one file. Kind Aggregate is a current file
+// whose tier rows must be built.
+struct FileDecision {
+    enum class Kind : std::uint8_t {
+        NotIndexed,
+        Stale,
+        NeedsCheckpoint,
+        Bloom,
+        Aggregate,
+        Cached
+    };
+    dstd::String schema;
+    index::store::ExtensionMask tier;
+    Kind kind = Kind::NotIndexed;
+    bool agg_candidate = false;
+    bool agg_current = false;
+};
+
+// Reads only. Safe to run for many files at once on one snapshot.
+FileDecision decide(const Snapshot& snapshot, const PendingFile& f,
+                    const ResolveGroupInput& input, std::uint64_t params) {
+    FileDecision d;
+    const auto file = snapshot.file(f.logical_path);
+    if (!file) return d;
+
+    // Stat-only staleness using mtime/size captured during the scan
+    // (no extra metadata op). Rebuild if the source changed since it
+    // was indexed, or the record predates mtime/size tracking.
+    const auto& stored_stat = file->stat();
+    if (stored_stat.mtime != f.mtime || stored_stat.size != f.size) {
+        DFTRACER_UTILS_LOG_WARN(
+            "Index stale for %s (source changed since indexing); "
+            "rebuilding",
+            f.file_path.c_str());
+        d.kind = FileDecision::Kind::Stale;
+        return d;
+    }
+
+    const bool has_checkpoints =
+        index::extension_current(snapshot, *file, IndexExtension::Members) &&
+        schema_current(snapshot, *file, input.schema);
+    if (input.require_checkpoints && !has_checkpoints) {
+        d.kind = FileDecision::Kind::NeedsCheckpoint;
+        return d;
+    }
+
+    // A changed checkpoint size re-checkpoints the file. The build path
+    // stores the requested size verbatim, so an exact compare suffices
+    // (no file read). Zero on either side means "unspecified": skip.
+    if (input.require_checkpoints && input.checkpoint_size != 0) {
+        const auto metadata =
+            common::unwrap(index::file_metadata(snapshot, *file));
+        const std::uint64_t stored_ckpt =
+            metadata ? metadata->checkpoint_size : 0;
+        if (stored_ckpt != 0 && stored_ckpt != input.checkpoint_size) {
+            d.kind = FileDecision::Kind::NeedsCheckpoint;
+            return d;
+        }
+    }
+
+    const auto recorded = common::unwrap(index::schema(snapshot, *file));
+    if (recorded) d.schema.assign(recorded->data(), recorded->size());
+    bool needs_agg = false;
+    if (find_schema(d.schema)) {
+        d.agg_candidate = true;
+        d.agg_current = agg_current(snapshot, *file, params);
+        needs_agg = !d.agg_current;
+    }
+    if (input.require_bloom) {
+        d.tier = stale_tier(snapshot, *file, input.bloom_config,
+                            find_schema(d.schema));
+        if (!d.tier.empty()) {
+            d.kind = FileDecision::Kind::Bloom;
+            return d;
+        }
+    }
+    d.kind =
+        needs_agg ? FileDecision::Kind::Aggregate : FileDecision::Kind::Cached;
+    return d;
 }
 
 ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
@@ -138,153 +256,89 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
     result.index_path = input.index_path;
     if (!input.index_path.empty()) load_index_schemas(input.index_path);
 
-    if (input.index_path.empty() || !fs::exists(input.index_path)) {
+    if (input.index_path.empty() ||
+        !common::unwrap(dstd::fs::exists(
+            dstd::PathView(index::store_of(input.index_path))))) {
         for (auto& f : input.files) {
             result.needs_checkpoint.push_back(
-                FileWorkItem{f.file_index, std::move(f.file_path), -1, {}, {}});
+                FileWorkItem{f.file_index, std::move(f.file_path), {}, {}});
         }
         return result;
     }
 
     try {
-        IndexDatabase db(input.index_path,
-                         index::store::IndexOpenMode::ReadOnly);
-        // An index in another format is rebuilt whole, like a changed source:
-        // it is never read.
-        if (db.format_outdated()) {
-            DFTRACER_UTILS_LOG_WARN("Index %s is not in format %u; rebuilding",
-                                    input.index_path.c_str(),
-                                    IndexDatabase::FORMAT_VERSION);
-            result.stale_detected = true;
-            result.format_outdated = true;
-            for (auto& f : input.files) {
-                result.needs_checkpoint.push_back(FileWorkItem{
-                    f.file_index, std::move(f.file_path), -1, {}, {}});
-            }
-            return result;
-        }
-        auto registry = db.query_all_file_registry();
+        const auto snapshot =
+            common::unwrap(index::plan::open_snapshot(input.index_path));
 
-        // The tier holds no file id, so one file's rows cannot be replaced:
-        // rows built with other params, or of a file rebuilt whole, make the
-        // whole tier stale.
-        const bool aggregate =
-            input.require_aggregation && input.aggregation_config;
-        const std::uint64_t params =
-            aggregate ? input.aggregation_config->params_hash() : 0;
-        if (auto stored =
-                index::schemas::dft::agg::tier::read_config(*db.db())) {
+        const std::uint64_t params = input.aggregation_config.params_hash();
+        if (auto stored = common::unwrap(
+                index::schemas::dft::agg::tier::read_config(snapshot))) {
             result.stored_time_interval_us = stored->time_interval_us;
-            if (aggregate && stored->params_hash != params) {
+            if (stored->params_hash != params) {
                 result.aggregation_stale = true;
-                auto same_interval = *input.aggregation_config;
+                auto same_interval = input.aggregation_config;
                 same_interval.time_interval_us = stored->time_interval_us;
                 result.needs_augmentation =
                     same_interval.params_hash() == stored->params_hash;
             }
+        } else {
+            // Partials with no config record may have keys in another layout,
+            // so they are never read and the tier is built again.
+            for (const auto& file : common::unwrap(snapshot.files())) {
+                if (index::extension_state(snapshot, file,
+                                           IndexExtension::Agg)) {
+                    result.aggregation_stale = true;
+                    break;
+                }
+            }
         }
-        std::vector<std::pair<FileWorkItem, bool>> agg_candidates;
-        auto rebuilt_whole = [&](int file_id) {
-            if (file_id >= 0 &&
-                db.extension_state(file_id, index::store::IndexExtension::AGG))
-                result.aggregation_stale = true;
-        };
+        dstd::Vector<FileDecision> decisions(input.files.size());
+        std::exception_ptr failure;
+        std::mutex failure_mutex;
+        default_runtime().parallel_for(
+            static_cast<std::int64_t>(input.files.size()), DECIDE_GRAIN,
+            [&](std::int64_t begin, std::int64_t end) {
+                try {
+                    for (std::int64_t i = begin; i < end; ++i) {
+                        const auto at = static_cast<std::size_t>(i);
+                        decisions[at] =
+                            decide(snapshot, input.files[at], input, params);
+                    }
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(failure_mutex);
+                    if (!failure) failure = std::current_exception();
+                }
+            });
+        if (failure) std::rethrow_exception(failure);
 
-        for (auto& f : input.files) {
-            auto reg_it = registry.find(f.logical_path);
-            if (reg_it == registry.end()) {
-                result.needs_checkpoint.push_back(FileWorkItem{
-                    f.file_index, std::move(f.file_path), -1, {}, {}});
-                continue;
-            }
-
-            const auto& reg = reg_it->second;
-
-            // Stat-only staleness using mtime/size captured during the scan
-            // (no extra metadata op). Rebuild if the source changed since it
-            // was indexed, or the record predates mtime/size tracking.
-            auto stored_stat = db.get_file_stat(f.logical_path);
-            bool stale = !stored_stat || stored_stat->mtime != f.mtime ||
-                         stored_stat->size != f.size;
-            if (stale) {
-                DFTRACER_UTILS_LOG_WARN(
-                    "Index stale for %s (source changed since indexing); "
-                    "rebuilding",
-                    f.file_path.c_str());
-                result.stale_detected = true;
-                rebuilt_whole(reg.file_id);
-                result.needs_checkpoint.push_back(FileWorkItem{
-                    f.file_index, std::move(f.file_path), reg.file_id, {}, {}});
-                continue;
-            }
-
-            const bool has_checkpoints =
-                db.extension_current(reg.file_id,
-                                     index::store::IndexExtension::MEMBERS) &&
-                schema_current(db, reg.file_id, input.schema);
-
-            if (input.require_checkpoints && !has_checkpoints) {
-                rebuilt_whole(reg.file_id);
-                result.needs_checkpoint.push_back(FileWorkItem{
-                    f.file_index, std::move(f.file_path), reg.file_id, {}, {}});
-                continue;
-            }
-
-            // A changed checkpoint size re-checkpoints the file. The build path
-            // stores the requested size verbatim, so an exact compare suffices
-            // (no file read). Zero on either side means "unspecified": skip.
-            if (input.require_checkpoints && input.checkpoint_size != 0) {
-                const auto stored_ckpt = db.get_checkpoint_size(reg.file_id);
-                if (stored_ckpt != 0 && stored_ckpt != input.checkpoint_size) {
-                    rebuilt_whole(reg.file_id);
-                    result.needs_checkpoint.push_back(
-                        FileWorkItem{f.file_index,
-                                     std::move(f.file_path),
-                                     reg.file_id,
-                                     {},
-                                     {}});
+        dstd::Vector<dstd::Pair<FileWorkItem, bool>> agg_candidates;
+        for (std::size_t i = 0; i < input.files.size(); ++i) {
+            PendingFile& f = input.files[i];
+            FileDecision& d = decisions[i];
+            switch (d.kind) {
+                case FileDecision::Kind::Stale:
+                    result.stale_detected = true;
+                    [[fallthrough]];
+                case FileDecision::Kind::NotIndexed:
+                case FileDecision::Kind::NeedsCheckpoint:
+                    result.needs_checkpoint.push_back(FileWorkItem{
+                        f.file_index, std::move(f.file_path), {}, {}});
                     continue;
-                }
+                default:
+                    break;
             }
-
-            std::string schema =
-                db.file_schema(reg.file_id).value_or(std::string{});
-            bool needs_agg = false;
-            if (aggregate) {
-                if (find_schema(schema)) {
-                    const auto agg_state = db.extension_state(
-                        reg.file_id, index::store::IndexExtension::AGG);
-                    // Rows stored by another version of the tier are of another
-                    // layout and the tier cannot replace one file's rows, so
-                    // the whole tier is stale: it is cleared and rebuilt, never
-                    // merged onto.
-                    if (agg_state && agg_state->version !=
-                                         index::store::layout::ext_version(
-                                             index::store::IndexExtension::AGG))
-                        result.aggregation_stale = true;
-                    const bool current = agg_current(agg_state, params);
-                    agg_candidates.emplace_back(
-                        FileWorkItem{
-                            f.file_index, f.file_path, reg.file_id, {}, schema},
-                        current);
-                    needs_agg = !current;
-                }
+            if (d.agg_candidate)
+                agg_candidates.emplace_back(
+                    FileWorkItem{f.file_index, f.file_path, {}, d.schema},
+                    d.agg_current);
+            if (d.kind == FileDecision::Kind::Bloom) {
+                result.needs_bloom.push_back(
+                    FileWorkItem{f.file_index, std::move(f.file_path), d.tier,
+                                 std::move(d.schema)});
+            } else if (d.kind == FileDecision::Kind::Cached) {
+                result.cached.push_back(ResolvedFile{
+                    f.file_index, std::move(f.file_path), std::move(d.schema)});
             }
-            if (input.require_bloom) {
-                auto tier = stale_tier(db, reg.file_id, input.bloom_config,
-                                       find_schema(schema));
-                if (!tier.empty()) {
-                    result.needs_bloom.push_back(
-                        FileWorkItem{f.file_index, std::move(f.file_path),
-                                     reg.file_id, tier, std::move(schema)});
-                    continue;
-                }
-            }
-            if (needs_agg) continue;
-
-            result.cached.push_back(
-                ResolvedFile{f.file_index, std::move(f.file_path), reg.file_id,
-                             std::move(schema)});
         }
         // A file already current must be aggregated again when the tier is
         // cleared; it then is not cached.
@@ -300,12 +354,11 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
         DFTRACER_UTILS_LOG_WARN(
             "Index resolve failed (%s); falling back to full rebuild",
             e.what());
-        // Every file is rebuilt whole and the tier cannot replace one file's
-        // rows, so the stored tier (possibly the corrupt part) is cleared.
+        // The tier may be what failed to read, so it is cleared.
         result.aggregation_stale = true;
         for (auto& f : input.files) {
             result.needs_checkpoint.push_back(
-                FileWorkItem{f.file_index, std::move(f.file_path), -1, {}, {}});
+                FileWorkItem{f.file_index, std::move(f.file_path), {}, {}});
         }
     }
 
@@ -314,36 +367,96 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
 
 }  // namespace
 
+dstd::Vector<runtime::fs::FoundFile> scanned_entries(
+    const ResolverResult& result) {
+    dstd::Vector<runtime::fs::FoundFile> out;
+    out.reserve(result.all_files.size());
+    for (std::size_t i = 0; i < result.all_files.size(); ++i) {
+        runtime::fs::FoundFile entry;
+        entry.path = dstd::Path(result.all_files[i]);
+        entry.size = result.all_file_sizes[i];
+        entry.mtime_ns =
+            result.all_file_mtimes[i] * runtime::fs::NANOS_PER_SECOND;
+        out.push_back(std::move(entry));
+    }
+    return out;
+}
+
+dstd::Vector<runtime::fs::FoundFile> scanned_entries(
+    const ResolverResult& result, const dstd::Vector<FileWorkItem>& items) {
+    dstd::Vector<runtime::fs::FoundFile> out;
+    out.reserve(items.size());
+    for (const auto& item : items) {
+        runtime::fs::FoundFile entry;
+        entry.path = dstd::Path(item.file_path);
+        entry.size = result.all_file_sizes[item.file_index];
+        entry.mtime_ns = result.all_file_mtimes[item.file_index] *
+                         runtime::fs::NANOS_PER_SECOND;
+        out.push_back(std::move(entry));
+    }
+    return out;
+}
+
 coro::CoroTask<ResolverResult> Resolver::operator()(
-    CoroScope& ctx, const ResolverInput& input) const {
+    coro::Scope& ctx, const ResolverInput& input) const {
     DFTRACER_UTILS_TRACE_SCOPE("resolve index");
     ResolverResult result;
 
-    if (!input.directory.empty()) {
-        utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
-            input.directory, utilities::filesystem::trace_file_patterns(),
-            false};
-        std::vector<utilities::filesystem::FileEntry> matched;
-        matched = co_await scanner_(ctx, scan_input);
+    if (!input.entries.empty()) {
+        result.all_files.reserve(input.entries.size());
+        result.all_file_sizes.reserve(input.entries.size());
+        result.all_file_mtimes.reserve(input.entries.size());
+        for (const auto& entry : input.entries) {
+            result.all_files.push_back(dstd::String(entry.path.str()));
+            result.all_file_sizes.push_back(entry.size);
+            result.all_file_mtimes.push_back(entry.mtime_seconds());
+        }
+    } else if (!input.directory.empty()) {
+        runtime::fs::FindOptions options;
+        options.patterns = runtime::fs::names_of(
+            common::constants::indexer::INPUT_FILE_PATTERNS);
+        options.skip_dirs =
+            runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
+        options.skip_unreadable = true;
+        auto found = co_await runtime::fs::find_all(
+            ctx, dstd::PathView(input.directory), std::move(options));
+        if (!found) throw common::DFTUtilsException(found.error());
+        const dstd::Vector<runtime::fs::FoundFile>& matched = *found;
         result.all_files.reserve(matched.size());
         result.all_file_sizes.reserve(matched.size());
         result.all_file_mtimes.reserve(matched.size());
         for (const auto& entry : matched) {
-            result.all_files.push_back(entry.path.string());
+            result.all_files.push_back(dstd::String(entry.path.str()));
             result.all_file_sizes.push_back(entry.size);
-            result.all_file_mtimes.push_back(entry.mtime);
+            result.all_file_mtimes.push_back(entry.mtime_seconds());
         }
     } else {
         result.all_files = input.files;
         result.all_file_sizes.assign(input.files.size(), 0);
         result.all_file_mtimes.assign(input.files.size(), 0);
+        dstd::Vector<dstd::Path> missed;
+        dstd::Vector<std::size_t> missed_at;
         for (std::size_t i = 0; i < input.files.size(); ++i) {
-            std::error_code ec;
-            auto sz = fs::file_size(input.files[i], ec);
-            if (!ec) result.all_file_sizes[i] = static_cast<std::size_t>(sz);
-            result.all_file_mtimes[i] = static_cast<std::uint64_t>(
-                index::store::internal::get_file_modification_time(
-                    input.files[i]));
+            common::InputFileStat kept;
+            if (!common::cached_input(input.files[i], kept)) {
+                missed.emplace_back(input.files[i]);
+                missed_at.push_back(i);
+            } else if (kept.is_regular_file) {
+                result.all_file_sizes[i] = kept.size;
+                result.all_file_mtimes[i] =
+                    static_cast<std::uint64_t>(kept.mtime);
+            }
+        }
+        auto stat_task = runtime::fs::stat_many(
+            dstd::Span<const dstd::Path>(missed.data(), missed.size()));
+        auto stats = co_await std::move(stat_task);
+        for (std::size_t j = 0; j < stats.size(); ++j) {
+            if (!stats[j] || stats[j]->kind != dstd::fs::FileKind::File)
+                continue;
+            const std::size_t i = missed_at[j];
+            result.all_file_sizes[i] = stats[j]->size;
+            result.all_file_mtimes[i] =
+                stats[j]->mtime_ns / runtime::fs::NANOS_PER_SECOND;
         }
     }
 
@@ -354,7 +467,7 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
     result.index_path = trace::internal::determine_index_path(
         result.all_files.front(), input.index_dir);
 
-    StringViewMap<std::vector<PendingFile>> groups;
+    dstd::StringViewMap<dstd::Vector<PendingFile>> groups;
     for (std::size_t i = 0; i < result.all_files.size(); ++i) {
         const auto& file_path = result.all_files[i];
         auto idx_path =
@@ -365,11 +478,11 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
                                                result.all_file_sizes[i]});
     }
 
-    std::vector<ResolveGroupOutput> outputs;
+    dstd::Vector<ResolveGroupOutput> outputs;
     outputs.reserve(groups.size());
 
     if (groups.size() > 1) {
-        std::vector<coro::SpawnFuture<ResolveGroupOutput>> futures;
+        dstd::Vector<coro::SpawnFuture<ResolveGroupOutput>> futures;
         futures.reserve(groups.size());
 
         for (auto& [idx_path, files] : groups) {
@@ -378,15 +491,14 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
             group_input.files = std::move(files);
             group_input.require_checkpoints = input.require_checkpoints;
             group_input.require_bloom = input.require_bloom;
-            group_input.require_aggregation = input.require_aggregation;
             group_input.checkpoint_size = input.checkpoint_size;
             group_input.bloom_config = input.bloom_config;
             group_input.schema = input.schema;
             group_input.aggregation_config = input.aggregation_config;
 
-            futures.push_back(ctx.spawn(
-                [gi = std::move(group_input)](
-                    CoroScope&) mutable -> coro::CoroTask<ResolveGroupOutput> {
+            futures.push_back(
+                ctx.spawn_future([gi = std::move(group_input)]() mutable
+                                     -> coro::CoroTask<ResolveGroupOutput> {
                     co_return resolve_group_sync(std::move(gi));
                 }));
         }
@@ -401,7 +513,6 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
             group_input.files = std::move(files);
             group_input.require_checkpoints = input.require_checkpoints;
             group_input.require_bloom = input.require_bloom;
-            group_input.require_aggregation = input.require_aggregation;
             group_input.checkpoint_size = input.checkpoint_size;
             group_input.bloom_config = input.bloom_config;
             group_input.schema = input.schema;
@@ -434,8 +545,6 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
         if (out.stale_detected) {
             result.stale_detected = true;
         }
-        if (out.format_outdated)
-            result.outdated_roots.push_back(out.index_path);
         if (out.aggregation_stale)
             result.stale_aggregation_roots.push_back(out.index_path);
     }

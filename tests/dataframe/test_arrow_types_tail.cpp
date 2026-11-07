@@ -1,23 +1,22 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
 // The tail of the Arrow-types audit: search_sorted, interpolate and rank,
 // which the matrix test in test_arrow_types_matrix.cpp does not cover. Same
 // table-driven shape and the same default-less is_audited() switch, so a new
 // TypeId with no row here fails instead of being silently skipped.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
+#include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/scalar.h>
-// clang-format on
+#include <dftracer/utils/dstd/string.h>
+#include <nanoarrow/nanoarrow.h>
 
-#include "builders_arrow_types.h"
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;
@@ -150,7 +149,7 @@ TEST_SUITE("dataframe_arrow_types_tail") {
         // the needle set probes below, between the tie and 2, between 2 and
         // 3, and above every value.
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             if (row.numeric_ops == Support::Refuses) {
@@ -175,7 +174,7 @@ TEST_SUITE("dataframe_arrow_types_tail") {
 
     TEST_CASE("search_sorted on a non-numeric self column refuses") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             if (row.numeric_ops == Support::Refuses) {
@@ -186,7 +185,7 @@ TEST_SUITE("dataframe_arrow_types_tail") {
 
     TEST_CASE("interpolate: numeric-domain types fill the null interior") {
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             Series interpolated = s.interpolate();
@@ -211,7 +210,7 @@ TEST_SUITE("dataframe_arrow_types_tail") {
     TEST_CASE("rank: dense, min, average and ordinal tie-breaking") {
         // Rows are {3, 1, 2, 1}: value 1 (rows 1, 3) ties for the lowest rank.
         for (const TypeRow& row : TYPE_ROWS) {
-            INFO(std::string(type_name(row.id)));
+            INFO(dstd::String(type_name(row.id)));
             Series s = row.build();
             REQUIRE(s.valid());
             Series dense = s.rank(RankMethod::Dense, false);

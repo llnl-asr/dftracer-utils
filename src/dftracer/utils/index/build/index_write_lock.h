@@ -1,19 +1,16 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_INDEX_BUILD_INDEX_WRITE_LOCK_H
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_WRITE_LOCK_H
 
+#include <dftracer/utils/dstd/string.h>
+
 #include <mutex>
-#include <string>
 
 namespace dftracer::utils::index::build {
 
-/// Serializes index writers per index path. The contention is the open, not the
-/// write: each committer opens its own short-lived writable handle (rather than
-/// caching one, which would hold the lock for the process lifetime and block
-/// the indexer sharing the process), and RocksDB allows only one writable open
-/// per directory via its LOCK file. Every lazy writer that rides along a scan
-/// (dictionary, bloom) takes this first so their opens queue instead of one
-/// failing with a lock error.
-std::mutex& index_write_mutex(const std::string& index_path);
+/// Serializes index writers per index path. Every lazy writer that rides along
+/// a scan takes this first.
+std::mutex& index_write_mutex(const dstd::String& index_path);
 
 }  // namespace dftracer::utils::index::build
 

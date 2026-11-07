@@ -1,22 +1,23 @@
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/python/op_runner.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dlfcn.h>
 
 #include <cstddef>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace dftracer::utils::python {
 namespace {
 
-namespace coro = dftracer::utils::coro;
-using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
 
 // The compose host is a real PluginFold with a do-nothing slice: the op graph
@@ -59,7 +60,7 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
         return nullptr;
     }
 
-    std::vector<char> out_buf(static_cast<std::size_t>(out_size));
+    dstd::Vector<char> out_buf(static_cast<std::size_t>(out_size));
     int rc = -1;
     bool ran = false;
     {
@@ -77,12 +78,11 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
                     compose->run(host.h, op, in_data, out_buf.data(), &rc);
                 if (task) {
                     Py_BEGIN_ALLOW_THREADS;
-                    Runtime rt(1);
-                    rt.scope("jit-op", [&](CoroScope&) -> coro::CoroTask<void> {
-                          co_await *reinterpret_cast<coro::CoroTask<void>*>(
-                              task);
-                      }).wait();
-                    rt.shutdown();
+                    default_runtime().block_on(
+                        coro::named("jit-op", [&]() -> coro::CoroTask<void> {
+                            co_await *reinterpret_cast<coro::CoroTask<void>*>(
+                                task);
+                        }()));
                     Py_END_ALLOW_THREADS;
                 }
                 ran = true;

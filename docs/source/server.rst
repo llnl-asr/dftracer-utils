@@ -12,7 +12,7 @@ Basic startup:
 
 .. code-block:: bash
 
-    dftracer_server -d /path/to/traces
+    dftracer_server /path/to/traces
 
 The server scans the trace directory on startup, loads or builds a bloom/checkpoint sidecar index (a ``.dftindex`` directory), and begins listening for HTTP requests on ``127.0.0.1:8080``. It also serves the interactive :doc:`trace-viewer` web UI at ``/`` and ``/index.html``.
 
@@ -21,16 +21,16 @@ Custom Configuration:
 .. code-block:: bash
 
     # Expose on all interfaces (see Security below), port 9000
-    dftracer_server -b 0.0.0.0 -p 9000 -d /path/to/traces
+    dftracer_server -b 0.0.0.0 -p 9000 /path/to/traces
 
     # Use separate index directory (useful for NFS or slow disks)
-    dftracer_server -d /path/to/traces --index-dir /var/cache/dftracer_indexes
+    dftracer_server /path/to/traces --index-dir /var/cache/dftracer_indexes
 
     # Use 16 worker threads for concurrent request handling
-    dftracer_server -d /path/to/traces --executor-threads 16
+    dftracer_server /path/to/traces --executor-threads 16
 
     # Auto-shutdown after 30 minutes of uptime (0, the default, disables it)
-    dftracer_server -d /path/to/traces --timeout 30m
+    dftracer_server /path/to/traces --timeout 30m
 
 ``--timeout`` bounds the server's total uptime and then triggers a graceful
 shutdown; it accepts a humanized duration (``30m``, ``1.5h``, ``0`` to
@@ -46,7 +46,7 @@ address). When exposing it beyond localhost, set an access token:
 
 .. code-block:: bash
 
-    dftracer_server -d /path/to/traces -b 0.0.0.0 --token "$(openssl rand -hex 16)"
+    dftracer_server /path/to/traces -b 0.0.0.0 --token "$(openssl rand -hex 16)"
 
 With ``--token`` set, every request must present the token, either as a
 ``?token=<TOKEN>`` query parameter or an ``Authorization: Bearer <TOKEN>``

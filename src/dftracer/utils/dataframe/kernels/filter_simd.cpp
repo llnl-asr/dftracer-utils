@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/filter_simd.h>
 #include <dftracer/utils/dataframe/internal/scalar.h>
@@ -13,7 +14,6 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
 // Indices where p[i] > thr. The comparison is vectorized; its mask bits are
 // extracted with StoreMaskBits and scanned to emit indices as plain integers
@@ -21,16 +21,18 @@ namespace hn = hwy::HWY_NAMESPACE;
 template <class T>
 std::int64_t compact_gt_lanes(const T* p, std::int64_t n, T thr,
                               std::int64_t* out) {
-    const hn::ScalableTag<T> d;
-    const std::size_t lanes = hn::Lanes(d);
-    const auto vthr = hn::Set(d, thr);
+    const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto vthr = hwy::HWY_NAMESPACE::Set(d, thr);
     std::int64_t count = 0;
     std::int64_t i = 0;
     for (; i + static_cast<std::int64_t>(lanes) <= n;
          i += static_cast<std::int64_t>(lanes)) {
-        const auto m = hn::Gt(hn::LoadU(d, p + i), vthr);
+        const auto m =
+            hwy::HWY_NAMESPACE::Gt(hwy::HWY_NAMESPACE::LoadU(d, p + i), vthr);
         std::uint64_t bits = 0;
-        hn::StoreMaskBits(d, m, reinterpret_cast<std::uint8_t*>(&bits));
+        hwy::HWY_NAMESPACE::StoreMaskBits(
+            d, m, reinterpret_cast<std::uint8_t*>(&bits));
         while (bits != 0) {
             unsigned b = static_cast<unsigned>(__builtin_ctzll(bits));
             out[count++] = static_cast<std::int64_t>(i + b);
@@ -116,8 +118,9 @@ HWY_EXPORT(CompactU8);
 
 std::int64_t compact_gt(const dftu_series& v, dftu_scalar threshold,
                         std::int64_t* out) {
-    if (v.validity) return -1;  // nulls need masking; caller does scalar
-    const void* p = v.data->data();
+    if (v.validity.block())
+        return -1;  // nulls need masking; caller does scalar
+    const void* p = v.data.data();
     std::int64_t n = v.length;
     switch (v.type) {
         case TypeId::Int64:

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -100,7 +101,7 @@ run_pre_commit_cpp() {
   # Collect staged C/C++ source files (Added, Copied, Modified, Renamed)
   local staged_files
   staged_files="$(git -C "$REPO_ROOT" diff --cached --name-only --diff-filter=ACMR -- src include tests |
-    grep -E '\.(c|cpp|h|hpp)$' || true)"
+    grep -E '\.(c|cpp|h|hpp)$' | grep -v '^include/dftracer/utils/dstd/vendor/' || true)"
 
   if [ -z "$staged_files" ]; then
     echo "[pre-commit] no C/C++ source files staged, skipping format"

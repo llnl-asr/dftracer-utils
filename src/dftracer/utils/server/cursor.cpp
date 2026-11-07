@@ -1,4 +1,7 @@
-#include <dftracer/utils/core/common/base64.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/server/cursor.h>
 
 #include <cstring>
@@ -9,17 +12,17 @@ namespace dftracer::utils::server {
 // (all little-endian), base64-encoded.
 static constexpr std::size_t CURSOR_BYTES = 16;
 
-std::string QueryCursor::encode() const {
+dstd::String QueryCursor::encode() const {
     unsigned char raw[CURSOR_BYTES];
     std::memcpy(raw, &file_index, 8);
     std::memcpy(raw + 8, &chunk_index, 4);
     std::memcpy(raw + 12, &line_offset, 4);
-    return base64_encode(raw, CURSOR_BYTES);
+    return dstd::base64_encode(raw, CURSOR_BYTES);
 }
 
-std::optional<QueryCursor> QueryCursor::decode(std::string_view cursor) {
-    auto raw = base64_decode(cursor);
-    if (!raw || raw->size() != CURSOR_BYTES) return std::nullopt;
+dstd::Optional<QueryCursor> QueryCursor::decode(dstd::StringView cursor) {
+    auto raw = dstd::base64_decode(cursor);
+    if (!raw || raw->size() != CURSOR_BYTES) return dstd::nullopt;
     QueryCursor c;
     std::memcpy(&c.file_index, raw->data(), 8);
     std::memcpy(&c.chunk_index, raw->data() + 8, 4);

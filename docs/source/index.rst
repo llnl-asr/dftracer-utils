@@ -66,7 +66,7 @@ What it does
    .. grid-item-card:: Async by construction
 
       A C++20 coroutine runtime (io_uring on Linux, kqueue on macOS) with
-      pipelines, task graphs, channels, and structured concurrency.
+      channels and structured concurrency.
 
    .. grid-item-card:: Extensible
 

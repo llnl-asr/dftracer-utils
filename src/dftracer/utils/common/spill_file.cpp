@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/common/spill_file.h>
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/path.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <cstring>
+#include <memory>
+
+namespace dftracer::utils::common {
+
+dstd::Result<dstd::UniquePtr<SpillFile>> SpillFile::create() {
+    auto dir = spill_dir();
+    if (!dir) return dstd::Unexpected(dir.error());
+    dstd::String path((dir->view() / "dftu_spill_XXXXXX").str());
+    auto f = dstd::make_unique<SpillFile>(Key{}, spill_dir_in_memory(*dir));
+    f->fd_ = dstd::File::from_native_handle(::mkostemp(path.data(), O_CLOEXEC));
+    if (!f->fd_.is_open())
+        return make_error(
+            ErrorCode::Io,
+            str_cat("spill: cannot create a spill file in '", dir->str(), "' (",
+                    std::strerror(errno), "); set ", constants::SPILL_DIR_ENV,
+                    " to a writable directory"));
+    ::unlink(path.c_str());
+    return f;
+}
+
+std::uint64_t SpillFile::reserve(std::size_t bytes, std::size_t align) {
+    std::uint64_t cur = end_.load(std::memory_order_relaxed);
+    for (;;) {
+        const std::uint64_t at =
+            align > 1 ? (cur + align - 1) / align * align : cur;
+        if (end_.compare_exchange_weak(cur, at + bytes,
+                                       std::memory_order_relaxed)) {
+            charge_.add(at + bytes - cur);
+            return at;
+        }
+    }
+}
+
+dstd::Result<void> SpillFile::write_at(std::uint64_t offset, const void* data,
+                                       std::size_t n) {
+    const char* p = static_cast<const char*>(data);
+    std::size_t done = 0;
+    while (done < n) {
+        const ssize_t w = ::pwrite(fd_.native_handle(), p + done, n - done,
+                                   static_cast<off_t>(offset + done));
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return make_error(
+                ErrorCode::Io,
+                str_cat("spill: write failed (", std::strerror(errno),
+                        "); the spill directory may be full"));
+        }
+        if (w == 0)
+            return make_error(ErrorCode::Io, "spill: write made no progress");
+        done += static_cast<std::size_t>(w);
+    }
+    return {};
+}
+
+dstd::Result<std::uint64_t> SpillFile::append(const void* data, std::size_t n) {
+    const std::uint64_t at = reserve(n);
+    auto written = write_at(at, data, n);
+    if (!written) return dstd::Unexpected(written.error());
+    return at;
+}
+
+dstd::Result<void> SpillFile::read(std::uint64_t offset, void* out,
+                                   std::size_t n) const {
+    char* p = static_cast<char*>(out);
+    std::size_t done = 0;
+    while (done < n) {
+        const ssize_t r = ::pread(fd_.native_handle(), p + done, n - done,
+                                  static_cast<off_t>(offset + done));
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0)
+            return make_error(
+                ErrorCode::Io,
+                str_cat("spill: short read at offset ", offset + done, " (",
+                        r < 0 ? std::strerror(errno) : "end of file", ")"));
+        done += static_cast<std::size_t>(r);
+    }
+    return {};
+}
+
+}  // namespace dftracer::utils::common

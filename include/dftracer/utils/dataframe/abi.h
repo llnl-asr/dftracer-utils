@@ -1,9 +1,10 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_ABI_H
 #define DFTRACER_UTILS_DATAFRAME_ABI_H
 
-#include <dftracer/utils/core/common/abi.h>
-#include <dftracer/utils/core/common/export.h>
-#include <dftracer/utils/core/coro/abi.h>
+#include <dftracer/utils/common/abi.h>
+#include <dftracer/utils/common/export.h>
+#include <dftracer/utils/coro/abi.h>
 #include <dftracer/utils/duql/abi.h>
 #include <stdint.h>
 
@@ -40,7 +41,7 @@ typedef enum {
  *
  * A STR scalar BORROWS `value.s` for the duration of the call: nothing stores a
  * dftu_scalar past the call it was passed to, and the owner of the text (an
- * ExprNode, a caller's std::string) outlives it. `len` sits in the padding
+ * ExprNode, a caller's string) outlives it. `len` sits in the padding
  * after `kind`, so the struct is 16 bytes and 8-aligned exactly as before and
  * no by-value call site changes.
  *
@@ -2188,7 +2189,7 @@ typedef enum {
 } dftu_pushed;
 
 /** A pushdown request passed to dftu_source_vt::scan (mirrors
-   dataframe::ScanRequest, lazyframe.h). */
+   @ref dftracer::utils::dataframe::ScanRequest "ScanRequest", lazyframe.h). */
 typedef struct dftu_scan_request {
     /** Columns the plan needs, in the order the scan must return them. NULL
        or n_projection == 0 means all source columns. Accepting a non-empty
@@ -2279,11 +2280,12 @@ typedef struct dftu_named_expr {
     const dftu_expr* expr;
 } dftu_named_expr;
 
-/** One aggregate of an offered group-by (mirrors dataframe::AggregateExpr).
-   `op` is the canonical aggregate name (dataframe::to_string(Agg)). `input`
-   and `by` are positional against schema(); `input` is NULL for count and
-   `by` is NULL unless the op reads a second column. `param` is the quantile or
-   k where the op takes one. */
+/** One aggregate of an offered group-by (mirrors @ref
+   dftracer::utils::dataframe::AggregateExpr "AggregateExpr"). `op` is the
+   canonical aggregate name (dataframe::to_string(Agg)). `input` and `by` are
+   positional against schema(); `input` is NULL for count and `by` is NULL
+   unless the op reads a second column. `param` is the quantile or k where the
+   op takes one. */
 typedef struct dftu_apply_agg {
     const char* op;
     const dftu_expr* input;
@@ -2386,7 +2388,7 @@ typedef struct dftu_apply_result {
 /** A pushdown-aware data source a plugin registers under a name. Immutable:
    schema() reports columns without scanning and scan() may be called many
    times to open independent cursors, so one registered source can back many
-   LazyFrame collects. */
+   @ref dftracer::utils::dataframe::LazyFrame "LazyFrame" collects. */
 typedef struct dftu_source_vt {
     /** Column names, as a NUL-terminated array owned by the source and valid
        for its lifetime (until destroy()). Returns the count, or -1 on
@@ -2441,10 +2443,12 @@ DFTU_EXPORT int dftu_provider_register(const char* name,
  * A no-op (returns nonzero) if `name` was never registered. */
 DFTU_EXPORT int dftu_provider_unregister(const char* name);
 
-/** Build a LazyFrame scanning the provider registered as `name`. Returns a new
- * owned dftu_lazyframe (free with dftu_lazyframe_free), or NULL if no provider
- * is registered under that name. The provider must stay registered for as
- * long as the returned LazyFrame, or any LazyFrame derived from it, may still
+/** Build a @ref dftracer::utils::dataframe::LazyFrame "LazyFrame" scanning the
+ * provider registered as `name`. Returns a new owned dftu_lazyframe (free with
+ * dftu_lazyframe_free), or NULL if no provider is registered under that name.
+ * The provider must stay registered for as long as the returned @ref
+ * dftracer::utils::dataframe::LazyFrame "LazyFrame", or any @ref
+ * dftracer::utils::dataframe::LazyFrame "LazyFrame" derived from it, may still
  * be collected. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_from_provider(const char* name);
 
@@ -2784,16 +2788,16 @@ DFTU_EXPORT int dftu_node_unregister(const char* name);
  * (NULL when the node needs none) copied into the plan by value - a
  * pointer-bearing operand (str/strlist/i32list/i64list/agglist/expr/query)
  * must therefore point at storage that outlives every future execution of the
- * returned LazyFrame, not merely this call. Returns a new owned dftu_lazyframe
- * (free with dftu_lazyframe_free), or NULL if `lf`/`name` is NULL or no node
- * is registered under that name - an unknown name fails here, loudly, rather
- * than building a plan that fails later. A node is an optimization barrier:
- * the engine never pushes a filter or a projection through it and never
- * reorders around it, since it has no way to know whether that is safe for an
- * opaque node. An open() that returns the NULL sentinel, or a node whose
- * produced frame does not match the column count output_schema() declared,
- * surfaces as an error the first time the plan is driven (collect() or
- * stream()), naming the node. */
+ * returned @ref dftracer::utils::dataframe::LazyFrame "LazyFrame", not merely
+ * this call. Returns a new owned dftu_lazyframe (free with
+ * dftu_lazyframe_free), or NULL if `lf`/`name` is NULL or no node is registered
+ * under that name - an unknown name fails here, loudly, rather than building a
+ * plan that fails later. A node is an optimization barrier: the engine never
+ * pushes a filter or a projection through it and never reorders around it,
+ * since it has no way to know whether that is safe for an opaque node. An
+ * open() that returns the NULL sentinel, or a node whose produced frame does
+ * not match the column count output_schema() declared, surfaces as an error the
+ * first time the plan is driven (collect() or stream()), naming the node. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_op(const dftu_lazyframe* lf,
                                               const char* name,
                                               const dftu_op_arg* args);

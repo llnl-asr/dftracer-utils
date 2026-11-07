@@ -1,20 +1,24 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <string>
-#include <variant>
-#include <vector>
+
+namespace dftracer::utils::index {
+class FileBuild;
+}
 
 namespace dftracer::utils::index::extensions {
 
@@ -24,11 +28,12 @@ namespace dftracer::utils::index::extensions {
 /// so the row sets run as query-time sides instead.
 class RowSetFold : public trace::views::detail::Fold {
    public:
-    using Value = std::variant<std::monostate, bool, std::int64_t,
-                               std::uint64_t, double, std::string>;
+    using Value =
+        dstd::Variant<dstd::Monostate, bool, std::int64_t, std::uint64_t,
+                      double, dftracer::utils::dstd::String>;
 
-    RowSetFold(dftracer::utils::StringIntern& intern,
-               std::vector<IndexedRowSet> rowsets,
+    RowSetFold(dftracer::utils::dstd::StringIntern& intern,
+               dstd::Vector<IndexedRowSet> rowsets,
                std::uint64_t budget_bytes = 64ull << 20);
 
     bool accepts(const trace::views::detail::ScanShape&) const override {
@@ -37,7 +42,7 @@ class RowSetFold : public trace::views::detail::Fold {
     bool needs_args() const override { return true; }
     // The schema refuses a row set that reads a never_index path.
     bool reads_never_indexed() const override { return false; }
-    std::unique_ptr<trace::views::detail::Fold> slice() const override;
+    dstd::UniquePtr<trace::views::detail::Fold> slice() const override;
     void step(const trace::views::detail::FoldBatch& batch) override;
     void seal_unit(const trace::views::detail::ScanUnit& unit) override;
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;
@@ -47,9 +52,10 @@ class RowSetFold : public trace::views::detail::Fold {
         co_return true;
     }
 
-    /// Writes each row set's sealed rows and the file's manifest entry. The
-    /// source is part of the schema's hash, which the profile records.
-    void write(index::store::IndexWrite& w, int file_id) const;
+    /// Writes each row set's sealed rows into `build` and finishes the
+    /// extension. The source is part of the schema's hash, which the profile
+    /// records.
+    void write(index::FileBuild& build) const;
 
     bool abandoned() const noexcept { return abandoned_; }
     /// Sealed rows over every row set.
@@ -63,30 +69,30 @@ class RowSetFold : public trace::views::detail::Fold {
    private:
     // Cheap tests a record must pass before its filter runs.
     struct Guard {
-        std::optional<trace::RecordPhase> phase;
-        std::optional<std::uint32_t> name;
+        dstd::Optional<trace::RecordPhase> phase;
+        dstd::Optional<std::uint32_t> name;
         // The filter without the phase term the guard checks, for records
         // whose phase is a field of the event rather than a value.
-        std::optional<duql::Query> rest;
+        dstd::Optional<duql::Query> rest;
     };
     struct Rows {
-        std::vector<std::vector<Value>> columns;
+        dstd::Vector<dstd::Vector<Value>> columns;
     };
 
     // Appends `from`'s rows to row set `r`'s sealed rows, each distinct row
     // once when the row set is distinct, and empties `from`.
     void absorb(std::size_t r, Rows& from);
 
-    dftracer::utils::StringIntern* intern_;
-    std::vector<IndexedRowSet> rowsets_;
-    std::vector<Guard> guards_;
+    dftracer::utils::dstd::StringIntern* intern_;
+    dstd::Vector<IndexedRowSet> rowsets_;
+    dstd::Vector<Guard> guards_;
     std::uint64_t budget_;
     std::uint64_t bytes_ = 0;
     bool abandoned_ = false;
-    std::vector<Rows> pending_;
-    std::vector<Rows> sealed_;
+    dstd::Vector<Rows> pending_;
+    dstd::Vector<Rows> sealed_;
     // Per distinct row set, the keys of its sealed rows.
-    std::vector<dftracer::utils::StringViewSet> seen_;
+    dstd::Vector<dftracer::utils::dstd::StringViewSet> seen_;
     duql::ValueMap scratch_;
 };
 

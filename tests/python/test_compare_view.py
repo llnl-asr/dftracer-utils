@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """TraceViewer.compare: a lazy two-viewer comparison over one group_by/agg."""
 
 import math

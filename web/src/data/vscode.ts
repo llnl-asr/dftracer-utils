@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { CONFIG } from "./config";
 
 // Messages the webview sends to the extension host.

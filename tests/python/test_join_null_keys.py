@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A join does not match null keys by default (the SQL rule); with
 ``nulls_equal=True`` it matches them as pandas does."""
 

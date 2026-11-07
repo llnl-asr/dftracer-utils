@@ -7,17 +7,23 @@ What this explains: how the codebase is layered, and the path a query takes
 from a ``.pfw.gz`` trace file on disk to a result the caller can use, in C++,
 C, or Python.
 
-Five libraries, one dependency direction
+Eight libraries, one dependency direction
 -------------------------------------------
 
-The C++ build produces five layered libraries, each as both a shared and a
+The C++ build produces eight layered libraries, each as both a shared and a
 static variant (``src/CMakeLists.txt``), aggregated behind
 ``dftracer::utils``:
 
-- ``dftracer_utils_core`` is the async runtime: coroutines, the task
-  executor and scheduler, the io backend, the pipeline machinery, RocksDB
-  wrappers, and shared primitives (string interning, object pools, sharded
-  maps, the error type). It knows nothing about traces.
+- ``dftracer_utils_runtime`` is the async runtime: coroutines, the task
+  executor and scheduler, the io backend, the pipeline machinery, and shared
+  primitives (string interning, sharded maps, the error type). It knows
+  nothing about traces.
+- ``dftracer_utils_store`` is the key-value store engine: data files, the
+  writer and its committer, and the snapshot that reads them. It links only
+  the runtime and knows nothing about traces.
+- ``dftracer_utils_io`` is the file I/O layer: gzip readers and writers,
+  the parallel writers, hashing, directory scanning and text filters. It
+  links the runtime and the JSON library and knows nothing about traces.
 - ``dftracer_utils_json`` is the simdjson-backed JSON layer: parsing and
   the JSON value type.
 - ``dftracer_utils_duql`` is the duql filter language: the predicate IR, the string
@@ -26,12 +32,16 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   ``DataFrame``, the Highway kernels, and the Arrow bridge. It also holds the
   duql parts that call the dataframe (``vectorize``, ``lookup``, ``overlap``
   and ``group_fold``), so it links ``dftracer_utils_duql``.
-- ``dftracer_utils_utilities`` depends on the four libraries above and
-  holds the top domain logic: trace reading, indexing, aggregation,
-  comparison, statistics, plugins, and replay.
+- ``dftracer_utils_trace`` is the trace layer: the index (build, plan, cache,
+  schemas), the views and folds, the trace reader and the Arrow interchange.
+  It links every library above it and never includes the parts of
+  ``dftracer_utils_utilities``.
+- ``dftracer_utils_utilities`` depends on the libraries above and
+  holds the top domain logic: comparison, statistics, genesis, plugins, the
+  server, DLIO, and replay.
 
-The dependency runs one way, down this list. Nothing in ``core`` knows what
-a DFTracer event looks like; nothing in ``utilities`` reimplements scheduling,
+The dependency runs one way, down this list. Nothing in ``runtime`` knows what
+a DFTracer event looks like; nothing in ``trace`` or ``utilities`` reimplements scheduling,
 I/O, JSON parsing, or the columnar kernels. This split is why the coroutine
 runtime can be reasoned about (and tested) on its own, and why domain code
 never has to touch a raw file descriptor or worry about which io backend is
@@ -40,24 +50,33 @@ active.
 .. mermaid::
 
    graph TB
-       Core["dftracer_utils_core<br/>runtime, coro, io, pipeline"]
+       Runtime["dftracer_utils_runtime<br/>runtime, coro, io, pipeline"]
+       Store["dftracer_utils_store<br/>key-value store engine"]
+       Io["dftracer_utils_io<br/>file I/O, gzip, hashing"]
        Json["dftracer_utils_json<br/>simdjson-backed parsing"]
        Query["dftracer_utils_duql<br/>predicate IR, evaluator"]
        DF["dftracer_utils_dataframe<br/>Series/DataFrame, SIMD kernels"]
-       Util["dftracer_utils_utilities<br/>trace, indexer, plugins"]
-       Json --> Core
-       Query --> Core
+       Trace["dftracer_utils_trace<br/>index, views, trace reader"]
+       Util["dftracer_utils_utilities<br/>comparator, plugins, server"]
+       Store --> Runtime
+       Io --> Runtime
+       Io --> Json
+       Json --> Runtime
+       Query --> Runtime
        Query --> Json
-       DF --> Core
+       DF --> Runtime
        DF --> Query
-       Util --> Core
-       Util --> Json
-       Util --> Query
-       Util --> DF
+       Trace --> Runtime
+       Trace --> Store
+       Trace --> Io
+       Trace --> Json
+       Trace --> Query
+       Trace --> DF
+       Util --> Trace
 
 The domain logic itself is grouped by what it does rather than by a shared
 base class: readers and the fused scan under ``trace/``, the index under
-``index/`` (in layers: ``store`` for RocksDB storage, ``gzip`` for
+``index/`` (in layers: ``store`` for index storage, ``gzip`` for
 checkpoints, ``extensions`` for blooms, dimension stats and stored row sets,
 ``schemas/dft`` for the dftracer-specific statistics and aggregation,
 then ``build``, ``plan`` for pruning and ``cache`` for rollups; a CTest check
@@ -84,7 +103,7 @@ regardless of which entry point started it (a CLI binary, the Python
        DF --> Out["Arrow / pandas / CLI / plugin"]
 
 1. **Index.** ``dftracer_index`` (or an equivalent library call) builds a
-   per-file index in a ``.dftindex`` RocksDB store: bloom filters over string
+   per-file index in a ``.dftindex`` store: bloom filters over string
    fields, min/max statistics per chunk, and checkpoints that mark where a
    compressed member starts. See :doc:`indexing-and-pushdown`.
 2. **Prune.** Given a query, the chunk pruner consults the index to decide
@@ -125,7 +144,7 @@ own side of the boundary.
 See also
 --------
 
-- :doc:`async-runtime` for what ``dftracer_utils_core`` actually runs.
+- :doc:`async-runtime` for what ``dftracer_utils_runtime`` actually runs.
 - :doc:`fused-scan` for how one pass serves many analytics.
 - :doc:`indexing-and-pushdown` for the bloom/stats/checkpoint index and pruning.
 - :doc:`dataframe-model` for the columnar result type.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """@jit.series: author a reusable column op as an Expr; it joins the ops
 registry and runs via the engine's evaluator (no compile step)."""
 

@@ -1,11 +1,11 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 TEST_CASE("a column of nulls has the frame's length and type") {
     Series n = Series::nulls(TypeId::Int64, 4);

@@ -1,5 +1,10 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
@@ -14,60 +19,42 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include <string_view>
-
 namespace dftracer::utils::index::store::internal {
 
 // Registry key: the canonical absolute path, so same-named files in different
 // directories are distinct and the key locates the trace. Applied on both the
 // write and read side so lookups stay consistent; relative inputs resolve
 // against the cwd, so the index is not portable across an absolute-layout move.
-std::string get_logical_path(std::string_view path) {
-    std::error_code ec;
-    fs::path abs = fs::absolute(fs::path(std::string(path)), ec);
-    if (ec) return fs::path(std::string(path)).lexically_normal().string();
-    return abs.lexically_normal().string();
+dstd::String get_logical_path(dstd::StringView path) {
+    const auto abs = dstd::fs::absolute(dstd::PathView(path));
+    if (!abs) return dstd::String(dstd::normalize(dstd::PathView(path)).str());
+    return dstd::String(dstd::normalize(abs->view()).str());
 }
 
-std::string normalize_index_root(std::string_view path) {
-    fs::path input{std::string(path)};
-    if (input.filename() == ".dftindex") {
-        return input.string();
-    }
-    if (input.parent_path().filename() == ".dftindex") {
-        return input.parent_path().string();
-    }
-    if (input.extension() == ".idx" || input.extension() == ".pidx" ||
-        input.has_extension()) {
-        return (input.parent_path() / ".dftindex").string();
-    }
-    return (input / ".dftindex").string();
+time_t get_file_modification_time(dstd::CStringView file_path) {
+    dftracer::utils::common::InputFileStat st;
+    if (!dftracer::utils::common::stat_input(file_path, st)) return 0;
+    return static_cast<time_t>(st.mtime);
 }
 
-time_t get_file_modification_time(const std::string &file_path) {
-    std::error_code ec;
-    auto ftime = fs::last_write_time(file_path, ec);
-    if (ec) return 0;
-    return dftracer::utils::file_mtime_seconds(ftime);
-}
-
-std::uint64_t calculate_file_hash(const std::string &file_path) {
-    // Fast fingerprint: hash file_size + first 64KB + last 64KB.
-    constexpr std::size_t SAMPLE_SIZE = 64 * 1024;
-
-    int fd = ::open(file_path.c_str(), O_RDONLY);
-    if (fd < 0) {
+std::uint64_t calculate_file_hash(dstd::CStringView file_path) {
+    auto file = dstd::File::open(dstd::PathView(file_path), {});
+    if (!file) {
         DFTRACER_UTILS_LOG_ERROR("Cannot open file for hash calculation: %s",
                                  file_path.c_str());
         return 0;
     }
 
     struct stat st{};
-    if (::fstat(fd, &st) != 0) {
-        ::close(fd);
-        return 0;
-    }
-    auto file_size = static_cast<std::size_t>(st.st_size);
+    if (::fstat(file->native_handle(), &st) != 0) return 0;
+    return calculate_file_hash(file->native_handle(),
+                               static_cast<std::uint64_t>(st.st_size));
+}
+
+std::uint64_t calculate_file_hash(int fd, std::uint64_t file_size_u64) {
+    // Fast fingerprint: hash file_size + first 64KB + last 64KB.
+    constexpr std::size_t SAMPLE_SIZE = 64 * 1024;
+    const auto file_size = static_cast<std::size_t>(file_size_u64);
 
     static thread_local dftracer::utils::utilities::hash::HasherUtility hasher;
     hasher.reset();
@@ -75,7 +62,7 @@ std::uint64_t calculate_file_hash(const std::string &file_path) {
     // Hash the file size itself
     char size_buf[32];
     int n = std::snprintf(size_buf, sizeof(size_buf), "%zu", file_size);
-    hasher.update(std::string_view(size_buf, static_cast<std::size_t>(n)));
+    hasher.update(dstd::StringView(size_buf, static_cast<std::size_t>(n)));
 
     unsigned char buf[SAMPLE_SIZE];
 
@@ -83,7 +70,7 @@ std::uint64_t calculate_file_hash(const std::string &file_path) {
     std::size_t head_bytes = std::min(file_size, SAMPLE_SIZE);
     ssize_t rd = ::pread(fd, buf, head_bytes, 0);
     if (rd > 0) {
-        hasher.update(std::string_view(reinterpret_cast<const char *>(buf),
+        hasher.update(dstd::StringView(reinterpret_cast<const char *>(buf),
                                        static_cast<std::size_t>(rd)));
     }
 
@@ -94,30 +81,22 @@ std::uint64_t calculate_file_hash(const std::string &file_path) {
             static_cast<off_t>(file_size - std::min(file_size, SAMPLE_SIZE));
         rd = ::pread(fd, buf, SAMPLE_SIZE, tail_off);
         if (rd > 0) {
-            hasher.update(std::string_view(reinterpret_cast<const char *>(buf),
+            hasher.update(dstd::StringView(reinterpret_cast<const char *>(buf),
                                            static_cast<std::size_t>(rd)));
         }
     }
 
-    ::close(fd);
-    return static_cast<std::uint64_t>(hasher.get_hash().value);
+    return static_cast<std::uint64_t>(hasher.hash().value);
 }
 
-std::uint64_t file_size_bytes(const std::string &path) {
-    struct stat st{};
-    if (stat(path.c_str(), &st) == 0) {
-#if defined(_WIN32)
-        if ((st.st_mode & _S_IFREG) != 0)
-            return static_cast<std::uint64_t>(st.st_size);
-#else
-        if (S_ISREG(st.st_mode)) return static_cast<std::uint64_t>(st.st_size);
-#endif
-    }
+std::uint64_t file_size_bytes(dstd::CStringView path) {
+    dftracer::utils::common::InputFileStat st;
+    if (dftracer::utils::common::stat_input(path, st) && st.is_regular_file)
+        return st.size;
 
-    int fd = ::open(path.c_str(), O_RDONLY);
-    if (fd < 0) return 0;
-    off_t pos = ::lseek(fd, 0, SEEK_END);
-    ::close(fd);
+    auto file = dstd::File::open(dstd::PathView(path), {});
+    if (!file) return 0;
+    off_t pos = ::lseek(file->native_handle(), 0, SEEK_END);
     if (pos < 0) return 0;
     return static_cast<std::uint64_t>(pos);
 }

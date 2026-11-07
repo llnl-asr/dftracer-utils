@@ -1,5 +1,9 @@
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/io/ops.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/scope_exit.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/server/http_connection.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
@@ -7,7 +11,6 @@
 #include <sys/uio.h>
 
 #include <cstring>
-#include <vector>
 
 #ifdef __linux__
 #include <malloc.h>  // malloc_trim
@@ -26,8 +29,8 @@ coro::CoroTask<void> handle_connection(int client_fd,
 
     while (true) {
         // Read data from socket.
-        ssize_t n = co_await io::recv(client_fd, buf + buf_used,
-                                      BUF_SIZE - buf_used, 0);
+        ssize_t n = co_await runtime::io::recv(client_fd, buf + buf_used,
+                                               BUF_SIZE - buf_used, 0);
         if (n <= 0) break;  // Connection closed or error
         buf_used += static_cast<std::size_t>(n);
 
@@ -40,7 +43,8 @@ coro::CoroTask<void> handle_connection(int client_fd,
                 // Buffer full but still no complete request.
                 auto resp = HttpResponse::bad_request("Request too large");
                 auto out = resp.serialize();
-                co_await io::send(client_fd, out.data(), out.size(), 0);
+                co_await runtime::io::send(client_fd, out.data(), out.size(),
+                                           0);
                 break;
             }
             continue;
@@ -48,13 +52,13 @@ coro::CoroTask<void> handle_connection(int client_fd,
         if (parsed < 0) {
             auto resp = HttpResponse::bad_request("Malformed HTTP request");
             auto out = resp.serialize();
-            co_await io::send(client_fd, out.data(), out.size(), 0);
+            co_await runtime::io::send(client_fd, out.data(), out.size(), 0);
             break;
         }
 
         // Route and handle. Register a cancellation token keyed by the
         // client-supplied request id so a separate cancel request can reach it.
-        std::string req_id(req.header("x-request-id"));
+        dstd::String req_id(req.header("x-request-id"));
         CancelToken token =
             CancelRegistry::instance().create(req_id, client_fd);
         req.cancel_token = token;
@@ -62,12 +66,8 @@ coro::CoroTask<void> handle_connection(int client_fd,
         // Remove the registration on every exit path, including a throw from
         // the streaming branch below, so a client-controlled req_id cannot leak
         // a CancelState for the process lifetime.
-        struct CancelRegistrationGuard {
-            const std::string& id;
-            ~CancelRegistrationGuard() {
-                CancelRegistry::instance().remove(id);
-            }
-        } cancel_guard{req_id};
+        auto cancel_guard =
+            dstd::defer([&] { CancelRegistry::instance().remove(req_id); });
 
         HttpResponse resp;
         try {
@@ -81,17 +81,19 @@ coro::CoroTask<void> handle_connection(int client_fd,
         }
         if (resp.is_streaming()) {
             auto hdrs = resp.serialize_headers();
-            auto hdr_rc =
-                co_await io::send(client_fd, hdrs.data(), hdrs.size(), 0);
+            auto hdr_rc = co_await runtime::io::send(client_fd, hdrs.data(),
+                                                     hdrs.size(), 0);
             if (hdr_rc < 0) goto stream_done;
 
             {
-                static constexpr char newline_ch = '\n';
+                static constexpr char NEWLINE_CH = '\n';
                 static constexpr char crlf[] = "\r\n";
                 char hex[24];
-                std::vector<struct iovec> iovs;
+                dstd::Vector<struct iovec> iovs;
 
-                while (auto chunk = co_await resp.stream->next()) {
+                for (;;) {
+                    auto chunk = co_await resp.stream->next();
+                    if (!chunk) break;
                     if (chunk->views.empty()) continue;
 
                     std::size_t payload_size = 0;
@@ -99,20 +101,20 @@ coro::CoroTask<void> handle_connection(int client_fd,
                         payload_size += sv.size() + 1;
                     }
 
-                    int hex_len = std::snprintf(hex, sizeof(hex), "%zx\r\n",
-                                                payload_size);
+                    int hex_size = std::snprintf(hex, sizeof(hex), "%zx\r\n",
+                                                 payload_size);
 
                     iovs.clear();
                     iovs.reserve(chunk->views.size() * 2 + 2);
-                    iovs.push_back({hex, static_cast<std::size_t>(hex_len)});
+                    iovs.push_back({hex, static_cast<std::size_t>(hex_size)});
                     for (const auto& sv : chunk->views) {
                         iovs.push_back(
                             {const_cast<char*>(sv.data()), sv.size()});
-                        iovs.push_back({const_cast<char*>(&newline_ch), 1});
+                        iovs.push_back({const_cast<char*>(&NEWLINE_CH), 1});
                     }
                     iovs.push_back({const_cast<char*>(crlf), 2});
 
-                    auto rc = co_await io::writev_all(
+                    auto rc = co_await runtime::io::writev_all(
                         client_fd, iovs.data(), static_cast<int>(iovs.size()));
                     if (rc < 0) {
                         DFTRACER_UTILS_LOG_ERROR(
@@ -122,11 +124,11 @@ coro::CoroTask<void> handle_connection(int client_fd,
                     }
                 }
             }
-            co_await io::send(client_fd, "0\r\n\r\n", 5, 0);
+            co_await runtime::io::send(client_fd, "0\r\n\r\n", 5, 0);
         stream_done:;
         } else {
             auto out = resp.serialize();
-            co_await io::send(client_fd, out.data(), out.size(), 0);
+            co_await runtime::io::send(client_fd, out.data(), out.size(), 0);
         }
 
         // Consume parsed bytes; shift any remaining data.
@@ -145,7 +147,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
     }
 
     // Note: the caller (tcp_listener) is responsible for closing
-    // client_fd via io::close() after this coroutine returns.
+    // client_fd via runtime::io::close() after this coroutine returns.
 
 #ifdef __linux__
     // Return freed heap pages to the OS.  Each request may decompress

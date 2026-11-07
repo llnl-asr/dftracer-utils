@@ -1,8 +1,9 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_INDEX_ABI_H
 #define DFTRACER_UTILS_INDEX_ABI_H
 
-#include <dftracer/utils/core/common/abi.h>
-#include <dftracer/utils/core/common/export.h>
+#include <dftracer/utils/common/abi.h>
+#include <dftracer/utils/common/export.h>
 #include <stdint.h>
 
 /*
@@ -16,9 +17,9 @@
  * from dftu_indexer_open or dftu_indexer_file_list_get is valid until the
  * next such call on the same thread.
  *
- * C++ only (dftracer::utils::index::Indexer): the aggregation tier, the bloom
- * false-positive rate and auto-field tuning, a caller-chosen runtime, the
- * async forms, and the ready / needs-work path lists of a status.
+ * C++ only (dftracer::utils::index::Indexer): the bloom false-positive rate
+ * and auto-field tuning, a caller-chosen runtime, the async forms, and the
+ * ready / needs-work path lists of a status.
  */
 
 #ifdef __cplusplus
@@ -57,6 +58,13 @@ typedef struct dftu_indexer_options {
      * naming stats_share. A registered schema's index.stats_share and
      * index.path_budget override both fields. */
     double bloom_stats_share;
+    /** The aggregation tier is built with every index; these fields adjust the
+     * config it is built with. 0 keeps the standard value. */
+    uint64_t aggregation_time_interval_us; /**< window; 0 = the standard 1 s */
+    int32_t aggregation_compute_percentiles; /**< 0 = the standard, which
+                                                stores them */
+    int32_t aggregation_group_by_file;       /**< 0 = the standard, which keys
+                                                rows by file */
 } dftu_indexer_options;
 
 typedef struct dftu_indexer_report {
@@ -71,7 +79,6 @@ typedef struct dftu_indexer_report {
 typedef struct dftu_indexer_file {
     const char* path;       /**< borrowed from the file list */
     const char* index_path; /**< borrowed from the file list */
-    int64_t file_id;
     uint64_t size_bytes;    /**< as recorded when indexed */
     uint64_t mtime;         /**< as recorded when indexed */
     int32_t truncated;      /**< bool: last gzip member was cut short */
@@ -84,7 +91,9 @@ DFTU_RESULT_DECL(dftu_indexer_files_result, dftu_indexer_file_list*);
 DFTU_RESULT_DECL(dftu_indexer_file_result, dftu_indexer_file);
 DFTU_RESULT_DECL(dftu_indexer_string_result, char*);
 
-/** The defaults of IndexerOptions: checkpoints and bloom on and required. */
+/** The defaults of @ref dftracer::utils::index::IndexerOptions
+ * "IndexerOptions": checkpoints and bloom on and required, and the aggregation
+ * tier built with the standard config. */
 DFTU_EXPORT void dftu_indexer_options_init(dftu_indexer_options* out);
 
 /** Open `n` trace files or directories (a directory contributes the trace

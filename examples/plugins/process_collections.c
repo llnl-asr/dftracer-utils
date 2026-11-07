@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example dftracer-utils plugin in pure C: the set-valued and list-valued
  * aggregates, all in one accumulator keyed by {pid}. SET_UNION gives the
  * distinct event names a process ran, DISTINCT their approximate cardinality
@@ -54,7 +55,8 @@ static void destroy(void* self) { (void)self; }
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
+                                                const dftu_value* config) {
     (void)h;
     (void)config;
     g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;

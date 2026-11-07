@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """jit.config: a runtime-configurable @jit.plugin. The threshold is bound at
 construction from Plugins config and read in the body as self.threshold."""
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_ABI_CORE_H
 #define DFTRACER_UTILS_PLUGINS_ABI_CORE_H
 
@@ -7,8 +8,8 @@
  * dftracer/utils/plugins/abi.h rather than this file directly.
  */
 
-#include <dftracer/utils/core/common/abi.h>
-#include <dftracer/utils/core/common/export.h>
+#include <dftracer/utils/common/abi.h>
+#include <dftracer/utils/common/export.h>
 #include <dftracer/utils/plugins/abi_version.h> /* DFTRACER_UTILS_PLUGIN_ABI_VERSION */
 #include <stddef.h>
 #include <stdint.h>

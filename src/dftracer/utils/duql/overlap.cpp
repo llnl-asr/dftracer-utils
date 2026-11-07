@@ -1,5 +1,8 @@
-#include <ankerl/unordered_dense.h>
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/overlap.h>
 #include <dftracer/utils/duql/vectorize.h>
 
@@ -7,34 +10,31 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
-#include <string>
 
 namespace dftracer::utils::duql {
 
 namespace {
 
-namespace df = dataframe;
-
-bool is_int64_safe(df::TypeId t) {
-    return t == df::TypeId::Int8 || t == df::TypeId::Int16 ||
-           t == df::TypeId::Int32 || t == df::TypeId::Int64 ||
-           t == df::TypeId::Uint8 || t == df::TypeId::Uint16 ||
-           t == df::TypeId::Uint32;
+bool is_int64_safe(dataframe::TypeId t) {
+    return t == dataframe::TypeId::Int8 || t == dataframe::TypeId::Int16 ||
+           t == dataframe::TypeId::Int32 || t == dataframe::TypeId::Int64 ||
+           t == dataframe::TypeId::Uint8 || t == dataframe::TypeId::Uint16 ||
+           t == dataframe::TypeId::Uint32;
 }
 
-bool is_number(df::TypeId t) {
-    return is_int64_safe(t) || t == df::TypeId::Uint64 ||
-           t == df::TypeId::Float32 || t == df::TypeId::Float64;
+bool is_number(dataframe::TypeId t) {
+    return is_int64_safe(t) || t == dataframe::TypeId::Uint64 ||
+           t == dataframe::TypeId::Float32 || t == dataframe::TypeId::Float64;
 }
 
 template <class T>
 struct Numbers {
-    std::vector<T> value;
-    std::vector<std::uint8_t> ok;
+    dstd::Vector<T> value;
+    dstd::Vector<std::uint8_t> ok;
 };
 
 template <class T, class U>
-void copy_column(const df::Series& s, Numbers<T>& out) {
+void copy_column(const dataframe::Series& s, Numbers<T>& out) {
     const U* p = s.data<U>();
     for (std::int64_t i = 0; i < s.length(); ++i) {
         const auto at = static_cast<std::size_t>(i);
@@ -44,39 +44,40 @@ void copy_column(const df::Series& s, Numbers<T>& out) {
 }
 
 template <class T>
-Numbers<T> read_numbers(const df::Series& s, const char* what) {
+Numbers<T> read_numbers(const dataframe::Series& s, const char* what) {
     if (!is_number(s.type()))
         throw std::invalid_argument(
-            std::string("overlap: the ") + what + " is " +
-            std::string(df::type_name(s.type())) + ", not a number");
+            (dstd::String("overlap: the ") + what + " is " +
+             dstd::String(dataframe::type_name(s.type())) + ", not a number")
+                .c_str());
     const auto n = static_cast<std::size_t>(s.length());
-    Numbers<T> out{std::vector<T>(n), std::vector<std::uint8_t>(n)};
+    Numbers<T> out{dstd::Vector<T>(n), dstd::Vector<std::uint8_t>(n)};
     switch (s.type()) {
-        case df::TypeId::Int8:
+        case dataframe::TypeId::Int8:
             copy_column<T, std::int8_t>(s, out);
             break;
-        case df::TypeId::Int16:
+        case dataframe::TypeId::Int16:
             copy_column<T, std::int16_t>(s, out);
             break;
-        case df::TypeId::Int32:
+        case dataframe::TypeId::Int32:
             copy_column<T, std::int32_t>(s, out);
             break;
-        case df::TypeId::Int64:
+        case dataframe::TypeId::Int64:
             copy_column<T, std::int64_t>(s, out);
             break;
-        case df::TypeId::Uint8:
+        case dataframe::TypeId::Uint8:
             copy_column<T, std::uint8_t>(s, out);
             break;
-        case df::TypeId::Uint16:
+        case dataframe::TypeId::Uint16:
             copy_column<T, std::uint16_t>(s, out);
             break;
-        case df::TypeId::Uint32:
+        case dataframe::TypeId::Uint32:
             copy_column<T, std::uint32_t>(s, out);
             break;
-        case df::TypeId::Uint64:
+        case dataframe::TypeId::Uint64:
             copy_column<T, std::uint64_t>(s, out);
             break;
-        case df::TypeId::Float32:
+        case dataframe::TypeId::Float32:
             copy_column<T, float>(s, out);
             break;
         default:
@@ -109,9 +110,9 @@ bool valid_interval(T start, T duration, bool ok) {
 // One frame's intervals as numbers; a row that cannot match has ok == 0.
 template <class T>
 struct Intervals {
-    std::vector<T> start;
-    std::vector<T> duration;
-    std::vector<std::uint8_t> ok;
+    dstd::Vector<T> start;
+    dstd::Vector<T> duration;
+    dstd::Vector<std::uint8_t> ok;
 };
 
 template <class T>
@@ -132,10 +133,10 @@ Intervals<T> read_intervals(const OverlapColumns& c) {
     return out;
 }
 
-bool row_key(std::string& out, const std::vector<df::Series>& keys,
+bool row_key(dstd::String& out, const dstd::Vector<dataframe::Series>& keys,
              std::int64_t r) {
     out.clear();
-    for (const df::Series& k : keys)
+    for (const dataframe::Series& k : keys)
         if (!append_cell_key(out, k, r)) return false;
     return true;
 }
@@ -165,7 +166,7 @@ class Group {
     }
 
     // The side rows overlapping `[a, a + d)`, unordered, appended to `out`.
-    void matches(T a, T d, std::vector<std::int64_t>& out) const {
+    void matches(T a, T d, dstd::Vector<std::int64_t>& out) const {
         const T stop = add_saturating(a, d);
         const auto first_after =
             std::upper_bound(starts_.begin(), starts_.end(), a);
@@ -193,7 +194,8 @@ class Group {
 
     // The items of `[lo, hi)` below `prefix` with an end after `a`.
     void report(std::size_t node, std::size_t lo, std::size_t hi,
-                std::size_t prefix, T a, std::vector<std::int64_t>& out) const {
+                std::size_t prefix, T a,
+                dstd::Vector<std::int64_t>& out) const {
         if (lo >= prefix || !(tree_[node] > a)) return;
         if (hi - lo == 1) {
             out.push_back(items_[lo].row);
@@ -204,9 +206,9 @@ class Group {
         report(2 * node + 1, mid, hi, prefix, a, out);
     }
 
-    std::vector<Item> items_;
-    std::vector<T> starts_;
-    std::vector<T> tree_;
+    dstd::Vector<Item> items_;
+    dstd::Vector<T> starts_;
+    dstd::Vector<T> tree_;
     std::size_t size_ = 1;
 };
 
@@ -214,8 +216,8 @@ template <class T>
 OverlapMatches run(const OverlapColumns& rows, const OverlapColumns& side) {
     const Intervals<T> mine = read_intervals<T>(rows);
     const Intervals<T> theirs = read_intervals<T>(side);
-    ankerl::unordered_dense::map<std::string, Group<T>> groups;
-    std::string key;
+    dstd::HashMap<dstd::String, Group<T>> groups;
+    dstd::String key;
     const auto m = static_cast<std::int64_t>(theirs.start.size());
     for (std::int64_t r = 0; r < m; ++r) {
         const auto at = static_cast<std::size_t>(r);
@@ -230,7 +232,7 @@ OverlapMatches run(const OverlapColumns& rows, const OverlapColumns& side) {
     const auto n = static_cast<std::int64_t>(mine.start.size());
     out.offsets.reserve(static_cast<std::size_t>(n) + 1);
     out.offsets.push_back(0);
-    std::vector<std::int64_t> found;
+    dstd::Vector<std::int64_t> found;
     for (std::int64_t i = 0; i < n; ++i) {
         const auto at = static_cast<std::size_t>(i);
         if (mine.ok[at] && row_key(key, rows.keys, i)) {

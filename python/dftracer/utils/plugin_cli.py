@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """``dftracer_plugin`` console-script: scaffold and build native plugins."""
 
 from __future__ import annotations

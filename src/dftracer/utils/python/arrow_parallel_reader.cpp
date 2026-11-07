@@ -1,4 +1,7 @@
-#include <dftracer/utils/core/common/config.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #define PY_SSIZE_T_CLEAN
@@ -10,15 +13,12 @@
 #include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
-#include <dftracer/utils/utilities/common/arrow/parallel_reader.h>
-
-#include <string>
-#include <vector>
+#include <dftracer/utils/utilities/arrow/parallel_reader.h>
 
 namespace dftracer::utils::python {
 
-using utilities::common::arrow::ArrowExportResult;
-using utilities::common::arrow::read_arrow_files_parallel;
+using utilities::arrow::ArrowExportResult;
+using utilities::arrow::read_arrow_files_parallel;
 
 static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
                                               PyObject* args,
@@ -33,8 +33,7 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
         return nullptr;
     }
 
-    // Convert paths to vector<string>
-    std::vector<std::string> paths;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
     if (!parse_str_list(paths_obj, "paths", paths)) return nullptr;
 
     // Get runtime
@@ -51,7 +50,7 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
     }
 
     // Call C++ parallel reader (releases GIL during file I/O)
-    utilities::common::arrow::ParallelReadResult result;
+    utilities::arrow::ParallelReadResult result;
     if (!run_blocking_r(
             [&] {
                 auto task = read_arrow_files_parallel(std::move(paths));

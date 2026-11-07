@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Static-typing regression guard for the typed DataFrame analytical-op surface.
 
 Runs the type checker on two fixtures under tests/python/typing/: the sample

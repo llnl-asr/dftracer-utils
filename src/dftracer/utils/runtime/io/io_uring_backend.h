@@ -88,6 +88,9 @@ class IoUringBackend : public ThreadPoolFileOps {
     const unsigned masked_features_;
     // Set in start(), before any worker parks.
     bool timed_enter_ = false;
+    bool should_enable_ring_ = false;
+    // 0 until the ring thread enabled the ring, then 1 or a negative errno.
+    std::atomic<int> enable_result_{0};
 
     // Only the ring thread touches these.
     uring::Ring ring_;

@@ -28,6 +28,24 @@
 #ifndef IORING_ENTER_EXT_ARG
 #define IORING_ENTER_EXT_ARG (1U << 3)
 #endif
+#ifndef IORING_SETUP_R_DISABLED
+#define IORING_SETUP_R_DISABLED (1U << 6)
+#endif
+#ifndef IORING_SETUP_TASKRUN_FLAG
+#define IORING_SETUP_TASKRUN_FLAG (1U << 9)
+#endif
+#ifndef IORING_SETUP_SINGLE_ISSUER
+#define IORING_SETUP_SINGLE_ISSUER (1U << 12)
+#endif
+#ifndef IORING_SETUP_DEFER_TASKRUN
+#define IORING_SETUP_DEFER_TASKRUN (1U << 13)
+#endif
+#ifndef IORING_SQ_TASKRUN
+#define IORING_SQ_TASKRUN (1U << 2)
+#endif
+#ifndef IORING_REGISTER_ENABLE_RINGS
+#define IORING_REGISTER_ENABLE_RINGS 12
+#endif
 
 namespace dftracer::utils::runtime::io::uring {
 
@@ -85,6 +103,8 @@ class Ring {
     unsigned* sq_ring_mask_ = nullptr;
     unsigned* sq_ring_entries_ = nullptr;
     unsigned* sq_array_ = nullptr;
+    unsigned* sq_flags_ = nullptr;
+    bool deferred_ = false;
 
     // CQ ring (completion queue)
     void* cq_ring_ptr_ = nullptr;
@@ -110,7 +130,13 @@ class Ring {
 
     /// Initialize the ring. Returns true on success, false if kernel
     /// doesn't support io_uring (ENOSYS) or other setup failure.
-    bool init(unsigned entries);
+    bool init(unsigned entries, unsigned setup_flags = 0);
+
+    /// Makes the calling thread the ring's one submitter.
+    bool enable();
+
+    /// Runs deferred completions so they show in the CQ. Owner thread only.
+    void run_deferred();
 
     /// Tear down: munmap + close fd.
     void destroy();

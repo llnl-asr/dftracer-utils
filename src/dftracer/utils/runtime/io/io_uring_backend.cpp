@@ -28,9 +28,11 @@ namespace dftracer::utils::runtime::io {
 
 namespace uring {
 
-bool Ring::init(unsigned entries) {
+bool Ring::init(unsigned entries, unsigned setup_flags) {
     struct io_uring_params params;
     std::memset(&params, 0, sizeof(params));
+    params.flags = setup_flags;
+    deferred_ = (setup_flags & IORING_SETUP_DEFER_TASKRUN) != 0;
 
     ring_fd_ = sys_io_uring_setup(entries, &params);
     if (ring_fd_ < 0) {
@@ -59,6 +61,7 @@ bool Ring::init(unsigned entries) {
     sq_ring_entries_ =
         reinterpret_cast<unsigned*>(sq_base + params.sq_off.ring_entries);
     sq_array_ = reinterpret_cast<unsigned*>(sq_base + params.sq_off.array);
+    sq_flags_ = reinterpret_cast<unsigned*>(sq_base + params.sq_off.flags);
 
     // Map SQEs
     sqes_size_ = params.sq_entries * sizeof(struct io_uring_sqe);
@@ -136,8 +139,9 @@ struct io_uring_sqe* Ring::get_sqe() {
 
 int Ring::enter(bool wait) {
     if (pending_ == 0 && !wait) return 0;
-    const int taken = sys_io_uring_enter(ring_fd_, pending_, wait ? 1 : 0,
-                                         wait ? IORING_ENTER_GETEVENTS : 0);
+    const int taken =
+        sys_io_uring_enter(ring_fd_, pending_, wait ? 1 : 0,
+                           wait || deferred_ ? IORING_ENTER_GETEVENTS : 0);
     if (taken < 0) return -errno;
     pending_ -= static_cast<unsigned>(taken);
     return taken;
@@ -154,6 +158,20 @@ int Ring::enter_wait(std::int64_t timeout_ms) {
     if (taken < 0) return -errno;
     pending_ -= static_cast<unsigned>(taken);
     return taken;
+}
+
+bool Ring::enable() {
+    return sys_io_uring_register(ring_fd_, IORING_REGISTER_ENABLE_RINGS,
+                                 nullptr, 0) == 0;
+}
+
+void Ring::run_deferred() {
+    if (!deferred_ ||
+        (std::atomic_ref<unsigned>(*sq_flags_).load(std::memory_order_acquire) &
+         IORING_SQ_TASKRUN) == 0) {
+        return;
+    }
+    (void)sys_io_uring_enter(ring_fd_, 0, 0, IORING_ENTER_GETEVENTS);
 }
 
 void Ring::limit_kernel_workers(unsigned bounded) {
@@ -400,7 +418,13 @@ void IoUringBackend::start() {
     cancelling_.store(false, std::memory_order_release);
     cancel_requested_.store(false, std::memory_order_release);
     stopping_.store(false, std::memory_order_release);
-    if (!ring_.init(RING_ENTRIES)) {
+    // Only the ring thread enters this ring, so completions can wait for it.
+    // The thread takes the ring when it enables it. A kernel before 6.1 refuses
+    // these flags.
+    should_enable_ring_ = ring_.init(
+        RING_ENTRIES, IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
+                          IORING_SETUP_TASKRUN_FLAG | IORING_SETUP_R_DISABLED);
+    if (!should_enable_ring_ && !ring_.init(RING_ENTRIES)) {
         throw common::DFTUtilsException(
             common::ErrorCode::Internal,
             common::str_cat("io_uring setup failed: ", std::strerror(errno)));
@@ -418,7 +442,20 @@ void IoUringBackend::start() {
             common::str_cat("eventfd failed: ", std::strerror(error)));
     }
     pool_.start();
+    enable_result_.store(0, std::memory_order_relaxed);
     thread_ = dstd::Thread([this] { ring_loop(); });
+    if (!should_enable_ring_) return;
+    int enabled = 0;
+    while ((enabled = enable_result_.load(std::memory_order_acquire)) == 0) {
+        std::this_thread::yield();
+    }
+    if (enabled < 0) {
+        stop();
+        throw common::DFTUtilsException(
+            common::ErrorCode::Internal,
+            common::str_cat("io_uring enable failed: ",
+                            std::strerror(-enabled)));
+    }
 }
 
 void IoUringBackend::stop() {
@@ -478,7 +515,12 @@ IoUringBackend::WorkerRing* IoUringBackend::calling_worker_ring(
     // as past the file limit, leaves this worker on the owner's ring.
     if (worker->ring_failed) return nullptr;
     worker->lock();
-    const bool created = worker->ring.init(WORKER_RING_ENTRIES);
+    // Not DEFER_TASKRUN: since some kernel after 6.1 it hides a completion
+    // until the owner enters, so a worker in a long task would hold it from
+    // thieves and the sysmon. A kernel before 6.0 refuses this flag.
+    const bool created =
+        worker->ring.init(WORKER_RING_ENTRIES, IORING_SETUP_SINGLE_ISSUER) ||
+        worker->ring.init(WORKER_RING_ENTRIES);
     if (created) {
         worker->ring.limit_kernel_workers(WORKER_RING_KERNEL_WORKERS);
         worker->live.store(true, std::memory_order_release);
@@ -870,7 +912,15 @@ void IoUringBackend::cancel_waiting() noexcept {
 }
 
 void IoUringBackend::ring_loop() noexcept {
+    if (should_enable_ring_) {
+        // Past a failure start() joins this thread and throws.
+        const bool enabled = ring_.enable();
+        const int error = errno;
+        enable_result_.store(enabled ? 1 : -error, std::memory_order_release);
+        if (!enabled) return;
+    }
     for (;;) {
+        ring_.run_deferred();
         const bool reaped = reap() != 0;
         take_incoming();
         if (cancel_requested_.load(std::memory_order_seq_cst)) {

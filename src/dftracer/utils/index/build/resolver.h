@@ -43,6 +43,9 @@ struct ResolverInput {
     dstd::Vector<runtime::fs::FoundFile> entries;
 
     bool require_checkpoints = true;
+    /// A file larger than its record counts as current: the build just took
+    /// every whole member, and the rest is a tail still being written.
+    bool tail_is_current = false;
     bool require_bloom = false;
 
     /// Checkpoint size the caller intends to build with. When non-zero, a file
@@ -86,6 +89,8 @@ struct ResolverResult {
 
     /// A registered file's source changed since indexing (mtime/size mismatch).
     bool stale_detected = false;
+    /// Files whose index grew by new members and was not rebuilt.
+    std::size_t appended_count = 0;
     /// Index roots whose aggregation tier must be cleared before a build:
     /// rows built with other params, or of a file rebuilt whole. Their
     /// dftracer files are all in needs_aggregation when aggregating.

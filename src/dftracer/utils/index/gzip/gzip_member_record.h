@@ -30,6 +30,9 @@ struct GzipMemberRecord {
     std::uint64_t last_line_num = 0;
     GzipRecordKind kind = GzipRecordKind::Member;
     std::uint8_t bits = 0;
+    /// The record starts inside a line, whose first bytes are in an earlier
+    /// record.
+    bool opens_mid_line = false;
 };
 
 }  // namespace dftracer::utils::index::gzip

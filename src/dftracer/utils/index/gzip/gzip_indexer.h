@@ -38,6 +38,10 @@ struct GzipBuildArtifacts {
     /// The last member was cut short; `recovered_bytes` of it were kept.
     bool truncated = false;
     std::uint64_t recovered_bytes = 0;
+    /// The last member ended inside a line, so the next bytes finish it.
+    bool has_open_line = false;
+    /// A chunk indexed before these artifacts starts inside a line.
+    bool has_mid_line_chunk = false;
 };
 
 /// Optional slice of a multi-member gzip file. When set, the indexer
@@ -51,6 +55,12 @@ struct GzipMemberSlice {
     const dstd::Vector<index::gzip::GzipMember> *members = nullptr;
     std::size_t member_begin = 0;
     std::size_t member_end = 0;  // exclusive
+    /// Added to each member index, for members that follow ones already
+    /// indexed.
+    std::uint64_t idx_base = 0;
+    /// When set, the end of the last member. Nothing past it is read, and the
+    /// range is treated as whole so nothing past it is recovered.
+    std::uint64_t c_end = 0;
 };
 
 /// Build gzip index artifacts (member table, dispatched visitor events).
@@ -119,7 +129,8 @@ class GzipIndexer : public CheckpointIndexer {
     bool find_member(std::size_t target_offset,
                      GzipMemberRecord &member) const override;
     dstd::Vector<GzipMemberRecord> members() const override;
-    dstd::Vector<std::uint64_t> piece_heads() const override;
+    dstd::Span<const std::uint64_t> piece_heads() const override;
+    std::uint64_t compressed_end() const override;
     dstd::String restart_window(std::uint64_t member_idx) const override;
 
     inline common::ArchiveFormat format_type() const override {

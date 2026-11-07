@@ -17,6 +17,13 @@ struct FileMetadataResult {
     std::uint64_t max_bytes = 0;
     /// The trace's last gzip member was cut short when it was indexed.
     bool truncated = false;
+    /// The last member ended inside a line when the file was indexed.
+    bool has_open_line = false;
+    /// A chunk of the file starts inside a line.
+    bool has_mid_line_chunk = false;
+    /// The index the next appended member takes. 0 means the record cannot be
+    /// appended to.
+    std::uint64_t next_member_idx = 0;
 };
 
 /// Owners of index data. The manifest records, per file, which of them are

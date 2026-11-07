@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/list.h>
 #include <dftracer/utils/dstd/map.h>
@@ -11,6 +12,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/index/index_internal.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/store_layout.h>
@@ -73,6 +75,7 @@ held_copies(dftracer::utils::store::Store& store,
         if (known.name.empty() || decl.format_version > known.format_version) {
             known.name = decl.name;
             known.format_version = decl.format_version;
+            known.shared = decl.shared;
         }
     }
     dstd::Vector<dftracer::utils::store::Namespace> held;
@@ -396,7 +399,9 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::prepare(
                 co_return dstd::Unexpected<dstd::Error>(written.error());
         }
         targets.push_back(dftracer::utils::store::Publish{
-            &copy.ns, &build.scope, copy.params_hash, &build.sources});
+            &copy.ns, &build.scope, copy.params_hash, &build.sources,
+            dftracer::utils::store::Publish::Change::Ready,
+            build.replaces_older});
     }
     if (!build.cleared.empty()) {
         auto taken = build.store.snapshot();
@@ -469,6 +474,8 @@ coro::CoroTask<dstd::Vector<dstd::Optional<dstd::Error>>> commit_group(
     return IndexAccess::commit_group(builds);
 }
 
+void FileBuild::keep_older_copies() { impl_->replaces_older = false; }
+
 void FileBuild::clear(store::IndexExtension ext) {
     if (!builtin(ext)) {
         IndexAccess::record_error(
@@ -524,6 +531,15 @@ dstd::Expected<dstd::Vector<FileRef>, dstd::Error> Snapshot::files() const {
             entry.copy.sources.empty() ? SourceStat{} : entry.copy.sources[0]));
     }
     return out;
+}
+
+bool is_append_of(dstd::StringView path, std::uint64_t size,
+                  const SourceStat& stored) {
+    if (size <= stored.size) return false;
+    auto file = dstd::File::open(dstd::PathView(path), {});
+    if (!file) return false;
+    return store::internal::calculate_file_hash(file->native_handle(),
+                                                stored.size) == stored.hash;
 }
 
 Freshness Snapshot::freshness(dstd::StringView path,

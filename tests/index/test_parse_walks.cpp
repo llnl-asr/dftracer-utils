@@ -150,9 +150,9 @@ struct NamespaceDigest {
     std::uint64_t digest;
 };
 constexpr NamespaceDigest RECORDED[] = {
-    {"dftu.idx.bloom", 397815554527540866ULL},
+    {"dftu.idx.bloom", 7883963652881105830ULL},
     {"dftu.idx.core.catalog", 13277922137834801935ULL},
-    {"dftu.idx.core.members", 12223201460428748558ULL},
+    {"dftu.idx.core.members", 7697722678485111383ULL},
     {"dftu.idx.core.profile", 12883975498841085017ULL},
     {"dftu.idx.core.rowset", 6585397510590508660ULL},
     {"dftu.idx.counts", 14528743384093093223ULL},

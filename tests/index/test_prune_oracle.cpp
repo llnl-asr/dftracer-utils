@@ -372,7 +372,8 @@ std::uint64_t count_view_unpruned(const dstd::String& trace,
         0,
         spans.back().uc_offset + spans.back().uc_size,
         0,
-        q};
+        q,
+        nullptr};
     return scan_unit(u, vdef).get();
 }
 

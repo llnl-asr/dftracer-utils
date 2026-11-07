@@ -218,41 +218,72 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         dstd::Optional<AggRun> agg_run{
             start_aggregation(build_index_path, input.aggregation_config)};
 
-        auto batch_config =
-            dstd::make_shared<index::build::IndexBuildBatchConfig>();
-        batch_config->file_paths = files_needing_work;
-        if (result.all_file_sizes.size() == result.all_files.size()) {
-            dstd::HashMap<dstd::StringView, std::uint64_t> size_of;
-            size_of.reserve(result.all_files.size());
-            for (std::size_t i = 0; i < result.all_files.size(); ++i)
-                size_of.emplace(result.all_files[i], result.all_file_sizes[i]);
-            for (const auto& f : files_needing_work)
-                batch_config->file_costs.push_back(
-                    size_of[dstd::StringView(f)]);
-        }
-        batch_config->index_dir = build_index_dir;
-        batch_config->checkpoint_size = input.checkpoint_size;
-        batch_config->parallelism = parallelism;
-        batch_config->force_rebuild = input.force_rebuild;
-        batch_config->build_bloom = input.build_bloom;
-        batch_config->memory_budget = input.memory_budget;
-        batch_config->schema = input.schema;
-        batch_config->bloom_config = input.bloom_config;
-        batch_config->bloom_dimensions.assign(
-            index::build::DEFAULT_BLOOM_DIMENSIONS.begin(),
-            index::build::DEFAULT_BLOOM_DIMENSIONS.end());
-        batch_config->bloom_dimensions.insert(
-            batch_config->bloom_dimensions.end(),
-            input.bloom_config.extra_dimensions.begin(),
-            input.bloom_config.extra_dimensions.end());
+        auto agg_factory = std::move(agg_run->factory);
+        const auto make_batch_config = [&]() {
+            auto batch_config =
+                dstd::make_shared<index::build::IndexBuildBatchConfig>();
+            batch_config->file_paths = files_needing_work;
+            if (result.all_file_sizes.size() == result.all_files.size()) {
+                dstd::HashMap<dstd::StringView, std::uint64_t> size_of;
+                size_of.reserve(result.all_files.size());
+                for (std::size_t i = 0; i < result.all_files.size(); ++i)
+                    size_of.emplace(result.all_files[i],
+                                    result.all_file_sizes[i]);
+                for (const auto& f : files_needing_work)
+                    batch_config->file_costs.push_back(
+                        size_of[dstd::StringView(f)]);
+            }
+            batch_config->index_dir = build_index_dir;
+            batch_config->checkpoint_size = input.checkpoint_size;
+            batch_config->parallelism = parallelism;
+            batch_config->force_rebuild = input.force_rebuild;
+            batch_config->whole_members = input.whole_members;
+            batch_config->build_bloom = input.build_bloom;
+            batch_config->memory_budget = input.memory_budget;
+            batch_config->schema = input.schema;
+            batch_config->bloom_config = input.bloom_config;
+            batch_config->bloom_dimensions.assign(
+                index::build::DEFAULT_BLOOM_DIMENSIONS.begin(),
+                index::build::DEFAULT_BLOOM_DIMENSIONS.end());
+            batch_config->bloom_dimensions.insert(
+                batch_config->bloom_dimensions.end(),
+                input.bloom_config.extra_dimensions.begin(),
+                input.bloom_config.extra_dimensions.end());
 
-        batch_config->agg_fold_factory = std::move(agg_run->factory);
+            batch_config->agg_fold_factory =
+                [factory = &agg_factory](dstd::StringIntern& intern) {
+                    return (*factory)(intern);
+                };
+            return batch_config;
+        };
+        auto batch_config = make_batch_config();
 
         auto batch_result = co_await index::build::BatchBuilder::process(
             std::move(batch_config));
+        // New members with a false header or a hole cost a second inflate here
+        // only: the walk keeps those before the first bad one.
+        auto walk_config = make_batch_config();
+        walk_config->file_paths.clear();
+        walk_config->file_costs.clear();
+        walk_config->walk_members = true;
+        for (const auto& r : batch_result.results)
+            if (r.needs_member_walk)
+                walk_config->file_paths.push_back(r.file_path);
+        if (!walk_config->file_paths.empty()) {
+            auto walked = co_await index::build::BatchBuilder::process(
+                std::move(walk_config));
+            for (auto& r : walked.results) {
+                if (!r.success && !r.was_skipped)
+                    result.failures.push_back({r.file_path, r.error_message});
+                if (r.was_appended) ++result.appended_count;
+            }
+            for (auto& out : walked.agg_outputs)
+                batch_result.agg_outputs.push_back(std::move(out));
+        }
         for (const auto& r : batch_result.results) {
-            if (!r.success && !r.was_skipped)
+            if (!r.success && !r.was_skipped && !r.needs_member_walk)
                 result.failures.push_back({r.file_path, r.error_message});
+            if (r.was_appended) ++result.appended_count;
         }
 
         finish_aggregation(*agg_run, batch_result);
@@ -274,6 +305,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             scanned_entries(result, result.needs_checkpoint);
         refresh_input.index_dir = input.index_dir;
         refresh_input.require_checkpoints = true;
+        refresh_input.tail_is_current = true;
 
         if (!refresh_input.entries.empty()) {
             auto refresh_result = co_await resolver(refresh_input);

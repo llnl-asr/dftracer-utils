@@ -476,6 +476,32 @@ TEST_CASE("the typed agg readers read what the aggregation store reads") {
     CHECK_FALSE(snapshot.file("/no/such/file").has_value());
 }
 
+TEST_CASE("a second dictionary read finds an id below one it already read") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const dstd::String root = env.dir() + "/.dftindex";
+    auto opened = Index::open(root);
+    REQUIRE(opened.has_value());
+
+    const auto commit_entry = [&](const dstd::String& path, std::uint32_t id,
+                                  dstd::StringView text) {
+        auto build = take(opened->build(path, stat_of(1000, 4000, 9)));
+        index::put_agg_dictionary_entry(build, id, text);
+        build.finish(index::store::IndexExtension::Agg, 21);
+        REQUIRE(run(build.commit()).has_value());
+    };
+
+    auto dictionary = schemas::dft::agg::make_intern_table();
+    commit_entry("/traces/two.pfw.gz", 9, "later");
+    ok(index::agg_dictionary(take(opened->snapshot()), *dictionary));
+    CHECK(dictionary->intern.resolve(9) == "later");
+
+    commit_entry("/traces/one.pfw.gz", 5, "earlier");
+    ok(index::agg_dictionary(take(opened->snapshot()), *dictionary));
+    CHECK(dictionary->intern.resolve(5) == "earlier");
+    CHECK(dictionary->intern.resolve(9) == "later");
+}
+
 TEST_CASE("a copy at another format version is not current") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());

@@ -191,6 +191,7 @@ class GzipStream : public StreamBase {
             inflater_.set_member_bound(static_cast<std::size_t>(
                 std::max<std::uint64_t>(indexer_->checkpoint_size(), 1)));
             inflater_.set_index_hint(indexer_->piece_heads());
+            inflater_.set_file_end(indexer_->compressed_end());
         }
 
         // A range starting past the end of the file yields nothing, so skip

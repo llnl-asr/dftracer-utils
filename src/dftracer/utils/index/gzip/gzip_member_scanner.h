@@ -53,11 +53,12 @@ inline constexpr std::size_t MEMBER_SCAN_WINDOW = std::size_t{4} << 20;
 inline constexpr std::uint64_t MEMBER_SCAN_RANGE = std::uint64_t{256} << 20;
 inline constexpr std::size_t MEMBER_SCAN_WAYS = 16;
 
-/// Scans the ranges [r * MEMBER_SCAN_RANGE, ...) of `fd` taken from `next`
-/// into `hits[r]`; 0 on a read error, else 1. Not bool: when_all writes the
-/// results of tasks on different threads into one vector.
+/// Scans the ranges [start + r * MEMBER_SCAN_RANGE, ...) of `fd` taken from
+/// `next` into `hits[r]`; 0 on a read error, else 1. Not bool: when_all writes
+/// the results of tasks on different threads into one vector.
 inline coro::CoroTask<std::uint8_t> scan_member_ranges(
-    int fd, std::uint64_t file_size, std::atomic<std::size_t>* next,
+    int fd, std::uint64_t start, std::uint64_t file_size,
+    std::atomic<std::size_t>* next,
     dstd::Vector<dstd::Vector<GzipHeaderHit>>* hits) {
     // Four bytes behind the window for the ISIZE, nine past it so a header
     // that starts in the window is whole.
@@ -69,7 +70,7 @@ inline coro::CoroTask<std::uint8_t> scan_member_ranges(
     for (;;) {
         const std::size_t r = next->fetch_add(1, std::memory_order_relaxed);
         if (r >= hits->size()) co_return 1;
-        const std::uint64_t begin = r * MEMBER_SCAN_RANGE;
+        const std::uint64_t begin = start + r * MEMBER_SCAN_RANGE;
         const std::uint64_t end =
             std::min<std::uint64_t>(begin + MEMBER_SCAN_RANGE, file_size);
         auto& out = (*hits)[r];
@@ -115,22 +116,24 @@ inline coro::CoroTask<std::uint8_t> scan_member_ranges(
 ///
 /// False positives (the byte pattern appearing inside compressed data
 /// with a plausible header) are possible; callers must treat a returned
-/// list as "candidate" and validate at inflate time.
+/// list as "candidate" and validate at inflate time. With `start`, only the
+/// bytes from there on are scanned.
 inline coro::CoroTask<bool> enumerate_gzip_member_candidates(
-    int fd, std::uint64_t file_size, dstd::Vector<GzipMember>& out) {
+    int fd, std::uint64_t file_size, dstd::Vector<GzipMember>& out,
+    std::uint64_t start = 0) {
     out.clear();
-    if (file_size < 18)
+    if (file_size < start + 18)
         co_return false;  // min gzip: 10 header + 2 deflate + 8 trailer
 
     const std::size_t ranges = static_cast<std::size_t>(
-        (file_size + MEMBER_SCAN_RANGE - 1) / MEMBER_SCAN_RANGE);
+        (file_size - start + MEMBER_SCAN_RANGE - 1) / MEMBER_SCAN_RANGE);
     dstd::Vector<dstd::Vector<GzipHeaderHit>> hits(ranges);
     std::atomic<std::size_t> next{0};
     dstd::Vector<coro::CoroTask<std::uint8_t>> scans;
     const std::size_t ways = std::min(ranges, MEMBER_SCAN_WAYS);
     scans.reserve(ways);
     for (std::size_t i = 0; i < ways; ++i)
-        scans.push_back(scan_member_ranges(fd, file_size, &next, &hits));
+        scans.push_back(scan_member_ranges(fd, start, file_size, &next, &hits));
     const dstd::Vector<std::uint8_t> ok =
         co_await coro::when_all(std::move(scans));
     if (std::find(ok.begin(), ok.end(), 0) != ok.end()) co_return false;

@@ -322,6 +322,9 @@ dftracer::utils::store::NamespaceSpec ext_spec(store::IndexExtension ext) {
     const dstd::String name = store::store_layout::namespace_name(ext);
     spec.name.assign(name.data(), name.size());
     spec.format_version = store::layout::ext_version(ext);
+    // A grown file adds a copy of only its new keys, so a build replaces older
+    // copies by asking for it at publish.
+    spec.shared = true;
     return spec;
 }
 
@@ -358,7 +361,7 @@ dstd::Result<dstd::Vector<gzip::ChunkSpan>> spans(const Snapshot& snapshot,
     out.reserve(found->size());
     for (const auto& member : *found) {
         out.push_back({member.uc_offset, member.uc_size, member.first_line_num,
-                       member.last_line_num});
+                       member.last_line_num, member.opens_mid_line});
     }
     return out;
 }
@@ -831,12 +834,21 @@ file_column_types(const Snapshot& snapshot, const FileRef& file) {
 
 void put_file_metadata(FileBuild& build, std::uint64_t checkpoint_size,
                        std::uint64_t total_lines, std::uint64_t total_uc_size,
-                       bool truncated) {
-    put_value(build, Ext::Members, file_key(store::layout::members::METADATA),
-              store::internal::encoding::encode_metadata_record(
-                  checkpoint_size, total_lines, total_uc_size,
-                  truncated ? store::internal::encoding::METADATA_FLAG_TRUNCATED
-                            : 0));
+                       bool truncated, bool has_open_line,
+                       std::uint64_t next_member_idx, bool has_mid_line_chunk) {
+    put_value(
+        build, Ext::Members, file_key(store::layout::members::METADATA),
+        store::internal::encoding::encode_metadata_record(
+            checkpoint_size, total_lines, total_uc_size,
+            (truncated ? store::internal::encoding::METADATA_FLAG_TRUNCATED
+                       : 0) |
+                (has_open_line
+                     ? store::internal::encoding::METADATA_FLAG_OPEN_LINE
+                     : 0) |
+                (has_mid_line_chunk
+                     ? store::internal::encoding::METADATA_FLAG_MID_LINE_CHUNK
+                     : 0),
+            next_member_idx));
 }
 
 void put_gzip_member(FileBuild& build, const gzip::GzipMemberRecord& member) {

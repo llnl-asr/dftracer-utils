@@ -63,6 +63,8 @@ struct ParallelInflateMsg {
     std::uint64_t lines = 0;
     // Absolute compressed offset just past the member this chunk ended.
     bool member_ended = false;
+    /// With member_ended: the member's last line has no newline yet.
+    bool has_open_line = false;
     std::uint64_t member_c_end = 0;
     // Uncompressed bytes of this chunk; `data` holds them only when a visitor
     // reads them.
@@ -406,6 +408,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
     emit(msg);
     buffers.give(std::move(buf));
     msg.member_ended = true;
+    msg.has_open_line = since_newline > 0;
     msg.member_c_end = co_await next_member_start(
         fd, candidates, c_off + in_bytes, range_c_end);
     const auto send_ok = co_await producer.send(std::move(msg));
@@ -530,6 +533,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
             buf = buffers.take();
         }
         msg.member_ended = true;
+        msg.has_open_line = out_size > 0 && out[out_size - 1] != '\n';
         msg.member_c_end = co_await next_member_start(
             fd, candidates, c_off + *in_bytes, range_c_end);
         msg.truncated = truncated;
@@ -680,7 +684,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
     dstd::Vector<GzipMemberRecord>& members,
     dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>>& restart_windows,
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
-    std::uint64_t& recovered_bytes) {
+    std::uint64_t& recovered_bytes, bool& has_open_line) {
     const bool has_visitors = !visitors.empty();
     std::uint64_t global_uc = 0;
 
@@ -690,6 +694,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
     std::uint64_t member_first_line = total_lines + 1;
     GzipRecordKind piece_kind = GzipRecordKind::Member;
     std::uint8_t piece_bits = 0;
+    bool piece_opens_mid_line = false;
     dstd::String piece_window;
 
     std::uint64_t total_chunks_received = 0;
@@ -732,6 +737,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
         global_uc += data_size;
         total_lines += msg.lines;
 
+        if (msg.member_ended) has_open_line = msg.has_open_line;
         if (msg.member_ended || msg.restart) {
             GzipRecordKind kind = piece_kind;
             if (msg.restart && kind == GzipRecordKind::Member) {
@@ -747,11 +753,15 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
                 .last_line_num = total_lines,
                 .kind = kind,
                 .bits = piece_bits,
+                .opens_mid_line = piece_opens_mid_line,
             });
             if (kind == GzipRecordKind::Restart) {
                 restart_windows.emplace_back(member_idx,
                                              std::move(piece_window));
             }
+            piece_opens_mid_line =
+                msg.restart ? msg.window.empty() || msg.window.back() != '\n'
+                            : msg.has_open_line;
             if (msg.restart) {
                 piece_kind = GzipRecordKind::Restart;
                 piece_bits = msg.bits;
@@ -877,7 +887,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
     std::uint64_t& total_uc_size, dstd::Vector<GzipMemberRecord>& members,
     dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>>& restart_windows,
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
-    std::uint64_t& recovered_bytes) {
+    std::uint64_t& recovered_bytes, bool& has_open_line) {
     // Fanning out past the thread count only adds channel and scheduling
     // overhead; on a single-threaded drive (coro::RunLoop, the no-executor
     // .get() path) it collapses to one worker.
@@ -917,7 +927,8 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
             // workers are joined.
             dispatcher_ok = co_await parallel_dispatcher(
                 &child, plan_ptr, member_idx_base, total_lines, total_uc_size,
-                members, restart_windows, visitors, truncated, recovered_bytes);
+                members, restart_windows, visitors, truncated, recovered_bytes,
+                has_open_line);
         });
 
     co_return dispatcher_ok;
@@ -929,7 +940,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
     dstd::Vector<GzipMemberRecord>& members,
     dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>>& restart_windows,
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
-    std::uint64_t& recovered_bytes) {
+    std::uint64_t& recovered_bytes, bool& has_open_line) {
     struct stat st;
     const ssize_t stat_result = co_await runtime::io::fstat(fd, &st);
     if (stat_result != 0) co_return false;
@@ -948,14 +959,17 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
         // Slice end: next-member offset if this isn't the last slice of
         // the file, else EOF. Crucial: a non-last slice's workers must
         // not inflate past this boundary into another slice's bytes.
-        const std::uint64_t slice_c_end =
-            (me < all.size()) ? all[me].c_offset : file_size;
+        const std::uint64_t slice_c_end = slice->c_end != 0   ? slice->c_end
+                                          : (me < all.size()) ? all[me].c_offset
+                                                              : file_size;
         dstd::Vector<GzipMember> sliced(all.begin() + mb, all.begin() + me);
         co_return co_await process_chunks_parallel(
-            fd, slice_c_end, file_size, ckpt_size, ways, std::move(sliced),
-            /*member_idx_base=*/mb, /*strip_slice_leading_partial=*/mb > 0,
-            total_lines, total_uc_size, members, restart_windows, visitors,
-            truncated, recovered_bytes);
+            fd, slice_c_end, slice->c_end != 0 ? slice->c_end : file_size,
+            ckpt_size, ways, std::move(sliced),
+            /*member_idx_base=*/slice->idx_base + mb,
+            /*strip_slice_leading_partial=*/mb > 0, total_lines, total_uc_size,
+            members, restart_windows, visitors, truncated, recovered_bytes,
+            has_open_line);
     }
 
     // Discover member boundaries so the inflate pass can fan out. The scan
@@ -972,7 +986,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
         fd, file_size, file_size, ckpt_size, ways, std::move(scanned),
         /*member_idx_base=*/0, /*strip_slice_leading_partial=*/false,
         total_lines, total_uc_size, members, restart_windows, visitors,
-        truncated, recovered_bytes);
+        truncated, recovered_bytes, has_open_line);
 }
 
 }  // namespace
@@ -1020,9 +1034,10 @@ build_gzip_index_artifacts(int fd, dstd::CStringView gz_path,
 
     bool truncated = false;
     std::uint64_t recovered_bytes = 0;
+    bool has_open_line = false;
     const bool success = co_await process_chunks(
         fd, slice, ckpt_size, ways, total_lines, total_uc_size, members,
-        restart_windows, visitors, truncated, recovered_bytes);
+        restart_windows, visitors, truncated, recovered_bytes, has_open_line);
 
     if (!success) {
         co_return dstd::nullopt;
@@ -1058,6 +1073,7 @@ build_gzip_index_artifacts(int fd, dstd::CStringView gz_path,
     artifacts.restart_windows = std::move(restart_windows);
     artifacts.truncated = truncated;
     artifacts.recovered_bytes = recovered_bytes;
+    artifacts.has_open_line = has_open_line;
     co_return artifacts;
 }
 
@@ -1067,9 +1083,17 @@ void persist_gzip_index_artifacts(index::FileBuild& build,
         index::put_gzip_member(build, member);
     for (const auto& [member_idx, window] : artifacts.restart_windows)
         index::put_restart_window(build, member_idx, window);
-    index::put_file_metadata(build, artifacts.checkpoint_size,
-                             artifacts.total_lines, artifacts.total_uc_size,
-                             artifacts.truncated);
+    const bool has_mid_line_chunk =
+        artifacts.has_mid_line_chunk ||
+        std::any_of(artifacts.members.begin(), artifacts.members.end(),
+                    [](const GzipMemberRecord& member) {
+                        return member.opens_mid_line;
+                    });
+    index::put_file_metadata(
+        build, artifacts.checkpoint_size, artifacts.total_lines,
+        artifacts.total_uc_size, artifacts.truncated, artifacts.has_open_line,
+        artifacts.members.empty() ? 0 : artifacts.members.back().member_idx + 1,
+        has_mid_line_chunk);
     build.finish(index::store::IndexExtension::Members, 0);
 }
 
@@ -1360,31 +1384,33 @@ std::uint64_t GzipIndexer::line_count() const {
 bool GzipIndexer::find_member(std::size_t target_offset,
                               GzipMemberRecord& member) const {
     ensure_loaded();
-    std::lock_guard<std::mutex> lock(cached_members_mutex_);
-    for (const auto& candidate : cached_members_) {
-        if (target_offset < candidate.uc_offset + candidate.uc_size) {
-            member = candidate;
-            return true;
-        }
-    }
-    return false;
+    const auto at = std::partition_point(
+        cached_members_.begin(), cached_members_.end(),
+        [target_offset](const GzipMemberRecord& candidate) {
+            return target_offset >= candidate.uc_offset + candidate.uc_size;
+        });
+    if (at == cached_members_.end()) return false;
+    member = *at;
+    return true;
 }
 
 dstd::Vector<GzipMemberRecord> GzipIndexer::members() const {
     ensure_loaded();
-    std::lock_guard<std::mutex> lock(cached_members_mutex_);
     return cached_members_;
 }
 
-dstd::Vector<std::uint64_t> GzipIndexer::piece_heads() const {
+dstd::Span<const std::uint64_t> GzipIndexer::piece_heads() const {
     ensure_loaded();
-    std::lock_guard<std::mutex> lock(cached_members_mutex_);
     return cached_heads_;
+}
+
+std::uint64_t GzipIndexer::compressed_end() const {
+    ensure_loaded();
+    return file_ref_ ? file_ref_->stat().size : 0;
 }
 
 dstd::String GzipIndexer::restart_window(std::uint64_t member_idx) const {
     ensure_loaded();
-    std::lock_guard<std::mutex> lock(cached_members_mutex_);
     if (!file_ref_) return {};
     auto window = common::unwrap(
         index::restart_window(*snapshot_, *file_ref_, member_idx));

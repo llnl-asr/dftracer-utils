@@ -21,11 +21,16 @@ dstd::String encode_gzip_member_value(
 
 /// Bits of the metadata record's flags word.
 inline constexpr std::uint64_t METADATA_FLAG_TRUNCATED = 1;
+inline constexpr std::uint64_t METADATA_FLAG_OPEN_LINE = 2;
+inline constexpr std::uint64_t METADATA_FLAG_MID_LINE_CHUNK = 4;
+// A restart piece has at most 7 spare bits, so the top bit of the byte is free.
+inline constexpr std::uint8_t MEMBER_FLAG_OPENS_MID_LINE = 0x80;
 
 dstd::String encode_metadata_record(std::uint64_t checkpoint_size,
                                     std::uint64_t total_lines,
                                     std::uint64_t total_uc_size,
-                                    std::uint64_t flags);
+                                    std::uint64_t flags,
+                                    std::uint64_t next_member_idx);
 
 dstd::String encode_chunk_statistics_value(
     const index::schemas::dft::ChunkStatistics& stats);

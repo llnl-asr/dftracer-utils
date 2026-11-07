@@ -18,6 +18,7 @@
 #include <dftracer/utils/index/build/file_group.h>
 #include <dftracer/utils/index/build/index_batch_writer.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
+#include <dftracer/utils/index/build/new_members.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
@@ -27,6 +28,7 @@
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -43,6 +45,22 @@ namespace dftracer::utils::index::build {
 using trace::internal::determine_index_path;
 
 namespace {
+
+// False when the inflate pass left a gap between the records, so a member after
+// the gap is not proven to follow the ones before it.
+bool covers_every_byte(
+    const dstd::Vector<index::gzip::GzipMemberRecord>& members,
+    std::uint64_t from, std::uint64_t to) {
+    std::uint64_t at = from;
+    for (const auto& member : members) {
+        if (member.c_offset != at) return false;
+        at += member.c_size;
+    }
+    return at == to;
+}
+
+/// Leaves the parse of a file with no new whole member.
+struct NothingNew {};
 
 struct PreparedFile {
     std::size_t index;
@@ -94,6 +112,9 @@ struct Admission {
     bool spill = false;
     /// RecordSchema id for every file; empty detects each file's.
     dstd::String schema;
+    bool force_rebuild = false;
+    bool whole_members = false;
+    bool walk_members = false;
     std::atomic<std::size_t> spilled{0};
     std::atomic<std::size_t> max_spill_runs{0};
     FoldBufferPool buffers;
@@ -111,6 +132,9 @@ struct BatchWriteState {
     dstd::Vector<std::uint64_t> file_costs;
     std::size_t parallelism = 0;
     std::size_t checkpoint_size = 0;
+    bool force_rebuild = false;
+    bool whole_members = false;
+    bool walk_members = false;
     bool build_bloom = true;
     bool tier_only = false;
     std::uint64_t memory_budget = 0;
@@ -219,12 +243,53 @@ static coro::CoroTask<void> parse_and_write_worker(
             ParsedBloomJob job;
             dstd::Optional<index::FileBuild> build;
             bool parse_ok = false;
+            bool is_appending = false;
+            NewMembers new_members;
+            index::gzip::GzipMemberSlice member_slice;
+            dstd::Optional<index::FileRef> appended_file;
             const bool fresh =
                 !writer->snapshot->file(pf.logical_path).has_value();
             try {
                 if (fd < 0)
                     throw common::DFTUtilsException::cat(
                         common::ErrorCode::Io, "cannot open ", pf.file_path);
+                // A file that grew by whole members adds only those members.
+                const auto known = writer->snapshot->file(pf.logical_path);
+                dstd::Optional<index::store::FileMetadataResult> stored;
+                if (known && !tier_only && !admission->force_rebuild &&
+                    pf.file_size > known->stat().size &&
+                    index::extensions::plugin_extensions().empty()) {
+                    stored = common::unwrap(
+                        index::file_metadata(*writer->snapshot, *known));
+                    if (stored && !stored->truncated &&
+                        !stored->has_open_line &&
+                        (checkpoint_size == 0 ||
+                         stored->checkpoint_size == checkpoint_size) &&
+                        index::store::internal::calculate_file_hash(
+                            fd, known->stat().size) == known->stat().hash) {
+                        is_appending = stored->next_member_idx > 0;
+                    }
+                }
+                const bool whole_only =
+                    is_appending || admission->whole_members;
+                if (whole_only) {
+                    const std::uint64_t from =
+                        is_appending ? known->stat().size : 0;
+                    auto finding = find_new_members(fd, from, pf.file_size,
+                                                    admission->walk_members);
+                    new_members = co_await std::move(finding);
+                    if (new_members.members.empty()) {
+                        result.success = true;
+                        result.was_skipped = true;
+                        throw NothingNew{};
+                    }
+                    member_slice.members = &new_members.members;
+                    member_slice.member_end = new_members.members.size();
+                    member_slice.c_end = new_members.c_end;
+                    member_slice.idx_base =
+                        is_appending ? stored->next_member_idx : 0;
+                    pf.file_size = new_members.c_end;
+                }
                 pf.file_hash = index::store::internal::calculate_file_hash(
                     fd, pf.file_size);
                 job.identity = pf;
@@ -268,12 +333,18 @@ static coro::CoroTask<void> parse_and_write_worker(
                                 dstd::make_unique<index::extensions::BloomFold>(
                                     *job.intern, file_config);
                             job.bloom_fold->set_file_bytes(pf.file_size);
+                            if (is_appending) {
+                                appended_file = known;
+                                job.bloom_fold->continue_file(
+                                    &*writer->snapshot, &*appended_file,
+                                    member_slice.idx_base);
+                            }
                             if (admission->spill)
                                 job.bloom_fold->enable_spill(
                                     ticket.elastic_bytes(), *build);
                             fold_ptrs.push_back(job.bloom_fold.get());
                         }
-                        if (!tier_only) {
+                        if (!tier_only && !is_appending) {
                             job.rowset_fold = dstd::make_unique<
                                 index::extensions::RowSetFold>(
                                 *job.intern, index::indexed_rowsets(schema));
@@ -304,12 +375,37 @@ static coro::CoroTask<void> parse_and_write_worker(
 
                     auto arts =
                         co_await index::gzip::build_gzip_index_artifacts(
-                            fd, pf.file_path, checkpoint_size, visitors, scope,
-                            nullptr, admission->files.inflate_ways());
-                    if (!arts) {
+                            fd, pf.file_path,
+                            is_appending ? stored->checkpoint_size
+                                         : checkpoint_size,
+                            visitors, scope,
+                            whole_only ? &member_slice : nullptr,
+                            admission->files.inflate_ways());
+                    if (whole_only && (!arts || arts->truncated ||
+                                       !covers_every_byte(
+                                           arts->members,
+                                           new_members.members.front().c_offset,
+                                           new_members.c_end))) {
+                        // A false header or a hole in the new bytes. The walk
+                        // finds the part that is whole.
+                        result.needs_member_walk = !admission->walk_members;
+                        result.error_message =
+                            "a new gzip member of the file is not whole";
+                    } else if (!arts) {
                         result.error_message =
                             "Failed to build gzip index artifacts";
                     } else {
+                        if (is_appending) {
+                            for (auto& m : arts->members) {
+                                m.uc_offset += stored->max_bytes;
+                                m.first_line_num += stored->line_count;
+                                m.last_line_num += stored->line_count;
+                            }
+                            arts->total_lines += stored->line_count;
+                            arts->total_uc_size += stored->max_bytes;
+                            arts->has_mid_line_chunk =
+                                stored->has_mid_line_chunk;
+                        }
                         job.artifacts = std::move(*arts);
                         result.total_lines =
                             static_cast<std::size_t>(job.artifacts.total_lines);
@@ -359,11 +455,13 @@ static coro::CoroTask<void> parse_and_write_worker(
                             job.agg_output = std::move(ao);
                         }
                         result.index_created = true;
+                        result.was_appended = is_appending;
                         result.success = true;
                         job.result = result;
                         parse_ok = true;
                     }
                 }
+            } catch (const NothingNew&) {
             } catch (const std::exception& e) {
                 result.error_message = e.what();
             }
@@ -406,6 +504,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                 index::build::ParsedIndexJob write_job;
                 write_job.file_path = pf.file_path;
                 write_job.fresh = fresh;
+                write_job.appended = is_appending;
                 write_job.artifacts = std::move(job.artifacts);
                 write_job.intern = std::move(job.intern);
                 write_job.bloom_fold = std::move(job.bloom_fold);
@@ -516,6 +615,9 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
         std::min(state->file_count, parse_workers), state->file_count);
     admission->spill = budget != NO_BUDGET;
     admission->schema = state->schema;
+    admission->force_rebuild = state->force_rebuild;
+    admission->whole_members = state->whole_members;
+    admission->walk_members = state->walk_members;
     auto* admission_ptr = admission.get();
     auto next_block = dstd::make_shared<std::atomic<std::size_t>>(0);
     auto files_done = dstd::make_shared<std::atomic<std::size_t>>(0);
@@ -604,6 +706,9 @@ static dstd::UniquePtr<BatchWriteState> init_batch_write_state(
     state->tier_only = config.tier_only;
     state->memory_budget = config.memory_budget;
     state->schema = config.schema;
+    state->force_rebuild = config.force_rebuild;
+    state->whole_members = config.whole_members;
+    state->walk_members = config.walk_members;
     state->progress = std::move(config.progress);
     state->bloom_dims = dstd::make_shared<dstd::Vector<dstd::String>>(
         config.bloom_dimensions.empty()
@@ -710,6 +815,8 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
         part->tier_only = config.tier_only;
         part->memory_budget = config.memory_budget;
         part->schema = config.schema;
+        part->whole_members = config.whole_members;
+        part->walk_members = config.walk_members;
         if (config.agg_fold_factory)
             part->agg_fold_factory =
                 [factory = &config.agg_fold_factory](

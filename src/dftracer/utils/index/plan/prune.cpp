@@ -144,9 +144,11 @@ dstd::Result<index::Snapshot> open_snapshot(dstd::StringView index_path) {
     return opened->snapshot();
 }
 
-coro::CoroTask<dstd::Result<PruneResult>> prune_file(PruneRequest request) {
+namespace {
+
+coro::CoroTask<dstd::Result<PruneResult>> prune_chunks(
+    const PruneRequest& request, Reads& reads) {
     PruneResult result;
-    Reads reads(request);
     if (request.metadata != MetadataUse::Records) {
         auto data = co_await prune_data(request, reads);
         if (!data || request.metadata == MetadataUse::None || data->all_chunks)
@@ -195,6 +197,53 @@ coro::CoroTask<dstd::Result<PruneResult>> prune_file(PruneRequest request) {
     result.file_may_match = !result.candidates.empty();
     if (result.total_chunks == 0) result.total_chunks = meta->size();
     co_return result;
+}
+
+// The key of a line that spans chunks is in the chunk where it ends, and a byte
+// range reader returns it from the chunk where it starts, so that one is read
+// too. A line number reader keeps its own rows, since each row has one owner.
+void add_line_starts(dstd::Vector<std::uint64_t>& candidates,
+                     const dstd::Vector<gzip::ChunkSpan>& spans) {
+    const std::size_t count = candidates.size();
+    for (std::size_t i = 0; i < count; ++i) {
+        std::uint64_t chunk = candidates[i];
+        while (chunk > 0 && chunk < spans.size() &&
+               spans[chunk].opens_mid_line) {
+            --chunk;
+            candidates.push_back(chunk);
+        }
+    }
+    if (candidates.size() == count) return;
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()),
+                     candidates.end());
+}
+
+}  // namespace
+
+coro::CoroTask<dstd::Result<PruneResult>> prune_file(PruneRequest request) {
+    Reads reads(request);
+    auto pruned = co_await prune_chunks(request, reads);
+    if (!pruned || pruned->all_chunks || pruned->candidates.empty() ||
+        request.index_path.empty())
+        co_return pruned;
+    try {
+        const index::Snapshot& snapshot = *common::unwrap(reads.get());
+        const auto file =
+            snapshot.file(store::internal::get_logical_path(request.file_path));
+        if (file) {
+            const auto meta =
+                common::unwrap(index::file_metadata(snapshot, *file));
+            if (meta && meta->has_mid_line_chunk)
+                add_line_starts(pruned->candidates,
+                                common::unwrap(index::spans(snapshot, *file)));
+        }
+    } catch (const std::exception& e) {
+        co_return common::make_error(common::ErrorCode::Indexer,
+                                     "prune_file: index read failed for " +
+                                         request.file_path + ": " + e.what());
+    }
+    co_return pruned;
 }
 
 }  // namespace dftracer::utils::index::plan

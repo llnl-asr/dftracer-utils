@@ -114,8 +114,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
     }
 
     // A forced rebuild rebuilds every file whole, so every tier is stale.
-    dstd::Set<dstd::String> stale_tiers(result.stale_aggregation_roots.begin(),
-                                        result.stale_aggregation_roots.end());
+    dstd::HashSet<dstd::String> stale_tiers(
+        result.stale_aggregation_roots.begin(),
+        result.stale_aggregation_roots.end());
     if (input.force_rebuild)
         for (const auto& file : result.all_files) {
             auto root =
@@ -195,7 +196,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         const bool has_result_store =
             common::unwrap(co_await std::move(checking_store));
         if (!has_result_store && common::should_stage(result.index_path)) {
-            dstd::Set<dstd::String> roots;
+            dstd::HashSet<dstd::String> roots;
             for (const auto& f : files_needing_work)
                 roots.insert(
                     trace::internal::determine_index_path(f, input.index_dir));
@@ -335,7 +336,7 @@ coro::CoroTask<IndexWork> files_needing_index(ResolverInput input) {
     Resolver resolver;
     auto result = co_await resolver(std::move(input));
     dstd::Vector<FileWorkItem> items;
-    dstd::Set<std::size_t> seen;
+    dstd::HashSet<std::size_t> seen;
     for (const auto* group : {&result.needs_checkpoint, &result.needs_bloom,
                               &result.needs_aggregation})
         for (const auto& item : *group)

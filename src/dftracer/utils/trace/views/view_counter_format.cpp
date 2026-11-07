@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -139,7 +139,7 @@ void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
 
     // Columns that are group keys, spec values, or occupancy metadata are not
     // dyn args; the rest of the frame is the per-arg dyn columns.
-    dstd::Set<dstd::String> non_dyn(group_cols.begin(), group_cols.end());
+    dstd::HashSet<dstd::String> non_dyn(group_cols.begin(), group_cols.end());
     non_dyn.insert("busy_cell_us");
     dstd::Vector<dstd::String> spec_cols;
     if (plan.agg.empty()) {

@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -462,7 +463,7 @@ dataframe::DataFrame Applier::spread(dataframe::DataFrame f, std::size_t n_keys,
     for (std::int64_t r = 0; r < n; ++r) row_value.push_back(text(pk, r));
     if (open) {
         dstd::Vector<std::int64_t> firsts;
-        dstd::Set<dstd::String> seen;
+        dstd::HashSet<dstd::String> seen;
         for (std::int64_t r = 0; r < n; ++r)
             if (seen.insert(row_value[static_cast<std::size_t>(r)]).second)
                 firsts.push_back(r);

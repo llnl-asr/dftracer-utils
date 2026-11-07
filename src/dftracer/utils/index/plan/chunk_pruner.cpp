@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -51,7 +51,7 @@ bool is_position(dstd::StringView digits) {
                        [](char c) { return c >= '0' && c <= '9'; });
 }
 
-using Positions = dstd::Map<dstd::String, dstd::Vector<dstd::String>>;
+using Positions = dstd::HashMap<dstd::String, dstd::Vector<dstd::String>>;
 
 // For each any() path, the catalog paths `<path>.<k>` in position order
 // (`args.<path>.<k>` for a dftracer arg written without the prefix).

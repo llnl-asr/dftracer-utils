@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
-#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
@@ -549,7 +548,7 @@ coro::CoroTask<dstd::Result<SideAggregate>> aggregate_side(
 
     AggQuery base;
     {
-        dstd::Map<dstd::String, std::size_t> root_of;
+        dstd::HashMap<dstd::String, std::size_t> root_of;
         for (const auto& f : files) {
             dstd::String root(
                 internal::determine_index_path(f, dstd::String(index_dir)));

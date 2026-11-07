@@ -22,7 +22,6 @@
 #include <dftracer/utils/dstd/hash/splitmix64.h>  // row/cell hashing
 #include <dftracer/utils/dstd/hash/xxh3.h>        // string cell hashing
 #include <dftracer/utils/dstd/hash_map.h>
-#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -840,7 +839,7 @@ DataFrame group_by(const DataFrame& b, const dstd::Vector<dstd::String>& keys,
     // Lower to the fused aggregation engine: value columns referenced by index
     // (deduped), all aggregates computed in one parallel pass over the batch.
     dstd::Vector<const Series*> values;
-    dstd::Map<dstd::String, std::int32_t> col_idx;
+    dstd::HashMap<dstd::String, std::int32_t> col_idx;
     auto resolve = [&](const dstd::String& name) -> std::int32_t {
         auto it = col_idx.find(name);
         if (it != col_idx.end()) return it->second;
@@ -2244,7 +2243,7 @@ DataFrame group_by_dynamic(const DataFrame& b, const dstd::String& time_col,
         Series keyc{kc};
         dstd::Vector<AggSpec> specs;
         dstd::Vector<const Series*> values;
-        dstd::Map<dstd::String, std::int32_t> col_idx;
+        dstd::HashMap<dstd::String, std::int32_t> col_idx;
         auto resolve = [&](const dstd::String& name) -> std::int32_t {
             auto it = col_idx.find(name);
             if (it != col_idx.end()) return it->second;
@@ -2293,7 +2292,7 @@ DataFrame group_by_dynamic(const DataFrame& b, const dstd::String& time_col,
     // (mirrors dfops::group_by's lowering).
     dstd::Vector<Series> gathered;
     dstd::Vector<AggSpec> specs;
-    dstd::Map<dstd::String, std::int32_t> col_idx;
+    dstd::HashMap<dstd::String, std::int32_t> col_idx;
     auto resolve = [&](const dstd::String& name) -> std::int32_t {
         auto it = col_idx.find(name);
         if (it != col_idx.end()) return it->second;

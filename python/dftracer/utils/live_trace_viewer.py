@@ -1,38 +1,44 @@
 # SPDX-License-Identifier: MIT
-"""``LiveTraceViewer``: a :class:`~dftracer.utils.TraceViewer` over traces that
-are still being written. The work is native (``trace::views::LiveView``); this
-is its Python adaptor.
-
-Only whole gzip members, CRC checked, are read: a file is read up to its first
-unfinished tail or hole, and ``refresh()`` or a new viewer picks up what has
-been finished or filled since. Every ``TraceViewer`` capability is inherited.
+"""``LiveTraceViewer``: tracks gzip traces that are still being written. The work
+is native (``trace::views::LiveView``); this is its Python adaptor.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any, List, Optional, Sequence, Tuple, Union
+from typing import Any, List, NamedTuple, Optional, Sequence, Union
 
 from . import dftracer_utils_ext as _ext
 from .schemas import schema_id
 from .trace_viewer import TraceViewer
 
 
-class LiveTraceViewer(TraceViewer):
-    """A :class:`TraceViewer` over gzip trace files that may still be growing.
+class LiveFileStatus(NamedTuple):
+    """One file as the last :meth:`LiveTraceViewer.snapshot` found it.
 
-    ``files`` is a path, a directory scanned recursively for gzip traces, or a
-    sequence of paths. ``index_path`` is as for ``TraceViewer``, over the
-    snapshots. ``snapshot_dir`` holds a copy of the verified bytes and needs
-    room for it; only one viewer at a time may use it. By default it is a
-    private temporary directory removed at process exit.
-
-    After a read: ``verified_bytes`` is the bytes of whole members read,
-    ``skipped_tail_bytes`` the bytes from each file's stop point to its end,
-    and ``holes`` the ``(path, offset, length)`` where a file was cut short.
+    ``state`` is ``"whole"`` when every byte is in a whole gzip member, ``"tail"``
+    when the file ends in a member that is short or bad, and ``"hole"`` when bytes
+    that are not a member come before a whole member. ``hole_bytes`` is the size
+    of that gap.
     """
 
-    __slots__ = ("_live", "_options")
+    path: str
+    state: str
+    verified_bytes: int
+    skipped_bytes: int
+    hole_bytes: int
+
+
+class LiveTraceViewer:
+    """Tracks gzip trace files that may still be growing.
+
+    ``files`` is a path, a directory scanned recursively for gzip traces, or a
+    sequence of paths. ``index_path`` is as for ``TraceViewer``. The files are
+    not copied. This object holds no query ops: :meth:`snapshot` returns a normal
+    ``TraceViewer``, which keeps its rows after later snapshots.
+    """
+
+    __slots__ = ("_live", "_runtime", "_record_schema")
 
     def __init__(
         self,
@@ -40,37 +46,27 @@ class LiveTraceViewer(TraceViewer):
         index_path: Optional[str] = None,
         runtime: Any = None,
         record_schema: Any = None,
-        snapshot_dir: Optional[str] = None,
     ) -> None:
         paths = (
             [os.fspath(files)]
             if isinstance(files, (str, os.PathLike))
             else [os.fspath(f) for f in files]
         )
-        self._live = _ext._LiveTraceViewer(paths, index_path, snapshot_dir)
-        self._options = (runtime, record_schema)
-        self.refresh()
-
-    def refresh(self) -> "LiveTraceViewer":
-        """Read the files again in place: rows of members written since, or of
-        a filled hole, now appear, and so do new files of a directory. Ops
-        applied to this object are dropped. Returns ``self``."""
-        runtime, record_schema = self._options
-        native = self._live.refresh()
-        if record_schema is not None:
-            native = native.record_schema(schema_id(record_schema))
-        TraceViewer.__init__(self, native)
+        self._live = _ext._LiveTraceViewer(paths, index_path)
         self._runtime = runtime
-        return self
+        self._record_schema = record_schema
 
-    @property
-    def verified_bytes(self) -> int:
-        return self._live.verified_bytes()
+    def snapshot(self) -> TraceViewer:
+        """Add the members written since the last call to the index, once each,
+        and return a viewer of every whole member. Each file stops at its first
+        short or bad member."""
+        native = self._live.snapshot()
+        if self._record_schema is not None:
+            native = native.record_schema(schema_id(self._record_schema))
+        viewer = TraceViewer(native)
+        viewer._runtime = self._runtime
+        return viewer
 
-    @property
-    def skipped_tail_bytes(self) -> int:
-        return self._live.skipped_tail_bytes()
-
-    @property
-    def holes(self) -> List[Tuple[str, int, int]]:
-        return self._live.holes()
+    def status(self) -> List[LiveFileStatus]:
+        """One entry per file, from the last :meth:`snapshot`."""
+        return [LiveFileStatus(*entry) for entry in self._live.status()]

@@ -1243,33 +1243,26 @@ void ltv_dealloc(LiveTraceViewerObject* self) {
 }
 
 int ltv_init(LiveTraceViewerObject* self, PyObject* args, PyObject* kwds) {
-    static const char* kwlist[] = {"files", "index_path", "snapshot_dir",
-                                   nullptr};
+    static const char* kwlist[] = {"files", "index_path", nullptr};
     PyObject* files = nullptr;
     PyObject* index_obj = nullptr;
-    PyObject* snapshot_obj = nullptr;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|OO",
-                                     const_cast<char**>(kwlist), &files,
-                                     &index_obj, &snapshot_obj))
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "O|O", const_cast<char**>(kwlist), &files, &index_obj))
         return -1;
     dstd::Vector<dstd::String> paths;
     if (!python::parse_string_seq(files, "files must be a sequence of paths",
                                   paths))
         return -1;
     dstd::String index_dir;
-    dstd::String snapshot_dir;
-    for (auto [obj, out] : {dstd::Pair{index_obj, &index_dir},
-                            dstd::Pair{snapshot_obj, &snapshot_dir}}) {
-        if (!obj || obj == Py_None) continue;
-        const char* s = as_utf8(obj);
-        if (!s) return -1;
-        *out = s;
+    if (index_obj && index_obj != Py_None) {
+        const char* text = as_utf8(index_obj);
+        if (!text) return -1;
+        index_dir = text;
     }
     dstd::UniquePtr<trace::views::LiveView> live;
     if (!run_blocking([&] {
             live = dstd::make_unique<trace::views::LiveView>(
-                std::move(paths), std::move(index_dir),
-                std::move(snapshot_dir));
+                std::move(paths), std::move(index_dir));
         }))
         return -1;
     dstd::UniquePtr<trace::views::LiveView>(self->live).reset();
@@ -1277,29 +1270,35 @@ int ltv_init(LiveTraceViewerObject* self, PyObject* args, PyObject* kwds) {
     return 0;
 }
 
-PyObject* ltv_refresh(PyObject* self, PyObject*) {
+PyObject* ltv_snapshot(PyObject* self, PyObject*) {
     View tv;
-    if (!run_blocking([&] { tv = live_of(self).refresh(); })) return nullptr;
+    if (!run_blocking([&] { tv = live_of(self).snapshot(); })) return nullptr;
     return guarded([&] { return make_viewer(std::move(tv)); });
 }
 
-PyObject* ltv_verified_bytes(PyObject* self, PyObject*) {
-    return PyLong_FromUnsignedLongLong(live_of(self).verified_bytes());
+const char* live_state_name(trace::views::LiveFileState state) {
+    switch (state) {
+        case trace::views::LiveFileState::Whole:
+            return "whole";
+        case trace::views::LiveFileState::Tail:
+            return "tail";
+        case trace::views::LiveFileState::Hole:
+            return "hole";
+    }
+    return "";
 }
 
-PyObject* ltv_skipped_tail_bytes(PyObject* self, PyObject*) {
-    return PyLong_FromUnsignedLongLong(live_of(self).skipped_tail_bytes());
-}
-
-PyObject* ltv_holes(PyObject* self, PyObject*) {
-    const dstd::Vector<trace::views::LiveHole> holes = live_of(self).holes();
-    PyObject* out = PyList_New(static_cast<Py_ssize_t>(holes.size()));
+PyObject* ltv_status(PyObject* self, PyObject*) {
+    const auto& status = live_of(self).status();
+    PyObject* out = PyList_New(static_cast<Py_ssize_t>(status.size()));
     if (!out) return nullptr;
-    for (std::size_t i = 0; i < holes.size(); ++i) {
+    for (std::size_t i = 0; i < status.size(); ++i) {
+        const auto& st = status[i];
         PyObject* t =
-            Py_BuildValue("(sKK)", holes[i].path.c_str(),
-                          static_cast<unsigned long long>(holes[i].offset),
-                          static_cast<unsigned long long>(holes[i].length));
+            Py_BuildValue("(ssKKK)", st.path.c_str(), live_state_name(st.state),
+                          static_cast<unsigned long long>(st.verified_bytes),
+                          static_cast<unsigned long long>(st.skipped_bytes),
+                          static_cast<unsigned long long>(st.hole_bytes));
         if (!t) {
             Py_DECREF(out);
             return nullptr;
@@ -1310,14 +1309,11 @@ PyObject* ltv_holes(PyObject* self, PyObject*) {
 }
 
 PyMethodDef ltv_methods[] = {
-    {"refresh", ltv_refresh, METH_NOARGS,
-     "Walk the files again; a _TraceViewer of what is whole now."},
-    {"verified_bytes", ltv_verified_bytes, METH_NOARGS,
-     "Bytes of whole members being read."},
-    {"skipped_tail_bytes", ltv_skipped_tail_bytes, METH_NOARGS,
-     "Bytes from each file's stop point to its end."},
-    {"holes", ltv_holes, METH_NOARGS,
-     "(path, offset, length) of the hole that cut each file short."},
+    {"snapshot", ltv_snapshot, METH_NOARGS,
+     "Index what was written since the last call; a _TraceViewer of every "
+     "whole member."},
+    {"status", ltv_status, METH_NOARGS,
+     "(path, state, verified_bytes, skipped_bytes, hole_bytes) per file."},
     {nullptr, nullptr, 0, nullptr}};
 
 }  // namespace

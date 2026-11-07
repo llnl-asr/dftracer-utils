@@ -41,7 +41,7 @@ bool is_hash_arg(dstd::StringView path) {
 // The plan's time_bucket and group_by do not apply here, as the counters keep
 // their own (host, name, time_bucket) grain.
 dstd::Optional<index::Snapshot> covering_index(const ViewPlan& plan) {
-    if (plan.files.empty()) return dstd::nullopt;
+    if (plan.files.empty() || is_past_pin(plan)) return dstd::nullopt;
     const dstd::String& index_path = plan.files.front().index_path;
     if (index_path.empty()) return dstd::nullopt;
     try {

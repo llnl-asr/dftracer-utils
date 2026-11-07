@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
@@ -2217,5 +2218,111 @@ TEST_SUITE("View") {
 
         CHECK(View::from_file(dstd::String(gz), dstd::String(idx))
                   .time_metric() == trace::TimeMetric::Ns);
+    }
+
+    TEST_CASE("View - the tier after a grow matches a full scan") {
+        TestEnvironment env(10);
+        REQUIRE(env.is_valid());
+        const dstd::String gz = env.dir() + "/grow.pfw.gz";
+        const auto append_member = [&](int first, const char* name,
+                                       const char* cat, int ts_base) {
+            const dstd::String plain = env.dir() + "/part.txt";
+            const dstd::String part = env.dir() + "/part.txt.gz";
+            {
+                dftu_utils_test::FileOut ofs(plain);
+                if (first == 0) ofs << "[\n";
+                for (int i = first; i < first + 200; ++i)
+                    ofs << R"({"id":)" << i << R"(,"ph":"X","name":")" << name
+                        << R"(","cat":")" << cat << R"(","pid":1,"tid":1,"ts":)"
+                        << (ts_base + i * 100)
+                        << R"(,"dur":50,"args":{"level":)" << i << "}}\n";
+            }
+            REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, part));
+            auto in = dstd::File::open(dstd::PathView(part), {});
+            REQUIRE(in.has_value());
+            dstd::String bytes(in->size().value(), '\0');
+            REQUIRE(in->read_exact_at(
+                          0, dstd::Span<std::uint8_t>(
+                                 reinterpret_cast<std::uint8_t*>(bytes.data()),
+                                 bytes.size()))
+                        .has_value());
+            dstd::OpenOptions options;
+            options.access = dstd::Access::Write;
+            options.creation = dstd::Creation::IfNeeded;
+            auto out = dstd::File::open(dstd::PathView(gz), options);
+            REQUIRE(out.has_value());
+            const auto size = dstd::fs::file_size(dstd::PathView(gz));
+            REQUIRE(
+                out->write_all_at(size ? *size : 0,
+                                  dstd::ByteView(bytes.data(), bytes.size()))
+                    .has_value());
+        };
+        append_member(0, "read", "POSIX", 1000000);
+        build_tier_index(gz);
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        const auto check = [&] {
+            const dstd::Vector<AggSpec> aggs{{AggOp::Count, "", "n"},
+                                             {AggOp::Sum, "dur", "total"},
+                                             {AggOp::Max, "dur", "longest"}};
+            const auto scan_plan = views::detail::scan::from_file(
+                dstd::String(gz), dstd::String(idx));
+            const auto same = [&](const dstd::Vector<GroupKey>& keys,
+                                  const dstd::Vector<dstd::String>& names) {
+                const auto answer =
+                    View::from_file(dstd::String(gz), dstd::String(idx))
+                        .group_by(keys)
+                        .agg(aggs)
+                        .collect()
+                        .get();
+                frames_equal(
+                    answer,
+                    scan_only(views::detail::scan::agg(
+                        views::detail::scan::group_by(scan_plan, keys), aggs)),
+                    names);
+            };
+            same({GroupKey::cat()}, {"cat"});
+            same({GroupKey::cat(), GroupKey::name()}, {"cat", "name"});
+            const auto by_bucket =
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .group_by({GroupKey::cat()})
+                    .time_bucket(1000000)
+                    .agg(aggs)
+                    .collect()
+                    .get();
+            frames_equal(by_bucket,
+                         scan_only(views::detail::scan::agg(
+                             views::detail::scan::time_bucket(
+                                 views::detail::scan::group_by(
+                                     scan_plan, {GroupKey::cat()}),
+                                 1000000),
+                             aggs)),
+                         {"cat", "time_bucket"});
+        };
+        check();
+        append_member(200, "write", "STDIO", 50000000);
+        build_tier_index(gz);
+        check();
+        append_member(400, "read", "POSIX", 90000000);
+        build_tier_index(gz);
+        check();
+        const auto counter = dstd::make_shared<ScanCounter>();
+        const auto totals = View::from_file(dstd::String(gz), dstd::String(idx))
+                                .count_scans(counter)
+                                .group_by({GroupKey::cat()})
+                                .agg({{AggOp::Count, "", "n"},
+                                      {AggOp::Sum, "dur", "total"},
+                                      {AggOp::Max, "ts", "last"}})
+                                .collect()
+                                .get();
+        // The tier answers, so no chunk is read.
+        CHECK(counter->chunks_scanned.load() == 0);
+        REQUIRE(totals.num_rows() == 2);
+        for (std::int64_t r = 0; r < totals.num_rows(); ++r) {
+            const bool is_posix = bstr(totals, r, "cat") == "posix";
+            CHECK(bnum(totals, r, "n") == (is_posix ? 400 : 200));
+            CHECK(bnum(totals, r, "total") == (is_posix ? 400 : 200) * 50);
+            CHECK(bnum(totals, r, "last") ==
+                  (is_posix ? 90000000 + 599 * 100 : 50000000 + 399 * 100));
+        }
     }
 }

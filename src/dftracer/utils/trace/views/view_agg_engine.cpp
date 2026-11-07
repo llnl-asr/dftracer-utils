@@ -1210,6 +1210,7 @@ namespace {
 
 // A paginated result is never cached.
 void persist_rollup(const ViewPlan& plan, const dataframe::AggState& state) {
+    if (has_pin(plan)) return;
     const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (rdir.empty()) return;

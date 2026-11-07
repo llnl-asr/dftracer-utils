@@ -33,6 +33,9 @@ struct ViewScannerInput {
     std::size_t start_byte = 0;
     std::size_t end_byte = 0;
     std::uint64_t checkpoint_idx = 0;
+    /// Reads through this indexer when set. Tasks over one file share it, so
+    /// its member table loads once.
+    dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer> indexer;
     std::size_t batch_size = 4 * 1024 * 1024;  // IO buffer size
     std::size_t event_batch_size = 10000;      // events per batch
     ViewDefinition view;

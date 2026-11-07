@@ -399,6 +399,7 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
                                  PrepSource from) {
     const bool trace = from == PrepSource::Trace;
     if (plan.files.empty()) return declined("no files");
+    if (is_past_pin(plan)) return declined("an index past the view's pin");
     if (!plan.computed.empty()) return declined("computed columns");
     if (plan.time_range) return declined("a time range");
     if (plan.all_records) return declined("every record is asked for");

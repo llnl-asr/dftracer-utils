@@ -296,6 +296,7 @@ ViewScannerInput make_scanner_input(const ScanUnit& u,
         .with_byte_range(u.start_byte, u.end_byte)
         .with_checkpoint_idx(u.checkpoint_idx)
         .with_view(vdef);
+    sin.indexer = u.indexer;
     if (u.query)
         sin.query = *u.query;
     else
@@ -405,10 +406,20 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
                     if (!planned->file_may_match) co_return;
 
                     auto& out = per_file[fi];
-                    for (const auto& c : planned->candidates)
-                        out.push_back(ScanUnit{f.file_path, index_path, ckpt,
-                                               c.checkpoint_idx, c.start_byte,
-                                               c.end_byte, 0, nullptr});
+                    if (planned->candidates.empty()) co_return;
+                    // Without a store the first read builds the index.
+                    dstd::SharedPtr<index::gzip::CheckpointIndexer> indexer;
+                    if (common::input_exists(index::store_of(index_path)))
+                        indexer = index::gzip::CheckpointIndexerFactory::create(
+                            f.file_path, index_path, ckpt, false);
+                    for (const auto& c : planned->candidates) {
+                        if (f.pinned_c_end > 0 &&
+                            c.start_byte >= f.pinned_uc_end)
+                            continue;
+                        out.push_back(ScanUnit{
+                            f.file_path, index_path, ckpt, c.checkpoint_idx,
+                            c.start_byte, c.end_byte, 0, nullptr, indexer});
+                    }
                 } catch (...) {
                     errors[fi] = std::current_exception();
                 }

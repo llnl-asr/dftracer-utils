@@ -18,6 +18,7 @@
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/file_process_types.h>
 #include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
+#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <simdjson.h>
 
@@ -414,8 +415,15 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     if (input.checkpoint_size > 0) {
         reader_input.with_checkpoint_size(input.checkpoint_size);
     }
-    utilities::fileio::IndexedFileReaderUtility reader_utility;
-    auto reader = co_await reader_utility(reader_input);
+    dstd::SharedPtr<utilities::reader::internal::Reader> reader;
+    if (input.indexer) {
+        reader =
+            utilities::reader::internal::ReaderFactory::create(input.indexer);
+    } else {
+        utilities::fileio::IndexedFileReaderUtility reader_utility;
+        auto made = co_await reader_utility(reader_input);
+        reader = std::move(made);
+    }
 
     // Candidates are gzip-member-aligned byte ranges. A member's last event has
     // its content in this member but its terminating '\n' as the first byte of

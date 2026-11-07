@@ -189,6 +189,13 @@ struct ViewPlan {
         record_schema;
 };
 
+/// True when a file of `plan` has a pin (@ref ViewFile::pinned_c_end).
+bool has_pin(const ViewPlan& plan);
+/// True when the index of a pinned file holds more than its pin, so an answer
+/// from the index covers rows the view must leave out. Such a plan reads
+/// chunks.
+bool is_past_pin(const ViewPlan& plan);
+
 }  // namespace dftracer::utils::trace::views::detail
 
 #endif  // DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_H

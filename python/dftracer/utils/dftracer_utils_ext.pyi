@@ -1065,14 +1065,13 @@ class _LiveTraceViewer:
         self,
         files: Sequence[str],
         index_path: Optional[str] = ...,
-        snapshot_dir: Optional[str] = ...,
     ) -> None: ...
-    def refresh(self) -> "_TraceViewer":
-        """Walk the files again; a _TraceViewer of what is whole now."""
+    def snapshot(self) -> "_TraceViewer":
+        """Index what was written since the last call; a _TraceViewer of every whole member."""
         ...
-    def verified_bytes(self) -> int: ...
-    def skipped_tail_bytes(self) -> int: ...
-    def holes(self) -> List[Tuple[str, int, int]]: ...
+    def status(self) -> List[Tuple[str, str, int, int, int]]:
+        """(path, state, verified_bytes, skipped_bytes, hole_bytes) per file."""
+        ...
 
 class _TraceViewer:
     """A trace scan and the plan over it. Builders return a new _TraceViewer;

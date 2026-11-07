@@ -68,6 +68,8 @@ struct ScanUnit {
     // The View query with resolved columns rewritten for this unit's index;
     // null when there was nothing to rewrite.
     dstd::SharedPtr<const duql::Query> query;
+    // One per file, so the tasks of a scan load its member table once.
+    dstd::SharedPtr<index::gzip::CheckpointIndexer> indexer;
 };
 
 // The record_schema every file of `plan` was indexed under, or is detected as

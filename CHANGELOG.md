@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Grow the index in place when a trace grows by whole gzip members, so a refresh costs only the new members.
 - Lower the default of `DFTRACER_UTILS_MEM_DECAY_MS` from 1000 to 200, so the heap gives idle pages back sooner.
   Peak memory of the index, stats, view and comparator tools falls 6% to 15% on a 1 GB trace set, with no change in run time above noise.
 - Add `runtime::fs::exists`, `create_directories` and `remove`, and run the per-file checks of the indexer and the tools off the worker, so they no longer hold a worker thread.
@@ -328,8 +329,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
-- Add `trace::views::LiveView` and its Python adaptor `LiveTraceViewer`, which read gzip traces that are still being written.
-  They read only whole gzip members, CRC checked, up to the first unfinished tail or hole, and `refresh()` picks up what has been finished or filled since.
+- Add `trace::views::LiveView` and its Python adaptor `LiveTraceViewer`, which follow gzip traces that are still being written.
+  `snapshot()` indexes the members written since the last call and returns a `View` or `TraceViewer` of every whole member, with no copy of the trace.
+  An old snapshot keeps its rows, and `status()` reports each file as whole, tail or hole.
 - Add a public key-value store API in `store/store.h`, a C ABI in `store/abi.h` and `dftracer.utils.Store` in Python.
 - Add `Batch::erase` and `Batch::erase_range`, which apply in the same record as the puts of the batch.
 - Add `Store::pack`, which merges small closed data files into one and deletes the files it replaced after a keep time.
@@ -488,6 +490,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a line that spans two chunks being lost when a query prunes chunks.
+- Make a reader stop at the verified end of the index, so it no longer reads bytes the index has not checked.
 - Fix the parallel inflate of a gzip trace written by zlib on macOS, which ran on one worker because the member scan rejected its OS byte.
 - Fix higher peak memory in `dftracer_index` and other trace tools: a thread now returns a freed block above 32 KiB to the thread that allocated it at once.
 - Stop the false "cannot be read" warning when a store reader opens a data file that another process has just created.

@@ -878,6 +878,8 @@ dstd::Optional<dstd::String> ViewSource::batch_key() const {
         key += '\0';
         key += f.index_path;
         key += '\0';
+        key += dstd::to_string(f.pinned_c_end);
+        key += '\0';
     }
     if (p.time_range)
         key += dstd::to_string(p.time_range->first) + ',' +

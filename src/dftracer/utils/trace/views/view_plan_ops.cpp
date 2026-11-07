@@ -58,6 +58,28 @@ ExportStats counted(const ViewPlan& plan, ExportStats st) {
 
 }  // namespace dftracer::utils::trace::views::detail
 
+namespace dftracer::utils::trace::views::detail {
+
+bool has_pin(const ViewPlan& plan) {
+    for (const auto& f : plan.files)
+        if (f.pinned_c_end > 0) return true;
+    return false;
+}
+
+bool is_past_pin(const ViewPlan& plan) {
+    for (const auto& f : plan.files) {
+        if (f.pinned_c_end == 0) continue;
+        const auto snapshot =
+            common::unwrap(index::plan::open_snapshot(f.index_path));
+        const auto file = snapshot.file(
+            index::store::internal::get_logical_path(f.file_path));
+        if (file && file->stat().size != f.pinned_c_end) return true;
+    }
+    return false;
+}
+
+}  // namespace dftracer::utils::trace::views::detail
+
 namespace dftracer::utils::trace::views::detail::scan {
 
 namespace {
@@ -242,7 +264,7 @@ void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
         dstd::HashSet<dstd::String> missing_roots;
         std::lock_guard<std::mutex> lock(confirmed_files().mu);
         for (const auto& f : files) {
-            if (f.index_path.empty()) continue;
+            if (f.index_path.empty() || f.pinned_c_end > 0) continue;
             dftracer::utils::common::InputFileStat file_stat;
             if (!dftracer::utils::common::stat_input(f.file_path, file_stat))
                 continue;
@@ -250,7 +272,7 @@ void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
                 index::store::internal::get_logical_path(f.file_path);
             dstd::String key(logical.data(), logical.size());
             key += '\n';
-            key += dstd::to_string(static_cast<long long>(file_stat.mtime));
+            key += dstd::to_string(static_cast<long long>(file_stat.mtime_ns));
             key += '\n';
             key += dstd::to_string(file_stat.size);
             key += '\n';

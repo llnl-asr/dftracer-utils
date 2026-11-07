@@ -493,6 +493,7 @@ namespace {
 ViewPlan redirect_reads(const ViewPlan& plan, bool* redirected = nullptr) {
     plan_record_schema(plan);
     ViewPlan eff = plan;
+    if (has_pin(plan)) return eff;
     if (auto mv = dftracer::utils::index::cache::find_subsuming_view(plan)) {
         eff.files = std::move(*mv);
         if (redirected) *redirected = true;
@@ -1089,6 +1090,7 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
 // engine collect path and the session so the two agree on what a rollup
 // answers.
 dstd::Optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
+    if (has_pin(plan)) return dstd::nullopt;
     const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (!rdir.empty()) plan_record_schema(plan);
@@ -1164,6 +1166,17 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
                         global_min,
                         static_cast<std::uint64_t>(std::llround(
                             r->first * index::micros_per(roles.time_unit))));
+                continue;
+            }
+            if (f.pinned_c_end > 0 && file->stat().size != f.pinned_c_end) {
+                const auto spans =
+                    common::unwrap(index::spans(snapshot, *file));
+                const auto chunks = index::extensions::kinds::chunk_time_bounds(
+                    snapshot, *file);
+                for (const auto& [chunk, bounds] : chunks)
+                    if (chunk < spans.size() &&
+                        spans[chunk].uc_offset < f.pinned_uc_end)
+                        global_min = std::min(global_min, bounds.first);
                 continue;
             }
             const auto b =
@@ -2043,8 +2056,9 @@ coro::CoroTask<ExportStats> run_session(
         }
     }
     plan_record_schema(plan);
-    if (auto mv = dftracer::utils::index::cache::find_subsuming_view(plan))
-        scan_plan.files = std::move(*mv);
+    if (!has_pin(plan))
+        if (auto mv = dftracer::utils::index::cache::find_subsuming_view(plan))
+            scan_plan.files = std::move(*mv);
     ViewDefinition avdef = make_vdef(scan_plan, /*for_aggregation=*/true);
     // Streamed morsels hold the intern their ids resolve through, and outlive
     // this scan in their consumers' hands.

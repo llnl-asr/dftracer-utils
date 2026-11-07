@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_LIVE_VIEW_H
 #define DFTRACER_UTILS_TRACE_VIEWS_LIVE_VIEW_H
 
-#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -11,60 +10,56 @@
 
 namespace dftracer::utils::trace::views {
 
-/// Zero or unreadable bytes of a live file with a whole gzip member after them.
-struct LiveHole {
-    dstd::String path;
-    std::uint64_t offset = 0;
-    std::uint64_t length = 0;
+/// Why a live file has bytes that its last @ref LiveView::snapshot left out.
+enum class LiveFileState : std::uint8_t {
+    /// Every byte is in a whole gzip member.
+    Whole,
+    /// The file ends in a member that is short or bad.
+    Tail,
+    /// Bytes that are not a member come before a whole member.
+    Hole,
 };
 
-/// Reads gzip traces that are still being written. A live `.pfw.gz` is a
-/// sequence of whole gzip members appended to one file; at any instant it can
-/// end inside a member and, on a parallel filesystem, can hold a hole where an
-/// earlier member has not landed behind a later one. A View is built for
-/// finished files, so this class gives it a snapshot of what is verifiably
-/// whole: each file is walked member by member from the last verified boundary
-/// with every CRC checked, the walk stops at the first unfinished tail or hole,
-/// and only the bytes before that are appended to a private snapshot file. A
-/// transient condition is never persisted, so a later refresh() that finds the
-/// tail finished or the hole filled returns those rows.
+/// One file as the last @ref LiveView::snapshot found it.
+struct LiveFileStatus {
+    dstd::String path;
+    LiveFileState state = LiveFileState::Whole;
+    /// Bytes of whole members with a checked CRC, from the start of the file.
+    std::uint64_t verified_bytes = 0;
+    /// Bytes after `verified_bytes` that the snapshot left out.
+    std::uint64_t skipped_bytes = 0;
+    /// With @ref LiveFileState::Hole, the bytes from `verified_bytes` to the
+    /// next whole member.
+    std::uint64_t hole_bytes = 0;
+};
+
+/// Tracks gzip traces that are still being written. A live `.pfw.gz` is a
+/// sequence of whole gzip members appended to one file. At any instant it can
+/// end inside a member and, on a parallel file system, can hold a hole where a
+/// member has not landed behind a later one.
 ///
-/// `paths` are files and directories; a directory is scanned recursively for
-/// gzip trace files on every refresh(), so files that appear later (spill
-/// files) join. `index_path` is as for View, over the snapshots. `snapshot_dir`
-/// holds the snapshots and must have room for a copy of the traces, and only
-/// one LiveView at a time may use it; when empty, a private directory under the
-/// system temporary directory is used and removed at process exit, since views
-/// from refresh() read the snapshots lazily and can outlive this object.
-/// Plain uncompressed traces have no member boundaries and are not read.
-/// Not thread safe.
+/// `paths` are files and directories. Each @ref snapshot scans a directory
+/// again, so new files join. `index_path` is as for View. The trace files are
+/// not copied or changed. Plain uncompressed traces have no member boundaries
+/// and are not read. Not thread safe.
 class LiveView {
    public:
     explicit LiveView(dstd::Vector<dstd::String> paths,
-                      dstd::String index_path = "",
-                      dstd::String snapshot_dir = "");
-    ~LiveView();
-    LiveView(const LiveView&) = delete;
-    LiveView& operator=(const LiveView&) = delete;
+                      dstd::String index_path = "");
 
-    /// Walks every file again and returns a View of what is whole now. Throws
-    /// when a named file does not exist.
-    View refresh();
+    /// Adds the members written since the last call to the index, once each,
+    /// and returns a View of every whole member. Each file stops at its first
+    /// short or bad member. The View does not change after this call and stays
+    /// valid after later calls. Throws when a named file does not exist.
+    View snapshot();
 
-    /// Bytes of whole members being read, summed over the files.
-    std::uint64_t verified_bytes() const;
-    /// Bytes from each file's stop point to its end that were not read (an
-    /// unfinished tail, or a hole and what follows it), summed over the files.
-    std::uint64_t skipped_tail_bytes() const;
-    /// The hole at which each file was cut short by the last refresh().
-    dstd::Vector<LiveHole> holes() const;
+    /// One entry per file, from the last @ref snapshot.
+    const dstd::Vector<LiveFileStatus>& status() const { return status_; }
 
    private:
-    struct Source;
     dstd::Vector<dstd::String> paths_;
     dstd::String index_path_;
-    dstd::String snapshot_dir_;
-    dstd::Vector<dstd::UniquePtr<Source>> sources_;
+    dstd::Vector<LiveFileStatus> status_;
 };
 
 }  // namespace dftracer::utils::trace::views

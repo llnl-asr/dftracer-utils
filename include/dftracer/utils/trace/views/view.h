@@ -191,6 +191,12 @@ struct ViewFile {
     /// first build or schema probe reads through it instead of opening the
     /// file again; the view shares it, and it closes with the last copy.
     dstd::SharedPtr<dstd::ScopedFd> fd = nullptr;
+    /// When not 0, the view reads the file up to this compressed end only, and
+    /// `pinned_uc_end` is the same point in uncompressed bytes. Members that
+    /// the index gains later stay out of the view. The bytes before the pin
+    /// must not change.
+    std::uint64_t pinned_c_end = 0;
+    std::uint64_t pinned_uc_end = 0;
 };
 
 struct ExportStats {

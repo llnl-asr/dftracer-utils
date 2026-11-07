@@ -471,6 +471,7 @@ dftu_store_void_result dftu_store_publish(
             change.params_hash = target.params_hash;
             change.sources = stats.back().empty() ? nullptr : &stats.back();
             change.change = static_cast<Publish::Change>(target.change);
+            change.replaces_older = target.replaces_older != 0;
             changes.push_back(change);
         }
         auto published = block(store->store.publish(

@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -380,6 +381,11 @@ void fill_commit(detail::Commit& commit,
     fill_segment_blocks(commit);
 }
 
+dstd::String verified_key(const detail::FileData& file,
+                          std::uint64_t sequence) {
+    return common::str_cat(file.name, ":", file.writer_random, ":", sequence);
+}
+
 void build_commits(detail::FileData& file, std::size_t file_index) {
     const FileIndex& index = file.reader.index();
     // A closed file holds no commit object: every commit of it is synced, and
@@ -555,8 +561,10 @@ ScopeKey scope_of(const DirectoryKey& key) {
 
 }  // namespace
 
-dstd::Expected<Snapshot, dstd::Error> Snapshot::open(dstd::StringView dir) {
+dstd::Expected<Snapshot, dstd::Error> Snapshot::open(
+    dstd::StringView dir, dstd::SharedPtr<detail::VerifiedCommits> verified) {
     Snapshot snapshot;
+    snapshot.verified_ = std::move(verified);
     auto loaded = snapshot.load(dir);
     if (!loaded) return dstd::Unexpected<dstd::Error>(loaded.error());
     return snapshot;
@@ -648,6 +656,15 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
 
     const auto group_commits = [&](std::size_t file_index) {
         build_commits(files_[file_index], file_index);
+        if (!verified_) return;
+        const std::lock_guard<std::mutex> held(verified_->mutex);
+        for (const auto& commit : files_[file_index].commits) {
+            if (commit->synced) continue;
+            if (verified_->keys.contains(
+                    verified_key(files_[file_index], commit->sequence))) {
+                commit->synced = true;
+            }
+        }
     };
     for_each_index(runtime, files_.size(), COMMIT_GRAIN, group_commits);
 
@@ -1791,6 +1808,11 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
     }
     reads_->add(state == detail::LoadState::Failed ? 0 : 1,
                 commit.blocks.size(), 0, reads);
+    if (state == detail::LoadState::Good && verified_) {
+        const std::lock_guard<std::mutex> held(verified_->mutex);
+        verified_->keys.insert(
+            verified_key(files_[commit.file_index], commit.sequence));
+    }
     commit.state.store(static_cast<std::uint8_t>(state),
                        std::memory_order_release);
     return state_of(state);
@@ -3094,6 +3116,7 @@ dstd::Expected<dstd::Vector<NamespaceDecl>, dstd::Error> Snapshot::namespaces()
             NamespaceDecl entry;
             entry.name = item.name;
             entry.format_version = item.format_version;
+            entry.shared = item.shared != 0;
             declared.push_back(std::move(entry));
         }
     }

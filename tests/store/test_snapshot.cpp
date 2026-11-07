@@ -3126,6 +3126,27 @@ TEST_SUITE("index store snapshot") {
         };
         check(1);
         check(8);
+
+        // A later snapshot of one store does not check a good commit again,
+        // and still finds the bad one.
+        const auto verified =
+            dstd::make_shared<engine::detail::VerifiedCommits>();
+        const auto read_all = [&](const engine::Snapshot& snapshot) {
+            CHECK(snapshot.state(spec, scopes[1]) == ScopeState::Bad);
+            for (const std::size_t at : {std::size_t{0}, std::size_t{2}}) {
+                auto cursor = snapshot.scan(spec, scopes[at], dstd::ByteView{},
+                                            dstd::ByteView{});
+                CHECK(collect(cursor).size() == 1000);
+            }
+        };
+        auto first = engine::Snapshot::open(copy_dir.str(), verified);
+        REQUIRE(first.has_value());
+        read_all(*first);
+        CHECK(first->read_stats().commits_verified == 3);
+        auto second = engine::Snapshot::open(copy_dir.str(), verified);
+        REQUIRE(second.has_value());
+        read_all(*second);
+        CHECK(second->read_stats().commits_verified == 1);
     }
 
     TEST_CASE("a block that cannot be read fails its queries with the error") {

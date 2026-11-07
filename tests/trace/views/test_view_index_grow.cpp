@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -9,6 +10,7 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -130,15 +132,20 @@ coro::CoroTask<std::size_t> build_tier(dstd::String gz) {
     co_return result.appended_count;
 }
 
-coro::CoroTask<index::build::ResolverResult> resolve_file(dstd::String gz) {
-    index::build::ResolverInput in;
-    in.files.emplace_back(gz);
-    in.require_checkpoints = true;
+coro::CoroTask<index::build::ResolverResult> resolve_entries(
+    index::build::ResolverInput in) {
     index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         result = co_await index::build::Resolver{}(scope, in);
     });
     co_return result;
+}
+
+coro::CoroTask<index::build::ResolverResult> resolve_file(dstd::String gz) {
+    index::build::ResolverInput in;
+    in.files.emplace_back(gz);
+    in.require_checkpoints = true;
+    co_return co_await resolve_entries(std::move(in));
 }
 
 View dir_view(const dstd::String& dir) {
@@ -261,6 +268,39 @@ TEST_SUITE("ViewIndexGrow") {
             dir_view(dir).duql(R"(name == "second")").sink_json(sink).get();
         CHECK(stats.events_matched == MEMBER_EVENTS);
         CHECK(stats.chunks_skipped > 0);
+    }
+
+    TEST_CASE("a build that read past its scan leaves the file current") {
+        TestEnvironment env(10);
+        REQUIRE(env.is_valid());
+        const dstd::String dir = env.dir();
+        const dstd::String gz = dir + "/t.pfw.gz";
+        start_trace(dir, gz, MEMBER_EVENTS, "A", "first");
+        run(build_tier(gz));
+        const dstd::String first_bytes = read_bytes(gz);
+        common::InputFileStat scanned;
+        REQUIRE(common::stat_input(gz, scanned));
+
+        append_bytes(gz, member(dir, events(MEMBER_EVENTS, MEMBER_EVENTS, "B",
+                                            "second")));
+        CHECK(run(build_tier(gz)) == 1);
+
+        const auto refresh = [&] {
+            index::build::ResolverInput in;
+            in.entries.push_back(runtime::fs::FoundFile{
+                dstd::Path(gz), scanned.size,
+                static_cast<std::uint64_t>(scanned.mtime_ns)});
+            in.require_checkpoints = true;
+            in.tail_is_current = true;
+            return run(resolve_entries(std::move(in)));
+        };
+        const auto current = refresh();
+        CHECK_FALSE(current.stale_detected);
+        CHECK(current.needs_checkpoint.empty());
+        CHECK(current.cached.size() == 1);
+
+        REQUIRE(dstd::fs::write_file(gz, first_bytes).has_value());
+        CHECK(refresh().stale_detected);
     }
 
     TEST_CASE("a member still being written waits for the next refresh") {

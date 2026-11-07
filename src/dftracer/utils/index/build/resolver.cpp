@@ -201,14 +201,24 @@ FileDecision decide(const Snapshot& snapshot, const PendingFile& f,
     // (no extra metadata op). Rebuild if the source changed since it
     // was indexed, or the record predates mtime/size tracking.
     const auto& stored_stat = file->stat();
-    const bool has_grown =
-        index::is_append_of(f.file_path, f.size, stored_stat);
+    std::uint64_t size = f.size;
+    std::uint64_t mtime = f.mtime;
+    // A build reads what a writer added after the scan, so a record can hold
+    // more than the scan saw. Only a new look tells that from a shorter file.
+    if (size < stored_stat.size) {
+        common::InputFileStat now;
+        if (common::stat_input(f.file_path, now)) {
+            size = now.size;
+            mtime = static_cast<std::uint64_t>(now.mtime);
+        }
+    }
+    const bool has_grown = index::is_append_of(f.file_path, size, stored_stat);
     if (has_grown && !input.tail_is_current) {
         d.kind = FileDecision::Kind::Grown;
         return d;
     }
     if (!has_grown &&
-        (stored_stat.mtime != f.mtime || stored_stat.size != f.size)) {
+        (stored_stat.mtime != mtime || stored_stat.size != size)) {
         DFTRACER_UTILS_LOG_WARN(
             "Index stale for %s (source changed since indexing); "
             "rebuilding",

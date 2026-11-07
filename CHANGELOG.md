@@ -490,6 +490,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a hang of a runtime with few threads when a task waits for other tasks while a blocked worker waits to run again, such as a duql join on one thread.
 - Fix a line that spans two chunks being lost when a query prunes chunks.
 - Make a reader stop at the verified end of the index, so it no longer reads bytes the index has not checked.
 - Fix the parallel inflate of a gzip trace written by zlib on macOS, which ran on one worker because the member scan rejected its OS byte.

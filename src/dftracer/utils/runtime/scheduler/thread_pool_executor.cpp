@@ -324,6 +324,10 @@ bool ThreadPoolExecutor::acquire_permit(WorkerContext* ctx) {
             return false;
         }
         permit_waiters_.fetch_add(1, std::memory_order_acq_rel);
+        // A parked driver that holds a permit gives it up when it wakes. The
+        // fence pairs with the one in coro::park_driver.
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        coro::wake_parked_drivers();
         // On the value read: a shrink can leave it below zero, and a wait on
         // zero would then return at once and spin.
         permits_.wait(c, std::memory_order_acquire);
@@ -759,20 +763,30 @@ bool ThreadPoolExecutor::drive_until(
                 continue;
             }
         }
+        // As an idle worker does: a worker that waits for a permit may hold
+        // the work this driver waits for.
+        const bool gave_permit =
+            ctx->holds_permit &&
+            permit_waiters_.load(std::memory_order_acquire) > 0;
+        if (gave_permit) release_permit(ctx);
         struct Wait {
             dftracer::utils::dstd::FunctionRef<bool()> done;
             const ThreadPoolExecutor& self;
-        } wait{done, *this};
+            bool holds_permit;
+        } wait{done, *this, ctx->holds_permit};
         parked_drivers_.fetch_add(1, std::memory_order_seq_cst);
         const bool woke = coro::park_driver(
             [](void* arg) {
                 const auto& w = *static_cast<const Wait*>(arg);
                 return w.done() ||
                        !w.self.running_.load(std::memory_order_acquire) ||
-                       w.self.pending_tasks(false) != 0;
+                       w.self.pending_tasks(false) != 0 ||
+                       (w.holds_permit && w.self.permit_waiters_.load(
+                                              std::memory_order_acquire) > 0);
             },
             &wait, park);
         parked_drivers_.fetch_sub(1, std::memory_order_seq_cst);
+        if (gave_permit && acquire_permit(ctx)) ctx->holds_permit = true;
         wake_sysmon_if_parked();
         park = woke ? IDLE_PARK_MIN : std::min(park * 2, IDLE_PARK_MAX);
     }
@@ -1054,6 +1068,13 @@ void ThreadPoolExecutor::post(std::coroutine_handle<> handle) noexcept {
         return;
     }
     Core& core = *ctx->core;
+    // A worker in a blocking region runs nothing from its LIFO slot, and only
+    // the stall check would move a task out of it.
+    if (ctx->blocking_depth != 0) {
+        core.queue.push_back(task, inject_);
+        notify();
+        return;
+    }
     // Taken from a slot that was empty, nothing new is stealable, and this
     // worker runs the task as soon as the running one suspends.
     void* displaced = core.lifo.exchange(task, std::memory_order_acq_rel);

@@ -4,6 +4,7 @@
 // task, no crash, no UB. Run under the asan/tsan presets for the real value:
 // worker churn while the shared run queue is being drained.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/async_event.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -51,6 +52,29 @@ std::size_t peak_under_backlog(Runtime& rt, ThreadPoolExecutor* exec,
     go.store(true, std::memory_order_release);
     rt.wait_all();
     return peak;
+}
+
+// Waits on the pool, as a blocking get() inside a task does, for an event
+// that only the blocked worker sets.
+coro::CoroTask<void> event_wait(coro::AsyncEvent* event) {
+    co_await event->wait();
+}
+
+coro::CoroTask<void> get_event(coro::AsyncEvent* event) {
+    event_wait(event).get();
+    co_return;
+}
+
+coro::CoroTask<void> block_then_set(Runtime* rt, coro::AsyncEvent* event,
+                                    TaskHandle* waiter) {
+    *waiter = rt->submit(get_event(event));
+    {
+        // Long past the handoff, so a second worker runs the waiter and parks.
+        coro::BlockingRegion region;
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    event->set();
+    co_return;
 }
 
 }  // namespace
@@ -187,5 +211,19 @@ TEST_SUITE("DynamicWorkers") {
         // Idle well under the keep-alive: workers must not have retired yet.
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         CHECK(exec->live_workers() > 1);  // still warm
+    }
+
+    TEST_CASE("a parked driver gives its permit to a worker leaving a block") {
+        Runtime rt(1);
+        coro::AsyncEvent event;
+        TaskHandle waiter;
+        auto setter = rt.submit(block_then_set(&rt, &event, &waiter));
+        const auto limit =
+            std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!setter.done() && std::chrono::steady_clock::now() < limit)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        REQUIRE(setter.done());
+        waiter.wait();
+        CHECK(waiter.done());
     }
 }

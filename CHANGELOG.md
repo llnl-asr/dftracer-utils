@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make a trace scan with no index answer up to about 25% faster when the query reads no args, because each line is decoded once and the args are not decoded.
 - Grow the index in place when a trace grows by whole gzip members, so a refresh costs only the new members.
 - Lower the default of `DFTRACER_UTILS_MEM_DECAY_MS` from 1000 to 200, so the heap gives idle pages back sooner.
   Peak memory of the index, stats, view and comparator tools falls 6% to 15% on a 1 GB trace set, with no change in run time above noise.

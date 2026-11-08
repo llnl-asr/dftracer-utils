@@ -1219,47 +1219,64 @@ PluginFold::~PluginFold() {
     return reinterpret_cast<::dftu_duql*>(&compiled_queries_.back());
 }
 
-int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
-                            std::int64_t row) {
-    match_qmap_.clear();
+const PluginFold::MatchColumns& PluginFold::match_columns(
+    const Query& q, const dftu_dataframe* df) {
+    const std::uint64_t serial = dataframe::dataframe_handle_serial(df);
+    if (serial != match_frame_serial_) {
+        match_columns_.clear();
+        match_frame_serial_ = serial;
+    }
+    for (const MatchColumns& m : match_columns_)
+        if (m.query == &q) return m;
+
+    const dataframe::DataFrame& frame = dataframe::dataframe_handle_view(df);
+    MatchColumns m{&q, frame.num_rows(), {}};
+    dstd::String args_name;
     for (dstd::StringView f : q.fields()) {
         // A path-decoded frame names each column by its path.
-        dftu_series* c = dftu_dataframe_column(df, dstd::String(f).c_str());
+        dataframe::Series c = frame.column(f);
         const bool top = f == "cat" || f == "name" || f == "fhash" ||
                          f == "hhash" || f == "pid" || f == "tid" ||
                          f == "ts" || f == "dur";
-        if (!c && !top) {
-            dstd::String args_name("args.");
+        if (!c.valid() && !top) {
+            args_name.assign("args.");
             args_name.append(common::strip_args_prefix(f));
-            c = dftu_dataframe_column(df, args_name.c_str());
+            c = frame.column(args_name);
         }
-        if (!c) continue;
-        if (!dftu_series_is_null(c, row)) {
-            switch (dftu_series_type(c)) {
-                case DFTU_TYPE_UINT64:
-                    match_qmap_[f] = static_cast<const std::uint64_t*>(
-                        dftu_series_data(c))[row];
-                    break;
-                case DFTU_TYPE_INT64:
-                    match_qmap_[f] = static_cast<const std::int64_t*>(
-                        dftu_series_data(c))[row];
-                    break;
-                case DFTU_TYPE_FLOAT64:
-                    match_qmap_[f] =
-                        static_cast<const double*>(dftu_series_data(c))[row];
-                    break;
-                case DFTU_TYPE_STRING: {
-                    std::int64_t n = 0;
-                    if (const char* p = dftu_series_string_at(c, row, &n))
-                        match_qmap_[f] = dftracer::utils::dstd::String(
-                            p, static_cast<std::size_t>(n));
-                    break;
-                }
-                default:
-                    break;
-            }
+        if (!c.valid()) continue;
+        // Numbers are read from the value buffer, which only a FLAT column
+        // has; strings read every encoding through string_at.
+        if (!c.is_flat() && c.type() != dataframe::TypeId::String)
+            c = c.materialize();
+        m.columns.emplace_back(f, std::move(c));
+    }
+    match_columns_.push_back(std::move(m));
+    return match_columns_.back();
+}
+
+int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
+                            std::int64_t row) {
+    const MatchColumns& m = match_columns(q, df);
+    if (row < 0 || row >= m.rows) return 0;
+    match_qmap_.clear();
+    for (const auto& [f, c] : m.columns) {
+        if (c.is_null(row)) continue;
+        switch (c.type()) {
+            case dataframe::TypeId::Uint64:
+                match_qmap_[f] = c.data<std::uint64_t>()[row];
+                break;
+            case dataframe::TypeId::Int64:
+                match_qmap_[f] = c.data<std::int64_t>()[row];
+                break;
+            case dataframe::TypeId::Float64:
+                match_qmap_[f] = c.data<double>()[row];
+                break;
+            case dataframe::TypeId::String:
+                match_qmap_[f] = dstd::String(c.string_at(row));
+                break;
+            default:
+                break;
         }
-        dftu_series_free(c);
     }
     return q.evaluate(match_qmap_) ? 1 : 0;
 }

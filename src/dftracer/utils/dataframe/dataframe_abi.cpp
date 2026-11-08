@@ -13,6 +13,7 @@
 #include <dftracer/utils/duql/internal/duql_handle.h>
 #include <dftracer/utils/runtime/runtime.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -20,9 +21,20 @@
 #include <exception>
 #include <optional>
 
-// The opaque dftu_dataframe handle owns a C++ DataFrame.
+namespace {
+std::atomic<std::uint64_t> g_next_frame_serial{1};
+}
+
+// The opaque dftu_dataframe handle owns a C++ DataFrame. `serial` is unique
+// per handle for the process, so a cache keyed on it survives address reuse.
+// Frames do not change after they are wrapped, which keeps such a cache true.
 struct dftu_dataframe : dftracer::utils::dstd::HeapObject {
     dftracer::utils::dataframe::DataFrame df;
+    std::uint64_t serial;
+
+    explicit dftu_dataframe(dftracer::utils::dataframe::DataFrame&& d)
+        : df(std::move(d)),
+          serial(g_next_frame_serial.fetch_add(1, std::memory_order_relaxed)) {}
 };
 
 // The opaque dftu_lazyframe handle owns a C++ LazyFrame.
@@ -36,7 +48,7 @@ dftu_lazyframe* lazyframe_handle_wrap(LazyFrame&& lf) {
     return new dftu_lazyframe{{}, std::move(lf)};
 }
 dftu_dataframe* dataframe_handle_wrap(DataFrame&& df) {
-    return new dftu_dataframe{{}, std::move(df)};
+    return new dftu_dataframe(std::move(df));
 }
 DataFrame dataframe_handle_take(dftu_dataframe* h) {
     DataFrame df = std::move(h->df);
@@ -45,6 +57,9 @@ DataFrame dataframe_handle_take(dftu_dataframe* h) {
 }
 const DataFrame& dataframe_handle_view(const dftu_dataframe* h) {
     return h->df;
+}
+std::uint64_t dataframe_handle_serial(const dftu_dataframe* h) {
+    return h->serial;
 }
 }  // namespace dftracer::utils::dataframe
 
@@ -55,7 +70,7 @@ using dftracer::utils::dataframe::LazyFrame;
 using dftracer::utils::dataframe::Series;
 
 dftu_dataframe* wrap(DataFrame&& df) {
-    return new dftu_dataframe{{}, std::move(df)};
+    return new dftu_dataframe(std::move(df));
 }
 
 dftu_lazyframe* wrap_lazy(LazyFrame&& lf) {

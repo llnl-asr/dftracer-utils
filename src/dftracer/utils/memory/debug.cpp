@@ -414,7 +414,7 @@ void debug_drain() noexcept {
     }
 }
 
-void debug_top_sites(std::size_t count, bool by_peak, DebugTotalVisit visit,
+void debug_top_sites(std::size_t count, DebugRank rank, DebugTotalVisit visit,
                      void* context) noexcept {
     SiteTotal* t = g_totals.load(std::memory_order_acquire);
     if (t == nullptr) return;
@@ -422,8 +422,16 @@ void debug_top_sites(std::size_t count, bool by_peak, DebugTotalVisit visit,
     count = std::min(count, MAX_TOP);
     DebugSiteTotal best[MAX_TOP];
     std::size_t have = 0;
-    auto key = [by_peak](const DebugSiteTotal& v) {
-        return by_peak ? v.peak : v.live;
+    auto key = [rank](const DebugSiteTotal& v) {
+        switch (rank) {
+            case DebugRank::Live:
+                return v.live;
+            case DebugRank::Peak:
+                return v.peak;
+            case DebugRank::Allocations:
+                return v.allocations;
+        }
+        return std::size_t{0};
     };
     for (std::size_t i = 0; i < DEBUG_SITE_TOTALS; ++i) {
         std::uintptr_t site = t[i].site.load(std::memory_order_acquire);

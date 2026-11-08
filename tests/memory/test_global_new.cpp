@@ -77,6 +77,25 @@ void find_planted(void* context, const detail::DebugSiteTotal& total) noexcept {
         *static_cast<Found*>(context) = {total.site, total.live, total.peak};
 }
 
+constexpr std::size_t MANY_ALLOCATIONS = 200000;
+
+__attribute__((noinline)) void plant_many() {
+    for (std::size_t i = 0; i < MANY_ALLOCATIONS; ++i) {
+        char* p = new char[16];
+        asm volatile("" : "+r"(p));
+        delete[] p;
+    }
+}
+
+struct MostAllocations {
+    std::uintptr_t site = 0;
+    std::size_t allocations = 0;
+};
+
+void take_first(void* context, const detail::DebugSiteTotal& total) noexcept {
+    *static_cast<MostAllocations*>(context) = {total.site, total.allocations};
+}
+
 // Own functions, so each has its own site. The empty asm keeps the call to new
 // from becoming a tail call.
 __attribute__((noinline)) char* plant_early() {
@@ -183,16 +202,26 @@ TEST_SUITE("GlobalNew") {
         char* block = plant();
         const auto start = reinterpret_cast<std::uintptr_t>(&plant);
         Found found;
-        debug_top_sites(64, false, find_planted, &found);
+        debug_top_sites(64, DebugRank::Live, find_planted, &found);
         CHECK(found.live == PLANTED_BYTES);
         CHECK(found.site > start);
         CHECK(found.site < start + PLANTED_SPAN);
         delete[] block;
         live();
         found = {};
-        debug_top_sites(64, true, find_planted, &found);
+        debug_top_sites(64, DebugRank::Peak, find_planted, &found);
         CHECK(found.peak == PLANTED_BYTES);
         CHECK(found.live == 0);
+    }
+
+    TEST_CASE("the debug mode ranks sites by allocation count") {
+        plant_many();
+        const auto start = reinterpret_cast<std::uintptr_t>(&plant_many);
+        MostAllocations top;
+        debug_top_sites(1, DebugRank::Allocations, take_first, &top);
+        CHECK(top.allocations >= MANY_ALLOCATIONS);
+        CHECK(top.site > start);
+        CHECK(top.site < start + PLANTED_SPAN);
     }
 
     TEST_CASE("the peak table holds the sites live at the peak") {

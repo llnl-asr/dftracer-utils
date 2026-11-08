@@ -135,8 +135,10 @@ Memory and kernels
        allocation: a record of the caller and size of each live block, a
        redzone behind each block, a fill pattern on freed blocks and double
        free detection. Each allocation is slower and freed blocks stay counted
-       for a while. Any value other than ``0`` or ``1`` stops the process at
-       the first allocation.
+       for a while. At exit it prints to stderr the 20 call sites with the
+       most live bytes, the highest peak bytes and the most allocations. Any
+       value other than ``0`` or ``1`` stops the process at the first
+       allocation.
    * - ``DFTRACER_UTILS_MEMORY_EXIT_CHECK``
      - ``0``
      - For test runs. ``1`` makes the process print a leak report and exit

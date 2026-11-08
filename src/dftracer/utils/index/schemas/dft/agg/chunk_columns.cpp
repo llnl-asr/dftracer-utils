@@ -92,17 +92,10 @@ void put_gaps(dstd::Vector<std::uint8_t>& out,
     }
 }
 
+// zstd finds repeated gaps better than repeated changes of gaps, so plain
+// deltas compress smaller than deltas of deltas.
 void put_core(dstd::Vector<std::uint8_t>& out, const ChunkColumns& block) {
-    std::uint64_t ts_prev = 0;
-    std::uint64_t step_prev = 0;
-    for (const std::uint64_t ts : block.ts) {
-        const std::uint64_t step = ts - ts_prev;
-        dstd::append_varint(
-            out,
-            dstd::zigzag_encode(static_cast<std::int64_t>(step - step_prev)));
-        step_prev = step;
-        ts_prev = ts;
-    }
+    put_deltas(out, block.ts);
     std::uint64_t missing = 0;
     for (const std::uint8_t has : block.has_dur) missing += has != 0 ? 0 : 1;
     dstd::append_varint(out, missing);
@@ -263,33 +256,26 @@ bool get_rle(dstd::LeReader& r, std::uint64_t rows, std::size_t id_count,
 
 bool get_core(dstd::LeReader& r, ChunkColumns& block, std::size_t id_count) {
     const std::uint64_t rows = block.rows;
-    dstd::Vector<std::uint64_t> steps;
-    if (!get_deltas(r, static_cast<std::size_t>(rows), steps)) return false;
-    block.ts.resize(steps.size());
-    std::uint64_t ts = 0;
-    for (std::size_t k = 0; k < steps.size(); ++k) {
-        ts += steps[k];
-        block.ts[k] = ts;
-    }
+    const auto n = static_cast<std::size_t>(rows);
+    if (!get_deltas(r, n, block.ts)) return false;
     std::uint64_t missing = 0;
     if (!get_count(r, rows, missing)) return false;
     dstd::Vector<std::uint64_t> gaps;
     if (!get_gaps(r, rows, static_cast<std::size_t>(missing), gaps)) {
         return false;
     }
-    block.dur.resize(steps.size());
-    block.has_dur.resize(steps.size(), 1);
+    block.dur.resize(n);
+    block.has_dur.resize(n, 1);
     for (const std::uint64_t row : gaps) block.has_dur[row] = 0;
     std::uint64_t dur_prev = 0;
-    for (std::size_t k = 0; k < steps.size(); ++k) {
+    for (std::size_t k = 0; k < n; ++k) {
         if (block.has_dur[k] == 0) continue;
         std::uint64_t z = 0;
         if (!dstd::read_varint(r, z)) return false;
         dur_prev += static_cast<std::uint64_t>(dstd::zigzag_decode(z));
         block.dur[k] = dur_prev;
     }
-    return get_deltas(r, steps.size(), block.pid) &&
-           get_deltas(r, steps.size(), block.tid) &&
+    return get_deltas(r, n, block.pid) && get_deltas(r, n, block.tid) &&
            get_rle(r, rows, block.phase) &&
            get_rle(r, rows, id_count, block.cat) &&
            get_rle(r, rows, id_count, block.name) &&

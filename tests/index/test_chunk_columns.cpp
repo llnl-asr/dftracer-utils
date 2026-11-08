@@ -702,6 +702,24 @@ TEST_SUITE("ChunkColumns") {
         CHECK(got.columns.empty());
     }
 
+    TEST_CASE("start times out of order round trip") {
+        // A tracer writes an event at its end, so starts go back in time; one
+        // start near the top makes a delta wrap.
+        auto block = core_block(6);
+        const std::uint64_t ends[] = {100, 110, 120, 130, 140, 150};
+        const std::uint64_t durs[] = {5, 40, 2, 0, 33, 1};
+        const std::uint8_t has[] = {1, 1, 1, 0, 1, 1};
+        for (std::size_t r = 0; r < 6; ++r) {
+            block.has_dur[r] = has[r];
+            block.dur[r] = durs[r];
+            block.ts[r] = ends[r] - durs[r];
+        }
+        check_core_columns(block, encode_then_decode(block));
+        block.ts[4] = std::numeric_limits<std::uint64_t>::max() - 10;
+        block.dur[4] = 20;
+        check_core_columns(block, encode_then_decode(block));
+    }
+
     TEST_CASE("several columns of one path of different kinds round trip") {
         auto block = core_block(4);
         block.columns.push_back(

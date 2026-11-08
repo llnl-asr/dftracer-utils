@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_STORE_WRITER_H
 #define DFTRACER_UTILS_STORE_WRITER_H
 
+#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
@@ -36,6 +37,11 @@ class TaskExecutor;
 }  // namespace dftracer::utils
 
 namespace dftracer::utils::store::engine {
+
+#if DFTRACER_UTILS_TEST_PROBES
+/// Publishes that also hid the older copies of their scope. For tests.
+inline std::atomic<std::uint64_t> g_hiding_publishes{0};
+#endif
 
 inline constexpr dstd::ErrorDomain ERROR_DOMAIN =
     dstd::make_error_domain("dftracer.utils.index.store");

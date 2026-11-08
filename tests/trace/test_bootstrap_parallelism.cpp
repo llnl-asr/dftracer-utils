@@ -6,6 +6,7 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/open_count.h>
+#include <dftracer/utils/store/writer.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_executor.h>
@@ -36,10 +37,10 @@ constexpr std::size_t RUNNING_WORKERS = WORKERS;
 #endif
 constexpr int EVENTS = 1000;
 
-dstd::String write_trace(const dstd::String& dir, int n) {
+dstd::String write_trace(const dstd::String& dir, int n, int events = EVENTS) {
     dftu_utils_test::TextOut out;
     out << "[\n";
-    for (int i = 0; i < EVENTS; ++i) {
+    for (int i = 0; i < events; ++i) {
         out << R"({"id":)" << i << R"(,"name":"op)" << (i + n) % 7
             << R"(","cat":"POSIX","pid":1,"tid":1,"ph":"X","ts":)"
             << 1000 + i * 10 << R"(,"dur":3,"args":{}})" << "\n";
@@ -108,6 +109,31 @@ TEST_SUITE("BootstrapParallelism") {
         std::int64_t total = 0;
         for (const auto& [name, n] : bootstrap_test::counts(cold)) total += n;
         CHECK(total == FILES * EVENTS);
+    }
+
+    TEST_CASE("a bootstrap hides older copies only of a file it rebuilds") {
+        dftu_utils_test::TestEnvironment env(10);
+        constexpr int FEW = 4;
+        dstd::Vector<dstd::String> files;
+        for (int i = 0; i < FEW; ++i)
+            files.push_back(write_trace(env.dir(), i));
+        const auto index_dir = env.dir() + "/idx";
+
+        auto& hiding = dftracer::utils::store::engine::g_hiding_publishes;
+        hiding.store(0);
+        const auto cold = bootstrap_test::count_by_name(files, index_dir);
+        CHECK(hiding.load() == 0);
+
+        write_trace(env.dir(), 0, EVENTS / 2);
+        const auto rebuilt = bootstrap_test::count_by_name(files, index_dir);
+        CHECK(hiding.load() > 0);
+        std::int64_t before = 0;
+        std::int64_t after = 0;
+        for (const auto& [name, n] : bootstrap_test::counts(cold)) before += n;
+        for (const auto& [name, n] : bootstrap_test::counts(rebuilt))
+            after += n;
+        CHECK(before == FEW * EVENTS);
+        CHECK(after == FEW * EVENTS - EVENTS / 2);
     }
 
     TEST_CASE(

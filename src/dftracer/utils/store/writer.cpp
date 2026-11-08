@@ -528,6 +528,9 @@ dstd::Expected<void, dstd::Error> Writer::apply(
             queued.push_back(
                 QueuedChange{batch, change.kind == ChangeKind::Dropped});
             if (change.replaces_older) {
+#if DFTRACER_UTILS_TEST_PROBES
+                g_hiding_publishes.fetch_add(1, std::memory_order_relaxed);
+#endif
                 auto* hides = new PendingBatch;
                 hides->namespace_id = namespaces[i]->id.value;
                 hides->namespace_item =

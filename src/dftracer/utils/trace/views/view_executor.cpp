@@ -327,8 +327,12 @@ void fill_bootstrap_file(
     dftracer::utils::index::extensions::RowSetFold& rowsets, bool fresh) {
     index::gzip::persist_gzip_index_artifacts(build, arts);
     // The new members renumber the chunks the old copies describe. A fresh
-    // file has none, and the check costs a store snapshot per file.
-    if (!fresh) index::clear_chunk_copies(build);
+    // file has none, so it skips the check, which costs a store snapshot per
+    // file, and the record per namespace that hides older copies.
+    if (fresh)
+        build.keep_older_copies();
+    else
+        index::clear_chunk_copies(build);
     index::put_profile(build, schema.id);
     build.finish(index::store::IndexExtension::Profile, schema.params_hash());
     bloom.write(build);

@@ -530,8 +530,8 @@ void register_view(dstd::StringView dir,
     j += "  \"phase\": " + dstd::int_text(static_cast<int>(plan.phase)) + ",\n";
     if (plan.time_range) {
         j += "  \"window\": {\"begin\": " +
-             dstd::int_text(plan.time_range->first) +
-             ", \"end\": " + dstd::int_text(plan.time_range->second) + "},\n";
+             dstd::fixed_text(plan.time_range->first) +
+             ", \"end\": " + dstd::fixed_text(plan.time_range->second) + "},\n";
     } else {
         j += "  \"window\": null,\n";
     }

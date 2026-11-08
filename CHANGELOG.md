@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Add `DFTRACER_UTILS_STORE_DIRECT_READS` to read the closed files of an index store past the page cache (`O_DIRECT` on Linux, `F_NOCACHE` on macOS).
   It is off by default, and a file system that refuses direct reads gets cached reads.
 - Make the plugin call `duql_matches` about 35% faster per row, because the columns a query reads are found once per frame.
+- Make an index build allocate about 7% fewer blocks, because the exact quantile and distinct id lists grow in large steps.
 - List the call sites with the most allocations at exit when `DFTRACER_UTILS_MEMORY_DEBUG=1` is set.
 - Run a task on the process runtime when a thread that is not a runtime worker calls `get()` on it, such as `view.collect().get()` in `main()`, so the work uses every core instead of the calling thread only.
   Bind a `coro::RunLoop` with `coro::CurrentScope` to keep the work on the calling thread.

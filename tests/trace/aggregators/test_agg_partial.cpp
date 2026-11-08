@@ -879,10 +879,10 @@ TEST_SUITE("AggPartial") {
                      static_cast<unsigned long long>(n_small),
                      static_cast<unsigned long long>(n_large));
         // Per partial: 4 quantile stores (duration, size, offset, level) each
-        // growing 1..64 (7 blocks) then a sketch and its bins. Then the tid
-        // list (3), the pid, file and span vectors (1 each) and the arg vector
-        // (3).
-        constexpr std::uint64_t BOUND = 60;
+        // growing to 8 then 64 values (2 blocks) then a sketch and its bins.
+        // Then the tid list (1), the pid, file and span vectors (1 each) and
+        // the arg vector (3).
+        constexpr std::uint64_t BOUND = 28;
         CHECK(n_small <= BOUND);
         CHECK(n_large <= BOUND);
         CHECK(n_large <= n_small + 16);

@@ -433,8 +433,15 @@ run_cpp_one() {
   # A forked child ends with blocks that its parent's threads own. Those threads
   # do not exist in the child, so Valgrind reports the blocks as lost and each
   # child exits with the error code. Memory errors in the child still fail.
+  # The same holds for a child that starts its own runtime and ends with _exit
+  # while those threads run.
   local -a leak_errors=(--errors-for-leak-kinds=definite,indirect)
-  [[ "$name" == store/test_store_fork ]] && leak_errors=(--errors-for-leak-kinds=none)
+  case "$name" in
+  store/test_store_fork | runtime/test_process_runtime | \
+    pipeline/test_runtime_elasticity | runtime/test_io_op)
+    leak_errors=(--errors-for-leak-kinds=none)
+    ;;
+  esac
 
   local -a doctest_args=()
   case "${name##*/}" in

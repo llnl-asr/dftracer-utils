@@ -55,3 +55,15 @@
    ...
    fun:hs_scan
 }
+
+# --- simdjson: stage 2 reads string padding in whole vectors -----------------
+# A dstd::String is parsed in place when its spare capacity covers the simdjson
+# padding, as simdjson does for a std::string. That capacity is never written,
+# and the string scan loads it in vector reads and masks it, so Memcheck sees a
+# branch on bytes past the input.
+{
+   simdjson-stage2-padding-cond
+   Memcheck:Cond
+   ...
+   fun:*dom_parser_implementation*stage2*
+}

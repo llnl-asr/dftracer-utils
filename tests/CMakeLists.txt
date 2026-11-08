@@ -498,6 +498,11 @@ foreach(test_file ${TEST_CPP_SOURCES})
 
   # Default timeout for all tests (safety net against hangs in CI)
   set(default_test_timeout 120)
+  # A coverage build is unoptimized and counts every branch, so the heavy store,
+  # index and reader tests take several times their usual time.
+  if(DFTRACER_UTILS_COVERAGE)
+    set(default_test_timeout 600)
+  endif()
   if(DFTRACER_UTILS_ENABLE_TSAN OR DFTRACER_UTILS_ENABLE_ASAN)
     set(default_test_timeout 1800)
   endif()

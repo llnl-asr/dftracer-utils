@@ -61,11 +61,11 @@ constexpr int BATCH_ATTEMPTS = 64;
 constexpr std::chrono::seconds TASK_LIMIT{60};
 constexpr std::chrono::seconds WAIT_LIMIT{30};
 
-// A sanitizer build runs under a ctest timeout of 120 s (ASan) or 300 s (TSan)
-// and makes a commit tens of times slower, so the thread and batch counts of
-// the concurrent cases shrink there. Each case keeps its shape and every
-// assertion. Only the number of commits differs.
-#if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
+// A sanitizer or coverage build makes a commit tens of times slower, so the
+// thread and batch counts of the concurrent cases shrink there. Each case
+// keeps its shape and every assertion. Only the number of commits differs.
+#if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__) || \
+    defined(DFTRACER_UTILS_COVERAGE_BUILD)
 constexpr bool SANITIZED = true;
 #elif defined(__has_feature)
 #if __has_feature(thread_sanitizer) || __has_feature(address_sanitizer)

@@ -285,7 +285,15 @@ TEST_CASE("a frame destroyed while it waits leaks nothing") {
                                 &warm, &suspended))
         .get();
     REQUIRE(warm.load());
-    const std::size_t before = general.blocks();
+    // The warm-up task's last frees run on a worker after get() returns, so
+    // the count is taken once two reads 50 ms apart agree.
+    std::size_t before = general.blocks();
+    const auto steady = Clock::now() + 2s;
+    for (std::size_t next = before; Clock::now() < steady; before = next) {
+        std::this_thread::sleep_for(50ms);
+        next = general.blocks();
+        if (next == before) break;
+    }
     rt.submit(start_and_destroy(pool.get(), 32 * MIB, Clock::now() + 50ms,
                                 &alive, &resumed, &suspended))
         .get();
@@ -296,13 +304,15 @@ TEST_CASE("a frame destroyed while it waits leaks nothing") {
     std::this_thread::sleep_for(100ms);
     CHECK(!resumed.load());
     CHECK(root().reserved() == 0);
-    // The warm-up frame may still be counted in `before`: a worker destroys
-    // it just after get() returns. A leak can only add blocks, and a leaked
-    // block never comes back, while one another thread frees late does.
+    // A leaked block never comes back, while one another thread frees late
+    // does. The check reads the same value that ended the wait.
     const auto settle = Clock::now() + 5s;
-    while (general.blocks() > before && Clock::now() < settle)
+    std::size_t after = general.blocks();
+    while (after > before && Clock::now() < settle) {
         std::this_thread::sleep_for(10ms);
-    CHECK(general.blocks() <= before);
+        after = general.blocks();
+    }
+    CHECK(after <= before);
 }
 
 TEST_CASE("many waiters on several workers end exact") {

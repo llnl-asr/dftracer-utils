@@ -720,6 +720,56 @@ TEST_SUITE("ChunkColumns") {
         check_core_columns(block, encode_then_decode(block));
     }
 
+    TEST_CASE("counters of interleaved names round trip and encode small") {
+        // One row per name per sample, as a sampler writes cpu-0, cpu-1, ...
+        constexpr std::size_t ROWS = 300;
+        const auto make = [](bool interleaved) {
+            auto block = core_block(ROWS);
+            dstd::Vector<std::uint64_t> rows;
+            dstd::Vector<std::uint64_t> pct;
+            dstd::Vector<std::uint64_t> bytes;
+            for (std::size_t r = 0; r < ROWS; ++r) {
+                const std::size_t name = r % 3;
+                const std::size_t sample = r / 3;
+                block.name[r] =
+                    interleaved ? static_cast<std::uint32_t>(name) : 0;
+                rows.push_back(r);
+                const double v = r == 151
+                                     ? 0.1 + 0.2
+                                     : 1000.0 * static_cast<double>(name + 1) +
+                                           0.25 * static_cast<double>(sample);
+                pct.push_back(double_bits_of(v));
+                bytes.push_back(static_cast<std::uint64_t>(
+                    std::int64_t{1000000000} *
+                        static_cast<std::int64_t>(name + 1) +
+                    static_cast<std::int64_t>(sample)));
+            }
+            block.columns.push_back(
+                column_of(1, schemas::dft::agg::ColumnKind::Double, rows, pct));
+            block.columns.push_back(column_of(
+                2, schemas::dft::agg::ColumnKind::Int64, rows, bytes));
+            return block;
+        };
+        const auto column_bytes =
+            [](const schemas::dft::agg::ChunkColumns& block) {
+                dstd::Vector<std::uint8_t> core;
+                dstd::Vector<std::uint8_t> all;
+                schemas::dft::agg::encode_chunk_columns(block, 0, core);
+                schemas::dft::agg::encode_chunk_columns(
+                    block, block.columns.size(), all);
+                return all.size() - core.size();
+            };
+        const auto interleaved = make(true);
+        const auto got = encode_then_decode(interleaved);
+        check_core_columns(interleaved, got);
+        REQUIRE(got.columns.size() == 2);
+        for (std::size_t c = 0; c < 2; ++c) {
+            CHECK(got.columns[c].rows == interleaved.columns[c].rows);
+            CHECK(got.columns[c].bits == interleaved.columns[c].bits);
+        }
+        CHECK(column_bytes(interleaved) * 2 < column_bytes(make(false)));
+    }
+
     TEST_CASE("several columns of one path of different kinds round trip") {
         auto block = core_block(4);
         block.columns.push_back(

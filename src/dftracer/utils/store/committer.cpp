@@ -114,7 +114,7 @@ struct Committer::WaitForWork {
         state->timers = timers;
         state->timer.store(
             timers->register_timeout(self.commit_interval_,
-                                     [state = state] { state->on_fire(); }),
+                                     [wake = state] { wake->on_fire(); }),
             std::memory_order_release);
         {
             std::lock_guard<std::mutex> lock(self.queue_mutex_);

@@ -79,6 +79,7 @@ void ThreadPoolExecutor::start() {
     const std::size_t floor = min_workers_.load(std::memory_order_acquire);
     workers_.clear();
     workers_.reserve(threads);
+    reserve_sleepers();
     permits_.store(static_cast<std::ptrdiff_t>(threads),
                    std::memory_order_release);
 
@@ -505,6 +506,7 @@ void ThreadPoolExecutor::set_threads(std::size_t threads,
     thread_count_.store(threads, std::memory_order_release);
     max_live_.store(threads + MAX_BLOCKING_REPLACEMENTS,
                     std::memory_order_release);
+    reserve_sleepers();
     min_workers_.store(floor, std::memory_order_release);
     // A shrink leaves permits below zero until running workers release them.
     permits_.fetch_add(
@@ -933,6 +935,15 @@ std::size_t ThreadPoolExecutor::pending_tasks(bool with_lifo) const noexcept {
     }
     if (with_lifo) total += lifo_in_transit_.load(std::memory_order_seq_cst);
     return total + inject_.size_approx();
+}
+
+// Sized for every worker the pool can have, so a park never grows it: a grown
+// buffer would stay charged to the general pool for the pool's life.
+void ThreadPoolExecutor::reserve_sleepers() {
+    memory::detail::Scope bookkeeping{memory::detail::Manager::get().general(),
+                                      nullptr};
+    std::lock_guard<std::mutex> lock(sleepers_mutex_);
+    sleepers_.reserve(max_live_.load(std::memory_order_acquire));
 }
 
 void ThreadPoolExecutor::park_worker(WorkerContext* ctx) {

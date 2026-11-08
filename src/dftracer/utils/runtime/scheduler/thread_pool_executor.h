@@ -426,6 +426,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     /// be stale.
     std::size_t pending_tasks(bool with_lifo) const noexcept;
     /// Parks until woken, retired or stopped.
+    void reserve_sleepers();
     void park_worker(WorkerContext* ctx);
     /// A LIFO task whose worker stayed in one resume for a whole tick goes to
     /// the inject queue, for a worker that can run it.

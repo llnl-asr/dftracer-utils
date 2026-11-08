@@ -10,6 +10,9 @@ namespace dftracer::utils::dstd {
 /// nothing, so there is no allocator to name.
 template <class T>
 using Optional = std::optional<T>;
+/// Deduces an @ref Optional; the alias itself does not deduce on every
+/// compiler.
+using std::make_optional;
 
 using NullOpt = std::nullopt_t;
 inline constexpr NullOpt nullopt = std::nullopt;

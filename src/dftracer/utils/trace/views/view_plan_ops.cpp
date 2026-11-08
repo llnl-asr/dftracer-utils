@@ -827,7 +827,7 @@ ScanPlan time_range(const ScanPlan& plan, double begin, double end) {
     detail::require_role(*plan, "time_range");
     auto next = clone(plan);
     next->timed = true;
-    next->time_range = dstd::Pair(begin, end);
+    next->time_range = dstd::make_pair(begin, end);
     return next;
 }
 

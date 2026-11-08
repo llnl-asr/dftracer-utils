@@ -99,8 +99,8 @@ dstd::Optional<dstd::Pair<std::uint64_t, std::uint64_t>> occupancy_window(
         return v > 0 ? static_cast<std::uint64_t>(std::ceil(v))
                      : std::uint64_t{0};
     };
-    return dstd::Pair(edge(plan.time_range->first),
-                      edge(plan.time_range->second));
+    return dstd::make_pair(edge(plan.time_range->first),
+                           edge(plan.time_range->second));
 }
 
 // Occupancy over a window or in buckets is bounded by them at finalize
@@ -607,7 +607,7 @@ dataframe::DataFrame finalize_engine_result(const dataframe::AggState& st,
     if (plan.time_bucket_us > 0) names.push_back("time_bucket");
     for (const auto& gk : plan.group_by) names.emplace_back(group_col_name(gk));
     if (clips_occupancy(plan) && dataframe::agg_group_count(st) > 0) {
-        const auto win = occupancy_window(plan).value_or(dstd::Pair(
+        const auto win = occupancy_window(plan).value_or(dstd::make_pair(
             std::uint64_t{0}, std::numeric_limits<std::uint64_t>::max()));
         dataframe::AggStatePtr clipped = dataframe::agg_clip_occupancy(
             st, win.first, win.second,

@@ -520,10 +520,10 @@ CollapsedMap collapse_by_group(const AggQueryResult& windows,
     order.reserve(merged.rows.size());
     for (const auto& row : merged.rows) order.push_back(&row);
     const auto text_key = [&](const AggKey& k) {
-        return dstd::Tuple(merged.text(k.cat), merged.text(k.name),
-                           merged.text(k.host), merged.text(k.extra),
-                           merged.text(k.file_text), k.kind, k.pid, k.tid,
-                           k.file, k.window);
+        return dstd::make_tuple(merged.text(k.cat), merged.text(k.name),
+                                merged.text(k.host), merged.text(k.extra),
+                                merged.text(k.file_text), k.kind, k.pid, k.tid,
+                                k.file, k.window);
     };
     std::sort(order.begin(), order.end(), [&](const auto* a, const auto* b) {
         return text_key(a->first) < text_key(b->first);

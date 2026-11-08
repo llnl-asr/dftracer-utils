@@ -276,10 +276,10 @@ int main(int argc, char** argv) {
     }
     std::printf("\n%-44s %10s\n", "DataFrame expr string predicate", "ns/row");
     for (const auto& [label, op, lit] :
-         {dftracer::utils::dstd::Tuple{
-              "starts_with", dataframe::StrPredOp::StartsWith, "MPI_"},
-          dftracer::utils::dstd::Tuple{
-              "contains", dataframe::StrPredOp::Contains, "Memcpy"}}) {
+         {dftracer::utils::dstd::make_tuple(
+              "starts_with", dataframe::StrPredOp::StartsWith, "MPI_"),
+          dftracer::utils::dstd::make_tuple(
+              "contains", dataframe::StrPredOp::Contains, "Memcpy")}) {
         const dftracer::utils::dstd::Vector<const dataframe::Series*> in0{&col};
         const dataframe::Expr lit_e =
             dataframe::expr_str_pred(op, dataframe::expr_col(0), lit);
@@ -341,12 +341,12 @@ int main(int argc, char** argv) {
         for (const auto& v : own) views.push_back(v);
         const dataframe::Series longs = dataframe::Series::strings(views);
         for (const auto& [label, fn, pattern] :
-             {dftracer::utils::dstd::Tuple{"str_search /scratch/.*\\.h5$",
-                                           &dataframe::Series::str_search,
-                                           "/scratch/.*\\.h5$"},
-              dftracer::utils::dstd::Tuple{"str_matches .*/scratch/.*",
-                                           &dataframe::Series::str_matches,
-                                           ".*/scratch/.*"}}) {
+             {dftracer::utils::dstd::make_tuple("str_search /scratch/.*\\.h5$",
+                                                &dataframe::Series::str_search,
+                                                "/scratch/.*\\.h5$"),
+              dftracer::utils::dstd::make_tuple("str_matches .*/scratch/.*",
+                                                &dataframe::Series::str_matches,
+                                                ".*/scratch/.*")}) {
             const double ns = ns_per_record(m, rounds, [&] {
                 const dataframe::Series r = (longs.*fn)(pattern);
                 if (!r.handle()) std::abort();

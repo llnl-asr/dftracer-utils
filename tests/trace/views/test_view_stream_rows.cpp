@@ -303,7 +303,7 @@ TEST_SUITE("trace scan - streaming row query") {
                         ++n;
                         nrows += chunk->num_rows();
                     }
-                    co_return dstd::Pair{n, nrows};
+                    co_return dstd::make_pair(n, nrows);
                 }(v))
                 .get();
 
@@ -338,7 +338,7 @@ TEST_SUITE("trace scan - streaming row query") {
                         ++n;
                         nrows += chunk->num_rows();
                     }
-                    co_return dstd::Pair{n, nrows};
+                    co_return dstd::make_pair(n, nrows);
                 }(v))
                 .get();
 

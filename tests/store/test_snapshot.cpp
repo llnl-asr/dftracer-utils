@@ -1599,12 +1599,12 @@ TEST_SUITE("index store snapshot") {
                 snapshot.scan(spec, scope, dstd::ByteView{}, dstd::ByteView{});
             const auto rows = collect(whole);
             REQUIRE(rows.size() == 3);
-            CHECK(rows[0] ==
-                  dstd::Pair{dstd::String("key-a"), dstd::String("v1-key-a")});
-            CHECK(rows[1] ==
-                  dstd::Pair{dstd::String("key-c"), dstd::String("v2-key-c")});
-            CHECK(rows[2] ==
-                  dstd::Pair{dstd::String("key-d"), dstd::String("v1-key-d")});
+            CHECK(rows[0] == dstd::make_pair(dstd::String("key-a"),
+                                             dstd::String("v1-key-a")));
+            CHECK(rows[1] == dstd::make_pair(dstd::String("key-c"),
+                                             dstd::String("v2-key-c")));
+            CHECK(rows[2] == dstd::make_pair(dstd::String("key-d"),
+                                             dstd::String("v1-key-d")));
 
             auto prefix =
                 snapshot.scan(spec, scope, view_of(dstd::String("key-b")));
@@ -2016,7 +2016,7 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(first.has_value());
             REQUIRE(second.has_value());
             for (const auto& [at, scope] :
-                 {dstd::Pair{*first, a}, dstd::Pair{*second, a}}) {
+                 {dstd::make_pair(*first, a), dstd::make_pair(*second, a)}) {
                 Batch batch = writer->batch(at, scope, 0);
                 batch.put(view_of(dstd::String("key")),
                           view_of(dstd::String("v")));
@@ -2824,9 +2824,10 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->state(spec, first) == ScopeState::Bad);
         CHECK(snapshot->state(spec, second) == ScopeState::Bad);
         CHECK(snapshot->state(spec, third) == ScopeState::Ready);
-        for (const auto& hidden : {dstd::Pair{first, dstd::String("a-1")},
-                                   dstd::Pair{first, dstd::String("a-2")},
-                                   dstd::Pair{second, dstd::String("b-1")}}) {
+        for (const auto& hidden :
+             {dstd::make_pair(first, dstd::String("a-1")),
+              dstd::make_pair(first, dstd::String("a-2")),
+              dstd::make_pair(second, dstd::String("b-1"))}) {
             auto found =
                 snapshot->get(spec, hidden.first, view_of(hidden.second));
             REQUIRE(found.has_value());

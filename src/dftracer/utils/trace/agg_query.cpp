@@ -354,8 +354,8 @@ void Runner::Stripe::drain(bool offset) {
     std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) {
         return a.first != b.first
                    ? a.first < b.first
-                   : dstd::Pair(a.second->seq, a.second->sub) <
-                         dstd::Pair(b.second->seq, b.second->sub);
+                   : dstd::make_pair(a.second->seq, a.second->sub) <
+                         dstd::make_pair(b.second->seq, b.second->sub);
     });
     for (std::size_t at = 0; at < order.size();) {
         Moments merged = *order[at].second;
@@ -698,10 +698,10 @@ coro::CoroTask<void> Task::whole_file_chunks(const dstd::String& path,
         request.file_path = path;
         request.snapshot = &*src_.snapshot;
         request.time_range =
-            dstd::Pair(static_cast<double>(r_.rules.q.ts_begin),
-                       r_.rules.q.ts_end == UINT64_MAX
-                           ? 0.0
-                           : static_cast<double>(r_.rules.q.ts_end));
+            dstd::make_pair(static_cast<double>(r_.rules.q.ts_begin),
+                            r_.rules.q.ts_end == UINT64_MAX
+                                ? 0.0
+                                : static_cast<double>(r_.rules.q.ts_end));
         request.chunk_count = chunk_count;
         request.by_start = true;
         auto pruned = co_await index::plan::prune_file(std::move(request));

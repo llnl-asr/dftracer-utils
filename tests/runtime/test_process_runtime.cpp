@@ -8,6 +8,7 @@
 #include <doctest/doctest.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <testing_runtime.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -101,7 +102,7 @@ TEST_SUITE("ProcessRuntime") {
         handle.wait();
         CHECK(done.load());
         CHECK(&after == before);
-        CHECK(after.threads() == 3);
+        CHECK(after.threads() == dftu_utils_test::pool_width(3));
     }
 
     TEST_CASE("a configure moves the running cap up and down") {
@@ -117,6 +118,11 @@ TEST_SUITE("ProcessRuntime") {
 
     TEST_CASE(
         "workers wait, not spin, after a shrink below the running tasks") {
+        if (dftu_utils_test::pool_width(3) < 3) {
+            MESSAGE("skipped: three tasks cannot run at once in a pool of "
+                    << dftu_utils_test::pool_width(3));
+            return;
+        }
         configure_default_runtime({.threads = 8, .eager = true});
         Concurrency held;
         dstd::Vector<TaskHandle> long_tasks;

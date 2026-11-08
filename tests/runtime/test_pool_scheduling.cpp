@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <testing_runtime.h>
 
 #include <algorithm>
 #include <atomic>
@@ -37,7 +38,9 @@ coro::CoroTask<void> relay_until(coro::AsyncSemaphore& in,
 
 TEST_SUITE("PoolScheduling") {
     TEST_CASE("children spawned on one worker reach the other workers") {
-        constexpr std::size_t THREADS = 4;
+        // Every child spins until all have started, so they need a worker
+        // each.
+        constexpr std::size_t THREADS = dftu_utils_test::pool_width(4);
         Runtime rt(THREADS);
         std::atomic<std::size_t> started{0};
         std::atomic<bool> all_met{true};

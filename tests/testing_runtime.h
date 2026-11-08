@@ -12,9 +12,20 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 
+#include <cstddef>
 #include <utility>
 
 namespace dftu_utils_test {
+
+/// The width a pool of @p n threads gets. Valgrind mode caps every compute and
+/// I/O pool at two threads, so a test that checks a width asks for this one.
+constexpr std::size_t pool_width(std::size_t n) {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    return n < 2 ? n : 2;
+#else
+    return n;
+#endif
+}
 
 /// Run `fn` as a coroutine on a private Runtime and block until it finishes.
 /// The runtime is shut down before returning, so anything the body spawned has

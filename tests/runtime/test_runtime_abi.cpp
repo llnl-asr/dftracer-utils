@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <testing_runtime.h>
 
 #include <atomic>
 
@@ -32,14 +33,15 @@ TEST_SUITE("core runtime ABI") {
         dftu_runtime* rt2 = dftu_runtime_new(3, 2);
         CHECK(rt1 == rt2);
         CHECK(dftu_default_runtime() == rt1);
-        CHECK(reinterpret_cast<Runtime*>(rt1)->threads() == 3);
+        CHECK(reinterpret_cast<Runtime*>(rt1)->threads() ==
+              dftu_utils_test::pool_width(3));
         dftu_runtime_free(rt2);
         dftu_runtime_free(rt1);
     }
 
     TEST_CASE("dftu_runtime_new moves the thread cap both ways") {
         auto* runtime = reinterpret_cast<Runtime*>(dftu_runtime_new(4, 0));
-        CHECK(runtime->threads() == 4);
+        CHECK(runtime->threads() == dftu_utils_test::pool_width(4));
         CHECK(reinterpret_cast<Runtime*>(dftu_runtime_new(2, 0))->threads() ==
               2);
         CHECK(exercise(dftu_default_runtime()));
@@ -48,7 +50,7 @@ TEST_SUITE("core runtime ABI") {
     TEST_CASE("threads=0 keeps the current count") {
         dftu_runtime_new(3, 0);
         auto* runtime = reinterpret_cast<Runtime*>(dftu_runtime_new(0, 0));
-        CHECK(runtime->threads() == 3);
+        CHECK(runtime->threads() == dftu_utils_test::pool_width(3));
     }
 
     TEST_CASE("dftu_runtime_free leaves the runtime running") {

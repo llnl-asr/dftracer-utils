@@ -7,6 +7,8 @@
 //   open_close   4x threads tasks open and close one file in a loop.
 //   lone_pread   one task reads, so that every read finds the ring or the pool
 //                asleep.
+//   busy_fsync   one task per thread submits an fsync and spins until it ends,
+//                so no worker reaps its own ring.
 //   stat_op      4x threads tasks stat one file with the statx operation.
 //   stat_call    the same with a blocking stat on the thread pool.
 //   mkdir_op     4x threads tasks make and remove their own directory with the
@@ -23,6 +25,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <fcntl.h>
@@ -168,6 +171,32 @@ coro::CoroTask<void> mkdir_call_task(Shared& shared, std::size_t rounds,
     }
 }
 
+void busy_done(runtime::io::IoOp& op) noexcept {
+    static_cast<std::atomic<ssize_t>*>(op.context)
+        ->store(op.result, std::memory_order_release);
+}
+
+coro::CoroTask<void> busy_syncer(Shared& shared, runtime::io::IoBackend& io,
+                                 std::size_t rounds) {
+    constexpr ssize_t RUNNING = 1;
+    for (std::size_t i = 0; i < rounds; ++i) {
+        std::atomic<ssize_t> result{RUNNING};
+        runtime::io::IoOp op;
+        op.kind = runtime::io::IoOpKind::Fsync;
+        op.handle = shared.fd;
+        op.complete = &busy_done;
+        op.context = &result;
+        io.submit(op);
+        io.flush();
+        while (result.load(std::memory_order_acquire) == RUNNING) {
+        }
+        if (result.load(std::memory_order_relaxed) != 0) {
+            shared.failures.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    co_return;
+}
+
 using Run = std::uint64_t (*)(const Config&, Runtime&, Shared&);
 
 template <typename Make>
@@ -204,6 +233,14 @@ std::uint64_t lone_pread(const Config& config, Runtime& rt, Shared& shared) {
     const std::size_t rounds = scaled(config, 50000);
     return fan_out(rt, 1, rounds,
                    [&](std::size_t) { return reader(shared, rounds, 1); });
+}
+
+std::uint64_t busy_fsync(const Config& config, Runtime& rt, Shared& shared) {
+    const std::size_t rounds = scaled(config, 2000);
+    runtime::io::IoBackend& io = rt.executor()->io_backend();
+    return fan_out(rt, config.threads, rounds, [&](std::size_t) {
+        return busy_syncer(shared, io, rounds);
+    });
 }
 
 #ifdef __linux__
@@ -246,6 +283,7 @@ struct Case {
 constexpr Case CASES[] = {
     {"pread_4k", pread_4k},     {"pwrite_4k", pwrite_4k},
     {"open_close", open_close}, {"lone_pread", lone_pread},
+    {"busy_fsync", busy_fsync},
 #ifdef __linux__
     {"stat_op", stat_op},
 #endif

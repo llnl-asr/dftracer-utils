@@ -22,12 +22,14 @@
 #include <sched.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -1082,7 +1084,15 @@ TEST_CASE(
                      15, "register_iowq_max_workers");
     CHECK(read_first == 0);
     CHECK(original[0] > 0);
-    CHECK(original[1] > 0);
+    // The unbound limit starts at RLIMIT_NPROC, and the kernel compares it as
+    // an int, so an unlimited one reads back as 0.
+    rlimit nproc{};
+    REQUIRE(::getrlimit(RLIMIT_NPROC, &nproc) == 0);
+    if (nproc.rlim_cur == RLIM_INFINITY) {
+        CHECK(original[1] == 0);
+    } else {
+        CHECK(original[1] > 0);
+    }
 
     unsigned set[2] = {1, 2};
     REQUIRE(register_iowq_max_workers(ring, set) == 0);
@@ -1100,15 +1110,13 @@ TEST_CASE(
 
 namespace {
 
-// The kernel workers of a task are named iou-wrk-<tid of the task>, and the
-// io-wq belongs to the task, not to a ring. True when this process has one for
-// `owner` and gives its thread id.
-bool find_iowq_worker(pid_t owner, pid_t& worker) {
-    char want[32];
-    std::snprintf(want, sizeof(want), "iou-wrk-%d\n", static_cast<int>(owner));
+// The kernel names a worker iou-wrk-<tid of its task>, with the tid of the
+// first pid namespace, so inside a container the name does not match gettid().
+// A worker is found as an iou-wrk thread that the snapshot did not have.
+dstd::Vector<pid_t> iowq_workers() {
+    dstd::Vector<pid_t> workers;
     DIR* dir = ::opendir("/proc/self/task");
-    if (dir == nullptr) return false;
-    bool is_found = false;
+    if (dir == nullptr) return workers;
     while (struct dirent* entry = ::readdir(dir)) {
         if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
         char path[320];
@@ -1121,14 +1129,21 @@ bool find_iowq_worker(pid_t owner, pid_t& worker) {
         ::close(fd);
         if (n <= 0) continue;
         comm[n] = '\0';
-        if (std::strcmp(comm, want) == 0) {
-            worker = static_cast<pid_t>(std::atoi(entry->d_name));
-            is_found = true;
-            break;
-        }
+        if (std::strncmp(comm, "iou-wrk-", 8) == 0)
+            workers.push_back(static_cast<pid_t>(std::atoi(entry->d_name)));
     }
     ::closedir(dir);
-    return is_found;
+    return workers;
+}
+
+bool find_new_iowq_worker(const dstd::Vector<pid_t>& before, pid_t& worker) {
+    for (const pid_t tid : iowq_workers()) {
+        if (std::find(before.begin(), before.end(), tid) == before.end()) {
+            worker = tid;
+            return true;
+        }
+    }
+    return false;
 }
 
 // What the affinity case saw on its own thread. Assertions wait for the join.
@@ -1173,12 +1188,12 @@ void run_affinity_case(AffinityResult& result) {
         prep_read(sqe, fds[0], buf, sizeof(buf), 0);
         sqe->flags |= IOSQE_ASYNC;
         sqe->user_data = 1;
+        const dstd::Vector<pid_t> before = iowq_workers();
         if (ring.enter(false) == 1) {
-            const pid_t owner = static_cast<pid_t>(::syscall(SYS_gettid));
             pid_t worker = -1;
             for (int waited = 0; waited < 2000 && !result.is_worker_found;
                  waited += 10) {
-                result.is_worker_found = find_iowq_worker(owner, worker);
+                result.is_worker_found = find_new_iowq_worker(before, worker);
                 if (!result.is_worker_found) ::usleep(10000);
             }
             if (result.is_worker_found) {
@@ -1436,11 +1451,13 @@ TEST_CASE("uring register: a wait region times an enter by its slot") {
     REQUIRE(registered == 0);
     REQUIRE(enable_rings(ring) == 0);
 
+    // EXT_ARG_REG alone is not enough: without EXT_ARG the kernel takes the
+    // argument as a sigmask pointer, reads no slot and waits with no timeout.
     const auto start = std::chrono::steady_clock::now();
-    const long ret =
-        ::syscall(__NR_io_uring_enter, ring.fd(), 0U, 1U,
-                  IORING_ENTER_GETEVENTS | IORING_ENTER_EXT_ARG_REG, 0UL,
-                  sizeof(RegWait));
+    const long ret = ::syscall(__NR_io_uring_enter, ring.fd(), 0U, 1U,
+                               IORING_ENTER_GETEVENTS | IORING_ENTER_EXT_ARG |
+                                   IORING_ENTER_EXT_ARG_REG,
+                               0UL, sizeof(RegWait));
     const int err = errno;
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start);

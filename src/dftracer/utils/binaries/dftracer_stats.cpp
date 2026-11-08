@@ -1166,14 +1166,15 @@ static dstd::Optional<ChunkStatistics> file_rows_to_statistics(
     if (cats) {
         // Categories are reported in lower case, as the View path groups them.
         dstd::StringViewMap<std::uint64_t> raw;
-        add_path_counts(snapshot, file, "cat", raw);
+        common::unwrap(add_path_counts(snapshot, file, "cat", raw));
         for (const auto& [cat, count] : raw) {
             dstd::String lower(cat);
             ::dftracer::utils::common::detail::lower_ascii(lower);
             cs.category_counts[lower] += count;
         }
     }
-    if (names) add_path_counts(snapshot, file, "name", cs.name_counts);
+    if (names)
+        common::unwrap(add_path_counts(snapshot, file, "name", cs.name_counts));
     if (pid_tids) cs.pid_tid_counts = std::move(*pid_tids);
     return cs;
 }

@@ -320,7 +320,9 @@ class CoroTask {
             void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
                 if constexpr (detail::is_expected_v<T>) {
                     auto& p = h.promise();
-                    p.failed = !p.exception && !p.stored().has_value();
+                    p.failed =
+                        !p.exception &&
+                        !dstd::detail::ExpectedAccess::holds_value(p.stored());
                 }
                 detail::report_finish(h.address());
                 h.promise().complete();
@@ -375,11 +377,11 @@ class CoroTask {
 
         template <typename V, typename E>
         detail::OrFailValue<V, E> await_transform(
-            detail::OrFailValue<V, E>&& awaitable) noexcept {
+            dstd::OrFail<V, E>&& awaitable) noexcept {
             static_assert(detail::is_expected_v<T>,
                           "or_fail ends the task with the error, so the task "
                           "must return a dstd::Expected");
-            return std::move(awaitable);
+            return {std::move(awaitable.result)};
         }
 
         template <typename V, typename E>
@@ -932,9 +934,9 @@ struct OrFailTask {
  * frame that holds a @ref Scope.
  */
 template <typename V, typename E>
-detail::OrFailValue<V, E> or_fail(dstd::Expected<V, E>&& result) noexcept(
+dstd::OrFail<V, E> or_fail(dstd::Expected<V, E>&& result) noexcept(
     std::is_nothrow_move_constructible_v<dstd::Expected<V, E>>) {
-    return {std::move(result)};
+    return std::move(result).or_fail();
 }
 
 /// The same for a task: awaits it, then gives its value or ends the calling

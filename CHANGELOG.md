@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make `dstd::Expected` our own class and remove the vendored `tl::expected`.
+  `value()` and `error()` on the wrong side now end the process with the message and a stack trace, where `value()` threw before.
+  A build with `DFTRACER_UTILS_DEBUG` also ends the process when an error result is destroyed unchecked.
 - Make an index of system counter traces up to 57% smaller, because each counter value is stored as a change from the last value of the same counter.
   Rebuild indexes made by an earlier version.
 - Store index extents on 8-byte boundaries in place of 4 KiB, so an index of a small trace set is up to 23% smaller.
@@ -343,6 +346,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Added
 
 - Add `coro::or_fail` and `CoroTask::or_fail()`, which give the value of a `dstd::Expected` or of a task that returns one, or end the calling task with its error, with no exception.
+- Add `match`, `discard` and `or_fail` to `dstd::Expected`, and pass an error on with `return r.error();`.
 - Add `trace::views::LiveView` and its Python adaptor `LiveTraceViewer`, which follow gzip traces that are still being written.
   `snapshot()` indexes the members written since the last call and returns a `View` or `TraceViewer` of every whole member, with no copy of the trace.
   An old snapshot keeps its rows, and `status()` reports each file as whole, tail or hole.

@@ -79,6 +79,7 @@ set(DFTRACER_UTILS_DSTD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/base64.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/concurrent_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/fatal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/fs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/os.cpp
@@ -2128,14 +2129,12 @@ endif()
 
 # Install headers: <includedir>/dftracer/utils/<subpath>, so a consumer includes
 # <dftracer/utils/...>. A wheel sets the includedir to dftracer/include (beside
-# dftracer/lib and dftracer/bin), so the same rule serves both. The one .hpp is
-# the vendored tl::expected in dstd/vendor/.
+# dftracer/lib and dftracer/bin), so the same rule serves both.
 install(
   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../include/dftracer/utils/
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dftracer/utils
   FILES_MATCHING
-  PATTERN "*.h"
-  PATTERN "*.hpp")
+  PATTERN "*.h")
 
 install(
   DIRECTORY ${CMAKE_BINARY_DIR}/include/dftracer/utils/

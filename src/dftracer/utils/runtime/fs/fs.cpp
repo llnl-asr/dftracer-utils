@@ -137,6 +137,8 @@ coro::CoroTask<void> stat_slice(dstd::SharedPtr<WalkPlan> plan,
         item.kind = FileKind::File;
         files.push_back(std::move(item));
     }
+    // The first error stands for the slice; the stats after it are not read.
+    for (const auto& stat : stats) stat.discard();
     if (!files.empty()) {
         Batch batch(std::move(files));
         co_await out.send(std::move(batch));

@@ -226,7 +226,8 @@ coro::detail::Coro Committer::run() {
         }
         {
             coro::BlockingRegion blocking;
-            commit_pending();
+            // A failure latches; the next flush or close reports it.
+            commit_pending().discard();
         }
     }
     finish_loop();

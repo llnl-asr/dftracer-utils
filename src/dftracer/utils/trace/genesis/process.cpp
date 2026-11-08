@@ -1575,8 +1575,13 @@ coro::CoroTask<GResult<void>> replay(
             }));
     }
     auto done = co_await coro::when_all(std::move(runs));
-    for (auto& st : done)
-        if (!st) co_return st;
+    for (auto& st : done) {
+        if (!st) {
+            // The first error stands for the batch.
+            for (const auto& other : done) other.discard();
+            co_return std::move(st);
+        }
+    }
     co_return GResult<void>{};
 }
 
@@ -1718,6 +1723,8 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     auto walked = co_await coro::when_all(std::move(walks));
     for (auto& st : walked) {
         if (!st) {
+            // The first error stands for the walk.
+            for (const auto& other : walked) other.discard();
             skip_all("", dstd::String(st.error().message()));
             co_return result;
         }

@@ -1253,16 +1253,17 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     const RecordItems items = items_with_pending_extents();
     // The range is taken only if no write took the end of the file meanwhile.
     dstd::Vector<std::uint8_t> blocks;
-    dstd::Expected<FileTail, dstd::Error> tail = invalid_error();
+    dstd::Optional<FileTail> tail;
     std::uint64_t base = 0;
     for (;;) {
         base = next_offset_.load(std::memory_order_acquire);
         blocks.clear();
-        tail = build_blocks(items, base, blocks);
-        if (!tail) {
-            latch(tail.error());
-            return dstd::Unexpected<dstd::Error>(tail.error());
+        auto built = build_blocks(items, base, blocks);
+        if (!built) {
+            latch(built.error());
+            return dstd::Unexpected<dstd::Error>(built.error());
         }
+        tail = std::move(*built);
         std::uint64_t expected = base;
         if (next_offset_.compare_exchange_strong(expected, base + blocks.size(),
                                                  std::memory_order_acq_rel,
@@ -1466,15 +1467,15 @@ dstd::Expected<bool, dstd::Error> DataFileReader::open_light(
         return false;
     }
 
-    dstd::Expected<Record, dstd::Error> decoded = parse_error();
-    if (tail_offset >= start) {
+    const auto read_footer = [&]() -> dstd::Expected<Record, dstd::Error> {
+        if (tail_offset < start)
+            return read_record_at(file_, file_size, tail_offset, records_read_);
         const std::size_t at = static_cast<std::size_t>(tail_offset - start);
         const std::size_t length = std::min<std::size_t>(
             footer_size, static_cast<std::size_t>(want) - at);
-        decoded = decode_record_at(bytes.subspan(at, length), tail_offset);
-    } else {
-        decoded = read_record_at(file_, file_size, tail_offset, records_read_);
-    }
+        return decode_record_at(bytes.subspan(at, length), tail_offset);
+    };
+    const auto decoded = read_footer();
     if (!decoded || decoded->kind != RecordKind::Footer) return false;
 
     return apply_footer(decoded->items, decoded->sequence, file_size);

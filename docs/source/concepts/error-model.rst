@@ -70,7 +70,13 @@ Two channels carry an error, chosen by whether the immediate caller is expected 
 
 - ``dstd::Result<T>`` (``dstd::Expected<T, dstd::Error>``) is the channel for a failure in the ordinary course of use, such as a query that does not parse or a key that is not found.
   The function returns it, and the caller checks it.
-  ``make_error(code, message)`` builds the error side, and a caller passes it up with ``if (!r) return dstd::Unexpected(r.error());`` (``co_return`` in a coroutine).
+  ``make_error(code, message)`` builds the error side, and a caller passes it up with ``if (!r) return r.error();``.
+  A coroutine task that returns a ``dstd::Expected`` writes ``co_await coro::or_fail(std::move(r))``, which gives the value or ends the task with the error.
+  ``r.match(on_value, on_error)`` handles both sides, and the compiler rejects a call that leaves one out.
+  ``value()`` and ``error()`` on the wrong side end the process with the message and a stack trace.
+  They never throw.
+  A debug build (``DFTRACER_UTILS_DEBUG``) also ends the process when an error result is destroyed or overwritten before anyone tested it, read its error or matched it.
+  A caller that may drop an error on purpose calls ``r.discard()`` and says why.
 - ``DFTUtilsException`` is for the case the caller cannot handle.
   It is thrown, not returned, and it holds a ``dstd::Error``.
   It crosses the Python boundary with its ``domain()``, ``code_int()`` and ``condition()`` intact, so a ``try`` and ``except`` in Python can branch on the same identity as a C++ caller.

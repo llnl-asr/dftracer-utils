@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/variant.h>
@@ -55,6 +56,12 @@ struct SharedState {
     dstd::SharedPtr<std::atomic<bool>> cancel_token;
     /// Cancels a task spawned by a @ref Scope, which reads it at its waits.
     std::atomic<bool> cancel_flag{false};
+
+    // A result no future read, as when the future is dropped, goes with the
+    // state.
+    ~SharedState() {
+        if constexpr (!std::is_void_v<T>) dstd::discard_unread(result);
+    }
 
     /// Called by the spawned coroutine on completion (non-void result).
     template <typename U = T>

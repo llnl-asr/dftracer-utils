@@ -26,16 +26,14 @@ notices here cover only the third-party dependencies.
 | yaml-cpp | `MIT` | https://github.com/jbeder/yaml-cpp |
 | moodycamel concurrentqueue | `BSD-2-Clause` | https://github.com/cameron314/concurrentqueue |
 | unordered_dense | `MIT` | https://github.com/martinus/unordered_dense |
-| tl::expected | `CC0-1.0` | https://github.com/TartanLlama/expected |
 | PCRE2 | `BSD-3-Clause WITH PCRE2-exception` | https://github.com/PCRE2Project/pcre2 |
 | Vectorscan | `BSD-3-Clause` | https://github.com/VectorCamp/vectorscan |
 | utf8proc | MIT, and the Unicode, Inc. data files license (1991-2007) for `utf8proc_data.c` | https://github.com/JuliaStrings/utf8proc |
 
-Three of these rows are vendored single headers: moodycamel concurrentqueue,
-unordered_dense and tl::expected. Their full text, unchanged apart from one
-provenance line, is in `include/dftracer/utils/dstd/vendor/` as
-`concurrentqueue.h`, `unordered_dense.h` and `expected.hpp`, and it installs with
-the rest of `include/`. The vendored concurrentqueue carries the thread-exit
+Two of these rows are vendored single headers: moodycamel concurrentqueue and
+unordered_dense. Their full text, unchanged apart from one provenance line, is
+in `include/dftracer/utils/dstd/vendor/` as `concurrentqueue.h` and
+`unordered_dense.h`, and it installs with the rest of `include/`. The vendored concurrentqueue carries the thread-exit
 unsubscribe fix upstream has not taken; the line names the upstream commit.
 
 ## Vendored build tooling

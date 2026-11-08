@@ -140,6 +140,13 @@ CoroTask<void> parallel_map_worker(ParallelMapState<T, Fn, R>& state,
 
 template <typename R>
 struct UnorderedMessage {
+    UnorderedMessage() = default;
+    UnorderedMessage(UnorderedMessage&&) = default;
+    UnorderedMessage& operator=(UnorderedMessage&&) = default;
+    // A message no reader takes, as when the generator is dropped, is dropped
+    // on purpose, an error result in it too.
+    ~UnorderedMessage() { dstd::discard_unread(value); }
+
     dstd::Optional<R> value;
     std::exception_ptr error;
 };
@@ -214,7 +221,10 @@ CoroTask<dstd::Vector<dstd::Expected<T, dstd::Error>>> when_all_settled(
         for (auto& future : futures) future.cancel();
     }
     co_await scope.join();
-    if (cancelled) common::rethrow_and_clear(cancelled);
+    if (cancelled) {
+        for (const auto& outcome : outcomes) outcome.discard();
+        common::rethrow_and_clear(cancelled);
+    }
     co_return outcomes;
 }
 

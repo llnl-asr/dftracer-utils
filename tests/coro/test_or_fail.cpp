@@ -181,7 +181,7 @@ TEST_SUITE("or_fail") {
         };
         auto cancelled = task();
         cancelled.cancel();
-        CHECK_THROWS(run(rt, std::move(cancelled)));
+        CHECK_THROWS((void)run(rt, std::move(cancelled)));
         CHECK(!went_on.load());
     }
 
@@ -208,7 +208,7 @@ TEST_SUITE("or_fail") {
                 const int b = co_await coro::or_fail(late(i, i % 3 == 1));
                 co_return a + b;
             };
-            for (int i = 0; i < 60; ++i) (void)run(rt, task(i));
+            for (int i = 0; i < 60; ++i) run(rt, task(i)).discard();
             rt.shutdown();
         }
         coro::set_coroutine_hooks(nullptr);
@@ -225,6 +225,6 @@ TEST_SUITE("or_fail") {
         auto task = [&]() -> coro::CoroTask<IntResult> {
             co_return co_await coro::or_fail(thrower());
         };
-        CHECK_THROWS_AS(run(rt, task()), std::runtime_error);
+        CHECK_THROWS_AS((void)run(rt, task()), std::runtime_error);
     }
 }

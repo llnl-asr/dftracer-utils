@@ -304,8 +304,9 @@ Writer::Writer(dstd::String name, dstd::String path, std::uint32_t extent_size,
 
 Writer::~Writer() {
     if (!closed_.load(std::memory_order_acquire)) {
-        extents_.seal_all();
-        extents_.wait_idle();
+        // A writer dropped without close has no caller to report to.
+        extents_.seal_all().discard();
+        extents_.wait_idle().discard();
     }
 }
 

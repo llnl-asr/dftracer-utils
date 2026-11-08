@@ -539,6 +539,9 @@ run_py_one() {
   fname="$(basename "$file" .py)"
   local logf="$LOG_DIR/python-${fname}.log"
 
+  # A test that forks and ends the child with os._exit leaves it holding the
+  # parent threads' memory with no pointer to it, so the child's report is
+  # silenced. A child that execs is still traced with --trace-children.
   local -a tc_opts=()
   [[ "${VALGRIND_PY_TRACE_CHILDREN:-0}" == "1" ]] && tc_opts+=(--trace-children=yes)
 
@@ -551,6 +554,7 @@ run_py_one() {
   (PYTHONMALLOC=malloc PYTHONDONTWRITEBYTECODE=1 \
     "${py_tmo_cmd[@]}" \
     valgrind --tool=memcheck --num-callers=20 --fair-sched=yes "${tc_opts[@]}" ${VALGRIND_EXTRA_OPTS:-} \
+    --child-silent-after-fork=yes \
     --leak-check=full \
     --show-leak-kinds=definite,indirect \
     --suppressions="$SUPP_DIR/valgrind-python.supp" \

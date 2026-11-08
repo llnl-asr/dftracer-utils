@@ -12,7 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Make an index of system counter traces up to 57% smaller, because each counter value is stored as a change from the last value of the same counter.
   Rebuild indexes made by an earlier version.
 - Store index extents on 8-byte boundaries in place of 4 KiB, so an index of a small trace set is up to 23% smaller.
-
+- Add `DFTRACER_UTILS_STORE_DIRECT_READS` to read the closed files of an index store past the page cache (`O_DIRECT` on Linux, `F_NOCACHE` on macOS).
+  It is off by default, and a file system that refuses direct reads gets cached reads.
 - Run a task on the process runtime when a thread that is not a runtime worker calls `get()` on it, such as `view.collect().get()` in `main()`, so the work uses every core instead of the calling thread only.
   Bind a `coro::RunLoop` with `coro::CurrentScope` to keep the work on the calling thread.
   The row order of a result with no sort is not fixed.

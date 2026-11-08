@@ -87,6 +87,11 @@ inline constexpr std::uint32_t STORE_DEFAULT_EXTENT_BYTES = std::uint32_t{1}
                                                             << 20;
 inline constexpr std::uint32_t STORE_MIN_EXTENT_BYTES = 4096;
 inline constexpr std::uint32_t STORE_MAX_EXTENT_BYTES = std::uint32_t{16} << 20;
+/// 1 reads the closed data files of a store past the operating system's page
+/// cache (O_DIRECT on Linux, F_NOCACHE on macOS); 0, the default, reads
+/// through it. A file system that refuses direct reads gets cached reads.
+inline constexpr const char* STORE_DIRECT_READS_ENV =
+    "DFTRACER_UTILS_STORE_DIRECT_READS";
 /// The most bytes of decoded pages one store snapshot keeps for its queries.
 /// STORE_PAGE_CACHE_BYTES_ENV overrides it with a plain number of bytes.
 inline constexpr const char* STORE_PAGE_CACHE_BYTES_ENV =

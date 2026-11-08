@@ -3062,10 +3062,19 @@ TEST_SUITE("index store snapshot") {
             ScopedDefaultRuntime runtime(1);
             return dump_open(dir, spec, scopes);
         }();
+#if DFTRACER_UTILS_TEST_PROBES
+        const std::uint64_t direct_before = engine::g_direct_reads.load();
+#endif
         const OpenDump eight = [&] {
             ScopedDefaultRuntime runtime(8);
             return dump_open(dir, spec, scopes);
         }();
+        // Direct reads skip the page cache, so they warm no window.
+#if DFTRACER_UTILS_TEST_PROBES
+        const bool direct = engine::g_direct_reads.load() > direct_before;
+#else
+        const bool direct = false;
+#endif
 
         CHECK(one.text == eight.text);
         CHECK(one.files == WRITERS);
@@ -3089,7 +3098,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(eight.indexes_read == 0);
         CHECK(eight.metadata_blocks_read == one.metadata_blocks_read);
         CHECK(eight.metadata_blocks_read >= 2U * WRITERS);
-        CHECK(eight.windows_warmed == WRITERS);
+        CHECK(eight.windows_warmed == (direct ? 0U : WRITERS));
         CHECK(eight.read_calls == eight.extents_read +
                                       eight.metadata_blocks_read +
                                       eight.page_reads + eight.windows_warmed);

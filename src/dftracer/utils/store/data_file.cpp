@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/bits.h>
@@ -11,6 +13,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -31,6 +34,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <random>
 #include <utility>
 
@@ -71,6 +75,87 @@ dstd::Unexpected<dstd::Error> invalid_error() {
 dstd::Unexpected<dstd::Error> io_error() {
     return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Io));
 }
+
+constexpr std::uint32_t DIRECT_UNPROBED =
+    std::numeric_limits<std::uint32_t>::max();
+constexpr std::uint32_t DIRECT_DEFAULT_ALIGN = 4096;
+
+/// Whether DFTRACER_UTILS_STORE_DIRECT_READS asks for direct reads.
+/// InvalidArgument when it is set to anything but an integer.
+dstd::Expected<bool, dstd::Error> direct_reads_wanted() {
+    using common::constants::store::STORE_DIRECT_READS_ENV;
+    if (!common::Env::get<dstd::StringView>(STORE_DIRECT_READS_ENV)) {
+        return false;
+    }
+    const auto value = common::Env::get<int>(STORE_DIRECT_READS_ENV);
+    if (!value) return invalid_error();
+    return *value != 0;
+}
+
+/// A descriptor of `path` that reads past the page cache and the alignment
+/// its reads need, or {-1, 0} when the file system refuses one. Io when the
+/// open fails for another reason.
+dstd::Expected<dstd::Pair<int, std::uint32_t>, dstd::Error> open_direct(
+    const dstd::String& path) {
+    using Opened = dstd::Pair<int, std::uint32_t>;
+    const auto refused = [](int error) {
+        return error == EINVAL || error == EOPNOTSUPP || error == ENOTSUP;
+    };
+#if defined(__linux__)
+    std::uint32_t align = DIRECT_DEFAULT_ALIGN;
+#if defined(STATX_DIOALIGN)
+    struct statx info{};
+    if (::statx(AT_FDCWD, path.c_str(), 0, STATX_DIOALIGN, &info) == 0 &&
+        (info.stx_mask & STATX_DIOALIGN) != 0) {
+        if (info.stx_dio_offset_align == 0) return Opened{-1, 0};
+        align = std::max(info.stx_dio_offset_align, info.stx_dio_mem_align);
+    }
+#endif
+    if (align > DIRECT_READ_CHUNK_BYTES || (align & (align - 1U)) != 0) {
+        return Opened{-1, 0};
+    }
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECT);
+    if (fd < 0) {
+        if (refused(errno)) return Opened{-1, 0};
+        return io_error();
+    }
+    return Opened{fd, align};
+#elif defined(__APPLE__)
+    // F_NOCACHE is a hint that holds for whole aligned blocks, so the reads
+    // still take aligned windows.
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return io_error();
+    if (::fcntl(fd, F_NOCACHE, 1) != 0) {
+        const int error = errno;
+        ::close(fd);
+        if (refused(error)) return Opened{-1, 0};
+        return io_error();
+    }
+    return Opened{fd, DIRECT_DEFAULT_ALIGN};
+#else
+    static_cast<void>(path);
+    static_cast<void>(refused);
+    return Opened{-1, 0};
+#endif
+}
+
+/// One aligned block from the memory library, freed when it goes.
+class AlignedChunk {
+   public:
+    AlignedChunk(std::size_t size, std::size_t align)
+        : size_(size),
+          data_(static_cast<std::uint8_t*>(
+              memory::detail::allocate(size, align))) {}
+    AlignedChunk(const AlignedChunk&) = delete;
+    AlignedChunk& operator=(const AlignedChunk&) = delete;
+    ~AlignedChunk() { memory::detail::deallocate(data_, size_); }
+
+    std::uint8_t* data() const { return data_; }
+
+   private:
+    std::size_t size_;
+    std::uint8_t* data_;
+};
 
 dstd::Unexpected<dstd::Error> unsupported_error() {
     return dstd::Unexpected<dstd::Error>(
@@ -1319,9 +1404,19 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
         return parse_error();
     }
 
+    auto direct = direct_reads_wanted();
+    if (!direct) {
+        ::close(fd);
+        return dstd::Unexpected<dstd::Error>(direct.error());
+    }
+
     DataFileReader reader;
     reader.fd_.store(fd, std::memory_order_relaxed);
     reader.file_size_ = file_size;
+    if (*direct) {
+        reader.path_ = path_std;
+        reader.direct_ = dstd::make_unique<DirectReads>();
+    }
 
     // One bounded read of the file end.
     if (footer == FooterItems::Directory) {
@@ -1488,13 +1583,130 @@ dstd::Expected<void, dstd::Error> DataFileReader::apply_items_block() {
     return {};
 }
 
+/// The direct descriptor of a reader and the alignment its reads need, opened
+/// on the first read of a closed file. A file still written is read through
+/// the page cache, which holds the bytes no commit has synced yet.
+struct DataFileReader::DirectReads {
+    std::mutex mutex;
+    std::atomic<int> fd{-1};
+    std::atomic<std::uint32_t> align{DIRECT_UNPROBED};
+
+    DirectReads() = default;
+    DirectReads(const DirectReads&) = delete;
+    DirectReads& operator=(const DirectReads&) = delete;
+    ~DirectReads() {
+        const int held = fd.load(std::memory_order_relaxed);
+        if (held >= 0) ::close(held);
+    }
+};
+
+dstd::Expected<std::uint32_t, dstd::Error> DataFileReader::direct_align()
+    const {
+    if (direct_ == nullptr || !index_.closed) return 0U;
+    const std::uint32_t known = direct_->align.load(std::memory_order_acquire);
+    if (known != DIRECT_UNPROBED) return known;
+    std::lock_guard<std::mutex> locked(direct_->mutex);
+    const std::uint32_t again = direct_->align.load(std::memory_order_acquire);
+    if (again != DIRECT_UNPROBED) return again;
+    auto opened = open_direct(path_string(path_));
+    if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
+    const auto [fd, align] = *opened;
+    if (fd >= 0) {
+        direct_->fd.store(fd, std::memory_order_release);
+    } else {
+#if DFTRACER_UTILS_TEST_PROBES
+        g_direct_fallbacks.fetch_add(1, std::memory_order_relaxed);
+#endif
+    }
+    direct_->align.store(align, std::memory_order_release);
+    return align;
+}
+
+dstd::Expected<bool, dstd::Error> DataFileReader::read_direct(
+    std::uint64_t offset, std::size_t length, std::uint8_t* dest,
+    BlockReads* reads) const {
+    auto known = direct_align();
+    if (!known) return dstd::Unexpected<dstd::Error>(known.error());
+    const std::uint64_t align = *known;
+    if (align == 0) return false;
+    const int fd = direct_->fd.load(std::memory_order_acquire);
+    // One alignment step more than the bytes, so an unaligned read of up to a
+    // chunk takes one pread.
+    const auto buffer_bytes = static_cast<std::size_t>(
+        dstd::bits::align_up(
+            std::min<std::uint64_t>(length, DIRECT_READ_CHUNK_BYTES), align) +
+        align);
+    AlignedChunk chunk(buffer_bytes, static_cast<std::size_t>(align));
+    const std::uint64_t end = offset + length;
+    std::uint64_t at = offset;
+    while (at < end) {
+        const std::uint64_t window = at - at % align;
+        const std::uint64_t stop =
+            std::min<std::uint64_t>(end, window + buffer_bytes);
+        const auto span = static_cast<std::size_t>(
+            dstd::bits::align_up(stop - window, align));
+        const ssize_t got =
+            ::pread(fd, chunk.data(), span, static_cast<off_t>(window));
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EINVAL) {
+                direct_->align.store(0, std::memory_order_release);
+#if DFTRACER_UTILS_TEST_PROBES
+                g_direct_fallbacks.fetch_add(1, std::memory_order_relaxed);
+#endif
+                return false;
+            }
+            return io_error();
+        }
+        const auto got_bytes = static_cast<std::uint64_t>(got);
+        if (got_bytes <= at - window) return parse_error();
+        if (reads != nullptr) {
+            ++reads->calls;
+            reads->bytes += got_bytes;
+        }
+        const std::uint64_t usable = std::min(window + got_bytes, stop) - at;
+        std::memcpy(dest + (at - offset), chunk.data() + (at - window),
+                    static_cast<std::size_t>(usable));
+        at += usable;
+    }
+#if DFTRACER_UTILS_TEST_PROBES
+    g_direct_reads.fetch_add(1, std::memory_order_relaxed);
+#endif
+    return true;
+}
+
+dstd::Expected<void, dstd::Error> DataFileReader::read_at(
+    int fd, std::uint64_t offset, std::size_t length, std::uint8_t* dest,
+    BlockReads* reads) const {
+    auto direct = read_direct(offset, length, dest, reads);
+    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (*direct) return {};
+    std::size_t done = 0;
+    while (done < length) {
+        const ssize_t got = ::pread(fd, dest + done, length - done,
+                                    static_cast<off_t>(offset + done));
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            return io_error();
+        }
+        if (got == 0) return parse_error();
+        if (reads != nullptr) {
+            ++reads->calls;
+            reads->bytes += static_cast<std::uint64_t>(got);
+        }
+        done += static_cast<std::size_t>(got);
+    }
+    return {};
+}
+
 DataFileReader::DataFileReader(DataFileReader&& other) noexcept
     : fd_(other.fd_.exchange(-1, std::memory_order_relaxed)),
       file_size_(other.file_size_),
       records_read_(other.records_read_),
       index_(std::move(other.index_)),
       path_(std::move(other.path_)),
-      open_mutex_(std::move(other.open_mutex_)) {}
+      open_mutex_(std::move(other.open_mutex_)),
+      direct_(std::move(other.direct_)) {}
 
 DataFileReader& DataFileReader::operator=(DataFileReader&& other) noexcept {
     if (this == &other) return *this;
@@ -1507,6 +1719,7 @@ DataFileReader& DataFileReader::operator=(DataFileReader&& other) noexcept {
     index_ = std::move(other.index_);
     path_ = std::move(other.path_);
     open_mutex_ = std::move(other.open_mutex_);
+    direct_ = std::move(other.direct_);
     return *this;
 }
 
@@ -1544,6 +1757,9 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::from_summary(
     reader.file_size_ = entry.needed_bytes;
     reader.path_.assign(path.data(), path.size());
     reader.open_mutex_ = dstd::make_unique<std::mutex>();
+    auto direct = direct_reads_wanted();
+    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (*direct) reader.direct_ = dstd::make_unique<DirectReads>();
     auto applied =
         reader.apply_footer(entry.footer, entry.sequence, entry.needed_bytes);
     if (!applied) return dstd::Unexpected<dstd::Error>(applied.error());
@@ -1559,10 +1775,10 @@ DataFileReader::read_extent(const ExtentRef& ref) const {
         ref.length > file_size_ - ref.offset) {
         return parse_error();
     }
-    auto bytes = pread_all(*fd, ref.offset, ref.length);
-    if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
-    const std::uint32_t crc = crc32(0, bytes->data(), bytes->size());
-    if (crc != ref.crc) return parse_error();
+    dstd::Vector<std::uint8_t> bytes(ref.length);
+    auto read = read_at(*fd, ref.offset, ref.length, bytes.data(), nullptr);
+    if (!read) return dstd::Unexpected<dstd::Error>(read.error());
+    if (crc32(0, bytes.data(), bytes.size()) != ref.crc) return parse_error();
     return bytes;
 }
 
@@ -1575,26 +1791,15 @@ dstd::Expected<void, dstd::Error> DataFileReader::read_range(
         return parse_error();
     }
     out.resize(length);
-    std::size_t done = 0;
-    while (done < length) {
-        const ssize_t got = ::pread(*fd, out.data() + done, length - done,
-                                    static_cast<off_t>(offset + done));
-        if (got < 0) {
-            if (errno == EINTR) continue;
-            return io_error();
-        }
-        if (got == 0) return parse_error();
-        if (reads != nullptr) {
-            ++reads->calls;
-            reads->bytes += static_cast<std::uint64_t>(got);
-        }
-        done += static_cast<std::size_t>(got);
-    }
-    return {};
+    return read_at(*fd, offset, length, out.data(), reads);
 }
 
 dstd::Expected<void, dstd::Error> DataFileReader::warm_range(
     std::uint64_t offset, std::uint64_t length, BlockReads* reads) const {
+    // Direct reads skip the page cache, so warming it buys nothing.
+    auto direct = direct_align();
+    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (*direct != 0) return {};
     auto fd = descriptor();
     if (!fd) return dstd::Unexpected<dstd::Error>(fd.error());
     if (offset >= file_size_) return {};
@@ -1636,17 +1841,18 @@ DataFileReader::read_block(const BlockHandle& handle, BlockReads* reads) const {
         ++reads->calls;
         reads->bytes += handle.length;
     }
-    auto bytes = pread_all(*fd, handle.offset, handle.length);
-    if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
-    if (crc32(0, bytes->data(), bytes->size()) != handle.crc) {
+    dstd::Vector<std::uint8_t> bytes(handle.length);
+    auto read =
+        read_at(*fd, handle.offset, handle.length, bytes.data(), nullptr);
+    if (!read) return dstd::Unexpected<dstd::Error>(read.error());
+    if (crc32(0, bytes.data(), bytes.size()) != handle.crc) {
         return parse_error();
     }
-    if (!bytes->empty() &&
-        bytes->front() == static_cast<std::uint8_t>(PageCodec::None)) {
-        bytes->erase(bytes->begin());
+    if (bytes.front() == static_cast<std::uint8_t>(PageCodec::None)) {
+        bytes.erase(bytes.begin());
         return bytes;
     }
-    return decode_meta(bytes_of(*bytes));
+    return decode_meta(bytes_of(bytes));
 }
 
 dstd::Expected<void, dstd::Error> DataFileReader::verify_block(
@@ -1664,19 +1870,10 @@ dstd::Expected<void, dstd::Error> DataFileReader::verify_block(
     while (done < ref.length) {
         const std::size_t want = static_cast<std::size_t>(
             std::min<std::uint64_t>(chunk.size(), ref.length - done));
-        const ssize_t got = ::pread(*fd, chunk.data(), want,
-                                    static_cast<off_t>(ref.offset + done));
-        if (got < 0) {
-            if (errno == EINTR) continue;
-            return io_error();
-        }
-        if (got == 0) return parse_error();
-        if (reads != nullptr) {
-            ++reads->calls;
-            reads->bytes += static_cast<std::uint64_t>(got);
-        }
-        crc = crc32(crc, chunk.data(), static_cast<std::size_t>(got));
-        done += static_cast<std::uint64_t>(got);
+        auto read = read_at(*fd, ref.offset + done, want, chunk.data(), reads);
+        if (!read) return dstd::Unexpected<dstd::Error>(read.error());
+        crc = crc32(crc, chunk.data(), want);
+        done += want;
     }
     if (crc != ref.crc) return parse_error();
     return {};
@@ -1696,6 +1893,29 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_extents(
     };
 
     BlockReads counts;
+    auto direct = direct_align();
+    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (*direct != 0) {
+        // One aligned window per extent, where preadv would scatter a run.
+        for (std::size_t i = 0; i < refs.size(); ++i) {
+            const ExtentRef& ref = refs[i];
+            dstd::Vector<std::uint8_t>& bytes = *targets[i].bytes;
+            if (in_file(ref)) {
+                bytes = dstd::Vector<std::uint8_t>(ref.length);
+                auto read =
+                    read_at(*fd, ref.offset, ref.length, bytes.data(), &counts);
+                if (!read && read.error().is(dstd::Condition::Io)) {
+                    return dstd::Unexpected<dstd::Error>(read.error());
+                }
+                if (read && crc32(0, bytes.data(), bytes.size()) == ref.crc) {
+                    continue;
+                }
+            }
+            *targets[i].bad = 1;
+            dstd::Vector<std::uint8_t>().swap(bytes);
+        }
+        return counts;
+    }
     dstd::Vector<struct iovec> vecs;
     std::size_t at = 0;
     while (at < refs.size()) {

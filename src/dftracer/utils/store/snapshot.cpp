@@ -2153,6 +2153,8 @@ void Snapshot::warm_window(const detail::FileData& file,
     BlockReads reads;
     (void)file.reader.warm_range(window * READ_RUN_BYTES, READ_RUN_BYTES,
                                  &reads);
+    // A reader with direct reads warms nothing.
+    if (reads.calls == 0) return;
     reads_->add_window(reads);
 }
 

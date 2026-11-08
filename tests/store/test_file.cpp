@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -641,6 +643,19 @@ void add_five_commit(engine::DataFileWriter& writer,
 
     REQUIRE(writer.commit().has_value());
 }
+
+// Sets DFTRACER_UTILS_STORE_DIRECT_READS for one scope.
+class DirectReadsEnv {
+   public:
+    explicit DirectReadsEnv(const char* value) {
+        ::setenv(common::constants::store::STORE_DIRECT_READS_ENV, value, 1);
+    }
+    DirectReadsEnv(const DirectReadsEnv&) = delete;
+    DirectReadsEnv& operator=(const DirectReadsEnv&) = delete;
+    ~DirectReadsEnv() {
+        ::unsetenv(common::constants::store::STORE_DIRECT_READS_ENV);
+    }
+};
 
 std::uint64_t commit_record_offset(std::uint32_t commit_id) {
     return 2U * static_cast<std::uint64_t>(commit_id) * EXTENT_SIZE;
@@ -2192,5 +2207,128 @@ TEST_SUITE("index store file") {
         auto report = store::engine::space_report(path);
         REQUIRE_FALSE(report.has_value());
         CHECK(report.error().is(dstd::Condition::Parse));
+    }
+
+    TEST_CASE("direct reads return the bytes of cached reads") {
+        TempDir temp;
+        const dstd::String path = temp.file("direct.dfs");
+        auto created =
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+        REQUIRE(created.has_value());
+        engine::FileIndex expected;
+        dstd::Vector<engine::ExtentRef> extents;
+        for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
+            add_five_commit(*created, expected, commit_id, &extents);
+        }
+        // Incompressible and over two direct chunks, so one read takes
+        // several windows.
+        std::mt19937_64 random(7);
+        dstd::Vector<std::uint8_t> noise(2 * engine::DIRECT_READ_CHUNK_BYTES +
+                                         123);
+        for (std::uint8_t& byte : noise)
+            byte = static_cast<std::uint8_t>(random());
+        REQUIRE(created->append_big(view_of(noise)).has_value());
+        REQUIRE(created->close().has_value());
+        const dstd::Vector<std::uint8_t> file = read_file(path);
+
+        DirectReadsEnv direct("1");
+#if DFTRACER_UTILS_TEST_PROBES
+        const std::uint64_t direct_before = engine::g_direct_reads.load();
+        const std::uint64_t fallback_before = engine::g_direct_fallbacks.load();
+#endif
+        auto reader = engine::DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        const std::size_t size = file.size();
+        const dstd::Pair<std::uint64_t, std::size_t> ranges[] = {
+            {0, 1},
+            {7, 4096},
+            {4095, 2},
+            {4096, 4096},
+            {12345, engine::DIRECT_READ_CHUNK_BYTES + 77},
+            {size - 5, 5},
+            {1, size - 1}};
+        for (const auto& [offset, length] : ranges) {
+            dstd::RawBuffer<std::uint8_t> out;
+            REQUIRE(
+                reader->read_range(offset, length, out, nullptr).has_value());
+            REQUIRE(out.size() == length);
+            CHECK(std::memcmp(out.data(), file.data() + offset, length) == 0);
+        }
+        dstd::RawBuffer<std::uint8_t> past;
+        CHECK_FALSE(
+            reader->read_range(size - 5, 10, past, nullptr).has_value());
+
+        dstd::Vector<dstd::Vector<std::uint8_t>> stored(extents.size());
+        dstd::Vector<std::uint8_t> bad(extents.size(), 0);
+        dstd::Vector<engine::ExtentTarget> targets;
+        for (std::size_t i = 0; i < extents.size(); ++i) {
+            targets.push_back({&stored[i], &bad[i]});
+            auto one = reader->read_extent(extents[i]);
+            REQUIRE(one.has_value());
+            CHECK(std::memcmp(one->data(), file.data() + extents[i].offset,
+                              extents[i].length) == 0);
+        }
+        REQUIRE(reader
+                    ->read_extents(dstd::Span<const engine::ExtentRef>(
+                                       extents.data(), extents.size()),
+                                   dstd::Span<const engine::ExtentTarget>(
+                                       targets.data(), targets.size()))
+                    .has_value());
+        for (std::size_t i = 0; i < extents.size(); ++i) {
+            CHECK(bad[i] == 0);
+            CHECK(stored[i].size() == extents[i].length);
+        }
+#if DFTRACER_UTILS_TEST_PROBES
+        const bool went_direct = engine::g_direct_reads.load() > direct_before;
+        const bool fell_back =
+            engine::g_direct_fallbacks.load() > fallback_before;
+        MESSAGE("direct reads ran: ", went_direct, ", fell back: ", fell_back);
+#if defined(__APPLE__)
+        CHECK(went_direct);
+#else
+        CHECK((went_direct || fell_back));
+#endif
+#endif
+    }
+
+    TEST_CASE("a file still written reads through the page cache") {
+        TempDir temp;
+        const dstd::String path = temp.file("live.dfs");
+        auto created =
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+        REQUIRE(created.has_value());
+        engine::FileIndex expected;
+        dstd::Vector<engine::ExtentRef> extents;
+        add_five_commit(*created, expected, 1, &extents);
+
+        DirectReadsEnv direct("1");
+#if DFTRACER_UTILS_TEST_PROBES
+        const std::uint64_t direct_before = engine::g_direct_reads.load();
+#endif
+        auto reader = engine::DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        REQUIRE_FALSE(reader->index().closed);
+        for (const engine::ExtentRef& extent : extents)
+            CHECK(reader->read_extent(extent).has_value());
+#if DFTRACER_UTILS_TEST_PROBES
+        CHECK(engine::g_direct_reads.load() == direct_before);
+#endif
+        REQUIRE(created->close().has_value());
+    }
+
+    TEST_CASE("a direct reads value that is not a number is refused") {
+        TempDir temp;
+        const dstd::String path = temp.file("refused.dfs");
+        auto created =
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+        REQUIRE(created.has_value());
+        engine::FileIndex expected;
+        add_five_commit(*created, expected, 1, nullptr);
+        REQUIRE(created->close().has_value());
+
+        DirectReadsEnv direct("yes");
+        auto reader = engine::DataFileReader::open(path);
+        REQUIRE_FALSE(reader.has_value());
+        CHECK(reader.error().is(dstd::Condition::InvalidArgument));
     }
 }

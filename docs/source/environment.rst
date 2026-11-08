@@ -214,6 +214,16 @@ Index storage and indexing
      - The shortest time in milliseconds between two looks for the data files
        that other processes wrote to the index store.
        ``0`` looks at each read.
+   * - ``DFTRACER_UTILS_STORE_DIRECT_READS``
+     - ``0``
+     - ``1`` reads the closed data files of the index store past the page
+       cache: with ``O_DIRECT`` on Linux and ``F_NOCACHE`` on macOS.
+       Each read takes the aligned window around its bytes.
+       A file system that refuses direct reads, such as tmpfs before Linux 6.6,
+       gets cached reads, and so does a data file still being written.
+       Leave it off for tools that query the same index again and again,
+       since only the page cache keeps the bytes between runs.
+       A value that is not an integer makes the store open fail.
    * - ``DFTRACER_UTILS_SCHEMA_PATH``
      - unset
      - Record schema spec files or directories, ``:``-separated, registered

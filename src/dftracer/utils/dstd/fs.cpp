@@ -35,13 +35,6 @@ Error invalid_error(StringView what) {
     return Error(Condition::InvalidArgument, what);
 }
 
-FileKind kind_from_mode(std::uint32_t mode) noexcept {
-    if (S_ISREG(mode)) return FileKind::File;
-    if (S_ISDIR(mode)) return FileKind::Directory;
-    if (S_ISLNK(mode)) return FileKind::Symlink;
-    return FileKind::Other;
-}
-
 FileKind kind_from_dtype(unsigned char type) noexcept {
     switch (type) {
         case DT_REG:
@@ -55,27 +48,6 @@ FileKind kind_from_dtype(unsigned char type) noexcept {
         default:
             return FileKind::Other;
     }
-}
-
-std::uint64_t mtime_nanoseconds(const struct stat& info) noexcept {
-#if defined(__APPLE__)
-    const auto& time = info.st_mtimespec;
-#else
-    const auto& time = info.st_mtim;
-#endif
-    return static_cast<std::uint64_t>(time.tv_sec) * NANOSECONDS_PER_SECOND +
-           static_cast<std::uint64_t>(time.tv_nsec);
-}
-
-FileStat make_file_stat(const struct stat& info) noexcept {
-    FileStat out;
-    out.size = static_cast<std::uint64_t>(info.st_size);
-    out.mtime_ns = mtime_nanoseconds(info);
-    out.dev = static_cast<std::uint64_t>(info.st_dev);
-    out.ino = static_cast<std::uint64_t>(info.st_ino);
-    out.mode = static_cast<std::uint32_t>(info.st_mode);
-    out.kind = kind_from_mode(out.mode);
-    return out;
 }
 
 /// The path without trailing separators, so lstat names a symlink itself and
@@ -268,7 +240,7 @@ Expected<FileStat, Error> stat(PathView path) {
     if (::stat(name.c_str(), &info) != 0) {
         return Unexpected(errno_error(errno, path.str()));
     }
-    return make_file_stat(info);
+    return internal::make_file_stat(info);
 }
 
 Expected<FileStat, Error> lstat(PathView path) {
@@ -277,7 +249,7 @@ Expected<FileStat, Error> lstat(PathView path) {
     if (::lstat(name.c_str(), &info) != 0) {
         return Unexpected(errno_error(errno, path.str()));
     }
-    return make_file_stat(info);
+    return internal::make_file_stat(info);
 }
 
 Expected<bool, Error> exists(PathView path) {
@@ -745,7 +717,7 @@ Expected<FileStat, Error> Dir::stat(StringView name) const {
     if (::fstatat(fd_.get(), relative.c_str(), &info, 0) != 0) {
         return Unexpected(errno_error(errno, name));
     }
-    return make_file_stat(info);
+    return internal::make_file_stat(info);
 }
 
 Expected<FileStat, Error> Dir::lstat(StringView name) const {
@@ -755,7 +727,7 @@ Expected<FileStat, Error> Dir::lstat(StringView name) const {
         0) {
         return Unexpected(errno_error(errno, name));
     }
-    return make_file_stat(info);
+    return internal::make_file_stat(info);
 }
 
 Expected<Dir, Error> Dir::open_dir(StringView name) const {

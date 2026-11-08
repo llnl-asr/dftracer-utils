@@ -129,6 +129,11 @@ IoAwaitable open(const char* path, int flags, mode_t mode) noexcept {
 
 coro::CoroTask<dstd::Expected<dstd::File, dstd::Error>> open_file(
     dstd::PathView path, dstd::OpenOptions options) {
+    if (options.caching == dstd::Caching::Bypass) {
+        co_return dstd::Unexpected(dstd::Error(
+            dstd::Condition::Unsupported,
+            "open_file: Caching::Bypass needs the blocking dstd::File::open"));
+    }
     auto flags = dstd::File::native_open_flags(options);
     if (!flags) co_return dstd::Unexpected(flags.error());
     const dstd::internal::PathCString c_path(path.str());

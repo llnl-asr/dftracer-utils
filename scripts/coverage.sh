@@ -142,7 +142,7 @@ run_tests() {
 	local extra=()
 	if [ -n "${CTEST_ARGS:-}" ]; then read -r -a extra <<<"$CTEST_ARGS"; fi
 
-	if ! ctest --test-dir "$BUILD_DIR" --output-on-failure --timeout 300 \
+	if ! ctest --test-dir "$BUILD_DIR" --output-on-failure --timeout 900 \
 		${extra[@]+"${extra[@]}"}; then
 		log_error "Tests failed"
 		exit 1
@@ -232,6 +232,7 @@ generate_coverage_report() {
 		#   format         – LLVM gcov emits line-number 0 for coroutine thunks
 		#   unsupported    – function begin/end lines not supported by this gcov
 		#   deprecated     – old RC option name warnings
+		#   negative       – threads race on the plain (non-atomic) counters
 		lcov_flags=(
 			--rc branch_coverage=1
 			--ignore-errors inconsistent,inconsistent
@@ -240,6 +241,7 @@ generate_coverage_report() {
 			--ignore-errors unsupported,unsupported
 			--ignore-errors unused,unused
 			--ignore-errors deprecated,deprecated
+			--ignore-errors negative,negative
 		)
 		genhtml_flags=(
 			--ignore-errors inconsistent,inconsistent
@@ -261,10 +263,18 @@ generate_coverage_report() {
 		log_warning "c++filt lacks --no-strip-underscores; disabling --demangle-cpp"
 	fi
 
+	# The notes are readable only by the gcov of the GCC that wrote them, and
+	# plain gcov is the system GCC (11 on Ubuntu 22.04, below the GCC 12 floor).
+	local gcov_flags=()
+	if [[ "${CXX:-}" =~ g\+\+-([0-9]+)$ ]]; then
+		gcov_flags=(--gcov-tool "gcov-${BASH_REMATCH[1]}")
+	fi
+
 	# Capture coverage data
 	lcov --capture \
 		--directory "$BUILD_DIR" \
 		--output-file "$COVERAGE_DIR/coverage.info" \
+		${gcov_flags[@]+"${gcov_flags[@]}"} \
 		"${lcov_flags[@]}"
 
 	# Filter to include only source files

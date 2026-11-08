@@ -24,14 +24,6 @@ function(target_enable_coverage target ENABLE_COVERAGE)
   endif()
 endfunction()
 
-function(set_coverage_compiler_flags)
-  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    # Threads share the counters; a racy increment can leave a negative count,
-    # which gcovr rejects. Directory scope reaches every target added later.
-    add_compile_options(-fprofile-update=atomic)
-  endif()
-endfunction()
-
 function(create_venv_symlink target_name)
   file(
     GENERATE

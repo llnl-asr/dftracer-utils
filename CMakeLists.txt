@@ -269,7 +269,6 @@ dftracer_utils_interface_versions("${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
                                   "${CMAKE_BINARY_DIR}/include")
 
 if(DFTRACER_UTILS_TESTS AND DFTRACER_UTILS_COVERAGE)
-  set_coverage_compiler_flags()
   add_compile_definitions(DFTRACER_UTILS_COVERAGE_BUILD)
 endif()
 

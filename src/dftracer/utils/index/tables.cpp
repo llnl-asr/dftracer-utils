@@ -110,6 +110,15 @@ dstd::String agg_partial_key(std::uint64_t chunk, std::uint32_t cat_id,
     return key;
 }
 
+dstd::String agg_file_partial_key(std::uint64_t chunk, std::uint32_t file_id,
+                                  std::uint8_t kind) {
+    dstd::String key =
+        granule_key(store::layout::agg_kind::FILE_PARTIAL, chunk);
+    dstd::append_u32_be(key, file_id);
+    key.push_back(static_cast<char>(kind));
+    return key;
+}
+
 dstd::StringView as_text(dstd::ByteView bytes) {
     return dstd::StringView(bytes.as<char>(), bytes.size());
 }
@@ -654,6 +663,41 @@ dstd::Result<void> for_each_agg_partial(const Snapshot& snapshot,
     return {};
 }
 
+dstd::Result<void> for_each_agg_file_partial(const Snapshot& snapshot,
+                                             const FileRef& file,
+                                             const AggFilePartialFn& fn) {
+    constexpr std::size_t RECORD_BYTES =
+        2 * sizeof(std::uint32_t) + sizeof(std::uint8_t);
+    dstd::Optional<dstd::Error> failed;
+    const dstd::String prefix = kind_key(store::layout::agg_kind::FILE_PARTIAL);
+    auto scanned = scan_payloads(
+        snapshot, file, read_ns(Ext::Agg), prefix,
+        [&](dstd::StringView key, dstd::StringView body) {
+            const dstd::StringView tail = key.substr(prefix.size());
+            if (tail.size() != RECORD_BYTES) {
+                failed = dstd::Error(dstd::Condition::Parse,
+                                     "aggregation file partial: malformed "
+                                     "record");
+                return false;
+            }
+            const auto kind = static_cast<std::uint8_t>(tail[RECORD_BYTES - 1]);
+            if (kind > static_cast<std::uint8_t>(
+                           schemas::dft::agg::PartialKind::Aggregated)) {
+                failed = dstd::Error(dstd::Condition::Parse,
+                                     "aggregation file partial: unknown kind");
+                return false;
+            }
+            const dstd::Span<const std::uint8_t> bytes(
+                reinterpret_cast<const std::uint8_t*>(body.data()),
+                body.size());
+            return fn(tail_u32(tail, 0), tail_u32(tail, 4),
+                      static_cast<schemas::dft::agg::PartialKind>(kind), bytes);
+        });
+    if (failed) return dstd::Unexpected<dstd::Error>(*failed);
+    if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
+    return {};
+}
+
 dstd::Result<void> for_each_agg_chunk_columns(const Snapshot& snapshot,
                                               const FileRef& file,
                                               const AggChunkColumnsFn& fn) {
@@ -980,6 +1024,21 @@ void put_agg_partial_value(FileBuild& build, std::uint64_t chunk,
                            std::uint8_t kind, dstd::StringView value) {
     const dstd::String key =
         agg_partial_key(chunk, cat_id, name_id, host_id, extra_id, kind);
+    IndexAccess::put(build, Ext::Agg, dstd::ByteView(key),
+                     dstd::ByteView(value.data(), value.size()));
+}
+
+void put_agg_file_partial(FileBuild& build, std::uint64_t chunk,
+                          std::uint32_t file_id, std::uint8_t kind,
+                          dstd::StringView payload) {
+    put_value(build, Ext::Agg, agg_file_partial_key(chunk, file_id, kind),
+              payload);
+}
+
+void put_agg_file_partial_value(FileBuild& build, std::uint64_t chunk,
+                                std::uint32_t file_id, std::uint8_t kind,
+                                dstd::StringView value) {
+    const dstd::String key = agg_file_partial_key(chunk, file_id, kind);
     IndexAccess::put(build, Ext::Agg, dstd::ByteView(key),
                      dstd::ByteView(value.data(), value.size()));
 }

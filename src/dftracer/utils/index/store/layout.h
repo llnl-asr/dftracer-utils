@@ -68,7 +68,13 @@ inline constexpr std::uint8_t FRAME = 0;
 ///            [extra id u32][kind u8]
 ///   DICT     [id u32]
 ///   META     [name], a namespace per name at the root scope
-///   COLUMNS  [chunk u32], a column block (see schemas/dft/agg/chunk_columns.h)
+///   COLUMNS  [chunk u32], a column block of the system counter rows (phase
+///            Counter, category sys) of the chunk (see
+///            schemas/dft/agg/chunk_columns.h)
+///   FILE_PARTIAL  [chunk u32][file id u32][kind u8], the events of the chunk
+///            that carry one file hash, whatever their category, name or
+///            host, as a PARTIAL value. The file id is the dictionary id of
+///            the hash text, and NO_FILE for the events with no hash.
 /// The ids are the index root's dictionary ids. The extra id is that of the
 /// extra group key values joined by 0x1F, the empty text when there are none.
 namespace agg_kind {
@@ -79,6 +85,9 @@ inline constexpr std::uint8_t DICT = 2;
 /// of an older store's namespace.
 inline constexpr std::uint8_t UNUSED_SYSTEM = 3;
 inline constexpr std::uint8_t COLUMNS = 4;
+inline constexpr std::uint8_t FILE_PARTIAL = 5;
+/// The file id of the events with no file hash.
+inline constexpr std::uint32_t NO_FILE = 0xFFFFFFFFu;
 }  // namespace agg_kind
 
 /// Code version of each extension's data; a manifest entry with another

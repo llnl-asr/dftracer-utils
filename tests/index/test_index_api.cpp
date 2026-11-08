@@ -471,7 +471,8 @@ TEST_CASE("the typed agg readers read what the aggregation store reads") {
                 return true;
             }));
     }
-    CHECK(block_count >= files.size());
+    // These traces hold no system counter rows, the only rows a block keeps.
+    CHECK(block_count == 0);
     CHECK(partial_count >= files.size());
     CHECK_FALSE(snapshot.file("/no/such/file").has_value());
 }

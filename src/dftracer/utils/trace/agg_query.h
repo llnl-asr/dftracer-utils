@@ -67,6 +67,11 @@ struct AggQuery {
     bool by_pid = false;
     bool by_tid = false;
     bool by_file = false;
+    /// Every group key of the caller is a file key, so by_file rows do not
+    /// need the category, name or host of the events. Without a filter, a
+    /// category, name or host set, or another group key, the rows then come
+    /// from the per-file partials and need no trace.
+    bool only_file_keys = false;
     /// Groups by the hhash text of the events. A partial keeps one host.
     bool by_host = false;
     /// Splits events (ph other than C), profiles (counters of a category
@@ -127,7 +132,7 @@ struct AggQuery {
     bool reread = true;
 
     /// Folds every event of every file by the rules of the index fold and
-    /// ignores the stored partials and column blocks. A file with no usable
+    /// ignores the stored partials. A file with no usable
     /// index is read whole. Not served for a plan whose records the dftracer
     /// line parser does not read (a path-decoded schema).
     bool from_trace = false;
@@ -186,9 +191,6 @@ struct AggQueryStats {
     std::size_t partials_binned = 0;
     /// Chunk reads. A chunk with several re-read partials is read once.
     std::size_t chunks_reread = 0;
-    /// Re-read chunks answered from their column block, without parsing the
-    /// trace.
-    std::size_t chunks_from_columns = 0;
     /// Partials and files that needed a re-read the query did not allow.
     std::size_t unanswered = 0;
     std::uint64_t events_read = 0;

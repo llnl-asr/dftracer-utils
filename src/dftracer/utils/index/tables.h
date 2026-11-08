@@ -161,6 +161,11 @@ using AggPartialFn = dstd::Function<bool(
     std::uint64_t chunk, std::uint32_t cat_id, std::uint32_t name_id,
     std::uint32_t host_id, std::uint32_t extra_id,
     schemas::dft::agg::PartialKind kind, dstd::Span<const std::uint8_t> bytes)>;
+/// `file_id` is a dictionary id, or store::layout::agg_kind::NO_FILE for the
+/// events with no file hash.
+using AggFilePartialFn = dstd::Function<bool(
+    std::uint64_t chunk, std::uint32_t file_id,
+    schemas::dft::agg::PartialKind kind, dstd::Span<const std::uint8_t> bytes)>;
 using AggChunkColumnsFn = dstd::Function<bool(
     std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block)>;
 
@@ -169,6 +174,11 @@ using AggChunkColumnsFn = dstd::Function<bool(
 dstd::Result<void> for_each_agg_partial(const Snapshot& snapshot,
                                         const FileRef& file,
                                         const AggPartialFn& fn);
+/// Calls fn for each per-file partial of the file until fn returns false. A
+/// malformed record is an error, not a throw.
+dstd::Result<void> for_each_agg_file_partial(const Snapshot& snapshot,
+                                             const FileRef& file,
+                                             const AggFilePartialFn& fn);
 /// `block.texts` holds the text of each id of `block.ids`, empty where the file
 /// holds none.
 dstd::Result<void> for_each_agg_chunk_columns(const Snapshot& snapshot,
@@ -265,6 +275,15 @@ void put_agg_partial_value(FileBuild& build, std::uint64_t chunk,
                            std::uint32_t cat_id, std::uint32_t name_id,
                            std::uint32_t host_id, std::uint32_t extra_id,
                            std::uint8_t kind, dstd::StringView value);
+/// As put_agg_partial for the per-file partial of (`chunk`, `file_id`,
+/// `kind`).
+void put_agg_file_partial(FileBuild& build, std::uint64_t chunk,
+                          std::uint32_t file_id, std::uint8_t kind,
+                          dstd::StringView payload);
+/// As put_agg_file_partial, with `value` the stored value.
+void put_agg_file_partial_value(FileBuild& build, std::uint64_t chunk,
+                                std::uint32_t file_id, std::uint8_t kind,
+                                dstd::StringView value);
 /// As put_agg_chunk_columns, with `value` the stored value.
 void put_agg_chunk_columns_value(FileBuild& build, std::uint64_t chunk,
                                  dstd::StringView value);

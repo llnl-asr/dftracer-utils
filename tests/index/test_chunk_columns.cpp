@@ -302,6 +302,14 @@ dstd::Vector<Row> parse_trace(const dstd::String& text) {
     return rows;
 }
 
+// The only rows an index keeps in its column blocks.
+dstd::Vector<Row> system_counters(const dstd::Vector<Row>& rows) {
+    dstd::Vector<Row> out;
+    for (const Row& row : rows)
+        if (row.phase == 2 && row.cat == "sys") out.push_back(row);
+    return out;
+}
+
 // The categories keep their case, so a block that lower-cases one is seen.
 dstd::String make_trace(int n) {
     dstd::String text;
@@ -780,13 +788,15 @@ TEST_SUITE("ChunkColumns") {
         CHECK(rejected > 0);
     }
 
-    TEST_CASE("an index stores every numeric field of every chunk") {
+    TEST_CASE("an index stores every numeric field of the system counters") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
         dstd::String text;
         const dstd::String gz = write_trace(env.dir(), "trace", text);
-        const auto rows = parse_trace(text);
+        const auto all = parse_trace(text);
+        const auto rows = system_counters(all);
         REQUIRE(rows.size() > 0);
+        REQUIRE(rows.size() < all.size());
         const dstd::String index_dir = env.dir() + "/idx";
         build({gz}, index_dir);
 
@@ -802,16 +812,16 @@ TEST_SUITE("ChunkColumns") {
         CHECK(stored_members->size() >= decoded.blocks);
     }
 
-    TEST_CASE("the file column names the file hash of a record, or no file") {
+    TEST_CASE("the file column names the file hash of a counter, or no file") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
         dstd::String text;
         text += "[\n";
         for (int i = 0; i < RECORDS; ++i) {
-            text += common::str_cat(
-                R"({"id":)", i, R"(,"name":"read","cat":"POSIX")",
-                R"(,"pid":1,"tid":1,"ph":"X","ts":)", 1000 + i * 7,
-                R"(,"dur":1,"args":{"ret":)", i);
+            text +=
+                common::str_cat(R"({"id":)", i, R"(,"name":"cpu","cat":"sys")",
+                                R"(,"pid":1,"tid":1,"ph":"C","ts":)",
+                                1000 + i * 7, R"(,"args":{"ret":)", i);
             if (i % 3 != 0) text += R"(,"fhash":"0123456789abcdef")";
             text += "}}\n";
         }
@@ -880,8 +890,8 @@ TEST_SUITE("ChunkColumns") {
         dstd::String text_b;
         const dstd::String a = write_trace(env.dir(), "alpha", text_a);
         const dstd::String b = write_trace(env.dir(), "beta", text_b);
-        const auto rows_a = parse_trace(text_a);
-        const auto rows_b = parse_trace(text_b);
+        const auto rows_a = system_counters(parse_trace(text_a));
+        const auto rows_b = system_counters(parse_trace(text_b));
         const dstd::String ia =
             dstd::String(trace::internal::determine_index_path(a, ""));
         const dstd::String ib =
@@ -981,7 +991,8 @@ TEST_SUITE("ChunkColumns") {
                     schemas::dft::agg::decode_chunk_columns(span_of(value));
                 REQUIRE_MESSAGE(decoded.has_value(), record.key);
                 ++blocks;
-            } else if (kind == index::store::layout::agg_kind::PARTIAL) {
+            } else if (kind == index::store::layout::agg_kind::PARTIAL ||
+                       kind == index::store::layout::agg_kind::FILE_PARTIAL) {
                 REQUIRE(
                     schemas::dft::agg::AggPartial::deserialize(span_of(value))
                         .has_value());

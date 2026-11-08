@@ -206,6 +206,19 @@ dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
                          dstd::String(bytes.begin(), bytes.end()));
             return true;
         }));
+    common::unwrap(index::for_each_agg_file_partial(
+        snapshot, stored_file,
+        [&](std::uint64_t chunk, std::uint32_t file_id,
+            schemas::dft::agg::PartialKind kind,
+            dstd::Span<const std::uint8_t> bytes) {
+            rows.emplace("f " + dstd::to_string(chunk) + " " +
+                             (file_id == index::store::layout::agg_kind::NO_FILE
+                                  ? dstd::String("-")
+                                  : text(file_id)) +
+                             " " + dstd::to_string(static_cast<int>(kind)),
+                         dstd::String(bytes.begin(), bytes.end()));
+            return true;
+        }));
     common::unwrap(index::for_each_agg_chunk_columns(
         snapshot, stored_file,
         [&](std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block) {
@@ -316,6 +329,68 @@ TEST_SUITE("AggPartialsStore") {
             CHECK(p.count == durations.at(key).size());
             check_quantiles(p, p.duration_q, durations.at(key));
         }
+    }
+
+    TEST_CASE("per-file partials hold the events of each file hash") {
+        dftu_utils_test::TestEnvironment env(10);
+        // Sixteen hex digits, a text that is not a hash, and no hash at all.
+        const char* const HASHES[] = {"00000000000010a1", "not-a-hash", ""};
+        dstd::Map<dstd::String, std::uint64_t> want;
+        dstd::Map<dstd::String, std::uint64_t> want_dur;
+        dstd::String text = "[\n";
+        for (int i = 0; i < EVENTS; ++i) {
+            const dstd::String fhash = HASHES[i % 3];
+            const int dur = 1 + i % 50;
+            text += common::str_cat(
+                R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":1)",
+                R"(,"tid":1,"ph":"X","ts":)", 1000 + i * 997, R"(,"dur":)", dur,
+                R"(,"args":{"hhash":"a1b2c3d4e5f60718")",
+                fhash.empty() ? dstd::String()
+                              : common::str_cat(R"(,"fhash":")", fhash, "\""),
+                "}}\n");
+            ++want[fhash];
+            want_dur[fhash] += static_cast<std::uint64_t>(dur);
+        }
+        text += "]\n";
+        const dstd::String pfw = env.dir() + "/f.pfw";
+        (void)dstd::fs::write_file(dstd::PathView(pfw), text);
+        const dstd::String gz = pfw + ".gz";
+        REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
+            pfw, gz, CHECKPOINT_SIZE));
+        (void)dstd::fs::remove(pfw);
+        const auto index_dir = index_dir_of(env);
+        build_seconds({gz}, index_dir);
+
+        const auto index_path =
+            dstd::String(trace::internal::determine_index_path(gz, index_dir));
+        const auto snapshot = open_index(index_path);
+        const auto file = file_of(snapshot, gz);
+        auto dictionary = schemas::dft::agg::make_intern_table();
+        common::unwrap(index::agg_dictionary(snapshot, *dictionary));
+        dstd::Map<dstd::String, std::uint64_t> got;
+        dstd::Map<dstd::String, std::uint64_t> got_dur;
+        dstd::Set<std::uint32_t> chunks;
+        common::unwrap(index::for_each_agg_file_partial(
+            snapshot, file,
+            [&](std::uint64_t chunk, std::uint32_t file_id,
+                schemas::dft::agg::PartialKind kind,
+                dstd::Span<const std::uint8_t> bytes) {
+                CHECK(kind == schemas::dft::agg::PartialKind::Event);
+                chunks.insert(static_cast<std::uint32_t>(chunk));
+                const dstd::String name =
+                    file_id == index::store::layout::agg_kind::NO_FILE
+                        ? dstd::String()
+                        : dstd::String(dictionary->intern.resolve(file_id));
+                auto p = schemas::dft::agg::AggPartial::deserialize(
+                    dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()));
+                REQUIRE(p.has_value());
+                got[name] += p->count;
+                got_dur[name] += static_cast<std::uint64_t>(p->duration.sum);
+                return true;
+            }));
+        CHECK(chunks.size() > 1);
+        CHECK(got == want);
+        CHECK(got_dur == want_dur);
     }
 
     TEST_CASE("an index without partials is built again") {

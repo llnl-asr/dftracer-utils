@@ -23,9 +23,9 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
 #include <dftracer/utils/index/store/file.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -99,7 +99,8 @@ class Runner {
           rules(query, read, result.strings()),
           out(result),
           has_time(query.ts_begin > 0 || query.ts_end < UINT64_MAX),
-          reread_only(query.by_file || query.filter.has_value()) {}
+          reread_only(query.filter.has_value() ||
+                      (query.by_file && !rules.file_rows)) {}
 
     coro::CoroTask<void> run();
 
@@ -266,6 +267,8 @@ class Task {
 
     void take_partial(std::uint32_t chunk, const AggGroup& group,
                       dstd::Span<const std::uint8_t> bytes);
+    /// The group of a per-file partial.
+    AggGroup file_group(std::uint32_t file_id, AggKind kind);
     bool bins_answer(const index::schemas::dft::agg::AggPartial& p) const;
     void take_bins(const index::schemas::dft::agg::AggPartial& p, AggKey key);
 
@@ -286,18 +289,14 @@ class Task {
     void parse_lines_of(dstd::String& pending, std::uint32_t chunk,
                         const dstd::HashSet<AggGroup, AggGroupHash>* wanted);
 
-    /// False, with nothing added, when the index holds no column block.
-    bool add_chunk_columns(const ChunkJob& job,
-                           const dstd::HashSet<AggGroup, AggGroupHash>* wanted);
-
     Runner& r_;
     Source& src_;
     AggEventFolder folder_;
     AggIdCache root_cat_, root_name_, root_host_, root_extra_;
+    dstd::HashMap<std::uint32_t, AggKey> file_keys_;
     dstd::HashMap<std::uint32_t, dstd::String> texts_;
     dstd::Vector<Reread> rereads_;
     views::detail::FoldEventBuffer buffer_;
-    FoldEvent column_event_;
     json::RecordParser parser_;
     dstd::SharedPtr<dstd::String> buf_ = dstd::make_shared<dstd::String>();
 };
@@ -427,7 +426,6 @@ void Runner::take_stats(const AggQueryStats& t) {
     s.partials_reread += t.partials_reread;
     s.partials_binned += t.partials_binned;
     s.chunks_reread += t.chunks_reread;
-    s.chunks_from_columns += t.chunks_from_columns;
     s.unanswered += t.unanswered;
     s.events_read += t.events_read;
     s.dropped_lines += t.dropped_lines;
@@ -599,7 +597,18 @@ coro::CoroTask<void> Task::scan_file(
                                  src_.params_hash) == index::Freshness::Current;
 
     std::size_t seen = 0;
-    if (usable) {
+    if (usable && r_.rules.file_rows) {
+        common::unwrap(index::agg_file_texts(*src_.snapshot, *file, texts_));
+        common::unwrap(index::for_each_agg_file_partial(
+            *src_.snapshot, *file,
+            [&](std::uint32_t chunk, std::uint32_t file_id, AggKind kind,
+                dstd::Span<const std::uint8_t> bytes) {
+                ++seen;
+                ++stats.partials_read;
+                take_partial(chunk, file_group(file_id, kind), bytes);
+                return true;
+            }));
+    } else if (usable) {
         common::unwrap(index::agg_file_texts(*src_.snapshot, *file, texts_));
         common::unwrap(index::for_each_agg_partial(
             *src_.snapshot, *file,
@@ -724,6 +733,24 @@ coro::CoroTask<void> Task::whole_file_chunks(const dstd::String& path,
     }
 }
 
+AggGroup Task::file_group(std::uint32_t file_id, AggKind kind) {
+    auto it = file_keys_.find(file_id);
+    if (it == file_keys_.end()) {
+        AggKey key;
+        if (file_id != index::store::layout::agg_kind::NO_FILE)
+            set_file_key(key, text_of(file_id), r_.rules.strings);
+        it = file_keys_.emplace(file_id, key).first;
+    }
+    constexpr std::uint32_t NO_ID = dstd::StringIntern::NO_ID;
+    return {NO_ID,
+            NO_ID,
+            NO_ID,
+            NO_ID,
+            kind,
+            it->second.file,
+            it->second.file_text};
+}
+
 void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
                         dstd::Span<const std::uint8_t> bytes) {
     if (r_.reread_only && !r_.has_time && r_.rules.pids.empty()) {
@@ -779,6 +806,10 @@ void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
     if (r_.rules.q.by_host) key.host = group.host;
     if (r_.rules.q.by_extra) key.extra = group.extra;
     if (r_.rules.q.by_kind) key.kind = group.kind;
+    if (r_.rules.file_rows) {
+        key.file = group.file;
+        key.file_text = group.file_text;
+    }
     bool split = false;
     if (r_.rules.q.by_pid) {
         const auto ids = p.pids.ids();
@@ -947,11 +978,6 @@ coro::CoroTask<void> Task::read_chunk(const dstd::String& path,
     if (!job.all) wanted.insert(job.groups.begin(), job.groups.end());
     const dstd::HashSet<AggGroup, AggGroupHash>* filter =
         job.all ? nullptr : &wanted;
-    if (!r_.rules.q.from_trace && !r_.rules.q.filter &&
-        r_.rules.q.config.extra_group_keys.empty() &&
-        add_chunk_columns(job, filter)) {
-        co_return;
-    }
 
     auto reader = co_await open_reader(path);
     const std::uint64_t from = job.whole_file ? 0 : span.uc_offset;
@@ -990,60 +1016,6 @@ coro::CoroTask<void> Task::read_chunk(const dstd::String& path,
         }
         parse_lines_of(pending, job.chunk, filter);
     }
-}
-
-bool Task::add_chunk_columns(
-    const ChunkJob& job, const dstd::HashSet<AggGroup, AggGroupHash>* wanted) {
-    if (!src_.snapshot || !job.file) return false;
-    auto found = common::unwrap(
-        index::agg_chunk_columns(*src_.snapshot, *job.file, job.chunk));
-    if (!found) return false;
-    index::schemas::dft::agg::ChunkColumns block = std::move(*found);
-    dstd::Vector<std::uint32_t> read_ids(block.ids.size(), AGG_UNSET);
-    const auto read_id = [&](std::uint32_t local) {
-        std::uint32_t& id = read_ids[local];
-        if (id == AGG_UNSET) {
-            const dstd::String& text = block.texts[local];
-            id = text.empty() ? dstd::StringIntern::NO_ID
-                              : r_.rules.read.get_or_insert(text);
-        }
-        return id;
-    };
-    dstd::Vector<std::uint32_t> path_ids(block.columns.size());
-    for (std::size_t c = 0; c < block.columns.size(); ++c)
-        path_ids[c] =
-            r_.rules.read.get_or_insert(block.texts[block.columns[c].path]);
-    dstd::Vector<std::size_t> at(block.columns.size(), 0);
-    for (std::size_t row = 0; row < block.rows; ++row) {
-        views::detail::reset_fold_event(column_event_);
-        column_event_.ts = block.ts[row];
-        column_event_.dur = block.dur[row];
-        column_event_.has_dur = block.has_dur[row] != 0;
-        column_event_.pid = block.pid[row];
-        column_event_.tid = block.tid[row];
-        column_event_.phase = static_cast<RecordPhase>(block.phase[row]);
-        column_event_.cat_id = read_id(block.cat[row]);
-        column_event_.name_id = read_id(block.name[row]);
-        column_event_.hhash_id = read_id(block.host[row]);
-        column_event_.fhash_id = read_id(block.file[row]);
-        for (std::size_t c = 0; c < block.columns.size(); ++c) {
-            const index::schemas::dft::agg::ChunkColumn& column =
-                block.columns[c];
-            if (at[c] >= column.rows.size() || column.rows[at[c]] != row)
-                continue;
-            const std::size_t k = at[c]++;
-            views::detail::FoldEvent::ArgValue value = column.double_at(k);
-            if (column.kind == index::schemas::dft::agg::ColumnKind::Int64)
-                value = column.int64_at(k);
-            else if (column.kind ==
-                     index::schemas::dft::agg::ColumnKind::Uint64)
-                value = column.uint64_at(k);
-            column_event_.args.emplace_back(path_ids[c], value);
-        }
-        folder_.add_event(column_event_, wanted);
-    }
-    ++stats.chunks_from_columns;
-    return true;
 }
 
 }  // namespace

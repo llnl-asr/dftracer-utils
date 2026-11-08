@@ -26,7 +26,7 @@ std::uint64_t AggregationConfig::params_hash() const {
     }
     // An aggregation built without one of these parts, or that held records
     // of an unknown phase, is stale.
-    text("partials+bins+columns+file+phase+xxh3");
+    text("partials+bins+columns+file+phase+file_partials+xxh3");
     return h.finish();
 }
 

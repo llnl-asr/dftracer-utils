@@ -165,7 +165,7 @@ class AggregationFold : public trace::views::detail::Fold {
                     chunk_ = batch.unit.checkpoint_idx;
                 }
                 add_to_partial(ev, acc);
-                add_to_columns(ev);
+                if (acc.is_system()) add_to_columns(ev);
             }
         }
     }
@@ -179,9 +179,11 @@ class AggregationFold : public trace::views::detail::Fold {
         co_return false;
     }
 
-    /// Emits the partials, column blocks and referenced dictionary entries into
-    /// `build`, and finishes the Agg extension. The commit replaces the file's
-    /// copy of it. Throws std::logic_error on a fold with no file.
+    /// Emits the partials, the column blocks and the referenced dictionary
+    /// entries into `build`. A column block holds only the system counter rows
+    /// (phase Counter, category sys) of its chunk, and a chunk with none has no
+    /// block. Finishes the Agg extension. The commit replaces the file's copy
+    /// of it. Throws std::logic_error on a fold with no file.
     void write(index::FileBuild& build);
 
     /// Lets the fold put its closed rows into `build` once they pass a run's
@@ -257,6 +259,11 @@ class AggregationFold : public trace::views::detail::Fold {
 
     void add_to_partial(const trace::views::detail::FoldEvent& ev,
                         const PodAccessor& acc);
+    void add_to_file_partial(const trace::views::detail::FoldEvent& ev,
+                             const PodAccessor& acc, PartialKind kind);
+    void fold_into_slot(Slot& slot, const PodAccessor& acc);
+    /// Writes the slot's row into `into` and empties the slot.
+    void close_slot(Slot& slot, dstd::Vector<Closed>& into);
     void add_to_columns(const trace::views::detail::FoldEvent& ev);
     TimeBin& bin_of(Slot& slot, std::uint64_t pid, std::uint64_t tid,
                     std::uint64_t bin);
@@ -284,6 +291,14 @@ class AggregationFold : public trace::views::detail::Fold {
     dftracer::utils::dstd::HashMap<SlotKey, std::uint32_t, SlotKeyHash>
         slot_of_;
     std::uint32_t last_slot_ = NO_ID;
+    /// The per-file slots: key.cat is the file id, the rest of the key is
+    /// unused.
+    dftracer::utils::dstd::Vector<Slot> file_slots_;
+    dftracer::utils::dstd::HashMap<SlotKey, std::uint32_t, SlotKeyHash>
+        file_slot_of_;
+    std::uint32_t last_file_slot_ = NO_ID;
+    std::uint32_t last_file_ = NO_ID;
+    PartialKind last_file_kind_ = PartialKind::Event;
     std::uint32_t last_cat_ = NO_ID;
     std::uint32_t last_name_ = NO_ID;
     std::uint32_t last_host_ = NO_ID;
@@ -299,6 +314,7 @@ class AggregationFold : public trace::views::detail::Fold {
     dftracer::utils::dstd::Vector<std::uint32_t> cat_text_ids_;
     dftracer::utils::dstd::Vector<std::uint8_t> scratch_;
     dftracer::utils::dstd::Vector<Closed> closed_;
+    dftracer::utils::dstd::Vector<Closed> closed_files_;
     index::schemas::dft::agg::ChunkColumnBuilder columns_;
     dftracer::utils::dstd::Vector<ClosedColumns> closed_columns_;
     /// Duplicates included. Cleared once written.

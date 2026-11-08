@@ -565,6 +565,12 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
                 break;
         }
     }
+    q.only_file_keys =
+        std::all_of(p.keys.begin(), p.keys.end(), [](const GroupKey& gk) {
+            return gk.kind == GroupKey::Kind::Fhash ||
+                   gk.kind == GroupKey::Kind::FilePath ||
+                   gk.kind == GroupKey::Kind::FileName;
+        });
     for (const auto& k : build_extra) p.extra.emplace_back(k.data(), k.size());
     q.config.time_interval_us = interval_us;
     q.config.extra_group_keys = std::move(build_extra);
@@ -795,11 +801,10 @@ void log_answer(const AggQueryStats& st) {
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the index partials answered over %zu files: %zu partials read, "
         "%zu merged, %zu pruned, %zu split by time bins, %zu re-read in %zu "
-        "chunks (%zu from their column blocks, %llu events), %zu unanswered",
+        "chunks (%llu events), %zu unanswered",
         st.files, st.partials_read, st.partials_merged, st.partials_pruned,
         st.partials_binned, st.partials_reread, st.chunks_reread,
-        st.chunks_from_columns, static_cast<unsigned long long>(st.events_read),
-        st.unanswered);
+        static_cast<unsigned long long>(st.events_read), st.unanswered);
 }
 
 dataframe::AggStatePtr seed_rows_of(const ViewPlan& plan,

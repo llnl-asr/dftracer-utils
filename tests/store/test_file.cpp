@@ -2119,12 +2119,10 @@ TEST_SUITE("index store file") {
         CHECK(space.copies == index.copies.size());
         CHECK(space.footer_bytes > store::engine::FILE_TRAILER_BYTES);
 
-        const std::uint64_t blocks =
-            space.segment_block_bytes + space.items_block_bytes +
-            space.directory_leaf_bytes + space.directory_separator_bytes;
-        CHECK(space.gap_bytes == (store::engine::EXTENT_ALIGN_BYTES -
-                                  blocks % store::engine::EXTENT_ALIGN_BYTES) %
-                                     store::engine::EXTENT_ALIGN_BYTES);
+        // The only gaps are the fills before each record and the footer, which
+        // start on FILE_HEADER_BYTES.
+        CHECK(space.gap_bytes <
+              (EXPECTED_COMMITS + 1) * store::engine::FILE_HEADER_BYTES);
     }
 
     TEST_CASE("a space report reads every leaf of a directory") {

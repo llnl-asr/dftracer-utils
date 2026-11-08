@@ -41,8 +41,9 @@ inline std::atomic<std::uint64_t> g_dict_wait_bytes{std::uint64_t{16} << 20};
 
 /// One written block of a data file: an extent of segments, or the run of a
 /// segment too big for an extent, in its stored form. `length` is the stored
-/// length rounded up to 4096. `crc` covers all `length` bytes. Segment offsets
-/// count from the raw bytes. `contexts` runs parallel to `segments`.
+/// length rounded up to @ref EXTENT_ALIGN_BYTES. `crc` covers all `length`
+/// bytes. Segment offsets count from the raw bytes. `contexts` runs parallel to
+/// `segments`.
 struct WrittenExtent {
     std::uint64_t offset = 0;
     std::uint32_t length = 0;

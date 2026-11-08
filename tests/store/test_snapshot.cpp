@@ -1337,7 +1337,7 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(run.segments.size() == 1);
         CHECK(run.segments[0].entry_count == static_cast<std::uint64_t>(COUNT));
         CHECK(run.length > SMALL_EXTENT);
-        CHECK(run.length % SMALL_EXTENT == 0);
+        CHECK(run.length % store::engine::EXTENT_ALIGN_BYTES == 0);
 
         auto snapshot = engine::Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -2911,7 +2911,8 @@ TEST_SUITE("index store snapshot") {
                 REQUIRE(extent.ref.segments.size() == 1);
                 CHECK(extent.ref.segments[0].length >=
                       SMALL_EXTENT - store::engine::EXTENT_HEADER_BYTES);
-                CHECK(extent.ref.length % SMALL_EXTENT == 0);
+                CHECK(extent.ref.length % store::engine::EXTENT_ALIGN_BYTES ==
+                      0);
             }
             REQUIRE(close_writer(*writer).has_value());
         }
@@ -3114,7 +3115,7 @@ TEST_SUITE("index store snapshot") {
             middle_raw += segment.length;
         }
         CHECK(middle_raw > SMALL_EXTENT);
-        CHECK(middle.length % SMALL_EXTENT == 0);
+        CHECK(middle.length % store::engine::EXTENT_ALIGN_BYTES == 0);
 
         dstd::Vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(middle.offset + middle.length <= bytes.size());

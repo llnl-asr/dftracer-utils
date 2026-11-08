@@ -33,9 +33,11 @@ inline constexpr std::uint64_t CHECKPOINT_INTERVAL = 64;
 /// The most bytes one read run covers: adjacent extent refs are read together
 /// with one preadv. A longer ref is a run of its own.
 inline constexpr std::size_t READ_RUN_BYTES = std::size_t{16} << 20;
-/// Every extent starts at a multiple of this many bytes and its stored form is
-/// padded to one, so extents lie end to end whatever their compressed length.
-inline constexpr std::size_t EXTENT_ALIGN_BYTES = 4096;
+/// Every extent and page dictionary starts at a multiple of this many bytes
+/// and its stored form is padded to one. Small, because a build seals many
+/// part-full extents. Records stay on @ref FILE_HEADER_BYTES, where recovery
+/// looks.
+inline constexpr std::size_t EXTENT_ALIGN_BYTES = 8;
 /// The most bytes the top table of a scope directory may use. Above it the
 /// directory gains a level of middle blocks.
 inline constexpr std::size_t DIRECTORY_TOP_BYTES = 32768;

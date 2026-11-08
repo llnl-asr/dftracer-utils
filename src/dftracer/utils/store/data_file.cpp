@@ -1459,8 +1459,8 @@ dstd::Expected<bool, dstd::Error> DataFileReader::apply_footer(
     }
     if (tail == nullptr) return false;
     if (tail->format_version != FORMAT_VERSION) return unsupported_error();
-    // Each extent takes EXTENT_ALIGN_BYTES of the file at least.
-    if (tail->extent_count > file_size / EXTENT_ALIGN_BYTES + 1) return false;
+    // Each extent takes its header of the file at least.
+    if (tail->extent_count > file_size / EXTENT_HEADER_BYTES + 1) return false;
 
     index_.extent_size = tail->extent_size;
     index_.writer_random = tail->writer_random;

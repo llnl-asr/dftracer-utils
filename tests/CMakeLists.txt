@@ -347,6 +347,7 @@ set(TEST_CPP_SOURCES
     coro/test_async_generator.cpp
     coro/test_coro.cpp
     coro/test_yield.cpp
+    coro/test_or_fail.cpp
     coro/test_user_executor.cpp
     coro/test_affinity.cpp
     coro/test_scope.cpp

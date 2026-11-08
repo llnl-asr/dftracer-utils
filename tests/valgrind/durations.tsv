@@ -239,6 +239,7 @@ dataframe/test_arrow	7.4
 coro/test_channel	7.4
 common/test_str_format	7.4
 common/test_memory_budget	7.4
+coro/test_or_fail	7.3
 utilities/reader/test_member_decode_cache	7.3
 utilities/fileio/test_truncated_member	7.3
 trace/comparator/test_is_data_transfer_op	7.3

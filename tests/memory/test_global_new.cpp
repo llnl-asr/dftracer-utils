@@ -108,8 +108,10 @@ bool inside(std::uintptr_t site, char* (*fn)()) {
 
 void find_at_peak(void* context, const detail::DebugSiteTotal& total) noexcept {
     auto& found = *static_cast<AtPeak*>(context);
-    if (inside(total.site, plant_early)) found.early = total.live;
-    if (inside(total.site, plant_late)) found.late = total.live;
+    if (total.peak == EARLY_BYTES && inside(total.site, plant_early))
+        found.early = total.live;
+    if (total.peak == LATE_BYTES && inside(total.site, plant_late))
+        found.late = total.live;
 }
 
 }  // namespace

@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
@@ -16,7 +17,6 @@
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
-#include <sys/stat.h>
 
 #include <algorithm>
 #include <cinttypes>
@@ -214,9 +214,9 @@ class ReaderInflater {
     coro::CoroTask<bool> begin_at(int fd, off_t& offset,
                                   std::uint64_t file_offset,
                                   std::size_t expected_out = 0) {
-        struct stat st;
-        if (::fstat(fd, &st) != 0) co_return false;
-        file_size_ = static_cast<std::uint64_t>(st.st_size);
+        const auto st = dstd::File::stat_of(fd);
+        if (!st) co_return false;
+        file_size_ = st->size;
         if (file_end_ > 0) file_size_ = std::min(file_size_, file_end_);
         comp_off_ = file_offset;
         next_read_ = file_offset;

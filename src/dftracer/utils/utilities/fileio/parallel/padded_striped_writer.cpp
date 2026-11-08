@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -13,7 +14,6 @@
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <dftracer/utils/utilities/fileio/parallel/pwrite_fully.h>
 #include <fcntl.h>
-#include <unistd.h>
 
 #include <atomic>
 #include <cstdint>
@@ -100,7 +100,7 @@ struct PaddedStripedImpl {
     explicit PaddedStripedImpl(std::size_t stripe) : stripe_size(stripe) {}
 
     dstd::String path;
-    int fd = -1;
+    dstd::File file;
     std::size_t stripe_size;
     std::atomic<std::uint64_t> next_stripe_idx{0};
 
@@ -110,20 +110,19 @@ struct PaddedStripedImpl {
     dstd::Optional<coro::SpawnFuture<int>> packer_future;
     bool packer_drained = false;
 
-    bool settled() const { return fd < 0 && (packer_drained || !packer_scope); }
+    bool settled() const {
+        return !file.is_open() && (packer_drained || !packer_scope);
+    }
 
     void abandon() {}
 
     // join_and_clean() stops before the close when a shutdown cancels it.
-    ~PaddedStripedImpl() {
-        if (fd >= 0) ::close(fd);
-    }
+    ~PaddedStripedImpl() = default;
 
     coro::CoroTask<void> join_and_clean() {
         co_await drain_packer();
-        if (fd >= 0) {
-            co_await ::dftracer::utils::runtime::io::close(fd);
-            fd = -1;
+        if (file.is_open()) {
+            co_await ::dftracer::utils::runtime::io::close(file.release());
         }
     }
 
@@ -254,7 +253,8 @@ struct PaddedStripedImpl {
 
     coro::CoroTask<int> pwrite_bytes(const std::uint8_t* bytes,
                                      std::size_t size, off_t offset) {
-        co_return co_await pwrite_fully(fd, path.c_str(), bytes, size, offset);
+        co_return co_await pwrite_fully(file.native_handle(), path.c_str(),
+                                        bytes, size, offset);
     }
 };
 
@@ -286,7 +286,7 @@ class PaddedStripedWriter : public ParallelWriter {
                                      s.path.c_str());
             co_return -1;
         }
-        s.fd = static_cast<int>(fd);
+        s.file = dstd::File::from_native_handle(static_cast<int>(fd));
         s.next_stripe_idx.store(0, std::memory_order_relaxed);
         per_worker_last_.assign(worker_count, dstd::nullopt);
 
@@ -377,15 +377,15 @@ class PaddedStripedWriter : public ParallelWriter {
         PaddedStripedImpl& s = *impl_;
         const auto drain_packer_rc = co_await s.drain_packer();
         if (drain_packer_rc != 0) {
-            if (s.fd >= 0) {
-                co_await ::dftracer::utils::runtime::io::close(s.fd);
-                s.fd = -1;
+            if (s.file.is_open()) {
+                co_await ::dftracer::utils::runtime::io::close(
+                    s.file.release());
             }
             co_return -1;
         }
-        if (s.fd < 0) co_return 0;
-        auto rc = co_await ::dftracer::utils::runtime::io::close(s.fd);
-        s.fd = -1;
+        if (!s.file.is_open()) co_return 0;
+        auto rc =
+            co_await ::dftracer::utils::runtime::io::close(s.file.release());
         co_return static_cast<int>(rc);
     }
 

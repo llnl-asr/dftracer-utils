@@ -11,8 +11,6 @@
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/inflater.h>
 #include <dftracer/utils/utilities/reader/internal/streams/stream.h>
-#include <fcntl.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <cinttypes>
@@ -148,9 +146,7 @@ class GzipStream : public StreamBase {
             throw ReaderError(ReaderError::FileIoError,
                               "Failed to open file: " + path);
         }
-#ifdef __linux__
-        posix_fadvise(file->native_handle(), 0, 0, POSIX_FADV_SEQUENTIAL);
-#endif
+        (void)file->advise(dstd::Advice::Sequential);
         return std::move(*file);
     }
 

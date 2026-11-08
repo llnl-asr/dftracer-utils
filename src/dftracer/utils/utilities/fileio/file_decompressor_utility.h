@@ -12,8 +12,6 @@
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
-#include <fcntl.h>
-#include <sys/stat.h>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -150,8 +148,8 @@ class FileDecompressorUtility {
             const dstd::File fd_file = std::move(*opened);
             const int fd = fd_file.native_handle();
 
-            struct stat st;
-            if (::fstat(fd, &st) != 0) {
+            const auto st = fd_file.stat();
+            if (!st) {
                 co_return common::make_error(
                     common::ErrorCode::Io,
                     "Cannot stat file: " + input.input_path);
@@ -159,8 +157,7 @@ class FileDecompressorUtility {
 
             fileio::StreamingFileWriterUtility writer(
                 dstd::PathView(input.output_path));
-            auto gen = fileio::compress::decode_gzip_members(
-                fd, static_cast<std::uint64_t>(st.st_size));
+            auto gen = fileio::compress::decode_gzip_members(fd, st->size);
             for (;;) {
                 auto chunk = co_await gen.next();
                 if (!chunk) break;

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/bits.h>
@@ -11,6 +13,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -18,19 +21,15 @@
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/scope_filter.h>
 #include <dftracer/utils/store/varint.h>
-#include <fcntl.h>
-#include <limits.h>
-#include <sys/stat.h>
-#include <sys/uio.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <random>
 #include <utility>
 
@@ -72,6 +71,62 @@ dstd::Unexpected<dstd::Error> io_error() {
     return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Io));
 }
 
+constexpr std::uint32_t DIRECT_UNPROBED =
+    std::numeric_limits<std::uint32_t>::max();
+
+/// Whether DFTRACER_UTILS_STORE_DIRECT_READS asks for direct reads.
+/// InvalidArgument when it is set to anything but an integer.
+dstd::Expected<bool, dstd::Error> direct_reads_wanted() {
+    using common::constants::store::STORE_DIRECT_READS_ENV;
+    if (!common::Env::get<dstd::StringView>(STORE_DIRECT_READS_ENV)) {
+        return false;
+    }
+    const auto value = common::Env::get<int>(STORE_DIRECT_READS_ENV);
+    if (!value) return invalid_error();
+    return *value != 0;
+}
+
+/// A file of `path` that reads past the page cache and the alignment its
+/// reads need, or a closed file and 0 when the file system refuses one. Io
+/// when the open fails for another reason.
+struct DirectOpen {
+    dstd::File file;
+    std::uint32_t align = 0;
+};
+
+dstd::Expected<DirectOpen, dstd::Error> open_direct(const dstd::String& path) {
+    const dstd::PathView view(path);
+    const std::uint32_t align = dstd::File::direct_alignment(view);
+    if (align == 0 || align > DIRECT_READ_CHUNK_BYTES ||
+        (align & (align - 1U)) != 0) {
+        return DirectOpen{};
+    }
+    auto file = dstd::File::open(view, {.caching = dstd::Caching::Bypass});
+    if (!file) {
+        if (file.error().is(dstd::Condition::Unsupported)) return DirectOpen{};
+        return io_error();
+    }
+    return DirectOpen{std::move(*file), align};
+}
+
+/// One aligned block from the memory library, freed when it goes.
+class AlignedChunk {
+   public:
+    AlignedChunk(std::size_t size, std::size_t align)
+        : size_(size),
+          data_(static_cast<std::uint8_t*>(
+              memory::detail::allocate(size, align))) {}
+    AlignedChunk(const AlignedChunk&) = delete;
+    AlignedChunk& operator=(const AlignedChunk&) = delete;
+    ~AlignedChunk() { memory::detail::deallocate(data_, size_); }
+
+    std::uint8_t* data() const { return data_; }
+
+   private:
+    std::size_t size_;
+    std::uint8_t* data_;
+};
+
 dstd::Unexpected<dstd::Error> unsupported_error() {
     return dstd::Unexpected<dstd::Error>(
         dstd::Error(dstd::Condition::Unsupported));
@@ -86,36 +141,27 @@ dstd::String path_string(dstd::StringView path) {
     return dstd::String(path.data(), path.size());
 }
 
-dstd::Expected<void, dstd::Error> pwrite_all(int fd, const std::uint8_t* data,
+dstd::Expected<void, dstd::Error> pwrite_all(const dstd::File& file,
+                                             const std::uint8_t* data,
                                              std::size_t size,
                                              std::uint64_t offset) {
-    std::size_t done = 0;
-    while (done < size) {
-        const ssize_t written = ::pwrite(fd, data + done, size - done,
-                                         static_cast<off_t>(offset + done));
-        if (written < 0) {
-            if (errno == EINTR) continue;
-            return io_error();
-        }
-        if (written == 0) return io_error();
-        done += static_cast<std::size_t>(written);
-    }
+    auto written = file.write_all_at(
+        offset, {reinterpret_cast<const std::byte*>(data), size});
+    if (!written) return io_error();
     return {};
 }
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> pread_all(
-    int fd, std::uint64_t offset, std::size_t size) {
+    const dstd::File& file, std::uint64_t offset, std::size_t size) {
     dstd::Vector<std::uint8_t> out(size);
     std::size_t done = 0;
     while (done < size) {
-        const ssize_t read = ::pread(fd, out.data() + done, size - done,
-                                     static_cast<off_t>(offset + done));
-        if (read < 0) {
-            if (errno == EINTR) continue;
-            return io_error();
-        }
-        if (read == 0) return parse_error();
-        done += static_cast<std::size_t>(read);
+        auto read = file.read_at(
+            offset + done,
+            dstd::Span<std::uint8_t>(out.data() + done, size - done));
+        if (!read) return io_error();
+        if (*read == 0) return parse_error();
+        done += *read;
     }
     return out;
 }
@@ -144,9 +190,9 @@ std::uint64_t now_ns() {
             .count());
 }
 
-dstd::Expected<HeaderInfo, dstd::Error> read_header(int fd) {
+dstd::Expected<HeaderInfo, dstd::Error> read_header(const dstd::File& file) {
     HeaderInfo info;
-    auto bytes = pread_all(fd, 0, FILE_HEADER_BYTES);
+    auto bytes = pread_all(file, 0, FILE_HEADER_BYTES);
     if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
     const auto* data = reinterpret_cast<const std::uint8_t*>(bytes->data());
 
@@ -209,12 +255,12 @@ bool tail_layout_is_valid(std::uint64_t file_size, std::uint64_t tail_offset,
 }
 
 dstd::Expected<std::uint64_t, dstd::Error> read_record_size(
-    int fd, std::uint64_t file_size, std::uint64_t offset) {
+    const dstd::File& file, std::uint64_t file_size, std::uint64_t offset) {
     if (offset < FILE_HEADER_BYTES || offset % FILE_HEADER_BYTES != 0 ||
         offset > file_size || file_size - offset < RECORD_HEADER_BYTES) {
         return parse_error();
     }
-    auto head = pread_all(fd, offset, RECORD_HEADER_BYTES);
+    auto head = pread_all(file, offset, RECORD_HEADER_BYTES);
     if (!head) return dstd::Unexpected<dstd::Error>(head.error());
     const auto* data = reinterpret_cast<const std::uint8_t*>(head->data());
     if (std::memcmp(data, RECORD_MAGIC.data(), RECORD_MAGIC.size()) != 0) {
@@ -240,32 +286,33 @@ dstd::Expected<Record, dstd::Error> decode_record_at(dstd::ByteView bytes,
     return record;
 }
 
-dstd::Expected<Record, dstd::Error> read_record_at(int fd,
+dstd::Expected<Record, dstd::Error> read_record_at(const dstd::File& file,
                                                    std::uint64_t file_size,
                                                    std::uint64_t offset,
                                                    std::size_t& records_read) {
-    auto length = read_record_size(fd, file_size, offset);
+    auto length = read_record_size(file, file_size, offset);
     if (!length) return dstd::Unexpected<dstd::Error>(length.error());
     ++records_read;
-    auto bytes = pread_all(fd, offset, *length);
+    auto bytes = pread_all(file, offset, *length);
     if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
     return decode_record_at(bytes_of(*bytes), offset);
 }
 
 dstd::Expected<dstd::Vector<Record>, dstd::Error> scan_records(
-    int fd, std::uint64_t file_size, std::size_t& records_read) {
+    const dstd::File& file, std::uint64_t file_size,
+    std::size_t& records_read) {
     dstd::Vector<Record> records;
     for (std::uint64_t offset = FILE_HEADER_BYTES;
          offset <= file_size && file_size - offset >= RECORD_HEADER_BYTES;
          offset += FILE_HEADER_BYTES) {
-        auto length = read_record_size(fd, file_size, offset);
+        auto length = read_record_size(file, file_size, offset);
         if (!length) {
             if (length.error().is(dstd::Condition::Io)) {
                 return dstd::Unexpected<dstd::Error>(length.error());
             }
             continue;
         }
-        auto bytes = pread_all(fd, offset, *length);
+        auto bytes = pread_all(file, offset, *length);
         if (!bytes) {
             if (bytes.error().is(dstd::Condition::Io)) {
                 return dstd::Unexpected<dstd::Error>(bytes.error());
@@ -287,7 +334,7 @@ dstd::Expected<dstd::Vector<Record>, dstd::Error> scan_records(
 }
 
 dstd::Expected<dstd::Vector<Record>, dstd::Error> walk_back(
-    int fd, std::uint64_t file_size, Record start_record,
+    const dstd::File& file, std::uint64_t file_size, Record start_record,
     std::size_t& records_read) {
     dstd::Vector<Record> chain;
     chain.push_back(std::move(start_record));
@@ -307,7 +354,8 @@ dstd::Expected<dstd::Vector<Record>, dstd::Error> walk_back(
             file_size - prev_offset < RECORD_HEADER_BYTES) {
             return parse_error();
         }
-        auto record = read_record_at(fd, file_size, prev_offset, records_read);
+        auto record =
+            read_record_at(file, file_size, prev_offset, records_read);
         if (!record) return dstd::Unexpected<dstd::Error>(record.error());
         if (record->sequence != current.sequence - 1) return parse_error();
         chain.push_back(std::move(*record));
@@ -317,15 +365,15 @@ dstd::Expected<dstd::Vector<Record>, dstd::Error> walk_back(
 }
 
 dstd::Expected<dstd::Vector<Record>, dstd::Error> recover_from_scan(
-    int fd, std::uint64_t file_size, const dstd::Vector<Record>& scanned,
-    std::size_t& records_read) {
+    const dstd::File& file, std::uint64_t file_size,
+    const dstd::Vector<Record>& scanned, std::size_t& records_read) {
     std::uint64_t last_sequence = 0;
     bool have_sequence = false;
     for (const Record& start : scanned) {
         if (have_sequence && start.sequence == last_sequence) continue;
         have_sequence = true;
         last_sequence = start.sequence;
-        auto chain = walk_back(fd, file_size, start, records_read);
+        auto chain = walk_back(file, file_size, start, records_read);
         if (chain) return chain;
         if (chain.error().is(dstd::Condition::Io)) {
             return dstd::Unexpected<dstd::Error>(chain.error());
@@ -524,12 +572,14 @@ void append_summary(dstd::StringView data_path, std::uint64_t needed_bytes,
     dstd::append_u32_le(entry, static_cast<std::uint32_t>(payload.size()));
     dstd::append_u32_le(entry, crc32(0, payload.data(), payload.size()));
     entry.insert(entry.end(), payload.begin(), payload.end());
-    const int fd = ::open(summary_path(dir).c_str(),
-                          O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
-    if (fd < 0) return;
+    const dstd::String path = summary_path(dir);
+    auto file = dstd::File::open(
+        dstd::PathView(path),
+        {.access = dstd::Access::Append, .creation = dstd::Creation::IfNeeded});
+    if (!file) return;
     // One write, so writers that close at once append whole entries.
-    (void)::write(fd, entry.data(), entry.size());
-    ::close(fd);
+    (void)file->append(
+        {reinterpret_cast<const std::byte*>(entry.data()), entry.size()});
 }
 
 }  // namespace
@@ -544,10 +594,9 @@ dstd::Expected<dstd::Vector<SummaryEntry>, dstd::Error> read_summary(
         if (file.error().is(dstd::Condition::NotFound)) return entries;
         return io_error();
     }
-    const int fd = file->native_handle();
-    struct stat st{};
-    if (::fstat(fd, &st) != 0 || st.st_size < 0) return io_error();
-    auto bytes = pread_all(fd, 0, static_cast<std::size_t>(st.st_size));
+    auto file_bytes = file->size();
+    if (!file_bytes) return io_error();
+    auto bytes = pread_all(*file, 0, static_cast<std::size_t>(*file_bytes));
     if (!bytes) {
         if (bytes.error().is(dstd::Condition::Io)) {
             return dstd::Unexpected<dstd::Error>(bytes.error());
@@ -708,8 +757,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_header() {
 
     const std::uint32_t crc = crc32(0, header.data(), header.size());
     dstd::write_u32_le(header.data() + 12, crc);
-    auto written =
-        pwrite_all(fd_.native_handle(), header.data(), header.size(), 0);
+    auto written = pwrite_all(fd_, header.data(), header.size(), 0);
     if (written) {
         io_fault::on_write(fd_.native_handle(), io_fault::WriteKind::Header, 0,
                            header.data(), header.size());
@@ -735,8 +783,7 @@ dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_extent(
         stored->size(), EXTENT_ALIGN_BYTES, io_fault::WriteKind::Extent);
     ExtentRef ref{offset, static_cast<std::uint32_t>(stored->size()), 0};
     ref.crc = crc32(0, stored->data(), stored->size());
-    auto written =
-        pwrite_all(fd_.native_handle(), stored->data(), stored->size(), offset);
+    auto written = pwrite_all(fd_, stored->data(), stored->size(), offset);
     if (!written) {
         latch(written.error());
         return dstd::Unexpected<dstd::Error>(written.error());
@@ -758,8 +805,7 @@ dstd::Expected<DictRef, dstd::Error> DataFileWriter::append_dict(
                                io_fault::WriteKind::Extent);
     ref.length = static_cast<std::uint32_t>(bytes.size());
     ref.crc = crc32(0, padded.data(), bytes.size());
-    auto written = pwrite_all(fd_.native_handle(), padded.data(), padded.size(),
-                              ref.offset);
+    auto written = pwrite_all(fd_, padded.data(), padded.size(), ref.offset);
     if (!written) {
         latch(written.error());
         return dstd::Unexpected<dstd::Error>(written.error());
@@ -784,7 +830,7 @@ dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_big(
     ExtentRef ref{offset, static_cast<std::uint32_t>(length), 0};
     const auto write = [this](const std::uint8_t* data, std::size_t size,
                               std::uint64_t at) {
-        auto written = pwrite_all(fd_.native_handle(), data, size, at);
+        auto written = pwrite_all(fd_, data, size, at);
         if (!written) {
             latch(written.error());
             return written;
@@ -1164,8 +1210,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_record(
     dstd::Vector<std::uint8_t> encoded = std::move(*probe);
     if (offset != FILE_HEADER_BYTES) set_record_offset(encoded, offset);
 
-    auto written =
-        pwrite_all(fd_.native_handle(), encoded.data(), encoded.size(), offset);
+    auto written = pwrite_all(fd_, encoded.data(), encoded.size(), offset);
     if (!written) {
         latch(written.error());
         return written;
@@ -1208,16 +1253,17 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     const RecordItems items = items_with_pending_extents();
     // The range is taken only if no write took the end of the file meanwhile.
     dstd::Vector<std::uint8_t> blocks;
-    dstd::Expected<FileTail, dstd::Error> tail = invalid_error();
+    dstd::Optional<FileTail> tail;
     std::uint64_t base = 0;
     for (;;) {
         base = next_offset_.load(std::memory_order_acquire);
         blocks.clear();
-        tail = build_blocks(items, base, blocks);
-        if (!tail) {
-            latch(tail.error());
-            return dstd::Unexpected<dstd::Error>(tail.error());
+        auto built = build_blocks(items, base, blocks);
+        if (!built) {
+            latch(built.error());
+            return dstd::Unexpected<dstd::Error>(built.error());
         }
+        tail = std::move(*built);
         std::uint64_t expected = base;
         if (next_offset_.compare_exchange_strong(expected, base + blocks.size(),
                                                  std::memory_order_acq_rel,
@@ -1226,8 +1272,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
         }
     }
     if (!blocks.empty()) {
-        auto written =
-            pwrite_all(fd_.native_handle(), blocks.data(), blocks.size(), base);
+        auto written = pwrite_all(fd_, blocks.data(), blocks.size(), base);
         if (!written) {
             latch(written.error());
             return written;
@@ -1262,8 +1307,8 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     dstd::write_u32_le(trailer.data() + 16, footer_size);
     const std::uint32_t trailer_crc = crc32(0, trailer.data(), 20);
     dstd::write_u32_le(trailer.data() + 20, trailer_crc);
-    auto written = pwrite_all(fd_.native_handle(), trailer.data(),
-                              trailer.size(), trailer_offset);
+    auto written =
+        pwrite_all(fd_, trailer.data(), trailer.size(), trailer_offset);
     if (!written) {
         latch(written.error());
         return written;
@@ -1283,16 +1328,9 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
 }
 
 dstd::Expected<void, dstd::Error> DataFileWriter::sync_data() {
-    int sync_result = -1;
-    do {
-#if defined(__APPLE__)
-        sync_result = ::fsync(fd_.native_handle());
-#else
-        sync_result = ::fdatasync(fd_.native_handle());
-#endif
-    } while (sync_result != 0 && errno == EINTR);
+    auto synced = fd_.sync(dstd::SyncMode::Data);
     io_fault::on_sync(fd_.native_handle());
-    if (sync_result != 0) {
+    if (!synced) {
         return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Io));
     }
     return {};
@@ -1301,27 +1339,25 @@ dstd::Expected<void, dstd::Error> DataFileWriter::sync_data() {
 dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     dstd::StringView path, FooterItems footer) {
     const dstd::String path_std = path_string(path);
-    const int fd = ::open(path_std.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return io_error();
+    auto opened = dstd::File::open(dstd::PathView(path_std), {});
+    if (!opened) return io_error();
+    auto size = opened->size();
+    if (!size) return io_error();
+    const std::uint64_t file_size = *size;
+    if (file_size < FILE_HEADER_BYTES) return parse_error();
 
-    struct stat st{};
-    if (::fstat(fd, &st) != 0) {
-        ::close(fd);
-        return io_error();
-    }
-    if (st.st_size < 0) {
-        ::close(fd);
-        return parse_error();
-    }
-    const std::uint64_t file_size = static_cast<std::uint64_t>(st.st_size);
-    if (file_size < FILE_HEADER_BYTES) {
-        ::close(fd);
-        return parse_error();
-    }
+    auto direct = direct_reads_wanted();
+    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
 
     DataFileReader reader;
-    reader.fd_.store(fd, std::memory_order_relaxed);
+    reader.file_ = std::move(*opened);
+    reader.opened_.store(true, std::memory_order_relaxed);
+    const dstd::File& file = reader.file_;
     reader.file_size_ = file_size;
+    if (*direct) {
+        reader.path_ = path_std;
+        reader.direct_ = dstd::make_unique<DirectReads>();
+    }
 
     // One bounded read of the file end.
     if (footer == FooterItems::Directory) {
@@ -1341,7 +1377,7 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
         return std::move(reader);
     };
 
-    auto header_result = read_header(fd);
+    auto header_result = read_header(file);
     if (!header_result)
         return dstd::Unexpected<dstd::Error>(header_result.error());
     const HeaderInfo header = *header_result;
@@ -1351,11 +1387,11 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     if (header.header_crc_ok) fill_header_fields(reader.index_, header);
 
     if (header.header_crc_ok && header.tail_kind == 0) {
-        auto found = scan_records(fd, file_size, reader.records_read_);
+        auto found = scan_records(file, file_size, reader.records_read_);
         if (!found) return dstd::Unexpected<dstd::Error>(found.error());
         if (found->empty()) return finish();
         auto recovered =
-            recover_from_scan(fd, file_size, *found, reader.records_read_);
+            recover_from_scan(file, file_size, *found, reader.records_read_);
         if (!recovered) return dstd::Unexpected<dstd::Error>(recovered.error());
         apply_chain(reader.index_, *recovered);
         return finish();
@@ -1365,7 +1401,7 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     bool have_chain = false;
     if (header.header_crc_ok && header.tail_kind != 0 &&
         tail_layout_is_valid(file_size, header.tail_offset, header.tail_kind)) {
-        auto tail = read_record_at(fd, file_size, header.tail_offset,
+        auto tail = read_record_at(file, file_size, header.tail_offset,
                                    reader.records_read_);
         if (!tail) {
             if (tail.error().is(dstd::Condition::Io)) {
@@ -1373,7 +1409,7 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
             }
         } else if (static_cast<std::uint32_t>(tail->kind) == header.tail_kind &&
                    tail->crc == header.tail_crc) {
-            auto walked = walk_back(fd, file_size, std::move(*tail),
+            auto walked = walk_back(file, file_size, std::move(*tail),
                                     reader.records_read_);
             if (!walked) {
                 if (walked.error().is(dstd::Condition::Io)) {
@@ -1387,11 +1423,11 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     }
 
     if (!have_chain) {
-        auto found = scan_records(fd, file_size, reader.records_read_);
+        auto found = scan_records(file, file_size, reader.records_read_);
         if (!found) return dstd::Unexpected<dstd::Error>(found.error());
         if (found->empty()) return parse_error();
         auto recovered =
-            recover_from_scan(fd, file_size, *found, reader.records_read_);
+            recover_from_scan(file, file_size, *found, reader.records_read_);
         if (!recovered) return dstd::Unexpected<dstd::Error>(recovered.error());
         chain = std::move(*recovered);
     }
@@ -1407,8 +1443,7 @@ dstd::Expected<bool, dstd::Error> DataFileReader::open_light(
     if (want < FILE_TRAILER_BYTES) return false;
     const std::uint64_t start = file_size - want;
     ++records_read_;
-    auto buffer = pread_all(fd_.load(std::memory_order_relaxed), start,
-                            static_cast<std::size_t>(want));
+    auto buffer = pread_all(file_, start, static_cast<std::size_t>(want));
     if (!buffer) return false;
     const dstd::ByteView bytes = bytes_of(*buffer);
 
@@ -1432,16 +1467,15 @@ dstd::Expected<bool, dstd::Error> DataFileReader::open_light(
         return false;
     }
 
-    dstd::Expected<Record, dstd::Error> decoded = parse_error();
-    if (tail_offset >= start) {
+    const auto read_footer = [&]() -> dstd::Expected<Record, dstd::Error> {
+        if (tail_offset < start)
+            return read_record_at(file_, file_size, tail_offset, records_read_);
         const std::size_t at = static_cast<std::size_t>(tail_offset - start);
         const std::size_t length = std::min<std::size_t>(
             footer_size, static_cast<std::size_t>(want) - at);
-        decoded = decode_record_at(bytes.subspan(at, length), tail_offset);
-    } else {
-        decoded = read_record_at(fd_.load(std::memory_order_relaxed), file_size,
-                                 tail_offset, records_read_);
-    }
+        return decode_record_at(bytes.subspan(at, length), tail_offset);
+    };
+    const auto decoded = read_footer();
     if (!decoded || decoded->kind != RecordKind::Footer) return false;
 
     return apply_footer(decoded->items, decoded->sequence, file_size);
@@ -1459,8 +1493,8 @@ dstd::Expected<bool, dstd::Error> DataFileReader::apply_footer(
     }
     if (tail == nullptr) return false;
     if (tail->format_version != FORMAT_VERSION) return unsupported_error();
-    // Each extent takes EXTENT_ALIGN_BYTES of the file at least.
-    if (tail->extent_count > file_size / EXTENT_ALIGN_BYTES + 1) return false;
+    // Each extent takes its header of the file at least.
+    if (tail->extent_count > file_size / EXTENT_HEADER_BYTES + 1) return false;
 
     index_.extent_size = tail->extent_size;
     index_.writer_random = tail->writer_random;
@@ -1488,54 +1522,153 @@ dstd::Expected<void, dstd::Error> DataFileReader::apply_items_block() {
     return {};
 }
 
+/// The direct descriptor of a reader and the alignment its reads need, opened
+/// on the first read of a closed file. A file still written is read through
+/// the page cache, which holds the bytes no commit has synced yet.
+struct DataFileReader::DirectReads {
+    std::mutex mutex;
+    dstd::File file;
+    std::atomic<std::uint32_t> align{DIRECT_UNPROBED};
+};
+
+dstd::Expected<std::uint32_t, dstd::Error> DataFileReader::direct_align()
+    const {
+    if (direct_ == nullptr || !index_.closed) return 0U;
+    const std::uint32_t known = direct_->align.load(std::memory_order_acquire);
+    if (known != DIRECT_UNPROBED) return known;
+    std::lock_guard<std::mutex> locked(direct_->mutex);
+    const std::uint32_t again = direct_->align.load(std::memory_order_acquire);
+    if (again != DIRECT_UNPROBED) return again;
+    auto opened = open_direct(path_string(path_));
+    if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
+    const std::uint32_t align = opened->align;
+    if (opened->file.is_open()) {
+        direct_->file = std::move(opened->file);
+    } else {
+#if DFTRACER_UTILS_TEST_PROBES
+        g_direct_fallbacks.fetch_add(1, std::memory_order_relaxed);
+#endif
+    }
+    direct_->align.store(align, std::memory_order_release);
+    return align;
+}
+
+dstd::Expected<bool, dstd::Error> DataFileReader::read_direct(
+    std::uint64_t offset, std::size_t length, std::uint8_t* dest,
+    BlockReads* reads) const {
+    auto known = direct_align();
+    if (!known) return dstd::Unexpected<dstd::Error>(known.error());
+    const std::uint64_t align = *known;
+    if (align == 0) return false;
+    const dstd::File& direct_file = direct_->file;
+    // One alignment step more than the bytes, so an unaligned read of up to a
+    // chunk takes one pread.
+    const auto buffer_bytes = static_cast<std::size_t>(
+        dstd::bits::align_up(
+            std::min<std::uint64_t>(length, DIRECT_READ_CHUNK_BYTES), align) +
+        align);
+    AlignedChunk chunk(buffer_bytes, static_cast<std::size_t>(align));
+    const std::uint64_t end = offset + length;
+    std::uint64_t at = offset;
+    while (at < end) {
+        const std::uint64_t window = at - at % align;
+        const std::uint64_t stop =
+            std::min<std::uint64_t>(end, window + buffer_bytes);
+        const auto span = static_cast<std::size_t>(
+            dstd::bits::align_up(stop - window, align));
+        auto got = direct_file.read_at(
+            window, dstd::Span<std::uint8_t>(chunk.data(), span));
+        if (!got) {
+            if (got.error().is(dstd::Condition::InvalidArgument)) {
+                direct_->align.store(0, std::memory_order_release);
+#if DFTRACER_UTILS_TEST_PROBES
+                g_direct_fallbacks.fetch_add(1, std::memory_order_relaxed);
+#endif
+                return false;
+            }
+            return io_error();
+        }
+        const auto got_bytes = static_cast<std::uint64_t>(*got);
+        if (got_bytes <= at - window) return parse_error();
+        if (reads != nullptr) {
+            ++reads->calls;
+            reads->bytes += got_bytes;
+        }
+        const std::uint64_t usable = std::min(window + got_bytes, stop) - at;
+        std::memcpy(dest + (at - offset), chunk.data() + (at - window),
+                    static_cast<std::size_t>(usable));
+        at += usable;
+    }
+#if DFTRACER_UTILS_TEST_PROBES
+    g_direct_reads.fetch_add(1, std::memory_order_relaxed);
+#endif
+    return true;
+}
+
+dstd::Expected<void, dstd::Error> DataFileReader::read_at(
+    const dstd::File& file, std::uint64_t offset, std::size_t length,
+    std::uint8_t* dest, BlockReads* reads) const {
+    auto direct = read_direct(offset, length, dest, reads);
+    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (*direct) return {};
+    std::size_t done = 0;
+    while (done < length) {
+        auto got = file.read_at(offset + done, dstd::Span<std::uint8_t>(
+                                                   dest + done, length - done));
+        if (!got) return io_error();
+        if (*got == 0) return parse_error();
+        if (reads != nullptr) {
+            ++reads->calls;
+            reads->bytes += static_cast<std::uint64_t>(*got);
+        }
+        done += *got;
+    }
+    return {};
+}
+
 DataFileReader::DataFileReader(DataFileReader&& other) noexcept
-    : fd_(other.fd_.exchange(-1, std::memory_order_relaxed)),
+    : file_(std::move(other.file_)),
+      opened_(other.opened_.exchange(false, std::memory_order_relaxed)),
       file_size_(other.file_size_),
       records_read_(other.records_read_),
       index_(std::move(other.index_)),
       path_(std::move(other.path_)),
-      open_mutex_(std::move(other.open_mutex_)) {}
+      open_mutex_(std::move(other.open_mutex_)),
+      direct_(std::move(other.direct_)) {}
 
 DataFileReader& DataFileReader::operator=(DataFileReader&& other) noexcept {
     if (this == &other) return *this;
-    const int held =
-        fd_.exchange(other.fd_.exchange(-1, std::memory_order_relaxed),
-                     std::memory_order_relaxed);
-    if (held >= 0) ::close(held);
+    file_ = std::move(other.file_);
+    opened_.store(other.opened_.exchange(false, std::memory_order_relaxed),
+                  std::memory_order_relaxed);
     file_size_ = other.file_size_;
     records_read_ = other.records_read_;
     index_ = std::move(other.index_);
     path_ = std::move(other.path_);
     open_mutex_ = std::move(other.open_mutex_);
+    direct_ = std::move(other.direct_);
     return *this;
 }
 
-DataFileReader::~DataFileReader() {
-    const int held = fd_.load(std::memory_order_relaxed);
-    if (held >= 0) ::close(held);
-}
+DataFileReader::~DataFileReader() = default;
 
-dstd::Expected<int, dstd::Error> DataFileReader::descriptor() const {
-    const int known = fd_.load(std::memory_order_acquire);
-    if (known >= 0 || open_mutex_ == nullptr) return known;
+dstd::Expected<const dstd::File*, dstd::Error> DataFileReader::descriptor()
+    const {
+    if (opened_.load(std::memory_order_acquire) || open_mutex_ == nullptr) {
+        return &file_;
+    }
     std::lock_guard<std::mutex> locked(*open_mutex_);
-    const int again = fd_.load(std::memory_order_acquire);
-    if (again >= 0) return again;
+    if (opened_.load(std::memory_order_acquire)) return &file_;
     const dstd::String path = path_string(path_);
-    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return io_error();
-    struct stat st{};
-    if (::fstat(fd, &st) != 0) {
-        ::close(fd);
-        return io_error();
-    }
+    auto opened = dstd::File::open(dstd::PathView(path), {});
+    if (!opened) return io_error();
+    auto size = opened->size();
+    if (!size) return io_error();
     // Shorter than the summary says: not the file the entry lists.
-    if (st.st_size < 0 || static_cast<std::uint64_t>(st.st_size) < file_size_) {
-        ::close(fd);
-        return parse_error();
-    }
-    fd_.store(fd, std::memory_order_release);
-    return fd;
+    if (*size < file_size_) return parse_error();
+    file_ = std::move(*opened);
+    opened_.store(true, std::memory_order_release);
+    return &file_;
 }
 
 dstd::Expected<DataFileReader, dstd::Error> DataFileReader::from_summary(
@@ -1544,6 +1677,9 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::from_summary(
     reader.file_size_ = entry.needed_bytes;
     reader.path_.assign(path.data(), path.size());
     reader.open_mutex_ = dstd::make_unique<std::mutex>();
+    auto direct = direct_reads_wanted();
+    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (*direct) reader.direct_ = dstd::make_unique<DirectReads>();
     auto applied =
         reader.apply_footer(entry.footer, entry.sequence, entry.needed_bytes);
     if (!applied) return dstd::Unexpected<dstd::Error>(applied.error());
@@ -1553,50 +1689,39 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::from_summary(
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error>
 DataFileReader::read_extent(const ExtentRef& ref) const {
-    auto fd = descriptor();
-    if (!fd) return dstd::Unexpected<dstd::Error>(fd.error());
+    auto file = descriptor();
+    if (!file) return dstd::Unexpected<dstd::Error>(file.error());
     if (ref.length == 0 || ref.offset > file_size_ ||
         ref.length > file_size_ - ref.offset) {
         return parse_error();
     }
-    auto bytes = pread_all(*fd, ref.offset, ref.length);
-    if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
-    const std::uint32_t crc = crc32(0, bytes->data(), bytes->size());
-    if (crc != ref.crc) return parse_error();
+    dstd::Vector<std::uint8_t> bytes(ref.length);
+    auto read = read_at(**file, ref.offset, ref.length, bytes.data(), nullptr);
+    if (!read) return dstd::Unexpected<dstd::Error>(read.error());
+    if (crc32(0, bytes.data(), bytes.size()) != ref.crc) return parse_error();
     return bytes;
 }
 
 dstd::Expected<void, dstd::Error> DataFileReader::read_range(
     std::uint64_t offset, std::size_t length,
     dstd::RawBuffer<std::uint8_t>& out, BlockReads* reads) const {
-    auto fd = descriptor();
-    if (!fd) return dstd::Unexpected<dstd::Error>(fd.error());
+    auto file = descriptor();
+    if (!file) return dstd::Unexpected<dstd::Error>(file.error());
     if (offset > file_size_ || length > file_size_ - offset) {
         return parse_error();
     }
     out.resize(length);
-    std::size_t done = 0;
-    while (done < length) {
-        const ssize_t got = ::pread(*fd, out.data() + done, length - done,
-                                    static_cast<off_t>(offset + done));
-        if (got < 0) {
-            if (errno == EINTR) continue;
-            return io_error();
-        }
-        if (got == 0) return parse_error();
-        if (reads != nullptr) {
-            ++reads->calls;
-            reads->bytes += static_cast<std::uint64_t>(got);
-        }
-        done += static_cast<std::size_t>(got);
-    }
-    return {};
+    return read_at(**file, offset, length, out.data(), reads);
 }
 
 dstd::Expected<void, dstd::Error> DataFileReader::warm_range(
     std::uint64_t offset, std::uint64_t length, BlockReads* reads) const {
-    auto fd = descriptor();
-    if (!fd) return dstd::Unexpected<dstd::Error>(fd.error());
+    // Direct reads skip the page cache, so warming it buys nothing.
+    auto direct = direct_align();
+    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (*direct != 0) return {};
+    auto file = descriptor();
+    if (!file) return dstd::Unexpected<dstd::Error>(file.error());
     if (offset >= file_size_) return {};
     const std::uint64_t end = offset + std::min(length, file_size_ - offset);
     dstd::Vector<std::uint8_t> chunk(static_cast<std::size_t>(
@@ -1605,26 +1730,23 @@ dstd::Expected<void, dstd::Error> DataFileReader::warm_range(
     while (at < end) {
         const std::size_t want = static_cast<std::size_t>(
             std::min<std::uint64_t>(chunk.size(), end - at));
-        const ssize_t got =
-            ::pread(*fd, chunk.data(), want, static_cast<off_t>(at));
-        if (got < 0) {
-            if (errno == EINTR) continue;
-            return io_error();
-        }
-        if (got == 0) break;
+        auto got =
+            (*file)->read_at(at, dstd::Span<std::uint8_t>(chunk.data(), want));
+        if (!got) return io_error();
+        if (*got == 0) break;
         if (reads != nullptr) {
             ++reads->calls;
-            reads->bytes += static_cast<std::uint64_t>(got);
+            reads->bytes += static_cast<std::uint64_t>(*got);
         }
-        at += static_cast<std::uint64_t>(got);
+        at += static_cast<std::uint64_t>(*got);
     }
     return {};
 }
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error>
 DataFileReader::read_block(const BlockHandle& handle, BlockReads* reads) const {
-    auto fd = descriptor();
-    if (!fd) return dstd::Unexpected<dstd::Error>(fd.error());
+    auto file = descriptor();
+    if (!file) return dstd::Unexpected<dstd::Error>(file.error());
     if (handle.length == 0 && handle.offset == 0 && handle.crc == 0) {
         return dstd::Vector<std::uint8_t>{};
     }
@@ -1636,23 +1758,24 @@ DataFileReader::read_block(const BlockHandle& handle, BlockReads* reads) const {
         ++reads->calls;
         reads->bytes += handle.length;
     }
-    auto bytes = pread_all(*fd, handle.offset, handle.length);
-    if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
-    if (crc32(0, bytes->data(), bytes->size()) != handle.crc) {
+    dstd::Vector<std::uint8_t> bytes(handle.length);
+    auto read =
+        read_at(**file, handle.offset, handle.length, bytes.data(), nullptr);
+    if (!read) return dstd::Unexpected<dstd::Error>(read.error());
+    if (crc32(0, bytes.data(), bytes.size()) != handle.crc) {
         return parse_error();
     }
-    if (!bytes->empty() &&
-        bytes->front() == static_cast<std::uint8_t>(PageCodec::None)) {
-        bytes->erase(bytes->begin());
+    if (bytes.front() == static_cast<std::uint8_t>(PageCodec::None)) {
+        bytes.erase(bytes.begin());
         return bytes;
     }
-    return decode_meta(bytes_of(*bytes));
+    return decode_meta(bytes_of(bytes));
 }
 
 dstd::Expected<void, dstd::Error> DataFileReader::verify_block(
     const ExtentRef& ref, BlockReads* reads) const {
-    auto fd = descriptor();
-    if (!fd) return dstd::Unexpected<dstd::Error>(fd.error());
+    auto file = descriptor();
+    if (!file) return dstd::Unexpected<dstd::Error>(file.error());
     if (ref.length == 0 || ref.offset > file_size_ ||
         ref.length > file_size_ - ref.offset) {
         return parse_error();
@@ -1664,19 +1787,11 @@ dstd::Expected<void, dstd::Error> DataFileReader::verify_block(
     while (done < ref.length) {
         const std::size_t want = static_cast<std::size_t>(
             std::min<std::uint64_t>(chunk.size(), ref.length - done));
-        const ssize_t got = ::pread(*fd, chunk.data(), want,
-                                    static_cast<off_t>(ref.offset + done));
-        if (got < 0) {
-            if (errno == EINTR) continue;
-            return io_error();
-        }
-        if (got == 0) return parse_error();
-        if (reads != nullptr) {
-            ++reads->calls;
-            reads->bytes += static_cast<std::uint64_t>(got);
-        }
-        crc = crc32(crc, chunk.data(), static_cast<std::size_t>(got));
-        done += static_cast<std::uint64_t>(got);
+        auto read =
+            read_at(**file, ref.offset + done, want, chunk.data(), reads);
+        if (!read) return dstd::Unexpected<dstd::Error>(read.error());
+        crc = crc32(crc, chunk.data(), want);
+        done += want;
     }
     if (crc != ref.crc) return parse_error();
     return {};
@@ -1685,8 +1800,8 @@ dstd::Expected<void, dstd::Error> DataFileReader::verify_block(
 dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_extents(
     dstd::Span<const ExtentRef> refs,
     dstd::Span<const ExtentTarget> targets) const {
-    auto fd = descriptor();
-    if (!fd) return dstd::Unexpected<dstd::Error>(fd.error());
+    auto file = descriptor();
+    if (!file) return dstd::Unexpected<dstd::Error>(file.error());
     const auto in_file = [this](const ExtentRef& ref) {
         return ref.length != 0 && ref.offset <= file_size_ &&
                ref.length <= file_size_ - ref.offset;
@@ -1696,7 +1811,30 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_extents(
     };
 
     BlockReads counts;
-    dstd::Vector<struct iovec> vecs;
+    auto direct = direct_align();
+    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (*direct != 0) {
+        // One aligned window per extent, where preadv would scatter a run.
+        for (std::size_t i = 0; i < refs.size(); ++i) {
+            const ExtentRef& ref = refs[i];
+            dstd::Vector<std::uint8_t>& bytes = *targets[i].bytes;
+            if (in_file(ref)) {
+                bytes = dstd::Vector<std::uint8_t>(ref.length);
+                auto read = read_at(**file, ref.offset, ref.length,
+                                    bytes.data(), &counts);
+                if (!read && read.error().is(dstd::Condition::Io)) {
+                    return dstd::Unexpected<dstd::Error>(read.error());
+                }
+                if (read && crc32(0, bytes.data(), bytes.size()) == ref.crc) {
+                    continue;
+                }
+            }
+            *targets[i].bad = 1;
+            dstd::Vector<std::uint8_t>().swap(bytes);
+        }
+        return counts;
+    }
+    dstd::Vector<dstd::Span<std::uint8_t>> vecs;
     std::size_t at = 0;
     while (at < refs.size()) {
         if (!in_file(refs[at])) {
@@ -1705,8 +1843,9 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_extents(
             continue;
         }
         std::size_t end = at + 1;
-        while (end < refs.size() && end - at < IOV_MAX && in_file(refs[end]) &&
-               adjacent(refs[end - 1U], refs[end])) {
+        while (end < refs.size() &&
+               end - at < dstd::File::MAX_VECTORED_BUFFERS &&
+               in_file(refs[end]) && adjacent(refs[end - 1U], refs[end])) {
             ++end;
         }
 
@@ -1716,36 +1855,32 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_extents(
             const ExtentRef& ref = refs[i];
             *targets[i].bytes =
                 dstd::Vector<std::uint8_t>(ref.length, std::uint8_t{0});
-            vecs[i - at].iov_base = targets[i].bytes->data();
-            vecs[i - at].iov_len = targets[i].bytes->size();
+            vecs[i - at] = dstd::Span<std::uint8_t>(targets[i].bytes->data(),
+                                                    targets[i].bytes->size());
             group_bytes += ref.length;
         }
 
         std::size_t served = 0;
         std::uint64_t done = 0;
         while (done < group_bytes) {
-            struct iovec* cur = &vecs[served];
-            const ssize_t got =
-                ::preadv(*fd, cur, static_cast<int>(vecs.size() - served),
-                         static_cast<off_t>(refs[at].offset + done));
-            if (got < 0) {
-                if (errno == EINTR) continue;
-                return io_error();
-            }
-            if (got == 0) break;
+            auto got = (*file)->read_vectored_at(
+                refs[at].offset + done,
+                dstd::Span<const dstd::Span<std::uint8_t>>(
+                    vecs.data() + served, vecs.size() - served));
+            if (!got) return io_error();
+            if (*got == 0) break;
             ++counts.calls;
-            counts.bytes += static_cast<std::uint64_t>(got);
-            done += static_cast<std::uint64_t>(got);
-            std::size_t left = static_cast<std::size_t>(got);
+            counts.bytes += static_cast<std::uint64_t>(*got);
+            done += static_cast<std::uint64_t>(*got);
+            std::size_t left = *got;
             while (left > 0) {
-                struct iovec* extent = &vecs[served];
-                if (left < extent->iov_len) {
-                    extent->iov_base =
-                        static_cast<char*>(extent->iov_base) + left;
-                    extent->iov_len -= left;
+                dstd::Span<std::uint8_t>& extent = vecs[served];
+                if (left < extent.size()) {
+                    extent = dstd::Span<std::uint8_t>(extent.data() + left,
+                                                      extent.size() - left);
                     left = 0;
                 } else {
-                    left -= extent->iov_len;
+                    left -= extent.size();
                     ++served;
                 }
             }
@@ -1769,11 +1904,11 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_extents(
 
 dstd::Expected<dstd::Vector<ExtentRefItem>, dstd::Error>
 DataFileReader::read_commit(const CommitRefItem& ref, BlockReads* reads) const {
-    auto fd = descriptor();
-    if (!fd) return dstd::Unexpected<dstd::Error>(fd.error());
-    auto length = read_record_size(*fd, file_size_, ref.record_offset);
+    auto file = descriptor();
+    if (!file) return dstd::Unexpected<dstd::Error>(file.error());
+    auto length = read_record_size(**file, file_size_, ref.record_offset);
     if (!length) return dstd::Unexpected<dstd::Error>(length.error());
-    auto bytes = pread_all(*fd, ref.record_offset, *length);
+    auto bytes = pread_all(**file, ref.record_offset, *length);
     if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
     if (reads != nullptr) {
         reads->calls += 2;

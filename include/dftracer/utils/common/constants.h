@@ -55,6 +55,10 @@ inline constexpr bool DEFAULT_REPORT = false;
 namespace io_settings {
 /// auto, io_uring, epoll, kqueue or threadpool.
 inline constexpr const char* BACKEND_ENV = "DFTRACER_UTILS_IO_BACKEND";
+/// Above 0, io_uring asks for SQPOLL with this idle time in milliseconds.
+inline constexpr const char* SQPOLL_IDLE_ENV =
+    "DFTRACER_UTILS_IO_URING_SQPOLL_IDLE_MS";
+inline constexpr std::uint64_t DEFAULT_SQPOLL_IDLE_MS = 0;
 }  // namespace io_settings
 
 namespace executor_settings {
@@ -83,6 +87,11 @@ inline constexpr std::uint32_t STORE_DEFAULT_EXTENT_BYTES = std::uint32_t{1}
                                                             << 20;
 inline constexpr std::uint32_t STORE_MIN_EXTENT_BYTES = 4096;
 inline constexpr std::uint32_t STORE_MAX_EXTENT_BYTES = std::uint32_t{16} << 20;
+/// 1 reads the closed data files of a store past the operating system's page
+/// cache (O_DIRECT on Linux, F_NOCACHE on macOS); 0, the default, reads
+/// through it. A file system that refuses direct reads gets cached reads.
+inline constexpr const char* STORE_DIRECT_READS_ENV =
+    "DFTRACER_UTILS_STORE_DIRECT_READS";
 /// The most bytes of decoded pages one store snapshot keeps for its queries.
 /// STORE_PAGE_CACHE_BYTES_ENV overrides it with a plain number of bytes.
 inline constexpr const char* STORE_PAGE_CACHE_BYTES_ENV =

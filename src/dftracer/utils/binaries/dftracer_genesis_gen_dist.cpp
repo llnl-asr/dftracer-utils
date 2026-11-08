@@ -11,11 +11,13 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -24,7 +26,6 @@
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <fcntl.h>
 #include <sys/resource.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -586,30 +587,21 @@ bool copy_into(const dstd::String& from, const dstd::File& to,
                std::uint64_t offset) {
     auto source = dstd::File::open(dstd::PathView(from), {});
     if (!source) return false;
-    const int in = source->native_handle();
     auto buf = dstd::make_unique_for_overwrite<char[]>(COPY_BYTES);
-    bool ok = true;
+    std::uint64_t read_offset = 0;
     for (;;) {
-        const ssize_t n = ::read(in, buf.get(), COPY_BYTES);
-        if (n < 0) {
-            ok = false;
-            break;
-        }
-        if (n == 0) break;
-        for (ssize_t done = 0; done < n;) {
-            const ssize_t w = ::pwrite(to.native_handle(), buf.get() + done,
-                                       static_cast<std::size_t>(n - done),
-                                       static_cast<off_t>(offset));
-            if (w <= 0) {
-                ok = false;
-                break;
-            }
-            done += w;
-            offset += static_cast<std::uint64_t>(w);
-        }
-        if (!ok) break;
+        const auto n = source->read_at(
+            read_offset,
+            dstd::Span<std::uint8_t>(reinterpret_cast<std::uint8_t*>(buf.get()),
+                                     COPY_BYTES));
+        if (!n) return false;
+        if (*n == 0) break;
+        if (!to.write_all_at(offset, dstd::ByteView(buf.get(), *n)))
+            return false;
+        read_offset += *n;
+        offset += *n;
     }
-    return ok;
+    return true;
 }
 
 // Writes this process's groups to `output`. Skips go to stderr; the summary

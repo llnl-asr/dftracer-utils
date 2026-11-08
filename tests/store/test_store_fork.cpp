@@ -347,8 +347,7 @@ TEST_CASE("pack keeps a shared scope whole and a later writer adds to it") {
     CHECK(wait_for(later) == 0);
 }
 
-TEST_CASE(
-    "a shared namespace refuses a fold and erases, and a drop clears it") {
+TEST_CASE("a shared namespace refuses a fold, and a drop clears it") {
     dftu_utils_test::ScopedTestDir dir("store_shared_rules");
     auto opened =
         Store::open(dstd::StringView(dir.str().data(), dir.str().size()));
@@ -361,16 +360,7 @@ TEST_CASE(
     auto ns = opened->ns(shared_spec());
     REQUIRE(ns.has_value());
     REQUIRE(put(*opened, *ns, ScopeKey::root(), "k", "v").has_value());
-    const dstd::String begin = "a", end = "z";
-    CHECK(opened->erase(*ns, ScopeKey::root(), view_of(begin), view_of(end))
-              .error()
-              .is(dstd::Condition::Unsupported));
-    Batch batch = opened->batch(*ns, ScopeKey::root());
     const dstd::String key = "k";
-    batch.erase(view_of(key));
-    CHECK(run(opened->commit(std::move(batch)))
-              .error()
-              .is(dstd::Condition::Unsupported));
 
     REQUIRE(opened->drop(*ns, ScopeKey::root()).has_value());
     REQUIRE(run(opened->flush()).has_value());
@@ -379,6 +369,73 @@ TEST_CASE(
     auto gone = view->get(*ns, ScopeKey::root(), view_of(key));
     REQUIRE(gone.has_value());
     CHECK(!gone->has_value());
+}
+
+TEST_CASE("a shared namespace erase hides only the keys of this copy") {
+    dftu_utils_test::ScopedTestDir dir("store_shared_erase");
+    const dstd::String path = dir.str();
+    const dstd::String old_key = "old", own_key = "own", kept_key = "kept";
+    {
+        auto opened = Store::open(dstd::StringView(path.data(), path.size()));
+        REQUIRE(opened.has_value());
+        auto ns = opened->ns(shared_spec());
+        REQUIRE(ns.has_value());
+        REQUIRE(put(*opened, *ns, ScopeKey::root(), "old", "1").has_value());
+        REQUIRE(run(opened->close()).has_value());
+    }
+    auto opened = Store::open(dstd::StringView(path.data(), path.size()));
+    REQUIRE(opened.has_value());
+    auto ns = opened->ns(shared_spec());
+    REQUIRE(ns.has_value());
+    REQUIRE(put(*opened, *ns, ScopeKey::root(), "own", "2").has_value());
+    REQUIRE(put(*opened, *ns, ScopeKey::root(), "kept", "3").has_value());
+    const dstd::String begin = "ow", end = "ox";
+    REQUIRE(opened->erase(*ns, ScopeKey::root(), view_of(begin), view_of(end))
+                .has_value());
+    REQUIRE(run(opened->flush()).has_value());
+    auto view = opened->snapshot();
+    REQUIRE(view.has_value());
+    CHECK(view->get(*ns, ScopeKey::root(), view_of(old_key))->has_value());
+    CHECK(view->get(*ns, ScopeKey::root(), view_of(kept_key))->has_value());
+    CHECK_FALSE(
+        view->get(*ns, ScopeKey::root(), view_of(own_key))->has_value());
+}
+
+TEST_CASE("publish with replaces_older hides the older copies of a scope") {
+    dftu_utils_test::ScopedTestDir dir("store_shared_replace");
+    const dstd::String path = dir.str();
+    const dstd::String old_key = "old", new_key = "new", other_key = "other";
+    const ScopeKey other = ScopeKey::file(dstd::StringView("other"));
+    {
+        auto opened = Store::open(dstd::StringView(path.data(), path.size()));
+        REQUIRE(opened.has_value());
+        auto ns = opened->ns(shared_spec());
+        REQUIRE(ns.has_value());
+        REQUIRE(put(*opened, *ns, ScopeKey::root(), "old", "1").has_value());
+        REQUIRE(put(*opened, *ns, other, "other", "1").has_value());
+        REQUIRE(run(opened->close()).has_value());
+    }
+    auto opened = Store::open(dstd::StringView(path.data(), path.size()));
+    REQUIRE(opened.has_value());
+    auto ns = opened->ns(shared_spec());
+    REQUIRE(ns.has_value());
+    Batch batch = opened->building_batch(*ns, ScopeKey::root());
+    batch.put(view_of(new_key), view_of(new_key));
+    REQUIRE(run(opened->commit(std::move(batch))).has_value());
+    const ScopeKey root = ScopeKey::root();
+    Publish change;
+    change.ns = &*ns;
+    change.scope = &root;
+    change.replaces_older = true;
+    REQUIRE(run(opened->publish(dstd::Span<const Publish>(&change, 1)))
+                .has_value());
+    REQUIRE(run(opened->flush()).has_value());
+    auto view = opened->snapshot();
+    REQUIRE(view.has_value());
+    CHECK_FALSE(
+        view->get(*ns, ScopeKey::root(), view_of(old_key))->has_value());
+    CHECK(view->get(*ns, ScopeKey::root(), view_of(new_key))->has_value());
+    CHECK(view->get(*ns, other, view_of(other_key))->has_value());
 }
 
 namespace {

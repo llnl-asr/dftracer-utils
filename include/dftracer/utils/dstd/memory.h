@@ -6,6 +6,7 @@
 #include <dftracer/utils/memory/detail/heap.h>
 
 #include <cstddef>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <new>
@@ -48,7 +49,9 @@ struct Delete {
 
     Delete() noexcept = default;
     template <class U>
-        requires(std::is_convertible_v<U*, T*> &&
+    // U == T comes first: T can be incomplete where a member UniquePtr<T>
+    // is declared, and the trait below is an error on an incomplete type.
+        requires(!std::is_same_v<U, T> && std::is_convertible_v<U*, T*> &&
                  std::has_virtual_destructor_v<T>)
     Delete(const Delete<U>& /*other*/) noexcept {}
 
@@ -130,8 +133,17 @@ template <class T>
     requires std::is_unbounded_array_v<T>
 UniquePtr<T> make_unique(std::size_t n) {
     using E = std::remove_extent_t<T>;
-    return detail::fill_array<T>(detail::allocate_array<T>(n), n,
-                                 [](E* at) { ::new (at) E(); });
+    // One call per element stays in an unoptimized build, which then pays a
+    // call per byte of a large buffer.
+    if constexpr (std::is_arithmetic_v<E> || std::is_enum_v<E> ||
+                  std::is_pointer_v<E>) {
+        E* p = detail::allocate_array<T>(n);
+        std::memset(p, 0, n * sizeof(E));
+        return UniquePtr<T>(p);
+    } else {
+        return detail::fill_array<T>(detail::allocate_array<T>(n), n,
+                                     [](E* at) { ::new (at) E(); });
+    }
 }
 
 /// An array of @p n default-initialized elements. A number is left
@@ -140,8 +152,12 @@ template <class T>
     requires std::is_unbounded_array_v<T>
 UniquePtr<T> make_unique_for_overwrite(std::size_t n) {
     using E = std::remove_extent_t<T>;
-    return detail::fill_array<T>(detail::allocate_array<T>(n), n,
-                                 [](E* at) { ::new (at) E; });
+    if constexpr (std::is_trivially_default_constructible_v<E>) {
+        return UniquePtr<T>(detail::allocate_array<T>(n));
+    } else {
+        return detail::fill_array<T>(detail::allocate_array<T>(n), n,
+                                     [](E* at) { ::new (at) E; });
+    }
 }
 
 /**

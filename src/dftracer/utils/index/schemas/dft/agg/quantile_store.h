@@ -65,6 +65,7 @@ class QuantileStore {
     using ExactVec = dstd::Vector<double>;
 
     void to_sketch(const double* extra, std::size_t n);
+    void reserve_exact(std::size_t need);
     void destroy() noexcept;
 
     union {

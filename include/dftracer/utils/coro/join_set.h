@@ -28,8 +28,21 @@ class JoinSet;
 
 namespace detail {
 
+// An outcome in the queue of a join set. One that no reader takes, as when
+// the set ends first, is dropped on purpose.
 template <class T>
-using SettledResults = UnboundedChannel<dstd::Expected<T, dstd::Error>>;
+struct QueuedOutcome {
+    explicit QueuedOutcome(dstd::Expected<T, dstd::Error> value)
+        : outcome(std::move(value)) {}
+    QueuedOutcome(QueuedOutcome&&) = default;
+    QueuedOutcome& operator=(QueuedOutcome&&) = default;
+    ~QueuedOutcome() { outcome.discard(); }
+
+    dstd::Expected<T, dstd::Error> outcome;
+};
+
+template <class T>
+using SettledResults = UnboundedChannel<QueuedOutcome<T>>;
 
 // A frame parameter, so it reports a child that never started as well as one
 // whose frame a cancelled wait ended.
@@ -42,13 +55,13 @@ class JoinReport {
     JoinReport& operator=(JoinReport&&) = delete;
     ~JoinReport() {
         if (results_) {
-            results_->try_send(dstd::Unexpected(dstd::Error{
-                dstd::Condition::Cancelled, "a join set task was cancelled"}));
+            results_->try_send(QueuedOutcome<T>(dstd::Unexpected(dstd::Error{
+                dstd::Condition::Cancelled, "a join set task was cancelled"})));
         }
     }
 
     void send(dstd::Expected<T, dstd::Error> outcome) {
-        results_->try_send(std::move(outcome));
+        results_->try_send(QueuedOutcome<T>(std::move(outcome)));
         results_.reset();
     }
 
@@ -107,10 +120,11 @@ class JoinSet {
 
     explicit JoinSet(Scope& scope)
         : scope_(scope),
-          results_(make_unbounded_channel<dstd::Expected<T, dstd::Error>>()) {}
+          results_(make_unbounded_channel<detail::QueuedOutcome<T>>()) {}
 
     JoinSet(const JoinSet&) = delete;
     JoinSet& operator=(const JoinSet&) = delete;
+    ~JoinSet() { dstd::discard_unread(ready_); }
 
     /// A task that the scope refuses, or that a stop ends, gives a
     /// dstd::Condition::Cancelled error from @ref next.
@@ -150,7 +164,7 @@ class JoinSet {
    private:
     CoroTask<void> fill() {
         auto outcome = co_await results_->receive();
-        ready_ = std::move(outcome);
+        if (outcome) ready_ = std::move(outcome->outcome);
     }
 
     Outcome take_ready() {

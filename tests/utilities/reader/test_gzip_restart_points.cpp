@@ -23,7 +23,7 @@ using namespace dftracer::utils::utilities;
 
 namespace {
 
-constexpr std::uint64_t CKPT = 1u << 20;
+constexpr std::uint64_t CKPT = 128u << 10;
 
 dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     std::mt19937 rng(seed);
@@ -125,7 +125,7 @@ void check_reads_from_every_piece(Fixture& fx, const dstd::String& text) {
 
 TEST_SUITE("gzip_restart_points") {
     TEST_CASE("a one-member file splits into a head and restart pieces") {
-        const auto text = hex_lines(12u << 20, 1);
+        const auto text = hex_lines(2u << 20, 1);
         Fixture fx(gzip(text));
         const auto pieces = fx.indexer->members();
         REQUIRE(pieces.size() >= 6);
@@ -144,7 +144,7 @@ TEST_SUITE("gzip_restart_points") {
     }
 
     TEST_CASE("a read from a piece runs into the members after it") {
-        const auto text = hex_lines(12u << 20, 2);
+        const auto text = hex_lines(2u << 20, 2);
         const auto tail = hex_lines(1000, 3) + hex_lines(2000, 4);
         auto comp = gzip(text);
         for (const auto& t : {hex_lines(1000, 3), hex_lines(2000, 4)}) {
@@ -165,7 +165,7 @@ TEST_SUITE("gzip_restart_points") {
         dstd::Vector<std::size_t> sizes;
         dstd::String all;
         for (std::uint32_t i = 0; i < 5; ++i) {
-            const auto t = hex_lines(i % 2 ? 400u << 10 : 3000, 10 + i);
+            const auto t = hex_lines(i % 2 ? 100u << 10 : 3000, 10 + i);
             const auto m = gzip(t);
             comp.insert(comp.end(), m.begin(), m.end());
             sizes.push_back(t.size());
@@ -183,7 +183,7 @@ TEST_SUITE("gzip_restart_points") {
     }
 
     TEST_CASE("a cut one-member file keeps its complete lines") {
-        const auto text = hex_lines(12u << 20, 5);
+        const auto text = hex_lines(2u << 20, 5);
         auto comp = gzip(text);
         comp.resize(comp.size() * 7 / 10);
         Fixture fx(comp);
@@ -197,11 +197,11 @@ TEST_SUITE("gzip_restart_points") {
     }
 
     TEST_CASE("a cut inside a line longer than a piece keeps whole lines") {
-        dstd::String long_line(3u << 20, 'a');
+        dstd::String long_line(768u << 10, 'a');
         std::mt19937 rng(9);
         for (auto& c : long_line) c = static_cast<char>('a' + rng() % 26);
-        const auto head = hex_lines(4u << 20, 8);
-        const auto text = head + long_line + "\n" + hex_lines(1u << 20, 10);
+        const auto head = hex_lines(512u << 10, 8);
+        const auto text = head + long_line + "\n" + hex_lines(128u << 10, 10);
         auto comp = gzip(text);
         // Cut inside the long line, past at least one restart point in it.
         comp.resize(comp.size() * (head.size() + long_line.size() * 3 / 4) /
@@ -215,7 +215,7 @@ TEST_SUITE("gzip_restart_points") {
     }
 
     TEST_CASE("a line range from the split file equals the lines") {
-        const auto text = hex_lines(12u << 20, 6);
+        const auto text = hex_lines(2u << 20, 6);
         Fixture fx(gzip(text));
         dstd::Vector<std::size_t> starts;
         std::size_t pos = 0;

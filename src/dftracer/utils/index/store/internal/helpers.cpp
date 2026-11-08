@@ -4,20 +4,10 @@
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
-
-// Platform-specific includes for file stats
-#ifdef _WIN32
-#include <sys/stat.h>
-#else
-#include <sys/stat.h>
-#include <sys/types.h>
-#endif
-
-#include <fcntl.h>
-#include <unistd.h>
 
 namespace dftracer::utils::index::store::internal {
 
@@ -45,13 +35,13 @@ std::uint64_t calculate_file_hash(dstd::CStringView file_path) {
         return 0;
     }
 
-    struct stat st{};
-    if (::fstat(file->native_handle(), &st) != 0) return 0;
-    return calculate_file_hash(file->native_handle(),
-                               static_cast<std::uint64_t>(st.st_size));
+    const auto size = file->size();
+    if (!size) return 0;
+    return calculate_file_hash(*file, *size);
 }
 
-std::uint64_t calculate_file_hash(int fd, std::uint64_t file_size_u64) {
+std::uint64_t calculate_file_hash(const dstd::File &file,
+                                  std::uint64_t file_size_u64) {
     // Fast fingerprint: hash file_size + first 64KB + last 64KB.
     constexpr std::size_t SAMPLE_SIZE = 64 * 1024;
     const auto file_size = static_cast<std::size_t>(file_size_u64);
@@ -68,21 +58,21 @@ std::uint64_t calculate_file_hash(int fd, std::uint64_t file_size_u64) {
 
     // Hash first SAMPLE_SIZE bytes
     std::size_t head_bytes = std::min(file_size, SAMPLE_SIZE);
-    ssize_t rd = ::pread(fd, buf, head_bytes, 0);
-    if (rd > 0) {
+    auto rd = file.read_at(0, dstd::Span<std::uint8_t>(buf, head_bytes));
+    if (rd && *rd > 0) {
         hasher.update(dstd::StringView(reinterpret_cast<const char *>(buf),
-                                       static_cast<std::size_t>(rd)));
+                                       static_cast<std::size_t>(*rd)));
     }
 
     // Hash last SAMPLE_SIZE bytes, only if file is large enough such that they
     // don't overlap with the head
     if (file_size > SAMPLE_SIZE) {
-        off_t tail_off =
-            static_cast<off_t>(file_size - std::min(file_size, SAMPLE_SIZE));
-        rd = ::pread(fd, buf, SAMPLE_SIZE, tail_off);
-        if (rd > 0) {
+        const std::uint64_t tail_off =
+            file_size - std::min(file_size, SAMPLE_SIZE);
+        rd = file.read_at(tail_off, dstd::Span<std::uint8_t>(buf, SAMPLE_SIZE));
+        if (rd && *rd > 0) {
             hasher.update(dstd::StringView(reinterpret_cast<const char *>(buf),
-                                           static_cast<std::size_t>(rd)));
+                                           static_cast<std::size_t>(*rd)));
         }
     }
 
@@ -96,9 +86,8 @@ std::uint64_t file_size_bytes(dstd::CStringView path) {
 
     auto file = dstd::File::open(dstd::PathView(path), {});
     if (!file) return 0;
-    off_t pos = ::lseek(file->native_handle(), 0, SEEK_END);
-    if (pos < 0) return 0;
-    return static_cast<std::uint64_t>(pos);
+    const auto size = file->size();
+    return size ? *size : 0;
 }
 
 }  // namespace dftracer::utils::index::store::internal

@@ -290,6 +290,10 @@ def capture(build: Path, root: Path, output: Path, gcov: str) -> None:
             # rejects as the gcov bug 68080; the counts are real, so keep them.
             "--gcov-ignore-parse-errors",
             "suspicious_hits.warn_once_per_file",
+            # Threads race on the plain counters, which atomic ones would slow
+            # down many times over, and a lost update can leave a negative count.
+            "--gcov-ignore-parse-errors",
+            "negative_hits.warn_once_per_file",
             "--filter",
             str(root / "src") + "/",
             "--filter",

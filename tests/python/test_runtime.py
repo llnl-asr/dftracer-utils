@@ -13,8 +13,8 @@ class TestRuntimeCreation:
         assert rt.threads > 0
 
     def test_custom_threads(self):
-        rt = dftu_utils.Runtime(threads=4)
-        assert rt.threads == 4
+        rt = dftu_utils.Runtime(threads=2)
+        assert rt.threads == 2
         rt.shutdown()
 
     def test_context_manager(self):
@@ -45,10 +45,10 @@ class TestRuntimeCreation:
 
     def test_every_runtime_is_the_process_runtime(self):
         default = dftu_utils.get_default_runtime()
-        dftu_utils.Runtime(threads=4)
-        assert default.threads == 4
-        dftu_utils.Runtime(threads=3)
-        assert default.threads == 3
+        dftu_utils.Runtime(threads=1)
+        assert default.threads == 1
+        dftu_utils.Runtime(threads=2)
+        assert default.threads == 2
 
     def test_leaving_a_with_block_keeps_the_runtime_running(self):
         with dftu_utils.Runtime(threads=2):

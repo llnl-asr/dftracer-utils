@@ -4,7 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
@@ -245,7 +245,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     log_stage("scan");
 
     std::size_t skipped_fresh = 0;
-    dstd::Set<dstd::String> stale_tiers;
+    dstd::HashSet<dstd::String> stale_tiers;
     if (!force_rebuild) {
         ResolverInput resolve_input;
         resolve_input.entries = matched_entries;

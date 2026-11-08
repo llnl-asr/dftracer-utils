@@ -68,7 +68,15 @@ class StreamRowFold : public Fold {
           guard_(channel_.get()) {}
 
     bool accepts(const ScanShape&) const override { return true; }
-    bool needs_args() const override { return true; }
+    bool needs_args() const override {
+        if (keep_metadata_ || emit_dyn_ || by_path_ || json_ ||
+            !row_select_is_arg_free(select_))
+            return true;
+        if (branch_ && branch_->query)
+            for (dstd::StringView f : branch_->query->fields())
+                if (!query_field_is_arg_free(f)) return true;
+        return false;
+    }
     bool wants_metadata() const override { return keep_metadata_; }
 
     dstd::Vector<dstd::String> extra_captures() const override {

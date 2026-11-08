@@ -77,6 +77,16 @@ static_assert(
 static_assert(!std::is_convertible_v<dstd::UniquePtr<PlainDerived>,
                                      dstd::UniquePtr<PlainBase>>);
 
+namespace {
+struct NeverDefined;
+}
+
+TEST_CASE("Delete copies while its type is incomplete") {
+    const dstd::Delete<NeverDefined> first;
+    const dstd::Delete<NeverDefined> second(first);
+    static_cast<void>(second);
+}
+
 TEST_CASE("Vector copies, moves and grows like std::vector") {
     dstd::Vector<int> v{1, 2, 3};
     for (int i = 4; i <= 1000; ++i) v.push_back(i);

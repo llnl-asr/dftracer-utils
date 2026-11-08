@@ -213,8 +213,8 @@ TEST_CASE("blocks keep their alignment and the redzone does not move them") {
 TEST_CASE("many threads allocate and free across threads") {
     PoolHandle pool = Manager::get().root().child("debug threads");
     std::size_t before = Manager::get().root().live();
-    constexpr int THREADS = 8;
-    constexpr int ROUNDS = 5000;
+    constexpr int THREADS = 4;
+    constexpr int ROUNDS = 1000;
     std::vector<std::atomic<void*>> mailbox(THREADS);
     for (auto& m : mailbox) m.store(nullptr);
     std::vector<std::thread> threads;

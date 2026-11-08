@@ -79,6 +79,9 @@ set(DEPENDENCY_LIBRARY_DIRS "")
 option(DFTRACER_UTILS_TESTS "Build tests" OFF)
 option(DFTRACER_UTILS_COVERAGE "Enable coverage reporting" OFF)
 option(DFTRACER_UTILS_DEBUG "Enable debug mode including verbose logging" OFF)
+if(DFTRACER_UTILS_DEBUG)
+  add_compile_definitions(DFTRACER_UTILS_EXPECTED_CHECKS=1)
+endif()
 option(
   DFTRACER_UTILS_TEST_PROBES
   "Compile in the counters and switches that only tests read; the tests that read them build only when it is ON"
@@ -269,7 +272,6 @@ dftracer_utils_interface_versions("${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
                                   "${CMAKE_BINARY_DIR}/include")
 
 if(DFTRACER_UTILS_TESTS AND DFTRACER_UTILS_COVERAGE)
-  set_coverage_compiler_flags()
   add_compile_definitions(DFTRACER_UTILS_COVERAGE_BUILD)
 endif()
 

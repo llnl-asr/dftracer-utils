@@ -63,7 +63,7 @@ class TestDaskWorkerPlugin:
     def test_setup_sets_default_runtime(self):
         from dftracer.utils.dask import DFTracerUtilsDaskWorkerPlugin
 
-        plugin = DFTracerUtilsDaskWorkerPlugin(threads=4)
+        plugin = DFTracerUtilsDaskWorkerPlugin(threads=2)
 
         class MockWorker:
             pass
@@ -71,7 +71,7 @@ class TestDaskWorkerPlugin:
         worker = MockWorker()
         plugin.setup(worker)
         default = dftu_utils.get_default_runtime()
-        assert default.threads == 4
+        assert default.threads == 2
 
 
 @pytest.mark.skipif(not DASK_DISTRIBUTED_AVAILABLE, reason="dask.distributed not available")

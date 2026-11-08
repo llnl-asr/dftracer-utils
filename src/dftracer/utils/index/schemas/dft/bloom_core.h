@@ -20,8 +20,10 @@
 #include <utility>
 
 namespace dftracer::utils::index {
+class Snapshot;
+class FileRef;
 class FileBuild;
-}
+}  // namespace dftracer::utils::index
 
 namespace dftracer::utils::index::store {
 enum class ColumnType : std::uint8_t;
@@ -219,6 +221,15 @@ class BloomCore {
     /// The file-level records a file's chunks add up to: file blooms, file
     /// statistics and the chunk count. write_chunk feeds it; finish_file
     /// writes it.
+    class FileAccumulator;
+    /// Loads into `acc` what the file-wide records of `file` hold, so new
+    /// chunks add to them. Returns the extra dimensions the file is indexed on
+    /// besides config.extra_dimensions. A dimension without a file bloom keeps
+    /// none, since a filter of the new values alone would miss the old ones.
+    static dstd::Vector<dstd::String> seed_accumulator(
+        const index::Snapshot& snapshot, const index::FileRef& file,
+        const ChunkIndexerConfig& config, FileAccumulator& acc);
+
     class FileAccumulator {
        public:
         explicit FileAccumulator(const ChunkIndexerConfig& config);

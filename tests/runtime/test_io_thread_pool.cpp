@@ -4,6 +4,7 @@
 #include <dftracer/utils/runtime/io/io_thread_pool.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <doctest/doctest.h>
+#include <testing_runtime.h>
 
 #include <atomic>
 #include <chrono>
@@ -212,12 +213,14 @@ TEST_CASE("an eager executor holds more threads than an elastic one") {
         auto executor = make_task_executor(config);
         executor->start();
         const std::size_t during = settled_threads();
-        CHECK(executor->io_pool_size() == 8);
+        CHECK(executor->io_pool_size() == dftu_utils_test::pool_width(8));
         executor->shutdown();
         return during - before;
     };
     if (process_threads() == 0) return;
     const std::size_t eager = held(0);
     const std::size_t elastic_held = held(1);
-    CHECK(eager >= elastic_held + 6);
+    // Eager holds at least all but two of the I/O threads more than elastic:
+    // six of eight, and none when the pool is capped at two.
+    CHECK(eager + 2 >= elastic_held + dftu_utils_test::pool_width(8));
 }

@@ -263,7 +263,7 @@ void check_extent_layout(dstd::Vector<engine::WrittenExtent>& extents,
         });
     for (std::size_t i = 0; i < extents.size(); ++i) {
         CHECK(extents[i].offset % store::engine::EXTENT_ALIGN_BYTES == 0);
-        CHECK(extents[i].length % FOUR_KIB == 0);
+        CHECK(extents[i].length % store::engine::EXTENT_ALIGN_BYTES == 0);
         CHECK(extents[i].length <= extent_size);
         CHECK(!extents[i].segments.empty());
         CHECK(extents[i].contexts.size() == extents[i].segments.size());
@@ -451,7 +451,7 @@ TEST_CASE("store open extent: a segment of three extents is written alone") {
     REQUIRE(extents.size() == 1);
     const engine::WrittenExtent& extent = extents.front();
     CHECK(extent.offset % store::engine::EXTENT_ALIGN_BYTES == 0);
-    CHECK(extent.length % FOUR_KIB == 0);
+    CHECK(extent.length % store::engine::EXTENT_ALIGN_BYTES == 0);
     REQUIRE(extent.segments.size() == 1);
     CHECK(extent.segments.front().offset_in_extent == 0);
     CHECK(extent.segments.front().length == length);
@@ -526,7 +526,8 @@ TEST_CASE(
     REQUIRE(rest.segments.size() == 1);
     CHECK(rest.segments[0].offset_in_extent == 0);
     CHECK(rest.segments[0].length == c.size());
-    CHECK(rest.length == FOUR_KIB);
+    CHECK(rest.length % store::engine::EXTENT_ALIGN_BYTES == 0);
+    CHECK(rest.length < FOUR_KIB);
     REQUIRE(rest.contexts.size() == 1);
     CHECK(rest.contexts[0] == &context_c);
 
@@ -633,13 +634,14 @@ TEST_CASE(
     auto extent =
         file->append_extent(dstd::ByteView(payload.data(), payload.size()));
     REQUIRE(extent.has_value());
-    // An extent starts at the next 4 KiB after the file end, not at the next
-    // extent size, and its stored form fills whole 4 KiB blocks.
-    CHECK(extent->offset == SIXTY_FOUR_KIB + 2 * FOUR_KIB);
-    CHECK(extent->length == FOUR_KIB);
+    // An extent starts at the next EXTENT_ALIGN_BYTES after the file end and
+    // is padded only to that; a big value starts at the next 4 KiB.
+    CHECK(extent->offset == SIXTY_FOUR_KIB + FOUR_KIB + 24);
+    CHECK(extent->length % store::engine::EXTENT_ALIGN_BYTES == 0);
+    CHECK(extent->length < FOUR_KIB - 24);
     auto big = file->append_big(dstd::ByteView(payload.data(), payload.size()));
     REQUIRE(big.has_value());
-    CHECK(big->offset == SIXTY_FOUR_KIB + 3 * FOUR_KIB);
+    CHECK(big->offset == SIXTY_FOUR_KIB + 2 * FOUR_KIB);
 }
 
 TEST_CASE("store open extent: stress a small extent from many threads") {
@@ -721,7 +723,8 @@ TEST_CASE("store open extent: a short write is finished with resubmissions") {
 
     dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
-    CHECK(extents.front().length == FOUR_KIB);
+    CHECK(extents.front().length % store::engine::EXTENT_ALIGN_BYTES == 0);
+    CHECK(extents.front().length < FOUR_KIB);
 
     auto fd_file = dstd::File::open(file_path, {});
     REQUIRE(fd_file);
@@ -817,7 +820,8 @@ TEST_CASE("store open extent: an extent write needs the backend flush") {
 
     dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
-    CHECK(extents.front().length == FOUR_KIB);
+    CHECK(extents.front().length % store::engine::EXTENT_ALIGN_BYTES == 0);
+    CHECK(extents.front().length < FOUR_KIB);
 
     auto fd_file = dstd::File::open(file_path, {});
     REQUIRE(fd_file);
@@ -856,7 +860,7 @@ TEST_CASE(
     REQUIRE(extents.size() == 1);
     const engine::WrittenExtent& extent = extents.front();
     CHECK(extent.offset % store::engine::EXTENT_ALIGN_BYTES == 0);
-    CHECK(extent.length % FOUR_KIB == 0);
+    CHECK(extent.length % store::engine::EXTENT_ALIGN_BYTES == 0);
     REQUIRE(extent.segments.size() == 1);
     CHECK(extent.segments.front().offset_in_extent == 0);
     CHECK(extent.segments.front().length == EIGHT_KIB);

@@ -20,6 +20,7 @@
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/fold.h>
+#include <dftracer/utils/store/open_extent.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/segment.h>
 #include <dftracer/utils/store/snapshot.h>
@@ -48,6 +49,24 @@ using namespace dftracer::utils;
 namespace {
 
 using namespace dftracer::utils::store;
+
+// Sets the dictionary sample size and training wait for one test case.
+class DictLimits {
+   public:
+    DictLimits(std::size_t sample_bytes, std::uint64_t wait_bytes)
+        : sample_(engine::g_dict_sample_bytes.exchange(sample_bytes)),
+          wait_(engine::g_dict_wait_bytes.exchange(wait_bytes)) {}
+    ~DictLimits() {
+        engine::g_dict_sample_bytes.store(sample_);
+        engine::g_dict_wait_bytes.store(wait_);
+    }
+    DictLimits(const DictLimits&) = delete;
+    DictLimits& operator=(const DictLimits&) = delete;
+
+   private:
+    std::size_t sample_;
+    std::uint64_t wait_;
+};
 
 constexpr std::uint32_t SMALL_EXTENT = 4096;
 constexpr std::size_t HEADER_WRITER_RANDOM_AT = 32;
@@ -637,9 +656,11 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_page_dict");
         const ScopeKey scope = file_scope("/traces/dict.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.dict");
-        // The first dictionary trains on the first 8 MiB, the second on every
-        // eighth page of the 64 MiB after it.
-        constexpr int KEYS = 120000;
+        // The first dictionary trains on the first 1 MiB, the second on every
+        // eighth page of the 8 MiB after it, and a seal waits for a training
+        // after 2 MiB more. 20000 values of 1 KiB hold both; 24000 leave room.
+        const DictLimits limits(std::size_t{1} << 20, std::uint64_t{2} << 20);
+        constexpr int KEYS = 24000;
         constexpr int PER_BATCH = 200;
         constexpr int PER_BIG_BATCH = 2000;
         const auto dict_key = [](int index) {
@@ -678,7 +699,11 @@ TEST_SUITE("index store snapshot") {
                 const dstd::String bytes = value(i);
                 batch.put(view_of(key), view_of(bytes));
             }
-            REQUIRE(writer->commit(std::move(batch)).has_value());
+            auto committed = writer->commit(std::move(batch));
+            REQUIRE_MESSAGE(
+                committed.has_value(),
+                (committed ? dstd::String()
+                           : dstd::String(committed.error().message())));
             first += count;
         }
         REQUIRE(flush_writer(*writer).has_value());
@@ -1312,7 +1337,7 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(run.segments.size() == 1);
         CHECK(run.segments[0].entry_count == static_cast<std::uint64_t>(COUNT));
         CHECK(run.length > SMALL_EXTENT);
-        CHECK(run.length % SMALL_EXTENT == 0);
+        CHECK(run.length % store::engine::EXTENT_ALIGN_BYTES == 0);
 
         auto snapshot = engine::Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -1599,12 +1624,12 @@ TEST_SUITE("index store snapshot") {
                 snapshot.scan(spec, scope, dstd::ByteView{}, dstd::ByteView{});
             const auto rows = collect(whole);
             REQUIRE(rows.size() == 3);
-            CHECK(rows[0] ==
-                  dstd::Pair{dstd::String("key-a"), dstd::String("v1-key-a")});
-            CHECK(rows[1] ==
-                  dstd::Pair{dstd::String("key-c"), dstd::String("v2-key-c")});
-            CHECK(rows[2] ==
-                  dstd::Pair{dstd::String("key-d"), dstd::String("v1-key-d")});
+            CHECK(rows[0] == dstd::make_pair(dstd::String("key-a"),
+                                             dstd::String("v1-key-a")));
+            CHECK(rows[1] == dstd::make_pair(dstd::String("key-c"),
+                                             dstd::String("v2-key-c")));
+            CHECK(rows[2] == dstd::make_pair(dstd::String("key-d"),
+                                             dstd::String("v1-key-d")));
 
             auto prefix =
                 snapshot.scan(spec, scope, view_of(dstd::String("key-b")));
@@ -2016,7 +2041,7 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(first.has_value());
             REQUIRE(second.has_value());
             for (const auto& [at, scope] :
-                 {dstd::Pair{*first, a}, dstd::Pair{*second, a}}) {
+                 {dstd::make_pair(*first, a), dstd::make_pair(*second, a)}) {
                 Batch batch = writer->batch(at, scope, 0);
                 batch.put(view_of(dstd::String("key")),
                           view_of(dstd::String("v")));
@@ -2824,9 +2849,10 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->state(spec, first) == ScopeState::Bad);
         CHECK(snapshot->state(spec, second) == ScopeState::Bad);
         CHECK(snapshot->state(spec, third) == ScopeState::Ready);
-        for (const auto& hidden : {dstd::Pair{first, dstd::String("a-1")},
-                                   dstd::Pair{first, dstd::String("a-2")},
-                                   dstd::Pair{second, dstd::String("b-1")}}) {
+        for (const auto& hidden :
+             {dstd::make_pair(first, dstd::String("a-1")),
+              dstd::make_pair(first, dstd::String("a-2")),
+              dstd::make_pair(second, dstd::String("b-1"))}) {
             auto found =
                 snapshot->get(spec, hidden.first, view_of(hidden.second));
             REQUIRE(found.has_value());
@@ -2885,7 +2911,8 @@ TEST_SUITE("index store snapshot") {
                 REQUIRE(extent.ref.segments.size() == 1);
                 CHECK(extent.ref.segments[0].length >=
                       SMALL_EXTENT - store::engine::EXTENT_HEADER_BYTES);
-                CHECK(extent.ref.length % SMALL_EXTENT == 0);
+                CHECK(extent.ref.length % store::engine::EXTENT_ALIGN_BYTES ==
+                      0);
             }
             REQUIRE(close_writer(*writer).has_value());
         }
@@ -3035,10 +3062,19 @@ TEST_SUITE("index store snapshot") {
             ScopedDefaultRuntime runtime(1);
             return dump_open(dir, spec, scopes);
         }();
+#if DFTRACER_UTILS_TEST_PROBES
+        const std::uint64_t direct_before = engine::g_direct_reads.load();
+#endif
         const OpenDump eight = [&] {
             ScopedDefaultRuntime runtime(8);
             return dump_open(dir, spec, scopes);
         }();
+        // Direct reads skip the page cache, so they warm no window.
+#if DFTRACER_UTILS_TEST_PROBES
+        const bool direct = engine::g_direct_reads.load() > direct_before;
+#else
+        const bool direct = false;
+#endif
 
         CHECK(one.text == eight.text);
         CHECK(one.files == WRITERS);
@@ -3062,7 +3098,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(eight.indexes_read == 0);
         CHECK(eight.metadata_blocks_read == one.metadata_blocks_read);
         CHECK(eight.metadata_blocks_read >= 2U * WRITERS);
-        CHECK(eight.windows_warmed == WRITERS);
+        CHECK(eight.windows_warmed == (direct ? 0U : WRITERS));
         CHECK(eight.read_calls == eight.extents_read +
                                       eight.metadata_blocks_read +
                                       eight.page_reads + eight.windows_warmed);
@@ -3088,7 +3124,7 @@ TEST_SUITE("index store snapshot") {
             middle_raw += segment.length;
         }
         CHECK(middle_raw > SMALL_EXTENT);
-        CHECK(middle.length % SMALL_EXTENT == 0);
+        CHECK(middle.length % store::engine::EXTENT_ALIGN_BYTES == 0);
 
         dstd::Vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(middle.offset + middle.length <= bytes.size());
@@ -3126,6 +3162,27 @@ TEST_SUITE("index store snapshot") {
         };
         check(1);
         check(8);
+
+        // A later snapshot of one store does not check a good commit again,
+        // and still finds the bad one.
+        const auto verified =
+            dstd::make_shared<engine::detail::VerifiedCommits>();
+        const auto read_all = [&](const engine::Snapshot& snapshot) {
+            CHECK(snapshot.state(spec, scopes[1]) == ScopeState::Bad);
+            for (const std::size_t at : {std::size_t{0}, std::size_t{2}}) {
+                auto cursor = snapshot.scan(spec, scopes[at], dstd::ByteView{},
+                                            dstd::ByteView{});
+                CHECK(collect(cursor).size() == 1000);
+            }
+        };
+        auto first = engine::Snapshot::open(copy_dir.str(), verified);
+        REQUIRE(first.has_value());
+        read_all(*first);
+        CHECK(first->read_stats().commits_verified == 3);
+        auto second = engine::Snapshot::open(copy_dir.str(), verified);
+        REQUIRE(second.has_value());
+        read_all(*second);
+        CHECK(second->read_stats().commits_verified == 1);
     }
 
     TEST_CASE("a block that cannot be read fails its queries with the error") {

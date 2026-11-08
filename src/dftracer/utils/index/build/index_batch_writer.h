@@ -31,6 +31,8 @@ using index::schemas::dft::agg::AggregationFold;
 struct ParsedIndexJob {
     /// The file was not in the index before, so it has no old tier to clear.
     bool fresh = false;
+    /// These are new members of a file the index holds: the keys add to it.
+    bool appended = false;
     dstd::String file_path;
     index::gzip::GzipBuildArtifacts artifacts;
     // The folds' intern, destroyed after them.
@@ -68,8 +70,16 @@ inline void fill_file_build(index::FileBuild& build, ParsedIndexJob& job) {
     if (job.plugin_builders) job.plugin_builders->write(build);
     if (job.rowset_fold) job.rowset_fold->write(build);
     if (job.agg_fold) job.agg_fold->write(build);
-    // New members renumber the chunks, so a copy the build does not write
-    // would describe old ones. A fresh file has nothing to clear.
+    if (job.appended) {
+        // A row set frame holds the whole file, and these members are not in
+        // it. Queries scan until a rebuild writes it again.
+        build.keep_older_copies();
+        build.clear(index::store::IndexExtension::Rowset);
+        return;
+    }
+    // A fresh file has no older copies. A rebuild renumbers the chunks, so a
+    // copy it does not write would describe old ones.
+    if (job.fresh) build.keep_older_copies();
     if (job.tier_only || job.fresh) return;
     index::clear_unwritten(build);
 }

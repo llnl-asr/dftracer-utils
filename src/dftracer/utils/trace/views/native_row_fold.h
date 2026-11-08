@@ -118,6 +118,16 @@ build_dyn_numeric_columns(EventRows events,
 dstd::Vector<dstd::String> row_fold_extra_captures(
     const dstd::Vector<dstd::String>& select);
 
+/// True when every column of a non-empty `select` comes from the event's own
+/// scalar fields (name, cat, pid, tid, ts, dur, ph, fhash, hhash, io_cat,
+/// acc_pat), so the scan can skip decoding args. An empty `select` emits
+/// every arg column and is never arg free.
+bool row_select_is_arg_free(const dstd::Vector<dstd::String>& select);
+
+/// True when a query field `f` reads only the event's own scalar fields (name,
+/// cat, pid, tid, ts, dur, ph, fhash, hhash). Any other name is read from args.
+bool query_field_is_arg_free(dstd::StringView f);
+
 /// The output column name build_row_frame's select branch gives `sel`: a
 /// top-level field or resolved column keeps its own name;
 /// fhash/hhash keep their bare name; anything else is an arg, flat or a nested
@@ -187,7 +197,9 @@ class NativeRowFold : public Fold {
           by_path_(by_path) {}
 
     bool accepts(const ScanShape&) const override { return true; }
-    bool needs_args() const override { return true; }
+    bool needs_args() const override {
+        return keep_metadata_ || by_path_ || !row_select_is_arg_free(select_);
+    }
     bool wants_metadata() const override { return keep_metadata_; }
 
     dstd::Vector<dstd::String> extra_captures() const override {

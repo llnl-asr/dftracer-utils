@@ -95,7 +95,7 @@ dstd::String signature(const duql::Pipeline& p) {
                 if constexpr (std::is_same_v<T, duql::PipelineWhere>) {
                     out += " " + n.text;
                 } else if constexpr (std::is_same_v<T, duql::PipelineBucket>) {
-                    out += " " + dstd::int_text(n.width) + " " + n.text;
+                    out += " " + dstd::fixed_text(n.width) + " " + n.text;
                 } else if constexpr (std::is_same_v<T, duql::PipelineGroup>) {
                     for (const auto& k : n.keys) out += " k:" + k.text;
                     for (const auto& a : n.aggs)

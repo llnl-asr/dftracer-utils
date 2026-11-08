@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/async_event.h>
 #include <dftracer/utils/coro/join_set.h>
 #include <dftracer/utils/coro/stage.h>
 #include <dftracer/utils/coro/stream.h>
@@ -28,6 +29,17 @@ CoroTask<int> after(std::chrono::milliseconds delay, int value) {
 
 CoroTask<int> fails_after(std::chrono::milliseconds delay) {
     co_await sleep(delay);
+    throw common::DFTUtilsException(
+        dstd::Error{dstd::Condition::Io, "planned failure"});
+}
+
+CoroTask<int> when_set(AsyncEvent& gate, int value) {
+    co_await gate.wait();
+    co_return value;
+}
+
+CoroTask<int> fails_when_set(AsyncEvent& gate) {
+    co_await gate.wait();
     throw common::DFTUtilsException(
         dstd::Error{dstd::Condition::Io, "planned failure"});
 }
@@ -98,18 +110,24 @@ struct FailsOnThree {
 
 TEST_CASE("a join set gives results as they finish, with errors as values") {
     Runtime runtime(2);
+    AsyncEvent first;
+    AsyncEvent second;
+    AsyncEvent third;
     auto seen = runtime.block_on(with_join_set<int>(
-        [](JoinSet<int>& set) -> CoroTask<dstd::Vector<int>> {
-            set.spawn(after(30ms, 3));
-            set.spawn(after(1ms, 1));
-            set.spawn(fails_after(15ms));
+        [&](JoinSet<int>& set) -> CoroTask<dstd::Vector<int>> {
+            set.spawn(when_set(third, 3));
+            set.spawn(when_set(first, 1));
+            set.spawn(fails_when_set(second));
             CHECK(set.size() == 3);
             dstd::Vector<int> out;
-            for (;;) {
+            for (AsyncEvent* gate : {&first, &second, &third}) {
+                gate->set();
                 auto outcome = co_await set.next();
-                if (!outcome) break;
+                REQUIRE(outcome);
                 out.push_back(outcome->has_value() ? **outcome : -1);
             }
+            auto none = co_await set.next();
+            CHECK(!none);
             CHECK(set.size() == 0);
             co_return out;
         }));
@@ -123,7 +141,7 @@ TEST_CASE("a join set wait can time out and lose nothing") {
     Runtime runtime(2);
     auto value = runtime.block_on(
         with_join_set<int>([](JoinSet<int>& set) -> CoroTask<int> {
-            set.spawn(after(80ms, 7));
+            set.spawn(after(500ms, 7));
             dstd::Condition condition = dstd::Condition::Unknown;
             try {
                 auto waited = co_await set.next_within(5ms);
@@ -166,9 +184,9 @@ TEST_CASE("a join set task that a stop ends reports as cancelled") {
 TEST_CASE("as_completed gives each outcome and honors its limit") {
     Runtime runtime(4);
     dstd::Vector<CoroTask<int>> tasks;
-    tasks.push_back(after(30ms, 3));
+    tasks.push_back(after(300ms, 3));
     tasks.push_back(fails_after(1ms));
-    tasks.push_back(after(10ms, 2));
+    tasks.push_back(after(150ms, 2));
     auto outcomes = runtime.block_on(collect(as_completed(std::move(tasks))));
     REQUIRE(outcomes.size() == 3);
     CHECK_FALSE(outcomes[0].has_value());

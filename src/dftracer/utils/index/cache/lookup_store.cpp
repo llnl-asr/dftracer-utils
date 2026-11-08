@@ -34,6 +34,8 @@ constexpr std::uint64_t SIG_BYTES = 8;
 }  // namespace
 
 dstd::String lookup_cache_path(const trace::views::detail::ViewPlan& plan) {
+    // A pin selects other rows at the same file stat, which a key cannot see.
+    if (trace::views::detail::has_pin(plan)) return {};
     const dstd::String dir = cache_dir(plan);
     return dir.empty() ? dir : index::lookups_dir(dir);
 }

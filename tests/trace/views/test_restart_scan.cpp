@@ -28,11 +28,11 @@ using namespace dftracer::utils::trace;
 
 namespace {
 
-constexpr std::size_t CKPT = 1u << 20;
-constexpr std::size_t MEMBER_BYTES = 256u << 10;
-// A line is longer than 128 bytes, so the inflated trace spans more than 5
+constexpr std::size_t CKPT = 128u << 10;
+constexpr std::size_t MEMBER_BYTES = 32u << 10;
+// A line is longer than 128 bytes, so the inflated trace spans more than 10
 // checkpoints and 20 members.
-constexpr int EVENTS = static_cast<int>(5 * CKPT / 128);
+constexpr int EVENTS = static_cast<int>(10 * CKPT / 128);
 
 struct Trace {
     dstd::Vector<dstd::String> lines;

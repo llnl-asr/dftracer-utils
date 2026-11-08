@@ -1157,6 +1157,21 @@ dstd::Vector<dstd::String> row_fold_extra_captures(
     return out;
 }
 
+bool row_select_is_arg_free(const dstd::Vector<dstd::String>& select) {
+    if (select.empty()) return false;
+    for (const dstd::String& token : select) {
+        const dstd::StringView f = window_inner(token);
+        if (!is_top_level(f) && !is_hash_field(f) && !is_iocat_field(f) &&
+            !is_accpat_field(f))
+            return false;
+    }
+    return true;
+}
+
+bool query_field_is_arg_free(dstd::StringView f) {
+    return is_top_level(f) || is_hash_field(f);
+}
+
 dstd::String canonical_row_column_name(dstd::StringView sel, bool by_path) {
     if (sel.substr(0, WINDOW_PREFIX.size()) == WINDOW_PREFIX ||
         is_clip_token(sel))

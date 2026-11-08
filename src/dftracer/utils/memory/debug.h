@@ -44,10 +44,12 @@ struct DebugSiteTotal {
 using DebugTotalVisit = void (*)(void* context,
                                  const DebugSiteTotal& total) noexcept;
 
-/// Visit the @p count callers (at most 64) with the most live bytes, or with
-/// the highest peak of live bytes when @p by_peak, largest first. Callers
-/// past the table capacity are not counted.
-void debug_top_sites(std::size_t count, bool by_peak, DebugTotalVisit visit,
+/// The order of @ref debug_top_sites.
+enum class DebugRank : std::uint8_t { Live, Peak, Allocations };
+
+/// Visit the @p count callers (at most 64) that rank highest by @p rank,
+/// largest first. Callers past the table capacity are not counted.
+void debug_top_sites(std::size_t count, DebugRank rank, DebugTotalVisit visit,
                      void* context) noexcept;
 
 /// Blocks above this size count as big in the peak summary.

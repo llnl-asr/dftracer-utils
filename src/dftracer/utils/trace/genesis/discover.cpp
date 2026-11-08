@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -45,10 +46,10 @@ struct DirFiles {
     // Traces directly in the run directory, used when it has no compacted/.
     dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> run_traces;
     // raw/<set>/*.pfw.gz, used for a set whose compacted file is missing.
-    dstd::Map<dstd::String,
-              dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>>>
+    dstd::HashMap<dstd::String,
+                  dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>>>
         raw;
-    dstd::Map<dstd::String, dstd::Vector<dstd::String>> gpu_csvs;
+    dstd::HashMap<dstd::String, dstd::Vector<dstd::String>> gpu_csvs;
 };
 
 void set_files(

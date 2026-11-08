@@ -6,13 +6,15 @@
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 
 namespace dftracer::utils::index::extensions {
 
 namespace {
 constexpr std::size_t MAGIC_SIZE = 4;
-constexpr std::size_t CHAIN_HEADER_SIZE = 8;
+constexpr std::size_t CHAIN_HEADER_SIZE = 24;
+constexpr std::size_t LEVEL_HEADER_SIZE = 12;
 constexpr char MAGIC[MAGIC_SIZE] = {'S', 'B', 'F', '1'};
 
 bool has_chain_magic(const unsigned char* data, std::size_t size) {
@@ -109,43 +111,48 @@ void ScalableBloomFilter::serialize_into(
     result.resize(CHAIN_HEADER_SIZE);
     dstd::write_u32_le(result.data() + MAGIC_SIZE,
                        static_cast<std::uint32_t>(levels_.size()));
+    dstd::write_u64_le(result.data() + 8, initial_capacity_);
+    dstd::write_u64_le(result.data() + 16,
+                       std::bit_cast<std::uint64_t>(false_positive_rate_));
 
     dstd::Vector<unsigned char> blob;
     for (const auto& level : levels_) {
         level.filter.serialize_into(blob);
         const auto offset = result.size();
-        result.resize(offset + sizeof(std::uint32_t) + blob.size());
-        dstd::write_u32_le(result.data() + offset,
+        result.resize(offset + LEVEL_HEADER_SIZE + blob.size());
+        dstd::write_u64_le(result.data() + offset, level.capacity);
+        dstd::write_u32_le(result.data() + offset + 8,
                            static_cast<std::uint32_t>(blob.size()));
-        std::memcpy(result.data() + offset + sizeof(std::uint32_t), blob.data(),
+        std::memcpy(result.data() + offset + LEVEL_HEADER_SIZE, blob.data(),
                     blob.size());
     }
 }
 
 ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
                                                    std::size_t size) {
+    if (!has_chain_magic(data, size)) {
+        throw common::DFTUtilsException(
+            common::ErrorCode::Parse,
+            "ScalableBloomFilter::from_blob: not a filter chain");
+    }
+
     ScalableBloomFilter result;
     result.levels_.clear();
-
-    if (!has_chain_magic(data, size)) {
-        auto legacy = BloomFilter::from_blob(data, size);
-        const auto entries = legacy.entry_count();
-        result.levels_.push_back(
-            Level{std::move(legacy), entries > 0 ? entries : 1, entries});
-        result.distinct_ = entries;
-        return result;
-    }
+    result.initial_capacity_ = dstd::read_u64_le(data + 8);
+    result.false_positive_rate_ =
+        std::bit_cast<double>(dstd::read_u64_le(data + 16));
 
     const std::uint32_t count = dstd::read_u32_le(data + MAGIC_SIZE);
     std::size_t cursor = CHAIN_HEADER_SIZE;
     for (std::uint32_t i = 0; i < count; ++i) {
-        if (cursor + sizeof(std::uint32_t) > size) {
+        if (cursor + LEVEL_HEADER_SIZE > size) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Parse,
                 "ScalableBloomFilter::from_blob: truncated level header");
         }
-        const std::size_t blob_size = dstd::read_u32_le(data + cursor);
-        cursor += sizeof(std::uint32_t);
+        const std::size_t capacity = dstd::read_u64_le(data + cursor);
+        const std::size_t blob_size = dstd::read_u32_le(data + cursor + 8);
+        cursor += LEVEL_HEADER_SIZE;
         if (cursor + blob_size > size) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Parse,
@@ -155,8 +162,7 @@ ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
         cursor += blob_size;
         const auto entries = filter.entry_count();
         result.distinct_ += entries;
-        result.levels_.push_back(
-            Level{std::move(filter), entries > 0 ? entries : 1, entries});
+        result.levels_.push_back(Level{std::move(filter), capacity, entries});
     }
 
     if (result.levels_.empty()) result.open_level(result.initial_capacity_);

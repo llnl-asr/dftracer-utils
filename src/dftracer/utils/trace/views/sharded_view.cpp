@@ -18,6 +18,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/index/tables.h>
@@ -213,8 +214,8 @@ std::size_t consolidate_shard_set(const dstd::String& root) {
 
 namespace {
 
-// Copies the partials and column blocks of one file, re-keying their
-// dictionary ids into the consolidated table.
+// Copies the partials, per-file partials and column blocks of one file,
+// re-keying their dictionary ids into the consolidated table.
 void copy_agg_data(const index::Snapshot& source_db,
                    const index::FileRef& source_file, index::FileBuild& build,
                    const index::schemas::dft::agg::AggInternTable& source,
@@ -241,6 +242,28 @@ void copy_agg_data(const index::Snapshot& source_db,
             index::put_agg_partial(
                 build, chunk, remap(cat), remap(name), remap(host),
                 remap(extra), static_cast<std::uint8_t>(kind),
+                dstd::StringView(reinterpret_cast<const char*>(body.data()),
+                                 body.size()));
+            return true;
+        }));
+
+    common::unwrap(index::for_each_agg_file_partial(
+        source_db, source_file,
+        [&](std::uint64_t chunk, std::uint32_t file_id,
+            index::schemas::dft::agg::PartialKind kind,
+            dstd::Span<const std::uint8_t> body) {
+            auto parsed = index::schemas::dft::agg::AggPartial::deserialize(
+                dstd::Span<const std::uint8_t>(body.data(), body.size()));
+            if (!parsed)
+                throw common::DFTUtilsException(
+                    common::ErrorCode::Parse,
+                    "aggregation file partial: malformed record");
+            index::put_agg_file_partial(
+                build, chunk,
+                file_id == index::store::layout::agg_kind::NO_FILE
+                    ? file_id
+                    : remap(file_id),
+                static_cast<std::uint8_t>(kind),
                 dstd::StringView(reinterpret_cast<const char*>(body.data()),
                                  body.size()));
             return true;

@@ -216,10 +216,11 @@ std::uint16_t shard_of(
 }
 
 // What the column blocks of the index of `gz` in `idx` hold: how many there
-// are and how many carry a sys counter.
+// are, how many carry a sys counter and how many rows are anything else.
 struct Blocks {
     std::size_t total = 0;
     std::size_t counters = 0;
+    std::size_t other_rows = 0;
 };
 
 Blocks blocks_of(const dstd::String& gz, const dstd::String& idx) {
@@ -241,6 +242,8 @@ Blocks blocks_of(const dstd::String& gz, const dstd::String& idx) {
                                           trace::RecordPhase::Counter) &&
                     dstd::StringView(block.texts[block.cat[r]]) == "sys")
                     holds_counter = true;
+                else
+                    ++out.other_rows;
             if (holds_counter) ++out.counters;
             return true;
         }));
@@ -268,6 +271,7 @@ TEST_SUITE("CountersColumns") {
         const auto blocks = blocks_of(gz, idx);
         CHECK(blocks.total > 1);
         CHECK(blocks.counters > 1);
+        CHECK(blocks.other_rows == 0);
     }
 
     TEST_CASE("a shard split splits the counters without a repeat") {

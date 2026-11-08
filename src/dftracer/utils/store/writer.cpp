@@ -304,8 +304,9 @@ Writer::Writer(dstd::String name, dstd::String path, std::uint32_t extent_size,
 
 Writer::~Writer() {
     if (!closed_.load(std::memory_order_acquire)) {
-        extents_.seal_all();
-        extents_.wait_idle();
+        // A writer dropped without close has no caller to report to.
+        extents_.seal_all().discard();
+        extents_.wait_idle().discard();
     }
 }
 
@@ -528,6 +529,9 @@ dstd::Expected<void, dstd::Error> Writer::apply(
             queued.push_back(
                 QueuedChange{batch, change.kind == ChangeKind::Dropped});
             if (change.replaces_older) {
+#if DFTRACER_UTILS_TEST_PROBES
+                g_hiding_publishes.fetch_add(1, std::memory_order_relaxed);
+#endif
                 auto* hides = new PendingBatch;
                 hides->namespace_id = namespaces[i]->id.value;
                 hides->namespace_item =

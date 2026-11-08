@@ -34,7 +34,7 @@
 #include <dftracer/utils/python/lazyframe.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/arrow_helpers.h>
@@ -77,8 +77,8 @@ struct PluginHostState : dftracer::utils::dstd::HeapObject {
     NamedResultRegistry results;
     // wire id -> attribute name, so a caller indexes results[...] with the
     // plugin's declared name rather than its package-qualified wire identity.
-    dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
-                               dftracer::utils::dstd::String>
+    dftracer::utils::dstd::HashMap<dftracer::utils::dstd::String,
+                                   dftracer::utils::dstd::String>
         result_names;
 };
 
@@ -266,8 +266,8 @@ void ph_dealloc(PluginHostObject* self) {
 
 bool parse_result_names(
     PyObject* obj,
-    dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
-                               dftracer::utils::dstd::String>& out) {
+    dftracer::utils::dstd::HashMap<dftracer::utils::dstd::String,
+                                   dftracer::utils::dstd::String>& out) {
     if (!obj || obj == Py_None) return true;
     if (!PyDict_Check(obj)) {
         PyErr_SetString(PyExc_TypeError, "result_names must be a dict or None");

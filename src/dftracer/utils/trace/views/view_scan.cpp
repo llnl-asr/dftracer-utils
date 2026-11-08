@@ -60,7 +60,7 @@ const dftracer::utils::index::RecordSchema& plan_record_schema(
     for (const auto& f : plan.files)
         files.push_back({dstd::String(dstd::StringView(f.file_path)),
                          dstd::String(dstd::StringView(f.index_path)),
-                         f.fd ? f.fd->get() : -1});
+                         f.fd.get()});
     const index::RecordSchema* found = &index::plan::files_schema(files);
     // Registered record_schemas live until the process exits, so the pointer
     // never dangles.
@@ -296,6 +296,7 @@ ViewScannerInput make_scanner_input(const ScanUnit& u,
         .with_byte_range(u.start_byte, u.end_byte)
         .with_checkpoint_idx(u.checkpoint_idx)
         .with_view(vdef);
+    sin.indexer = u.indexer;
     if (u.query)
         sin.query = *u.query;
     else
@@ -363,7 +364,7 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
         if (f.index_path.empty()) continue;
         if (!seen_roots.insert(dstd::String(f.index_path)).second) continue;
         if (!common::input_exists(index::store_of(f.index_path))) continue;
-        if (auto taken = index::plan::open_snapshot(f.index_path))
+        if (auto taken = snapshot_of(plan, f.index_path))
             snapshots.emplace(dstd::String(f.index_path), std::move(*taken));
     }
 
@@ -405,10 +406,26 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
                     if (!planned->file_may_match) co_return;
 
                     auto& out = per_file[fi];
-                    for (const auto& c : planned->candidates)
+                    if (planned->candidates.empty()) co_return;
+                    // Without a store the first read builds the index.
+                    dstd::SharedPtr<index::gzip::CheckpointIndexer> indexer;
+                    if (common::input_exists(index::store_of(index_path)))
+                        indexer = index::gzip::CheckpointIndexerFactory::create(
+                            f.file_path, index_path, ckpt, false);
+                    for (const auto& c : planned->candidates) {
+                        std::uint64_t start = c.start_byte;
+                        std::uint64_t end = c.end_byte;
+                        // A rebuild can merge members, so a pin can fall inside
+                        // a chunk.
+                        if (f.pinned_c_end > 0) {
+                            start = std::max(start, f.pinned_uc_begin);
+                            end = std::min(end, f.pinned_uc_end);
+                            if (start >= end) continue;
+                        }
                         out.push_back(ScanUnit{f.file_path, index_path, ckpt,
-                                               c.checkpoint_idx, c.start_byte,
-                                               c.end_byte, 0, nullptr});
+                                               c.checkpoint_idx, start, end, 0,
+                                               nullptr, indexer});
+                    }
                 } catch (...) {
                     errors[fi] = std::current_exception();
                 }
@@ -451,9 +468,8 @@ bool any_file_missing_extension(
             auto at = snapshots.find(f.index_path);
             if (at == snapshots.end())
                 at = snapshots
-                         .emplace(f.index_path,
-                                  common::unwrap(
-                                      index::plan::open_snapshot(f.index_path)))
+                         .emplace(f.index_path, common::unwrap(snapshot_of(
+                                                    plan, f.index_path)))
                          .first;
             const auto file = at->second.file(
                 index::store::internal::get_logical_path(f.file_path));
@@ -484,7 +500,9 @@ dstd::Vector<dstd::UniquePtr<Fold>> select_index_folds(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern) {
     dstd::Vector<dstd::UniquePtr<Fold>> kept;
-    if (plan.files.empty() || !any_file_missing_bloom(plan)) return kept;
+    if (plan.files.empty() || !any_file_missing_bloom(plan) ||
+        is_past_pin(plan))
+        return kept;
 
     const ScanShape shape = scan_shape(vdef);
     auto bloom =
@@ -498,7 +516,9 @@ dstd::Vector<dstd::UniquePtr<Fold>> select_index_folds(
 dstd::UniquePtr<Fold> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern) {
-    if (plan.files.empty() || !any_file_missing_catalog(plan)) return nullptr;
+    if (plan.files.empty() || !any_file_missing_catalog(plan) ||
+        is_past_pin(plan))
+        return nullptr;
     auto fold = dstd::make_unique<index::extensions::CatalogFold>(
         intern, index::build::for_schema({}, plan_record_schema(plan))
                     .params_hash(index::store::IndexExtension::Catalog));

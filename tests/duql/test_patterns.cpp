@@ -374,9 +374,9 @@ TEST_CASE("capture_names lists named groups in group order") {
     REQUIRE(p.has_value());
     const auto names = capture_names(**p);
     REQUIRE(names.size() == 3);
-    CHECK(names[0] == dstd::Pair{std::size_t{2}, dstd::String("second")});
-    CHECK(names[1] == dstd::Pair{std::size_t{4}, dstd::String("fourth")});
-    CHECK(names[2] == dstd::Pair{std::size_t{5}, dstd::String("fifth")});
+    CHECK(names[0] == dstd::make_pair(std::size_t{2}, dstd::String("second")));
+    CHECK(names[1] == dstd::make_pair(std::size_t{4}, dstd::String("fourth")));
+    CHECK(names[2] == dstd::make_pair(std::size_t{5}, dstd::String("fifth")));
     auto none = compile_regex("(a)b", false);
     REQUIRE(none.has_value());
     CHECK(capture_names(**none).empty());

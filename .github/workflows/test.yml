@@ -64,6 +64,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake lcov zlib1g-dev libsqlite3-dev pkg-config ninja-build
+          # The project needs GCC 12 or later; Ubuntu 22.04 ships GCC 11.
+          if [ "$(gcc -dumpversion | cut -d. -f1)" -lt 12 ]; then
+            sudo apt-get install -y gcc-12 g++-12
+            echo "CC=gcc-12" >> "$GITHUB_ENV"
+            echo "CXX=g++-12" >> "$GITHUB_ENV"
+          fi
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -158,6 +164,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake lcov zlib1g-dev libsqlite3-dev pkg-config ninja-build
+          # The project needs GCC 12 or later; Ubuntu 22.04 ships GCC 11.
+          if [ "$(gcc -dumpversion | cut -d. -f1)" -lt 12 ]; then
+            sudo apt-get install -y gcc-12 g++-12
+            echo "CC=gcc-12" >> "$GITHUB_ENV"
+            echo "CXX=g++-12" >> "$GITHUB_ENV"
+          fi
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'

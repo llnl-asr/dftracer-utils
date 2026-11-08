@@ -142,7 +142,6 @@ AggregatedTraces load_aggregated_traces(
     }
     trace::AggQueryResult& result = *queried;
     out.chunks_reread = result.stats.chunks_reread;
-    out.chunks_from_columns = result.stats.chunks_from_columns;
 
     ComponentAccumulator acc_fetch_block;
     ComponentAccumulator acc_fetch_iter;

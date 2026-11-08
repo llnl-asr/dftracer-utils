@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -280,7 +280,7 @@ dstd::String agg_col_name(const AggSpec& spec) {
 void project_columns(dftracer::utils::dataframe::DataFrame& batch,
                      const dstd::Vector<dstd::String>& select) {
     if (select.empty()) return;
-    const dstd::Set<dstd::String> keep(select.begin(), select.end());
+    const dstd::HashSet<dstd::String> keep(select.begin(), select.end());
     dstd::Vector<dstd::String> names;
     dstd::Vector<dftracer::utils::dataframe::Series> columns;
     for (std::size_t i = 0; i < batch.names.size(); ++i) {

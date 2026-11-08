@@ -5,9 +5,11 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
@@ -15,7 +17,6 @@
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
-#include <sys/stat.h>
 
 #include <algorithm>
 #include <cinttypes>
@@ -69,12 +70,15 @@ class ReaderInflater {
         bound_ = std::max<std::size_t>(bytes, INIT_OUT);
     }
 
+    /// The reader sees no bytes past `end`. 0 means the whole file.
+    void set_file_end(std::uint64_t end) { file_end_ = end; }
+
     /// The compressed offsets where the index puts the HEAD of a member too
     /// big to hold whole (empty when it has none). Such a member is streamed
     /// without a libdeflate attempt.
-    void set_index_hint(dstd::Vector<std::uint64_t> heads) {
-        big_heads_ = std::move(heads);
-        std::sort(big_heads_.begin(), big_heads_.end());
+    /// `heads` is ascending and stays valid while this inflater reads.
+    void set_index_hint(dstd::Span<const std::uint64_t> heads) {
+        big_heads_ = heads;
         hinted_ = true;
     }
 
@@ -202,6 +206,7 @@ class ReaderInflater {
     bool is_at_end() const { return exhausted_ && member_pos_ >= member_size_; }
 
    private:
+    std::uint64_t file_end_ = 0;
     static constexpr std::size_t READ_CHUNK = 1u << 20;
     static constexpr std::size_t INIT_OUT = 1u << 20;
     static constexpr std::size_t BOUND_DEFAULT = std::size_t{32} << 20;
@@ -209,9 +214,10 @@ class ReaderInflater {
     coro::CoroTask<bool> begin_at(int fd, off_t& offset,
                                   std::uint64_t file_offset,
                                   std::size_t expected_out = 0) {
-        struct stat st;
-        if (::fstat(fd, &st) != 0) co_return false;
-        file_size_ = static_cast<std::uint64_t>(st.st_size);
+        const auto st = dstd::File::stat_of(fd);
+        if (!st) co_return false;
+        file_size_ = st->size;
+        if (file_end_ > 0) file_size_ = std::min(file_size_, file_end_);
         comp_off_ = file_offset;
         next_read_ = file_offset;
         offset = static_cast<off_t>(file_offset);
@@ -543,7 +549,7 @@ class ReaderInflater {
     std::uint64_t file_token_ = 0;
 
     std::size_t bound_ = BOUND_DEFAULT;
-    dstd::Vector<std::uint64_t> big_heads_;
+    dstd::Span<const std::uint64_t> big_heads_;
     bool hinted_ = false;
 };
 

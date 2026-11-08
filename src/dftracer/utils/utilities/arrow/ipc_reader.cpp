@@ -3,26 +3,19 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/ipc_reader.h>
 #include <nanoarrow/nanoarrow.h>
 #include <nanoarrow/nanoarrow_ipc.h>
+#include <sys/mman.h>
 
 #include <cstring>
 #include <new>
-
-// Platform-specific includes for mmap
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
 
 namespace dftracer::utils::utilities::arrow {
 
@@ -43,7 +36,7 @@ IpcReader::~IpcReader() { close(); }
 IpcReader::IpcReader(IpcReader&& other) noexcept
     : mapped_data_(other.mapped_data_),
       mapped_size_(other.mapped_size_),
-      fd_(other.fd_),
+      file_(std::move(other.file_)),
       decoder_(other.decoder_),
       shared_schema_(std::move(other.shared_schema_)),
       blocks_(std::move(other.blocks_)),
@@ -57,7 +50,7 @@ IpcReader& IpcReader::operator=(IpcReader&& other) noexcept {
         close();
         mapped_data_ = other.mapped_data_;
         mapped_size_ = other.mapped_size_;
-        fd_ = other.fd_;
+        file_ = std::move(other.file_);
         decoder_ = other.decoder_;
         shared_schema_ = std::move(other.shared_schema_);
         blocks_ = std::move(other.blocks_);
@@ -71,7 +64,6 @@ IpcReader& IpcReader::operator=(IpcReader&& other) noexcept {
 void IpcReader::reset_state() noexcept {
     mapped_data_ = nullptr;
     mapped_size_ = 0;
-    fd_ = -1;
     decoder_ = nullptr;
     shared_schema_.reset();
     blocks_.clear();
@@ -88,21 +80,10 @@ void IpcReader::close() {
 
     shared_schema_.reset();
 
-#ifdef _WIN32
-    if (mapped_data_) {
-        UnmapViewOfFile(mapped_data_);
-    }
-    if (fd_ != -1) {
-        CloseHandle(reinterpret_cast<HANDLE>(fd_));
-    }
-#else
     if (mapped_data_ && mapped_data_ != MAP_FAILED) {
         munmap(mapped_data_, mapped_size_);
     }
-    if (fd_ != -1) {
-        ::close(fd_);
-    }
-#endif
+    (void)file_.close();
 
     reset_state();
 }
@@ -114,65 +95,31 @@ void IpcReader::close() {
 int IpcReader::open(dstd::CStringView path) {
     if (is_open()) return -1;
 
-#ifdef _WIN32
-    // Windows memory mapping
-    HANDLE file =
-        CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return -1;
-
-    LARGE_INTEGER size;
-    if (!GetFileSizeEx(file, &size)) {
-        CloseHandle(file);
-        return -1;
-    }
-    mapped_size_ = static_cast<std::size_t>(size.QuadPart);
-
-    HANDLE mapping =
-        CreateFileMappingA(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
-    if (!mapping) {
-        CloseHandle(file);
-        return -1;
-    }
-
-    mapped_data_ = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
-    CloseHandle(mapping);
-    if (!mapped_data_) {
-        CloseHandle(file);
-        return -1;
-    }
-    fd_ = reinterpret_cast<int>(file);
-#else
-    // POSIX memory mapping
-    fd_ = ::open(path.c_str(), O_RDONLY);
-    if (fd_ < 0) return -1;
-
-    struct stat st;
-    if (fstat(fd_, &st) < 0) {
-        ::close(fd_);
-        fd_ = -1;
-        return -1;
-    }
-    mapped_size_ = static_cast<std::size_t>(st.st_size);
+    auto opened = dstd::File::open(dstd::PathView(path.view()), {});
+    if (!opened) return -1;
+    const auto size = opened->size();
+    if (!size) return -1;
+    mapped_size_ = static_cast<std::size_t>(*size);
 
     // Minimum Arrow IPC file: magic(8) + footer_size(4) + magic(6) = 18 bytes
     if (mapped_size_ < 18) {
-        ::close(fd_);
-        fd_ = -1;
+        mapped_size_ = 0;
         return -1;
     }
 
-    mapped_data_ = mmap(nullptr, mapped_size_, PROT_READ, MAP_PRIVATE, fd_, 0);
+    // The mapping stays valid after the file closes, but the file is held for
+    // as long as the reader is open.
+    mapped_data_ = mmap(nullptr, mapped_size_, PROT_READ, MAP_PRIVATE,
+                        opened->native_handle(), 0);
     if (mapped_data_ == MAP_FAILED) {
-        ::close(fd_);
-        fd_ = -1;
         mapped_data_ = nullptr;
+        mapped_size_ = 0;
         return -1;
     }
+    file_ = std::move(*opened);
 
     // Advise kernel we'll read sequentially
     madvise(mapped_data_, mapped_size_, MADV_SEQUENTIAL);
-#endif
 
     int rc = read_footer();
     if (rc != NANOARROW_OK) {

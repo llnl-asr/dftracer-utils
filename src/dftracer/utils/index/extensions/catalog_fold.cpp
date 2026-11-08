@@ -21,6 +21,15 @@ void observe_catalog_path(index::store::PathStat& stat, std::uint8_t tag) {
     if (t != index::store::PathType::NullValue) ++stat.count;
 }
 
+void add_path_stat(dstd::HashMap<dstd::String, index::store::PathStat>& paths,
+                   dstd::StringView path, const index::store::PathStat& stat) {
+    auto [pos, inserted] = paths.try_emplace(dstd::String(path), stat);
+    if (inserted) return;
+    pos->second.type = index::store::join(pos->second.type, stat.type);
+    pos->second.seen |= stat.seen;
+    pos->second.count += stat.count;
+}
+
 void CatalogFold::step(const trace::views::detail::FoldBatch& batch) {
     const dstd::StringView file = batch.unit.file_path;
     auto it = files_.find(file);
@@ -49,10 +58,20 @@ void CatalogFold::merge(trace::views::detail::Fold& slice) {
     }
 }
 
+dstd::HashMap<dstd::String, index::store::PathStat> CatalogFold::paths() const {
+    dstd::HashMap<dstd::String, index::store::PathStat> out;
+    for (const auto& [file, fs] : files_) {
+        for (const auto& [id, stat] : fs.paths)
+            add_path_stat(out, intern_->resolve(id), stat);
+    }
+    return out;
+}
+
 coro::CoroTask<bool> CatalogFold::finalize(
     const trace::views::detail::CoverageSet& covered) {
     using index::store::IndexExtension;
     bool wrote = false;
+    if (!should_write_) co_return false;
     dstd::HashMap<dstd::String, index::Snapshot> snapshots;
     for (auto& [file, fs] : files_) {
         if (fs.index_path.empty() || fs.paths.empty()) continue;

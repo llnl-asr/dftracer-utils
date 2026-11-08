@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -343,6 +344,17 @@ class PluginFold : public trace::views::detail::Fold {
     // itself, independent of plan_duql above.
     dstd::Deque<Query> compiled_queries_;
     ValueMap match_qmap_;
+    // duql_matches runs once per row, so the columns each query reads are
+    // resolved once per frame and kept here until a frame with another
+    // serial comes.
+    struct MatchColumns {
+        const Query* query;
+        std::int64_t rows;
+        dstd::Vector<dstd::Pair<dstd::StringView, dataframe::Series>> columns;
+    };
+    std::uint64_t match_frame_serial_ = 0;
+    dstd::Vector<MatchColumns> match_columns_;
+    const MatchColumns& match_columns(const Query& q, const dftu_dataframe* df);
 
     dstd::Vector<FoldEvent> col_scratch_;  // batch materialization
 

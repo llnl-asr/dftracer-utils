@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -85,8 +86,7 @@ bool roles_complete(const ViewPlan& plan) {
         if (at == snapshots.end())
             at = snapshots
                      .emplace(f.index_path,
-                              common::unwrap(
-                                  index::plan::open_snapshot(f.index_path)))
+                              common::unwrap(snapshot_of(plan, f.index_path)))
                      .first;
         const index::Snapshot& snapshot = at->second;
         const auto file = snapshot.file(get_logical_path(f.file_path));
@@ -96,8 +96,8 @@ bool roles_complete(const ViewPlan& plan) {
             return false;
         const auto spans = common::unwrap(index::spans(snapshot, *file));
         for (dstd::StringView p : paths) {
-            dstd::Map<std::uint64_t,
-                      dftracer::utils::index::extensions::kinds::Zone>
+            dstd::HashMap<std::uint64_t,
+                          dftracer::utils::index::extensions::kinds::Zone>
                 zones;
             for (const auto& [granule, bytes] : common::unwrap(
                      index::granules(snapshot, *file,
@@ -399,6 +399,7 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
                                  PrepSource from) {
     const bool trace = from == PrepSource::Trace;
     if (plan.files.empty()) return declined("no files");
+    if (is_past_pin(plan)) return declined("an index past the view's pin");
     if (!plan.computed.empty()) return declined("computed columns");
     if (plan.time_range) return declined("a time range");
     if (plan.all_records) return declined("every record is asked for");
@@ -446,7 +447,7 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
     // The first root with a config fixes the span of a pre-aggregated counter
     // and the extra keys. A root without one says nothing about either.
     bool config_seen = false;
-    dstd::Map<dstd::String, std::size_t> root_of;
+    dstd::HashMap<dstd::String, std::size_t> root_of;
     dstd::Map<dstd::String, index::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         std::size_t at = q.sources.size();
@@ -457,8 +458,8 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
             try {
                 auto it = root_of.find(f.index_path);
                 if (it == root_of.end()) {
-                    auto snapshot = common::unwrap(
-                        index::plan::open_snapshot(f.index_path));
+                    auto snapshot =
+                        common::unwrap(snapshot_of(plan, f.index_path));
                     const auto config = common::unwrap(
                         index::schemas::dft::agg::tier::read_config(snapshot));
                     if (!config && !trace)
@@ -480,6 +481,8 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
                                 "indexes with other extra group keys");
                         }
                     }
+                    src.snapshot =
+                        dstd::make_shared<const index::Snapshot>(snapshot);
                     it = root_of.emplace(f.index_path, q.sources.size()).first;
                     q.sources.push_back(std::move(src));
                     snapshots.emplace(f.index_path, std::move(snapshot));
@@ -562,6 +565,12 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
                 break;
         }
     }
+    q.only_file_keys =
+        std::all_of(p.keys.begin(), p.keys.end(), [](const GroupKey& gk) {
+            return gk.kind == GroupKey::Kind::Fhash ||
+                   gk.kind == GroupKey::Kind::FilePath ||
+                   gk.kind == GroupKey::Kind::FileName;
+        });
     for (const auto& k : build_extra) p.extra.emplace_back(k.data(), k.size());
     q.config.time_interval_us = interval_us;
     q.config.extra_group_keys = std::move(build_extra);
@@ -792,11 +801,10 @@ void log_answer(const AggQueryStats& st) {
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the index partials answered over %zu files: %zu partials read, "
         "%zu merged, %zu pruned, %zu split by time bins, %zu re-read in %zu "
-        "chunks (%zu from their column blocks, %llu events), %zu unanswered",
+        "chunks (%llu events), %zu unanswered",
         st.files, st.partials_read, st.partials_merged, st.partials_pruned,
         st.partials_binned, st.partials_reread, st.chunks_reread,
-        st.chunks_from_columns, static_cast<unsigned long long>(st.events_read),
-        st.unanswered);
+        static_cast<unsigned long long>(st.events_read), st.unanswered);
 }
 
 dataframe::AggStatePtr seed_rows_of(const ViewPlan& plan,

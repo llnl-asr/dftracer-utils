@@ -24,13 +24,17 @@ inline constexpr std::uint32_t AGG_REJECT = 0xFFFFFFFFu;
 inline constexpr std::uint32_t AGG_UNSET = 0xFFFFFFFEu;
 
 /// The (cat, name, host, extra, kind) of a partial, as result ids. The extra id
-/// is NO_ID for none.
+/// is NO_ID for none. A per-file partial (see AggEventRules::file_rows) has
+/// NO_ID for the four ids and the file of its events in `file` and
+/// `file_text`.
 struct AggGroup {
     std::uint32_t cat;
     std::uint32_t name;
     std::uint32_t host;
     std::uint32_t extra;
     AggKind kind;
+    std::uint64_t file = 0;
+    std::uint32_t file_text = 0xFFFFFFFFu;
 
     bool operator==(const AggGroup&) const = default;
 };
@@ -39,6 +43,12 @@ struct AggGroupHash {
     using is_avalanching = void;
     std::size_t operator()(const AggGroup& g) const noexcept;
 };
+
+/// Sets `key.file` and `key.file_text` for the file hash text `fhash`, as the
+/// index fold keys it: a hash of 16 hex digits is its value and any other text
+/// is kept in `strings`. An empty text is no file.
+void set_file_key(AggKey& key, dstd::StringView fhash,
+                  dstd::StringIntern& strings);
 
 /// The state every event of one query is folded with, shared by its files,
 /// chunks and workers.
@@ -54,6 +64,10 @@ class AggEventRules {
     }
 
     const AggQuery& q;
+    /// The query is answered from the per-file partials: it groups by file
+    /// alone, so the events fold by (file, kind) in place of their category,
+    /// name and host.
+    bool file_rows = false;
     dstd::StringIntern& strings;
     dstd::StringIntern& read;
     /// The ids of the fixed metric args in `read`.

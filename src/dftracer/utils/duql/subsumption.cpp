@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -90,10 +90,11 @@ dstd::Optional<double> as_point(const Interval& iv) {
 // A conjunction split into numeric intervals, value sets, and opaque
 // residuals (or/not/like/!=/not in) keyed by canonical source.
 struct Buckets {
-    dstd::Map<dstd::String, Interval> intervals;
-    dstd::Map<dstd::String, dstd::Map<dstd::String, dstd::Optional<double>>>
+    dstd::HashMap<dstd::String, Interval> intervals;
+    dstd::HashMap<dstd::String,
+                  dstd::HashMap<dstd::String, dstd::Optional<double>>>
         sets;
-    dstd::Set<dstd::String> residual;
+    dstd::HashSet<dstd::String> residual;
 };
 
 void add_set_value(Buckets& b, const dstd::String& field,
@@ -105,7 +106,7 @@ void add_set_value(Buckets& b, const dstd::String& field,
 // (`name == a or name == b` is `name in [a,b]`). Collects the field + values,
 // or returns false if the disjunction mixes fields or carries any other op.
 bool or_to_set(const detail::QueryNode& node, dstd::String& field,
-               dstd::Map<dstd::String, dstd::Optional<double>>& vals) {
+               dstd::HashMap<dstd::String, dstd::Optional<double>>& vals) {
     return std::visit(
         [&](auto&& n) -> bool {
             using T = std::decay_t<decltype(n)>;
@@ -182,7 +183,7 @@ void flatten(const detail::QueryNode& node, Buckets& b) {
                 // An all-equality/IN-on-one-field `or` is a value set; any
                 // other disjunction stays an opaque residual.
                 dstd::String field;
-                dstd::Map<dstd::String, dstd::Optional<double>> vals;
+                dstd::HashMap<dstd::String, dstd::Optional<double>> vals;
                 if (or_to_set(node, field, vals))
                     for (const auto& [k, v] : vals) b.sets[field].emplace(k, v);
                 else
@@ -197,7 +198,7 @@ void flatten(const detail::QueryNode& node, Buckets& b) {
 
 // Every value listed for `field` in `q` sets is numeric and inside `iv`.
 bool set_within_interval(
-    const dstd::Map<dstd::String, dstd::Optional<double>>& vals,
+    const dstd::HashMap<dstd::String, dstd::Optional<double>>& vals,
     const Interval& iv) {
     for (const auto& entry : vals) {
         const auto& num = entry.second;

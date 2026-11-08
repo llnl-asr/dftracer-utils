@@ -42,8 +42,8 @@ TEST_CASE("Runtime - an unsized I/O pool has one thread per worker") {
     if (std::getenv("DFTRACER_UTILS_IO_THREADS") != nullptr) return;
     Runtime rt(3);
     CHECK(rt.io_threads() == 3);
-#endif
     rt.shutdown();
+#endif
 }
 
 TEST_CASE("Runtime - parallel_for covers the range exactly once") {

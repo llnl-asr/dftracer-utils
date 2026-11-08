@@ -19,6 +19,12 @@ namespace dftracer::utils::index {
 
 using SourceStat = dftracer::utils::store::SourceStat;
 
+/// True when the file at `path`, now `size` bytes, holds more than `stored` and
+/// its first `stored.size` bytes still match the sampled hash in `stored`. The
+/// bytes past `stored.size` are not read and may be short or bad.
+bool is_append_of(dstd::StringView path, std::uint64_t size,
+                  const SourceStat& stored);
+
 /// What a snapshot knows about a file or one of its extensions.
 enum class Freshness : std::uint8_t { Current, Stale, Missing, Failed };
 
@@ -77,6 +83,11 @@ class FileBuild {
     /// Marks the extension complete for `params_hash`. An extension that was
     /// written must be finished before commit().
     void finish(store::IndexExtension ext, std::uint64_t params_hash);
+
+    /// Keeps the older copies of the file, so the written keys add to them and
+    /// replace only the same keys. By default a written extension stands for
+    /// the whole file. Call before commit().
+    void keep_older_copies();
 
     /// Drops the file's copy of the extension in the same record as the
     /// commit. An extension the build neither writes nor clears keeps its

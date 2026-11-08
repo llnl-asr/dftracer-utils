@@ -199,7 +199,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
             }
         });
         REQUIRE(found);
-        return dstd::Pair{program, found};
+        return dstd::make_pair(program, found);
     };
 
     const auto [p, l] = lookup_of(

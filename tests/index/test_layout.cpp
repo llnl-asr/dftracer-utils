@@ -125,7 +125,8 @@ TEST_SUITE("index layout") {
         check_separate_ranges({index::store::layout::agg_kind::PARTIAL,
                                index::store::layout::agg_kind::META,
                                index::store::layout::agg_kind::DICT,
-                               index::store::layout::agg_kind::COLUMNS});
+                               index::store::layout::agg_kind::COLUMNS,
+                               index::store::layout::agg_kind::FILE_PARTIAL});
     }
 
     TEST_CASE("a prefix range ends at the first larger key") {

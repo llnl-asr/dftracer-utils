@@ -71,8 +71,12 @@ void AggregationFold::add_to_partial(const trace::views::detail::FoldEvent& ev,
         last_host_ = ev.hhash_id;
         last_kind_ = kind;
     }
-    Slot& slot = slots_[at];
     if (!partial_holds(acc)) return;
+    fold_into_slot(slots_[at], acc);
+    add_to_file_partial(ev, acc, kind);
+}
+
+void AggregationFold::fold_into_slot(Slot& slot, const PodAccessor& acc) {
     TimeBin* bin = nullptr;
     if (config_.time_interval_us != 0) {
         std::uint64_t ts = acc.ts();
@@ -82,6 +86,38 @@ void AggregationFold::add_to_partial(const trace::views::detail::FoldEvent& ev,
     }
     fold_into_partial(slot.partial, acc, config_, bin);
     slot.used = true;
+}
+
+void AggregationFold::add_to_file_partial(
+    const trace::views::detail::FoldEvent& ev, const PodAccessor& acc,
+    PartialKind kind) {
+    std::uint32_t file = NO_ID;
+    if (ev.fhash_id != NO_ID) {
+        if (empty_id_ == NO_ID)
+            empty_id_ = agg_intern_->intern.get_or_insert("");
+        file = root_id(fhash_ids_, ev.fhash_id, false);
+        if (file == empty_id_) file = NO_ID;
+    }
+    std::uint32_t at;
+    if (last_file_slot_ != NO_ID && file == last_file_ &&
+        kind == last_file_kind_) {
+        at = last_file_slot_;
+    } else {
+        const SlotKey key{file, NO_ID, NO_ID, NO_ID, kind};
+        auto it = file_slot_of_.find(key);
+        if (it == file_slot_of_.end()) {
+            it = file_slot_of_
+                     .emplace(key,
+                              static_cast<std::uint32_t>(file_slots_.size()))
+                     .first;
+            file_slots_.emplace_back(config_.sketch_accuracy, key);
+        }
+        at = it->second;
+        last_file_slot_ = at;
+        last_file_ = file;
+        last_file_kind_ = kind;
+    }
+    fold_into_slot(file_slots_[at], acc);
 }
 
 TimeBin& AggregationFold::bin_of(Slot& slot, std::uint64_t pid,
@@ -161,27 +197,36 @@ void AggregationFold::close_columns() {
     columns_.clear();
 }
 
+void AggregationFold::close_slot(Slot& slot, dstd::Vector<Closed>& into) {
+    slot.partial.normalize_bins();
+    scratch_.clear();
+    slot.partial.serialize_into(scratch_);
+    Closed closed;
+    closed.chunk = chunk_;
+    closed.key = slot.key;
+    closed.value.assign(scratch_.begin(), scratch_.end());
+    closed_bytes_ += closed.value.size();
+    into.push_back(std::move(closed));
+    slot.partial.clear();
+    slot.threads.clear();
+    slot.last_thread = 0;
+    slot.used = false;
+}
+
 void AggregationFold::close_chunk() {
     close_columns();
     for (Slot& slot : slots_) {
         if (!slot.used) continue;
-        slot.partial.normalize_bins();
-        scratch_.clear();
-        slot.partial.serialize_into(scratch_);
-        Closed closed;
-        closed.chunk = chunk_;
-        closed.key = slot.key;
-        closed.value.assign(scratch_.begin(), scratch_.end());
-        closed_bytes_ += closed.value.size();
-        closed_.push_back(std::move(closed));
         referenced_.push_back(slot.key.cat);
         referenced_.push_back(slot.key.name);
         referenced_.push_back(slot.key.host);
         referenced_.push_back(slot.key.extra);
-        slot.partial.clear();
-        slot.threads.clear();
-        slot.last_thread = 0;
-        slot.used = false;
+        close_slot(slot, closed_);
+    }
+    for (Slot& slot : file_slots_) {
+        if (!slot.used) continue;
+        if (slot.key.cat != NO_ID) referenced_.push_back(slot.key.cat);
+        close_slot(slot, closed_files_);
     }
     if (through_ == nullptr) return;
     const std::size_t doublings =
@@ -212,6 +257,10 @@ void AggregationFold::put_closed(index::FileBuild& build) {
             build, closed.chunk, closed.key.cat, closed.key.name,
             closed.key.host, closed.key.extra,
             static_cast<std::uint8_t>(closed.key.kind), bytes_of(closed.value));
+    for (const Closed& closed : closed_files_)
+        index::put_agg_file_partial_value(
+            build, closed.chunk, closed.key.cat,
+            static_cast<std::uint8_t>(closed.key.kind), bytes_of(closed.value));
     for (const ClosedColumns& closed : closed_columns_)
         index::put_agg_chunk_columns_value(build, closed.chunk,
                                            bytes_of(closed.value));
@@ -220,6 +269,7 @@ void AggregationFold::put_closed(index::FileBuild& build) {
 
 void AggregationFold::release_closed() {
     closed_.clear();
+    closed_files_.clear();
     closed_columns_.clear();
     closed_bytes_ = 0;
     std::sort(referenced_.begin(), referenced_.end());
@@ -240,6 +290,8 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
     close_chunk();
     o.close_chunk();
     for (Closed& closed : o.closed_) closed_.push_back(std::move(closed));
+    for (Closed& closed : o.closed_files_)
+        closed_files_.push_back(std::move(closed));
     for (ClosedColumns& closed : o.closed_columns_)
         closed_columns_.push_back(std::move(closed));
     referenced_.insert(referenced_.end(), o.referenced_.begin(),
@@ -247,6 +299,7 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
     closed_bytes_ += o.closed_bytes_;
     o.closed_bytes_ = 0;
     o.closed_.clear();
+    o.closed_files_.clear();
     o.closed_columns_.clear();
     o.referenced_.clear();
 }

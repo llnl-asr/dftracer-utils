@@ -797,7 +797,7 @@ Value slice(const Value& v, const Value& from,
     if (!is_array(v, arr)) return VNull{};
     const std::uint64_t size = arr.size();
     const auto b = slice_at(from, size);
-    const auto e = to ? slice_at(*to, size) : dstd::Optional{size};
+    const auto e = to ? slice_at(*to, size) : dstd::make_optional(size);
     if (!b || !e) return VNull{};
     dstd::String out = "[";
     std::uint64_t i = 0;
@@ -1337,7 +1337,7 @@ class TermEval {
             }
             case Fn::Slice:
                 return slice(arg(c, 0), arg(c, 1),
-                             c.args.size() > 2 ? dstd::Optional{arg(c, 2)}
+                             c.args.size() > 2 ? dstd::make_optional(arg(c, 2))
                                                : dstd::nullopt);
             case Fn::Flatten:
                 return flatten(arg(c, 0));

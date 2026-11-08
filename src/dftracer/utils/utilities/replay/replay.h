@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -175,8 +176,13 @@ class PosixExecutor : public TraceExecutor {
     dstd::String name() const override { return "POSIX"; }
 
    private:
+    struct OpenFile {
+        dstd::File file;
+        std::uint64_t position = 0;
+    };
+
     /// Keys are interned via the replay @ref dstd::StringIntern pool.
-    dstd::HashMap<dstd::StringView, int> open_files_;
+    dstd::HashMap<dstd::StringView, OpenFile> open_files_;
     /// Scratch buffer reused across reads and writes.
     dstd::Vector<char> io_buffer_;
 

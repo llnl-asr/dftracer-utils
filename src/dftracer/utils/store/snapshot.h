@@ -383,6 +383,14 @@ struct DictCache {
     dstd::Vector<dstd::SharedPtr<const PageDict>> dicts;
 };
 
+/// The commits that are not synced and that this process read and checked
+/// whole. Their bytes do not change, so a later snapshot of the same store does
+/// not check them again.
+struct VerifiedCommits {
+    std::mutex mutex;
+    dstd::HashSet<dstd::String> keys;
+};
+
 struct FileData {
     explicit FileData(DataFileReader opened) : reader(std::move(opened)) {}
 
@@ -690,7 +698,11 @@ class Snapshot {
     /// and no block of it is read here. Phases run in parallel on the process
     /// runtime (configure_default_runtime sets its threads) and serially on the
     /// calling thread when a fork-join could not finish there (worker, fork).
-    static dstd::Expected<Snapshot, dstd::Error> open(dstd::StringView dir);
+    /// `verified`, when given, is shared by the snapshots of one store, so each
+    /// commit that is not synced is checked once and not once per snapshot.
+    static dstd::Expected<Snapshot, dstd::Error> open(
+        dstd::StringView dir,
+        dstd::SharedPtr<detail::VerifiedCommits> verified = nullptr);
 
     Snapshot(const Snapshot&) = delete;
     Snapshot& operator=(const Snapshot&) = delete;
@@ -878,6 +890,7 @@ class Snapshot {
         const NamespaceSpec& spec) const;
 
     dstd::Vector<detail::FileData> files_;
+    dstd::SharedPtr<detail::VerifiedCommits> verified_;
     dstd::Vector<SkippedFile> skipped_;
     OpenStats open_stats_;
     /// Behind pointers so the snapshot moves while threads read these.

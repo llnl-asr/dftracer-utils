@@ -18,6 +18,7 @@
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/file_process_types.h>
 #include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
+#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <simdjson.h>
 
@@ -209,6 +210,46 @@ void emit_event(LineScan& ls, const char* line_start, std::size_t json_size) {
     ls.batch.events.emplace_back(line_start, json_size);
 }
 
+// Without a query or args, the decode's own walk reads ph, ts and dur, so the
+// phase and the window are checked on the decoded event. A ts of 0 or a missing
+// dur may be a value the decode does not keep, such as a fraction, so those
+// lines check the window on the text.
+void scan_decoded(LineScan& ls, json::Value& event, const char* line_start,
+                  std::size_t json_size) {
+    const ViewScannerInput& input = ls.input;
+    const ViewDefinition& view = input.view;
+    ViewScannerBatch& batch = ls.batch;
+    detail::FoldEvent& ev = ls.pool.append();
+    decode_into(ev, event, input, false, ls.hints, ls.cache);
+    if (json::detail::ValueAccess::broken(event)) {
+        ls.pool.discard_last();
+        ++batch.lines_invalid;
+        return;
+    }
+    bool match;
+    if (ev.phase == RecordPhase::Metadata) {
+        match = view.include_metadata;
+    } else {
+        batch.events_scanned++;
+        if (!view.window) {
+            match = true;
+        } else if (ev.ts == 0 || (view.window_overlap && !ev.has_dur)) {
+            json::detail::ValueAccess::rewind(event);
+            match = in_window(event, view);
+        } else {
+            match = in_window(true, static_cast<double>(ev.ts),
+                              static_cast<double>(ev.dur), view);
+        }
+    }
+    if (!match) {
+        ls.pool.discard_last();
+        return;
+    }
+    batch.values_unconverted += ev.unconverted;
+    if (input.fold_keep_raw) emit_event(ls, line_start, json_size);
+    batch.events_matched++;
+}
+
 // One line read on demand: the window, the query and the fold decode all
 // read the same parse, which a syntax error in a part they reach drops.
 void scan_line(LineScan& ls, const char* line_start, std::size_t json_size) {
@@ -220,6 +261,12 @@ void scan_line(LineScan& ls, const char* line_start, std::size_t json_size) {
         return;
     }
     json::Value& event = *parsed;
+    if (input.fold_intern && !input.fold_needs_args && !ls.use_query &&
+        !input.view.by_path && input.view.time_path.empty() &&
+        !input.fold_capture_schema) {
+        scan_decoded(ls, event, line_start, json_size);
+        return;
+    }
     const RecordPhase phase =
         input.view.by_path ? RecordPhase::Unknown : trace::event_phase(event);
     const bool metadata = phase == RecordPhase::Metadata;
@@ -414,8 +461,15 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     if (input.checkpoint_size > 0) {
         reader_input.with_checkpoint_size(input.checkpoint_size);
     }
-    utilities::fileio::IndexedFileReaderUtility reader_utility;
-    auto reader = co_await reader_utility(reader_input);
+    dstd::SharedPtr<utilities::reader::internal::Reader> reader;
+    if (input.indexer) {
+        reader =
+            utilities::reader::internal::ReaderFactory::create(input.indexer);
+    } else {
+        utilities::fileio::IndexedFileReaderUtility reader_utility;
+        auto made = co_await reader_utility(reader_input);
+        reader = std::move(made);
+    }
 
     // Candidates are gzip-member-aligned byte ranges. A member's last event has
     // its content in this member but its terminating '\n' as the first byte of

@@ -592,17 +592,16 @@ dstd::Vector<Series> PartFile::append(const dstd::Vector<Series>& cols) {
                     common::unwrap(
                         file_->write_at(base + p->at, p->src, p->bytes));
         // The last bytes may be padding: extend so the mapped pages exist.
-        if (::ftruncate(file_->fd(), static_cast<off_t>(base + region_bytes)) !=
-            0)
+        const auto resized = file_->file().resize(base + region_bytes);
+        if (!resized)
             throw std::runtime_error(("spill: cannot extend the spill file (" +
-                                      dstd::String(std::strerror(errno)) +
-                                      "); set " +
+                                      resized.error().format() + "); set " +
                                       common::constants::SPILL_DIR_ENV +
                                       " to a directory with free space")
                                          .c_str());
     }
     void* map = ::mmap(nullptr, region_bytes, PROT_READ, MAP_SHARED,
-                       file_->fd(), static_cast<off_t>(base));
+                       file_->file().native_handle(), static_cast<off_t>(base));
     if (map == MAP_FAILED)
         throw std::runtime_error(("spill: cannot map the spill file (" +
                                   dstd::String(std::strerror(errno)) +

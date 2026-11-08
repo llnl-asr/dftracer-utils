@@ -72,11 +72,6 @@ dstd::Error forked_handle_error() {
                        "call Store::open in the child");
 }
 
-dstd::Error shared_erase_error() {
-    return dstd::Error(dstd::Condition::Unsupported,
-                       "store: a shared namespace has no erase");
-}
-
 dstd::Error foreign_copy_error() {
     return dstd::Error(dstd::Condition::Unsupported,
                        "erase needs the copy this writer wrote, and another "
@@ -356,6 +351,8 @@ struct Store::State {
     std::uint64_t held_version = 0;
     std::uint64_t held_records = 0;
     bool held_taken = false;
+    dstd::SharedPtr<engine::detail::VerifiedCommits> verified =
+        dstd::make_shared<engine::detail::VerifiedCommits>();
     /// snapshot() hands it out under a shared lock, so readers never wait on
     /// the state mutex. Written under the mutex, then this lock.
     mutable std::shared_mutex published_mutex;
@@ -538,7 +535,7 @@ dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
 Store::State::open_snapshot_locked() {
     auto made = ensure_dir_locked();
     if (!made) return dstd::Unexpected<dstd::Error>(made.error());
-    auto opened = engine::Snapshot::open(dir.str());
+    auto opened = engine::Snapshot::open(dir.str(), verified);
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
     return dstd::make_shared<const engine::Snapshot>(std::move(*opened));
 }
@@ -667,17 +664,19 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::State::commit_task(
                 if (known.id == batch.namespace_id_) shared = known.spec.shared;
             }
         }
-        if (shared) {
-            co_return dstd::Unexpected<dstd::Error>(shared_erase_error());
-        }
         auto spec = writer->spec_when_no_copy(
             engine::NamespaceId{batch.namespace_id_}, batch.scope_);
         if (spec) {
-            auto view = Store(self).snapshot();
-            if (!view) co_return dstd::Unexpected<dstd::Error>(view.error());
-            const Namespace ns{*spec, batch.namespace_id_};
-            if (view->copy_info(ns, batch.scope_).state == ScopeState::Ready) {
-                co_return dstd::Unexpected<dstd::Error>(foreign_copy_error());
+            if (!shared) {
+                auto view = Store(self).snapshot();
+                if (!view)
+                    co_return dstd::Unexpected<dstd::Error>(view.error());
+                const Namespace ns{*spec, batch.namespace_id_};
+                if (view->copy_info(ns, batch.scope_).state ==
+                    ScopeState::Ready) {
+                    co_return dstd::Unexpected<dstd::Error>(
+                        foreign_copy_error());
+                }
             }
             batch.erases_.clear();
         }
@@ -950,9 +949,11 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::publish(
                 kind = engine::ChangeKind::Dropped;
                 break;
         }
-        converted.push_back(
-            engine::CopyChange{engine::NamespaceId{target.ns->id}, target.scope,
-                               target.params_hash, target.sources, kind});
+        converted.push_back(engine::CopyChange{
+            engine::NamespaceId{target.ns->id}, target.scope,
+            target.params_hash, target.sources, kind,
+            target.replaces_older && target.ns->spec.shared &&
+                kind == engine::ChangeKind::Ready});
     }
     return State::publish_task(state_, std::move(converted));
 }
@@ -981,16 +982,13 @@ dstd::Expected<void, dstd::Error> Store::erase(const Namespace& ns,
                                                const ScopeKey& scope,
                                                dstd::ByteView begin,
                                                dstd::ByteView end) {
-    if (ns.spec.shared) {
-        return dstd::Unexpected<dstd::Error>(shared_erase_error());
-    }
     auto opened = state_->writer_for_use();
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
     auto erased =
         (*opened)->erase(engine::NamespaceId{ns.id}, scope, begin, end);
     state_->bump_version();
     if (!erased) return dstd::Unexpected<dstd::Error>(erased.error());
-    if (*erased) return {};
+    if (*erased || ns.spec.shared) return {};
     auto view = snapshot();
     if (!view) return dstd::Unexpected<dstd::Error>(view.error());
     if (view->copy_info(ns, scope).state != ScopeState::Ready) return {};

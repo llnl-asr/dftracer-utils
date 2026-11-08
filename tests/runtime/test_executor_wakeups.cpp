@@ -73,9 +73,10 @@ TEST_SUITE("ExecutorWakeups") {
         rt.shutdown();
 
         MESSAGE("context switches per gap: " << switches / BURSTS);
-#ifndef DFTRACER_UTILS_TSAN_ENABLED
-        // ThreadSanitizer adds switches of its own, so the count says nothing
-        // there. The bursts still run for its race checks.
+#if !defined(DFTRACER_UTILS_TSAN_ENABLED) && \
+    !defined(DFTRACER_UTILS_VALGRIND_MODE)
+        // ThreadSanitizer and Valgrind add switches of their own, so the count
+        // says nothing there. The bursts still run for their checks.
         CHECK(switches / BURSTS < MAX_SWITCHES_PER_GAP);
 #endif
     }
@@ -88,7 +89,7 @@ TEST_SUITE("ExecutorWakeups") {
         constexpr int ROUNDS = 5;
         constexpr auto WAIT = 40ms;
         constexpr auto MAX_CPU = 40ms;
-        constexpr std::int64_t MAX_SWITCHES = 150;
+        [[maybe_unused]] constexpr std::int64_t MAX_SWITCHES = 150;
         constexpr auto MAX_MEDIAN_LATENCY = 1ms;
 
         Runtime rt(THREADS);
@@ -136,7 +137,11 @@ TEST_SUITE("ExecutorWakeups") {
                        .count()
                 << " us");
         CHECK(cpu < MAX_CPU);
+#ifndef DFTRACER_UTILS_VALGRIND_MODE
+        // Valgrind runs one thread at a time and switches between them on its
+        // own, so the count says nothing there.
         CHECK(switches < MAX_SWITCHES);
+#endif
         CHECK(median < MAX_MEDIAN_LATENCY);
     }
     TEST_CASE("an I/O op starts without waiting for its worker to idle") {

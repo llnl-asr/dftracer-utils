@@ -340,8 +340,14 @@ dstd::UniquePtr<runtime::io::IoBackend> make_no_timed_enter(void*) {
 }
 
 bool has_ring() {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    // Valgrind before 3.23 keeps its thread lock while a thread waits in
+    // io_uring_enter, so a completion that needs another thread never comes.
+    return false;
+#else
     runtime::io::IoUringBackend backend;
     return backend.probe();
+#endif
 }
 #endif
 

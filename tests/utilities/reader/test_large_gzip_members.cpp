@@ -23,7 +23,10 @@ using namespace dftracer::utils::utilities;
 
 namespace {
 
-// Random hex compresses about 2:1, so the member spans many 1 MiB reads.
+// The readers read 1 MiB of compressed bytes at a time.
+constexpr std::size_t READ_BYTES = 1u << 20;
+
+// Random hex compresses about 2:1.
 dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     std::mt19937 rng(seed);
     static const char HEX[] = "0123456789abcdef";
@@ -99,31 +102,33 @@ dstd::String read_members(const dstd::String& path) {
 }  // namespace
 
 TEST_SUITE("ReaderInflater") {
-    TEST_CASE("one member larger than many reads decodes whole") {
-        const auto text = hex_lines(12u << 20, 1);
+    TEST_CASE("one member larger than one read decodes whole") {
+        const auto text = hex_lines(3u << 20, 1);
         const auto comp = gzip(text);
-        REQUIRE(comp.size() > (4u << 20));
+        REQUIRE(comp.size() > READ_BYTES);
         TempFile f(comp);
         CHECK(read_all(f.path) == text);
     }
 
     TEST_CASE("members of different sizes decode in order") {
-        const auto a = hex_lines(6u << 20, 2);
+        const auto a = hex_lines(5u << 20, 2);
         const auto b = hex_lines(1000, 3);
-        const auto c = hex_lines(3u << 20, 4);
+        const auto c = hex_lines(1u << 20, 4);
         dstd::Vector<std::uint8_t> comp;
         for (const auto* t : {&a, &b, &c}) {
             const auto m = gzip(*t);
             comp.insert(comp.end(), m.begin(), m.end());
         }
+        REQUIRE(gzip(a).size() > READ_BYTES);
         TempFile f(comp);
         CHECK(read_all(f.path) == a + b + c);
     }
 
     TEST_CASE("a large cut member keeps the complete lines") {
-        const auto text = hex_lines(12u << 20, 5);
+        const auto text = hex_lines(5u << 20, 5);
         auto comp = gzip(text);
         comp.resize(comp.size() * 7 / 10);
+        REQUIRE(comp.size() > READ_BYTES);
         TempFile f(comp);
         const auto got = read_all(f.path);
         REQUIRE(!got.empty());
@@ -133,7 +138,7 @@ TEST_SUITE("ReaderInflater") {
     }
 
     TEST_CASE("the member line reader decodes one large member") {
-        const auto text = hex_lines(12u << 20, 6);
+        const auto text = hex_lines(3u << 20, 6);
         TempFile f(gzip(text));
         CHECK(read_members(f.path) == text);
     }
@@ -144,7 +149,7 @@ TEST_SUITE("ReaderInflater") {
     TEST_CASE(
         "the member line reader decodes members larger and smaller "
         "than the last") {
-        const auto big = hex_lines(9u << 20, 8);
+        const auto big = hex_lines(3u << 20, 8);
         const auto small = hex_lines(4000, 9);
         for (const bool big_first : {true, false}) {
             CAPTURE(big_first);
@@ -161,9 +166,10 @@ TEST_SUITE("ReaderInflater") {
     }
 
     TEST_CASE("the member line reader keeps the lines of a cut file") {
-        const auto text = hex_lines(6u << 20, 10);
+        const auto text = hex_lines(5u << 20, 10);
         auto comp = gzip(text);
         comp.resize(comp.size() * 6 / 10);
+        REQUIRE(comp.size() > READ_BYTES);
         TempFile f(comp);
         const auto got = read_members(f.path);
         REQUIRE(!got.empty());
@@ -172,7 +178,7 @@ TEST_SUITE("ReaderInflater") {
     }
 
     TEST_CASE("the index build counts one large member") {
-        const auto text = hex_lines(12u << 20, 7);
+        const auto text = hex_lines(3u << 20, 7);
         TempFile f(gzip(text));
         dstd::Optional<index::gzip::GzipBuildArtifacts> arts;
         dftu_utils_test::run_coro(

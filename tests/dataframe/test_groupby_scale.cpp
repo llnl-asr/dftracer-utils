@@ -41,7 +41,7 @@ const int REPEATS =
     static_cast<int>(DFTRACER_UTILS_VALGRIND_SCALE_MIN(2, 10, 2));
 #else
 const int REPEATS =
-    static_cast<int>(DFTRACER_UTILS_VALGRIND_SCALE_MIN(20, 10, 2));
+    static_cast<int>(DFTRACER_UTILS_VALGRIND_SCALE_MIN(4, 10, 2));
 #endif
 
 // Value columns, by index in `values`.

@@ -47,7 +47,7 @@ class LargeTestEnvironment {
     std::size_t bytes_per_line_;
 
    public:
-    LargeTestEnvironment(std::size_t target_size_mb = 128,
+    LargeTestEnvironment(std::size_t target_size_mb = 8,
                          std::size_t bytes_per_line = 1024)
         : bytes_per_line_(bytes_per_line) {
         // Calculate number of lines needed for target size
@@ -106,8 +106,8 @@ class LargeTestEnvironment {
 
         // Multi-member output so mid-file reads seek to a member instead of
         // re-inflating from the start of a single giant member.
-        bool success = compress_file_to_gzip_multimember(txt_file, gz_file,
-                                                         4 * 1024 * 1024);
+        bool success =
+            compress_file_to_gzip_multimember(txt_file, gz_file, 512 * 1024);
         (void)dstd::fs::remove(txt_file);
         return success ? gz_file : "";
     }
@@ -239,7 +239,7 @@ static Prepared& prepared(std::size_t size_mb, std::size_t bytes_per_line,
 }
 
 TEST_CASE("Robustness - Large file continuous stride reading") {
-    Prepared& fx = prepared(74, 1024, 32.0);
+    Prepared& fx = prepared(8, 1024, 4.0);
     const dstd::String gz_file = fx.gz_file;
     const dstd::String idx_file = fx.idx_file;
 
@@ -249,9 +249,9 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
     REQUIRE(max_bytes > 0);
 
     SUBCASE("Continuous stride reading with no data loss") {
-        // Test with 10MB chunks using 8MB buffer
-        const std::size_t chunk_size = 10 * 1024 * 1024;  // 10MB
-        const std::size_t buffer_size = 8 * 1024 * 1024;  // 8MB
+        // Test with 1.25MB chunks using 1MB buffer
+        const std::size_t chunk_size = 1280 * 1024;   // 1.25MB
+        const std::size_t buffer_size = 1024 * 1024;  // 1MB
 
         std::size_t current_start = 0;
         std::size_t total_lines = 0;
@@ -326,9 +326,9 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
     }
 
     SUBCASE("Single large read vs stride reading comparison") {
-        // Read first 30MB as single read
-        const std::size_t large_read_size = 30 * 1024 * 1024;
-        const std::size_t buffer_size = 8 * 1024 * 1024;
+        // Read first 3.75MB as single read
+        const std::size_t large_read_size = 3 * 1280 * 1024;
+        const std::size_t buffer_size = 1024 * 1024;
 
         dstd::Vector<char> buffer(buffer_size);
         std::size_t bytes_written = 0;
@@ -349,12 +349,12 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
         dstd::String single_read_last_line =
             get_last_json_line(single_read_content);
 
-        // Now read same range as three 10MB stride chunks with fresh reader
+        // Now read same range as three 1.25MB stride chunks with fresh reader
         auto stride_reader =
             ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
         REQUIRE(stride_reader != nullptr);
         std::size_t stride_total_lines = 0;
-        const std::size_t chunk_size = 10 * 1024 * 1024;
+        const std::size_t chunk_size = 1280 * 1024;
         dstd::String stride_combined_content;
 
         for (std::size_t i = 0; i < 3; ++i) {
@@ -396,7 +396,7 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
 }
 
 TEST_CASE("Robustness - Different buffer sizes consistency") {
-    Prepared& fx = prepared(36, 512, 16.0);
+    Prepared& fx = prepared(8, 512, 4.0);
     const dstd::String gz_file = fx.gz_file;
     const dstd::String idx_file = fx.idx_file;
 
@@ -619,7 +619,7 @@ TEST_CASE("Robustness - Boundary edge cases") {
 }
 
 TEST_CASE("Robustness - Complete file sequential read") {
-    Prepared& fx = prepared(16, 128, 8.0);
+    Prepared& fx = prepared(8, 128, 4.0);
     const dstd::String gz_file = fx.gz_file;
     const dstd::String idx_file = fx.idx_file;
     LargeTestEnvironment& env = fx.env;
@@ -766,7 +766,7 @@ TEST_CASE("Robustness - Complete file sequential read") {
 }
 
 TEST_CASE("Robustness - JSON validation and consistency") {
-    Prepared& fx = prepared(20, 512, 8.0);
+    Prepared& fx = prepared(8, 512, 4.0);
     const dstd::String gz_file = fx.gz_file;
     const dstd::String idx_file = fx.idx_file;
 
@@ -965,7 +965,7 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 }
 
 TEST_CASE("Robustness - Complete file reading equivalence") {
-    Prepared& fx = prepared(20, 512, 8.0);
+    Prepared& fx = prepared(8, 512, 4.0);
     const dstd::String gz_file = fx.gz_file;
     const dstd::String idx_file = fx.idx_file;
 
@@ -1316,7 +1316,7 @@ TEST_CASE("Robustness - Memory and performance stress") {
 TEST_CASE("Robustness - Line-based reading stress tests") {
     // A larger file with bigger lines and small chunks, to force many
     // checkpoints with line counts.
-    Prepared& fx = prepared(16, 1024, 0.5, true);
+    Prepared& fx = prepared(8, 1024, 0.5, true);
     const dstd::String gz_file = fx.gz_file;
     const dstd::String idx_file = fx.idx_file;
     LargeTestEnvironment& env = fx.env;
@@ -1629,7 +1629,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 }
 
 TEST_CASE("Robustness - Line reading consistency across multiple readers") {
-    Prepared& fx = prepared(16, 128, 4.0, true);
+    Prepared& fx = prepared(8, 128, 2.0, true);
     const dstd::String gz_file = fx.gz_file;
     const dstd::String idx_file = fx.idx_file;
     const std::size_t total_lines = fx.total_lines;

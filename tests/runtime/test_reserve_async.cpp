@@ -10,6 +10,7 @@
 #include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <testing_runtime.h>
 
 #include <atomic>
 #include <chrono>
@@ -260,7 +261,7 @@ TEST_CASE("a blocking get() on its own run loop does not wait") {
     Outcome out;
     CoroTask<void> task =
         wait_for(pool.get(), 32 * MIB, Clock::now() + 10s, &out, nullptr);
-    CHECK_NOTHROW(task.get());
+    CHECK_NOTHROW(dftu_utils_test::run_here(std::move(task)));
     CHECK(out.status != memory::Status::Ok);
     CHECK(out.waited < 5s);
     CHECK(root().reserved() == 64 * MIB);

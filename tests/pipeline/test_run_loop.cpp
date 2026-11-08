@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <testing_runtime.h>
 
 #include <atomic>
 #include <chrono>
@@ -111,7 +112,7 @@ TEST_SUITE("RunLoop") {
                 while (!release.load()) std::this_thread::yield();
                 mutex.unlock();
             };
-            task().get();
+            dftu_utils_test::run_here(task());
         });
         while (!holder_has_lock.load()) std::this_thread::yield();
 
@@ -123,7 +124,7 @@ TEST_SUITE("RunLoop") {
                 resumed_thread = std::this_thread::get_id();
                 mutex.unlock();
             };
-            task().get();
+            dftu_utils_test::run_here(task());
         });
         while (!waiter_started.load()) std::this_thread::yield();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));

@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/pool_resume.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
@@ -62,15 +63,27 @@ struct SyncScope {
 /// No-op if not on a worker thread.  Resets the timeslice.
 void yield_to_executor(std::coroutine_handle<> h) noexcept;
 
-/// Run `h` until it sets `finished` (a release store at its final suspend)
-/// on the calling thread. Waiting on that flag, not on h.done(), keeps the
-/// wait race-free while another worker resumes `h`, and makes its result
-/// visible to this thread.
+/// Blocks the calling thread until `h` sets `finished` (a release store at its
+/// final suspend). Waiting on that flag, not on h.done(), keeps the wait
+/// race-free while another thread resumes `h`, and makes its result visible
+/// to this thread. A thread of an executor runs that executor's work while
+/// it waits.
 ///
-/// With no executor bound to this thread, work spawned by `h` would have
-/// nothing to resume it, so a RunLoop is installed for the duration.
+/// With no executor bound to this thread, `h` runs on the executor that
+/// @ref set_blocking_executor gives, and this thread waits. Without one, a
+/// RunLoop is installed for the duration, so `h` and its work run here.
 void drive_to_completion(std::coroutine_handle<> h,
                          const std::atomic<bool>& finished);
+
+/// Gives the executor that @ref drive_to_completion runs a task on when the
+/// calling thread has no executor, with an owner that keeps it alive, or null.
+using BlockingExecutorFn = dstd::SharedPtr<Executor> (*)();
+
+/// Sets the source @ref drive_to_completion asks on a thread with no executor.
+/// The runtime library sets its process runtime here when it loads. With no
+/// source, or a null result, the calling thread runs the task on a RunLoop of
+/// its own. Safe from any thread.
+void set_blocking_executor(BlockingExecutorFn fn) noexcept;
 
 /// Wakes the threads parked in an executor's drive_until after a task with
 /// no awaiter ended, so a blocked get() sees it without polling. Call it

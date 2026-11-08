@@ -53,6 +53,7 @@ struct DriverPark {
 };
 
 constinit std::atomic<std::uint32_t> g_parked_drivers{0};
+constinit std::atomic<BlockingExecutorFn> g_blocking_executor{nullptr};
 // Set by the first wake after a park and cleared by the next park, so a
 // burst of enqueues takes the park mutex once, not once each.
 constinit std::atomic<bool> g_wake_sent{false};
@@ -100,6 +101,10 @@ bool park_driver(bool (*ready)(void*), void* arg,
     return woke;
 }
 
+void set_blocking_executor(BlockingExecutorFn fn) noexcept {
+    g_blocking_executor.store(fn, std::memory_order_release);
+}
+
 void restore_executor(void* saved) noexcept {
     Executor::set_current(static_cast<Executor*>(saved));
 }
@@ -139,6 +144,22 @@ void drive_to_completion(std::coroutine_handle<> h,
             common::ErrorCode::Pipeline,
             "cannot block on a thread of an executor that cannot lend it; use "
             "co_await or a thread outside the executor");
+    }
+
+    // A thread with no executor hands the task to the process pool and waits:
+    // a RunLoop here would run all of its work on this one thread.
+    const BlockingExecutorFn source =
+        g_blocking_executor.load(std::memory_order_acquire);
+    if (dstd::SharedPtr<Executor> pool = source ? source() : nullptr) {
+        pool->post(h);
+        auto ready = [](void* flag) {
+            return static_cast<const std::atomic<bool>*>(flag)->load(
+                std::memory_order_acquire);
+        };
+        void* flag = const_cast<std::atomic<bool>*>(&finished);
+        while (!is_finished())
+            park_driver(ready, flag, std::chrono::milliseconds{100});
+        return;
     }
 
     RunLoop loop;

@@ -22,6 +22,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <stdlib.h>
+#include <testing_runtime.h>
 #include <unistd.h>
 
 #include <cstddef>
@@ -171,11 +172,11 @@ TEST_CASE("spill bytes show as external") {
         reserved = pool->try_reserve(free_budget / 2).status();
     });
     {
-        const DataFrame out = LazyFrame::scan(source)
-                                  .sort_by("k")
-                                  .memory_budget(SORT_BUDGET)
-                                  .collect()
-                                  .get();
+        const DataFrame out =
+            dftu_utils_test::run_here(LazyFrame::scan(source)
+                                          .sort_by("k")
+                                          .memory_budget(SORT_BUDGET)
+                                          .collect());
         CHECK(out.num_rows() == MORSELS * ROWS);
     }
 

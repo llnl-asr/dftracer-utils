@@ -112,19 +112,15 @@ dstd::Vector<dstd::String> sorted(dstd::Vector<dstd::String> n) {
     return n;
 }
 
-void same_column(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
-                 const dstd::String& n) {
+void same_rows(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
+               const dstd::Vector<dstd::String>& cols) {
     REQUIRE(a.num_rows() == b.num_rows());
-    const auto& ca = a.columns[static_cast<std::size_t>(bcol(a, n))];
-    const auto& cb = b.columns[static_cast<std::size_t>(bcol(b, n))];
-    for (std::int64_t r = 0; r < a.num_rows(); ++r) {
-        REQUIRE(ca.is_null(r) == cb.is_null(r));
-        if (ca.is_null(r)) continue;
-        if (ca.type() == dataframe::TypeId::String)
-            CHECK(bstr(a, r, n) == bstr(b, r, n));
-        else
-            CHECK(bnum(a, r, n) == bnum(b, r, n));
-    }
+    CHECK(sorted_row_keys(a, cols) == sorted_row_keys(b, cols));
+}
+
+void same_rows(const dataframe::DataFrame& a, const dataframe::DataFrame& b) {
+    REQUIRE(a.num_rows() == b.num_rows());
+    CHECK(sorted_row_keys(a) == sorted_row_keys(b));
 }
 
 dstd::String join_names(const dataframe::DataFrame& f) {
@@ -187,7 +183,7 @@ void same_as_full(Gen gen, const dstd::String& schema, const dstd::String& q) {
     INFO(q);
     INFO("got " << join_names(got) << " want " << join_names(want));
     REQUIRE(sorted(got.names) == sorted(want.names));
-    for (const auto& n : got.names) same_column(got, want, n);
+    same_rows(got, want);
 }
 
 struct Case {
@@ -238,8 +234,7 @@ TEST_SUITE("DropRenameViews") {
         CHECK(dropped.names.size() == all.names.size() - 1);
         const auto dropped_full = frame(f, base + " | drop v.p50");
         REQUIRE(sorted(dropped.names) == sorted(dropped_full.names));
-        for (const auto& n : dropped.names)
-            same_column(dropped, dropped_full, n);
+        same_rows(dropped, dropped_full);
 
         const dstd::String rename = base + " | rename cnt = count, p = v.p99";
         const auto renamed = frame(q, rename);
@@ -250,8 +245,7 @@ TEST_SUITE("DropRenameViews") {
         CHECK(renamed.names.size() == all.names.size());
         const auto renamed_full = frame(f, rename);
         REQUIRE(sorted(renamed.names) == sorted(renamed_full.names));
-        for (const auto& n : renamed.names)
-            same_column(renamed, renamed_full, n);
+        same_rows(renamed, renamed_full);
     }
 
     TEST_CASE("dftracer trace without a catalog") {
@@ -269,8 +263,7 @@ TEST_SUITE("DropRenameViews") {
         CHECK(has(renamed, "off"));
         CHECK_FALSE(has(renamed, "args.offset"));
         CHECK(has(renamed, "dur"));
-        same_column(renamed, renamed_full, "off");
-        same_column(renamed, renamed_full, "dur");
+        same_rows(renamed, renamed_full, {"off", "dur"});
 
         const auto dropped = frame(q, base + " | drop dur");
         CHECK_FALSE(has(dropped, "dur"));
@@ -332,6 +325,6 @@ TEST_SUITE("DropRenameViews") {
         const auto got = p.view.lazy().fill_null(0).collect().get();
         REQUIRE(sorted(got.names) == sorted(want.names));
         CHECK(has(got, "v.p50"));
-        for (const auto& n : got.names) same_column(got, want, n);
+        same_rows(got, want);
     }
 }

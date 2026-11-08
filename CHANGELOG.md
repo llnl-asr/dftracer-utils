@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Run a task on the process runtime when a thread that is not a runtime worker calls `get()` on it, such as `view.collect().get()` in `main()`, so the work uses every core instead of the calling thread only.
+  Bind a `coro::RunLoop` with `coro::CurrentScope` to keep the work on the calling thread.
+  The row order of a result with no sort is not fixed.
 - Make a trace scan with no index answer up to about 25% faster when the query reads no args, because each line is decoded once and the args are not decoded.
 - Grow the index in place when a trace grows by whole gzip members, so a refresh costs only the new members.
 - Lower the default of `DFTRACER_UTILS_MEM_DECAY_MS` from 1000 to 200, so the heap gives idle pages back sooner.

@@ -167,8 +167,9 @@ TEST_SUITE("RunLoop") {
             finished.store(true);
         }).detach();
 
+        // Wide, as Valgrind runs this file many times slower.
         const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            std::chrono::steady_clock::now() + std::chrono::seconds(60);
         while (!finished.load() && std::chrono::steady_clock::now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(finished.load());

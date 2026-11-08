@@ -146,8 +146,15 @@ TEST_SUITE("RunLoop") {
         // timers fails the check below instead of hanging the test.
         static std::atomic<bool> timed_out{false};
         static std::atomic<bool> finished{false};
+        static std::atomic<bool> on_loop{false};
+        static std::atomic<coro::Executor*> ran_on{nullptr};
         std::thread([] {
+            // Bound here, as a get() on a thread with no executor runs on the
+            // process runtime instead.
+            coro::RunLoop loop;
+            coro::CurrentScope bind{loop};
             auto task = []() -> coro::CoroTask<void> {
+                ran_on.store(coro::Executor::current());
                 try {
                     co_await coro::timeout(std::chrono::milliseconds(20),
                                            coro::Executor::current()->timers());
@@ -156,6 +163,7 @@ TEST_SUITE("RunLoop") {
                 }
             };
             task().get();
+            on_loop.store(ran_on.load() == &loop);
             finished.store(true);
         }).detach();
 
@@ -165,5 +173,6 @@ TEST_SUITE("RunLoop") {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(finished.load());
         CHECK(timed_out.load());
+        CHECK(on_loop.load());
     }
 }

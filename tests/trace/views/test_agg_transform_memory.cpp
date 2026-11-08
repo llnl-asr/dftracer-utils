@@ -124,18 +124,24 @@ TEST_CASE("a group-key transform holds no more than one morsel" *
     TestEnvironment env(200);
     REQUIRE(env.is_valid());
     const dstd::String gz = write_trace(env.dir());
-    // One run's peak swings, so each side is the lowest of a few runs. The
-    // first run builds the index. The runs go one at a time, as children that
-    // compete for cores hold more memory while they wait.
+    // Under load a run's peak can drop by tens of MiB, so each side is the
+    // median of a few runs; the lowest let one side dip alone. The first run
+    // builds the index. The runs go one at a time, as children that compete
+    // for cores hold more memory while they wait.
     peak_rss(start_child("plain", gz));
-    std::uint64_t plain = ~std::uint64_t{0};
-    std::uint64_t transformed = ~std::uint64_t{0};
+    std::uint64_t plain_runs[RUNS];
+    std::uint64_t transform_runs[RUNS];
     for (int i = 0; i < RUNS; ++i) {
-        plain = std::min(plain, peak_rss(start_child("plain", gz)));
-        transformed =
-            std::min(transformed, peak_rss(start_child("transform", gz)));
+        plain_runs[i] = peak_rss(start_child("plain", gz));
+        transform_runs[i] = peak_rss(start_child("transform", gz));
     }
+    std::sort(plain_runs, plain_runs + RUNS);
+    std::sort(transform_runs, transform_runs + RUNS);
+    const std::uint64_t plain = plain_runs[RUNS / 2];
+    const std::uint64_t transformed = transform_runs[RUNS / 2];
     const std::uint64_t extra = transformed > plain ? transformed - plain : 0;
+    MESSAGE("peak RSS without a transform ", plain >> 20, " MiB, with one ",
+            transformed >> 20, " MiB");
     CHECK_MESSAGE(extra <= MAX_EXTRA, "the transform holds ", extra >> 20,
                   " MiB above the same aggregation without one (limit ",
                   MAX_EXTRA >> 20, " MiB)");

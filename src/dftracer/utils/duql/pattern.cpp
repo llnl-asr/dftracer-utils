@@ -560,9 +560,14 @@ PatternPtr make(CompiledPattern p) {
 PatternResult compile_like(dstd::StringView pattern, bool icase,
                            dstd::Optional<char> escape) {
     dstd::Vector<GlobToken> toks;
-    // An int, not the optional: GCC fuses the two tests of an optional into
-    // a read of its unset payload, which Valgrind reports.
-    const int esc = escape ? *escape : -1;
+    // GCC fuses the two tests of an optional into a branch on its unset
+    // payload, which Valgrind reports. The volatile read keeps the payload on
+    // the branch where it is set.
+    int esc = -1;
+    if (escape.has_value()) {
+        const volatile char set = *escape;
+        esc = set;
+    }
     for (std::size_t i = 0; i < pattern.size(); ++i) {
         const char c = pattern[i];
         if (c == esc) {

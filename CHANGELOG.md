@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make an index of system counter traces up to 57% smaller, because each counter value is stored as a change from the last value of the same counter.
+  Rebuild indexes made by an earlier version.
+
 - Run a task on the process runtime when a thread that is not a runtime worker calls `get()` on it, such as `view.collect().get()` in `main()`, so the work uses every core instead of the calling thread only.
   Bind a `coro::RunLoop` with `coro::CurrentScope` to keep the work on the calling thread.
   The row order of a result with no sort is not fixed.

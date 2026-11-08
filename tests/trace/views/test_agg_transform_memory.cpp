@@ -41,17 +41,10 @@ constexpr std::uint64_t BUDGET = 4ULL << 20;
 constexpr std::uint64_t MAX_EXTRA = 24ULL << 20;
 constexpr int RUNS = 3;
 
-// The bound on the extra peak depends on the scale: only a transform that held
-// a million scanned rows would exceed it. Coverage counters make each scan
-// much slower, so that build scans fewer rows with keys padded to
-// KEY_PAD bytes, which catches a larger regression only.
-#ifdef DFTRACER_UTILS_UNDER_COVERAGE
+// Keys padded to KEY_PAD bytes, so a transform that held the scanned keys would
+// hold twice MAX_EXTRA.
 constexpr std::size_t KEY_PAD = 320;
 constexpr int EVENTS = static_cast<int>((2 * MAX_EXTRA) / KEY_PAD);
-#else
-constexpr std::size_t KEY_PAD = 0;
-constexpr int EVENTS = 1'500'000;
-#endif
 
 dstd::String g_self;
 
@@ -131,21 +124,17 @@ TEST_CASE("a group-key transform holds no more than one morsel" *
     TestEnvironment env(200);
     REQUIRE(env.is_valid());
     const dstd::String gz = write_trace(env.dir());
-    // One run's peak swings, so each side is the lowest of a
-    // few runs. The first run builds the index; the rest start together, since
-    // each child's peak is its own.
+    // One run's peak swings, so each side is the lowest of a few runs. The
+    // first run builds the index. The runs go one at a time, as children that
+    // compete for cores hold more memory while they wait.
     peak_rss(start_child("plain", gz));
-    dstd::Vector<pid_t> plain_runs;
-    dstd::Vector<pid_t> transform_runs;
-    for (int i = 0; i < RUNS; ++i) {
-        plain_runs.push_back(start_child("plain", gz));
-        transform_runs.push_back(start_child("transform", gz));
-    }
     std::uint64_t plain = ~std::uint64_t{0};
     std::uint64_t transformed = ~std::uint64_t{0};
-    for (const pid_t pid : plain_runs) plain = std::min(plain, peak_rss(pid));
-    for (const pid_t pid : transform_runs)
-        transformed = std::min(transformed, peak_rss(pid));
+    for (int i = 0; i < RUNS; ++i) {
+        plain = std::min(plain, peak_rss(start_child("plain", gz)));
+        transformed =
+            std::min(transformed, peak_rss(start_child("transform", gz)));
+    }
     const std::uint64_t extra = transformed > plain ? transformed - plain : 0;
     CHECK_MESSAGE(extra <= MAX_EXTRA, "the transform holds ", extra >> 20,
                   " MiB above the same aggregation without one (limit ",

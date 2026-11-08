@@ -2,12 +2,21 @@
 #ifndef DFTRACER_UTILS_DUQL_OVERLAP_H
 #define DFTRACER_UTILS_DUQL_OVERLAP_H
 
+#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
+#if DFTRACER_UTILS_TEST_PROBES
+#include <atomic>
+#endif
 
 namespace dftracer::utils::duql {
+
+#if DFTRACER_UTILS_TEST_PROBES
+/// Tree nodes and side rows that @ref overlap_matches visited. For tests.
+inline std::atomic<std::uint64_t> g_overlap_steps{0};
+#endif
 
 /// Each row's matches as CSR lists: row `i` matches the side rows
 /// `rows[offsets[i]..offsets[i + 1])`, in ascending side row order.

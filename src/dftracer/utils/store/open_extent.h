@@ -34,6 +34,11 @@ namespace dftracer::utils::store::engine {
 /// this buffer, which fills with what a namespace writes up to this size.
 inline std::atomic<std::size_t> g_dict_sample_bytes{std::size_t{8} << 20};
 
+/// The page bytes a namespace seals while its dictionary trains before a seal
+/// waits for the training, so a dictionary is never later than this. A test
+/// lowers it to train both dictionaries on less data.
+inline std::atomic<std::uint64_t> g_dict_wait_bytes{std::uint64_t{16} << 20};
+
 /// One written block of a data file: an extent of segments, or the run of a
 /// segment too big for an extent, in its stored form. `length` is the stored
 /// length rounded up to 4096. `crc` covers all `length` bytes. Segment offsets

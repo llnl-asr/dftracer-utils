@@ -44,9 +44,6 @@ constexpr std::uint64_t OPEN_EXTENT_SLOT_BLOCKS =
 /// second, so it learns from a wider stretch of the data at the same cost.
 constexpr std::uint64_t DICT_RETRAIN_STRIDE = 8;
 constexpr std::uint8_t DICT_STAGES = 2;
-/// The page bytes a namespace seals while its dictionary trains before a seal
-/// waits for the training, so a dictionary is never later than this.
-constexpr std::uint64_t DICT_WAIT_BYTES = std::uint64_t{16} << 20;
 
 /// One dictionary training, shared by the namespace and the executor task that
 /// runs it. Whoever claims it first trains: the task, or a seal that cannot
@@ -237,7 +234,8 @@ dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
         if (slot.training != nullptr) {
             job = slot.training;
             slot.sealed_while_training += used;
-            must_finish = slot.sealed_while_training >= DICT_WAIT_BYTES;
+            must_finish = slot.sealed_while_training >=
+                          g_dict_wait_bytes.load(std::memory_order_relaxed);
         } else {
             if (slot.dict_stage >= DICT_STAGES) return slot.dict;
             const std::size_t sample_bytes =

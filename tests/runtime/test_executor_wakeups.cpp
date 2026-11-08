@@ -29,10 +29,17 @@ using namespace std::chrono_literals;
 
 namespace {
 
+// Voluntary only on Linux: a thread that polls gives up the CPU itself, while
+// preemptions grow with the load of the machine. macOS counts every switch,
+// sleeps too, as involuntary.
 std::int64_t context_switches() {
     rusage usage{};
     getrusage(RUSAGE_SELF, &usage);
-    return static_cast<std::int64_t>(usage.ru_nvcsw) + usage.ru_nivcsw;
+#ifdef __APPLE__
+    return static_cast<std::int64_t>(usage.ru_nivcsw);
+#else
+    return static_cast<std::int64_t>(usage.ru_nvcsw);
+#endif
 }
 
 std::chrono::microseconds cpu_time() {

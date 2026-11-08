@@ -7,7 +7,6 @@
 #include <mmix_lcg.h>
 #include <testing_utilities.h>
 
-#include <chrono>
 #include <cstdint>
 
 using namespace dftracer::utils;
@@ -127,19 +126,24 @@ TEST_CASE("overlap is half open and zero-length intervals sit inside") {
     CHECK(m.rows == rows_want);
 }
 
+#if DFTRACER_UTILS_TEST_PROBES
 TEST_CASE("overlap does not scan pairs") {
+    // A pair scan visits about n * n / KEYS side rows. The tree visits about
+    // log2(n) nodes per row plus one per match.
+    constexpr int KEYS = 4;
+    constexpr int N = 20000;
     Rng rng{11};
-    const int n = static_cast<int>(DFTRACER_UTILS_VALGRIND_SCALE(200000, 20));
-    const Table rows = random_table(rng, n, 4, 5'000'000, 50);
-    const Table side = random_table(rng, n, 4, 5'000'000, 50);
-    const auto t0 = std::chrono::steady_clock::now();
+    const Table rows = random_table(rng, N, KEYS, 5'000'000, 50);
+    const Table side = random_table(rng, N, KEYS, 5'000'000, 50);
+    g_overlap_steps.store(0, std::memory_order_relaxed);
     const auto m = overlap_matches(columns_of(rows), columns_of(side));
-    const double seconds =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
-            .count();
-    CHECK(m.offsets.size() == static_cast<std::size_t>(n) + 1);
-    CHECK(seconds < 10.0);  // a pair scan takes minutes
+    const std::uint64_t steps = g_overlap_steps.load(std::memory_order_relaxed);
+    MESSAGE("steps: " << steps << ", matches: " << m.rows.size());
+    CHECK(m.offsets.size() == static_cast<std::size_t>(N) + 1);
+    constexpr std::uint64_t PER_ROW = 4 * 16;
+    CHECK(steps <= N * PER_ROW + 4 * m.rows.size());
 }
+#endif
 
 TEST_CASE("overlap compares doubles and scaled durations") {
     const double start[] = {0.5, 3.0};

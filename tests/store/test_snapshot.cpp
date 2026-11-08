@@ -20,6 +20,7 @@
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/fold.h>
+#include <dftracer/utils/store/open_extent.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/segment.h>
 #include <dftracer/utils/store/snapshot.h>
@@ -48,6 +49,24 @@ using namespace dftracer::utils;
 namespace {
 
 using namespace dftracer::utils::store;
+
+// Sets the dictionary sample size and training wait for one test case.
+class DictLimits {
+   public:
+    DictLimits(std::size_t sample_bytes, std::uint64_t wait_bytes)
+        : sample_(engine::g_dict_sample_bytes.exchange(sample_bytes)),
+          wait_(engine::g_dict_wait_bytes.exchange(wait_bytes)) {}
+    ~DictLimits() {
+        engine::g_dict_sample_bytes.store(sample_);
+        engine::g_dict_wait_bytes.store(wait_);
+    }
+    DictLimits(const DictLimits&) = delete;
+    DictLimits& operator=(const DictLimits&) = delete;
+
+   private:
+    std::size_t sample_;
+    std::uint64_t wait_;
+};
 
 constexpr std::uint32_t SMALL_EXTENT = 4096;
 constexpr std::size_t HEADER_WRITER_RANDOM_AT = 32;
@@ -637,9 +656,11 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_page_dict");
         const ScopeKey scope = file_scope("/traces/dict.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.dict");
-        // The first dictionary trains on the first 8 MiB, the second on every
-        // eighth page of the 64 MiB after it.
-        constexpr int KEYS = 120000;
+        // The first dictionary trains on the first 1 MiB, the second on every
+        // eighth page of the 8 MiB after it, and a seal waits for a training
+        // after 2 MiB more. 20000 values of 1 KiB hold both; 24000 leave room.
+        const DictLimits limits(std::size_t{1} << 20, std::uint64_t{2} << 20);
+        constexpr int KEYS = 24000;
         constexpr int PER_BATCH = 200;
         constexpr int PER_BIG_BATCH = 2000;
         const auto dict_key = [](int index) {
@@ -678,7 +699,11 @@ TEST_SUITE("index store snapshot") {
                 const dstd::String bytes = value(i);
                 batch.put(view_of(key), view_of(bytes));
             }
-            REQUIRE(writer->commit(std::move(batch)).has_value());
+            auto committed = writer->commit(std::move(batch));
+            REQUIRE_MESSAGE(
+                committed.has_value(),
+                (committed ? dstd::String()
+                           : dstd::String(committed.error().message())));
             first += count;
         }
         REQUIRE(flush_writer(*writer).has_value());

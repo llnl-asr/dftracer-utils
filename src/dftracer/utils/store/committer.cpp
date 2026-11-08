@@ -8,9 +8,7 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/io_fault.h>
-#include <unistd.h>
 
-#include <cerrno>
 #include <cstddef>
 #include <utility>
 
@@ -354,25 +352,17 @@ void Committer::free_entries(dstd::Vector<PendingEntry>& entries) noexcept {
 }
 
 dstd::Expected<void, dstd::Error> Committer::sync_file() {
-    const int fd = file_.fd();
-    if (fd < 0) {
+    const dstd::File& file = file_.file();
+    if (!file.is_open()) {
         return dstd::Unexpected<dstd::Error>(
             io_error("store group commit sync on a closed file"));
     }
     sync_calls().fetch_add(1, std::memory_order_relaxed);
-    int result = -1;
-    do {
-#if defined(__APPLE__)
-        result = ::fsync(fd);
-#else
-        result = ::fdatasync(fd);
-#endif
-    } while (result != 0 && errno == EINTR);
-    if (result != 0) {
+    if (!file.sync(dstd::SyncMode::Data)) {
         return dstd::Unexpected<dstd::Error>(
             io_error("store group commit sync failed"));
     }
-    io_fault::on_sync(fd);
+    io_fault::on_sync(file.native_handle());
     return {};
 }
 

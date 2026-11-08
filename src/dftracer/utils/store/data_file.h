@@ -184,6 +184,8 @@ class DataFileWriter {
 
     /// The descriptor this writer appends to, -1 once closed.
     int fd() const noexcept { return fd_.native_handle(); }
+    /// The file this writer appends to, closed once the writer closes.
+    const dstd::File& file() const noexcept { return fd_; }
     void add(RecordItem item);
     dstd::Expected<void, dstd::Error> commit();
     dstd::Expected<void, dstd::Error> close();
@@ -296,11 +298,11 @@ class DataFileReader {
     /// its crc fails. `reads` counts the calls and bytes.
     dstd::Expected<void, dstd::Error> verify_block(const ExtentRef& ref,
                                                    BlockReads* reads) const;
-    /// Reads the extents of one run, one preadv per group of at most IOV_MAX
-    /// refs, then checks each crc. `refs` and `targets` are parallel, and
-    /// `refs` must ascend, each starting where the previous ends. A bad or
-    /// truncated extent is left empty and marked bad. Io, the only error, ends
-    /// the file.
+    /// Reads the extents of one run, one preadv per group of at most @ref
+    /// dstd::File::MAX_VECTORED_BUFFERS refs, then checks each crc. `refs` and
+    /// `targets` are parallel, and `refs` must ascend, each starting where the
+    /// previous ends. A bad or truncated extent is left empty and marked bad.
+    /// Io, the only error, ends the file.
     dstd::Expected<BlockReads, dstd::Error> read_extents(
         dstd::Span<const ExtentRef> refs,
         dstd::Span<const ExtentTarget> targets) const;
@@ -318,9 +320,9 @@ class DataFileReader {
    private:
     DataFileReader() = default;
 
-    /// The descriptor of the file, opened here on the first call of a reader
+    /// The file, opened here on the first call of a reader
     /// built from a summary entry.
-    dstd::Expected<int, dstd::Error> descriptor() const;
+    dstd::Expected<const dstd::File*, dstd::Error> descriptor() const;
     /// The alignment of a direct read of this file, opening its direct
     /// descriptor on the first call; 0 when reads go through the page cache.
     /// Io when that open fails for a reason other than a refusal.
@@ -328,7 +330,8 @@ class DataFileReader {
     /// Reads `length` bytes at `offset` into `dest`: past the page cache when
     /// direct reads are on, through it otherwise or after a direct read fails
     /// with EINVAL. Parse when the file ends first, Io when a read fails.
-    dstd::Expected<void, dstd::Error> read_at(int fd, std::uint64_t offset,
+    dstd::Expected<void, dstd::Error> read_at(const dstd::File& file,
+                                              std::uint64_t offset,
                                               std::size_t length,
                                               std::uint8_t* dest,
                                               BlockReads* reads) const;
@@ -353,7 +356,8 @@ class DataFileReader {
     /// holds every scope, copy, drop and commit summary.
     dstd::Expected<void, dstd::Error> apply_items_block();
 
-    mutable std::atomic<int> fd_{-1};
+    mutable dstd::File file_;
+    mutable std::atomic<bool> opened_{false};
     std::uint64_t file_size_ = 0;
     std::size_t records_read_ = 0;
     FileIndex index_;

@@ -101,7 +101,7 @@ TEST_SUITE("FileDecompressor") {
             FileCompressorUtility compressor;
             auto compress_input =
                 FileCompressionUtilityInput::from_file(original_file);
-            compressor(compress_input).get();
+            REQUIRE(compressor(compress_input).get().has_value());
             (void)dstd::fs::remove(original_file);
 
             FileDecompressorUtility decompressor;

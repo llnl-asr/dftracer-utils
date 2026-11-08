@@ -288,14 +288,14 @@ class TestRuntimeLifecycle:
             assert rt.python_threads == 8
 
     def test_python_threads_default(self):
-        with Runtime(threads=4) as rt:
+        with Runtime(threads=2) as rt:
             assert rt.python_threads == 0
             rt.submit(lambda: 1).get()
-            assert rt.python_threads == min(32, 4)
+            assert rt.python_threads == min(32, 2)
 
     def test_threads_property(self):
-        with Runtime(threads=4) as rt:
-            assert rt.threads == 4
+        with Runtime(threads=2) as rt:
+            assert rt.threads == 2
 
     def test_nested_submit(self):
         """Python callable that internally submits another callable."""

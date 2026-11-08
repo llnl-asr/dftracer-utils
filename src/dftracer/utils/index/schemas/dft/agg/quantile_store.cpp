@@ -125,10 +125,23 @@ void QuantileStore::add_to(dataframe::DDSketch& out) const {
     }
 }
 
+namespace {
+// Most stores hold a few values, so the buffer starts small and then jumps
+// to EXACT_CAPACITY: two allocations at most, not one per doubling.
+constexpr std::size_t EXACT_FIRST_CAPACITY = 8;
+}  // namespace
+
+void QuantileStore::reserve_exact(std::size_t need) {
+    if (need <= exact_.capacity()) return;
+    exact_.reserve(need <= EXACT_FIRST_CAPACITY ? EXACT_FIRST_CAPACITY
+                                                : EXACT_CAPACITY);
+}
+
 void QuantileStore::add(double value) {
     if (std::isnan(value)) return;
     if (!sketch_mode_) {
         if (exact_.size() < EXACT_CAPACITY) {
+            reserve_exact(exact_.size() + 1);
             exact_.insert(std::upper_bound(exact_.begin(), exact_.end(), value),
                           value);
             return;
@@ -147,6 +160,7 @@ void QuantileStore::add_many(dstd::Span<const double> values) {
             to_sketch(values.data(), values.size());
             return;
         }
+        reserve_exact(exact_.size() + clean);
         const std::size_t mid = exact_.size();
         for (double v : values)
             if (v == v) exact_.push_back(v);

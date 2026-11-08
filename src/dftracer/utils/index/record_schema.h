@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -257,10 +258,11 @@ SchemaDetection explain_schema(dstd::Span<const dstd::StringView> lines);
 SchemaDetection explain_file_schema(dstd::CStringView file_path);
 
 /// The same over an open file of `size` bytes modified at `mtime_ns`
-/// nanoseconds since the epoch, read with pread. `fd` stays open and owned by
-/// the caller.
-SchemaDetection explain_file_schema(dstd::CStringView file_path, int fd,
-                                    std::uint64_t size, std::int64_t mtime_ns);
+/// nanoseconds since the epoch, read at offsets. `file` stays open and owned
+/// by the caller.
+SchemaDetection explain_file_schema(dstd::CStringView file_path,
+                                    const dstd::File& file, std::uint64_t size,
+                                    std::int64_t mtime_ns);
 
 /// `d` as a JSON object: chosen (id), objects, records, and scores, each with
 /// id, required (the count of required paths) and share.
@@ -272,8 +274,9 @@ const RecordSchema& detect_schema(dstd::Span<const dstd::StringView> lines);
 /// explain_file_schema(file_path).chosen.
 const RecordSchema& detect_file_schema(dstd::CStringView file_path);
 
-/// explain_file_schema(file_path, fd, size, mtime_ns).chosen.
-const RecordSchema& detect_file_schema(dstd::CStringView file_path, int fd,
+/// explain_file_schema(file_path, file, size, mtime_ns).chosen.
+const RecordSchema& detect_file_schema(dstd::CStringView file_path,
+                                       const dstd::File& file,
                                        std::uint64_t size,
                                        std::int64_t mtime_ns);
 

@@ -52,6 +52,7 @@ struct ResolveGroupInput {
     dstd::Vector<PendingFile> files;
     bool require_checkpoints;
     bool require_bloom;
+    bool tail_is_current = false;
     std::size_t checkpoint_size = 0;
     dstd::Optional<ChunkIndexerConfig> bloom_config;
     dstd::String schema;
@@ -176,6 +177,7 @@ struct FileDecision {
     enum class Kind : std::uint8_t {
         NotIndexed,
         Stale,
+        Grown,
         NeedsCheckpoint,
         Bloom,
         Aggregate,
@@ -199,7 +201,24 @@ FileDecision decide(const Snapshot& snapshot, const PendingFile& f,
     // (no extra metadata op). Rebuild if the source changed since it
     // was indexed, or the record predates mtime/size tracking.
     const auto& stored_stat = file->stat();
-    if (stored_stat.mtime != f.mtime || stored_stat.size != f.size) {
+    std::uint64_t size = f.size;
+    std::uint64_t mtime = f.mtime;
+    // A build reads what a writer added after the scan, so a record can hold
+    // more than the scan saw. Only a new look tells that from a shorter file.
+    if (size < stored_stat.size) {
+        common::InputFileStat now;
+        if (common::stat_input(f.file_path, now)) {
+            size = now.size;
+            mtime = static_cast<std::uint64_t>(now.mtime);
+        }
+    }
+    const bool has_grown = index::is_append_of(f.file_path, size, stored_stat);
+    if (has_grown && !input.tail_is_current) {
+        d.kind = FileDecision::Kind::Grown;
+        return d;
+    }
+    if (!has_grown &&
+        (stored_stat.mtime != mtime || stored_stat.size != size)) {
         DFTRACER_UTILS_LOG_WARN(
             "Index stale for %s (source changed since indexing); "
             "rebuilding",
@@ -319,6 +338,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                 case FileDecision::Kind::Stale:
                     result.stale_detected = true;
                     [[fallthrough]];
+                case FileDecision::Kind::Grown:
                 case FileDecision::Kind::NotIndexed:
                 case FileDecision::Kind::NeedsCheckpoint:
                     result.needs_checkpoint.push_back(FileWorkItem{
@@ -489,6 +509,7 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
             ResolveGroupInput group_input;
             group_input.index_path = idx_path;
             group_input.files = std::move(files);
+            group_input.tail_is_current = input.tail_is_current;
             group_input.require_checkpoints = input.require_checkpoints;
             group_input.require_bloom = input.require_bloom;
             group_input.checkpoint_size = input.checkpoint_size;
@@ -511,6 +532,7 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
             ResolveGroupInput group_input;
             group_input.index_path = idx_path;
             group_input.files = std::move(files);
+            group_input.tail_is_current = input.tail_is_current;
             group_input.require_checkpoints = input.require_checkpoints;
             group_input.require_bloom = input.require_bloom;
             group_input.checkpoint_size = input.checkpoint_size;

@@ -82,11 +82,10 @@ dstd::Path probe_path(dstd::StringView path) noexcept {
 }
 
 bool same_device(dstd::CStringView a, dstd::CStringView b) noexcept {
-    struct stat sa{};
-    struct stat sb{};
-    if (::stat(a.c_str(), &sa) != 0 || ::stat(b.c_str(), &sb) != 0)
-        return false;
-    return sa.st_dev == sb.st_dev;
+    const auto sa = dstd::fs::stat(dstd::PathView(a));
+    const auto sb = dstd::fs::stat(dstd::PathView(b));
+    if (!sa || !sb) return false;
+    return sa->dev == sb->dev;
 }
 
 // Decode /proc/mounts octal escapes (e.g. "\040" for space).

@@ -4,19 +4,19 @@
 
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/ipc_writer.h>
-#include <fcntl.h>
 #include <flatcc/flatcc_builder.h>
 #include <nanoarrow/ipc/flatcc_generated.h>
 #include <nanoarrow/nanoarrow.h>
 #include <nanoarrow/nanoarrow_ipc.h>
 #include <sys/uio.h>
-#include <unistd.h>
 #include <zstd.h>
 
 #include <cstring>
@@ -220,17 +220,11 @@ static int build_message_header(ArrowArrayView* view,
 // ---------------------------------------------------------------------------
 
 IpcWriter::~IpcWriter() {
-    if (is_open()) {
-        // Sync close in destructor - not ideal but safe
-        if (fd_ >= 0) {
-            ::close(fd_);
-        }
-        reset_state();
-    }
+    if (is_open()) reset_state();
 }
 
 IpcWriter::IpcWriter(IpcWriter&& other) noexcept {
-    fd_ = other.fd_;
+    file_ = std::move(other.file_);
     write_offset_ = other.write_offset_;
     buffer_pool_ = std::move(other.buffer_pool_);
     schema_written_ = other.schema_written_;
@@ -242,8 +236,7 @@ IpcWriter::IpcWriter(IpcWriter&& other) noexcept {
 
 IpcWriter& IpcWriter::operator=(IpcWriter&& other) noexcept {
     if (this != &other) {
-        if (fd_ >= 0) ::close(fd_);
-        fd_ = other.fd_;
+        file_ = std::move(other.file_);
         write_offset_ = other.write_offset_;
         buffer_pool_ = std::move(other.buffer_pool_);
         schema_written_ = other.schema_written_;
@@ -256,7 +249,6 @@ IpcWriter& IpcWriter::operator=(IpcWriter&& other) noexcept {
 }
 
 void IpcWriter::reset_state() noexcept {
-    fd_ = -1;
     write_offset_ = 0;
     schema_written_ = false;
     batch_blocks_ = nullptr;
@@ -276,22 +268,26 @@ coro::CoroTask<int> IpcWriter::open(dstd::CStringView path,
     buffer_pool_ = BufferPool(pool_slots);
 
     // Async open via runtime::io::open (auto-detects executor context)
-    auto result = co_await runtime::io::open(
-        path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    const dstd::OpenOptions open_options{.access = dstd::Access::Write,
+                                         .creation = dstd::Creation::AlwaysNew};
+    auto opening =
+        runtime::io::open_file(dstd::PathView(path.view()), open_options);
+    auto opened = co_await std::move(opening);
 
-    if (result < 0) {
+    if (!opened) {
         reset_state();
-        co_return static_cast<int>(result);
+        co_return -1;
     }
 
-    fd_ = static_cast<int>(result);
+    file_ = std::move(*opened);
     write_offset_ = 0;
 
     // Write Arrow IPC file magic "ARROW1" + padding
     constexpr char MAGIC[] = "ARROW1\0\0";
-    auto write_result = co_await runtime::io::pwrite(fd_, MAGIC, 8, 0);
+    auto write_result =
+        co_await runtime::io::pwrite(file_.native_handle(), MAGIC, 8, 0);
     if (write_result < 0) {
-        co_await runtime::io::close(fd_);
+        (void)file_.close();
         reset_state();
         co_return static_cast<int>(write_result);
     }
@@ -337,7 +333,7 @@ coro::CoroTask<int> IpcWriter::write_schema(ArrowExportResult& batch) {
 
     // Write schema message
     auto result = co_await runtime::io::pwrite(
-        fd_, msg_buf.data, msg_buf.size_bytes, write_offset_);
+        file_.native_handle(), msg_buf.data, msg_buf.size_bytes, write_offset_);
 
     if (result < 0) {
         ArrowBufferReset(&msg_buf);
@@ -508,7 +504,8 @@ coro::CoroTask<int> IpcWriter::write_compressed(CompressedBatch& cb) {
     iov[1].iov_base = cb.body.data().data();
     iov[1].iov_len = cb.body_size;
 
-    auto result = co_await runtime::io::pwritev(fd_, iov, 2, write_offset_);
+    auto result = co_await runtime::io::pwritev(file_.native_handle(), iov, 2,
+                                                write_offset_);
 
     // Release pooled buffer
     cb.body.reset();
@@ -613,8 +610,9 @@ coro::CoroTask<int> IpcWriter::write_footer() {
     ArrowIpcFooterReset(&footer);
 
     // Write footer
-    auto result = co_await runtime::io::pwrite(
-        fd_, footer_data.data(), footer_data.size(), write_offset_);
+    auto result =
+        co_await runtime::io::pwrite(file_.native_handle(), footer_data.data(),
+                                     footer_data.size(), write_offset_);
 
     if (result < 0) {
         co_return static_cast<int>(result);
@@ -651,8 +649,8 @@ coro::CoroTask<int> IpcWriter::close() {
     }
 
     // Fsync and close
-    co_await runtime::io::fsync(fd_);
-    co_await runtime::io::close(fd_);
+    co_await runtime::io::fsync(file_.native_handle());
+    (void)file_.close();
 
     reset_state();
     co_return rc;

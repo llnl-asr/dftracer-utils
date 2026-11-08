@@ -20,6 +20,7 @@ struct ChunkSpan {
     std::uint64_t uc_size = 0;
     std::uint64_t first_line_num = 0;
     std::uint64_t last_line_num = 0;
+    bool opens_mid_line = false;
 };
 
 }  // namespace dftracer::utils::index::gzip

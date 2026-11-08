@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #include <fcntl.h>
-#include <unistd.h>
 
 namespace dftracer::utils::utilities::fileio::parallel {
 
@@ -82,7 +82,7 @@ coro::CoroTask<int> merge_shards(dstd::CStringView target,
     co_await ::dftracer::utils::runtime::io::close(static_cast<int>(out_fd));
 
     for (const auto& shard : shards) {
-        ::unlink(shard.c_str());
+        (void)dstd::fs::remove(dstd::PathView(shard));
     }
     co_return 0;
 }

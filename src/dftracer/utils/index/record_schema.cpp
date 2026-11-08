@@ -58,17 +58,18 @@ constexpr std::size_t MAX_RECORD = 256u * 1024 * 1024;
 // without its newline too, until it returns false or MAX_TEXT bytes were
 // read.
 template <typename Emit>
-void for_each_head_line(int fd, dstd::StringView path, Emit&& emit) {
+void for_each_head_line(const dstd::File& file, dstd::StringView path,
+                        Emit&& emit) {
     dstd::Vector<char> comp(CHUNK);
-    off_t offset = 0;
+    std::uint64_t offset = 0;
     // Returns the byte count, 0 at the end and -1 on error.
     auto read_chunk = [&](std::size_t n) -> ssize_t {
-        ssize_t got;
-        do {
-            got = ::pread(fd, comp.data(), n, offset);
-        } while (got < 0 && errno == EINTR);
-        if (got > 0) offset += got;
-        return got;
+        const auto got = file.read_at(
+            offset, dstd::Span<std::uint8_t>(
+                        reinterpret_cast<std::uint8_t*>(comp.data()), n));
+        if (!got) return -1;
+        offset += *got;
+        return static_cast<ssize_t>(*got);
     };
     const bool gz = read_chunk(2) == 2 &&
                     static_cast<unsigned char>(comp[0]) == 0x1f &&
@@ -1105,12 +1106,13 @@ dstd::Optional<SchemaDetection> cached_detection(dstd::StringView file_path,
 
 }  // namespace
 
-SchemaDetection explain_file_schema(dstd::CStringView file_path, int fd,
-                                    std::uint64_t size, std::int64_t mtime_ns) {
+SchemaDetection explain_file_schema(dstd::CStringView file_path,
+                                    const dstd::File& file, std::uint64_t size,
+                                    std::int64_t mtime_ns) {
     if (const auto hit = cached_detection(file_path, size, mtime_ns))
         return *hit;
     Detector d;
-    for_each_head_line(fd, file_path,
+    for_each_head_line(file, file_path,
                        [&](dstd::StringView line) { return d.add(line); });
     SchemaDetection out = d.finish();
     {
@@ -1139,8 +1141,7 @@ SchemaDetection explain_file_schema(dstd::CStringView file_path) {
                                              "cannot read trace for schema "
                                              "detection: ",
                                              file_path);
-    return explain_file_schema(file_path, file->native_handle(), st.size,
-                               st.mtime_ns);
+    return explain_file_schema(file_path, *file, st.size, st.mtime_ns);
 }
 
 dstd::String to_json(const SchemaDetection& d) {
@@ -1168,10 +1169,11 @@ const RecordSchema& detect_file_schema(dstd::CStringView file_path) {
     return *explain_file_schema(file_path).chosen;
 }
 
-const RecordSchema& detect_file_schema(dstd::CStringView file_path, int fd,
+const RecordSchema& detect_file_schema(dstd::CStringView file_path,
+                                       const dstd::File& file,
                                        std::uint64_t size,
                                        std::int64_t mtime_ns) {
-    return *explain_file_schema(file_path, fd, size, mtime_ns).chosen;
+    return *explain_file_schema(file_path, file, size, mtime_ns).chosen;
 }
 
 dstd::Optional<std::int64_t> iso8601_micros(dstd::StringView s) {

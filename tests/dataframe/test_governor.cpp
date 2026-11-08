@@ -22,6 +22,7 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
 #include <doctest/doctest.h>
+#include <testing_runtime.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -240,10 +241,8 @@ Asked run_asked(const Plan& plan, dstd::StringView tail, bool typed = true) {
                 r.after = std::min(r.after, reserved_of(id));
         },
         typed);
-    r.asked = plan(LazyFrame::scan(source))
-                  .memory_budget(LAZY_BUDGET)
-                  .collect()
-                  .get();
+    r.asked = dftu_utils_test::run_here(
+        plan(LazyFrame::scan(source)).memory_budget(LAZY_BUDGET).collect());
     return r;
 }
 
@@ -282,11 +281,11 @@ TEST_CASE("a request posted to a sort makes it spill at the next morsel") {
         }
         if (i > ASK_AT) after = std::min(after, reserved_of(sort_pool));
     });
-    const DataFrame got = LazyFrame::scan(source)
-                              .sort_by("k")
-                              .memory_budget(LAZY_BUDGET)
-                              .collect()
-                              .get();
+    const DataFrame got =
+        dftu_utils_test::run_here(LazyFrame::scan(source)
+                                      .sort_by("k")
+                                      .memory_budget(LAZY_BUDGET)
+                                      .collect());
     CHECK(before > 0);
     CHECK(asked == memory::Status::Pending);
     CHECK(after == 0);
@@ -313,12 +312,12 @@ TEST_CASE("a request posted to a group by makes it spill at the next morsel") {
         if (i > ASK_AT) after = std::min(after, reserved_of(group_pool));
     });
     const dstd::Vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};
-    const DataFrame got = LazyFrame::scan(source)
-                              .group_by("k", aggs)
-                              .memory_budget(LAZY_BUDGET)
-                              .collect()
-                              .get()
-                              .sort_by("k", false);
+    const DataFrame got =
+        dftu_utils_test::run_here(LazyFrame::scan(source)
+                                      .group_by("k", aggs)
+                                      .memory_budget(LAZY_BUDGET)
+                                      .collect())
+            .sort_by("k", false);
     CHECK(before > 0);
     CHECK(asked == memory::Status::Pending);
     CHECK(after == 0);
@@ -350,19 +349,19 @@ TEST_CASE(
             Budget::set(memory::detail::Manager::get().root().reserved() +
                         BUDGET / 32);
             second_source = dstd::make_shared<Hooked>(1, SECOND_ROWS, nullptr);
-            second_got = LazyFrame::scan(second_source)
-                             .sort_by("k")
-                             .memory_budget(LAZY_BUDGET)
-                             .collect()
-                             .get();
+            second_got =
+                dftu_utils_test::run_here(LazyFrame::scan(second_source)
+                                              .sort_by("k")
+                                              .memory_budget(LAZY_BUDGET)
+                                              .collect());
         }
         if (i > ASK_AT) after = std::min(after, reserved_of(first_pool));
     });
-    const DataFrame got = LazyFrame::scan(source)
-                              .sort_by("k")
-                              .memory_budget(LAZY_BUDGET)
-                              .collect()
-                              .get();
+    const DataFrame got =
+        dftu_utils_test::run_here(LazyFrame::scan(source)
+                                      .sort_by("k")
+                                      .memory_budget(LAZY_BUDGET)
+                                      .collect());
     CHECK(before > 0);
     CHECK(after == 0);
     const DataFrame want = source->whole().sort_by("k", false);
@@ -389,11 +388,11 @@ TEST_CASE("a run's pools close and its live bytes return to zero") {
         scratch = pools_named("root/query/sort").size();
     });
     {
-        const DataFrame got = LazyFrame::scan(source)
-                                  .sort_by("k")
-                                  .memory_budget(LAZY_BUDGET)
-                                  .collect()
-                                  .get();
+        const DataFrame got =
+            dftu_utils_test::run_here(LazyFrame::scan(source)
+                                          .sort_by("k")
+                                          .memory_budget(LAZY_BUDGET)
+                                          .collect());
         CHECK(got.num_rows() == 16 * 4096);
         CHECK(pools_named("root/query").empty());
     }
@@ -499,10 +498,8 @@ TEST_CASE("unique and head_by keep their results when a grow is refused") {
             dstd::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
                 if (i == MORSELS - 1) seen = entries();
             });
-        return plan(LazyFrame::scan(source))
-            .memory_budget(LAZY_BUDGET)
-            .collect()
-            .get();
+        return dftu_utils_test::run_here(
+            plan(LazyFrame::scan(source)).memory_budget(LAZY_BUDGET).collect());
     };
     for (const Plan& plan :
          {Plan([](LazyFrame lf) { return lf.unique({"k"}); }),

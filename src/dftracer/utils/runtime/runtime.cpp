@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shutdown.h>
@@ -19,6 +20,7 @@
 #include <pthread.h>
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <stdexcept>
 
@@ -276,6 +278,9 @@ std::size_t Runtime::io_threads() const {
 namespace {
 std::mutex g_default_mtx;
 dstd::SharedPtr<Runtime> g_default_runtime;
+// Set once the process runtime stopped at exit, so a late blocking get() does
+// not make a new one.
+std::atomic<bool> g_default_stopped{false};
 
 // A fork copies the process runtime without its threads. The child drops the
 // copy unused, never touching its executor, and makes its own on first use.
@@ -326,6 +331,7 @@ void Runtime::stop_at_exit() {
         std::lock_guard<std::mutex> lock(g_default_mtx);
         rt = std::move(g_default_runtime);
         g_default_runtime = nullptr;
+        g_default_stopped.store(true, std::memory_order_release);
     }
     // Shutdown stops the runtime before the memory exit check reads the
     // counters, which lets the workers free their last frames first. The
@@ -355,6 +361,24 @@ dstd::SharedPtr<Runtime> default_runtime_shared() {
 }
 
 Runtime& default_runtime() { return *default_runtime_shared(); }
+
+namespace {
+
+dstd::SharedPtr<coro::Executor> process_executor() {
+    if (g_default_stopped.load(std::memory_order_acquire)) return nullptr;
+    // The first blocking get() may make the runtime; its memory belongs to
+    // the process, not to the pool of the task that happened to ask.
+    memory::detail::Scope scope{memory::detail::Manager::get().general()};
+    dstd::SharedPtr<Runtime> rt = default_runtime_shared();
+    TaskExecutor* executor = rt->executor();
+    if (executor == nullptr || !executor->is_running()) return nullptr;
+    return dstd::SharedPtr<coro::Executor>(rt, executor);
+}
+
+[[maybe_unused]] const bool BLOCKING_EXECUTOR_SET =
+    (coro::set_blocking_executor(&process_executor), true);
+
+}  // namespace
 
 Runtime& configure_default_runtime(const RuntimeSettings& settings) {
     std::lock_guard<std::mutex> lock(g_default_mtx);

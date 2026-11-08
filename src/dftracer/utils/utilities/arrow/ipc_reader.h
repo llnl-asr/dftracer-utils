@@ -6,6 +6,7 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -78,7 +79,7 @@ class IpcReader {
     /// Memory-mapped file data
     void* mapped_data_ = nullptr;
     std::size_t mapped_size_ = 0;
-    int fd_ = -1;
+    dstd::File file_;
 
     /// Decoder state
     void* decoder_ = nullptr;  ///< ArrowIpcDecoder*

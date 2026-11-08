@@ -9,6 +9,7 @@
 #include <dftracer/utils/coro/spawn_future.h>
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 
@@ -242,6 +243,12 @@ class Scope {
 namespace detail {
 template <class T>
 struct ScopeResult {
+    ScopeResult() = default;
+    ScopeResult(const ScopeResult&) = delete;
+    ScopeResult& operator=(const ScopeResult&) = delete;
+    // A value a failed join kept from the caller goes with the frame.
+    ~ScopeResult() { dstd::discard_unread(value); }
+
     dstd::Optional<T> value;
     void set(T v) { value.emplace(std::move(v)); }
     T take() { return std::move(*value); }

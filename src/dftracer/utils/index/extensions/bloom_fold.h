@@ -20,8 +20,10 @@
 #include <utility>
 
 namespace dftracer::utils::index {
+class Snapshot;
+class FileRef;
 class FileBuild;
-}
+}  // namespace dftracer::utils::index
 
 namespace dftracer::utils::index::extensions {
 
@@ -109,6 +111,12 @@ class BloomFold : public trace::views::detail::Fold {
     coro::CoroTask<void> write_run();
     /// Caps the auto keys. Unset, the size is read from the path at write.
     void set_file_bytes(std::uint64_t bytes) { file_bytes_ = bytes; }
+    /// This fold adds chunks from `next_chunk` on to `file` in `snapshot`,
+    /// which both stay alive until write(). File-wide records continue from
+    /// the stored ones, and the auto dimensions stay as the file has them,
+    /// because old chunks hold no records for a new one.
+    void continue_file(const index::Snapshot* snapshot,
+                       const index::FileRef* file, std::uint64_t next_chunk);
     /// Bytes the open run holds before it is committed. It never falls under
     /// MIN_SPILL_RUN_BYTES and doubles every SPILL_RUNS_PER_DOUBLING runs, so a
     /// tiny budget writes few large runs.
@@ -179,6 +187,10 @@ class BloomFold : public trace::views::detail::Fold {
         // keeps one of them and skips another.
         bool same_bounds = true;
     };
+
+    const index::Snapshot* continue_snapshot_ = nullptr;
+    const index::FileRef* continue_file_ = nullptr;
+    std::uint64_t continue_next_ = 0;
 
     struct SpillState {
         dstd::Optional<std::uint64_t> max_seen;

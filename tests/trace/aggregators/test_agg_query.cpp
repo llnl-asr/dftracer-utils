@@ -556,6 +556,34 @@ AggQueryResult check(const Fixture& fx, const Ask& ask,
     return r;
 }
 
+dstd::Map<std::uint64_t, index::schemas::dft::agg::AggPartial> merge_by_file(
+    const AggQueryResult& r) {
+    dstd::Map<std::uint64_t, index::schemas::dft::agg::AggPartial> out;
+    for (const auto& [k, p] : r.rows)
+        out.try_emplace(k.file, SKETCH_ACCURACY).first->second.merge(p);
+    return out;
+}
+
+void check_file_rows(
+    const dstd::Map<std::uint64_t, index::schemas::dft::agg::AggPartial>& want,
+    const AggQueryResult& got) {
+    REQUIRE(got.rows.size() == want.size());
+    for (const auto& [k, p] : got.rows) {
+        const auto it = want.find(k.file);
+        REQUIRE(it != want.end());
+        const auto& w = it->second;
+        CHECK(p.count == w.count);
+        CHECK(p.ts == w.ts);
+        CHECK(p.te == w.te);
+        check_stat(p.duration, w.duration, "duration");
+        check_stat(p.size, w.size, "size");
+        check_stat(p.offset, w.offset, "offset");
+        CHECK(p.pids.count() == w.pids.count());
+        CHECK(p.tids.count() == w.tids.count());
+        CHECK(p.files.count() == w.files.count());
+    }
+}
+
 std::size_t partial_count(const Fixture& fx) {
     auto snapshot = common::unwrap(index::plan::open_snapshot(fx.index_path));
     std::size_t n = 0;
@@ -941,7 +969,62 @@ TEST_SUITE("AggQuery") {
         }
     }
 
-    TEST_CASE("a re-read answers from the chunk column blocks") {
+    TEST_CASE("a group by file is answered from the per-file partials alone") {
+        auto fx = build(FIVE_SECONDS_US, "file_partials");
+        Ask ask;
+        ask.by_file = true;
+
+        const AggQueryResult scan = run(make_query(*fx, ask, FIVE_SECONDS_US));
+        REQUIRE(scan.stats.chunks_reread > 0);
+        const auto merged = merge_by_file(scan);
+        const auto truth =
+            reference(fx->events, ask, make_config(FIVE_SECONDS_US));
+        dstd::Map<std::uint64_t, std::uint64_t> counts;
+        for (const auto& [key, t] : truth)
+            counts[std::get<4>(key)] += t.metrics.count;
+        REQUIRE(merged.size() == counts.size());
+        REQUIRE(merged.count(0) == 1);
+        for (const auto& [file, p] : merged) CHECK(p.count == counts.at(file));
+
+        AggQuery q = make_query(*fx, ask, FIVE_SECONDS_US);
+        q.only_file_keys = true;
+        q.reread = false;
+        const auto expect_rows = [&](const AggQueryResult& r) {
+            CHECK(r.stats.chunks_reread == 0);
+            CHECK(r.stats.unanswered == 0);
+            CHECK(r.stats.files_without_partials == 0);
+            CHECK(r.stats.partials_read > 0);
+            CHECK(r.stats.partials_merged == r.stats.partials_read);
+            check_file_rows(merged, r);
+        };
+        expect_rows(run(q));
+
+        for (const auto& f : fx->files) (void)dstd::fs::remove(f);
+        expect_rows(run(q));
+    }
+
+    TEST_CASE("a per-file query re-reads only the file rows a rule splits") {
+        auto fx = build(FIVE_SECONDS_US, "file_partials_reread");
+        Ask ask;
+        ask.by_file = true;
+        SUBCASE("a pid set") { ask.pids = {100, 101}; }
+        SUBCASE("a time range") {
+            ask.ts_begin = BASE_TS + 3'000'000;
+            ask.ts_end = BASE_TS + 9'000'000;
+        }
+        const AggQueryResult scan = run(make_query(*fx, ask, FIVE_SECONDS_US));
+        AggQuery q = make_query(*fx, ask, FIVE_SECONDS_US);
+        q.only_file_keys = true;
+        const AggQueryResult r = run(q);
+        CHECK(r.stats.unanswered == 0);
+        CHECK(r.stats.partials_reread > 0);
+        CHECK(r.stats.partials_merged + r.stats.partials_pruned +
+                  r.stats.partials_reread ==
+              r.stats.partials_read);
+        check_file_rows(merge_by_file(scan), r);
+    }
+
+    TEST_CASE("a filter that keeps every record re-reads the same rows") {
         auto fx = dstd::make_unique<Fixture>();
         const dstd::String pfw = fx->env.dir() + "/mixed.pfw";
         {
@@ -973,35 +1056,32 @@ TEST_SUITE("AggQuery") {
         ask.window = FIVE_SECONDS_US;
         ask.quantiles = true;
 
-        AggQueryResult by_columns = run(make_query(*fx, ask, FIVE_SECONDS_US));
-        REQUIRE(by_columns.stats.chunks_reread > 0);
-        CHECK(by_columns.stats.files_without_partials == 0);
-        CHECK(by_columns.stats.chunks_from_columns ==
-              by_columns.stats.chunks_reread);
-        CHECK(by_columns.stats.max_batch_events == 0);
-        CHECK(by_columns.rows.size() > 20);
+        AggQueryResult unfiltered = run(make_query(*fx, ask, FIVE_SECONDS_US));
+        REQUIRE(unfiltered.stats.chunks_reread > 0);
+        CHECK(unfiltered.stats.files_without_partials == 0);
+        CHECK(unfiltered.stats.max_batch_events > 0);
+        CHECK(unfiltered.rows.size() > 20);
 
         // A filter keeps every record and so parses every re-read chunk.
         AggQuery filtered = make_query(*fx, ask, FIVE_SECONDS_US);
         filtered.filter = duql::parse_or_throw("ts >= 0");
         AggQueryResult by_events = run(filtered);
-        CHECK(by_events.stats.chunks_from_columns == 0);
-        CHECK(by_events.stats.chunks_reread == by_columns.stats.chunks_reread);
+        CHECK(by_events.stats.chunks_reread == unfiltered.stats.chunks_reread);
         CHECK(by_events.stats.max_batch_events > 0);
-        CHECK(by_events.stats.events_read == by_columns.stats.events_read);
+        CHECK(by_events.stats.events_read == unfiltered.stats.events_read);
 
-        REQUIRE(by_columns.rows.size() == by_events.rows.size());
-        for (const auto& [k, a] : by_columns.rows) {
+        REQUIRE(unfiltered.rows.size() == by_events.rows.size());
+        for (const auto& [k, a] : unfiltered.rows) {
             const auto b = by_events.rows.find([&] {
                 trace::AggKey key = k;
                 key.cat =
-                    by_events.strings().get_or_insert(by_columns.text(k.cat));
+                    by_events.strings().get_or_insert(unfiltered.text(k.cat));
                 key.name =
-                    by_events.strings().get_or_insert(by_columns.text(k.name));
+                    by_events.strings().get_or_insert(unfiltered.text(k.name));
                 return key;
             }());
-            REQUIRE_MESSAGE(b != by_events.rows.end(), by_columns.text(k.cat),
-                            " ", by_columns.text(k.name), " pid ", k.pid,
+            REQUIRE_MESSAGE(b != by_events.rows.end(), unfiltered.text(k.cat),
+                            " ", unfiltered.text(k.name), " pid ", k.pid,
                             " tid ", k.tid, " file ", k.file, " window ",
                             k.window);
             check_same_partial(a, b->second);
@@ -1086,7 +1166,6 @@ TEST_SUITE("AggQuery") {
         CHECK(r.stats.files_without_partials == FILES);
         CHECK(r.stats.partials_read == 0);
         CHECK(r.stats.chunks_reread > 0);
-        CHECK(r.stats.chunks_from_columns == r.stats.chunks_reread);
         CHECK(r.stats.events_read == fx->events.size());
     }
 
@@ -1160,7 +1239,6 @@ TEST_SUITE("AggQuery") {
         // A filter keeps every event and so answers from the parse alone.
         q.filter = duql::parse_or_throw("ts >= 0");
         const AggQueryResult r = run(q);
-        CHECK(r.stats.chunks_from_columns == 0);
         CHECK(r.stats.events_read == TINY_EVENTS);
         CHECK(r.stats.max_batch_events > 0);
         CHECK(r.stats.max_batch_events <=
@@ -1214,7 +1292,6 @@ TEST_SUITE("AggQuery") {
         AggQuery q = make_query(*fx, ask, FIVE_SECONDS_US);
         q.filter = duql::parse_or_throw("ts >= 0");
         const AggQueryResult r = run(q);
-        CHECK(r.stats.chunks_from_columns == 0);
         CHECK(r.stats.events_read == 126);
         CHECK(r.stats.dropped_lines == 1);
         dstd::Map<dstd::Pair<dstd::String, std::uint64_t>, double> sums;

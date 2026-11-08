@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_STORE_DATA_FILE_H
 #define DFTRACER_UTILS_STORE_DATA_FILE_H
 
+#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
@@ -33,9 +34,20 @@ inline constexpr std::uint64_t CHECKPOINT_INTERVAL = 64;
 /// The most bytes one read run covers: adjacent extent refs are read together
 /// with one preadv. A longer ref is a run of its own.
 inline constexpr std::size_t READ_RUN_BYTES = std::size_t{16} << 20;
-/// Every extent starts at a multiple of this many bytes and its stored form is
-/// padded to one, so extents lie end to end whatever their compressed length.
-inline constexpr std::size_t EXTENT_ALIGN_BYTES = 4096;
+/// Every extent and page dictionary starts at a multiple of this many bytes
+/// and its stored form is padded to one. Small, because a build seals many
+/// part-full extents; a direct read rounds its own window to the device
+/// alignment. Records stay on @ref FILE_HEADER_BYTES, where recovery looks.
+inline constexpr std::size_t EXTENT_ALIGN_BYTES = 8;
+/// The most bytes of a range one direct pread covers.
+inline constexpr std::size_t DIRECT_READ_CHUNK_BYTES = std::size_t{1} << 20;
+
+#if DFTRACER_UTILS_TEST_PROBES
+/// Reads a DataFileReader served past the page cache. For tests.
+inline std::atomic<std::uint64_t> g_direct_reads{0};
+/// Readers that wanted direct reads and fell back to the page cache. For tests.
+inline std::atomic<std::uint64_t> g_direct_fallbacks{0};
+#endif
 /// The most bytes the top table of a scope directory may use. Above it the
 /// directory gains a level of middle blocks.
 inline constexpr std::size_t DIRECTORY_TOP_BYTES = 32768;
@@ -172,6 +184,8 @@ class DataFileWriter {
 
     /// The descriptor this writer appends to, -1 once closed.
     int fd() const noexcept { return fd_.native_handle(); }
+    /// The file this writer appends to, closed once the writer closes.
+    const dstd::File& file() const noexcept { return fd_; }
     void add(RecordItem item);
     dstd::Expected<void, dstd::Error> commit();
     dstd::Expected<void, dstd::Error> close();
@@ -284,11 +298,11 @@ class DataFileReader {
     /// its crc fails. `reads` counts the calls and bytes.
     dstd::Expected<void, dstd::Error> verify_block(const ExtentRef& ref,
                                                    BlockReads* reads) const;
-    /// Reads the extents of one run, one preadv per group of at most IOV_MAX
-    /// refs, then checks each crc. `refs` and `targets` are parallel, and
-    /// `refs` must ascend, each starting where the previous ends. A bad or
-    /// truncated extent is left empty and marked bad. Io, the only error, ends
-    /// the file.
+    /// Reads the extents of one run, one preadv per group of at most @ref
+    /// dstd::File::MAX_VECTORED_BUFFERS refs, then checks each crc. `refs` and
+    /// `targets` are parallel, and `refs` must ascend, each starting where the
+    /// previous ends. A bad or truncated extent is left empty and marked bad.
+    /// Io, the only error, ends the file.
     dstd::Expected<BlockReads, dstd::Error> read_extents(
         dstd::Span<const ExtentRef> refs,
         dstd::Span<const ExtentTarget> targets) const;
@@ -306,9 +320,27 @@ class DataFileReader {
    private:
     DataFileReader() = default;
 
-    /// The descriptor of the file, opened here on the first call of a reader
+    /// The file, opened here on the first call of a reader
     /// built from a summary entry.
-    dstd::Expected<int, dstd::Error> descriptor() const;
+    dstd::Expected<const dstd::File*, dstd::Error> descriptor() const;
+    /// The alignment of a direct read of this file, opening its direct
+    /// descriptor on the first call; 0 when reads go through the page cache.
+    /// Io when that open fails for a reason other than a refusal.
+    dstd::Expected<std::uint32_t, dstd::Error> direct_align() const;
+    /// Reads `length` bytes at `offset` into `dest`: past the page cache when
+    /// direct reads are on, through it otherwise or after a direct read fails
+    /// with EINVAL. Parse when the file ends first, Io when a read fails.
+    dstd::Expected<void, dstd::Error> read_at(const dstd::File& file,
+                                              std::uint64_t offset,
+                                              std::size_t length,
+                                              std::uint8_t* dest,
+                                              BlockReads* reads) const;
+    /// @ref read_at past the page cache. False, with nothing to report, when
+    /// the direct descriptor refused the read and the reader fell back.
+    dstd::Expected<bool, dstd::Error> read_direct(std::uint64_t offset,
+                                                  std::size_t length,
+                                                  std::uint8_t* dest,
+                                                  BlockReads* reads) const;
     /// Indexes a closed file from the namespaces and the tail of its footer.
     /// False when the footer holds no tail or one that `file_size` bytes
     /// cannot hold.
@@ -324,12 +356,16 @@ class DataFileReader {
     /// holds every scope, copy, drop and commit summary.
     dstd::Expected<void, dstd::Error> apply_items_block();
 
-    mutable std::atomic<int> fd_{-1};
+    mutable dstd::File file_;
+    mutable std::atomic<bool> opened_{false};
     std::uint64_t file_size_ = 0;
     std::size_t records_read_ = 0;
     FileIndex index_;
     dstd::String path_;
     dstd::UniquePtr<std::mutex> open_mutex_;
+    /// Null unless DFTRACER_UTILS_STORE_DIRECT_READS asked for direct reads.
+    struct DirectReads;
+    dstd::UniquePtr<DirectReads> direct_;
 };
 
 /// Where the bytes of one closed data file are. Each category counts bytes no

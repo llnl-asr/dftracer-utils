@@ -1300,8 +1300,8 @@ TEST_SUITE("TraceReader byte windows") {
     }
 
     TEST_CASE("a window near a restart piece finds its line") {
-        const std::size_t checkpoint = 1024 * 1024;
-        const WindowFixture f = window_fixture(480, checkpoint);
+        const std::size_t checkpoint = 64 * 1024;
+        const WindowFixture f = window_fixture(30, checkpoint);
         const auto indexer = CheckpointIndexerFactory::create(
             f.gz, determine_index_path(f.gz, ""), checkpoint, false);
         REQUIRE(indexer != nullptr);

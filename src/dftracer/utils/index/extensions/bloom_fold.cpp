@@ -319,6 +319,14 @@ dstd::Vector<dstd::String> BloomFold::dims_of(const AutoKeys& keys) const {
     return dims;
 }
 
+void BloomFold::continue_file(const index::Snapshot* snapshot,
+                              const index::FileRef* file,
+                              std::uint64_t next_chunk) {
+    continue_snapshot_ = snapshot;
+    continue_file_ = file;
+    continue_next_ = next_chunk;
+}
+
 void BloomFold::write_pending(index::FileBuild& build, FileState& fs) {
     auto& sp = fs.spill;
     if (!sp.acc) sp.acc.emplace(config_);
@@ -331,6 +339,15 @@ void BloomFold::write_pending(index::FileBuild& build, FileState& fs) {
 void BloomFold::write_file(index::FileBuild& build, dstd::CStringView file,
                            FileState& fs) {
     auto& sp = fs.spill;
+    AutoKeys continued;
+    if (continue_snapshot_ != nullptr) {
+        sp.next = std::max(sp.next, continue_next_);
+        if (!sp.acc) sp.acc.emplace(config_);
+        // Before write_pending: a run's chunks merge into the seeded records.
+        for (const dstd::String& dim : BV::seed_accumulator(
+                 *continue_snapshot_, *continue_file_, config_, *sp.acc))
+            continued.push_back({dim, intern_->get_or_insert(dim), false});
+    }
     write_pending(build, fs);
     // A whole-file read fills every checkpoint, so any gap below the last one
     // is an empty chunk for an unobserved member, unless its run wrote it
@@ -338,7 +355,11 @@ void BloomFold::write_file(index::FileBuild& build, dstd::CStringView file,
     const std::uint64_t end =
         fs.chunks.empty() ? sp.next
                           : std::max(sp.next, fs.chunks.rbegin()->first + 1);
-    const AutoKeys keys = auto_keys(file, fs);
+    const AutoKeys keys = [&] {
+        if (continue_snapshot_ == nullptr) return auto_keys(file, fs);
+        flush_shapes(fs);
+        return continued;
+    }();
     const auto dims = dims_of(keys);
     // The runs hold every candidate path's evidence. The paths the selection
     // did not keep are erased from them.
@@ -365,7 +386,24 @@ void BloomFold::write_file(index::FileBuild& build, dstd::CStringView file,
                                        spilled.events, config_);
     }
     fs.auto_chunks.clear();
-    BV::finish_file(build, *sp.acc, config_, dims, catalog(fs));
+    auto merged = catalog(fs);
+    if (continue_snapshot_ != nullptr) {
+        const auto old = common::unwrap(
+            index::catalog(*continue_snapshot_, *continue_file_));
+        for (auto& [path, stat] : merged) {
+            const auto known = std::lower_bound(
+                old.begin(), old.end(), path,
+                [](const auto& entry, dstd::StringView wanted) {
+                    return dstd::StringView(entry.first) < wanted;
+                });
+            if (known == old.end() || dstd::StringView(known->first) != path)
+                continue;
+            stat.count += known->second.count;
+            stat.seen |= known->second.seen;
+            stat.type = index::store::join(stat.type, known->second.type);
+        }
+    }
+    BV::finish_file(build, *sp.acc, config_, dims, merged);
 }
 
 std::uint64_t BloomFold::resident_bytes(const FileState& fs,

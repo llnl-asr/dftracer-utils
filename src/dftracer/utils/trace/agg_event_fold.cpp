@@ -23,13 +23,27 @@ std::size_t AggGroupHash::operator()(const AggGroup& g) const noexcept {
     return static_cast<std::size_t>(splitmix64(
         splitmix64(splitmix64((std::uint64_t{g.cat} << 32) | g.name) ^
                    ((std::uint64_t{g.host} << 32) | g.extra)) ^
-        static_cast<std::uint64_t>(g.kind)));
+        splitmix64(g.file ^ (std::uint64_t{g.file_text} << 8) ^
+                   static_cast<std::uint64_t>(g.kind))));
+}
+
+void set_file_key(AggKey& key, dstd::StringView fhash,
+                  dstd::StringIntern& strings) {
+    if (fhash.empty()) return;
+    key.file = index::schemas::dft::agg::agg_hash_of_hex(fhash);
+    if (!dstd::hash::parse_hex64(fhash))
+        key.file_text = strings.get_or_insert(fhash);
 }
 
 AggEventRules::AggEventRules(const AggQuery& query,
                              dstd::StringIntern& read_intern,
                              dstd::StringIntern& strings_intern)
     : q(query),
+      file_rows(query.by_file && query.only_file_keys &&
+                !query.filter.has_value() && !query.from_trace &&
+                !query.by_pid && !query.by_tid && !query.by_host &&
+                !query.by_extra && query.categories.empty() &&
+                query.names.empty() && query.hosts.empty()),
       strings(strings_intern),
       read(read_intern),
       read_metric_ids(read),
@@ -111,33 +125,38 @@ void AggEventFolder::add_event(
     if (!r_.pids.empty() &&
         !std::binary_search(r_.pids.begin(), r_.pids.end(), ev.pid))
         return;
-    const std::uint32_t cat = read_cat(ev.cat_id);
-    if (cat == AGG_REJECT) return;
-    const std::uint32_t name = read_name(ev.name_id);
-    if (name == AGG_REJECT) return;
-    const std::uint32_t host = read_host(ev.hhash_id);
-    if (host == AGG_REJECT) return;
-    const std::uint32_t extra = extra_id(acc);
+    constexpr std::uint32_t NO_ID = dstd::StringIntern::NO_ID;
+    std::uint32_t cat = NO_ID;
+    std::uint32_t name = NO_ID;
+    std::uint32_t host = NO_ID;
+    std::uint32_t extra = NO_ID;
+    if (!r_.file_rows) {
+        cat = read_cat(ev.cat_id);
+        if (cat == AGG_REJECT) return;
+        name = read_name(ev.name_id);
+        if (name == AGG_REJECT) return;
+        host = read_host(ev.hhash_id);
+        if (host == AGG_REJECT) return;
+        extra = extra_id(acc);
+    }
     const AggKind kind = index::schemas::dft::agg::partial_kind(acc);
-    if (wanted != nullptr &&
-        wanted->find(AggGroup{cat, name, host, extra, kind}) == wanted->end())
-        return;
-
     AggKey key;
+    if (r_.q.by_file) set_file_key(key, acc.arg_string("fhash"), r_.strings);
+    if (wanted != nullptr) {
+        AggGroup group{cat, name, host, extra, kind};
+        if (r_.file_rows) {
+            group.file = key.file;
+            group.file_text = key.file_text;
+        }
+        if (wanted->find(group) == wanted->end()) return;
+    }
+
     key.cat = cat;
     key.name = name;
     if (r_.q.by_host) key.host = host;
     if (r_.q.by_kind) key.kind = kind;
     if (r_.q.by_pid) key.pid = ev.pid;
     if (r_.q.by_tid) key.tid = ev.tid;
-    if (r_.q.by_file) {
-        const auto fhash = acc.arg_string("fhash");
-        key.file = fhash.empty()
-                       ? 0
-                       : index::schemas::dft::agg::agg_hash_of_hex(fhash);
-        if (!fhash.empty() && !dstd::hash::parse_hex64(fhash))
-            key.file_text = r_.strings.get_or_insert(fhash);
-    }
     if (r_.q.window_us != 0) key.window = r_.bucket(ev.ts);
     if (r_.q.by_extra) key.extra = extra;
 

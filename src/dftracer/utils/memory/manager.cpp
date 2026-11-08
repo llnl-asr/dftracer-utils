@@ -407,16 +407,19 @@ static void describe_site(std::uintptr_t site, char* out,
                       site - reinterpret_cast<std::uintptr_t>(info.dli_fbase)));
 }
 
-static void report_top_sites(bool by_peak) noexcept {
+static void report_top_sites(DebugRank rank) noexcept {
+    const char* order = rank == DebugRank::Live   ? "live bytes"
+                        : rank == DebugRank::Peak ? "peak bytes"
+                                                  : "allocations";
     char text[REPORT_BYTES];
     int n = std::snprintf(
         text, sizeof(text),
-        "dftracer-utils memory: top %zu sites by %s bytes, allocations=%llu\n",
-        TOP_SITES, by_peak ? "peak" : "live",
+        "dftracer-utils memory: top %zu sites by %s, allocations=%llu\n",
+        TOP_SITES, order,
         static_cast<unsigned long long>(debug_allocation_count()));
     report(text, static_cast<std::size_t>(n));
     debug_top_sites(
-        TOP_SITES, by_peak,
+        TOP_SITES, rank,
         [](void*, const DebugSiteTotal& total) noexcept {
             char where[REPORT_BYTES / 2];
             describe_site(total.site, where, sizeof(where));
@@ -497,8 +500,9 @@ void ManagerAccess::exit_check() noexcept {
                                            sizeof(line) - 1));
     }
     if (sites) {
-        report_top_sites(false);
-        report_top_sites(true);
+        report_top_sites(DebugRank::Live);
+        report_top_sites(DebugRank::Peak);
+        report_top_sites(DebugRank::Allocations);
         report_peak_sites();
     }
     if (!check) return;
@@ -1172,7 +1176,9 @@ void PoolInternals::close(Pool& p, std::uint32_t generation) noexcept {
     // A thread stopped inside a flush or a scope switch shows a charge twice or
     // not at all for as long as it stays stopped, so equal reads prove nothing.
     // A real leak never reaches zero, so it alone is left after the wait.
-    for (int read = 0; read < CLOSE_READS && (bytes != 0 || blocks != 0);
+    // Only a scratch pool reports a leak; other pools may close holding blocks.
+    for (int read = 0; p.kind_ == PoolKind::Scratch && read < CLOSE_READS &&
+                       (bytes != 0 || blocks != 0);
          ++read) {
         ::nanosleep(&CLOSE_READ_WAIT, nullptr);
         full_fence();

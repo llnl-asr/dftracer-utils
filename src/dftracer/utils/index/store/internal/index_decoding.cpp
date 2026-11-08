@@ -99,7 +99,11 @@ index::gzip::GzipMemberRecord decode_gzip_member(std::uint32_t member_idx,
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Indexer, "unknown gzip record kind ", kind);
         member.kind = static_cast<index::gzip::GzipRecordKind>(kind);
-        member.bits = cursor.u8();
+        const auto bits = cursor.u8();
+        member.bits = bits & static_cast<std::uint8_t>(
+                                 ~encoding::MEMBER_FLAG_OPENS_MID_LINE);
+        member.opens_mid_line =
+            (bits & encoding::MEMBER_FLAG_OPENS_MID_LINE) != 0;
     }
     return member;
 }
@@ -123,7 +127,12 @@ FileMetadataResult decode_metadata_record(dstd::StringView value) {
     meta.checkpoint_size = cursor.u64();
     meta.line_count = cursor.u64();
     meta.max_bytes = cursor.u64();
-    meta.truncated = (cursor.u64() & encoding::METADATA_FLAG_TRUNCATED) != 0;
+    const std::uint64_t flags = cursor.u64();
+    meta.truncated = (flags & encoding::METADATA_FLAG_TRUNCATED) != 0;
+    meta.has_open_line = (flags & encoding::METADATA_FLAG_OPEN_LINE) != 0;
+    meta.has_mid_line_chunk =
+        (flags & encoding::METADATA_FLAG_MID_LINE_CHUNK) != 0;
+    meta.next_member_idx = cursor.u64();
     return meta;
 }
 

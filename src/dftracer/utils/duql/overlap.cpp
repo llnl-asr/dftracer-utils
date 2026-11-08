@@ -182,6 +182,9 @@ class Group {
                 std::lower_bound(starts_.begin(), starts_.end(), stop) -
                 starts_.begin());
             for (std::size_t i = lo; i < hi; ++i) out.push_back(items_[i].row);
+#if DFTRACER_UTILS_TEST_PROBES
+            g_overlap_steps.fetch_add(hi - lo, std::memory_order_relaxed);
+#endif
         }
     }
 
@@ -196,6 +199,9 @@ class Group {
     void report(std::size_t node, std::size_t lo, std::size_t hi,
                 std::size_t prefix, T a,
                 dstd::Vector<std::int64_t>& out) const {
+#if DFTRACER_UTILS_TEST_PROBES
+        g_overlap_steps.fetch_add(1, std::memory_order_relaxed);
+#endif
         if (lo >= prefix || !(tree_[node] > a)) return;
         if (hi - lo == 1) {
             out.push_back(items_[lo].row);

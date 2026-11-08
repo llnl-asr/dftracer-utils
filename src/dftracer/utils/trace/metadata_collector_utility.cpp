@@ -70,24 +70,32 @@ MetadataCollectorUtility::operator()(
 namespace {
 
 // The index record of `file` when the index holds it unchanged since the stat
-// the caller read. The file is not opened again.
+// the caller read, or a prefix of it. Only a file that grew is opened again.
 dstd::Optional<internal::IndexedFile> fresh_index_record(
     const dstd::String& index_path, const dstd::String& file,
-    const dftracer::utils::common::InputFileStat& st) {
+    const dftracer::utils::common::InputFileStat& st, bool& is_prefix) {
     try {
         auto snapshot = dftracer::utils::common::unwrap(
             index::plan::open_snapshot(index_path));
         const auto logical = index::store::internal::get_logical_path(file);
-        if (snapshot.freshness(
+        const bool is_current =
+            snapshot.freshness(
                 logical, index::SourceStat{static_cast<std::uint64_t>(st.mtime),
-                                           st.size}) !=
-            index::Freshness::Current)
-            return dstd::nullopt;
+                                           st.size}) ==
+            index::Freshness::Current;
         const auto ref = snapshot.file(logical);
         if (!ref) return dstd::nullopt;
+        // A clean append keeps its index, which stops at the verified end. A
+        // full rebuild here would read the member still being written.
+        if (!is_current &&
+            !index::is_append_of(dstd::StringView(file), st.size, ref->stat()))
+            return dstd::nullopt;
         const auto meta = dftracer::utils::common::unwrap(
             index::file_metadata(snapshot, *ref));
         if (!meta || meta->checkpoint_size == 0) return dstd::nullopt;
+        if (!is_current && (meta->truncated || meta->has_open_line))
+            return dstd::nullopt;
+        is_prefix = !is_current;
         return internal::IndexedFile{
             {st.mtime, st.size},
             meta->line_count,
@@ -156,9 +164,12 @@ MetadataCollectorUtility::process_compressed(
             const internal::RootPermit reading(*root, 1);
             if (common::input_exists(
                     dftracer::utils::index::store_of(input.index_path))) {
+                // A same-size fill of a hole keeps this stat, so a record of a
+                // prefix is not kept past this read.
+                bool is_prefix = false;
                 seen = fresh_index_record(input.index_path, input.file_path,
-                                          input_stat);
-                if (seen) {
+                                          input_stat, is_prefix);
+                if (seen && !is_prefix) {
                     std::lock_guard<std::mutex> lock(root->current_mutex);
                     root->current[file_key] = *seen;
                 }

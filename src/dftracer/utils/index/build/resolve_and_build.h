@@ -31,6 +31,9 @@ struct ResolveAndBuildInput {
     bool force_rebuild = false;
 
     bool require_checkpoints = true;
+    /// Index only whole gzip members, CRC checked, and recover nothing from a
+    /// cut tail, for files that are still being written.
+    bool whole_members = false;
     bool require_bloom = false;
     /// Build the bloom/stats/dimension tier. Off for aggregation-only
     /// consumers (dfanalyzer) that never read it.

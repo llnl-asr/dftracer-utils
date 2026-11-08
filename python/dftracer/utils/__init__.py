@@ -59,7 +59,7 @@ from .lazyframe import (  # noqa: F401
     collect_all,
     lazy,
 )
-from .live_trace_viewer import LiveTraceViewer  # noqa: F401
+from .live_trace_viewer import LiveFileStatus, LiveTraceViewer  # noqa: F401
 from .runtime import Runtime, TaskHandle  # noqa: F401
 from .series import Series  # noqa: F401
 from .store import Store  # noqa: F401
@@ -139,6 +139,7 @@ __all__ = [
     "TimeUnit",
     "Store",
     "TraceViewer",
+    "LiveFileStatus",
     "LiveTraceViewer",
     "Containment",
     "Session",

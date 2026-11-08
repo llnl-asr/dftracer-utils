@@ -15,9 +15,13 @@ dstd::String encode_gzip_member_value(
     dstd::append_u64_be(value, member.uc_size);
     dstd::append_u64_be(value, member.first_line_num);
     dstd::append_u64_be(value, member.last_line_num);
-    if (member.kind != index::gzip::GzipRecordKind::Member) {
+    if (member.kind != index::gzip::GzipRecordKind::Member ||
+        member.opens_mid_line) {
         value.push_back(static_cast<char>(member.kind));
-        value.push_back(static_cast<char>(member.bits));
+        value.push_back(static_cast<char>(
+            member.bits |
+            (member.opens_mid_line ? encoding::MEMBER_FLAG_OPENS_MID_LINE
+                                   : 0)));
     }
     return value;
 }
@@ -25,12 +29,14 @@ dstd::String encode_gzip_member_value(
 dstd::String encode_metadata_record(std::uint64_t checkpoint_size,
                                     std::uint64_t total_lines,
                                     std::uint64_t total_uc_size,
-                                    std::uint64_t flags) {
+                                    std::uint64_t flags,
+                                    std::uint64_t next_member_idx) {
     dstd::String value;
     dstd::append_u64_be(value, checkpoint_size);
     dstd::append_u64_be(value, total_lines);
     dstd::append_u64_be(value, total_uc_size);
     dstd::append_u64_be(value, flags);
+    dstd::append_u64_be(value, next_member_idx);
     return value;
 }
 

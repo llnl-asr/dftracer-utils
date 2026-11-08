@@ -28,7 +28,7 @@ include/dftracer/utils/dstd/list.h | list | defines dstd::List
 include/dftracer/utils/dstd/map.h | map, multimap, multiset, set | defines dstd::Map and dstd::Set
 include/dftracer/utils/dstd/memory.h | shared_ptr, unique_ptr, weak_ptr | defines dstd::UniquePtr and dstd::SharedPtr
 include/dftracer/utils/dstd/optional.h | nullopt, optional | defines dstd::Optional
-include/dftracer/utils/dstd/pair.h | pair | defines dstd::Pair
+include/dftracer/utils/dstd/pair.h | pair, make_pair | defines dstd::Pair
 include/dftracer/utils/dstd/queue.h | priority_queue, queue | defines dstd::Queue
 include/dftracer/utils/dstd/span.h | span | defines dstd::Span
 include/dftracer/utils/dstd/string.h | hash, string_view | defines dstd::StringView and its hash

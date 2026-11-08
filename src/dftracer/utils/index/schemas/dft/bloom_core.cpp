@@ -278,6 +278,57 @@ BloomCore::ChunkStatistics finish_file_to(
 
 }  // namespace
 
+dstd::Vector<dstd::String> BloomCore::seed_accumulator(
+    const index::Snapshot& snapshot, const index::FileRef& file,
+    const ChunkIndexerConfig& config, FileAccumulator& acc) {
+    auto stats = common::unwrap(index::scalar_stats(snapshot, file));
+    if (stats) {
+        acc.statistics = std::move(stats->stats);
+        acc.chunks = stats->chunk_count;
+    }
+    auto pid_tid = common::unwrap(index::pid_tid_counts(snapshot, file));
+    if (pid_tid) acc.statistics.pid_tid_counts = std::move(*pid_tid);
+    const auto file_bloom = [&](dstd::StringView dim)
+        -> dstd::Optional<index::extensions::ScalableBloomFilter> {
+        auto payload = common::unwrap(
+            index::path_file(snapshot, file, IndexExtension::Bloom, dim));
+        if (!payload) return dstd::nullopt;
+        return index::extensions::kinds::decode_bloom(*payload);
+    };
+    for (std::size_t b = 0; config.fixed_dimensions && b < BfCount; ++b) {
+        auto bloom = file_bloom(FIXED_BLOOM_NAMES[b]);
+        if (bloom) acc.fixed_blooms[b] = std::move(*bloom);
+    }
+    dstd::Set<dstd::String> dims;
+    for (auto ext : {IndexExtension::Zonemap, IndexExtension::Bloom,
+                     IndexExtension::Counts}) {
+        if (!config.extensions.has(ext)) continue;
+        for (auto& path : common::unwrap(index::paths(snapshot, file, ext)))
+            dims.insert(std::move(path));
+    }
+    dstd::Vector<dstd::String> extras;
+    for (const dstd::String& dim : dims) {
+        const dstd::StringView name(dim.data(), dim.size());
+        const bool is_fixed =
+            name == DIM_TE ||
+            std::find(FIXED_DIM_NAMES.begin(), FIXED_DIM_NAMES.end(), name) !=
+                FIXED_DIM_NAMES.end();
+        if (is_fixed) continue;
+        auto& extra = acc.extra(name);
+        auto bloom = file_bloom(name);
+        if (bloom) {
+            extra.bloom = std::move(*bloom);
+        } else {
+            extra.skip = true;
+        }
+        const bool is_named = std::find(config.extra_dimensions.begin(),
+                                        config.extra_dimensions.end(),
+                                        dim) != config.extra_dimensions.end();
+        if (!is_named) extras.push_back(dim);
+    }
+    return extras;
+}
+
 BloomCore::FileAccumulator::FileAccumulator(const ChunkIndexerConfig& config)
     : config_(&config) {
     fixed_blooms.reserve(BfCount);

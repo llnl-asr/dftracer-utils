@@ -115,6 +115,8 @@ inline char* to_chars_i64(char* first, char* last, std::int64_t v) noexcept {
 /// The decimal text of an integer.
 template <class I>
 inline String int_text(I v) {
+    static_assert(std::is_integral_v<I>,
+                  "the float std::to_chars needs macOS 13.3; use fixed_text");
     char buf[24];
     auto [p, ec] = std::to_chars(buf, buf + sizeof(buf), v);
     return ec == std::errc{} ? String(buf, p) : String();

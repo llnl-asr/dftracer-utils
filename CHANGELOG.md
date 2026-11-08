@@ -9,6 +9,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make `dstd::Expected` our own class and remove the vendored `tl::expected`.
+  `value()` and `error()` on the wrong side now end the process with the message and a stack trace, where `value()` threw before.
+  A build with `DFTRACER_UTILS_DEBUG` also ends the process when an error result is destroyed unchecked.
+- Make an index of system counter traces up to 57% smaller, because each counter value is stored as a change from the last value of the same counter.
+  Rebuild indexes made by an earlier version.
+- Store index extents on 8-byte boundaries in place of 4 KiB, so an index of a small trace set is up to 23% smaller.
+- Add `DFTRACER_UTILS_STORE_DIRECT_READS` to read the closed files of an index store past the page cache (`O_DIRECT` on Linux, `F_NOCACHE` on macOS).
+  It is off by default, and a file system that refuses direct reads gets cached reads.
+- Make the plugin call `duql_matches` about 35% faster per row, because the columns a query reads are found once per frame.
+- Make an index build allocate about 7% fewer blocks, because the exact quantile and distinct id lists grow in large steps.
+- List the call sites with the most allocations at exit when `DFTRACER_UTILS_MEMORY_DEBUG=1` is set.
+- Run a task on the process runtime when a thread that is not a runtime worker calls `get()` on it, such as `view.collect().get()` in `main()`, so the work uses every core instead of the calling thread only.
+  Bind a `coro::RunLoop` with `coro::CurrentScope` to keep the work on the calling thread.
+  The row order of a result with no sort is not fixed.
+- Make a trace scan with no index answer up to about 25% faster when the query reads no args, because each line is decoded once and the args are not decoded.
+- Grow the index in place when a trace grows by whole gzip members, so a refresh costs only the new members.
 - Lower the default of `DFTRACER_UTILS_MEM_DECAY_MS` from 1000 to 200, so the heap gives idle pages back sooner.
   Peak memory of the index, stats, view and comparator tools falls 6% to 15% on a 1 GB trace set, with no change in run time above noise.
 - Add `runtime::fs::exists`, `create_directories` and `remove`, and run the per-file checks of the indexer and the tools off the worker, so they no longer hold a worker thread.
@@ -16,6 +32,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Give each executor worker its own io_uring ring for positional reads and writes, `close` and `fsync`.
   With io_uring these run 1.25 to 4.5 times faster in `io_bench`, and a read of cached data now ends with no thread woken.
   The backend needs Linux 5.6 or later and otherwise falls back to the thread pool.
+- Add the async operations `runtime::io::statx`, `unlink`, `rmdir`, `rename`, `mkdir`, `fallocate`, `fadvise`, `sync_file_range` and `splice`, and run `ftruncate` on the ring too.
+  The io_uring backend asks the kernel which of them it has and sends the rest to the thread pool, and `runtime::fs::stat`, `exists`, `remove` and `create_directories` use them on Linux.
+- Add the async operations `runtime::io::linkat`, `symlinkat`, `socket`, `connect`, `bind`, `listen`, `shutdown`, `sendmsg`, `recvmsg`, `madvise`, `waitid` and `poll_add`, and on Linux `openat2`, `getxattr`, `setxattr`, `fgetxattr`, `fsetxattr`, `tee`, `pipe`, `futex_wait`, `futex_wake`, `futex_waitv`, `epoll_ctl` and `epoll_wait`.
+  The io_uring backend runs each on the ring when the kernel has its opcode and on the thread pool otherwise.
+  Where it cannot end a wait on the pool, the doc comment of the call says so.
+- Add `DFTRACER_UTILS_IO_URING_SQPOLL_IDLE_MS` to run the io_uring backend with a kernel polling thread.
+  It is off by default, because that thread holds a core while I/O runs.
 - Run coroutines on one queue per worker, with stealing between workers, in place of one shared queue.
   Scheduling is faster, most of all when one worker wakes another task, and an idle pool no longer wakes on a short timer.
 - List every `*.gz` file when a tool, an indexer or a viewer discovers the traces in a folder, and no longer list plain `.pfw`, `.jsonl` or `.ndjson` files, so gzip them first; the Python constant `TRACE_FILE_PATTERNS` becomes `INPUT_FILE_PATTERNS`.
@@ -130,9 +153,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Count a pre-aggregated counter record as the events it stands for when a trace aggregation reads the trace, with its duration, size and offset statistics from its args, so the answer matches the index.
   A frame still counts its rows, so a pre-aggregated record is one row there.
   Percentiles, histograms, plans that decode records by path, time buckets on a plan with no schema and group keys on arguments the build did not keep still count it as one row.
-- Answer the re-reads of an aggregation query from the chunk column blocks of the index instead of parsing the trace, when the query has no event filter and the build has no extra group keys.
-  A block now holds the file hash of each record as a core column, so `by_file` is answered from it too, and `AggQueryStats::chunks_from_columns` counts the re-read chunks that a block answered (`AggregatedTraces::chunks_from_columns` in the DLIO loader).
-  A query with an event filter or extra group keys still parses the chunk.
+- Store per-event column data in the index only for system counter rows (phase `C`, category `sys`), which makes the index much smaller.
+  Quantile, offset and bin queries that the stored partials cannot answer now read the trace again.
+  `AggQueryStats::chunks_from_columns` and `AggregatedTraces::chunks_from_columns` are gone.
+  Group by file is answered from new per-file partials, so it needs no trace.
   Indexes built before this change rebuild their aggregation data once.
 - Use less memory to build an index, because the aggregation data of each file is kept at its exact size with one copy less.
   File admission now counts these bytes, so a memory budget limits them too.
@@ -321,8 +345,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
-- Add `trace::views::LiveView` and its Python adaptor `LiveTraceViewer`, which read gzip traces that are still being written.
-  They read only whole gzip members, CRC checked, up to the first unfinished tail or hole, and `refresh()` picks up what has been finished or filled since.
+- Add `coro::or_fail` and `CoroTask::or_fail()`, which give the value of a `dstd::Expected` or of a task that returns one, or end the calling task with its error, with no exception.
+- Add `match`, `discard` and `or_fail` to `dstd::Expected`, and pass an error on with `return r.error();`.
+- Add `trace::views::LiveView` and its Python adaptor `LiveTraceViewer`, which follow gzip traces that are still being written.
+  `snapshot()` indexes the members written since the last call and returns a `View` or `TraceViewer` of every whole member, with no copy of the trace.
+  An old snapshot keeps its rows, and `status()` reports each file as whole, tail or hole.
+- Add `LiveTraceViewer.new_rows()` and `follow()`, which return only the rows that an earlier call did not return.
 - Add a public key-value store API in `store/store.h`, a C ABI in `store/abi.h` and `dftracer.utils.Store` in Python.
 - Add `Batch::erase` and `Batch::erase_range`, which apply in the same record as the puts of the batch.
 - Add `Store::pack`, which merges small closed data files into one and deletes the files it replaced after a keep time.
@@ -481,6 +509,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a hang of a runtime with few threads when a task waits for other tasks while a blocked worker waits to run again, such as a duql join on one thread.
+- Fix a line that spans two chunks being lost when a query prunes chunks.
+- Make a reader stop at the verified end of the index, so it no longer reads bytes the index has not checked.
+- Fix the parallel inflate of a gzip trace written by zlib on macOS, which ran on one worker because the member scan rejected its OS byte.
 - Fix higher peak memory in `dftracer_index` and other trace tools: a thread now returns a freed block above 32 KiB to the thread that allocated it at once.
 - Stop the false "cannot be read" warning when a store reader opens a data file that another process has just created.
 - Fix a link failure for static `pkg-config` users of a Debug build, where the archive was named `libyaml-cppd.a`.

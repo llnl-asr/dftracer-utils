@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <testing_runtime.h>
 
 #include <atomic>
 #include <chrono>
@@ -111,7 +112,7 @@ TEST_SUITE("RunLoop") {
                 while (!release.load()) std::this_thread::yield();
                 mutex.unlock();
             };
-            task().get();
+            dftu_utils_test::run_here(task());
         });
         while (!holder_has_lock.load()) std::this_thread::yield();
 
@@ -123,7 +124,7 @@ TEST_SUITE("RunLoop") {
                 resumed_thread = std::this_thread::get_id();
                 mutex.unlock();
             };
-            task().get();
+            dftu_utils_test::run_here(task());
         });
         while (!waiter_started.load()) std::this_thread::yield();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -145,8 +146,15 @@ TEST_SUITE("RunLoop") {
         // timers fails the check below instead of hanging the test.
         static std::atomic<bool> timed_out{false};
         static std::atomic<bool> finished{false};
+        static std::atomic<bool> on_loop{false};
+        static std::atomic<coro::Executor*> ran_on{nullptr};
         std::thread([] {
+            // Bound here, as a get() on a thread with no executor runs on the
+            // process runtime instead.
+            coro::RunLoop loop;
+            coro::CurrentScope bind{loop};
             auto task = []() -> coro::CoroTask<void> {
+                ran_on.store(coro::Executor::current());
                 try {
                     co_await coro::timeout(std::chrono::milliseconds(20),
                                            coro::Executor::current()->timers());
@@ -155,14 +163,17 @@ TEST_SUITE("RunLoop") {
                 }
             };
             task().get();
+            on_loop.store(ran_on.load() == &loop);
             finished.store(true);
         }).detach();
 
+        // Wide, as Valgrind runs this file many times slower.
         const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            std::chrono::steady_clock::now() + std::chrono::seconds(60);
         while (!finished.load() && std::chrono::steady_clock::now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(finished.load());
         CHECK(timed_out.load());
+        CHECK(on_loop.load());
     }
 }

@@ -8,6 +8,8 @@ namespace dftracer::utils::dstd {
 
 template <class... Ts>
 using Tuple = std::tuple<Ts...>;
+/// Deduces a @ref Tuple; the alias itself does not deduce on every compiler.
+using std::make_tuple;
 
 }  // namespace dftracer::utils::dstd
 

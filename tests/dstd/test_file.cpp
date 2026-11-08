@@ -9,6 +9,7 @@
 #include <testing_utilities.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -136,4 +137,107 @@ TEST_CASE("close is idempotent and a moved-from file is closed") {
     REQUIRE(moved.close());
     CHECK_FALSE(moved.is_open());
     CHECK(moved.close());
+}
+
+TEST_CASE("append writes at the end whatever the other handles do") {
+    dftu_utils_test::ScopedTestDir dir("dstd_file_append");
+    const auto path = in(dir, "log.bin");
+    auto a = dstd::File::open(
+        path, options(dstd::Access::Append, dstd::Creation::IfNeeded));
+    auto b = dstd::File::open(
+        path, options(dstd::Access::Append, dstd::Creation::IfNeeded));
+    REQUIRE(a);
+    REQUIRE(b);
+    CHECK(a->append(dstd::ByteView("one,", 4)).value() == 4);
+    CHECK(b->append(dstd::ByteView("two,", 4)).value() == 4);
+    CHECK(a->append(dstd::ByteView("three", 5)).value() == 5);
+
+    auto r = dstd::File::open(path, {});
+    REQUIRE(r);
+    dstd::Vector<std::uint8_t> out(13);
+    REQUIRE(r->read_exact_at(0, out));
+    CHECK(dstd::String(out.begin(), out.end()) == "one,two,three");
+}
+
+TEST_CASE("a vectored read fills the buffers in order") {
+    dftu_utils_test::ScopedTestDir dir("dstd_file_vectored");
+    auto f = dstd::File::open(
+        in(dir, "a.bin"),
+        options(dstd::Access::ReadWrite, dstd::Creation::AlwaysNew));
+    REQUIRE(f);
+    REQUIRE(f->write_all_at(0, dstd::ByteView("abcdefghij", 10)));
+    dstd::Vector<std::uint8_t> first(3);
+    dstd::Vector<std::uint8_t> second(4);
+    const dstd::Span<std::uint8_t> parts[] = {first, second};
+    CHECK(f->read_vectored_at(2, parts).value() == 7);
+    CHECK(dstd::String(first.begin(), first.end()) == "cde");
+    CHECK(dstd::String(second.begin(), second.end()) == "fghi");
+    CHECK(f->read_vectored_at(8, parts).value() == 2);
+    CHECK(dstd::String(first.begin(), first.begin() + 2) == "ij");
+}
+
+TEST_CASE("stat of an open file matches the path stat") {
+    dftu_utils_test::ScopedTestDir dir("dstd_file_stat");
+    const auto path = in(dir, "a.bin");
+    auto f = dstd::File::open(
+        path, options(dstd::Access::Write, dstd::Creation::AlwaysNew));
+    REQUIRE(f);
+    REQUIRE(f->write_all_at(0, dstd::ByteView("12345", 5)));
+    REQUIRE(f->advise(dstd::Advice::Sequential));
+    const auto by_file = f->stat();
+    const auto by_path = dstd::fs::stat(path);
+    REQUIRE(by_file);
+    REQUIRE(by_path);
+    CHECK(by_file->size == 5);
+    CHECK(by_file->kind == dstd::fs::FileKind::File);
+    CHECK(by_file->ino == by_path->ino);
+    CHECK(by_file->mtime_ns == by_path->mtime_ns);
+}
+
+TEST_CASE("one open file holds the lock until it unlocks") {
+    dftu_utils_test::ScopedTestDir dir("dstd_file_lock");
+    const auto path = in(dir, ".lock");
+    auto a = dstd::File::open(
+        path, options(dstd::Access::ReadWrite, dstd::Creation::IfNeeded));
+    auto b = dstd::File::open(
+        path, options(dstd::Access::ReadWrite, dstd::Creation::IfNeeded));
+    REQUIRE(a);
+    REQUIRE(b);
+    CHECK(a->try_lock().value());
+    CHECK_FALSE(b->try_lock().value());
+    REQUIRE(a->unlock());
+    CHECK(b->try_lock().value());
+    REQUIRE(b->close());
+    CHECK(a->try_lock().value());
+}
+
+TEST_CASE("bypass caching opens or reports Unsupported") {
+    dftu_utils_test::ScopedTestDir dir("dstd_file_bypass");
+    const auto path = in(dir, "a.bin");
+    {
+        auto w = dstd::File::open(
+            path, options(dstd::Access::Write, dstd::Creation::AlwaysNew));
+        REQUIRE(w);
+        dstd::Vector<std::uint8_t> block(8192, std::uint8_t{7});
+        REQUIRE(w->write_all_at(0, block));
+    }
+    const std::uint32_t align = dstd::File::direct_alignment(path);
+    dstd::OpenOptions o;
+    o.caching = dstd::Caching::Bypass;
+    auto f = dstd::File::open(path, o);
+    if (!f) {
+        CHECK(f.error().is(dstd::Condition::Unsupported));
+        MESSAGE("direct I/O refused here: ", f.error().message());
+        return;
+    }
+    REQUIRE(align != 0);
+    REQUIRE(align <= 4096);
+    void* raw = nullptr;
+    REQUIRE(::posix_memalign(&raw, align, 4096) == 0);
+    auto* buf = static_cast<std::uint8_t*>(raw);
+    auto n = f->read_at(4096, dstd::Span<std::uint8_t>(buf, 4096));
+    CHECK(n.value() == 4096);
+    CHECK(buf[0] == 7);
+    CHECK(buf[4095] == 7);
+    std::free(raw);
 }

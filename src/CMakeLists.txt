@@ -79,6 +79,7 @@ set(DFTRACER_UTILS_DSTD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/base64.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/concurrent_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/fatal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/fs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/os.cpp
@@ -139,6 +140,7 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
     # Async I/O
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/filesystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/fs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/local_stat.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs_on_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_awaitable.cpp
@@ -152,7 +154,8 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
 # Conditionally add io_uring backend sources
 if(DFTRACER_UTILS_HAVE_IO_URING)
   list(APPEND DFTRACER_UTILS_RUNTIME_SOURCES
-       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_uring_backend.cpp)
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_uring_backend.cpp
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io_uring_register.cpp)
 endif()
 
 # Linux: add epoll+threadpool backend
@@ -236,6 +239,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/aggregation_run.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/batch_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/file_group.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/new_members.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/resolver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/index_write_lock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/resolve_and_build.cpp
@@ -2125,14 +2129,12 @@ endif()
 
 # Install headers: <includedir>/dftracer/utils/<subpath>, so a consumer includes
 # <dftracer/utils/...>. A wheel sets the includedir to dftracer/include (beside
-# dftracer/lib and dftracer/bin), so the same rule serves both. The one .hpp is
-# the vendored tl::expected in dstd/vendor/.
+# dftracer/lib and dftracer/bin), so the same rule serves both.
 install(
   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../include/dftracer/utils/
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dftracer/utils
   FILES_MATCHING
-  PATTERN "*.h"
-  PATTERN "*.hpp")
+  PATTERN "*.h")
 
 install(
   DIRECTORY ${CMAKE_BINARY_DIR}/include/dftracer/utils/
@@ -2414,11 +2416,15 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/spill_harness.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/ring_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/store_bench.cpp)
 
   foreach(bench ${DFTRACER_UTILS_BENCHMARKS})
     get_filename_component(bench_name ${bench} NAME_WE)
     add_executable(${bench_name} ${bench})
+    if(DFTRACER_UTILS_HAVE_IO_URING)
+      target_compile_definitions(${bench_name} PRIVATE DFTRACER_UTILS_HAVE_IO_URING)
+    endif()
     target_add_rpath(${bench_name})
     target_link_libraries(${bench_name} PRIVATE dftracer_utils)
     target_include_directories(

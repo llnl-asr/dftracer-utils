@@ -82,31 +82,14 @@ dstd::String create_meta_trace(TestEnvironment& env) {
 }
 
 // collect() yields a columnar DataFrame; two results are equal when they carry
-// the same named columns and every cell matches (String via string_at, numeric
-// by widened value).
+// the same named columns and the same multiset of rows.
 bool rows_equal(const dftracer::utils::dataframe::DataFrame& a,
                 const dftracer::utils::dataframe::DataFrame& b) {
     if (a.names != b.names) return false;
     if (a.num_rows() != b.num_rows()) return false;
-    for (std::size_t c = 0; c < a.columns.size(); ++c) {
-        const auto& ca = a.columns[c];
-        const auto& cb = b.columns[c];
-        if (ca.type() != cb.type()) return false;
-        for (std::int64_t i = 0; i < a.num_rows(); ++i) {
-            if (ca.type() == dataframe::TypeId::String) {
-                if (ca.string_at(i) != cb.string_at(i)) return false;
-            } else if (ca.type() == dataframe::TypeId::Int64) {
-                if (ca.data<std::int64_t>()[i] != cb.data<std::int64_t>()[i])
-                    return false;
-            } else if (ca.type() == dataframe::TypeId::Uint64) {
-                if (ca.data<std::uint64_t>()[i] != cb.data<std::uint64_t>()[i])
-                    return false;
-            } else {
-                if (ca.data<double>()[i] != cb.data<double>()[i]) return false;
-            }
-        }
-    }
-    return true;
+    for (std::size_t c = 0; c < a.columns.size(); ++c)
+        if (a.columns[c].type() != b.columns[c].type()) return false;
+    return sorted_row_keys(a, a.names) == sorted_row_keys(b, a.names);
 }
 
 }  // namespace

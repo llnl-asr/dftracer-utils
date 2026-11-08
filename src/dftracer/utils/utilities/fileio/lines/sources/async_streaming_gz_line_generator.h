@@ -12,7 +12,6 @@
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
-#include <sys/stat.h>
 
 #include <cstring>
 
@@ -45,12 +44,12 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     }
     dftracer::utils::dstd::File& fd = open_file ? *open_file : owned;
 
-    struct stat st;
-    if (::fstat(fd.native_handle(), &st) != 0) {
+    const auto st = fd.stat();
+    if (!st) {
         throw common::DFTUtilsException(
             common::ErrorCode::Io, "Cannot stat compressed file: " + file_path);
     }
-    const std::uint64_t file_size = static_cast<std::uint64_t>(st.st_size);
+    const std::uint64_t file_size = st->size;
 
     dstd::String line_buffer;
     std::size_t current_line = 0;

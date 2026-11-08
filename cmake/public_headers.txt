@@ -85,6 +85,7 @@ dftracer/utils/dstd/deque.h
 dftracer/utils/dstd/either.h
 dftracer/utils/dstd/error.h
 dftracer/utils/dstd/expected.h
+dftracer/utils/dstd/fatal.h
 dftracer/utils/dstd/file.h
 dftracer/utils/dstd/fs.h
 dftracer/utils/dstd/function.h
@@ -130,7 +131,6 @@ dftracer/utils/dstd/variant.h
 dftracer/utils/dstd/varint.h
 dftracer/utils/dstd/vector.h
 dftracer/utils/dstd/vendor/concurrentqueue.h
-dftracer/utils/dstd/vendor/expected.hpp
 dftracer/utils/dstd/vendor/unordered_dense.h
 dftracer/utils/dstd/vendor/xxhash.h
 dftracer/utils/duql/abi.h

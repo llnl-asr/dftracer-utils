@@ -118,6 +118,9 @@ typedef struct dftu_store_publish_target {
     const dftu_store_source_stat* sources;
     uint64_t source_count;
     int32_t change; /**< a dftu_store_publish_change value */
+    /** Nonzero with READY in a shared namespace: the new copy stands for the
+     * whole scope, and the same record hides every older copy. */
+    int32_t replaces_older;
 } dftu_store_publish_target;
 
 /** Fill with dftu_store_pack_options_init before setting fields. */

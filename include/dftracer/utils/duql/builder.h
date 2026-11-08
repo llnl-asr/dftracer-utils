@@ -444,9 +444,11 @@ inline Col param(dstd::StringView name) {
 /// `amount` followed by a unit: ns, us, ms, s, m or h.
 template <typename N, std::enable_if_t<std::is_arithmetic_v<N>, int> = 0>
 Col duration(N amount, dstd::StringView unit) {
-    dstd::String t = std::is_integral_v<N>
-                         ? dstd::int_text(amount)
-                         : detail::number_text(static_cast<double>(amount));
+    dstd::String t;
+    if constexpr (std::is_integral_v<N>)
+        t = dstd::int_text(amount);
+    else
+        t = detail::number_text(static_cast<double>(amount));
     return Col::from_text(t + dstd::String(unit));
 }
 

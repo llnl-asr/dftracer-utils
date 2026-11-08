@@ -86,10 +86,10 @@ index::gzip::TimeBounds file_time_bounds(const index::Snapshot& snapshot,
     return bounds;
 }
 
-dstd::Optional<dstd::Pair<double, double>> file_value_range(
+dstd::HashMap<std::uint64_t, dstd::Pair<double, double>> chunk_value_ranges(
     const index::Snapshot& snapshot, const index::FileRef& file,
     dstd::StringView path) {
-    dstd::Optional<dstd::Pair<double, double>> out;
+    dstd::HashMap<std::uint64_t, dstd::Pair<double, double>> out;
     if (!index::extension_current(snapshot, file,
                                   index::store::IndexExtension::Zonemap))
         return out;
@@ -106,9 +106,22 @@ dstd::Optional<dstd::Pair<double, double>> file_value_range(
         if (!zone || zone->value_type == "string" || !number(zone->min, lo) ||
             !number(zone->max, hi) || lo > hi)
             continue;
-        out = out ? dstd::Pair<double, double>{std::min(out->first, lo),
-                                               std::max(out->second, hi)}
-                  : dstd::Pair<double, double>{lo, hi};
+        out.emplace(granule, dstd::Pair<double, double>{lo, hi});
+    }
+    return out;
+}
+
+dstd::Optional<dstd::Pair<double, double>> file_value_range(
+    const index::Snapshot& snapshot, const index::FileRef& file,
+    dstd::StringView path) {
+    dstd::Optional<dstd::Pair<double, double>> out;
+    for (const auto& [granule, range] :
+         chunk_value_ranges(snapshot, file, path)) {
+        out =
+            out ? dstd::Pair<double, double>{std::min(out->first, range.first),
+                                             std::max(out->second,
+                                                      range.second)}
+                : range;
     }
     return out;
 }

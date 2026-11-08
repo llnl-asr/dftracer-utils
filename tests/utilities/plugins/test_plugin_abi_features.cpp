@@ -14,6 +14,8 @@
 // After plugin.h/fold_adapter.h so nanoarrow is already set up for arrow_abi.h.
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -444,6 +446,75 @@ TEST_CASE("plugin ABI: duql_compile then duql_matches on known events") {
         CHECK(bq == nullptr);
         // A null query must yield a defined 0, never a throw across the ABI.
         CHECK(qx->duql_matches(host.h, nullptr, frame.df, 0) == 0);
+    }
+}
+
+TEST_CASE("plugin ABI: duql_matches sees each new frame, not cached columns") {
+    FoldFixture<CountSlice> fx(nullptr);
+    dftu_plugin_host& host = fx.host();
+    const auto* qx = static_cast<const dftu_svc_duql*>(
+        host.get_service(host.h, DFTU_SVC_DUQL));
+    REQUIRE(qx != nullptr);
+
+    dstd::String cat_src = "cat == \"POSIX\"";
+    dstd::String name_src = "name == \"write\"";
+    dftu_duql* by_cat = qx->duql_compile(
+        host.h, cat_src.data(), static_cast<std::uint32_t>(cat_src.size()));
+    dftu_duql* by_name = qx->duql_compile(
+        host.h, name_src.data(), static_cast<std::uint32_t>(name_src.size()));
+    REQUIRE(by_cat != nullptr);
+    REQUIRE(by_name != nullptr);
+
+    QueryFrame first = cat_name_frame({"POSIX", "STDIO"}, {"read", "write"});
+    for (std::int64_t row = 0; row < 2; ++row) {
+        CHECK(qx->duql_matches(host.h, by_cat, first.df, row) == (row == 0));
+        CHECK(qx->duql_matches(host.h, by_name, first.df, row) == (row == 1));
+    }
+
+    // The same shape with the values swapped, made right after the free so
+    // the allocator is likely to hand back the same address.
+    const dftu_dataframe* old_address = first.df;
+    dftu_dataframe_free(first.df);
+    first.df = nullptr;
+    QueryFrame second = cat_name_frame({"STDIO", "POSIX"}, {"write", "read"});
+    MESSAGE("frame address reused: ", second.df == old_address);
+    for (std::int64_t row = 0; row < 2; ++row) {
+        CHECK(qx->duql_matches(host.h, by_cat, second.df, row) == (row == 1));
+        CHECK(qx->duql_matches(host.h, by_name, second.df, row) == (row == 0));
+    }
+}
+
+TEST_CASE("plugin ABI: duql_matches reads a non-flat number column") {
+    FoldFixture<CountSlice> fx(nullptr);
+    dftu_plugin_host& host = fx.host();
+    const auto* qx = static_cast<const dftu_svc_duql*>(
+        host.get_service(host.h, DFTU_SVC_DUQL));
+    REQUIRE(qx != nullptr);
+    dstd::String src = "dur > 600";
+    dftu_duql* q = qx->duql_compile(host.h, src.data(),
+                                    static_cast<std::uint32_t>(src.size()));
+    REQUIRE(q != nullptr);
+
+    const std::int64_t durs[] = {1, 500, 700, 3};
+    dftu_series* base = dftu_series_new_flat(DFTU_TYPE_INT64, durs, 4, nullptr);
+    dftu_series* dur =
+        dftu_series_filter_gt(base, dataframe::to_scalar(std::int64_t{2}));
+    dftu_series_free(base);
+    REQUIRE(dur != nullptr);
+    REQUIRE(dftu_series_encoding(dur) !=
+            static_cast<std::int32_t>(dataframe::Encoding::Flat));
+
+    const char* col_names[2] = {"cat", "dur"};
+    dftu_series* cols[2] = {string_column({"POSIX", "POSIX", "POSIX"}), dur};
+    QueryFrame frame;
+    frame.df = dftu_dataframe_new(col_names, cols, 2);
+    CHECK(qx->duql_matches(host.h, q, frame.df, 0) == 0);
+    CHECK(qx->duql_matches(host.h, q, frame.df, 1) == 1);
+    CHECK(qx->duql_matches(host.h, q, frame.df, 2) == 0);
+
+    SUBCASE("a row outside the frame matches nothing") {
+        CHECK(qx->duql_matches(host.h, q, frame.df, 3) == 0);
+        CHECK(qx->duql_matches(host.h, q, frame.df, -1) == 0);
     }
 }
 

@@ -35,6 +35,12 @@ Runtime and scheduler
      - hardware concurrency
      - Fixes the I/O backend (io_uring/kqueue) thread-pool size independently
        of the compute pool. Same parsing rule as ``DFTRACER_UTILS_THREADS``.
+   * - ``DFTRACER_UTILS_IO_URING_SQPOLL_IDLE_MS``
+     - ``0``
+     - Above 0, asks the io_uring backend for SQPOLL: one ring, and a kernel
+       thread that takes requests with no system call. That thread spins for this
+       many milliseconds after its last request, so it holds a core while I/O
+       runs. A kernel that refuses it, such as one before 5.11, runs without it.
    * - ``DFTRACER_UTILS_IO_BACKEND``
      - ``auto``
      - Forces the I/O backend of every runtime that would pick one itself:
@@ -129,8 +135,10 @@ Memory and kernels
        allocation: a record of the caller and size of each live block, a
        redzone behind each block, a fill pattern on freed blocks and double
        free detection. Each allocation is slower and freed blocks stay counted
-       for a while. Any value other than ``0`` or ``1`` stops the process at
-       the first allocation.
+       for a while. At exit it prints to stderr the 20 call sites with the
+       most live bytes, the highest peak bytes and the most allocations. Any
+       value other than ``0`` or ``1`` stops the process at the first
+       allocation.
    * - ``DFTRACER_UTILS_MEMORY_EXIT_CHECK``
      - ``0``
      - For test runs. ``1`` makes the process print a leak report and exit
@@ -208,6 +216,16 @@ Index storage and indexing
      - The shortest time in milliseconds between two looks for the data files
        that other processes wrote to the index store.
        ``0`` looks at each read.
+   * - ``DFTRACER_UTILS_STORE_DIRECT_READS``
+     - ``0``
+     - ``1`` reads the closed data files of the index store past the page
+       cache: with ``O_DIRECT`` on Linux and ``F_NOCACHE`` on macOS.
+       Each read takes the aligned window around its bytes.
+       A file system that refuses direct reads, such as tmpfs before Linux 6.6,
+       gets cached reads, and so does a data file still being written.
+       Leave it off for tools that query the same index again and again,
+       since only the page cache keeps the bytes between runs.
+       A value that is not an integer makes the store open fail.
    * - ``DFTRACER_UTILS_SCHEMA_PATH``
      - unset
      - Record schema spec files or directories, ``:``-separated, registered

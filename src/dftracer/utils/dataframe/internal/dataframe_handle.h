@@ -5,6 +5,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 
+#include <cstdint>
+
 namespace dftracer::utils::dataframe {
 
 // Wrap a DataFrame as a new owned dftu_dataframe handle. Internal bridge so a
@@ -20,6 +22,9 @@ dftu_dataframe* dataframe_handle_wrap(DataFrame&& df);
 DataFrame dataframe_handle_take(dftu_dataframe* h);
 // Borrow the DataFrame behind a live handle; valid while `h` is.
 const DataFrame& dataframe_handle_view(const dftu_dataframe* h);
+// A number unique to `h` for the life of the process; never 0. A freed
+// handle's address can come back, its serial cannot.
+std::uint64_t dataframe_handle_serial(const dftu_dataframe* h);
 
 }  // namespace dftracer::utils::dataframe
 

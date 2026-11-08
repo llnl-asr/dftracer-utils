@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/replay/replay.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <chrono>
 #include <cstring>
 
@@ -22,14 +23,7 @@ bool ensure_directory_exists(dstd::StringView path) {
     dstd::String dir_path(path.substr(0, path.rfind('/')));
     if (dir_path.empty() || dir_path == path) return true;
 
-    struct stat st;
-    if (stat(dir_path.c_str(), &st) == 0) {
-        return S_ISDIR(st.st_mode);
-    }
-
-    // Try to create directory recursively
-    return ensure_directory_exists(dir_path) &&
-           (mkdir(dir_path.c_str(), 0755) == 0);
+    return dstd::fs::create_directories(dstd::PathView(dir_path)).has_value();
 }
 
 }  // anonymous namespace
@@ -94,15 +88,19 @@ bool PosixExecutor::execute_open(const Trace& trace,
 
         ensure_directory_exists(file_path);
 
-        int fd = open(file_path.c_str(), O_CREAT | O_RDWR, 0644);
-        if (fd >= 0) {
-            open_files_[trace.fhash] = fd;
+        auto opened = dstd::File::open(dstd::PathView(file_path),
+                                       {.access = dstd::Access::ReadWrite,
+                                        .creation = dstd::Creation::IfNeeded});
+        if (opened) {
             DFTRACER_UTILS_LOG_DEBUG("Opened file %s with fd %d",
-                                     file_path.c_str(), fd);
+                                     file_path.c_str(),
+                                     opened->native_handle());
+            open_files_[trace.fhash] = OpenFile{std::move(*opened), 0};
             return true;
         } else {
             DFTRACER_UTILS_LOG_ERROR("Failed to open file %s: %s",
-                                     file_path.c_str(), strerror(errno));
+                                     file_path.c_str(),
+                                     opened.error().format().c_str());
             return false;
         }
     }
@@ -116,7 +114,6 @@ bool PosixExecutor::execute_close(const Trace& trace,
 
     auto it = open_files_.find(trace.fhash);
     if (it != open_files_.end()) {
-        close(it->second);
         open_files_.erase(it);
         DFTRACER_UTILS_LOG_DEBUG("Closed file with hash %.*s",
                                  static_cast<int>(trace.fhash.size()),
@@ -142,9 +139,15 @@ bool PosixExecutor::execute_read(const Trace& trace,
         std::size_t n = std::min(static_cast<std::size_t>(trace.size),
                                  config.max_file_size);
         ensure_io_buffer(n);
-        [[maybe_unused]] ssize_t bytes_read =
-            read(it->second, io_buffer_.data(), n);
-        DFTRACER_UTILS_LOG_DEBUG("Read %zd bytes", bytes_read);
+        OpenFile& open = it->second;
+        const auto bytes_read = open.file.read_at(
+            open.position,
+            dstd::Span<std::uint8_t>(
+                reinterpret_cast<std::uint8_t*>(io_buffer_.data()), n));
+        if (bytes_read) open.position += *bytes_read;
+        DFTRACER_UTILS_LOG_DEBUG(
+            "Read %zd bytes",
+            bytes_read ? static_cast<ssize_t>(*bytes_read) : ssize_t{-1});
     }
 
     return true;
@@ -160,9 +163,13 @@ bool PosixExecutor::execute_write(const Trace& trace,
         std::size_t write_size = std::min(static_cast<std::size_t>(trace.size),
                                           config.max_file_size);
         ensure_io_buffer(write_size);
-        [[maybe_unused]] ssize_t bytes_written =
-            write(it->second, io_buffer_.data(), write_size);
-        DFTRACER_UTILS_LOG_DEBUG("Wrote %zd bytes", bytes_written);
+        OpenFile& open = it->second;
+        const auto bytes_written = open.file.write_at(
+            open.position, dstd::ByteView(io_buffer_.data(), write_size));
+        if (bytes_written) open.position += *bytes_written;
+        DFTRACER_UTILS_LOG_DEBUG(
+            "Wrote %zd bytes",
+            bytes_written ? static_cast<ssize_t>(*bytes_written) : ssize_t{-1});
     }
 
     return true;
@@ -175,11 +182,9 @@ bool PosixExecutor::execute_seek(const Trace& trace,
 
     auto it = open_files_.find(trace.fhash);
     if (it != open_files_.end() && trace.offset >= 0) {
-        [[maybe_unused]] off_t result =
-            lseek(it->second, trace.offset, SEEK_SET);
-        DFTRACER_UTILS_LOG_DEBUG("Seek to offset %lld, result: %lld",
-                                 static_cast<long long>(trace.offset),
-                                 static_cast<long long>(result));
+        it->second.position = static_cast<std::uint64_t>(trace.offset);
+        DFTRACER_UTILS_LOG_DEBUG("Seek to offset %lld",
+                                 static_cast<long long>(trace.offset));
     }
 
     return true;

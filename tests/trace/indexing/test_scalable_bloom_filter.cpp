@@ -88,18 +88,43 @@ TEST_SUITE("ScalableBloomFilter") {
         }
     }
 
-    TEST_CASE("Reads a bare BloomFilter blob") {
-        BloomFilter legacy(128, 0.01);
-        legacy.add("alpha");
-        legacy.add("beta");
-        auto blob = legacy.serialize();
+    TEST_CASE("Refuses bytes that are not a chain") {
+        BloomFilter bare(128, 0.01);
+        bare.add("alpha");
+        const auto blob = bare.serialize();
+        CHECK_THROWS(ScalableBloomFilter::from_blob(blob.data(), blob.size()));
+    }
 
-        auto restored =
-            ScalableBloomFilter::from_blob(blob.data(), blob.size());
-        CHECK(restored.level_count() == 1);
-        CHECK(restored.possibly_contains("alpha"));
-        CHECK(restored.possibly_contains("beta"));
-        CHECK_FALSE(restored.possibly_contains("gamma"));
+    TEST_CASE("A chain grows the same after a reload") {
+        ScalableBloomFilter chunk(1024, 0.01);
+        chunk.add("seed");
+        ScalableBloomFilter file(1024, 0.01);
+        file.merge_from(chunk);
+        const std::size_t levels = file.level_count();
+        const std::size_t bytes = file.size_bytes();
+        for (int round = 0; round < 50; ++round) {
+            const auto blob = file.serialize();
+            file = ScalableBloomFilter::from_blob(blob.data(), blob.size());
+            file.merge_from(chunk);
+        }
+        CHECK(file.level_count() == levels);
+        CHECK(file.size_bytes() == bytes);
+        CHECK(file.possibly_contains("seed"));
+
+        const auto blob = file.serialize();
+        auto loaded = ScalableBloomFilter::from_blob(blob.data(), blob.size());
+        ScalableBloomFilter direct(1024, 0.01);
+        direct.add("seed");
+        for (std::size_t i = 0; i < 5000; ++i) {
+            const auto value = "value-" + dstd::to_string(i);
+            loaded.add(value);
+            direct.add(value);
+        }
+        CHECK(loaded.level_count() == direct.level_count());
+        CHECK(loaded.size_bytes() == direct.size_bytes());
+        for (std::size_t i = 0; i < 5000; ++i) {
+            REQUIRE(loaded.possibly_contains("value-" + dstd::to_string(i)));
+        }
     }
 
     TEST_CASE("Merge unions both sides") {

@@ -302,6 +302,14 @@ dstd::Vector<Row> parse_trace(const dstd::String& text) {
     return rows;
 }
 
+// The only rows an index keeps in its column blocks.
+dstd::Vector<Row> system_counters(const dstd::Vector<Row>& rows) {
+    dstd::Vector<Row> out;
+    for (const Row& row : rows)
+        if (row.phase == 2 && row.cat == "sys") out.push_back(row);
+    return out;
+}
+
 // The categories keep their case, so a block that lower-cases one is seen.
 dstd::String make_trace(int n) {
     dstd::String text;
@@ -694,6 +702,74 @@ TEST_SUITE("ChunkColumns") {
         CHECK(got.columns.empty());
     }
 
+    TEST_CASE("start times out of order round trip") {
+        // A tracer writes an event at its end, so starts go back in time; one
+        // start near the top makes a delta wrap.
+        auto block = core_block(6);
+        const std::uint64_t ends[] = {100, 110, 120, 130, 140, 150};
+        const std::uint64_t durs[] = {5, 40, 2, 0, 33, 1};
+        const std::uint8_t has[] = {1, 1, 1, 0, 1, 1};
+        for (std::size_t r = 0; r < 6; ++r) {
+            block.has_dur[r] = has[r];
+            block.dur[r] = durs[r];
+            block.ts[r] = ends[r] - durs[r];
+        }
+        check_core_columns(block, encode_then_decode(block));
+        block.ts[4] = std::numeric_limits<std::uint64_t>::max() - 10;
+        block.dur[4] = 20;
+        check_core_columns(block, encode_then_decode(block));
+    }
+
+    TEST_CASE("counters of interleaved names round trip and encode small") {
+        // One row per name per sample, as a sampler writes cpu-0, cpu-1, ...
+        constexpr std::size_t ROWS = 300;
+        const auto make = [](bool interleaved) {
+            auto block = core_block(ROWS);
+            dstd::Vector<std::uint64_t> rows;
+            dstd::Vector<std::uint64_t> pct;
+            dstd::Vector<std::uint64_t> bytes;
+            for (std::size_t r = 0; r < ROWS; ++r) {
+                const std::size_t name = r % 3;
+                const std::size_t sample = r / 3;
+                block.name[r] =
+                    interleaved ? static_cast<std::uint32_t>(name) : 0;
+                rows.push_back(r);
+                const double v = r == 151
+                                     ? 0.1 + 0.2
+                                     : 1000.0 * static_cast<double>(name + 1) +
+                                           0.25 * static_cast<double>(sample);
+                pct.push_back(double_bits_of(v));
+                bytes.push_back(static_cast<std::uint64_t>(
+                    std::int64_t{1000000000} *
+                        static_cast<std::int64_t>(name + 1) +
+                    static_cast<std::int64_t>(sample)));
+            }
+            block.columns.push_back(
+                column_of(1, schemas::dft::agg::ColumnKind::Double, rows, pct));
+            block.columns.push_back(column_of(
+                2, schemas::dft::agg::ColumnKind::Int64, rows, bytes));
+            return block;
+        };
+        const auto column_bytes =
+            [](const schemas::dft::agg::ChunkColumns& block) {
+                dstd::Vector<std::uint8_t> core;
+                dstd::Vector<std::uint8_t> all;
+                schemas::dft::agg::encode_chunk_columns(block, 0, core);
+                schemas::dft::agg::encode_chunk_columns(
+                    block, block.columns.size(), all);
+                return all.size() - core.size();
+            };
+        const auto interleaved = make(true);
+        const auto got = encode_then_decode(interleaved);
+        check_core_columns(interleaved, got);
+        REQUIRE(got.columns.size() == 2);
+        for (std::size_t c = 0; c < 2; ++c) {
+            CHECK(got.columns[c].rows == interleaved.columns[c].rows);
+            CHECK(got.columns[c].bits == interleaved.columns[c].bits);
+        }
+        CHECK(column_bytes(interleaved) * 2 < column_bytes(make(false)));
+    }
+
     TEST_CASE("several columns of one path of different kinds round trip") {
         auto block = core_block(4);
         block.columns.push_back(
@@ -780,13 +856,15 @@ TEST_SUITE("ChunkColumns") {
         CHECK(rejected > 0);
     }
 
-    TEST_CASE("an index stores every numeric field of every chunk") {
+    TEST_CASE("an index stores every numeric field of the system counters") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
         dstd::String text;
         const dstd::String gz = write_trace(env.dir(), "trace", text);
-        const auto rows = parse_trace(text);
+        const auto all = parse_trace(text);
+        const auto rows = system_counters(all);
         REQUIRE(rows.size() > 0);
+        REQUIRE(rows.size() < all.size());
         const dstd::String index_dir = env.dir() + "/idx";
         build({gz}, index_dir);
 
@@ -802,16 +880,16 @@ TEST_SUITE("ChunkColumns") {
         CHECK(stored_members->size() >= decoded.blocks);
     }
 
-    TEST_CASE("the file column names the file hash of a record, or no file") {
+    TEST_CASE("the file column names the file hash of a counter, or no file") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
         dstd::String text;
         text += "[\n";
         for (int i = 0; i < RECORDS; ++i) {
-            text += common::str_cat(
-                R"({"id":)", i, R"(,"name":"read","cat":"POSIX")",
-                R"(,"pid":1,"tid":1,"ph":"X","ts":)", 1000 + i * 7,
-                R"(,"dur":1,"args":{"ret":)", i);
+            text +=
+                common::str_cat(R"({"id":)", i, R"(,"name":"cpu","cat":"sys")",
+                                R"(,"pid":1,"tid":1,"ph":"C","ts":)",
+                                1000 + i * 7, R"(,"args":{"ret":)", i);
             if (i % 3 != 0) text += R"(,"fhash":"0123456789abcdef")";
             text += "}}\n";
         }
@@ -880,8 +958,8 @@ TEST_SUITE("ChunkColumns") {
         dstd::String text_b;
         const dstd::String a = write_trace(env.dir(), "alpha", text_a);
         const dstd::String b = write_trace(env.dir(), "beta", text_b);
-        const auto rows_a = parse_trace(text_a);
-        const auto rows_b = parse_trace(text_b);
+        const auto rows_a = system_counters(parse_trace(text_a));
+        const auto rows_b = system_counters(parse_trace(text_b));
         const dstd::String ia =
             dstd::String(trace::internal::determine_index_path(a, ""));
         const dstd::String ib =
@@ -981,7 +1059,8 @@ TEST_SUITE("ChunkColumns") {
                     schemas::dft::agg::decode_chunk_columns(span_of(value));
                 REQUIRE_MESSAGE(decoded.has_value(), record.key);
                 ++blocks;
-            } else if (kind == index::store::layout::agg_kind::PARTIAL) {
+            } else if (kind == index::store::layout::agg_kind::PARTIAL ||
+                       kind == index::store::layout::agg_kind::FILE_PARTIAL) {
                 REQUIRE(
                     schemas::dft::agg::AggPartial::deserialize(span_of(value))
                         .has_value());

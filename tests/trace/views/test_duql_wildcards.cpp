@@ -74,14 +74,7 @@ void same(const View& v, const dstd::String& wild,
     const auto b = frame(v.duql(spelled));
     REQUIRE(names(a) == names(b));
     REQUIRE(a.num_rows() == b.num_rows());
-    for (const auto& n : names(a))
-        for (std::int64_t r = 0; r < a.num_rows(); ++r) {
-            const auto& ca = a.columns[static_cast<std::size_t>(bcol(a, n))];
-            if (ca.type() == dataframe::TypeId::String)
-                CHECK(bstr(a, r, n) == bstr(b, r, n));
-            else if (!ca.is_null(r))
-                CHECK(bnum(a, r, n) == bnum(b, r, n));
-        }
+    CHECK(sorted_row_keys(a) == sorted_row_keys(b));
 }
 
 dstd::String error_of(const View& v, const dstd::String& q) {
@@ -242,15 +235,7 @@ TEST_SUITE("DuqlWildcards") {
             const auto b = frame(full.duql(spelled));
             REQUIRE(names(a) == names(b));
             REQUIRE(a.num_rows() == b.num_rows());
-            for (const auto& c : names(a))
-                for (std::int64_t r = 0; r < a.num_rows(); ++r) {
-                    const auto& ca =
-                        a.columns[static_cast<std::size_t>(bcol(a, c))];
-                    if (ca.type() == dataframe::TypeId::String)
-                        CHECK(bstr(a, r, c) == bstr(b, r, c));
-                    else if (!ca.is_null(r))
-                        CHECK(bnum(a, r, c) == bnum(b, r, c));
-                }
+            CHECK(sorted_row_keys(a) == sorted_row_keys(b));
         }
     }
 

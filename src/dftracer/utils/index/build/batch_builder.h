@@ -62,6 +62,11 @@ struct IndexBuildResult {
     std::size_t total_lines = 0;
     /// Lines left out of the index because they could not be read in full.
     std::size_t dropped_lines = 0;
+    /// Failed on new members that were not whole. A build with walk_members
+    /// finds the part that is.
+    bool needs_member_walk = false;
+    /// Added new members to the index of the file, without a full rebuild.
+    bool was_appended = false;
     dstd::String error_message;
 };
 
@@ -83,6 +88,12 @@ struct IndexBuildBatchConfig {
     /// tier, for files whose members are current; members, the file record
     /// and hash tables are left as they are.
     bool tier_only = false;
+    /// A new file is indexed up to its last whole gzip member, CRC checked,
+    /// with nothing recovered from a cut tail. The file's recorded size is that
+    /// end, so the next build goes on from it.
+    bool whole_members = false;
+    /// Find new members by inflating each one first, see find_new_members.
+    bool walk_members = false;
     /// Bytes the build may hold at once: 0 resolves through
     /// memory::resolve_spill_budget, memory::NO_SPILL_BUDGET leaves the build
     /// unbounded.

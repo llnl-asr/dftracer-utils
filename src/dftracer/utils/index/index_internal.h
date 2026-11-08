@@ -75,6 +75,9 @@ struct FileBuild::Impl {
     /// named in `kept`.
     bool drop_unwritten = false;
     dstd::Vector<dstd::String> kept;
+    /// A written copy stands for the whole file and hides older ones. False
+    /// for a file with no older copies, and for new members of a grown file.
+    bool replaces_older = true;
     /// The first error of a put or a finish, reported by commit.
     dstd::Optional<dstd::Error> error;
     bool committed = false;

@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/detail/pool_resume.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/tuple.h>
@@ -71,6 +72,10 @@ struct WhenAllVectorState : detail::WhenAllCompletionState {
     explicit WhenAllVectorState(dstd::Vector<Awaitable> items)
         : awaitables(std::move(items)), results(awaitables.size()) {
         total = awaitables.size();
+    }
+    // Results an exception kept from the caller go with the state.
+    ~WhenAllVectorState() {
+        for (const auto& result : results) dstd::discard_unread(result);
     }
 };
 
@@ -337,6 +342,12 @@ struct WhenAllTupleState : detail::WhenAllCompletionState {
     explicit WhenAllTupleState(Awaitables&&... items)
         : awaitables(std::forward<Awaitables>(items)...) {
         total = sizeof...(Awaitables);
+    }
+    // Results an exception kept from the caller go with the state.
+    ~WhenAllTupleState() {
+        std::apply(
+            [](const auto&... result) { (dstd::discard_unread(result), ...); },
+            results);
     }
 };
 

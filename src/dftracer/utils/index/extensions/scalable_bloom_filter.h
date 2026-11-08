@@ -34,12 +34,13 @@ namespace dftracer::utils::index::extensions {
  * Serialization format:
  *   ["SBF1" magic (4 bytes)]
  *   [4 bytes: level count (uint32_t LE)]
- *   [per level: 4 bytes blob length (uint32_t LE), then a @ref BloomFilter
- * blob]
+ *   [8 bytes: initial capacity (uint64_t LE)]
+ *   [8 bytes: false positive rate (IEEE double, LE)]
+ *   [per level: 8 bytes capacity (uint64_t LE), 4 bytes blob length
+ * (uint32_t LE), then a @ref BloomFilter blob]
  *
- * `from_blob` accepts a bare @ref BloomFilter blob too, reading it as a
- * single-level chain, so blooms written before this type existed still
- * load.
+ * A loaded chain takes more values and merges as the one it was saved from.
+ * @ref from_blob throws on any other bytes.
  */
 class ScalableBloomFilter {
    public:

@@ -92,17 +92,10 @@ void put_gaps(dstd::Vector<std::uint8_t>& out,
     }
 }
 
+// zstd finds repeated gaps better than repeated changes of gaps, so plain
+// deltas compress smaller than deltas of deltas.
 void put_core(dstd::Vector<std::uint8_t>& out, const ChunkColumns& block) {
-    std::uint64_t ts_prev = 0;
-    std::uint64_t step_prev = 0;
-    for (const std::uint64_t ts : block.ts) {
-        const std::uint64_t step = ts - ts_prev;
-        dstd::append_varint(
-            out,
-            dstd::zigzag_encode(static_cast<std::int64_t>(step - step_prev)));
-        step_prev = step;
-        ts_prev = ts;
-    }
+    put_deltas(out, block.ts);
     std::uint64_t missing = 0;
     for (const std::uint8_t has : block.has_dur) missing += has != 0 ? 0 : 1;
     dstd::append_varint(out, missing);
@@ -131,22 +124,84 @@ void put_core(dstd::Vector<std::uint8_t>& out, const ChunkColumns& block) {
     put_rle(out, block.file, put_local);
 }
 
-void put_column(dstd::Vector<std::uint8_t>& out, const ChunkColumn& column) {
+/// The value a column's delta is taken from. The counter rows of one sample
+/// come one per name (cpu-0, cpu-1, ...), so the last value of the same name
+/// is often much closer than the value of the row before.
+enum class DeltaBase : std::uint8_t { Previous = 0, SameName = 1 };
+
+/// The value of entry k as an integer, false for an entry stored elsewhere.
+template <class ValueAt>
+DeltaBase pick_delta_base(const ChunkColumn& column,
+                          const dstd::Vector<std::uint32_t>& names,
+                          dstd::Vector<std::uint64_t>& last,
+                          ValueAt&& value_at) {
+    std::fill(last.begin(), last.end(), 0);
+    std::uint64_t prev = 0;
+    std::size_t previous_bytes = 0;
+    std::size_t same_name_bytes = 0;
+    for (std::size_t k = 0; k < column.bits.size(); ++k) {
+        std::uint64_t v = 0;
+        if (!value_at(k, v)) continue;
+        previous_bytes += dstd::varint_size(
+            dstd::zigzag_encode(static_cast<std::int64_t>(v - prev)));
+        prev = v;
+        std::uint64_t& p = last[names[column.rows[k]]];
+        same_name_bytes += dstd::varint_size(
+            dstd::zigzag_encode(static_cast<std::int64_t>(v - p)));
+        p = v;
+    }
+    return same_name_bytes < previous_bytes ? DeltaBase::SameName
+                                            : DeltaBase::Previous;
+}
+
+template <class ValueAt>
+void put_value_deltas(dstd::Vector<std::uint8_t>& out,
+                      const ChunkColumn& column,
+                      const dstd::Vector<std::uint32_t>& names,
+                      dstd::Vector<std::uint64_t>& last, DeltaBase base,
+                      ValueAt&& value_at) {
+    std::fill(last.begin(), last.end(), 0);
+    std::uint64_t prev = 0;
+    for (std::size_t k = 0; k < column.bits.size(); ++k) {
+        std::uint64_t v = 0;
+        if (!value_at(k, v)) continue;
+        std::uint64_t& p =
+            base == DeltaBase::SameName ? last[names[column.rows[k]]] : prev;
+        dstd::append_varint(
+            out, dstd::zigzag_encode(static_cast<std::int64_t>(v - p)));
+        p = v;
+    }
+}
+
+/// `last` holds one value per local id of the block, as scratch.
+void put_column(dstd::Vector<std::uint8_t>& out, const ChunkColumn& column,
+                const dstd::Vector<std::uint32_t>& names,
+                dstd::Vector<std::uint64_t>& last) {
     dstd::append_varint(out, column.path);
     out.push_back(static_cast<std::uint8_t>(column.kind));
     dstd::append_varint(out, column.rows.size());
     put_gaps(out, column.rows);
     if (column.kind != ColumnKind::Double) {
-        std::uint64_t prev = 0;
-        for (const std::uint64_t bits : column.bits) {
-            dstd::append_varint(
-                out,
-                dstd::zigzag_encode(static_cast<std::int64_t>(bits - prev)));
-            prev = bits;
-        }
+        const auto bits_at = [&column](std::size_t k, std::uint64_t& v) {
+            v = column.bits[k];
+            return true;
+        };
+        const DeltaBase base = pick_delta_base(column, names, last, bits_at);
+        out.push_back(static_cast<std::uint8_t>(base));
+        put_value_deltas(out, column, names, last, base, bits_at);
         return;
     }
     const std::uint8_t exponent = best_exponent(column.bits);
+    const auto scaled_at = [&column, exponent](std::size_t k,
+                                               std::uint64_t& v) {
+        std::int64_t i = 0;
+        if (!encodes_as(dstd::bits_double(column.bits[k]), exponent, i))
+            return false;
+        v = static_cast<std::uint64_t>(i);
+        return true;
+    };
+    const DeltaBase base = pick_delta_base(column, names, last, scaled_at);
+    out.push_back(static_cast<std::uint8_t>(base));
     out.push_back(exponent);
     std::size_t exceptions = 0;
     for (const std::uint64_t bits : column.bits) {
@@ -163,15 +218,7 @@ void put_column(dstd::Vector<std::uint8_t>& out, const ChunkColumn& column) {
         prev_row = column.rows[k];
         dstd::append_u64_le(out, column.bits[k]);
     }
-    std::uint64_t prev = 0;
-    for (const std::uint64_t bits : column.bits) {
-        std::int64_t i = 0;
-        if (!encodes_as(dstd::bits_double(bits), exponent, i)) continue;
-        const auto value = static_cast<std::uint64_t>(i);
-        dstd::append_varint(
-            out, dstd::zigzag_encode(static_cast<std::int64_t>(value - prev)));
-        prev = value;
-    }
+    put_value_deltas(out, column, names, last, base, scaled_at);
 }
 
 void append_block(const ChunkColumns& block, std::size_t column_count,
@@ -182,8 +229,10 @@ void append_block(const ChunkColumns& block, std::size_t column_count,
     for (const std::uint32_t id : block.ids) dstd::append_varint(out, id);
     put_core(out, block);
     dstd::append_varint(out, column_count);
+    if (column_count == 0) return;
+    dstd::Vector<std::uint64_t> last(block.ids.size());
     for (std::size_t k = 0; k < column_count; ++k)
-        put_column(out, block.columns[k]);
+        put_column(out, block.columns[k], block.name, last);
 }
 
 /// Every element takes at least one byte, so a count above the bytes left is
@@ -263,33 +312,26 @@ bool get_rle(dstd::LeReader& r, std::uint64_t rows, std::size_t id_count,
 
 bool get_core(dstd::LeReader& r, ChunkColumns& block, std::size_t id_count) {
     const std::uint64_t rows = block.rows;
-    dstd::Vector<std::uint64_t> steps;
-    if (!get_deltas(r, static_cast<std::size_t>(rows), steps)) return false;
-    block.ts.resize(steps.size());
-    std::uint64_t ts = 0;
-    for (std::size_t k = 0; k < steps.size(); ++k) {
-        ts += steps[k];
-        block.ts[k] = ts;
-    }
+    const auto n = static_cast<std::size_t>(rows);
+    if (!get_deltas(r, n, block.ts)) return false;
     std::uint64_t missing = 0;
     if (!get_count(r, rows, missing)) return false;
     dstd::Vector<std::uint64_t> gaps;
     if (!get_gaps(r, rows, static_cast<std::size_t>(missing), gaps)) {
         return false;
     }
-    block.dur.resize(steps.size());
-    block.has_dur.resize(steps.size(), 1);
+    block.dur.resize(n);
+    block.has_dur.resize(n, 1);
     for (const std::uint64_t row : gaps) block.has_dur[row] = 0;
     std::uint64_t dur_prev = 0;
-    for (std::size_t k = 0; k < steps.size(); ++k) {
+    for (std::size_t k = 0; k < n; ++k) {
         if (block.has_dur[k] == 0) continue;
         std::uint64_t z = 0;
         if (!dstd::read_varint(r, z)) return false;
         dur_prev += static_cast<std::uint64_t>(dstd::zigzag_decode(z));
         block.dur[k] = dur_prev;
     }
-    return get_deltas(r, steps.size(), block.pid) &&
-           get_deltas(r, steps.size(), block.tid) &&
+    return get_deltas(r, n, block.pid) && get_deltas(r, n, block.tid) &&
            get_rle(r, rows, block.phase) &&
            get_rle(r, rows, id_count, block.cat) &&
            get_rle(r, rows, id_count, block.name) &&
@@ -297,8 +339,25 @@ bool get_core(dstd::LeReader& r, ChunkColumns& block, std::size_t id_count) {
            get_rle(r, rows, id_count, block.file);
 }
 
+/// Reads the next value delta of entry k into `value`.
+bool get_value_delta(dstd::LeReader& r, const ChunkColumn& column,
+                     std::size_t k, const dstd::Vector<std::uint32_t>& names,
+                     dstd::Vector<std::uint64_t>& last, DeltaBase base,
+                     std::uint64_t& prev, std::uint64_t& value) {
+    std::uint64_t z = 0;
+    if (!dstd::read_varint(r, z)) return false;
+    std::uint64_t& p =
+        base == DeltaBase::SameName ? last[names[column.rows[k]]] : prev;
+    p += static_cast<std::uint64_t>(dstd::zigzag_decode(z));
+    value = p;
+    return true;
+}
+
+/// `names` is the block's decoded name column, `last` scratch of one value
+/// per local id.
 bool get_column(dstd::LeReader& r, std::uint64_t rows, std::size_t id_count,
-                ChunkColumn& column) {
+                const dstd::Vector<std::uint32_t>& names,
+                dstd::Vector<std::uint64_t>& last, ChunkColumn& column) {
     std::uint64_t path = 0;
     std::uint8_t kind = 0;
     if (!dstd::read_varint(r, path) || path >= id_count || !r.u8(kind) ||
@@ -312,8 +371,23 @@ bool get_column(dstd::LeReader& r, std::uint64_t rows, std::size_t id_count,
     if (!get_gaps(r, rows, static_cast<std::size_t>(n), column.rows)) {
         return false;
     }
+    std::uint8_t base_byte = 0;
+    if (!r.u8(base_byte) ||
+        base_byte > static_cast<std::uint8_t>(DeltaBase::SameName)) {
+        return false;
+    }
+    const auto base = static_cast<DeltaBase>(base_byte);
+    std::fill(last.begin(), last.end(), 0);
+    std::uint64_t value_prev = 0;
     if (column.kind != ColumnKind::Double) {
-        return get_deltas(r, column.rows.size(), column.bits);
+        column.bits.resize(column.rows.size());
+        for (std::size_t k = 0; k < column.rows.size(); ++k) {
+            if (!get_value_delta(r, column, k, names, last, base, value_prev,
+                                 column.bits[k])) {
+                return false;
+            }
+        }
+        return true;
     }
     std::uint8_t exponent = 0;
     std::uint64_t exceptions = 0;
@@ -341,16 +415,17 @@ bool get_column(dstd::LeReader& r, std::uint64_t rows, std::size_t id_count,
     }
     column.bits.resize(column.rows.size());
     std::size_t at = 0;
-    std::uint64_t value_prev = 0;
     for (std::size_t k = 0; k < column.rows.size(); ++k) {
         if (at < rows_without.size() && rows_without[at] == column.rows[k]) {
             column.bits[k] = bits[at++];
             continue;
         }
-        std::uint64_t z = 0;
-        if (!dstd::read_varint(r, z)) return false;
-        value_prev += static_cast<std::uint64_t>(dstd::zigzag_decode(z));
-        const std::int64_t i = static_cast<std::int64_t>(value_prev);
+        std::uint64_t value = 0;
+        if (!get_value_delta(r, column, k, names, last, base, value_prev,
+                             value)) {
+            return false;
+        }
+        const std::int64_t i = static_cast<std::int64_t>(value);
         column.bits[k] =
             dstd::double_bits(static_cast<double>(i) / POW10[exponent]);
     }
@@ -506,8 +581,11 @@ dstd::Expected<ChunkColumns, common::ErrorCode> decode_chunk_columns(
     std::uint64_t columns = 0;
     if (!get_count(r, r.remaining(), columns)) return bad();
     block.columns.resize(static_cast<std::size_t>(columns));
+    dstd::Vector<std::uint64_t> last;
+    if (columns != 0) last.resize(block.ids.size());
     for (ChunkColumn& column : block.columns) {
-        if (!get_column(r, rows, block.ids.size(), column)) return bad();
+        if (!get_column(r, rows, block.ids.size(), block.name, last, column))
+            return bad();
     }
     if (r.remaining() != 0) return bad();
     return block;

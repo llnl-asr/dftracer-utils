@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TESTS_VIEW_COMMON_H
 #define DFTRACER_UTILS_TESTS_VIEW_COMMON_H
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -17,7 +18,9 @@
 #include <index_test_helpers.h>
 #include <testing_utilities.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 
@@ -202,6 +205,46 @@ inline dftracer::utils::dstd::String bstr(
     dftracer::utils::dstd::StringView name) {
     return dftracer::utils::dstd::String(
         b.columns[static_cast<std::size_t>(bcol(b, name))].string_at(row));
+}
+
+// One text key per row over the named columns, in the order given, sorted, so
+// two results compare as multisets of rows when their row order is
+// unspecified. A null cell has its own key.
+inline dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
+sorted_row_keys(
+    const dftracer::utils::dataframe::DataFrame& b,
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& cols) {
+    using T = dftracer::utils::dataframe::TypeId;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
+    dftracer::utils::dstd::Vector<dftracer::utils::dataframe::Series> mat;
+    for (const auto& name : cols)
+        mat.push_back(
+            b.columns[static_cast<std::size_t>(bcol(b, name))].materialize());
+    for (std::int64_t r = 0; r < b.num_rows(); ++r) {
+        dftracer::utils::dstd::String key;
+        for (const auto& col : mat) {
+            if (col.is_null(r)) {
+                key += "\x01null";
+            } else if (col.type() == T::Float64) {
+                char buf[40];
+                std::snprintf(buf, sizeof buf, "%.17g", col.data<double>()[r]);
+                key += buf;
+            } else {
+                key += dftracer::utils::dataframe::cell_to_string(col, r);
+            }
+            key += '\x1f';
+        }
+        keys.push_back(std::move(key));
+    }
+    std::sort(keys.begin(), keys.end());
+    return keys;
+}
+
+inline dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
+sorted_row_keys(const dftracer::utils::dataframe::DataFrame& b) {
+    auto cols = b.names;
+    std::sort(cols.begin(), cols.end());
+    return sorted_row_keys(b, cols);
 }
 
 // A mixed(30 POSIX "read", 20 STDIO "fwrite") trace whose index is built once

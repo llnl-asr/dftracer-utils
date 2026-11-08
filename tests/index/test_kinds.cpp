@@ -174,10 +174,11 @@ TEST_SUITE("index kinds") {
         }
         auto q = duql::Query::from_string("dur > 5");
         REQUIRE(q.has_value());
-        CHECK_THROWS_WITH_AS(
-            index::plan::prune_file({path, trace, &*q, nullptr, dstd::nullopt})
-                .get(),
-            doctest::Contains("corrupt zone map"), std::exception);
+        CHECK_THROWS_WITH_AS((void)index::plan::prune_file(
+                                 {path, trace, &*q, nullptr, dstd::nullopt})
+                                 .get(),
+                             doctest::Contains("corrupt zone map"),
+                             std::exception);
     }
 
     TEST_CASE("a ts bound that is not an integer is an error") {
@@ -188,7 +189,7 @@ TEST_SUITE("index kinds") {
 
         auto bad = duql::Query::from_string(R"(ts > "abc")");
         REQUIRE(bad.has_value());
-        CHECK_THROWS_WITH_AS(index::plan::prune_file(
+        CHECK_THROWS_WITH_AS((void)index::plan::prune_file(
                                  {index, trace, &*bad, nullptr, dstd::nullopt})
                                  .get(),
                              doctest::Contains("abc"), std::exception);

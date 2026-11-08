@@ -2,9 +2,12 @@
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/os.h>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <limits>
 
@@ -23,6 +26,17 @@ Expected<off_t, Error> to_offset(std::uint64_t offset, std::size_t len,
             internal::make_message(what, {}, "offset past the largest file")));
     }
     return static_cast<off_t>(offset);
+}
+
+constexpr std::uint32_t DIRECT_DEFAULT_ALIGN = 4096;
+
+bool refuses_direct(int error) noexcept {
+    return error == EINVAL || error == EOPNOTSUPP || error == ENOTSUP;
+}
+
+Error direct_refused(StringView path) {
+    return Error(Condition::Unsupported,
+                 internal::make_message(path, {}, "no direct I/O here"));
 }
 
 }  // namespace
@@ -56,6 +70,17 @@ Expected<int, Error> File::native_open_flags(OpenOptions options) {
         case Access::ReadWrite:
             flags |= O_RDWR;
             break;
+        case Access::Append:
+            flags |= O_WRONLY | O_APPEND;
+            break;
+    }
+    if (options.caching == Caching::Bypass) {
+#if defined(O_DIRECT)
+        flags |= O_DIRECT;
+#else
+        return Unexpected(Error(Condition::Unsupported,
+                                "open: no O_DIRECT flag on this system"));
+#endif
     }
     if (options.creation != Creation::OpenExisting &&
         options.access == Access::Read) {
@@ -82,6 +107,11 @@ Expected<int, Error> File::native_open_flags(OpenOptions options) {
 }
 
 Expected<File, Error> File::open(PathView path, OpenOptions options) {
+    const bool bypass = options.caching == Caching::Bypass;
+#if defined(__APPLE__)
+    // F_NOCACHE is set on the open file, not passed as an open flag.
+    options.caching = Caching::Normal;
+#endif
     auto flags = native_open_flags(options);
     if (!flags) return Unexpected(flags.error());
     const internal::PathCString c_path(path.str());
@@ -89,8 +119,42 @@ Expected<File, Error> File::open(PathView path, OpenOptions options) {
     do {
         fd = ::open(c_path.c_str(), *flags, static_cast<mode_t>(options.mode));
     } while (fd < 0 && errno == EINTR);
-    if (fd < 0) return Unexpected(internal::errno_error(errno, path.str()));
-    return File(fd);
+    if (fd < 0) {
+        if (bypass && refuses_direct(errno)) {
+            return Unexpected(direct_refused(path.str()));
+        }
+        return Unexpected(internal::errno_error(errno, path.str()));
+    }
+    File file(fd);
+#if defined(__APPLE__)
+    if (bypass && ::fcntl(fd, F_NOCACHE, 1) != 0) {
+        const int error = errno;
+        if (refuses_direct(error)) {
+            return Unexpected(direct_refused(path.str()));
+        }
+        return Unexpected(internal::errno_error(error, path.str()));
+    }
+#else
+    static_cast<void>(bypass);
+#endif
+    return file;
+}
+
+std::uint32_t File::direct_alignment(PathView path) {
+#if defined(__linux__) && defined(STATX_DIOALIGN)
+    const internal::PathCString c_path(path.str());
+    struct statx info{};
+    // A refused statx leaves the decision to the open.
+    if (::statx(AT_FDCWD, c_path.c_str(), 0, STATX_DIOALIGN, &info) != 0 ||
+        (info.stx_mask & STATX_DIOALIGN) == 0) {
+        return DIRECT_DEFAULT_ALIGN;
+    }
+    if (info.stx_dio_offset_align == 0) return 0;
+    return std::max(info.stx_dio_offset_align, info.stx_dio_mem_align);
+#else
+    static_cast<void>(path);
+    return DIRECT_DEFAULT_ALIGN;
+#endif
 }
 
 Expected<void, Error> File::close() noexcept {
@@ -154,6 +218,76 @@ Expected<void, Error> File::write_all_at(std::uint64_t offset,
         }
         done += *n;
     }
+    return {};
+}
+
+Expected<std::size_t, Error> File::read_vectored_at(
+    std::uint64_t offset, Span<const Span<std::uint8_t>> buffers) const {
+    struct iovec vecs[MAX_VECTORED_BUFFERS];
+    const std::size_t count = std::min(buffers.size(), MAX_VECTORED_BUFFERS);
+    std::size_t bytes = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+        vecs[i].iov_base = buffers[i].data();
+        vecs[i].iov_len = buffers[i].size();
+        bytes += buffers[i].size();
+    }
+    auto at = to_offset(offset, bytes, "preadv");
+    if (!at) return Unexpected(at.error());
+    ssize_t n = -1;
+    do {
+        n = ::preadv(handle_, vecs, static_cast<int>(count), *at);
+    } while (n < 0 && errno == EINTR);
+    if (n < 0) return Unexpected(internal::errno_error(errno, "preadv"));
+    return static_cast<std::size_t>(n);
+}
+
+Expected<std::size_t, Error> File::append(ByteView data) const {
+    ssize_t n = -1;
+    do {
+        n = ::write(handle_, data.data(), data.size());
+    } while (n < 0 && errno == EINTR);
+    if (n < 0) return Unexpected(internal::errno_error(errno, "write"));
+    return static_cast<std::size_t>(n);
+}
+
+Expected<fs::FileStat, Error> File::stat() const { return stat_of(handle_); }
+
+Expected<fs::FileStat, Error> File::stat_of(NativeHandle handle) {
+    struct stat st{};
+    if (::fstat(handle, &st) != 0) {
+        return Unexpected(internal::errno_error(errno, "fstat"));
+    }
+    return internal::make_file_stat(st);
+}
+
+Expected<void, Error> File::advise(Advice advice) const {
+#if defined(__linux__)
+    const int hint = advice == Advice::Sequential ? POSIX_FADV_SEQUENTIAL
+                                                  : POSIX_FADV_NORMAL;
+    const int rc = ::posix_fadvise(handle_, 0, 0, hint);
+    if (rc != 0) return Unexpected(internal::errno_error(rc, "posix_fadvise"));
+#else
+    static_cast<void>(advice);
+#endif
+    return {};
+}
+
+Expected<bool, Error> File::try_lock() const {
+    int rc = -1;
+    do {
+        rc = ::flock(handle_, LOCK_EX | LOCK_NB);
+    } while (rc != 0 && errno == EINTR);
+    if (rc == 0) return true;
+    if (errno == EWOULDBLOCK) return false;
+    return Unexpected(internal::errno_error(errno, "flock"));
+}
+
+Expected<void, Error> File::unlock() const {
+    int rc = -1;
+    do {
+        rc = ::flock(handle_, LOCK_UN);
+    } while (rc != 0 && errno == EINTR);
+    if (rc != 0) return Unexpected(internal::errno_error(errno, "flock"));
     return {};
 }
 

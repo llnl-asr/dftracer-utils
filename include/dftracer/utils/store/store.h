@@ -72,8 +72,9 @@ struct NamespaceSpec {
     PageCodec codec = PageCodec::Zstd;
     /// Each scope holds the keys of every writer, and the newest copy wins for
     /// a key that several wrote. Otherwise the first batch of a new writer
-    /// replaces the scope. A shared namespace has no fold and refuses erases
-    /// with dstd::Condition::Unsupported. A drop still clears the whole scope.
+    /// replaces the scope. A shared namespace has no fold. An erase hides keys
+    /// of this writer's own copy only, and keys of older copies stay. A drop
+    /// still clears the whole scope, and so does Publish::replaces_older.
     bool shared = false;
 };
 
@@ -115,6 +116,7 @@ struct ScopeEntry {
 struct NamespaceDecl {
     dstd::String name;
     std::uint32_t format_version = 0;
+    bool shared = false;
 };
 
 /// A namespace this process registered with Store::ns.
@@ -279,6 +281,9 @@ struct Publish {
     /// Ready only. Null, or one per path of the scope in its path order.
     const dstd::Vector<SourceStat>* sources = nullptr;
     Change change = Change::Ready;
+    /// Ready only, in a shared namespace. The new copy stands for the whole
+    /// scope, and the same record hides every older copy.
+    bool replaces_older = false;
 };
 
 /// When Store::pack rewrites a file, and how long a replaced one stays.

@@ -6,7 +6,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/file.h>
-#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -182,7 +182,7 @@ coro::CoroTask<std::size_t> stream_count(dstd::String path) {
                                              "cannot stat ", path);
     const auto size = static_cast<std::uint64_t>(st.st_size);
     const auto& schema =
-        index::detect_file_schema(path, fd, size, common::stat_mtime_ns(st));
+        index::detect_file_schema(path, *file, size, common::stat_mtime_ns(st));
     StreamCounter counter(schema.decoder == index::Decoder::Path);
 
     unsigned char magic[2] = {0, 0};
@@ -258,7 +258,7 @@ static int run_event_count(const EventCountArgParse* cli) {
     std::atomic<bool> failed{false};
 
     dstd::Vector<dstd::String> stream_items;
-    dstd::Map<dstd::String, dstd::Vector<ResolvedFile>> index_groups;
+    dstd::HashMap<dstd::String, dstd::Vector<ResolvedFile>> index_groups;
     for (auto& entry : resolve_result.cached) {
         if (force) {
             stream_items.push_back(std::move(entry.file_path));

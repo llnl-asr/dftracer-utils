@@ -6,7 +6,7 @@
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/function.h>
-#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -365,7 +365,7 @@ class Applier {
     dstd::Vector<dstd::String> arrays_;
     bool closed_ = false;
     dstd::Vector<dstd::String> extras_;
-    dstd::Optional<dstd::Map<dstd::String, dataframe::TypeId>> index_types_;
+    dstd::Optional<dstd::HashMap<dstd::String, dataframe::TypeId>> index_types_;
     dstd::Optional<dstd::Vector<SchemaLeaf>> tree_;
     std::size_t quants_ = 0;
     std::size_t lookups_ = 0;

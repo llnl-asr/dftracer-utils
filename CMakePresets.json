@@ -112,6 +112,8 @@
       "inherits": "tests",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS_DEBUG": "-Og -g",
+        "CMAKE_CXX_FLAGS_DEBUG": "-Og -g",
         "DFTRACER_UTILS_COVERAGE": "ON",
         "DFTRACER_UTILS_BUILD_STATIC": "OFF"
       }

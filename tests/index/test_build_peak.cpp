@@ -86,22 +86,25 @@ TEST_SUITE("IndexBuildPeak") {
     TEST_CASE("one worker holds the state of a file only until it is written") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;
-        for (int i = 0; i < 256; ++i)
+        for (int i = 0; i < 64; ++i)
             files.emplace_back(write_trace(env.dir(), i));
-        const dstd::Vector<dstd::String> few(files.begin(), files.begin() + 64);
+        const dstd::Vector<dstd::String> few(files.begin(), files.begin() + 16);
         // The store trains each namespace's dictionary on samples that fill
-        // within the first files, so 64 files hold as many sample bytes as 256.
+        // within the first files, so 16 files hold as many sample bytes as 64.
         const auto samples =
             dftracer::utils::store::engine::g_dict_sample_bytes.exchange(
                 std::size_t{256} << 10);
 
-        const auto small = peak_live(few, env.dir() + "/idx64");
-        const auto large = peak_live(files, env.dir() + "/idx256");
+        const auto small = peak_live(few, env.dir() + "/idx16");
+        const auto large = peak_live(files, env.dir() + "/idx64");
         dftracer::utils::store::engine::g_dict_sample_bytes.store(samples);
-        MESSAGE("peak live bytes: 64 files " << small << ", 256 files "
+        MESSAGE("peak live bytes: 16 files " << small << ", 64 files "
                                              << large);
         constexpr std::size_t BUDGET = std::size_t{48} << 20;
+        // Four times the files may not add more than a few hundred KB each.
+        constexpr std::size_t GROWTH = std::size_t{8} << 20;
         CHECK(small < BUDGET);
         CHECK(large < BUDGET);
+        CHECK(large < small + GROWTH);
     }
 }

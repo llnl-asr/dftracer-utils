@@ -345,7 +345,8 @@ dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan(
                      f.index_path.empty()
                          ? internal::determine_index_path(f.file_path, "")
                          : dstd::String(dstd::StringView(f.index_path))});
-            sides.stored[i] = index::plan::has_stored_rowsets(sides.files[i]);
+            sides.stored[i] = !detail::is_past_pin(*plan_) &&
+                              index::plan::has_stored_rowsets(sides.files[i]);
         }
         sides.views[i] = std::move(b.view);
         sides.columns[i] = std::move(b.cols);

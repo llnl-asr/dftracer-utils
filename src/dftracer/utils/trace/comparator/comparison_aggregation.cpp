@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
-#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
@@ -521,10 +520,10 @@ CollapsedMap collapse_by_group(const AggQueryResult& windows,
     order.reserve(merged.rows.size());
     for (const auto& row : merged.rows) order.push_back(&row);
     const auto text_key = [&](const AggKey& k) {
-        return dstd::Tuple(merged.text(k.cat), merged.text(k.name),
-                           merged.text(k.host), merged.text(k.extra),
-                           merged.text(k.file_text), k.kind, k.pid, k.tid,
-                           k.file, k.window);
+        return dstd::make_tuple(merged.text(k.cat), merged.text(k.name),
+                                merged.text(k.host), merged.text(k.extra),
+                                merged.text(k.file_text), k.kind, k.pid, k.tid,
+                                k.file, k.window);
     };
     std::sort(order.begin(), order.end(), [&](const auto* a, const auto* b) {
         return text_key(a->first) < text_key(b->first);
@@ -549,7 +548,7 @@ coro::CoroTask<dstd::Result<SideAggregate>> aggregate_side(
 
     AggQuery base;
     {
-        dstd::Map<dstd::String, std::size_t> root_of;
+        dstd::HashMap<dstd::String, std::size_t> root_of;
         for (const auto& f : files) {
             dstd::String root(
                 internal::determine_index_path(f, dstd::String(index_dir)));

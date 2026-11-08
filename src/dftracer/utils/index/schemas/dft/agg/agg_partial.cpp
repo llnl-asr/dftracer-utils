@@ -188,7 +188,15 @@ void DistinctIds::insert(std::uint64_t id) {
         sketch_->add_hash(mix(id));
         return;
     }
-    list_.insert(it, id);
+    const std::ptrdiff_t at = it - list_.begin();
+    // Grow in three steps up to the cap, not one per doubling.
+    if (list_.size() == list_.capacity())
+        list_.reserve(list_.size() < DISTINCT_EXACT_CAPACITY / 16
+                          ? DISTINCT_EXACT_CAPACITY / 16
+                      : list_.size() < DISTINCT_EXACT_CAPACITY / 4
+                          ? DISTINCT_EXACT_CAPACITY / 4
+                          : DISTINCT_EXACT_CAPACITY);
+    list_.insert(list_.begin() + at, id);
 }
 
 void DistinctIds::merge(const DistinctIds& other) {

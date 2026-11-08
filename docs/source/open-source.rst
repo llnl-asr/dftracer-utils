@@ -56,9 +56,6 @@ Runtime dependencies
    * - unordered_dense
      - ``MIT``
      - https://github.com/martinus/unordered_dense
-   * - tl::expected
-     - ``CC0-1.0``
-     - https://github.com/TartanLlama/expected
    * - PCRE2
      - ``BSD-3-Clause WITH PCRE2-exception``
      - https://github.com/PCRE2Project/pcre2
@@ -71,11 +68,10 @@ prefilters raw lines. Vectorscan is built unless you configure with
 ``-DDFTRACER_UTILS_ENABLE_VECTORSCAN=OFF``, and it needs ``ragel`` at build
 time.
 
-Three of these rows are vendored single headers: moodycamel concurrentqueue,
-unordered_dense and tl::expected. Their full text, unchanged apart from one
-provenance line, is in ``include/dftracer/utils/dstd/vendor/`` as
-``concurrentqueue.h``, ``unordered_dense.h`` and ``expected.hpp``, and it
-installs with the rest of ``include/``, so a plugin built from a source checkout
+Two of these rows are vendored single headers: moodycamel concurrentqueue and
+unordered_dense. Their full text, unchanged apart from one provenance line, is
+in ``include/dftracer/utils/dstd/vendor/`` as ``concurrentqueue.h`` and
+``unordered_dense.h``, and it installs with the rest of ``include/``, so a plugin built from a source checkout
 and a plugin built against an install prefix see the same headers. The vendored
 concurrentqueue carries the thread-exit unsubscribe fix upstream has not taken;
 its first line names the upstream commit.

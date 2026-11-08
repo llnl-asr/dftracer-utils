@@ -6,7 +6,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
-#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -161,7 +161,7 @@ struct GzipLineWriter::Impl {
     dstd::Vector<std::size_t> free_slots;
 
     std::mutex mu;
-    dstd::Map<std::uint64_t, Done> ready;
+    dstd::HashMap<std::uint64_t, Done> ready;
     std::uint64_t next_write = 0;
     dstd::Optional<dstd::Error> error;
     dstd::Vector<dstd::UniquePtr<compress::GzipMemberCompressor>> pool;

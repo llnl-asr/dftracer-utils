@@ -818,7 +818,7 @@ TEST_CASE("kernels run across evaluation chunks") {
     constexpr std::int64_t N = 200000;
     Opt<std::int64_t> a, b;
     for (std::int64_t i = 0; i < N; ++i) {
-        a.emplace_back(i % 7 == 0 ? dstd::nullopt : dstd::Optional(-i));
+        a.emplace_back(i % 7 == 0 ? dstd::nullopt : dstd::make_optional(-i));
         b.emplace_back(i % 5);
     }
     const Series sa = ints(a);

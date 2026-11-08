@@ -43,18 +43,17 @@ void fill(const Block& b) {
     }
 }
 
+// Every byte equals the tag when the first does and each equals the next. libc
+// memcmp keeps an unoptimized coverage build from counting each byte.
+bool all_tag(const unsigned char* c, std::size_t n, unsigned char tag) {
+    return n == 0 || (c[0] == tag && std::memcmp(c, c + 1, n - 1) == 0);
+}
+
 bool intact(const Block& b) {
     auto* c = static_cast<const unsigned char*>(b.p);
-    std::size_t head = b.size <= MIB ? b.size : SAMPLE;
-    for (std::size_t i = 0; i < head; ++i) {
-        if (c[i] != b.tag) return false;
-    }
-    if (b.size > MIB) {
-        for (std::size_t i = b.size - SAMPLE; i < b.size; ++i) {
-            if (c[i] != b.tag) return false;
-        }
-    }
-    return true;
+    if (b.size <= MIB) return all_tag(c, b.size, b.tag);
+    return all_tag(c, SAMPLE, b.tag) &&
+           all_tag(c + b.size - SAMPLE, SAMPLE, b.tag);
 }
 
 std::size_t random_size(std::mt19937_64& rng) {

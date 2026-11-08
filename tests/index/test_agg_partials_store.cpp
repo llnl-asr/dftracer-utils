@@ -594,6 +594,35 @@ TEST_SUITE("AggPartialsStore") {
             check_rows(agg_rows(f, through), agg_rows(f, fresh));
     }
 
+    TEST_CASE("a file that grew by members has the rows of a fresh build") {
+        dftu_utils_test::TestEnvironment env(10);
+        dstd::Map<Key, dstd::Vector<double>> durations;
+        const dstd::String file = write_trace(env.dir(), 0, durations);
+        const dstd::String tail = write_trace(env.dir(), 1, durations);
+        const auto index_dir = index_dir_of(env);
+        build_seconds({file}, index_dir);
+
+        const auto added =
+            common::unwrap(dstd::fs::read_file(dstd::PathView(tail)));
+        REQUIRE(dstd::fs::append_file(dstd::PathView(file), added));
+        build_seconds({file}, index_dir);
+        const dstd::String fresh = env.dir() + "/fresh";
+        build_seconds({file}, fresh);
+
+        const auto index_path = dstd::String(
+            trace::internal::determine_index_path(file, index_dir));
+        const auto snapshot = open_index(index_path);
+        const auto stored = file_of(snapshot, file);
+        const auto span_count =
+            common::unwrap(index::spans(snapshot, stored)).size();
+        auto dictionary = schemas::dft::agg::make_intern_table();
+        common::unwrap(index::agg_dictionary(snapshot, *dictionary));
+        const auto partials = read_partials(snapshot, stored, *dictionary);
+        REQUIRE(!partials.chunks.empty());
+        CHECK(*partials.chunks.rbegin() < span_count);
+        check_rows(agg_rows(file, index_dir), agg_rows(file, fresh));
+    }
+
     // A build killed after it staged rows of a changed file leaves each file
     // with its old rows or its new rows whole, and the next build ends well.
     TEST_CASE("a build killed while it writes through leaves whole rows") {

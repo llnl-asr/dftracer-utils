@@ -538,8 +538,8 @@ bool is_append_of(dstd::StringView path, std::uint64_t size,
     if (size <= stored.size) return false;
     auto file = dstd::File::open(dstd::PathView(path), {});
     if (!file) return false;
-    return store::internal::calculate_file_hash(file->native_handle(),
-                                                stored.size) == stored.hash;
+    return store::internal::calculate_file_hash(*file, stored.size) ==
+           stored.hash;
 }
 
 Freshness Snapshot::freshness(dstd::StringView path,

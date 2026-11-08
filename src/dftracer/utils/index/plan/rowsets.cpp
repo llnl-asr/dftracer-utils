@@ -59,8 +59,8 @@ static dstd::Optional<FileRef> current_file(const Snapshot& snapshot,
 
 static SchemaDetection explain_trace_schema(const RowSetFile& f) {
     common::InputFileStat st;
-    if (f.fd >= 0 && common::stat_input(f.trace, st))
-        return explain_file_schema(f.trace, f.fd, st.size, st.mtime_ns);
+    if (f.file && common::stat_input(f.trace, st))
+        return explain_file_schema(f.trace, *f.file, st.size, st.mtime_ns);
     return explain_file_schema(f.trace);
 }
 

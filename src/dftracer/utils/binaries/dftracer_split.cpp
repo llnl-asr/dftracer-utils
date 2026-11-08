@@ -307,11 +307,11 @@ class ProbeStage {
             co_return probe;
         }
         dstd::File sfd = std::move(*opened);
-        struct stat st;
-        if (::fstat(sfd.native_handle(), &st) != 0 || st.st_size == 0) {
+        const auto size = sfd.size();
+        if (!size || *size == 0) {
             co_return probe;
         }
-        probe.bytes = static_cast<std::uint64_t>(st.st_size);
+        probe.bytes = *size;
         const utilities::fileio::compress::FirstMember first =
             co_await utilities::fileio::compress::gzip_first_member(
                 sfd.native_handle(), probe.bytes,

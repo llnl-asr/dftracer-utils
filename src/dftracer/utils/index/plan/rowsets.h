@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -23,9 +24,9 @@ const RecordSchema* recorded_schema(const Snapshot& snapshot,
 struct RowSetFile {
     dstd::String trace;
     dstd::String index;
-    /// An open descriptor of `trace` the caller owns, or -1. A schema probe
+    /// An open `trace` the caller owns and keeps open, or null. A schema probe
     /// reads through it instead of opening the file.
-    int fd = -1;
+    const dstd::File* file = nullptr;
 };
 
 /// The record schema of `files`: each one's recorded schema, or the detected

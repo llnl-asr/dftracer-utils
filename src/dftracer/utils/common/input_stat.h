@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_COMMON_INPUT_STAT_H
 
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -36,21 +37,15 @@ inline std::int64_t stat_mtime_ns(const struct stat& st) {
            static_cast<std::int64_t>(ts.tv_nsec);
 }
 
-inline InputFileStat input_file_stat_from(const struct stat& st) {
-    InputFileStat out;
-    out.size = static_cast<std::uint64_t>(st.st_size);
-    out.mtime = static_cast<std::int64_t>(st.st_mtime);
-    out.mtime_ns = stat_mtime_ns(st);
-    out.is_directory = S_ISDIR(st.st_mode);
-    out.is_regular_file = S_ISREG(st.st_mode);
-    return out;
-}
-
 /// One stat of `path`. Returns false when the path cannot be stat'ed.
 inline bool stat_path(const char* path, InputFileStat& out) {
-    struct stat st{};
-    if (::stat(path, &st) != 0) return false;
-    out = input_file_stat_from(st);
+    const auto st = dstd::fs::stat(dstd::PathView(path));
+    if (!st) return false;
+    out.size = st->size;
+    out.mtime_ns = static_cast<std::int64_t>(st->mtime_ns);
+    out.mtime = out.mtime_ns / 1000000000;
+    out.is_directory = st->kind == dstd::fs::FileKind::Directory;
+    out.is_regular_file = st->kind == dstd::fs::FileKind::File;
     return true;
 }
 

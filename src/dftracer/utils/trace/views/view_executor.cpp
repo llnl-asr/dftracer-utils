@@ -187,8 +187,8 @@ coro::CoroTask<void> build_bootstrap_artifacts(
     coro::Scope& scope, dstd::String file,
     dftracer::utils::index::gzip::CheckpointIndexer::VisitorList visitors,
     dftracer::utils::index::gzip::GzipBuildArtifacts* arts, bool* ok,
-    std::size_t ways, dstd::SharedPtr<dstd::ScopedFd> source) {
-    const int fd = source->get();
+    std::size_t ways, dstd::SharedPtr<dstd::File> source) {
+    const int fd = source->native_handle();
     if (fd < 0) co_return;
     auto built =
         co_await dftracer::utils::index::gzip::build_gzip_index_artifacts(
@@ -205,29 +205,29 @@ coro::CoroTask<void> build_bootstrap_artifacts(
 // The file's descriptor, its size and its hash: the build needs them before
 // the folds run, and the artifacts read the same descriptor.
 struct BootstrapSource {
-    dstd::SharedPtr<dstd::ScopedFd> fd;
+    dstd::SharedPtr<dstd::File> fd;
     std::uint64_t size = 0;
     std::uint64_t hash = 0;
     bool ok = false;
 };
 
 BootstrapSource open_bootstrap_source(dstd::StringView file,
-                                      dstd::SharedPtr<dstd::ScopedFd> shared) {
+                                      dstd::SharedPtr<dstd::File> shared) {
     // A region, not an async op: a task that resumes on another worker frees
     // its memory away from the owning heap, and the view's peak grows.
     coro::BlockingRegion blocking;
     BootstrapSource out;
-    if (!shared)
-        shared = dstd::make_shared<dstd::ScopedFd>(
-            ::open(dstd::String(file).c_str(), O_RDONLY));
-    const int fd = shared->get();
-    if (fd < 0) return out;
-    struct stat st{};
-    if (::fstat(fd, &st) != 0) return out;
+    if (!shared) {
+        auto opened = dstd::File::open(dstd::PathView(file), {});
+        if (!opened) return out;
+        shared = dstd::make_shared<dstd::File>(std::move(*opened));
+    }
+    const auto size = shared->size();
+    if (!size) return out;
     out.fd = std::move(shared);
-    out.size = static_cast<std::uint64_t>(st.st_size);
+    out.size = *size;
     out.hash = dftracer::utils::index::store::internal::calculate_file_hash(
-        fd, out.size);
+        *out.fd, out.size);
     out.ok = true;
     return out;
 }
@@ -730,12 +730,15 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     if (f.uncompressed_size == 0) {
         // A file never indexed has no size in the index.
         coro::BlockingRegion blocking;
-        if (!f.fd)
-            f.fd = dstd::make_shared<dstd::ScopedFd>(
-                ::open(f.file_path.c_str(), O_RDONLY));
-        struct stat st{};
-        if (f.fd->get() >= 0 && ::fstat(f.fd->get(), &st) == 0)
-            compressed = static_cast<std::uint64_t>(st.st_size);
+        if (!f.fd) {
+            auto opened = dstd::File::open(dstd::PathView(f.file_path), {});
+            if (opened)
+                f.fd = dstd::make_shared<dstd::File>(std::move(*opened));
+        }
+        if (f.fd) {
+            const auto size = f.fd->size();
+            if (size) compressed = *size;
+        }
     }
     const std::uint64_t plaintext =
         dftracer::utils::index::build::FileAdmission::plaintext_estimate(

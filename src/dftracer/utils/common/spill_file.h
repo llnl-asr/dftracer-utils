@@ -39,8 +39,8 @@ class SpillFile {
     dstd::Result<void> write_at(std::uint64_t offset, const void* data,
                                 std::size_t n);
 
-    /// The descriptor, for a caller that maps the file.
-    int fd() const noexcept { return fd_.native_handle(); }
+    /// The open file, for a caller that resizes or maps it.
+    const dstd::File& file() const noexcept { return file_; }
 
     /// Reads exactly `n` bytes at `offset`. IO error on a short read.
     dstd::Result<void> read(std::uint64_t offset, void* out,
@@ -57,7 +57,7 @@ class SpillFile {
     SpillFile(Key, bool in_memory) : charge_(in_memory) {}
 
    private:
-    dstd::File fd_;
+    dstd::File file_;
     std::atomic<std::uint64_t> end_{0};
     SpillCharge charge_;
 };

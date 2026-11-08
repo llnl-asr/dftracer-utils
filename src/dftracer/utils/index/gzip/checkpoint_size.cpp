@@ -4,12 +4,10 @@
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <cinttypes>
@@ -18,55 +16,68 @@
 using namespace dftracer::utils;
 
 // GZIP header parsing utilities
-static bool read_gzip_magic(int fd) {
+static bool read_gzip_magic(const dstd::File& file) {
     unsigned char h[3];
-    if (::pread(fd, h, 3, 0) != 3) return false;
+    const auto n = file.read_at(0, dstd::Span<std::uint8_t>(h, 3));
+    if (!n || *n != 3) return false;
     return h[0] == 0x1F && h[1] == 0x8B && h[2] == 0x08;
 }
 
 // Read GZIP ISIZE from last 4 bytes (uncompressed size modulo 2^32)
-static bool read_isize_last4(int fd, uint32_t& out) {
-    off_t end = ::lseek(fd, -4, SEEK_END);
-    if (end < 0) return false;
+static bool read_isize_last4(const dstd::File& file, uint32_t& out) {
+    const auto size = file.size();
+    if (!size || *size < 4) return false;
     unsigned char b[4]{};
-    if (::pread(fd, b, 4, end) != 4) return false;
+    const auto n = file.read_at(*size - 4, dstd::Span<std::uint8_t>(b, 4));
+    if (!n || *n != 4) return false;
     out = dftracer::utils::dstd::read_u32_le(b);
     return true;
 }
 
 // Check if GZIP file contains multiple members (concatenated archives)
-static bool likely_multiple_members(int fd) {
+static bool likely_multiple_members(const dstd::File& file) {
     constexpr std::size_t BUF = 64 * 1024;
     unsigned char buf[BUF];
-    off_t offset = 10;
+    std::uint64_t offset = 10;
     while (true) {
-        ssize_t n = ::pread(fd, buf, BUF, offset);
-        if (n <= 0) break;
-        for (ssize_t i = 0; i + 2 < n; ++i)
+        const auto got =
+            file.read_at(offset, dstd::Span<std::uint8_t>(buf, BUF));
+        if (!got || *got == 0) break;
+        const std::size_t n = *got;
+        for (std::size_t i = 0; i + 2 < n; ++i)
             if (buf[i] == 0x1F && buf[i + 1] == 0x8B && buf[i + 2] == 0x08)
                 return true;
         offset += n;
-        if (static_cast<std::size_t>(n) < BUF) break;
+        if (n < BUF) break;
     }
     return false;
 }
+// Reads one byte at `pos`; false at the end of the file or on error.
+static bool read_byte_at(const dstd::File& file, std::uint64_t pos,
+                         unsigned char& out) {
+    const auto n = file.read_at(pos, dstd::Span<std::uint8_t>(&out, 1));
+    return n && *n == 1;
+}
+
 // Extract filename from GZIP header (if present)
-static dstd::String read_gzip_fname(int fd) {
+static dstd::String read_gzip_fname(const dstd::File& file) {
     unsigned char fixed[10];
-    if (::pread(fd, fixed, 10, 0) != 10) return {};
+    const auto head = file.read_at(0, dstd::Span<std::uint8_t>(fixed, 10));
+    if (!head || *head != 10) return {};
     if (!(fixed[0] == 0x1F && fixed[1] == 0x8B && fixed[2] == 0x08)) return {};
     unsigned char flg = fixed[3];
-    off_t pos = 10;
+    std::uint64_t pos = 10;
     if (flg & 0x04) {
         unsigned char x[2];
-        if (::pread(fd, x, 2, pos) != 2) return {};
+        const auto n = file.read_at(pos, dstd::Span<std::uint8_t>(x, 2));
+        if (!n || *n != 2) return {};
         auto xlen = dftracer::utils::dstd::read_u16_le(x);
         pos += 2 + xlen;
     }
     dstd::String name;
     if (flg & 0x08) {
         unsigned char c;
-        while (::pread(fd, &c, 1, pos) == 1 && c != 0) {
+        while (read_byte_at(file, pos, c) && c != 0) {
             name.push_back(static_cast<char>(c));
             ++pos;
         }
@@ -74,7 +85,7 @@ static dstd::String read_gzip_fname(int fd) {
     } else {
         if (flg & 0x10) {
             unsigned char c;
-            while (::pread(fd, &c, 1, pos) == 1 && c != 0) {
+            while (read_byte_at(file, pos, c) && c != 0) {
                 ++pos;
             }
             ++pos;
@@ -177,13 +188,12 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
 
     auto file = dstd::File::open(dstd::PathView(path), {});
     if (file) {
-        const int fd = file->native_handle();
-        if (read_gzip_magic(fd)) {
+        if (read_gzip_magic(*file)) {
             uint32_t isize = 0;
-            bool has_isize = read_isize_last4(fd, isize);
+            bool has_isize = read_isize_last4(*file, isize);
             bool multi = false;
             if (has_isize) {
-                multi = likely_multiple_members(fd);
+                multi = likely_multiple_members(*file);
             }
             if (has_isize && !multi && isize > 0) {
                 U = (std::size_t)isize;
@@ -192,7 +202,7 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
             }
             if (U == 0) {
                 // The size only picks a checkpoint size, never the results.
-                dstd::String fname = read_gzip_fname(fd);
+                dstd::String fname = read_gzip_fname(*file);
                 double ratio = guess_text_ratio_from_ext(fname);
                 DFTRACER_UTILS_LOG_DEBUG(
                     "checkpoint size: %s has no usable uncompressed size, "

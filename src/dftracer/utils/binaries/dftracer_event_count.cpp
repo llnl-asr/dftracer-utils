@@ -182,7 +182,7 @@ coro::CoroTask<std::size_t> stream_count(dstd::String path) {
                                              "cannot stat ", path);
     const auto size = static_cast<std::uint64_t>(st.st_size);
     const auto& schema =
-        index::detect_file_schema(path, fd, size, common::stat_mtime_ns(st));
+        index::detect_file_schema(path, *file, size, common::stat_mtime_ns(st));
     StreamCounter counter(schema.decoder == index::Decoder::Path);
 
     unsigned char magic[2] = {0, 0};

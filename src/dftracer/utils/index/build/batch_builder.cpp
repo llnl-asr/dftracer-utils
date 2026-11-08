@@ -266,7 +266,8 @@ static coro::CoroTask<void> parse_and_write_worker(
                         (checkpoint_size == 0 ||
                          stored->checkpoint_size == checkpoint_size) &&
                         index::store::internal::calculate_file_hash(
-                            fd, known->stat().size) == known->stat().hash) {
+                            *input_fd, known->stat().size) ==
+                            known->stat().hash) {
                         is_appending = stored->next_member_idx > 0;
                     }
                 }
@@ -291,7 +292,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                     pf.file_size = new_members.c_end;
                 }
                 pf.file_hash = index::store::internal::calculate_file_hash(
-                    fd, pf.file_size);
+                    *input_fd, pf.file_size);
                 job.identity = pf;
                 // The build exists before the folds, so one that spills
                 // writes its runs into the file it is parsing.
@@ -308,7 +309,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                     const auto s0 = std::chrono::steady_clock::now();
                     const index::RecordSchema& schema =
                         admission->schema.empty()
-                            ? index::detect_file_schema(pf.file_path, fd,
+                            ? index::detect_file_schema(pf.file_path, *input_fd,
                                                         pf.file_size,
                                                         pf.file_mtime_ns)
                             : index::get_schema(admission->schema);

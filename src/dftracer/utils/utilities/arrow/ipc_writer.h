@@ -7,6 +7,7 @@
 
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -125,10 +126,10 @@ class IpcWriter {
     coro::CoroTask<int> write_batch(ArrowExportResult& batch);
     coro::CoroTask<int> close();
 
-    bool is_open() const noexcept { return fd_ >= 0; }
+    bool is_open() const noexcept { return file_.is_open(); }
 
    private:
-    int fd_ = -1;
+    dstd::File file_;
     off_t write_offset_ = 0;
     BufferPool buffer_pool_;
     bool schema_written_ = false;

@@ -60,7 +60,7 @@ const dftracer::utils::index::RecordSchema& plan_record_schema(
     for (const auto& f : plan.files)
         files.push_back({dstd::String(dstd::StringView(f.file_path)),
                          dstd::String(dstd::StringView(f.index_path)),
-                         f.fd ? f.fd->get() : -1});
+                         f.fd.get()});
     const index::RecordSchema* found = &index::plan::files_schema(files);
     // Registered record_schemas live until the process exits, so the pointer
     // never dangles.

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
-#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -18,12 +18,10 @@
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_plan.h>
-#include <fcntl.h>
 #include <simdjson.h>
-#include <sys/file.h>
-#include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -304,9 +302,17 @@ std::int64_t last_used(dstd::StringView dir) {
 
 void touch_last_used(dstd::StringView dir) {
     const dstd::Path path = dstd::PathView(dir) / LAST_USED_NAME;
-    dstd::ScopedFd fd(
-        ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0666));
-    if (fd.valid()) ::futimens(fd.get(), nullptr);
+    auto file =
+        dstd::File::open(path.view(), {.access = dstd::Access::Write,
+                                       .creation = dstd::Creation::IfNeeded,
+                                       .mode = 0666});
+    if (!file) return;
+    (void)file->close();
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    (void)dstd::fs::set_mtime_ns(
+        path.view(),
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()));
 }
 
 // Removes the least recently used views under `root` until they hold at most
@@ -490,14 +496,14 @@ dstd::File lock_view_dir(dstd::StringView dir) {
         dstd::File::open(path.view(), {.access = dstd::Access::ReadWrite,
                                        .creation = dstd::Creation::IfNeeded});
     if (!file) return {};
-    if (::flock(file->native_handle(), LOCK_EX | LOCK_NB) != 0)
-        return {};            // another builder holds it
-    return std::move(*file);  // released by unlock_view_dir
+    const auto locked = file->try_lock();
+    if (!locked || !*locked) return {};  // another builder holds it
+    return std::move(*file);             // released by unlock_view_dir
 }
 
 void unlock_view_dir(dstd::File& lock) {
     if (!lock.is_open()) return;
-    ::flock(lock.native_handle(), LOCK_UN);
+    (void)lock.unlock();
     (void)lock.close();
 }
 

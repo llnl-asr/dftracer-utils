@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/memory/detail/heap.h>
@@ -14,6 +15,10 @@ namespace dftracer::utils::runtime::io {
 namespace {
 // How long an I/O thread waits for work before it gives back its idle pages.
 constexpr std::chrono::milliseconds IDLE_TRIM_AFTER{50};
+
+[[noreturn]] void fail_spawn(const dstd::Error& error) {
+    dstd::fatal("I/O thread pool: cannot start a thread", error.c_str());
+}
 }  // namespace
 
 IoThreadPool::IoThreadPool(std::size_t thread_count, unsigned batch_threshold,
@@ -25,16 +30,20 @@ IoThreadPool::IoThreadPool(std::size_t thread_count, unsigned batch_threshold,
 
 IoThreadPool::~IoThreadPool() { stop(); }
 
-void IoThreadPool::start() {
+dstd::Result<void> IoThreadPool::start() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (running_.load()) return;
+    if (running_.load()) return {};
     cancelling_.store(false, std::memory_order_release);
     running_ = true;
     const std::size_t count =
         eager_ ? thread_count_.load(std::memory_order_acquire) : 1;
     threads_.reserve(count);
-    for (std::size_t i = 0; i < count; ++i)
-        if (!spawn_locked()) break;
+    for (std::size_t i = 0; i < count; ++i) {
+        auto spawned = spawn_locked();
+        if (!spawned) return dstd::Unexpected<dstd::Error>(spawned.error());
+        if (!*spawned) break;
+    }
+    return {};
 }
 
 void IoThreadPool::grow(std::size_t threads, bool eager) {
@@ -46,19 +55,21 @@ void IoThreadPool::grow(std::size_t threads, bool eager) {
         thread_count_.store(threads, std::memory_order_release);
     if (!eager_ || !running_.load()) return;
     const std::size_t cap = thread_count_.load(std::memory_order_acquire);
-    while (live_.load(std::memory_order_relaxed) < cap)
-        if (!spawn_locked()) break;
+    while (live_.load(std::memory_order_relaxed) < cap) {
+        auto spawned = spawn_locked();
+        if (!spawned) fail_spawn(spawned.error());
+        if (!*spawned) break;
+    }
 }
 
-bool IoThreadPool::spawn_locked() {
+dstd::Result<bool> IoThreadPool::spawn_locked() {
     reap_locked();
     auto started = dstd::Thread::try_start([this] { worker_loop(); });
     if (!started) {
         // A pool with a thread still runs the queue, only slower.
         if (live_.load(std::memory_order_relaxed) == 0) {
-            const dstd::String message(started.error().message());
-            throw common::DFTUtilsException(common::ErrorCode::Internal,
-                                            message.c_str());
+            return common::make_error(common::ErrorCode::Internal,
+                                      started.error().message());
         }
         if (!spawn_warned_) {
             spawn_warned_ = true;
@@ -110,7 +121,9 @@ void IoThreadPool::submit(dstd::Function<void()> fn) {
             queue_.size() > idle_ &&
             live_.load(std::memory_order_relaxed) <
                 thread_count_.load(std::memory_order_relaxed))
-            spawn_locked();
+            if (auto spawned = spawn_locked(); !spawned) {
+                fail_spawn(spawned.error());
+            }
         const unsigned unflushed =
             unflushed_count_.load(std::memory_order_relaxed) + 1;
         if (unflushed >= batch_threshold_) {

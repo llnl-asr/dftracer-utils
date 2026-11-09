@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
@@ -283,7 +284,7 @@ void peer_read_done(IoOp& op) noexcept {
 class CountingBackend final : public runtime::io::IoBackend {
    public:
     explicit CountingBackend(std::atomic<int>& ops) : ops_(ops) {}
-    void start() override {}
+    dstd::Result<void> start() override { return {}; }
     void stop() override {}
     void submit(IoOp& op) override {
         ops_.fetch_add(1, std::memory_order_relaxed);
@@ -1628,7 +1629,7 @@ void fill_pipe(int write_fd) {
 // The op waits on its output end, so only a cancel can end it.
 void check_ends_on_cancel(IoOp& op) {
     runtime::io::ThreadPoolBackend pool(1);
-    pool.start();
+    REQUIRE(pool.start().has_value());
     g_cancelled_op_ended.store(false, std::memory_order_release);
     op.complete = &note_cancelled_op_end;
     pool.submit(op);

@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shutdown.h>
@@ -54,6 +55,13 @@ std::size_t resolve_io_threads(std::size_t requested, std::size_t workers) {
     }
     return requested == 0 ? workers : requested;
 }
+
+// A Runtime constructor has no way to report failure, so a runtime that cannot
+// start ends the process here, with the cause.
+void start_or_fatal(TaskExecutor& executor) {
+    auto started = executor.start();
+    if (!started) dstd::fatal("runtime: cannot start", started.error().c_str());
+}
 }  // namespace
 
 Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
@@ -63,7 +71,7 @@ Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
     config.io_pool_size = resolve_io_threads(
         config.io_pool_size, threads_.load(std::memory_order_relaxed));
     executor_ = make_task_executor(config);
-    executor_->start();
+    start_or_fatal(*executor_);
 
     watchdog_ = dstd::make_unique<Watchdog>();
     watchdog_->set_executor(executor_.get());
@@ -79,7 +87,7 @@ Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
     cfg.io_pool_size = resolve_io_threads(
         config.io_pool_size, threads_.load(std::memory_order_relaxed));
     executor_ = make_task_executor(cfg);
-    executor_->start();
+    start_or_fatal(*executor_);
 
     if (enable_watchdog) {
         watchdog_ = dstd::make_unique<Watchdog>();
@@ -97,7 +105,7 @@ Runtime::Runtime(const ExecutorConfig& config,
     cfg.io_pool_size = resolve_io_threads(
         config.io_pool_size, threads_.load(std::memory_order_relaxed));
     executor_ = make_task_executor(cfg);
-    executor_->start();
+    start_or_fatal(*executor_);
 
     watchdog_ = std::move(watchdog);
     if (watchdog_) {
@@ -202,22 +210,26 @@ ExecutorProgress Runtime::progress() const { return executor_->progress(); }
 
 bool Runtime::is_responsive() const { return executor_->is_responsive(); }
 
-void Runtime::set_global_timeout(std::chrono::milliseconds timeout) {
+dstd::Result<void> Runtime::set_global_timeout(
+    std::chrono::milliseconds timeout) {
     if (!watchdog_) {
-        throw common::DFTUtilsException(
+        return common::make_error(
             common::ErrorCode::Pipeline,
             "Cannot set timeout: Runtime created without watchdog");
     }
     watchdog_->set_global_timeout(timeout);
+    return {};
 }
 
-void Runtime::set_default_task_timeout(std::chrono::milliseconds timeout) {
+dstd::Result<void> Runtime::set_default_task_timeout(
+    std::chrono::milliseconds timeout) {
     if (!watchdog_) {
-        throw common::DFTUtilsException(
+        return common::make_error(
             common::ErrorCode::Pipeline,
             "Cannot set timeout: Runtime created without watchdog");
     }
     watchdog_->set_default_task_timeout(timeout);
+    return {};
 }
 
 void Runtime::shutdown() {

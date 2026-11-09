@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/backend_type.h>
@@ -138,7 +139,9 @@ struct ExecutorProgress {
  */
 class TaskExecutor : public coro::Executor {
    public:
-    virtual void start() = 0;
+    /// Fails when the executor cannot get what it needs to run, such as an
+    /// I/O backend.
+    virtual dstd::Result<void> start() = 0;
     virtual void shutdown() = 0;
 
     /// Records tracked task @p id as running on the calling worker. Called

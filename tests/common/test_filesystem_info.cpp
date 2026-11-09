@@ -93,7 +93,8 @@ TEST_CASE("publish_path moves a built directory to its destination") {
     }
 
     const dstd::String dst = dstd::String(s.dir().str()) + "/published";
-    common::publish_path(dstd::PathView(src), dstd::PathView(dst));
+    CHECK(common::publish_path(dstd::PathView(src), dstd::PathView(dst))
+              .has_value());
 
     CHECK_FALSE(dstd::fs::exists(src).value());
     CHECK(dstd::fs::exists(dst + "/marker.txt").value());

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -197,8 +198,10 @@ class Runtime {
     ExecutorProgress progress() const;
     bool is_responsive() const;
 
-    void set_global_timeout(std::chrono::milliseconds timeout);
-    void set_default_task_timeout(std::chrono::milliseconds timeout);
+    /// Both fail with Pipeline when the runtime was made without a watchdog.
+    dstd::Result<void> set_global_timeout(std::chrono::milliseconds timeout);
+    dstd::Result<void> set_default_task_timeout(
+        std::chrono::milliseconds timeout);
 
     /// Stops the executor. A no-op on the process runtime, which only the
     /// shutdown hooks stop.

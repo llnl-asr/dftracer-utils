@@ -7,21 +7,16 @@
 
 namespace dftracer::utils::common {
 
-InternRef InternTable::create() {
+dstd::Result<InternRef> InternTable::create() {
     auto handle =
         memory::root_pool().child("intern", memory::PoolKind::Results);
     if (!handle) {
-        throw DFTUtilsException(ErrorCode::MemoryBudgetExceeded,
-                                "intern table: the pool table is full");
+        return make_error(ErrorCode::MemoryBudgetExceeded,
+                          "intern table: the pool table is full");
     }
     void* mem = memory::detail::allocate(sizeof(InternTable),
                                          alignof(InternTable), *handle);
-    try {
-        return InternRef::adopt(new (mem) InternTable(std::move(handle)));
-    } catch (...) {
-        memory::detail::deallocate(mem, sizeof(InternTable));
-        throw;
-    }
+    return InternRef::adopt(new (mem) InternTable(std::move(handle)));
 }
 
 void InternTable::release() noexcept {

@@ -8,7 +8,7 @@ ThreadPoolBackend::ThreadPoolBackend(std::size_t pool_size,
                                      IoPoolOptions pool_options)
     : ThreadPoolFileOps(pool_size, batch_threshold, pool_options) {}
 
-void ThreadPoolBackend::start() { pool_.start(); }
+dstd::Result<void> ThreadPoolBackend::start() { return pool_.start(); }
 void ThreadPoolBackend::stop() { pool_.stop(); }
 
 dstd::String ThreadPoolBackend::name() const { return "threadpool"; }

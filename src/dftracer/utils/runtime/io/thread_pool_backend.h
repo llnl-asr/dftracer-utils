@@ -19,7 +19,7 @@ class ThreadPoolBackend : public ThreadPoolFileOps {
                                unsigned batch_threshold = 0,
                                IoPoolOptions pool_options = {});
 
-    void start() override;
+    dstd::Result<void> start() override;
     void stop() override;
     dstd::String name() const override;
 };

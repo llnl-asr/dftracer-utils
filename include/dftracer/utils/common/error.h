@@ -178,10 +178,14 @@ class DFTUtilsException : public std::exception {
     dstd::Error error_;
 };
 
+/// Throws @ref DFTUtilsException with `error`. Defined in a source built with
+/// exceptions, so a header that calls it holds no `throw`.
+[[noreturn]] void throw_error(const dstd::Error& error);
+
 /// The value of `r`, or throws @ref DFTUtilsException with its error.
 template <typename T>
 T unwrap(dstd::Result<T>&& r) {
-    if (!r) throw DFTUtilsException(r.error());
+    if (!r) throw_error(r.error());
     if constexpr (!std::is_void_v<T>) return std::move(*r);
 }
 

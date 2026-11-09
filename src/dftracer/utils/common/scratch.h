@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -72,8 +73,8 @@ dstd::Optional<ScratchSession> staged_build_scratch(
 
 /// Move `src` (a directory or file built on scratch) to `dst`, replacing any
 /// existing `dst`. Renames when both live on one filesystem, else recursively
-/// copies then removes `src`. Throws @ref DFTUtilsException on failure.
-void publish_path(dstd::PathView src, dstd::PathView dst);
+/// copies then removes `src`. Fails with Io when the copy fails.
+dstd::Result<void> publish_path(dstd::PathView src, dstd::PathView dst);
 
 }  // namespace dftracer::utils::common
 

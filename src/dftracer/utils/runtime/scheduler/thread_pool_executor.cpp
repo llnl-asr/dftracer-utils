@@ -65,10 +65,10 @@ ThreadPoolExecutor::~ThreadPoolExecutor() {
         std::this_thread::yield();
 }
 
-void ThreadPoolExecutor::start() {
+dstd::Result<void> ThreadPoolExecutor::start() {
     if (running_) {
         DFTRACER_UTILS_LOG_WARN("%s", "Executor already running");
-        return;
+        return {};
     }
     coro::detail::install_monitor_from_env();
 
@@ -87,12 +87,25 @@ void ThreadPoolExecutor::start() {
 
     // Create and start I/O backend before workers so workers
     // can use it immediately.
-    io_backend_ = io_backend_factory_ != nullptr
-                      ? io_backend_factory_(io_backend_context_)
-                      : runtime::io::make_io_backend(
-                            io_pool_size_.load(), io_backend_type_,
-                            io_batch_threshold_, {eager_.load(), keepalive_});
-    io_backend_->start();
+    if (io_backend_factory_ != nullptr) {
+        io_backend_ = io_backend_factory_(io_backend_context_);
+    } else {
+        auto made = runtime::io::make_io_backend(
+            io_pool_size_.load(), io_backend_type_, io_batch_threshold_,
+            {eager_.load(), keepalive_});
+        if (!made) {
+            timer_service_.stop();
+            running_ = false;
+            return dstd::Unexpected<dstd::Error>(made.error());
+        }
+        io_backend_ = std::move(*made);
+    }
+    if (auto started = io_backend_->start(); !started) {
+        io_backend_.reset();
+        timer_service_.stop();
+        running_ = false;
+        return started;
+    }
 
     // Spawn the floor (== the cap in eager mode). The elastic monitor grows the
     // rest on demand. Contexts first so workers_ is stable before any worker
@@ -127,6 +140,7 @@ void ThreadPoolExecutor::start() {
 
     DFTRACER_UTILS_LOG_DEBUG(
         "Executor started with %zu worker threads (cap %zu)", floor, threads);
+    return {};
 }
 
 void ThreadPoolExecutor::shutdown() {

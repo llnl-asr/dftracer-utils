@@ -24,7 +24,7 @@ class EpollThreadPoolBackend : public ThreadPoolFileOps {
                                     IoPoolOptions pool_options = {});
     ~EpollThreadPoolBackend() override;
 
-    void start() override;
+    dstd::Result<void> start() override;
     void stop() override;
     dstd::String name() const override { return "epoll+threadpool"; }
 

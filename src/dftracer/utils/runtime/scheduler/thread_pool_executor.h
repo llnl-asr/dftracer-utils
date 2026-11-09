@@ -278,7 +278,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     ThreadPoolExecutor(ThreadPoolExecutor&&) = delete;
     ThreadPoolExecutor& operator=(ThreadPoolExecutor&&) = delete;
 
-    void start() override;
+    dstd::Result<void> start() override;
 
     void shutdown() override;
 

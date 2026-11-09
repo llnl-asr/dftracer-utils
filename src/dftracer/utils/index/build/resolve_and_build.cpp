@@ -295,9 +295,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             agg_run.reset();
             index::release_root(build_index_path);
             index::release_root(staged_final_path);
-            common::publish_path(
+            common::unwrap(common::publish_path(
                 dstd::PathView(index::store_dir(build_index_path)),
-                dstd::PathView(index::store_dir(staged_final_path)));
+                dstd::PathView(index::store_dir(staged_final_path))));
         }
 
         // Refresh_input queries the index for the files just indexed.

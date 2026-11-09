@@ -368,11 +368,16 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
         dftracer::utils::index::release_root(
             dftracer::utils::index::normalize_index_root(build_dir));
         dftracer::utils::index::release_root(final_root);
-        dftracer::utils::common::publish_path(
+        const auto published = dftracer::utils::common::publish_path(
             dftracer::utils::dstd::PathView(dftracer::utils::index::store_dir(
                 dftracer::utils::index::normalize_index_root(build_dir))),
             dftracer::utils::dstd::PathView(
                 dftracer::utils::index::store_dir(final_root)));
+        if (!published) {
+            dftracer::utils::python::set_typed_py_error(
+                dftracer::utils::common::DFTUtilsException(published.error()));
+            return NULL;
+        }
     }
 
     Py_RETURN_NONE;

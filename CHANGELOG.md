@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - End the process with a message when memory runs out or an allocation would pass `DFTRACER_UTILS_MEM_HARD_LIMIT`, where it threw `std::bad_alloc` before.
   Python gets an abort in place of `MemoryError`.
 - End the process when `dstd::any_cast` gets the wrong type or an empty `dstd::Function` is called, where they threw before.
+- End the process with a message that names `DFTRACER_UTILS_IO_BACKEND` when it holds a bad value, or when the I/O thread pool cannot start a thread, where creating a `Runtime` threw before.
+- Raise a Python error from `Runtime.set_timeout` and `Runtime.set_default_task_timeout` on a runtime without a watchdog, where the C++ call threw before.
 - Make an index of system counter traces up to 57% smaller, because each counter value is stored as a change from the last value of the same counter.
   Rebuild indexes made by an earlier version.
 - Store index extents on 8-byte boundaries in place of 4 KiB, so an index of a small trace set is up to 23% smaller.

@@ -979,7 +979,7 @@ bool IoUringBackend::has_opcode(IoOpKind kind) const noexcept {
     return false;
 }
 
-void IoUringBackend::start() {
+dstd::Result<void> IoUringBackend::start() {
     cancelling_.store(false, std::memory_order_release);
     cancel_requested_.store(false, std::memory_order_release);
     stopping_.store(false, std::memory_order_release);
@@ -1005,7 +1005,7 @@ void IoUringBackend::start() {
                    IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
                        IORING_SETUP_TASKRUN_FLAG | IORING_SETUP_R_DISABLED);
     if (!is_sq_polled_ && !should_enable_ring_ && !ring_.init(RING_ENTRIES)) {
-        throw common::DFTUtilsException(
+        return common::make_error(
             common::ErrorCode::Internal,
             common::str_cat("io_uring setup failed: ", std::strerror(errno)));
     }
@@ -1026,25 +1026,28 @@ void IoUringBackend::start() {
     if (!wake_fd_.valid()) {
         const int error = errno;
         ring_.destroy();
-        throw common::DFTUtilsException(
+        return common::make_error(
             common::ErrorCode::Internal,
             common::str_cat("eventfd failed: ", std::strerror(error)));
     }
-    pool_.start();
+    if (auto started = pool_.start(); !started) {
+        stop();
+        return started;
+    }
     enable_result_.store(0, std::memory_order_relaxed);
     thread_ = dstd::Thread([this] { ring_loop(); });
-    if (!should_enable_ring_) return;
+    if (!should_enable_ring_) return {};
     int enabled = 0;
     while ((enabled = enable_result_.load(std::memory_order_acquire)) == 0) {
         std::this_thread::yield();
     }
     if (enabled < 0) {
         stop();
-        throw common::DFTUtilsException(
-            common::ErrorCode::Internal,
-            common::str_cat("io_uring enable failed: ",
-                            std::strerror(-enabled)));
+        return common::make_error(common::ErrorCode::Internal,
+                                  common::str_cat("io_uring enable failed: ",
+                                                  std::strerror(-enabled)));
     }
+    return {};
 }
 
 void IoUringBackend::stop() {
@@ -1506,7 +1509,7 @@ void IoUringBackend::cancel_waiting() noexcept {
 
 void IoUringBackend::ring_loop() noexcept {
     if (should_enable_ring_) {
-        // Past a failure start() joins this thread and throws.
+        // Past a failure start() joins this thread and reports it.
         const bool enabled = ring_.enable();
         const int error = errno;
         enable_result_.store(enabled ? 1 : -error, std::memory_order_release);

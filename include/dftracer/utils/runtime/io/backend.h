@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_IO_BACKEND_H
 
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -259,7 +260,8 @@ class IoBackend {
    public:
     virtual ~IoBackend() = default;
 
-    virtual void start() = 0;
+    /// Fails when the backend cannot get what it needs to run.
+    virtual dstd::Result<void> start() = 0;
 
     /// Call it after in_flight() reads zero. An operation still running then
     /// never completes.

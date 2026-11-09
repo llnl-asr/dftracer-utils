@@ -248,22 +248,23 @@ dstd::Optional<ScratchSession> staged_build_scratch(
     return scratch;
 }
 
-void publish_path(dstd::PathView src, dstd::PathView dst) {
+dstd::Result<void> publish_path(dstd::PathView src, dstd::PathView dst) {
     const dstd::PathView parent = dst.parent();
     if (!parent.empty()) dstd::fs::create_directories(parent).discard();
     dstd::fs::remove_all(dst).discard();
 
-    if (dstd::fs::rename(src, dst)) return;
+    if (dstd::fs::rename(src, dst)) return {};
 
     // Cross-device rename fails; fall back to copy + remove.
     const auto copied =
         dstd::fs::copy_tree(src, dst, dstd::fs::CopyMode::Overwrite);
     if (!copied) {
-        throw DFTUtilsException(
-            ErrorCode::Io, str_cat("failed to publish ", src.str(), " to ",
-                                   dst.str(), ": ", copied.error().message()));
+        return make_error(ErrorCode::Io,
+                          str_cat("failed to publish ", src.str(), " to ",
+                                  dst.str(), ": ", copied.error().message()));
     }
     dstd::fs::remove_all(src).discard();
+    return {};
 }
 
 }  // namespace dftracer::utils::common

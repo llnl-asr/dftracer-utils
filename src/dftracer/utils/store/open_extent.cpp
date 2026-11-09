@@ -70,15 +70,11 @@ void run_training(DictTraining& job) {
         sizes = std::move(job.sizes);
     }
     dstd::Vector<std::uint8_t> bytes;
-    try {
-        auto trained = train_page_dict(
-            dstd::ByteView(reinterpret_cast<const std::byte*>(sample.data()),
-                           sample.size()),
-            dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
-        if (trained) bytes = std::move(*trained);
-    } catch (const std::exception&) {
-        bytes.clear();
-    }
+    auto trained = train_page_dict(
+        dstd::ByteView(reinterpret_cast<const std::byte*>(sample.data()),
+                       sample.size()),
+        dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
+    if (trained) bytes = std::move(*trained);
     sample = dstd::Vector<std::uint8_t>();
     {
         std::lock_guard<std::mutex> lock(job.mutex);

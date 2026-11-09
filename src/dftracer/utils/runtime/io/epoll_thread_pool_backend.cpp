@@ -20,21 +20,21 @@ EpollThreadPoolBackend::EpollThreadPoolBackend(std::size_t pool_size,
 
 EpollThreadPoolBackend::~EpollThreadPoolBackend() = default;
 
-void EpollThreadPoolBackend::start() {
-    pool_.start();
+dstd::Result<void> EpollThreadPoolBackend::start() {
+    if (auto started = pool_.start(); !started) return started;
 
     epoll_fd_.reset(::epoll_create1(EPOLL_CLOEXEC));
     if (!epoll_fd_.valid()) {
         DFTRACER_UTILS_LOG_ERROR("epoll_create1 failed: %s",
                                  std::strerror(errno));
-        return;
+        return {};
     }
 
     event_fd_.reset(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC));
     if (!event_fd_.valid()) {
         DFTRACER_UTILS_LOG_ERROR("eventfd failed: %s", std::strerror(errno));
         epoll_fd_.reset();
-        return;
+        return {};
     }
 
     // Register the eventfd with epoll for shutdown wakeup.
@@ -51,6 +51,7 @@ void EpollThreadPoolBackend::start() {
         epoll_fd_.get(), event_fd_.get());
 
     completion_thread_.start([this] { epoll_loop(); });
+    return {};
 }
 
 void EpollThreadPoolBackend::stop() {

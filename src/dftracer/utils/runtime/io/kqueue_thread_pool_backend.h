@@ -26,7 +26,7 @@ class KqueueThreadPoolBackend : public ThreadPoolFileOps {
                                      IoPoolOptions pool_options = {});
     ~KqueueThreadPoolBackend() override;
 
-    void start() override;
+    dstd::Result<void> start() override;
     void stop() override;
     dstd::String name() const override { return "kqueue+threadpool"; }
 

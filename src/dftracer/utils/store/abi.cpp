@@ -105,7 +105,6 @@ struct dftu_store_snapshot_s : dstd::HeapObject {
 struct dftu_store_cursor_s : dstd::HeapObject {
     explicit dftu_store_cursor_s(Cursor c) : cursor(std::move(c)) {}
     Cursor cursor;
-    dstd::Optional<Error> failure;
     bool started = false;
 };
 
@@ -210,6 +209,10 @@ dstd::Expected<ScopeKey, Error> scope_of(const dftu_store_scope* scope) {
             Error(Condition::InvalidArgument, "scope paths is NULL"));
     }
     dstd::Vector<dstd::StringView> paths;
+    if (scope->path_count > paths.max_size()) {
+        return dstd::Unexpected<Error>(
+            Error(Condition::InvalidArgument, "scope path count is too large"));
+    }
     paths.reserve(static_cast<std::size_t>(scope->path_count));
     for (std::uint64_t i = 0; i < scope->path_count; ++i) {
         if (!scope->paths[i]) {
@@ -245,6 +248,10 @@ dstd::Expected<dstd::Vector<SourceStat>, Error> sources_of(
             Error(Condition::InvalidArgument, "sources is NULL with a count"));
     }
     dstd::Vector<SourceStat> out;
+    if (count > out.max_size()) {
+        return dstd::Unexpected<Error>(
+            Error(Condition::InvalidArgument, "source count is too large"));
+    }
     out.reserve(static_cast<std::size_t>(count));
     for (std::uint64_t i = 0; i < count; ++i) {
         out.push_back(
@@ -262,20 +269,16 @@ dftu_store_batch_result make_batch(dftu_store_t* store,
     if (!store || !ns) {
         return invalid<dftu_store_batch_result>("store or ns is NULL");
     }
-    try {
-        auto key = scope_of(scope);
-        if (!key) return failed<dftu_store_batch_result>(key.error());
-        auto stats = sources_of(sources, source_count);
-        if (!stats) return failed<dftu_store_batch_result>(stats.error());
-        Batch batch =
-            building ? store->store.building_batch(ns->ns, *key)
-                     : store->store.batch(ns->ns, *key, params_hash,
-                                          source_count > 0 ? &*stats : nullptr);
-        return succeeded<dftu_store_batch_result>(
-            new dftu_store_batch_s(store->store, std::move(batch)));
-    } catch (...) {
-        return failed_current<dftu_store_batch_result>();
-    }
+    auto key = scope_of(scope);
+    if (!key) return failed<dftu_store_batch_result>(key.error());
+    auto stats = sources_of(sources, source_count);
+    if (!stats) return failed<dftu_store_batch_result>(stats.error());
+    Batch batch =
+        building ? store->store.building_batch(ns->ns, *key)
+                 : store->store.batch(ns->ns, *key, params_hash,
+                                      source_count > 0 ? &*stats : nullptr);
+    return succeeded<dftu_store_batch_result>(
+        new dftu_store_batch_s(store->store, std::move(batch)));
 }
 
 dftu_store_void_result write_entry(dftu_store_batch_t* batch,
@@ -287,18 +290,12 @@ dftu_store_void_result write_entry(dftu_store_batch_t* batch,
         return invalid<dftu_store_void_result>(
             "batch is NULL, or a pointer is NULL with a size");
     }
-    try {
-        if (fold) {
-            batch->batch.fold(view_of(key, key_size),
-                              view_of(value, value_size));
-        } else {
-            batch->batch.put(view_of(key, key_size),
-                             view_of(value, value_size));
-        }
-        return done();
-    } catch (...) {
-        return failed_current<dftu_store_void_result>();
+    if (fold) {
+        batch->batch.fold(view_of(key, key_size), view_of(value, value_size));
+    } else {
+        batch->batch.put(view_of(key, key_size), view_of(value, value_size));
     }
+    return done();
 }
 
 dftu_store_cursor_result make_cursor(Cursor cursor) {
@@ -312,14 +309,10 @@ extern "C" {
 
 dftu_store_open_result dftu_store_open(const char* dir) {
     if (!dir) return invalid<dftu_store_open_result>("dir is NULL");
-    try {
-        auto opened = Store::open(dir);
-        if (!opened) return failed<dftu_store_open_result>(opened.error());
-        return succeeded<dftu_store_open_result>(
-            new dftu_store_s(std::move(*opened)));
-    } catch (...) {
-        return failed_current<dftu_store_open_result>();
-    }
+    auto opened = Store::open(dir);
+    if (!opened) return failed<dftu_store_open_result>(opened.error());
+    return succeeded<dftu_store_open_result>(
+        new dftu_store_s(std::move(*opened)));
 }
 
 void dftu_store_free(dftu_store_t* store) { delete store; }
@@ -333,20 +326,16 @@ dftu_store_ns_result dftu_store_ns(dftu_store_t* store, const char* name,
     if (fold < DFTU_STORE_FOLD_NONE || fold > DFTU_STORE_FOLD_CONCAT) {
         return invalid<dftu_store_ns_result>("unknown fold kind");
     }
-    try {
-        NamespaceSpec spec;
-        spec.name = name;
-        spec.format_version = format_version;
-        spec.fold = static_cast<FoldKind>(fold);
-        spec.durable = durable != 0;
-        spec.shared = shared != 0;
-        auto added = store->store.ns(spec);
-        if (!added) return failed<dftu_store_ns_result>(added.error());
-        return succeeded<dftu_store_ns_result>(
-            new dftu_store_ns_s(std::move(*added)));
-    } catch (...) {
-        return failed_current<dftu_store_ns_result>();
-    }
+    NamespaceSpec spec;
+    spec.name = name;
+    spec.format_version = format_version;
+    spec.fold = static_cast<FoldKind>(fold);
+    spec.durable = durable != 0;
+    spec.shared = shared != 0;
+    auto added = store->store.ns(spec);
+    if (!added) return failed<dftu_store_ns_result>(added.error());
+    return succeeded<dftu_store_ns_result>(
+        new dftu_store_ns_s(std::move(*added)));
 }
 
 void dftu_store_ns_free(dftu_store_ns_t* ns) { delete ns; }
@@ -390,12 +379,8 @@ dftu_store_void_result dftu_store_batch_erase(dftu_store_batch_t* batch,
         return invalid<dftu_store_void_result>(
             "batch is NULL, or key is NULL with a size");
     }
-    try {
-        batch->batch.erase(view_of(key, key_size));
-        return done();
-    } catch (...) {
-        return failed_current<dftu_store_void_result>();
-    }
+    batch->batch.erase(view_of(key, key_size));
+    return done();
 }
 
 dftu_store_void_result dftu_store_batch_erase_range(dftu_store_batch_t* batch,
@@ -407,13 +392,9 @@ dftu_store_void_result dftu_store_batch_erase_range(dftu_store_batch_t* batch,
         return invalid<dftu_store_void_result>(
             "batch is NULL, or a bound is NULL with a size");
     }
-    try {
-        batch->batch.erase_range(view_of(begin, begin_size),
-                                 view_of(end, end_size));
-        return done();
-    } catch (...) {
-        return failed_current<dftu_store_void_result>();
-    }
+    batch->batch.erase_range(view_of(begin, begin_size),
+                             view_of(end, end_size));
+    return done();
 }
 
 dftu_store_void_result dftu_store_batch_commit(dftu_store_batch_t* batch) {
@@ -444,6 +425,10 @@ dftu_store_void_result dftu_store_publish(
         dstd::Vector<ScopeKey> scopes;
         dstd::Vector<dstd::Vector<SourceStat>> stats;
         dstd::Vector<Publish> changes;
+        if (n > scopes.max_size() || n > stats.max_size() ||
+            n > changes.max_size()) {
+            return invalid<dftu_store_void_result>("target count is too large");
+        }
         scopes.reserve(count);
         stats.reserve(count);
         changes.reserve(count);
@@ -492,15 +477,11 @@ dftu_store_void_result dftu_store_fail(dftu_store_t* store,
     if (!store || !ns) {
         return invalid<dftu_store_void_result>("store or ns is NULL");
     }
-    try {
-        auto key = scope_of(scope);
-        if (!key) return failed<dftu_store_void_result>(key.error());
-        auto marked = store->store.fail(ns->ns, *key, params_hash);
-        if (!marked) return failed<dftu_store_void_result>(marked.error());
-        return done();
-    } catch (...) {
-        return failed_current<dftu_store_void_result>();
-    }
+    auto key = scope_of(scope);
+    if (!key) return failed<dftu_store_void_result>(key.error());
+    auto marked = store->store.fail(ns->ns, *key, params_hash);
+    if (!marked) return failed<dftu_store_void_result>(marked.error());
+    return done();
 }
 
 dftu_store_void_result dftu_store_drop(dftu_store_t* store,
@@ -509,15 +490,11 @@ dftu_store_void_result dftu_store_drop(dftu_store_t* store,
     if (!store || !ns) {
         return invalid<dftu_store_void_result>("store or ns is NULL");
     }
-    try {
-        auto key = scope_of(scope);
-        if (!key) return failed<dftu_store_void_result>(key.error());
-        auto dropped = store->store.drop(ns->ns, *key);
-        if (!dropped) return failed<dftu_store_void_result>(dropped.error());
-        return done();
-    } catch (...) {
-        return failed_current<dftu_store_void_result>();
-    }
+    auto key = scope_of(scope);
+    if (!key) return failed<dftu_store_void_result>(key.error());
+    auto dropped = store->store.drop(ns->ns, *key);
+    if (!dropped) return failed<dftu_store_void_result>(dropped.error());
+    return done();
 }
 
 dftu_store_void_result dftu_store_flush(dftu_store_t* store) {
@@ -607,26 +584,22 @@ dftu_store_copy_result dftu_store_snapshot_copy_info(
         return invalid<dftu_store_copy_result>(
             "snapshot or ns is NULL, or sources is NULL with a capacity");
     }
-    try {
-        auto key = scope_of(scope);
-        if (!key) return failed<dftu_store_copy_result>(key.error());
-        const CopyInfo info = snapshot->snapshot.copy_info(ns->ns, *key);
-        if (sources) {
-            const std::size_t copied = info.sources.size() < capacity
-                                           ? info.sources.size()
-                                           : static_cast<std::size_t>(capacity);
-            for (std::size_t i = 0; i < copied; ++i) {
-                sources[i] = dftu_store_source_stat{info.sources[i].mtime,
-                                                    info.sources[i].size,
-                                                    info.sources[i].hash};
-            }
+    auto key = scope_of(scope);
+    if (!key) return failed<dftu_store_copy_result>(key.error());
+    const CopyInfo info = snapshot->snapshot.copy_info(ns->ns, *key);
+    if (sources) {
+        const std::size_t copied = info.sources.size() < capacity
+                                       ? info.sources.size()
+                                       : static_cast<std::size_t>(capacity);
+        for (std::size_t i = 0; i < copied; ++i) {
+            sources[i] = dftu_store_source_stat{info.sources[i].mtime,
+                                                info.sources[i].size,
+                                                info.sources[i].hash};
         }
-        return succeeded<dftu_store_copy_result>(
-            dftu_store_copy{static_cast<int32_t>(info.state), info.generation,
-                            info.params_hash, info.sources.size()});
-    } catch (...) {
-        return failed_current<dftu_store_copy_result>();
     }
+    return succeeded<dftu_store_copy_result>(
+        dftu_store_copy{static_cast<int32_t>(info.state), info.generation,
+                        info.params_hash, info.sources.size()});
 }
 
 dftu_store_value_result dftu_store_snapshot_get(
@@ -636,21 +609,16 @@ dftu_store_value_result dftu_store_snapshot_get(
         return invalid<dftu_store_value_result>(
             "snapshot or ns is NULL, or key is NULL with a size");
     }
-    try {
-        auto where = scope_of(scope);
-        if (!where) return failed<dftu_store_value_result>(where.error());
-        auto found =
-            snapshot->snapshot.get(ns->ns, *where, view_of(key, key_size));
-        if (!found) return failed<dftu_store_value_result>(found.error());
-        if (!found->has_value()) {
-            return succeeded<dftu_store_value_result>(
-                static_cast<dftu_store_value_t*>(nullptr));
-        }
+    auto where = scope_of(scope);
+    if (!where) return failed<dftu_store_value_result>(where.error());
+    auto found = snapshot->snapshot.get(ns->ns, *where, view_of(key, key_size));
+    if (!found) return failed<dftu_store_value_result>(found.error());
+    if (!found->has_value()) {
         return succeeded<dftu_store_value_result>(
-            new dftu_store_value_s(std::move(**found)));
-    } catch (...) {
-        return failed_current<dftu_store_value_result>();
+            static_cast<dftu_store_value_t*>(nullptr));
     }
+    return succeeded<dftu_store_value_result>(
+        new dftu_store_value_s(std::move(**found)));
 }
 
 dftu_store_value_list_result dftu_store_snapshot_multi_get(
@@ -660,29 +628,28 @@ dftu_store_value_list_result dftu_store_snapshot_multi_get(
         return invalid<dftu_store_value_list_result>(
             "snapshot or ns is NULL, or keys is NULL with a count");
     }
-    try {
-        auto where = scope_of(scope);
-        if (!where) return failed<dftu_store_value_list_result>(where.error());
-        dstd::Vector<dstd::ByteView> views;
-        views.reserve(static_cast<std::size_t>(n));
-        for (std::uint64_t i = 0; i < n; ++i) {
-            if (!bytes_ok(keys[i].data, keys[i].size)) {
-                return invalid<dftu_store_value_list_result>(
-                    "a key is NULL with a size");
-            }
-            views.push_back(view_of(keys[i].data, keys[i].size));
-        }
-        auto found = snapshot->snapshot.multi_get(
-            ns->ns, *where,
-            dstd::Span<const dstd::ByteView>(views.data(), views.size()));
-        if (!found) {
-            return failed<dftu_store_value_list_result>(found.error());
-        }
-        return succeeded<dftu_store_value_list_result>(
-            new dftu_store_value_list_s(std::move(*found)));
-    } catch (...) {
-        return failed_current<dftu_store_value_list_result>();
+    auto where = scope_of(scope);
+    if (!where) return failed<dftu_store_value_list_result>(where.error());
+    dstd::Vector<dstd::ByteView> views;
+    if (n > views.max_size()) {
+        return invalid<dftu_store_value_list_result>("key count is too large");
     }
+    views.reserve(static_cast<std::size_t>(n));
+    for (std::uint64_t i = 0; i < n; ++i) {
+        if (!bytes_ok(keys[i].data, keys[i].size)) {
+            return invalid<dftu_store_value_list_result>(
+                "a key is NULL with a size");
+        }
+        views.push_back(view_of(keys[i].data, keys[i].size));
+    }
+    auto found = snapshot->snapshot.multi_get(
+        ns->ns, *where,
+        dstd::Span<const dstd::ByteView>(views.data(), views.size()));
+    if (!found) {
+        return failed<dftu_store_value_list_result>(found.error());
+    }
+    return succeeded<dftu_store_value_list_result>(
+        new dftu_store_value_list_s(std::move(*found)));
 }
 
 dftu_store_bytes dftu_store_value_bytes(const dftu_store_value_t* v) {
@@ -715,14 +682,10 @@ dftu_store_cursor_result dftu_store_snapshot_scan_prefix(
         return invalid<dftu_store_cursor_result>(
             "snapshot or ns is NULL, or prefix is NULL with a size");
     }
-    try {
-        auto where = scope_of(scope);
-        if (!where) return failed<dftu_store_cursor_result>(where.error());
-        return make_cursor(snapshot->snapshot.scan(
-            ns->ns, *where, view_of(prefix, prefix_size)));
-    } catch (...) {
-        return failed_current<dftu_store_cursor_result>();
-    }
+    auto where = scope_of(scope);
+    if (!where) return failed<dftu_store_cursor_result>(where.error());
+    return make_cursor(
+        snapshot->snapshot.scan(ns->ns, *where, view_of(prefix, prefix_size)));
 }
 
 dftu_store_cursor_result dftu_store_snapshot_scan_range(
@@ -734,63 +697,42 @@ dftu_store_cursor_result dftu_store_snapshot_scan_range(
         return invalid<dftu_store_cursor_result>(
             "snapshot or ns is NULL, or a bound is NULL with a size");
     }
-    try {
-        auto where = scope_of(scope);
-        if (!where) return failed<dftu_store_cursor_result>(where.error());
-        return make_cursor(snapshot->snapshot.scan(ns->ns, *where,
-                                                   view_of(begin, begin_size),
-                                                   view_of(end, end_size)));
-    } catch (...) {
-        return failed_current<dftu_store_cursor_result>();
-    }
+    auto where = scope_of(scope);
+    if (!where) return failed<dftu_store_cursor_result>(where.error());
+    return make_cursor(snapshot->snapshot.scan(
+        ns->ns, *where, view_of(begin, begin_size), view_of(end, end_size)));
 }
 
 int32_t dftu_store_cursor_next(dftu_store_cursor_t* cursor) {
     if (!cursor) return -1;
-    if (cursor->failure) return 0;
-    try {
-        if (cursor->started) {
-            if (!cursor->cursor.at_end()) cursor->cursor.next();
-        } else {
-            cursor->started = true;
-        }
-        return cursor->cursor.at_end() ? 0 : 1;
-    } catch (...) {
-        cursor->failure = current_error();
-        return 0;
+    if (cursor->started) {
+        if (!cursor->cursor.at_end()) cursor->cursor.next();
+    } else {
+        cursor->started = true;
     }
+    return cursor->cursor.at_end() ? 0 : 1;
 }
 
 dftu_store_bytes dftu_store_cursor_key(const dftu_store_cursor_t* cursor) {
-    if (!cursor || !cursor->started || cursor->failure ||
-        cursor->cursor.at_end()) {
+    if (!cursor || !cursor->started || cursor->cursor.at_end()) {
         return dftu_store_bytes{nullptr, 0};
     }
     return bytes_of(cursor->cursor.key());
 }
 
 dftu_store_bytes_result dftu_store_cursor_value(dftu_store_cursor_t* cursor) {
-    if (!cursor || !cursor->started || cursor->failure ||
-        cursor->cursor.at_end()) {
+    if (!cursor || !cursor->started || cursor->cursor.at_end()) {
         return invalid<dftu_store_bytes_result>(
             "cursor is NULL, not moved or at its end");
     }
-    try {
-        auto value = cursor->cursor.value();
-        if (!value) return failed<dftu_store_bytes_result>(value.error());
-        return succeeded<dftu_store_bytes_result>(bytes_of(*value));
-    } catch (...) {
-        return failed_current<dftu_store_bytes_result>();
-    }
+    auto value = cursor->cursor.value();
+    if (!value) return failed<dftu_store_bytes_result>(value.error());
+    return succeeded<dftu_store_bytes_result>(bytes_of(*value));
 }
 
 int32_t dftu_store_cursor_error(const dftu_store_cursor_t* cursor,
                                 dftu_error* out) {
     if (!cursor) return 0;
-    if (cursor->failure) {
-        if (out) *out = to_c(*cursor->failure);
-        return 1;
-    }
     if (!cursor->cursor.error().has_value()) return 0;
     if (out) *out = to_c(*cursor->cursor.error());
     return 1;

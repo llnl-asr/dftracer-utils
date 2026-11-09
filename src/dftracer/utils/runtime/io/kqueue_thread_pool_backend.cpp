@@ -22,13 +22,13 @@ KqueueThreadPoolBackend::KqueueThreadPoolBackend(std::size_t pool_size,
 
 KqueueThreadPoolBackend::~KqueueThreadPoolBackend() = default;
 
-void KqueueThreadPoolBackend::start() {
-    pool_.start();
+dstd::Result<void> KqueueThreadPoolBackend::start() {
+    if (auto started = pool_.start(); !started) return started;
 
     kqueue_fd_.reset(::kqueue());
     if (!kqueue_fd_.valid()) {
         DFTRACER_UTILS_LOG_ERROR("kqueue() failed: %s", std::strerror(errno));
-        return;
+        return {};
     }
 
     // Register a user event (EVFILT_USER) for shutdown signaling.
@@ -43,6 +43,7 @@ void KqueueThreadPoolBackend::start() {
                              kqueue_fd_.get());
 
     completion_thread_.start([this] { kqueue_loop(); });
+    return {};
 }
 
 void KqueueThreadPoolBackend::stop() {

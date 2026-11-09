@@ -32,7 +32,7 @@ TEST_CASE("child: report the backend" * doctest::skip()) {
     config.thread_count = 2;
     config.io_pool_size = 2;
     auto executor = make_task_executor(config);
-    executor->start();
+    REQUIRE(executor->start().has_value());
     REQUIRE(executor->has_io_backend());
     std::fprintf(stderr, "backend=%s\n", executor->io_backend().name().c_str());
     executor->shutdown();
@@ -40,14 +40,20 @@ TEST_CASE("child: report the backend" * doctest::skip()) {
 
 TEST_CASE("child: start with a bogus backend" * doctest::skip()) {
     fresh_process::announce();
-    try {
-        Runtime runtime(2);
-    } catch (const common::DFTUtilsException& e) {
-        std::fprintf(stderr, "start failed: %s\n", e.what());
-        return;
-    }
+    ExecutorConfig config;
+    config.thread_count = 2;
+    auto executor = make_task_executor(config);
+    auto started = executor->start();
+    REQUIRE_FALSE(started.has_value());
+    std::fprintf(stderr, "start failed: %s\n", started.error().c_str());
+    REQUIRE_FALSE(executor->has_io_backend());
+}
+
+TEST_CASE("child: a runtime with a bogus backend ends the process" *
+          doctest::skip()) {
+    fresh_process::announce();
+    Runtime runtime(2);
     std::fprintf(stderr, "started\n");
-    FAIL("the runtime started");
 }
 
 TEST_CASE("the env var forces the thread pool") {
@@ -61,6 +67,14 @@ TEST_CASE("an unknown backend fails to start") {
         run_with("bogus_backend", "child: start with a bogus backend");
     CHECK(result.ok());
     CHECK(result.output.find("start failed: ") != dstd::String::npos);
+    CHECK(result.output.find(BACKEND_ENV) != dstd::String::npos);
     CHECK(result.output.find("'bogus_backend'") != dstd::String::npos);
+}
+
+TEST_CASE("a runtime with a bogus backend ends the process") {
+    auto result =
+        run_with("bogus_backend",
+                 "child: a runtime with a bogus backend ends the process");
+    CHECK(result.aborted_with(BACKEND_ENV));
     CHECK(result.output.find("started\n") == dstd::String::npos);
 }

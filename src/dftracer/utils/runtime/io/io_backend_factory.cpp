@@ -47,17 +47,17 @@ constexpr bool HAVE_IO_URING =
     false;
 #endif
 
-[[noreturn]] void fail_backend_env(dstd::StringView value,
-                                   dstd::StringView why) {
-    throw common::DFTUtilsException(
+dstd::Unexpected<dstd::Error> bad_backend_env(dstd::StringView value,
+                                              dstd::StringView why) {
+    return common::make_error(
         common::ErrorCode::InvalidArgument,
         common::str_cat(common::constants::io_settings::BACKEND_ENV, ": '",
                         value, "' ", why));
 }
 
 // Auto when the variable is unset, empty or "auto". Otherwise the backend it
-// names. One the platform lacks or an unknown name throws.
-IoBackendType backend_from_env(bool& forced) {
+// names. One the platform lacks or an unknown name is an error.
+dstd::Result<IoBackendType> backend_from_env(bool& forced) {
     forced = false;
     auto raw = common::Env::get<dstd::StringView>(
         common::constants::io_settings::BACKEND_ENV);
@@ -65,20 +65,21 @@ IoBackendType backend_from_env(bool& forced) {
     forced = true;
     if (*raw == "threadpool") return IoBackendType::Threadpool;
     if (*raw == "epoll") {
-        if (!HAVE_EPOLL) fail_backend_env(*raw, "is not available here");
+        if (!HAVE_EPOLL) return bad_backend_env(*raw, "is not available here");
         return IoBackendType::EpollThreadpool;
     }
     if (*raw == "kqueue") {
-        if (!HAVE_KQUEUE) fail_backend_env(*raw, "is not available here");
+        if (!HAVE_KQUEUE) return bad_backend_env(*raw, "is not available here");
         return IoBackendType::KqueueThreadpool;
     }
     if (*raw == "io_uring") {
-        if (!HAVE_IO_URING) fail_backend_env(*raw, "is not available here");
+        if (!HAVE_IO_URING)
+            return bad_backend_env(*raw, "is not available here");
         return IoBackendType::IoUring;
     }
-    fail_backend_env(*raw,
-                     "is not a backend (use auto, io_uring, epoll, kqueue or "
-                     "threadpool)");
+    return bad_backend_env(*raw,
+                           "is not a backend (use auto, io_uring, epoll, "
+                           "kqueue or threadpool)");
 }
 
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
@@ -95,13 +96,14 @@ dstd::UniquePtr<IoUringBackend> make_io_uring(std::size_t pool_size,
 
 }  // namespace
 
-dstd::UniquePtr<IoBackend> make_io_backend(std::size_t pool_size,
-                                           IoBackendType backend_type,
-                                           unsigned batch_threshold,
-                                           IoPoolOptions pool_options) {
+dstd::Result<dstd::UniquePtr<IoBackend>> make_io_backend(
+    std::size_t pool_size, IoBackendType backend_type, unsigned batch_threshold,
+    IoPoolOptions pool_options) {
     bool forced = false;
     if (backend_type == IoBackendType::Auto) {
-        backend_type = backend_from_env(forced);
+        auto chosen = backend_from_env(forced);
+        if (!chosen) return dstd::Unexpected<dstd::Error>(chosen.error());
+        backend_type = *chosen;
     }
 
     // Explicit backend selection (non-AUTO).
@@ -139,7 +141,7 @@ dstd::UniquePtr<IoBackend> make_io_backend(std::size_t pool_size,
             return uring;
         }
         if (forced) {
-            fail_backend_env("io_uring", "failed its runtime probe");
+            return bad_backend_env("io_uring", "failed its runtime probe");
         }
         DFTRACER_UTILS_LOG_ERROR("%s",
                                  "io_uring selected but runtime probe failed");

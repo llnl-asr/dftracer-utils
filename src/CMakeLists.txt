@@ -93,6 +93,7 @@ set(DFTRACER_UTILS_DSTD_SOURCES
 # -----------------------------------------
 
 set(DFTRACER_UTILS_COMMON_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/symbolize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/format_detector.cpp
@@ -616,6 +617,12 @@ foreach(variant objects shared static)
 
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_common_objects)
+      target_compile_options(dftracer_utils_common_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+      # The throw delegate of common::unwrap is the one source that throws.
+      set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/error.cpp
+        PROPERTIES COMPILE_OPTIONS -fexceptions)
     elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})

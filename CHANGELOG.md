@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A task that a stop ended gives `dstd::Condition::Cancelled`, and a runtime that was shut down refuses a task with the same condition, in place of raising.
   A task that returns a `dstd::Expected<V, dstd::Error>` gives that type itself. An exception that a task raises is still rethrown from the calling code.
   `GroupBy::transform` and the eager group-by methods, and the sync wrappers of `TraceReader`, give a `dstd::Result` too.
+  The runtime and store libraries are built without exceptions.
   A `Runtime` built with a bad memory setting in the environment ends the process with the error in place of raising.
 - Remove the `bool` conversion of a `dstd::Expected<bool, E>`, so `if (result)` no longer compiles where it reads as the value and means the state.
   Test the state with `has_value()` and the value with `*result`.

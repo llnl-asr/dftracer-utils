@@ -683,6 +683,8 @@ foreach(variant objects shared static)
 
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_coro_objects)
+      target_compile_options(dftracer_utils_coro_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
     elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
@@ -756,6 +758,8 @@ foreach(variant objects shared static)
 
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_runtime_objects)
+      target_compile_options(dftracer_utils_runtime_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
 
       # io_uring compile definition
       if(DFTRACER_UTILS_HAVE_IO_URING)
@@ -848,6 +852,8 @@ foreach(variant objects shared static)
     link_zstd(${VARIANT_TARGET})
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_store_objects)
+      target_compile_options(dftracer_utils_store_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
     elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})

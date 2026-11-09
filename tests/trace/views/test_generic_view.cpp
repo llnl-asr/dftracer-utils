@@ -180,18 +180,10 @@ TEST_SUITE("GenericView") {
               dstd::String(dstd::String(determine_index_path(gz, "")))},
              {dstd::String(dft),
               dstd::String(dstd::String(determine_index_path(dft, "")))}});
-        dstd::String what;
-        bool threw = false;
-        try {
-            const auto collected = v.collect().get();
-            REQUIRE_FALSE(collected.has_value());
-            what = collected.error().c_str();
-        } catch (const std::exception& e) {
-            threw = true;
-            what = e.what();
-        }
+        const auto collected = v.collect().get();
+        REQUIRE_FALSE(collected.has_value());
+        const dstd::String what = collected.error().c_str();
         CAPTURE(what);
-        CHECK(threw == true);
         CHECK(what.find("dftracer") != dstd::String::npos);
         CHECK(what.find("generic") != dstd::String::npos);
     }

@@ -479,7 +479,7 @@ class CursorSource : public Source {
         return {{dftracer::utils::dataframe::Field{
             "val", dftracer::utils::dataframe::scalar(TypeId::Int64), true}}};
     }
-    dftracer::utils::dataframe::ScanResult scan(
+    dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         dftracer::utils::dataframe::ScanResult r;
         r.cursor = factory_();

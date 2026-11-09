@@ -151,9 +151,11 @@ struct CountingSource : dataframe::Source {
     explicit CountingSource(dstd::SharedPtr<const dataframe::Source> in)
         : inner(std::move(in)) {}
     dataframe::Schema schema() const override { return inner->schema(); }
-    dataframe::ScanResult scan(
+    dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
-        dataframe::ScanResult r = inner->scan(req);
+        auto scanned = inner->scan(req);
+        if (!scanned) return scanned.error();
+        dataframe::ScanResult r = std::move(*scanned);
         r.cursor = dstd::make_unique<CountingCursor>(std::move(r.cursor), &rows,
                                                      &narrows);
         return r;
@@ -281,7 +283,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         dataframe::ScanRequest req;
         req.projection = {"pid"};
         req.memory_budget = 300;
-        dataframe::ScanResult res = src.scan(req);
+        dataframe::ScanResult res = dftu_utils_test::ok(src.scan(req));
         REQUIRE(res.cursor);
 
         // Pull the first morsel before narrowing, exactly like a plugin that
@@ -329,7 +331,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         // than the nominal 120 events: tight checkpointing can replay a
         // boundary chunk in more than one unit, inflating even a full scan
         // past the nominal count.
-        dataframe::ScanResult unnarrowed = src.scan(req);
+        dataframe::ScanResult unnarrowed = dftu_utils_test::ok(src.scan(req));
         REQUIRE(unnarrowed.cursor);
         std::size_t full_total = 0, full_pid3 = 0;
         for (;;) {
@@ -351,7 +353,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         auto source =
             dstd::make_shared<dataframe::InMemorySource>(std::move(df));
         dataframe::ScanRequest req;
-        dataframe::ScanResult res = source->scan(req);
+        dataframe::ScanResult res = dftu_utils_test::ok(source->scan(req));
         REQUIRE(res.cursor);
 
         // The base Cursor::narrow() a source does not override: it must be

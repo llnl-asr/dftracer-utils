@@ -380,8 +380,11 @@ TEST_SUITE("View") {
                     s.collect({GroupKey::cat()}, {{AggOp::Count, "", "n"}});
                 return s.join(a, *foreign, JoinType::Inner);
             });
-        CHECK_THROWS_AS(dftu_utils_test::ok(joined.collect().get()),
-                        dftracer::utils::common::DFTUtilsException);
+        const auto refused = joined.collect().get();
+        REQUIRE_FALSE(refused.has_value());
+        CHECK(dstd::StringView(refused.error().c_str())
+                  .find("both handles must be collect() results") !=
+              dstd::StringView::npos);
     }
 
     TEST_CASE("View - agg accepts unified F field expressions") {

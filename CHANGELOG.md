@@ -20,6 +20,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The Python `duql.load_path` still raises the same exception.
 - Build the json and duql libraries without exceptions.
 - Build the io library without exceptions.
+- Return a `dstd::Result` from `Source::scan` and `Source::open_batch`.
+  A source that cannot open a scan returns the error and the collect ends with it.
+  A `Cursor` must not throw from `try_next`, `out_names` or `resident_bytes`.
+- Build the dataframe library without exceptions.
+  The C ABI functions of the library return the same null or error values as before.
 - Return a `dstd::Result` from `LazyFrame::collect`, `stream`, `open_cursor` and `reduce_specs`, from `collect_all` and `LazyResult::collect`, and from `DataFrame::join`, `compare_agg` and `to_ipc`, in place of raising.
   A `LazyFrame` builder keeps its first error: `status()` reads it, and every terminal returns it.
   `Cursor::next` gives a `MorselResult`.

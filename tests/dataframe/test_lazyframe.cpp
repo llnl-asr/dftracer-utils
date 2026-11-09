@@ -252,7 +252,7 @@ class RaggedSource : public Source {
                 dftracer::utils::dataframe::TypeId::Unknown),
             true}}};
     }
-    dftracer::utils::dataframe::ScanResult scan(
+    dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         auto intern = dstd::make_shared<dstd::StringIntern>();
         dftracer::utils::dataframe::ScanResult r;
@@ -2868,7 +2868,7 @@ TEST_SUITE("lazyframe") {
         ScanRequest req;
         req.projection = {"b"};
         req.filters.push_back(col(0) > std::int64_t{1});
-        ScanResult r = src.scan(req);
+        ScanResult r = dftu_utils_test::ok(src.scan(req));
 
         // The whole-column engine applies the predicate, so the source leaves
         // it.

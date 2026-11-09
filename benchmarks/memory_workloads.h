@@ -115,7 +115,7 @@ class GenSource : public dftracer::utils::dataframe::Source {
         return out;
     }
 
-    dftracer::utils::dataframe::ScanResult scan(
+    dftracer::utils::dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         dftracer::utils::dataframe::ScanResult r;
         r.cursor =

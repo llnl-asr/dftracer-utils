@@ -94,7 +94,7 @@ bool append_json_key(dstd::String& out, dstd::StringView text) {
         return false;
     switch (el.type()) {
         case simdjson::dom::element_type::INT64: {
-            const std::int64_t v = el.get_int64();
+            const std::int64_t v = el.get_int64().value_unsafe();
             append_int_key(
                 out, v < 0,
                 v < 0 ? std::uint64_t{0} - static_cast<std::uint64_t>(v)
@@ -102,15 +102,15 @@ bool append_json_key(dstd::String& out, dstd::StringView text) {
             return true;
         }
         case simdjson::dom::element_type::UINT64:
-            append_int_key(out, false, el.get_uint64());
+            append_int_key(out, false, el.get_uint64().value_unsafe());
             return true;
         case simdjson::dom::element_type::DOUBLE:
-            return append_double_key(out, el.get_double());
+            return append_double_key(out, el.get_double().value_unsafe());
         case simdjson::dom::element_type::STRING:
-            append_string_key(out, el.get_string().value());
+            append_string_key(out, el.get_string().value_unsafe());
             return true;
         case simdjson::dom::element_type::BOOL:
-            append_bool_key(out, el.get_bool());
+            append_bool_key(out, el.get_bool().value_unsafe());
             return true;
         default:
             return false;
@@ -164,16 +164,16 @@ dstd::Optional<Ordered> ordered_of(const dataframe::Series& s, std::int64_t r,
         return dstd::nullopt;
     switch (el.type()) {
         case simdjson::dom::element_type::INT64:
-            return Ordered{el.get_int64().value()};
+            return Ordered{el.get_int64().value_unsafe()};
         case simdjson::dom::element_type::UINT64:
-            return Ordered{el.get_uint64().value()};
+            return Ordered{el.get_uint64().value_unsafe()};
         case simdjson::dom::element_type::DOUBLE:
-            return real(el.get_double().value());
+            return real(el.get_double().value_unsafe());
         case simdjson::dom::element_type::STRING:
-            owned.emplace_back(el.get_string().value());
+            owned.emplace_back(el.get_string().value_unsafe());
             return Ordered{dstd::StringView(owned.back())};
         case simdjson::dom::element_type::BOOL:
-            return Ordered{el.get_bool().value()};
+            return Ordered{el.get_bool().value_unsafe()};
         default:
             return dstd::nullopt;
     }

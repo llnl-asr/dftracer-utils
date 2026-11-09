@@ -55,7 +55,7 @@ class FinishSource final : public dataframe::Source {
     // The rows carry the columns the inner scan returned beyond its schema.
     bool undeclared_columns() const override { return true; }
 
-    dataframe::ScanResult scan(
+    dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r;
         r.cursor = dstd::make_unique<Rows>(
@@ -94,7 +94,9 @@ class FinishSource final : public dataframe::Source {
                 intern_ =
                     dstd::make_shared<dftracer::utils::dstd::StringIntern>();
                 ids_ = frame_ids(f, declared_, *intern_);
-                rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
+                auto scanned = dataframe::InMemorySource(std::move(f)).scan({});
+                if (!scanned) co_return scanned.error();
+                rows_ = std::move(scanned->cursor);
             }
             auto next_task = rows_->next(max_rows);
             auto m = co_await std::move(next_task);
@@ -134,7 +136,7 @@ class MapSource final : public dataframe::Source {
     // The rows carry the columns the inner scan returned beyond its schema.
     bool undeclared_columns() const override { return true; }
 
-    dataframe::ScanResult scan(
+    dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r;
         r.cursor = dstd::make_unique<Rows>(
@@ -177,7 +179,9 @@ class MapSource final : public dataframe::Source {
                 if (!projection_.empty())
                     f = common::unwrap(f.select(projection_));
                 ids_ = frame_ids(f, declared_, *intern_);
-                rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
+                auto scanned = dataframe::InMemorySource(std::move(f)).scan({});
+                if (!scanned) co_return scanned.error();
+                rows_ = std::move(scanned->cursor);
             }
         }
 
@@ -252,7 +256,7 @@ class FoldSource final : public dataframe::Source {
 
     dataframe::Schema schema() const override { return schema_; }
 
-    dataframe::ScanResult scan(
+    dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r;
         r.cursor = dstd::make_unique<Rows>(*this, req.projection);
@@ -284,7 +288,9 @@ class FoldSource final : public dataframe::Source {
                     common::unwrap(fold_.finish(std::move(names_)));
                 if (!projection_.empty())
                     f = common::unwrap(f.select(projection_));
-                rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
+                auto scanned = dataframe::InMemorySource(std::move(f)).scan({});
+                if (!scanned) co_return scanned.error();
+                rows_ = std::move(scanned->cursor);
             }
             auto next_task = rows_->next(max_rows);
             co_return co_await std::move(next_task);

@@ -88,7 +88,7 @@ using MorselResult = dstd::Result<dstd::Optional<Morsel>>;
 /// a source hands out may still throw from next(), narrow() or reclaim(): the
 /// engine awaits those through @ref coro::settle and turns an exception into
 /// an error result (a failed narrow() or reclaim() counts as nothing done).
-/// try_next() must not throw.
+/// try_next(), out_names() and resident_bytes() must not throw.
 class Cursor {
    public:
     virtual ~Cursor();
@@ -168,7 +168,7 @@ struct ScanRequest {
     std::uint64_t memory_budget = 0;
 };
 
-/// The result of Source::scan: a fresh async Cursor plus, per @ref ScanRequest
+/// What Source::scan gives: a fresh async Cursor plus, per @ref ScanRequest
 /// filter, how completely the source applied it.
 struct ScanResult {
     dstd::UniquePtr<Cursor> cursor;
@@ -255,8 +255,9 @@ class Source {
     /// Open a Cursor honoring `req`. When req.projection is non-empty the
     /// cursor's morsels carry exactly those columns in that order; the returned
     /// ScanResult.filters reports, per req.filter, how completely it was
-    /// applied.
-    virtual ScanResult scan(const ScanRequest& req) const = 0;
+    /// applied. A scan that cannot open returns the error; it must not throw,
+    /// so a source built with exceptions catches at its own edge.
+    virtual dstd::Result<ScanResult> scan(const ScanRequest& req) const = 0;
     /// The resident frame when this source is already in memory, else nullptr
     /// (rows produced only by streaming). collect() runs a resident source
     /// whole-column, matching the eager path instead of paying the morsel tax.
@@ -330,10 +331,11 @@ class Source {
     /// shared read, so the caller must drain every cursor concurrently.
     /// Called on members.front() for members sharing its batch_key();
     /// dstd::nullopt (the default) means the source only batches through
-    /// collect_batch().
-    virtual dstd::Optional<dstd::Vector<dstd::UniquePtr<Cursor>>> open_batch(
-        dstd::Vector<dstd::SharedPtr<const Source>>, std::uint64_t) const {
-        return dstd::nullopt;
+    /// collect_batch(). An error result fails the collect; it must not throw.
+    virtual dstd::Result<dstd::Optional<dstd::Vector<dstd::UniquePtr<Cursor>>>>
+    open_batch(dstd::Vector<dstd::SharedPtr<const Source>>,
+               std::uint64_t) const {
+        return dstd::Optional<dstd::Vector<dstd::UniquePtr<Cursor>>>{};
     }
 
     /// Whether open_batch() can feed this member. A member that cannot (it
@@ -358,7 +360,7 @@ class InMemorySource : public Source {
    public:
     explicit InMemorySource(DataFrame frame);
     Schema schema() const override;
-    ScanResult scan(const ScanRequest& req) const override;
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override;
     const DataFrame* as_frame() const override { return frame_.get(); }
 
    private:

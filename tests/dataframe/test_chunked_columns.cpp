@@ -214,7 +214,7 @@ class PartsSource : public Source {
 
     Schema schema() const override { return Schema{}; }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
         r.cursor = dstd::make_unique<PartsCursor>(parts_);
         r.filters.assign(req.filters.size(), Pushed::No);

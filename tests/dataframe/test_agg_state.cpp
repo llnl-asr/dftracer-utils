@@ -401,11 +401,25 @@ TEST_CASE("AggState dyn: a Pct reduction round-trips its per-name sketch") {
     CHECK(r.column("p90_x").data<double>()[0] == doctest::Approx(q));
 }
 
-TEST_CASE("splitting groups into zero parts is an error") {
+TEST_CASE("splitting groups into zero parts ends the process" *
+          doctest::skip()) {
+    fresh_process::announce_abort();
     Sample s(64);
     auto st = dftu_utils_test::ok(
         dataframe::group_agg_state(s.keys1, s.values, mixed_specs()));
-    CHECK_THROWS(dataframe::agg_split_groups(*st, 0, 0));
+    (void)dataframe::agg_split_groups(*st, 0, 0);
+}
+
+TEST_CASE("splitting groups into zero parts is fatal") {
+    auto result =
+        fresh_process::run("splitting groups into zero parts ends the process");
+    CHECK(result.aborted_with("agg_split_groups: parts must be > 0"));
+}
+
+TEST_CASE("splitting groups yields the requested part count") {
+    Sample s(64);
+    auto st = dftu_utils_test::ok(
+        dataframe::group_agg_state(s.keys1, s.values, mixed_specs()));
     CHECK(dataframe::agg_split_groups(*st, 3, 0).size() == 3);
 }
 

@@ -150,7 +150,7 @@ class GenSource : public Source {
         return out;
     }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
         r.cursor = dstd::make_unique<GenCursor>(rows_, keys_, seed_, pad_);
         r.filters.assign(req.filters.size(), Pushed::No);
@@ -222,7 +222,7 @@ class ListSource : public Source {
         return out;
     }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
         r.cursor = dstd::make_unique<ListCursor>(rows_);
         r.filters.assign(req.filters.size(), Pushed::No);

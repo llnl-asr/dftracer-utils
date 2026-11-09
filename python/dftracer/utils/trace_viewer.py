@@ -45,6 +45,7 @@ from .series import _wrap
 _S = TypeVar("_S", bound=RecordSchema)
 
 if TYPE_CHECKING:
+    from .enums import DType
     from .plugins import Plugins
     from .runtime import Runtime
 
@@ -362,6 +363,13 @@ class TraceViewer(LazyFrame):
         listed."""
         self._tv.columns()
         return LazyFrame.columns.fget(self)  # type: ignore[attr-defined]
+
+    @property
+    def schema(self) -> "Dict[str, DType]":
+        """Output column names and dtypes without running the plan; raises when
+        the files have no one record schema."""
+        self._tv.columns()
+        return LazyFrame.schema.fget(self)  # type: ignore[attr-defined]
 
     def column_info(self) -> Dict[str, str]:
         """Every column the index knows, mapped to its type name (``"int64"``

@@ -385,6 +385,27 @@ TEST_SUITE("trace scan - streaming row query") {
         CHECK(bnum(via_lazy, 0, "n") == bnum(via_eager, 0, "n"));
     }
 
+    TEST_CASE("a ViewSource whose scan fails returns the error, not a throw") {
+        TestEnvironment env(200);
+        dstd::String gz = create_mixed_arg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        views::detail::scan::ScanPlan v = views::detail::scan::agg(
+            views::detail::scan::group_by(
+                views::detail::scan::from_file(dstd::String(gz),
+                                               dstd::String(idx)),
+                {GroupKey::name()}),
+            {{AggOp::Count, "", "n"}});
+        auto src = dstd::make_shared<ViewSource>(v);
+
+        dataframe::ScanRequest req;
+        req.projection = {"no_such_column"};
+        const auto scanned = src->scan(req);
+        REQUIRE_FALSE(scanned.has_value());
+        CHECK(
+            dstd::StringView(scanned.error().c_str()).find("no_such_column") !=
+            dstd::StringView::npos);
+    }
+
     TEST_CASE("ViewSource pushdown: col filter -> Query (Exact), matches") {
         const auto& s = shared_trace();
         views::detail::scan::ScanPlan v = views::detail::scan::from_file(
@@ -401,7 +422,7 @@ TEST_SUITE("trace scan - streaming row query") {
         // trace scan, so it comes back Exact.
         dataframe::ScanRequest req;
         req.filters.push_back(dataframe::col(di) > std::int64_t{25});
-        dataframe::ScanResult sr = src->scan(req);
+        dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
         REQUIRE(sr.filters.size() == 1);
         CHECK(sr.filters[0] == dataframe::Pushed::Exact);
 
@@ -440,7 +461,7 @@ TEST_SUITE("trace scan - streaming row query") {
             (dataframe::col(di) + dataframe::col(di)) > std::int64_t{50};
         dataframe::ScanRequest req;
         req.filters.push_back(pred);
-        dataframe::ScanResult sr = src->scan(req);
+        dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
         REQUIRE(sr.filters.size() == 1);
         CHECK(sr.filters[0] == dataframe::Pushed::No);
 
@@ -472,7 +493,7 @@ TEST_SUITE("trace scan - streaming row query") {
         auto pushed_as = [&](const dataframe::Expr& pred) {
             dataframe::ScanRequest req;
             req.filters.push_back(pred);
-            dataframe::ScanResult sr = src->scan(req);
+            dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
             REQUIRE(sr.filters.size() == 1);
             return sr.filters[0];
         };
@@ -556,7 +577,7 @@ TEST_SUITE("trace scan - streaming row query") {
         auto pushed_as = [&](const dataframe::Expr& pred) {
             dataframe::ScanRequest req;
             req.filters.push_back(pred);
-            dataframe::ScanResult sr = src->scan(req);
+            dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
             REQUIRE(sr.filters.size() == 1);
             return sr.filters[0];
         };

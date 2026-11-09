@@ -109,7 +109,7 @@ class SmartSource final : public Source,
           seen_(std::move(seen)) {}
 
     Schema schema() const override { return inner_.schema(); }
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         return inner_.scan(req);
     }
     const DataFrame* as_frame() const override { return inner_.as_frame(); }
@@ -723,6 +723,7 @@ namespace {
 
 struct BatchLog {
     bool throw_batch = false;
+    bool fail_open = false;
     int opened = 0;
     int scans = 0;
     int batches = 0;
@@ -742,22 +743,26 @@ class KeyedSource final : public Source {
           streams_(streams) {}
 
     Schema schema() const override { return inner_.schema(); }
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ++log_->scans;
         return inner_.scan(req);
     }
     dstd::Optional<dstd::String> batch_key() const override { return key_; }
     bool streams_in_batch() const override { return streams_; }
-    dstd::Optional<
-        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>
+    dstd::Result<dstd::Optional<
+        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>>
     open_batch(dstd::Vector<dstd::SharedPtr<const Source>> members,
                std::uint64_t) const override {
         ++log_->opened;
         log_->last_opened = members.size();
+        if (log_->fail_open)
+            return dftracer::utils::common::make_error<"open boom">(
+                dftracer::utils::common::ErrorCode::Io);
         dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>> out;
         for (const auto& m : members)
-            out.push_back(static_cast<const KeyedSource&>(*m)
-                              .inner_.scan(ScanRequest{})
+            out.push_back(dftu_utils_test::ok(
+                              static_cast<const KeyedSource&>(*m).inner_.scan(
+                                  ScanRequest{}))
                               .cursor);
         return out;
     }
@@ -910,20 +915,22 @@ class FaultBatchSource final : public Source {
         : inner_(share(df)), frame_(std::move(df)), fault_(fault) {}
 
     Schema schema() const override { return inner_.schema(); }
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         return inner_.scan(req);
     }
     dstd::Optional<dstd::String> batch_key() const override { return "k"; }
     bool streams_in_batch() const override {
         return fault_ == BatchFault::ShortOpen;
     }
-    dstd::Optional<
-        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>
+    dstd::Result<dstd::Optional<
+        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>>
     open_batch(dstd::Vector<dstd::SharedPtr<const Source>>,
                std::uint64_t) const override {
-        if (fault_ != BatchFault::ShortOpen) return dstd::nullopt;
+        if (fault_ != BatchFault::ShortOpen)
+            return dstd::Optional<dstd::Vector<
+                dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>{};
         dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>> out;
-        out.push_back(inner_.scan(ScanRequest{}).cursor);
+        out.push_back(dftu_utils_test::ok(inner_.scan(ScanRequest{})).cursor);
         return out;
     }
     coro::CoroTask<dstd::Vector<DataFrame>> collect_batch(
@@ -1001,7 +1008,7 @@ TEST_SUITE("batch contract") {
 
 namespace {
 
-enum class SourceFault { Throw, Stop };
+enum class SourceFault { Throw, Stop, ScanFails };
 
 class FaultyCursor final : public dftracer::utils::dataframe::Cursor {
    public:
@@ -1025,7 +1032,10 @@ class FaultySource final : public Source {
         return {{dftracer::utils::dataframe::Field{
             "a", dftracer::utils::dataframe::scalar(TypeId::Int64), true}}};
     }
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
+        if (fault_ == SourceFault::ScanFails)
+            return dftracer::utils::common::make_error<"scan boom">(
+                dftracer::utils::common::ErrorCode::Io);
         ScanResult r;
         r.cursor = dstd::make_unique<FaultyCursor>(fault_);
         r.filters.assign(req.filters.size(),
@@ -1088,6 +1098,29 @@ TEST_SUITE("source that fails") {
         REQUIRE_FALSE(result.has_value());
         CHECK(dstd::String(result.error().c_str()).find("source boom") !=
               dstd::String::npos);
+    }
+
+    TEST_CASE("a scan that fails ends the collect with its error") {
+        const auto collected = dftracer::utils::default_runtime()
+                                   .submit(faulty(SourceFault::ScanFails)
+                                               .filter(col(0) > std::int64_t{1})
+                                               .collect())
+                                   .get();
+        dftu_utils_test::expect_error(
+            collected, dftracer::utils::common::ErrorCode::Io, "scan boom");
+    }
+
+    TEST_CASE("an open_batch that fails ends the collect with its error") {
+        auto log = dstd::make_shared<BatchLog>();
+        log->fail_open = true;
+        const auto collected =
+            dftracer::utils::default_runtime()
+                .submit(dftracer::utils::dataframe::collect_all(
+                    {keyed("k", log), keyed("k", log)}))
+                .get();
+        CHECK(log->opened == 1);
+        dftu_utils_test::expect_error(
+            collected, dftracer::utils::common::ErrorCode::Io, "open boom");
     }
 
     TEST_CASE("a collect_batch that throws ends the collect with an error") {

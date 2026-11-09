@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/channel.h>
@@ -1123,8 +1124,19 @@ coro::CoroTask<void> run_open_batch(
 
 }  // namespace
 
-dstd::Optional<dstd::Vector<dstd::UniquePtr<dataframe::Cursor>>>
+dstd::Result<dstd::Optional<dstd::Vector<dstd::UniquePtr<dataframe::Cursor>>>>
 ViewSource::open_batch(
+    dstd::Vector<dstd::SharedPtr<const dataframe::Source>> members,
+    std::uint64_t memory_budget) const {
+    try {
+        return open_batch_or_throw(std::move(members), memory_budget);
+    } catch (...) {
+        return common::error_of_exception(std::current_exception());
+    }
+}
+
+dstd::Optional<dstd::Vector<dstd::UniquePtr<dataframe::Cursor>>>
+ViewSource::open_batch_or_throw(
     dstd::Vector<dstd::SharedPtr<const dataframe::Source>> members,
     std::uint64_t memory_budget) const {
     dstd::Vector<const ViewSource*> views;
@@ -1205,7 +1217,15 @@ bool ViewSource::can_stream_rows() const {
     const detail::ViewPlan& p = *plan_;
     // The index lists the args of data events only, so dftracer metadata rows
     // take their columns from the rows themselves.
-    if (!detail::plan_by_path(p) && p.select.empty() &&
+    bool by_path = false;
+    try {
+        by_path = detail::plan_by_path(p);
+    } catch (...) {
+        // The dataframe engine calls this and cannot catch. A plan whose
+        // files have no one schema buffers, and scan() returns the error.
+        return false;
+    }
+    if (!by_path && p.select.empty() &&
         (p.all_records || p.phase == Phase::Metadata))
         return false;
     // detail::scan::collect() always strips sort/topk/offset/limit before
@@ -1246,7 +1266,18 @@ dstd::Vector<dstd::String> ViewSource::row_schema() const {
 
 dftracer::utils::dataframe::Schema ViewSource::schema() const {
     std::lock_guard<std::mutex> lock(schema_mu_);
-    if (!schema_) schema_ = compute_schema();
+    if (!schema_) {
+        try {
+            schema_ = compute_schema();
+        } catch (...) {
+            // An empty schema, not cached: scan() runs the same work again
+            // and returns the error.
+            DFTRACER_UTILS_LOG_WARN(
+                "view schema failed: %s",
+                common::error_of_exception(std::current_exception()).c_str());
+            return {};
+        }
+    }
     return *schema_;
 }
 
@@ -1411,7 +1442,13 @@ coro::CoroTask<dataframe::DataFrame> ViewSource::run_alone() const {
 
 const dftracer::utils::dataframe::DataFrame* ViewSource::as_frame() const {
     if (can_stream_rows()) return nullptr;
-    return buffer().get();
+    try {
+        return buffer().get();
+    } catch (...) {
+        // No resident frame: scan() runs the same work again and returns the
+        // error.
+        return nullptr;
+    }
 }
 
 dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
@@ -1476,7 +1513,18 @@ dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
         std::move(fnames), detail::metadata_rows(*v), std::move(gate));
 }
 
-dftracer::utils::dataframe::ScanResult ViewSource::scan(
+// The dataframe engine is built without exceptions, so nothing here may throw
+// into it: the sync hooks catch at this edge and return the error.
+dstd::Result<dftracer::utils::dataframe::ScanResult> ViewSource::scan(
+    const dftracer::utils::dataframe::ScanRequest& req) const {
+    try {
+        return scan_or_throw(req);
+    } catch (...) {
+        return common::error_of_exception(std::current_exception());
+    }
+}
+
+dftracer::utils::dataframe::ScanResult ViewSource::scan_or_throw(
     const dftracer::utils::dataframe::ScanRequest& req) const {
     dftracer::utils::dataframe::ScanResult r;
     r.filters.assign(req.filters.size(),

@@ -224,7 +224,7 @@ class GenSource : public dataframe::Source {
         return out;
     }
 
-    dataframe::ScanResult scan(
+    dftracer::utils::dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dftracer::utils::dstd::Vector<std::size_t> picked;
         if (req.projection.empty()) {

@@ -1294,6 +1294,8 @@ foreach(variant objects shared static)
       # exported.
       set_target_properties(dftracer_utils_dataframe_objects
                             PROPERTIES VISIBILITY_INLINES_HIDDEN ON)
+      target_compile_options(dftracer_utils_dataframe_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
     endif()
     link_simdjson(${VARIANT_TARGET} ${VARIANT_UPPER})
     # Highway powers the SIMD kernels; hwy_contrib carries VQSort (argsort) and

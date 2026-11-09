@@ -285,11 +285,15 @@ class SideSource final : public dataframe::Source {
 
     dataframe::Schema schema() const override { return schema_; }
 
-    dataframe::ScanResult scan(
+    dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r;
-        r.cursor = dstd::make_unique<Rows>(strong_ ? strong_ : owner(weak_),
-                                           side_, req.projection);
+        try {
+            r.cursor = dstd::make_unique<Rows>(strong_ ? strong_ : owner(weak_),
+                                               side_, req.projection);
+        } catch (...) {
+            return common::error_of_exception(std::current_exception());
+        }
         r.filters.assign(req.filters.size(), dataframe::Pushed::No);
         return r;
     }
@@ -314,7 +318,9 @@ class SideSource final : public dataframe::Source {
                     f.columns.push_back(c.share());
                 if (!projection_.empty())
                     f = common::unwrap(f.select(projection_));
-                rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
+                auto scanned = dataframe::InMemorySource(std::move(f)).scan({});
+                if (!scanned) co_return scanned.error();
+                rows_ = std::move(scanned->cursor);
             }
             auto next_task = rows_->next(max_rows);
             co_return co_await std::move(next_task);
@@ -354,7 +360,23 @@ dstd::SharedPtr<const dataframe::detail::Tap> side_tap(
             dstd::Vector<dataframe::DataFrame> parts;
         };
         auto state = dstd::make_shared<State>();
-        const auto s = strong ? strong : owner(weak);
+        dstd::SharedPtr<Sides> s = strong;
+        if (!s) {
+            // The dataframe engine cannot catch: a released row set fails
+            // the run through its callbacks.
+            try {
+                s = owner(weak);
+            } catch (...) {
+                const dstd::Error error =
+                    common::error_of_exception(std::current_exception());
+                dataframe::detail::TapRun failed;
+                failed.rows = [error](const dataframe::DataFrame&) {
+                    return dstd::Result<void>(error);
+                };
+                failed.end = [error] { return dstd::Result<void>(error); };
+                return failed;
+            }
+        }
         const dstd::Optional<CacheKey> key = s->keys[side];
         const LookupCaps caps = LookupCaps::read();
         dataframe::detail::TapRun run;

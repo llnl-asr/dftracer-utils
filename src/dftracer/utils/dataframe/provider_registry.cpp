@@ -492,7 +492,7 @@ class ProviderSource final
         return s;
     }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
         r.filters.assign(req.filters.size(), Pushed::No);
 
@@ -531,7 +531,10 @@ class ProviderSource final
 
         for (dftu_expr* h : owned_filters) dftu_expr_free(h);
 
-        if (!ok || !vt) return r;
+        if (!ok || !vt)
+            return common::make_error<
+                "provider scan: the provider opened no "
+                "cursor">(common::ErrorCode::Internal);
 
         for (std::size_t i = 0; i < r.filters.size(); ++i)
             r.filters[i] = to_pushed(out_pushed[i]);

@@ -80,7 +80,7 @@ class PartsSource : public Source {
         return s;
     }
 
-    dftracer::utils::dataframe::ScanResult scan(
+    dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         dftracer::utils::dataframe::ScanResult r;
         r.cursor = dstd::make_unique<PartsCursor>(parts_);

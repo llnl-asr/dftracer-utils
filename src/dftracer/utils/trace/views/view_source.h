@@ -149,8 +149,8 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// member arrives as one frame once the scan ends. dstd::nullopt when a
     /// member's rows cannot stream (a select that needs the name resolver).
     /// Only members with streams_in_batch() are offered.
-    dstd::Optional<
-        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>
+    dstd::Result<dstd::Optional<
+        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>>
     open_batch(
         dstd::Vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
             members,
@@ -175,10 +175,19 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// Push projection into the plan's select and each translatable predicate
     /// into its query (reported Exact - the scan filters events, not just
     /// prunes I/O); the untranslatable rest stay No for the engine to apply.
-    dftracer::utils::dataframe::ScanResult scan(
+    dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override;
 
    private:
+    dftracer::utils::dataframe::ScanResult scan_or_throw(
+        const dftracer::utils::dataframe::ScanRequest& req) const;
+    dstd::Optional<
+        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>
+    open_batch_or_throw(
+        dstd::Vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
+            members,
+        std::uint64_t memory_budget) const;
+
     /// The session every member of a batch shares: their files and scan
     /// settings, with no member's own shape.
     static ViewSession base_session(const detail::ViewPlan& p);

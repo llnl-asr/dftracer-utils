@@ -947,7 +947,7 @@ class TransformSource final : public dataframe::Source {
     dataframe::Schema schema() const override { return schema_; }
     bool undeclared_columns() const override { return true; }
 
-    dataframe::ScanResult scan(
+    dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r;
         r.cursor = dstd::make_unique<Rows>(*this, req.projection);
@@ -987,7 +987,9 @@ class TransformSource final : public dataframe::Source {
                 ids_.clear();
                 for (const auto& n : f.names)
                     ids_.push_back(intern_->get_or_insert(n));
-                rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
+                auto scanned = dataframe::InMemorySource(std::move(f)).scan({});
+                if (!scanned) co_return scanned.error();
+                rows_ = std::move(scanned->cursor);
             }
         }
 

@@ -4732,7 +4732,7 @@ Schema InMemorySource::schema() const {
     return s;
 }
 
-ScanResult InMemorySource::scan(const ScanRequest& req) const {
+dstd::Result<ScanResult> InMemorySource::scan(const ScanRequest& req) const {
     // Honor projection zero-copy: share only the requested columns, in the
     // requested order. Every filter stays No - the whole-column engine applies
     // them (a resident source usually takes the as_frame() fast path anyway).
@@ -4743,6 +4743,7 @@ ScanResult InMemorySource::scan(const ScanRequest& req) const {
         proj.columns.reserve(req.projection.size());
         for (const dstd::String& nm : req.projection) {
             const int c = col_index(frame_->names, nm);
+            if (c < 0) return not_found<"scan: no column named {}">(nm).error();
             proj.columns.push_back(
                 frame_->columns[static_cast<std::size_t>(c)].share());
         }
@@ -5805,7 +5806,9 @@ dstd::Result<CursorChain> lower_cursor_chain(
         }
     }
 
-    ScanResult r = source.scan(req);
+    auto scanned = source.scan(req);
+    if (!scanned) return scanned.error();
+    ScanResult r = std::move(*scanned);
 
     // Drop every candidate the source applied exactly; the engine re-applies
     // No/Inexact (and any filter deeper in the plan).
@@ -6075,7 +6078,7 @@ class OpenedSource final : public Source {
     Schema schema() const override { return schema_; }
     bool undeclared_columns() const override { return undeclared_; }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         const dstd::Vector<dstd::String> all = names();
         dstd::Vector<int> pick;
         if (!req.projection.empty() && req.projection != all) {
@@ -6124,7 +6127,7 @@ class CollectedSource final : public Source {
     Schema schema() const override { return schema_; }
     bool undeclared_columns() const override { return true; }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
         r.filters.assign(req.filters.size(), Pushed::No);
         r.cursor = dstd::make_unique<Named>(
@@ -6294,14 +6297,17 @@ coro::CoroTask<dstd::Result<void>> batch_leaves(
         auto sources = sources_of(members);
         const std::uint64_t budget =
             memory::resolve_spill_budget(members.front()->memory_budget);
-        if (auto cursors = sources.front()->open_batch(sources, budget)) {
-            if (cursors->size() != members.size())
+        auto opened = sources.front()->open_batch(sources, budget);
+        if (!opened) co_return opened.error();
+        if (*opened) {
+            auto& cursors = **opened;
+            if (cursors.size() != members.size())
                 dstd::fatal(
                     "Source::open_batch returned a cursor count that differs "
                     "from its member count");
             for (std::size_t k = 0; k < members.size(); ++k)
                 members[k]->parts.source = dstd::make_shared<OpenedSource>(
-                    sources[k]->schema(), std::move((*cursors)[k]),
+                    sources[k]->schema(), std::move(cursors[k]),
                     sources[k]->undeclared_columns());
             continue;
         }

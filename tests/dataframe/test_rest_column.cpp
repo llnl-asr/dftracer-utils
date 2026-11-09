@@ -141,7 +141,7 @@ class PartsSource : public dataframe::Source {
 
     bool undeclared_columns() const override { return !declare_all_; }
 
-    dataframe::ScanResult scan(
+    dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r;
         r.cursor = dstd::make_unique<PartsCursor>(parts_, with_list_);
@@ -171,7 +171,7 @@ class RightSource : public dataframe::Source {
 
     bool undeclared_columns() const override { return true; }
 
-    dataframe::ScanResult scan(
+    dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r;
         r.cursor = dstd::make_unique<PartsCursor>(parts_, false);

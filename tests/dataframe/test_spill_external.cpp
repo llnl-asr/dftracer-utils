@@ -79,7 +79,7 @@ class Hooked : public Source {
         return out;
     }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
         r.cursor = dstd::make_unique<Rows>(morsels_, rows_, hook_);
         r.filters.assign(req.filters.size(), Pushed::No);

@@ -1338,6 +1338,12 @@ TEST_CASE("dftu_dataframe reshaping ops via C ABI") {
     CHECK(dftu_dataframe_explode(df, "missing") == nullptr);
     // non-list column -> NULL
     CHECK(dftu_dataframe_explode(df, "a") == nullptr);
+    // unknown subset column, unknown unpivot column, unknown column to
+    // dummies -> NULL, never an exception out of the C function
+    const char* missing[] = {"missing"};
+    CHECK(dftu_dataframe_unique_by(df, missing, 1) == nullptr);
+    CHECK(dftu_dataframe_unpivot(df, ids, 1, missing, 1) == nullptr);
+    CHECK(dftu_dataframe_to_dummies(df, "missing") == nullptr);
 
     // pivot via the C ABI: index=id, columns=id, values=a, "first".
     dftu_dataframe* pv = dftu_dataframe_pivot(df, "id", "id", "a", "first");

@@ -1323,6 +1323,23 @@ class TestTraceViewerSchema:
                 assert c in cols, c
             assert not any(c.startswith("resolved.") for c in cols)
 
+    def test_columns_and_schema_raise_on_mixed_record_schemas(self):
+        with Environment() as env:
+            generic = _make_trace(env, "g.ndjson.gz", [{"a": i, "b": "x"} for i in range(5)])
+            events = _make_trace(
+                env,
+                "f.pfw.gz",
+                [
+                    {"ph": "X", "name": "r", "cat": "POSIX", "pid": 1, "tid": 1, "ts": i, "dur": 1}
+                    for i in range(5)
+                ],
+            )
+            tv = TraceViewer([generic, events])
+            with pytest.raises(Exception, match="one record schema"):
+                tv.columns
+            with pytest.raises(Exception, match="one record schema"):
+                tv.schema
+
     def test_schema_reports_types(self):
         with Environment() as env:
             path = _make_trace(env, "schema.pfw.gz", self._rows())

@@ -451,9 +451,11 @@ TEST_SUITE("ViewIndexParity") {
                     View v = fx.view();
                     if (!sh.keys.empty()) v = v.group_by(sh.keys);
                     if (sh.window_us != 0) v = v.time_bucket(sh.window_us);
-                    got = cells_of(
-                        dftu_utils_test::ok(v.agg({ac.spec}).collect().get()),
-                        sh.columns, dstd::String(ac.spec.out_name));
+                    auto collected = v.agg({ac.spec}).collect().get();
+                    if (!collected)
+                        throw std::runtime_error(collected.error().c_str());
+                    got = cells_of(*collected, sh.columns,
+                                   dstd::String(ac.spec.out_name));
                 } catch (const std::exception& e) {
                     line.status = "declined";
                     line.note = first_line(e.what());

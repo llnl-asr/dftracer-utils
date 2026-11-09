@@ -86,14 +86,10 @@ class SpoolSource : public Source {
 
     Schema schema() const override { return schema_; }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
         auto opened = spool_->reader();
-        if (!opened) {
-            r.cursor = dstd::make_unique<ErrorCursor>(opened.error());
-            r.filters.assign(req.filters.size(), Pushed::No);
-            return r;
-        }
+        if (!opened) return opened.error();
         dstd::UniquePtr<Cursor> reader = std::move(*opened);
         if (req.projection.empty()) {
             r.cursor = std::move(reader);
@@ -103,12 +99,8 @@ class SpoolSource : public Source {
                 const auto it = std::find_if(
                     schema_.fields.begin(), schema_.fields.end(),
                     [&](const Field& f) { return f.name == name; });
-                if (it == schema_.fields.end()) {
-                    r.cursor = dstd::make_unique<ErrorCursor>(
-                        not_found<"scan: no column named {}">(name).error());
-                    r.filters.assign(req.filters.size(), Pushed::No);
-                    return r;
-                }
+                if (it == schema_.fields.end())
+                    return not_found<"scan: no column named {}">(name).error();
                 pick.push_back(
                     static_cast<std::size_t>(it - schema_.fields.begin()));
             }

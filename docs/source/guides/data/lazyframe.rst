@@ -313,7 +313,7 @@ a morsel or the end. The request carries what the plan wants pushed down:
 
    class MySource : public Source {
        Schema schema() const override;
-       ScanResult scan(const ScanRequest& req) const override;   // a fresh Cursor
+       dstd::Result<ScanResult> scan(const ScanRequest& req) const override;   // a fresh Cursor
    };
    LazyFrame plan = LazyFrame::scan(std::make_shared<MySource>());
 

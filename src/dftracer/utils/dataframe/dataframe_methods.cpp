@@ -14,7 +14,7 @@
 
 namespace {
 // Mirrors LazyFrame's file-local default in lazyframe.cpp.
-constexpr std::int64_t DEFAULT_MORSEL_ROWS = 65536;
+constexpr std::int64_t DEFAULT_BATCH_SIZE = 65536;
 }  // namespace
 
 namespace dftracer::utils::dataframe {
@@ -48,9 +48,9 @@ DataFrame DataFrame::tail(std::int64_t n) const {
 }
 
 coro::AsyncGenerator<DataFrame> DataFrame::stream(
-    std::int64_t morsel_rows) const {
+    std::int64_t batch_size) const {
     const std::int64_t eff_rows =
-        morsel_rows > 0 ? morsel_rows : DEFAULT_MORSEL_ROWS;
+        batch_size > 0 ? batch_size : DEFAULT_BATCH_SIZE;
     const std::int64_t nrows = num_rows();
     for (std::int64_t offset = 0; offset < nrows; offset += eff_rows) {
         DataFrame chunk = dataframe::slice(*this, offset, eff_rows);

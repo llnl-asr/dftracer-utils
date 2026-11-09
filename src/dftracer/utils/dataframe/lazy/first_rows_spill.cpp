@@ -336,7 +336,7 @@ class FirstRowsSpill {
             if (!opened) co_return opened.error();
             auto reader = std::move(*opened);
             for (;;) {
-                auto task = reader->next(DEFAULT_MORSEL_ROWS);
+                auto task = reader->next(DEFAULT_BATCH_SIZE);
                 auto m = co_await std::move(task).or_fail();
                 if (!m) break;
                 dstd::Vector<dstd::Vector<std::int64_t>> pick(
@@ -386,7 +386,7 @@ class FirstRowsSpill {
         if (!in_opened) co_return in_opened.error();
         auto reader = std::move(*in_opened);
         for (;;) {
-            auto task = reader->next(DEFAULT_MORSEL_ROWS);
+            auto task = reader->next(DEFAULT_BATCH_SIZE);
             auto m = co_await std::move(task).or_fail();
             if (!m) break;
             const std::int64_t* row_ids = m->columns[0].data<std::int64_t>();

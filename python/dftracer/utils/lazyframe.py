@@ -604,22 +604,22 @@ class LazyFrame:
         """Set the spill budget to ~1/3 of available memory."""
         return self._like(self._native.auto_spill())
 
-    def collect(self, morsel_rows: int = 0) -> DataFrame:
-        """Run the pipeline and materialize a :class:`DataFrame`. ``morsel_rows``
+    def collect(self, batch_size: int = 0) -> DataFrame:
+        """Run the pipeline and materialize a :class:`DataFrame`. ``batch_size``
         is the chunk a streaming source is pulled in; ``0`` (the default) is
         auto, and runs a resident source whole-column, as the eager path."""
-        return self._finish(_wrap(self._native.collect(morsel_rows, self._runtime)))
+        return self._finish(_wrap(self._native.collect(batch_size, self._runtime)))
 
     def _finish(self, out: DataFrame) -> DataFrame:
         if self._index is not None and all(name in out for name in self._index):
             out._index = self._index
         return out
 
-    def stream(self, morsel_rows: int = 0) -> "Iterator[DataFrame]":
+    def stream(self, batch_size: int = 0) -> "Iterator[DataFrame]":
         """Run the pipeline and yield its rows as :class:`DataFrame` chunks of
-        about ``morsel_rows`` rows (``0`` is auto), holding a bounded amount in
+        about ``batch_size`` rows (``0`` is auto), holding a bounded amount in
         memory. Each chunk carries its own schema. Starts on the first pull."""
-        return (_wrap(chunk) for chunk in self._native.stream(morsel_rows, self._runtime))
+        return (_wrap(chunk) for chunk in self._native.stream(batch_size, self._runtime))
 
     def __getitem__(self, key: object) -> "Union[BoundColumn, LazyFrame]":
         """Lazy indexing: a name gives a column expression bound to this plan

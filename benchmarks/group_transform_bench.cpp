@@ -35,11 +35,11 @@ using dataframe::Series;
 
 namespace {
 
-constexpr std::int64_t MORSEL_ROWS = 65536;
+constexpr std::int64_t BATCH_SIZE = 65536;
 
 DataFrame collect(LazyFrame plan) {
     return common::unwrap(dftracer::utils::default_runtime()
-                              .submit(plan.collect(MORSEL_ROWS))
+                              .submit(plan.collect(BATCH_SIZE))
                               .get());
 }
 

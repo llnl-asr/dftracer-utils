@@ -1225,9 +1225,9 @@ dataframe::LazyFrame collect(const ScanPlan& plan) {
 }
 
 coro::AsyncGenerator<dataframe::DataFrame> stream(ScanPlan plan,
-                                                  std::int64_t morsel_rows) {
+                                                  std::int64_t batch_size) {
     dataframe::LazyFrame lf = collect(plan);
-    auto gen = lf.stream(morsel_rows);
+    auto gen = lf.stream(batch_size);
     for (;;) {
         auto df = co_await gen.next();
         if (!df) break;

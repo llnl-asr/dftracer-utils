@@ -77,7 +77,7 @@ std::uint64_t budget_bytes() {
     return (v ? std::strtoull(v, nullptr, 10) : DEFAULT_BUDGET_MB) << 20;
 }
 const std::uint64_t BUDGET = budget_bytes();
-constexpr std::int64_t MORSEL_ROWS = 8192;
+constexpr std::int64_t BATCH_SIZE = 8192;
 // An op may use this many budgets above the streaming baseline: its own state
 // of one budget, a morsel or two in flight and the allocator's slack.
 #if defined(__APPLE__)
@@ -99,7 +99,7 @@ class GenCursor : public Cursor {
 
     coro::CoroTask<MorselResult> next(std::int64_t) override {
         if (at_ >= rows_) co_return MorselResult(dstd::nullopt);
-        const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
+        const std::int64_t n = std::min(BATCH_SIZE, rows_ - at_);
         dstd::Vector<std::int64_t> k(n), t(n), v(n), g(n);
         dstd::Vector<dstd::String> s(n);
         for (std::int64_t i = 0; i < n; ++i) {
@@ -192,7 +192,7 @@ class ListCursor : public Cursor {
 
     coro::CoroTask<MorselResult> next(std::int64_t) override {
         if (at_ >= rows_) co_return MorselResult(dstd::nullopt);
-        const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
+        const std::int64_t n = std::min(BATCH_SIZE, rows_ - at_);
         dstd::Vector<std::int64_t> pid(static_cast<std::size_t>(n));
         for (std::int64_t i = 0; i < n; ++i)
             pid[static_cast<std::size_t>(i)] = at_ + i;
@@ -667,7 +667,7 @@ dstd::Set<dstd::String> registry_ops() {
 
 coro::CoroTask<std::int64_t> drain_count(LazyFrame lf) {
     std::int64_t n = 0;
-    auto g = lf.stream(MORSEL_ROWS);
+    auto g = lf.stream(BATCH_SIZE);
     while (auto df = co_await g.next()) {
         if (!*df) {
             std::fprintf(stderr, "stream failed: %s\n", df->error().c_str());

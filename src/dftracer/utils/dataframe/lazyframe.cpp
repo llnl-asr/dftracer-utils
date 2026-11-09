@@ -5897,11 +5897,11 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> drive_cursor_chain(
 namespace {
 
 coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
-    PlanParts plan, std::uint64_t memory_budget, std::int64_t morsel_rows) {
+    PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size) {
     // 0 resolves to auto (~1/3 RAM), same policy as View.
     const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
     const std::int64_t eff_rows =
-        morsel_rows > 0 ? morsel_rows : DEFAULT_MORSEL_ROWS;
+        batch_size > 0 ? batch_size : DEFAULT_BATCH_SIZE;
 
     // The run's pool is the scope while the chain is built and of every
     // coroutine the driver makes. It has no limit, as the plan's budget stays
@@ -5924,10 +5924,10 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
 }  // namespace
 
 coro::AsyncGenerator<dstd::Result<DataFrame>> LazyFrame::stream(
-    std::int64_t morsel_rows) const {
+    std::int64_t batch_size) const {
     if (error_) return failed_stream(*error_);
     return stream_plan(optimize_parts(source_, ops_), memory_budget_,
-                       morsel_rows);
+                       batch_size);
 }
 
 namespace {
@@ -6000,12 +6000,12 @@ bool may_expand(const LazyOp& op) {
 }
 
 coro::CoroTask<dstd::Result<DataFrame>> collect_plan(
-    PlanParts plan, std::uint64_t memory_budget, std::int64_t morsel_rows) {
+    PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size) {
     // A resident source runs whole-column, matching eager, unless an op can
     // make more than it reads or the frame is past half the automatic budget
     // (a sort or a group-by holds about its input again). An explicit
-    // morsel_rows or memory_budget asks to stream/spill instead.
-    if (morsel_rows <= 0 && memory_budget == 0 &&
+    // batch_size or memory_budget asks to stream/spill instead.
+    if (batch_size <= 0 && memory_budget == 0 &&
         std::none_of(plan.ops.begin(), plan.ops.end(),
                      [](const auto& op) { return may_expand(*op); })) {
         if (const DataFrame* f = plan.source->as_frame();
@@ -6018,7 +6018,7 @@ coro::CoroTask<dstd::Result<DataFrame>> collect_plan(
     }
     const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
     auto draining = drain_stream(
-        stream_plan(std::move(plan), memory_budget, morsel_rows), budget);
+        stream_plan(std::move(plan), memory_budget, batch_size), budget);
     co_return co_await std::move(draining);
 }
 
@@ -6316,8 +6316,9 @@ coro::CoroTask<dstd::Result<void>> batch_leaves(
 
 namespace {
 
-coro::CoroTask<dstd::Result<DataFrame>> collect_owned(
-    LazyFrame plan, std::uint64_t budget, std::int64_t morsel_rows) {
+coro::CoroTask<dstd::Result<DataFrame>> collect_owned(LazyFrame plan,
+                                                      std::uint64_t budget,
+                                                      std::int64_t batch_size) {
     PlannedTree tree = plan_tree(plan);
     if (!tree.children.empty()) {
         dstd::Vector<PlannedTree*> leaves;
@@ -6327,7 +6328,7 @@ coro::CoroTask<dstd::Result<DataFrame>> collect_owned(
         if (!batched) co_return batched.error();
     }
     auto collecting =
-        collect_plan(finish_tree(std::move(tree)), budget, morsel_rows);
+        collect_plan(finish_tree(std::move(tree)), budget, batch_size);
     co_return co_await std::move(collecting);
 }
 
@@ -6356,9 +6357,9 @@ coro::CoroTask<dstd::Result<DataFrame>> join_chunks(DataFrame f) {
 }
 
 coro::CoroTask<dstd::Result<DataFrame>> LazyFrame::collect(
-    std::int64_t morsel_rows) const {
+    std::int64_t batch_size) const {
     if (error_) return failed_task<DataFrame>(*error_);
-    return collect_owned(*this, memory_budget_, morsel_rows);
+    return collect_owned(*this, memory_budget_, batch_size);
 }
 
 coro::CoroTask<dstd::Vector<DataFrame>> Source::collect_batch(
@@ -6462,11 +6463,11 @@ dstd::Result<void> agg_accumulate_chunk(
 coro::CoroTask<dstd::Result<AggStatePtr>> LazyFrame::collect_group_state(
     dstd::Vector<dstd::String> keys, dstd::Vector<GroupAgg> aggs,
     dstd::Vector<AggDynSpec> dyn, dstd::String dyn_prefix,
-    std::int64_t morsel_rows) const {
+    std::int64_t batch_size) const {
     if (error_) co_return *error_;
     LoweredGroupAggs lowered = lower_group_aggs(aggs);
     AggStatePtr state = agg_new(lowered.specs, dyn);
-    auto gen = stream(morsel_rows);
+    auto gen = stream(batch_size);
     std::int64_t rows_seen = 0;
     for (;;) {
         auto df = co_await gen.next();

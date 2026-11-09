@@ -657,20 +657,20 @@ class LazyFrame {
 
     /// Pull-based chunk generator: the streaming terminal. Each yielded
     /// @ref DataFrame is standalone, carrying its own schema. One-shot: re-run
-    /// from the @ref LazyFrame to restart. `morsel_rows` is the scan chunk
+    /// from the @ref LazyFrame to restart. `batch_size` is the scan chunk
     /// size;
     /// <= 0 means auto. collect() drains this. A chunk that cannot be made is
     /// an error result, after which the generator ends; so is a plan whose
     /// cursor chain cannot be built or that holds a @ref status() error.
     coro::AsyncGenerator<dstd::Result<DataFrame>> stream(
-        std::int64_t morsel_rows = 0) const;
+        std::int64_t batch_size = 0) const;
 
     /// The plan's cursor chain, undrained, so a caller can read each morsel's
     /// ordering before stream() materializes it away. One-shot, as stream().
     /// The error is the one stream() would end with first.
     dstd::Result<dstd::UniquePtr<Cursor>> open_cursor() const;
 
-    /// Run the pipeline and materialize the surviving rows. `morsel_rows` is
+    /// Run the pipeline and materialize the surviving rows. `batch_size` is
     /// the scan chunk size; <= 0 (the default) means auto; one pass over a
     /// resident source, the bounded streaming default otherwise. The error is
     /// the first one a builder kept (@ref status()) or the one that ended the
@@ -678,7 +678,7 @@ class LazyFrame {
     /// that cannot be written or read, a failed plugin node, or a cursor that
     /// threw (as an error of the exception's message).
     coro::CoroTask<dstd::Result<DataFrame>> collect(
-        std::int64_t morsel_rows = 0) const;
+        std::int64_t batch_size = 0) const;
 
     /// Group `keys` with `aggs` and return the mergeable partial instead of a
     /// finalized frame: streams this pipeline (no group op appended) and folds
@@ -689,7 +689,7 @@ class LazyFrame {
     coro::CoroTask<dstd::Result<AggStatePtr>> collect_group_state(
         dstd::Vector<dstd::String> keys, dstd::Vector<GroupAgg> aggs,
         dstd::Vector<AggDynSpec> dyn = {}, dstd::String dyn_prefix = {},
-        std::int64_t morsel_rows = 0) const;
+        std::int64_t batch_size = 0) const;
 
    private:
     friend struct detail::PlanAccess;

@@ -45,7 +45,7 @@ inline void require_ok(const dftracer::utils::dstd::Expected<
     std::exit(1);
 }
 
-constexpr std::int64_t MORSEL_ROWS = 8192;
+constexpr std::int64_t BATCH_SIZE = 8192;
 constexpr std::uint64_t PLAN_BUDGET = 1ULL << 36;
 constexpr std::uint64_t GENESIS_SHARE = 256ULL * 1024 * 1024;
 constexpr std::int64_t RANKS = 4;
@@ -64,7 +64,7 @@ class GenCursor : public dftracer::utils::dataframe::Cursor {
         if (at_ >= rows_)
             co_return dftracer::utils::dataframe::MorselResult(
                 dftracer::utils::dstd::nullopt);
-        const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
+        const std::int64_t n = std::min(BATCH_SIZE, rows_ - at_);
         dftracer::utils::dstd::Vector<std::int64_t> k(
             static_cast<std::size_t>(n));
         dftracer::utils::dstd::Vector<std::int64_t> t(
@@ -141,7 +141,7 @@ inline dftracer::utils::dataframe::LazyFrame gen(std::int64_t rows,
 inline dftracer::utils::coro::CoroTask<std::int64_t> drain_count(
     dftracer::utils::dataframe::LazyFrame lf) {
     std::int64_t n = 0;
-    auto g = lf.stream(MORSEL_ROWS);
+    auto g = lf.stream(BATCH_SIZE);
     while (auto frame = co_await g.next()) {
         if (!*frame) {
             std::fprintf(stderr, "drain_count: %s\n", frame->error().c_str());

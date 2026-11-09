@@ -97,7 +97,7 @@ constexpr std::uint64_t MIN_DATA = 64 * MIB;
 constexpr std::uint64_t MAX_DATA = 512 * MIB;
 constexpr std::uint64_t SPILLING_BUDGET_MAX = 64 * MIB;
 constexpr int SPILLING_RUNS = 3;
-constexpr std::int64_t MORSEL_ROWS = 65536;
+constexpr std::int64_t BATCH_SIZE = 65536;
 constexpr std::uint64_t SEED = 42;
 constexpr std::int64_t HOT_KEYS = 16;
 constexpr std::int64_t DIM_ROWS = 4096;
@@ -259,7 +259,7 @@ class GenSource : public dataframe::Source {
             if (pos_ >= shape_->rows)
                 co_return dataframe::MorselResult(
                     dftracer::utils::dstd::nullopt);
-            const std::int64_t want = max_rows > 0 ? max_rows : MORSEL_ROWS;
+            const std::int64_t want = max_rows > 0 ? max_rows : BATCH_SIZE;
             const std::int64_t n = std::min(want, shape_->rows - pos_);
             dataframe::Morsel m;
             m.rows = n;
@@ -444,7 +444,7 @@ dftracer::utils::dstd::Vector<Case> make_cases() {
 }
 
 coro::CoroTask<std::int64_t> drain(LazyFrame plan) {
-    auto gen = plan.stream(MORSEL_ROWS);
+    auto gen = plan.stream(BATCH_SIZE);
     std::int64_t rows = 0;
     while (auto part = co_await gen.next()) {
         if (!*part) co_return -1;

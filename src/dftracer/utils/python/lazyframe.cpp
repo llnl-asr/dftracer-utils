@@ -834,18 +834,18 @@ PyObject* LazyFrame_explain(PyObject* self, PyObject*) {
 PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
-    long long morsel_rows = 0;
+    long long batch_size = 0;
     PyObject* runtime_arg = nullptr;
-    static const char* kw[] = {"morsel_rows", "runtime", nullptr};
+    static const char* kw[] = {"batch_size", "runtime", nullptr};
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
-                                     &morsel_rows, &runtime_arg))
+                                     &batch_size, &runtime_arg))
         return nullptr;
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
     dataframe::DataFrame out;
     if (!run_blocking([&] {
-            out = common::unwrap(rt->submit(b->lf.collect(morsel_rows)).get());
+            out = common::unwrap(rt->submit(b->lf.collect(batch_size)).get());
         }))
         return nullptr;
     return dftracer::utils::python::wrap_dataframe(std::move(out));
@@ -857,9 +857,9 @@ dftracer::utils::coro::CoroTask<void> drain_stream(
     dftracer::utils::dstd::SharedPtr<
         dftracer::utils::python::StreamingState<dataframe::DataFrame>>
         state,
-    LazyFrame lf, std::int64_t morsel_rows) {
+    LazyFrame lf, std::int64_t batch_size) {
     try {
-        auto gen = lf.stream(morsel_rows);
+        auto gen = lf.stream(batch_size);
         for (;;) {
             auto next_frame = co_await gen.next();
             if (!next_frame) break;
@@ -879,11 +879,11 @@ dftracer::utils::coro::CoroTask<void> drain_stream(
 PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
-    long long morsel_rows = 0;
+    long long batch_size = 0;
     PyObject* runtime_arg = nullptr;
-    static const char* kw[] = {"morsel_rows", "runtime", nullptr};
+    static const char* kw[] = {"batch_size", "runtime", nullptr};
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
-                                     &morsel_rows, &runtime_arg))
+                                     &batch_size, &runtime_arg))
         return nullptr;
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
@@ -902,7 +902,7 @@ PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
     LazyFrame lf = b->lf;
     Py_BEGIN_ALLOW_THREADS rt->submit(
         drain_stream(state, std::move(lf),
-                     static_cast<std::int64_t>(morsel_rows)),
+                     static_cast<std::int64_t>(batch_size)),
         "lazyframe_stream");
     Py_END_ALLOW_THREADS return reinterpret_cast<PyObject*>(it);
 }
@@ -1067,14 +1067,14 @@ PyMethodDef LazyFrame_methods[] = {
      "output_schema() -> [(name, dtype id)] without running; a type the "
      "plan cannot know statically is 0 (unknown)."},
     {"stream", DFTU_PYCFUNCTION(LazyFrame_stream), METH_VARARGS | METH_KEYWORDS,
-     "stream(morsel_rows=0, runtime=None) -> iterator of DataFrame chunks."},
+     "stream(batch_size=0, runtime=None) -> iterator of DataFrame chunks."},
     {"schema", LazyFrame_schema, METH_NOARGS,
      "schema() -> list[str] of output column names, or [] if data-dependent."},
     {"explain", LazyFrame_explain, METH_NOARGS,
      "explain() -> str of the optimized plan."},
     {"collect", DFTU_PYCFUNCTION(LazyFrame_collect),
      METH_VARARGS | METH_KEYWORDS,
-     "collect(morsel_rows=65536) -> _DataFrame, running the pipeline."},
+     "collect(batch_size=65536) -> _DataFrame, running the pipeline."},
     {nullptr, nullptr, 0, nullptr}};
 
 PyObject* collect_all_py(PyObject*, PyObject* args, PyObject* kwds) {

@@ -101,7 +101,7 @@ coro::CoroTask<ExportStats> export_json(ScanPlan plan, ExportSink& sink);
 coro::CoroTask<ExportStats> export_trace(ScanPlan plan, TraceWriteOptions opts);
 dataframe::LazyFrame collect(const ScanPlan& plan);
 coro::AsyncGenerator<dataframe::DataFrame> stream(ScanPlan plan,
-                                                  std::int64_t morsel_rows = 0);
+                                                  std::int64_t batch_size = 0);
 coro::CoroTask<dataframe::DataFrame> collect_frame(ScanPlan plan);
 bool is_row_query(const ScanPlan& plan);
 coro::CoroTask<dataframe::DataFrame> call_tree(

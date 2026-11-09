@@ -309,8 +309,8 @@ inline dstd::Vector<Series> key_columns(const dstd::Vector<Series>& cols,
     return out;
 }
 
-// Default scan chunk when the caller does not set one (morsel_rows <= 0).
-inline constexpr std::int64_t DEFAULT_MORSEL_ROWS = 65536;
+// Default scan chunk when the caller does not set one (batch_size <= 0).
+inline constexpr std::int64_t DEFAULT_BATCH_SIZE = 65536;
 
 inline bool has_rest(const dstd::Vector<dstd::String>& sch) {
     return !sch.empty() && sch.back() == REST_COLUMN;

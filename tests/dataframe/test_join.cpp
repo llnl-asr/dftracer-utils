@@ -120,12 +120,12 @@ const I NI = dstd::nullopt;
 const S NS = dstd::nullopt;
 const B NB = dstd::nullopt;
 
-DataFrame lazy_join(JoinHow how, std::int64_t morsel_rows) {
+DataFrame lazy_join(JoinHow how, std::int64_t batch_size) {
     LazyFrame left =
         LazyFrame::scan(dstd::make_shared<InMemorySource>(make_left()));
     LazyFrame right =
         LazyFrame::scan(dstd::make_shared<InMemorySource>(make_right()));
-    return run(left.join(right, {"k"}, how).collect(morsel_rows));
+    return run(left.join(right, {"k"}, how).collect(batch_size));
 }
 
 void check_same(const DataFrame& a, const DataFrame& b) {

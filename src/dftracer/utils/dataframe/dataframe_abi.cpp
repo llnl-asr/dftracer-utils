@@ -555,12 +555,11 @@ dftu_lazyframe* dftu_dataframe_lazy(const dftu_dataframe* df) {
     }
 }
 
-dftu_dataframe* dftu_lazyframe_collect(dftu_lazyframe* lf,
-                                       int64_t morsel_rows) {
+dftu_dataframe* dftu_lazyframe_collect(dftu_lazyframe* lf, int64_t batch_size) {
     if (!lf) return nullptr;
     try {
         auto out = dftracer::utils::default_runtime()
-                       .submit(lf->lf.collect(morsel_rows))
+                       .submit(lf->lf.collect(batch_size))
                        .get();
         if (!out) return nullptr;
         return wrap(std::move(*out));

@@ -1663,10 +1663,10 @@ DFTU_EXPORT dftu_lazyframe* dftu_dataframe_lazy(const dftu_dataframe* df);
 
 /** Run the deferred pipeline and materialize the surviving rows into a new
  * owned frame (free with dftu_dataframe_free). Does NOT consume `lf`: it stays
- * valid and re-runnable. `morsel_rows` is the scan chunk size; <= 0 means auto.
+ * valid and re-runnable. `batch_size` is the scan chunk size; <= 0 means auto.
  * NULL on error. */
 DFTU_EXPORT dftu_dataframe* dftu_lazyframe_collect(dftu_lazyframe* lf,
-                                                   int64_t morsel_rows);
+                                                   int64_t batch_size);
 
 /** Free a lazyframe handle. */
 DFTU_EXPORT void dftu_lazyframe_free(dftu_lazyframe* lf);

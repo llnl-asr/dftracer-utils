@@ -189,15 +189,15 @@ class LazyOps {
     dstd::String explain() const { return lf().explain(); }
     dstd::Result<void> status() const { return lf().status(); }
     coro::AsyncGenerator<dstd::Result<DataFrame>> stream(
-        std::int64_t morsel_rows = 0) const {
-        return lf().stream(morsel_rows);
+        std::int64_t batch_size = 0) const {
+        return lf().stream(batch_size);
     }
     dstd::Result<dstd::UniquePtr<Cursor>> open_cursor() const {
         return lf().open_cursor();
     }
     coro::CoroTask<dstd::Result<DataFrame>> collect(
-        std::int64_t morsel_rows = 0) const {
-        return lf().collect(morsel_rows);
+        std::int64_t batch_size = 0) const {
+        return lf().collect(batch_size);
     }
 
     /// The wrapped plan, for passing this chain where a @ref LazyFrame is

@@ -601,7 +601,7 @@ class TraceViewer(LazyFrame):
         """Write the materialized-view manifest at ``dir``."""
         self._tv.register_materialized(dir)
 
-    def stream(self, batch_size: int = 65536) -> "Iterator[DataFrame]":  # ty: ignore[lost-keyword-for-regular-parameter]
+    def stream(self, batch_size: int = 65536) -> "Iterator[DataFrame]":
         """The rows as :class:`DataFrame` chunks of about ``batch_size`` rows,
         holding a bounded amount in memory."""
         return LazyFrame.stream(self, batch_size)

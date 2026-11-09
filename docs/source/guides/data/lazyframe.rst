@@ -105,7 +105,7 @@ node.
 Collect, or stream under a budget
 ---------------------------------
 
-``collect(morsel_rows)`` drains the plan into one frame. A resident source
+``collect(batch_size)`` drains the plan into one frame. A resident source
 runs whole-column, the same as eager, every op included (one with no
 eager form runs its own cursor over the frame as a single morsel); a
 streaming source runs morsel by morsel. ``stream()`` yields the morsels instead, each a standalone
@@ -271,7 +271,7 @@ names of all of them. A plugin node gets the plan's budget, but the host can
 only ask it for bytes to give back: it cannot make the node stay under the
 budget.
 
-A resident in-memory source with no budget and no ``morsel_rows`` runs each op
+A resident in-memory source with no budget and no ``batch_size`` runs each op
 over whole columns, as the eager API does, when the frame takes at most half of
 the automatic budget. A plan with an op that can make more
 than it reads (``join``, ``explode``, ``unpivot``, ``pivot``, ``to_dummies``,

@@ -125,9 +125,9 @@ struct DataFrame {
     /// Begin a deferred query over this frame; include dataframe/lazyframe.h.
     LazyFrame lazy() const;
 
-    /// Yield fixed-size row slices of this frame (0 = DEFAULT_MORSEL_ROWS).
+    /// Yield fixed-size row slices of this frame (0 = DEFAULT_BATCH_SIZE).
     /// Zero-copy: each chunk shares this frame's column buffers.
-    coro::AsyncGenerator<DataFrame> stream(std::int64_t morsel_rows = 0) const;
+    coro::AsyncGenerator<DataFrame> stream(std::int64_t batch_size = 0) const;
 
     DataFrame take(const dstd::Vector<std::int64_t>& indices) const;
     DataFrame filter(const Series& mask) const;

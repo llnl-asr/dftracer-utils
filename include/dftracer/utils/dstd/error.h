@@ -88,6 +88,18 @@ concept ErrorEnum = std::is_enum_v<E> && requires(E value) {
     { error_info(value) } -> std::same_as<const ErrorCodeInfo&>;
 };
 
+/// A message that lives for the whole program: `text` has `length` bytes and a
+/// terminating NUL. An @ref Error points at one without allocating.
+struct alignas(8) StaticMessage {
+    std::size_t length;
+    const char* text;
+};
+
+/// The text of the format `S` when it has no holes, with `{{}}` unescaped.
+template <FixedString S>
+inline constexpr StaticMessage STATIC_FORMAT_MESSAGE{
+    fmt_detail::PIECES<S>.total, fmt_detail::PIECES<S>.text};
+
 class [[nodiscard]] Error {
    public:
     Error() noexcept;
@@ -99,23 +111,31 @@ class [[nodiscard]] Error {
     }
     /// An error whose message is the format `S` filled with `a...`, written
     /// straight into the one block that holds the message. When the block
-    /// cannot be allocated the error has no message.
+    /// cannot be allocated the error has no message. A format with no holes
+    /// allocates nothing: the error points at the constant text.
     template <FixedString S, ErrorEnum E, class... A>
     static Error from_format(E code, const A&... a) noexcept {
         static_assert(fmt_detail::Check<S, A...>::OK);
-        constexpr fmt_detail::Static<S> FORMAT{};
-        Error error(code);
-        const std::size_t bound =
-            fmt_detail::bound<fmt_detail::PlainEscape>(FORMAT, a...);
-        error.context_ = make_context_buffer(bound);
-        if (error.context_ != nullptr) {
-            char* const text = context_text(error.context_);
-            char* const end =
-                fmt_detail::write<fmt_detail::PlainEscape>(FORMAT, text, a...);
-            finish_context(error.context_,
-                           static_cast<std::size_t>(end - text));
+        if constexpr (fmt_detail::COUNTED<S>.holes == 0) {
+            Error error(code);
+            if constexpr (fmt_detail::PIECES<S>.total != 0)
+                error.context_ = make_static_context(&STATIC_FORMAT_MESSAGE<S>);
+            return error;
+        } else {
+            constexpr fmt_detail::Static<S> FORMAT{};
+            Error error(code);
+            const std::size_t bound =
+                fmt_detail::bound<fmt_detail::PlainEscape>(FORMAT, a...);
+            error.context_ = make_context_buffer(bound);
+            if (error.context_ != nullptr) {
+                char* const text = context_text(error.context_);
+                char* const end = fmt_detail::write<fmt_detail::PlainEscape>(
+                    FORMAT, text, a...);
+                finish_context(error.context_,
+                               static_cast<std::size_t>(end - text));
+            }
+            return error;
         }
-        return error;
     }
     template <FixedString S, ErrorEnum E, class... A>
     static Error from_format(E code, Format<S>, const A&... a) noexcept {
@@ -152,6 +172,7 @@ class [[nodiscard]] Error {
     static Context* make_context_buffer(std::size_t capacity) noexcept;
     static char* context_text(Context* context) noexcept;
     static void finish_context(Context* context, std::size_t length) noexcept;
+    static Context* make_static_context(const StaticMessage* message) noexcept;
     static void retain_context(Context* context) noexcept;
     static void release_context(Context* context) noexcept;
 

@@ -104,6 +104,81 @@ TEST_CASE("copy assignment drops the old message and shares the new one") {
     CHECK(root().live() == base);
 }
 
+TEST_CASE("a format with no holes allocates nothing") {
+    memory::PoolHandle pool = root().child("error_static");
+    REQUIRE(pool);
+    memory::detail::Scope scope{*pool};
+    const std::size_t base = root().live();
+    {
+        dstd::Error err =
+            dstd::Error::from_format<"no holes here">(TestError::NotFound);
+        CHECK(root().live() == base);
+        CHECK(err.message() == "no holes here");
+        CHECK(dstd::StringView(err.c_str()) == "no holes here");
+        CHECK(err.code() == 42);
+        CHECK(err.format() == "test#42 NOT_FOUND: no holes here");
+
+        dstd::Error copy = err;
+        dstd::Error moved = std::move(copy);
+        CHECK(root().live() == base);
+        CHECK(moved.message().data() == err.message().data());
+        CHECK(moved.message() == "no holes here");
+
+        dstd::Error heap{TestError::Parse, "heap text"};
+        const std::size_t with_heap = root().live();
+        CHECK(with_heap > base);
+        heap = err;
+        CHECK(root().live() == base);
+        CHECK(heap.message() == "no holes here");
+        heap = dstd::Error{TestError::Parse, "again heap"};
+        CHECK(root().live() > base);
+        err = heap;
+        CHECK(err.message() == "again heap");
+        err = dstd::Error::from_format<"back to static">(TestError::Parse);
+        CHECK(heap.message() == "again heap");
+        CHECK(err.message() == "back to static");
+    }
+    CHECK(root().live() == base);
+}
+
+TEST_CASE("a no-hole format unescapes braces without allocating") {
+    memory::PoolHandle pool = root().child("error_static_braces");
+    REQUIRE(pool);
+    memory::detail::Scope scope{*pool};
+    const std::size_t base = root().live();
+    {
+        const dstd::Error err =
+            dstd::Error::from_format<"json {{}} and {x}">(TestError::Parse);
+        CHECK(root().live() == base);
+        CHECK(err.message() == "json {} and {x}");
+        CHECK(dstd::StringView(err.c_str()) == "json {} and {x}");
+        const dstd::Error value_form =
+            dstd::Error::from_format(TestError::Parse, "plain"_f);
+        CHECK(root().live() == base);
+        CHECK(value_form.message() == "plain");
+    }
+    CHECK(root().live() == base);
+}
+
+TEST_CASE("an empty format has no message and a format with holes allocates") {
+    memory::PoolHandle pool = root().child("error_static_holes");
+    REQUIRE(pool);
+    memory::detail::Scope scope{*pool};
+    const std::size_t base = root().live();
+    {
+        const dstd::Error empty =
+            dstd::Error::from_format<"">(TestError::Parse);
+        CHECK(empty.message().empty());
+        CHECK(dstd::StringView(empty.c_str()).empty());
+        CHECK(root().live() == base);
+        const dstd::Error filled =
+            dstd::Error::from_format<"value {}">(TestError::Parse, 7);
+        CHECK(filled.message() == "value 7");
+        CHECK(root().live() > base);
+    }
+    CHECK(root().live() == base);
+}
+
 TEST_CASE("Error formats like the legacy error") {
     const dstd::Error err{TestError::NotFound, "missing thing"};
     CHECK(err.format() == "test#42 NOT_FOUND: missing thing");

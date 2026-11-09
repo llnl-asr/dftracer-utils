@@ -7,6 +7,7 @@
 #include <atomic>
 #include <charconv>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 
@@ -21,6 +22,18 @@ struct Error::Context {
 namespace {
 
 constexpr std::size_t INT32_DIGITS = 11;
+
+// A context pointer with the low bit set is a StaticMessage, not a heap block.
+constexpr std::uintptr_t STATIC_TAG = 1;
+
+bool is_static(const void* context) noexcept {
+    return (reinterpret_cast<std::uintptr_t>(context) & STATIC_TAG) != 0;
+}
+
+const StaticMessage* as_static(const void* context) noexcept {
+    return reinterpret_cast<const StaticMessage*>(
+        reinterpret_cast<std::uintptr_t>(context) & ~STATIC_TAG);
+}
 
 }  // namespace
 
@@ -61,11 +74,16 @@ Error::~Error() { release_context(context_); }
 
 StringView Error::message() const noexcept {
     if (context_ == nullptr) return {};
+    if (is_static(context_)) {
+        const StaticMessage* text = as_static(context_);
+        return {text->text, text->length};
+    }
     return {reinterpret_cast<const char*>(context_ + 1), context_->length};
 }
 
 const char* Error::c_str() const noexcept {
     if (context_ == nullptr) return "";
+    if (is_static(context_)) return as_static(context_)->text;
     return reinterpret_cast<const char*>(context_ + 1);
 }
 
@@ -132,12 +150,21 @@ void Error::finish_context(Context* context, std::size_t length) noexcept {
     reinterpret_cast<char*>(context + 1)[length] = '\0';
 }
 
+Error::Context* Error::make_static_context(
+    const StaticMessage* message) noexcept {
+    static_assert(alignof(Context) >= 2 && alignof(StaticMessage) >= 2,
+                  "the low pointer bit must be free for the static tag");
+    return reinterpret_cast<Context*>(
+        reinterpret_cast<std::uintptr_t>(message) | STATIC_TAG);
+}
+
 void Error::retain_context(Context* context) noexcept {
+    if (is_static(context)) return;
     context->refs.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Error::release_context(Context* context) noexcept {
-    if (context == nullptr) return;
+    if (context == nullptr || is_static(context)) return;
     if (context->refs.fetch_sub(1, std::memory_order_acq_rel) == 1)
         memory::detail::deallocate(context,
                                    sizeof(Context) + context->capacity + 1);

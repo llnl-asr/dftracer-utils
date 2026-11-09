@@ -905,13 +905,14 @@ TEST_SUITE("trace scan - streaming row query") {
         // io_cat comes from the event name, which a scan key cannot read as
         // a field, so the host cursor must see the real categories.
         const std::int64_t host =
-            run(views::detail::scan::collect(
-                    views::detail::scan::select(
-                        views::detail::scan::from_file(dstd::String(gz),
-                                                       dstd::String(idx)),
-                        {"io_cat"}))
-                    .collect())
-                .unique()
+            dftu_utils_test::ok(
+                run(views::detail::scan::collect(
+                        views::detail::scan::select(
+                            views::detail::scan::from_file(dstd::String(gz),
+                                                           dstd::String(idx)),
+                            {"io_cat"}))
+                        .collect())
+                    .unique())
                 .num_rows();
         CHECK(host > 1);
         CHECK(run(lf.unique().collect()).num_rows() == host);

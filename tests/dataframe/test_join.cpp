@@ -224,7 +224,8 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("different key names keep both key columns") {
-        DataFrame right = make_right().rename({"rk", "name", "rv"});
+        DataFrame right =
+            dftu_utils_test::ok(make_right().rename({"rk", "name", "rv"}));
         DataFrame out = make_left().join(right, {"k"}, {"rk"});
         CHECK(out.names ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "rk", "name", "rv"});
@@ -378,7 +379,8 @@ TEST_SUITE("dataframe join") {
         CHECK(pct.is_null(2));
         CHECK_THROWS_AS(base.compare_agg(variant, 0), std::invalid_argument);
         CHECK_THROWS_AS(base.compare_agg(variant, 3), std::invalid_argument);
-        CHECK_THROWS_AS(base.compare_agg(variant.rename({"j", "n"}), 1),
+        CHECK_THROWS_AS(base.compare_agg(
+                            dftu_utils_test::ok(variant.rename({"j", "n"})), 1),
                         std::invalid_argument);
     }
 

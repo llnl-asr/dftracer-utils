@@ -510,15 +510,16 @@ Result measure(const Options& opt, const dstd::String& input,
                 frame.filter(frame.column("metric").str_starts_with("cpu"));
             },
             opt.warmups, opt.runs);
-        r.query_s["frame_sort"] =
-            timed([&] { frame.sort_by("metric"); }, opt.warmups, opt.runs);
+        r.query_s["frame_sort"] = timed([&] { (void)frame.sort_by("metric"); },
+                                        opt.warmups, opt.runs);
         r.query_s["frame_group"] = timed(
             [&] {
-                frame.group_by(dstd::Vector<dstd::String>{"metric"}).size();
+                (void)frame.group_by(dstd::Vector<dstd::String>{"metric"})
+                    .size();
             },
             opt.warmups, opt.runs);
-        const dataframe::DataFrame runs =
-            frame.group_by(dstd::Vector<dstd::String>{"run"}).size();
+        const dataframe::DataFrame runs = dftracer::utils::common::unwrap(
+            frame.group_by(dstd::Vector<dstd::String>{"run"}).size());
         r.query_s["frame_join"] =
             timed([&] { frame.join(runs, dstd::Vector<dstd::String>{"run"}); },
                   opt.warmups, opt.runs);

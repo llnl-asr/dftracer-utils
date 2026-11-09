@@ -174,9 +174,13 @@ class GroupTransformCore {
                 }
                 if (cls == NumClass::Signed) {
                     s.sum_i.add(static_cast<std::int64_t>(b));
+                    if (s.sum_i.overflowed)
+                        throw_window_overflow("RUNNING_SUM", "int64");
                     out = static_cast<std::uint64_t>(s.sum_i.acc);
                 } else if (cls == NumClass::Unsigned) {
                     s.sum_u.add(b);
+                    if (s.sum_u.overflowed)
+                        throw_window_overflow("RUNNING_SUM", "uint64");
                     out = s.sum_u.acc;
                 } else {
                     s.sum_f.add(x);
@@ -249,11 +253,15 @@ class GroupTransformCore {
                         steps::delta_f64(x, dstd::bits_double(prev)));
                     return NumClass::Float;
                 }
-                out = static_cast<std::uint64_t>(
+                std::int64_t diff = 0;
+                const bool fits =
                     cls == NumClass::Signed
                         ? steps::delta_i64(static_cast<std::int64_t>(b),
-                                           static_cast<std::int64_t>(prev))
-                        : steps::delta_u64(b, prev));
+                                           static_cast<std::int64_t>(prev),
+                                           diff)
+                        : steps::delta_u64(b, prev, diff);
+                if (!fits) throw_window_overflow("DELTA", "int64");
+                out = static_cast<std::uint64_t>(diff);
                 return NumClass::Signed;
             }
             case GroupwiseOp::FFill: {

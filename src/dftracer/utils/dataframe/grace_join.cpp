@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/grace_join.h>
 #include <dftracer/utils/dataframe/internal/budget_share.h>
@@ -99,7 +100,8 @@ DataFrame merge_morsels(dstd::Vector<DataFrame>& parts) {
     dstd::Vector<const DataFrame*> ptrs;
     ptrs.reserve(parts.size());
     for (const DataFrame& p : parts) ptrs.push_back(&p);
-    return concat(ptrs, uniform ? ConcatHow::Vertical : ConcatHow::Diagonal);
+    return common::unwrap(
+        concat(ptrs, uniform ? ConcatHow::Vertical : ConcatHow::Diagonal));
 }
 
 GraceJoin::GraceJoin(dstd::Vector<dstd::String> left_names,

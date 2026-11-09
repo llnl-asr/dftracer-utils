@@ -212,8 +212,10 @@ inline dftracer::utils::dataframe::DataFrame collect_groupmap_plan(
 inline void check_match(const dftracer::utils::dataframe::DataFrame& a0,
                         const dftracer::utils::dataframe::DataFrame& b0,
                         const dftracer::utils::dstd::String& key) {
-    dftracer::utils::dataframe::DataFrame a = a0.sort_by(key, false);
-    dftracer::utils::dataframe::DataFrame b = b0.sort_by(key, false);
+    dftracer::utils::dataframe::DataFrame a =
+        dftu_utils_test::ok(a0.sort_by(key, false));
+    dftracer::utils::dataframe::DataFrame b =
+        dftu_utils_test::ok(b0.sort_by(key, false));
     REQUIRE(a.names.size() == b.names.size());
     for (std::size_t i = 0; i < a.names.size(); ++i) {
         CHECK(a.names[i] == b.names[i]);

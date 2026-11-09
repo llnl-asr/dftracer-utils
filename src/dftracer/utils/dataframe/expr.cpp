@@ -1929,8 +1929,11 @@ class Compiler {
 Series load_slice(const Series& in, std::int64_t offset, std::int64_t len) {
     if (dftu_series* v = dftu_series_slice(in.handle(), offset, len)) {
         Series s{v};
-        return s.encoding() == Encoding::Chunked ? join_chunks(s)
-                                                 : std::move(s);
+        if (s.encoding() != Encoding::Chunked) return s;
+        // An invalid column is the kernel refusing its input, which
+        // require_evaluated reports.
+        dstd::Result<Series> joined = join_chunks(s);
+        return joined ? std::move(*joined) : Series{};
     }
     dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(len));
     for (std::int64_t i = 0; i < len; ++i)
@@ -3834,13 +3837,17 @@ dstd::Result<dstd::Vector<Series>> eval_many(
             pieces.reserve(parts.size());
             for (const dstd::Vector<Series>& part : parts)
                 pieces.push_back(part[j].share());
-            outs.push_back(chunked_column(std::move(pieces)));
+            dstd::Result<Series> chunked = chunked_column(std::move(pieces));
+            if (!chunked) return chunked.error();
+            outs.push_back(std::move(*chunked));
             continue;
         }
         dstd::Vector<const Series*> ptrs;
         ptrs.reserve(parts.size());
         for (const dstd::Vector<Series>& part : parts) ptrs.push_back(&part[j]);
-        outs.push_back(concat_columns(ptrs));
+        dstd::Result<Series> joined = concat_columns(ptrs);
+        if (!joined) return joined.error();
+        outs.push_back(std::move(*joined));
     }
     return outs;
 }

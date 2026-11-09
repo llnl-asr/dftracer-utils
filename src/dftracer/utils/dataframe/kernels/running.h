@@ -9,10 +9,13 @@
 //
 // Every step is a small state struct fed one row at a time: no virtual call,
 // no allocation per row. A null is not fed to a running step (the running
-// functions skip nulls); the caller decides what a null row outputs.
+// functions skip nulls); the caller decides what a null row outputs. A step
+// that overflows never throws: it records that in a flag or a return value and
+// the caller reports it once, after its loop.
 
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -20,45 +23,45 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <stdexcept>
 
 namespace dftracer::utils::dataframe::steps {
 
 using Wide = ::dftracer::utils::dstd::int128_t;
 
-[[noreturn]] inline void overflow(const char* func, const char* type) {
-    throw std::overflow_error(
-        (dstd::String("window: ") + func + " overflows " + type).c_str());
+/// The message of a step that overflowed its type: `func` names the window
+/// function and `type` the integer type it overflowed.
+inline dstd::String overflow_message(const char* func, const char* type) {
+    return dstd::fmt<"window: {} overflows {}">(func, type);
 }
 
-inline std::int64_t to_int64(Wide v, const char* func) {
-    if (v < std::numeric_limits<std::int64_t>::min() ||
-        v > std::numeric_limits<std::int64_t>::max())
-        overflow(func, "int64");
-    return static_cast<std::int64_t>(v);
+inline bool fits_int64(Wide v) {
+    return v >= std::numeric_limits<std::int64_t>::min() &&
+           v <= std::numeric_limits<std::int64_t>::max();
 }
 
-inline std::uint64_t to_uint64(Wide v, const char* func) {
-    if (v < 0 ||
-        v > static_cast<Wide>(std::numeric_limits<std::uint64_t>::max()))
-        overflow(func, "uint64");
-    return static_cast<std::uint64_t>(v);
+inline bool fits_uint64(Wide v) {
+    return v >= 0 &&
+           v <= static_cast<Wide>(std::numeric_limits<std::uint64_t>::max());
 }
 
 /// RUNNING_SUM of integers: one checked add. The narrow unsigned types sum as
-/// int64, so only a 64-bit unsigned column uses SumU64.
+/// int64, so only a 64-bit unsigned column uses SumU64. An add past the type
+/// sets `overflowed` (the sum is then meaningless); the caller reads it once
+/// after its loop and reports @ref overflow_message.
 struct SumI64 {
     std::int64_t acc = 0;
+    bool overflowed = false;
     void add(std::int64_t v) {
-        if (__builtin_add_overflow(acc, v, &acc))
-            overflow("RUNNING_SUM", "int64");
+        if (__builtin_add_overflow(acc, v, &acc)) [[unlikely]]
+            overflowed = true;
     }
 };
 struct SumU64 {
     std::uint64_t acc = 0;
+    bool overflowed = false;
     void add(std::uint64_t v) {
-        if (__builtin_add_overflow(acc, v, &acc))
-            overflow("RUNNING_SUM", "uint64");
+        if (__builtin_add_overflow(acc, v, &acc)) [[unlikely]]
+            overflowed = true;
     }
 };
 struct SumF64 {
@@ -112,15 +115,17 @@ struct Extreme {
 
 /// The sum of a frame that rows enter and leave, in the exact integers the
 /// FRAME_SUM and FRAME_MEAN kernels use: a 128-bit sum that the caller turns
-/// into int64 or uint64 once per output (an error past the type).
+/// into int64 or uint64 once per output, after checking fits_i64 or fits_u64.
 struct FrameSumInt {
     Wide sum = 0;
     void enter_i(std::int64_t v) { sum += static_cast<Wide>(v); }
     void enter_u(std::uint64_t v) { sum += static_cast<Wide>(v); }
     void leave_i(std::int64_t v) { sum -= static_cast<Wide>(v); }
     void leave_u(std::uint64_t v) { sum -= static_cast<Wide>(v); }
-    std::int64_t i64() const { return to_int64(sum, "FRAME_SUM"); }
-    std::uint64_t u64() const { return to_uint64(sum, "FRAME_SUM"); }
+    bool fits_i64() const { return fits_int64(sum); }
+    bool fits_u64() const { return fits_uint64(sum); }
+    std::int64_t i64() const { return static_cast<std::int64_t>(sum); }
+    std::uint64_t u64() const { return static_cast<std::uint64_t>(sum); }
 };
 
 /// The float sum of a frame. Rows leave in the order they entered, so the
@@ -157,13 +162,23 @@ struct SlidingExtreme {
     std::int64_t best() const { return candidates.front(); }
 };
 
-/// DELTA of integers (an error past int64) and of doubles. The caller makes a
-/// delta null when the row or the one before it is null.
-inline std::int64_t delta_i64(std::int64_t cur, std::int64_t prev) {
-    return to_int64(static_cast<Wide>(cur) - static_cast<Wide>(prev), "DELTA");
+/// DELTA of integers and of doubles. The integer forms store the difference in
+/// `out` and return false when it passes int64. The caller makes a delta null
+/// when the row or the one before it is null.
+inline bool delta_i64(std::int64_t cur, std::int64_t prev, std::int64_t& out) {
+    const Wide d = static_cast<Wide>(cur) - static_cast<Wide>(prev);
+    if (!fits_int64(d)) [[unlikely]]
+        return false;
+    out = static_cast<std::int64_t>(d);
+    return true;
 }
-inline std::int64_t delta_u64(std::uint64_t cur, std::uint64_t prev) {
-    return to_int64(static_cast<Wide>(cur) - static_cast<Wide>(prev), "DELTA");
+inline bool delta_u64(std::uint64_t cur, std::uint64_t prev,
+                      std::int64_t& out) {
+    const Wide d = static_cast<Wide>(cur) - static_cast<Wide>(prev);
+    if (!fits_int64(d)) [[unlikely]]
+        return false;
+    out = static_cast<std::int64_t>(d);
+    return true;
 }
 inline double delta_f64(double cur, double prev) { return cur - prev; }
 

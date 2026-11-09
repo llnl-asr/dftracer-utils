@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/abi.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 
@@ -474,8 +475,9 @@ TEST_SUITE("op_registry") {
         cpp_df.names = {"k", "v"};
         cpp_df.columns.emplace_back(k_col);
         cpp_df.columns.emplace_back(v_col);
-        DataFrame via_cpp = cpp_df.group_by(dstd::Vector<dstd::String>{"k"},
-                                            {GroupAgg{Agg::Sum, "v", "total"}});
+        DataFrame via_cpp = dftu_utils_test::ok(
+            cpp_df.group_by(dstd::Vector<dstd::String>{"k"},
+                            {GroupAgg{Agg::Sum, "v", "total"}}));
         REQUIRE(static_cast<std::int64_t>(via_cpp.num_rows()) ==
                 dftu_dataframe_num_rows(via_registry));
 

@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -63,8 +64,9 @@ dataframe::Series empty(const dataframe::DataType& type) {
         type.id == TypeId::Unknown ? TypeId::String : type.id, 0);
 }
 
-dataframe::Series joined(const dstd::Vector<dataframe::Series>& parts,
-                         const dataframe::DataType& type) {
+dstd::Result<dataframe::Series> joined(
+    const dstd::Vector<dataframe::Series>& parts,
+    const dataframe::DataType& type) {
     if (parts.empty()) return empty(type);
     if (parts.size() == 1) return parts.front().share();
     dstd::Vector<dataframe::DataFrame> frames(parts.size());
@@ -74,7 +76,9 @@ dataframe::Series joined(const dstd::Vector<dataframe::Series>& parts,
         frames[i].columns.push_back(parts[i].share());
         ptrs.push_back(&frames[i]);
     }
-    return std::move(dataframe::concat(ptrs).columns.front());
+    dstd::Result<dataframe::DataFrame> all = dataframe::concat(ptrs);
+    if (!all) return all.error();
+    return std::move(all->columns.front());
 }
 
 dstd::Vector<std::uint8_t> validity(const dstd::Vector<bool>& valid) {
@@ -191,8 +195,7 @@ GroupFold::GroupFold(dstd::Vector<dataframe::DataType> key_types,
     dstd::Vector<dataframe::AggSpec> specs;
     for (std::size_t a = 0; a < aggs_.size(); ++a) {
         if (aggs_[a].op != FoldOp::Engine) continue;
-        const dstd::String name =
-            dstd::String("__duql_fold_") + dstd::to_string(a);
+        const dstd::String name = dstd::fmt<"__duql_fold_{}">(a);
         dstd::String spec_name(name.data(), name.size());
         specs.push_back({aggs_[a].engine, aggs_[a].in, std::move(spec_name),
                          aggs_[a].param, -1});
@@ -230,8 +233,9 @@ dstd::Result<void> GroupFold::add(dataframe::DataFrame batch) {
                     if (!append_cell_key(key, c, r))
                         return common::make_error(
                             common::ErrorCode::InvalidArgument,
-                            "group: key '" + batch.names[0] +
-                                "' holds a list or object; group by a scalar");
+                            dstd::fmt<"group: key '{}' holds a list or "
+                                      "object; group by a scalar">(
+                                batch.names[0]));
                     const auto text = string_key_text(key);
                     if (text) {
                         sv = *text;
@@ -270,8 +274,8 @@ dstd::Result<void> GroupFold::add(dataframe::DataFrame batch) {
             } else {
                 return common::make_error(
                     common::ErrorCode::InvalidArgument,
-                    "group: key '" + batch.names[k] +
-                        "' holds a list or object; group by a scalar");
+                    dstd::fmt<"group: key '{}' holds a list or object; "
+                              "group by a scalar">(batch.names[k]));
             }
         }
         auto [it, added] = groups_.try_emplace(key, group_count_);
@@ -463,8 +467,12 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
         for (const auto& a : aggs_) out.columns.push_back(empty(a.type));
         return out;
     }
-    for (std::size_t k = 0; k < key_types_.size(); ++k)
-        out.columns.push_back(joined(key_parts_[k], key_types_[k]));
+    for (std::size_t k = 0; k < key_types_.size(); ++k) {
+        dstd::Result<dataframe::Series> key =
+            joined(key_parts_[k], key_types_[k]);
+        if (!key) return key.error();
+        out.columns.push_back(std::move(*key));
+    }
     dstd::Optional<dataframe::DataFrame> engine;
     dstd::Vector<std::int64_t> order;
     if (engine_) {
@@ -502,9 +510,11 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
                     rows.insert(rows.end(), m.begin(), m.end());
                     offsets.push_back(static_cast<std::int32_t>(rows.size()));
                 }
-                out.columns.push_back(dataframe::Series::list(
-                    offsets,
-                    joined(parts_[a], f.type.fields.front().type).take(rows)));
+                dstd::Result<dataframe::Series> all =
+                    joined(parts_[a], f.type.fields.front().type);
+                if (!all) return all.error();
+                out.columns.push_back(
+                    dataframe::Series::list(offsets, all->take(rows)));
                 break;
             }
             case FoldOp::Plugin: {
@@ -512,7 +522,8 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
                 if (!op)
                     return common::make_error(
                         common::ErrorCode::InvalidArgument,
-                        "plugin function '" + f.plugin + "' is not registered");
+                        dstd::fmt<"plugin function '{}' is not registered">(
+                            f.plugin));
                 const dftu_op_arg arg = plugin_arg(*op, f.params);
                 auto& members = members_[a];
                 members.resize(count);
@@ -521,7 +532,10 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
                 dstd::Vector<std::int64_t> i(count, 0);
                 const bool real = f.type.id == TypeId::Float64;
                 if (!parts_[a].empty()) {
-                    const dataframe::Series all = joined(parts_[a], f.type);
+                    dstd::Result<dataframe::Series> joined_all =
+                        joined(parts_[a], f.type);
+                    if (!joined_all) return joined_all.error();
+                    const dataframe::Series all = std::move(*joined_all);
                     for (std::size_t g = 0; g < count; ++g) {
                         if (members[g].empty()) continue;
                         const dataframe::Series part =
@@ -532,9 +546,9 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
                         if (!ok)
                             return common::make_error(
                                 common::ErrorCode::InvalidArgument,
-                                "plugin function '" + f.plugin +
-                                    "' failed on a group; it takes " +
-                                    dftu_op_signature(op->sig));
+                                dstd::fmt<"plugin function '{}' failed on a "
+                                          "group; it takes {}">(
+                                    f.plugin, dftu_op_signature(op->sig)));
                         valid[g] = true;
                         const bool from_f = r.kind == DFTU_SCALAR_TAG_F64;
                         const bool from_u = r.kind == DFTU_SCALAR_TAG_U64;
@@ -571,7 +585,9 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
                 dstd::Vector<std::int64_t> rows(count, -1);
                 for (std::size_t g = 0; g < args_[a].size(); ++g)
                     rows[g] = args_[a][g].at;
-                out.columns.push_back(joined(parts_[a], f.type).take(rows));
+                dstd::Result<dataframe::Series> all = joined(parts_[a], f.type);
+                if (!all) return all.error();
+                out.columns.push_back(all->take(rows));
                 break;
             }
             case FoldOp::Sketch:

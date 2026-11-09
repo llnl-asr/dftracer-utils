@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/errc.h>
@@ -30,9 +31,8 @@ namespace {
 // collects them, with domain fields under `args.`.
 constexpr bool FRAME_ARGS_FALLBACK = true;
 
-[[noreturn]] void unsupported(dstd::StringView why) {
-    throw dftracer::utils::common::DFTUtilsException(
-        dftracer::utils::dstd::Error{DuqlErrc::Unsupported, why});
+dstd::Unexpected<dstd::Error> unsupported(dstd::StringView why) {
+    return common::make_error(DuqlErrc::Unsupported, why);
 }
 
 bool is_string(const Series& c) {
@@ -86,7 +86,8 @@ dftu_scalar numeric_scalar(const LiteralValue& v) {
 Series negate(Series s) { return Series{dftu_series_logical_not(s.handle())}; }
 
 // A type mismatch is UNKNOWN on every row, as in the row evaluator.
-Series compare_mask(const Series& col, CompareOp op, const LiteralValue& v) {
+dstd::Result<Series> compare_mask(const Series& col, CompareOp op,
+                                  const LiteralValue& v) {
     if (!comparable(col, v)) return unknown(col.length());
     const bool eq = op == CompareOp::Eq || op == CompareOp::Ne;
     if (is_string(col)) {
@@ -98,7 +99,7 @@ Series compare_mask(const Series& col, CompareOp op, const LiteralValue& v) {
         Series m{dftu_series_compare(
             col.handle(), static_cast<dftu_cmp_op>(cmp_code(op)), rhs)};
         if (!m.handle())
-            unsupported("no comparison kernel for the column type");
+            return unsupported("no comparison kernel for the column type");
         return m;
     }
     if (is_bool(col) && eq) {
@@ -106,22 +107,22 @@ Series compare_mask(const Series& col, CompareOp op, const LiteralValue& v) {
         return want ? col.share() : negate(col.share());
     }
     if (is_bool(col)) {
-        return common::unwrap(
-            eval(expr_cmp_expr(static_cast<CmpOp>(cmp_code(op)), expr_col(0),
-                               expr_lit_bool(std::get<bool>(v))),
-                 {&col}));
+        return eval(expr_cmp_expr(static_cast<CmpOp>(cmp_code(op)), expr_col(0),
+                                  expr_lit_bool(std::get<bool>(v))),
+                    {&col});
     }
     Series m{dftu_series_compare(col.handle(),
                                  static_cast<dftu_cmp_op>(cmp_code(op)),
                                  numeric_scalar(v))};
-    if (!m.handle()) unsupported("no comparison kernel for the column type");
+    if (!m.handle())
+        return unsupported("no comparison kernel for the column type");
     return m;
 }
 
 // Kleene OR of the equalities with the comparable elements; UNKNOWN when no
 // element is comparable, as in the row evaluator.
-Series in_mask(const Series& col, const duql::detail::ArrayNode& arr,
-               bool negated) {
+dstd::Result<Series> in_mask(const Series& col,
+                             const duql::detail::ArrayNode& arr, bool negated) {
     if (is_string(col)) {
         dstd::HashSet<dstd::StringView> set;
         for (const LiteralNode& e : arr.elements)
@@ -132,31 +133,34 @@ Series in_mask(const Series& col, const duql::detail::ArrayNode& arr,
             return set.contains(s);
         })};
         if (!m.handle())
-            unsupported("no comparison kernel for the column type");
+            return unsupported("no comparison kernel for the column type");
         return negated ? negate(std::move(m)) : std::move(m);
     }
     dstd::Optional<Series> acc;
     for (const LiteralNode& e : arr.elements) {
         if (!comparable(col, e.value)) continue;
-        Series m = compare_mask(col, CompareOp::Eq, e.value);
-        acc = acc ? Series{dftu_series_logical(acc->handle(), m.handle(),
+        dstd::Result<Series> m = compare_mask(col, CompareOp::Eq, e.value);
+        if (!m) return m.error();
+        acc = acc ? Series{dftu_series_logical(acc->handle(), m->handle(),
                                                DFTU_LOGICAL_OR)}
-                  : std::move(m);
+                  : std::move(*m);
     }
     if (!acc) return unknown(col.length());
     return negated ? negate(std::move(*acc)) : std::move(*acc);
 }
 
 template <class Leaf>
-Series field_mask(const DataFrame& b, const duql::detail::FieldNode& field,
-                  Leaf&& leaf) {
-    if (field.any) unsupported("any() has no dataframe-mask lowering");
+dstd::Result<Series> field_mask(const DataFrame& b,
+                                const duql::detail::FieldNode& field,
+                                Leaf&& leaf) {
+    if (field.any) return unsupported("any() has no dataframe-mask lowering");
     const std::int64_t i = b.column_index(field.path);
     if (i < 0) return unknown(b.num_rows());
     return leaf(b.columns[static_cast<std::size_t>(i)]);
 }
 
-Series leaf_mask(const duql::detail::ExprLeaf& leaf, const DataFrame& b) {
+dstd::Result<Series> leaf_mask(const duql::detail::ExprLeaf& leaf,
+                               const DataFrame& b) {
     dstd::Vector<VectorColumn> cols;
     dstd::Vector<const Series*> inputs;
     cols.reserve(b.columns.size());
@@ -174,7 +178,7 @@ Series leaf_mask(const duql::detail::ExprLeaf& leaf, const DataFrame& b) {
     truths.reserve(quants.size());
     for (const TQuant* q : quants) {
         auto t = quantify(*q, inputs, cols, FRAME_ARGS_FALLBACK);
-        if (!t) unsupported(t.error().message());
+        if (!t) return unsupported(t.error().message());
         truths.push_back(std::move(*t));
     }
     for (std::size_t i = 0; i < quants.size(); ++i) {
@@ -182,13 +186,14 @@ Series leaf_mask(const duql::detail::ExprLeaf& leaf, const DataFrame& b) {
         inputs.push_back(&truths[i]);
     }
     auto e = vectorize_condition(*leaf.term, cols, FRAME_ARGS_FALLBACK);
-    if (!e) unsupported(e.error().message());
-    return common::unwrap(eval(*e, inputs));
+    if (!e) return unsupported(e.error().message());
+    return eval(*e, inputs);
 }
 
-Series lower(const duql::detail::QueryNode& node, const DataFrame& b) {
+dstd::Result<Series> lower(const duql::detail::QueryNode& node,
+                           const DataFrame& b) {
     return std::visit(
-        [&](const auto& n) -> Series {
+        [&](const auto& n) -> dstd::Result<Series> {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
                 return field_mask(b, n.field, [&](const Series& c) {
@@ -203,23 +208,34 @@ Series lower(const duql::detail::QueryNode& node, const DataFrame& b) {
                     return in_mask(c, n.values, true);
                 });
             } else if constexpr (std::is_same_v<T, duql::detail::MatchNode>) {
-                return field_mask(b, n.field, [&](const Series& c) {
-                    if (!is_string(c) || !n.compiled)
-                        return unknown(c.length());
-                    Series m = common::unwrap(
-                        eval(expr_str_pattern(expr_col(0), n.compiled), {&c}));
-                    return n.negated ? negate(std::move(m)) : std::move(m);
-                });
+                return field_mask(
+                    b, n.field, [&](const Series& c) -> dstd::Result<Series> {
+                        if (!is_string(c) || !n.compiled)
+                            return unknown(c.length());
+                        dstd::Result<Series> m = eval(
+                            expr_str_pattern(expr_col(0), n.compiled), {&c});
+                        if (!m) return m.error();
+                        return n.negated ? negate(std::move(*m))
+                                         : std::move(*m);
+                    });
             } else if constexpr (std::is_same_v<T, duql::detail::AndNode>) {
-                Series a = lower(*n.left, b), c = lower(*n.right, b);
-                return Series{dftu_series_logical(a.handle(), c.handle(),
+                dstd::Result<Series> a = lower(*n.left, b);
+                if (!a) return a.error();
+                dstd::Result<Series> c = lower(*n.right, b);
+                if (!c) return c.error();
+                return Series{dftu_series_logical(a->handle(), c->handle(),
                                                   DFTU_LOGICAL_AND)};
             } else if constexpr (std::is_same_v<T, duql::detail::OrNode>) {
-                Series a = lower(*n.left, b), c = lower(*n.right, b);
-                return Series{dftu_series_logical(a.handle(), c.handle(),
+                dstd::Result<Series> a = lower(*n.left, b);
+                if (!a) return a.error();
+                dstd::Result<Series> c = lower(*n.right, b);
+                if (!c) return c.error();
+                return Series{dftu_series_logical(a->handle(), c->handle(),
                                                   DFTU_LOGICAL_OR)};
             } else if constexpr (std::is_same_v<T, duql::detail::NotNode>) {
-                return negate(lower(*n.operand, b));
+                dstd::Result<Series> operand = lower(*n.operand, b);
+                if (!operand) return operand.error();
+                return negate(std::move(*operand));
             } else {
                 return leaf_mask(n, b);
             }
@@ -232,9 +248,11 @@ Series lower(const duql::detail::QueryNode& node, const DataFrame& b) {
 // An UNKNOWN row keeps its null and stores data 0, so a selection over the data
 // bits keeps only TRUE rows. The data buffer is replaced, not written, because
 // a leaf may share a caller's column.
-Series evaluate_mask(const duql::detail::QueryNode& node,
-                     const DataFrame& batch) {
-    Series m = lower(node, batch);
+dstd::Result<Series> evaluate_mask(const duql::detail::QueryNode& node,
+                                   const DataFrame& batch) {
+    dstd::Result<Series> lowered = lower(node, batch);
+    if (!lowered) return lowered.error();
+    Series m = std::move(*lowered);
     if (m.handle() && m.handle()->encoding != Encoding::Flat)
         m = Series{dftu_series_materialize(m.handle())};
     dftu_series* s = m.handle();

@@ -35,18 +35,17 @@ inline T scalar_as(const dftu_scalar& s) {
 }
 
 /// A reducer that refuses its input returns an ERR scalar (see
-/// dftu_series_reduce). This returns `s` unchanged when it is a value and
-/// throws DFTUtilsException (INVALID_ARGUMENT) with the refusal's message when
-/// it is an ERR scalar, so a C++ caller never reads a refusal as a number. It
-/// lives here, not in the public scalar.h, because error.h pulls in a
-/// dependency (tl/expected) the plugin SDK include directory does not ship.
-inline dftu_scalar raise_if_error(dftu_scalar s) {
+/// dftu_series_reduce). This returns `s` when it is a value and an
+/// InvalidArgument error with the refusal's message when it is an ERR scalar,
+/// so a C++ caller never reads a refusal as a number. It lives here, not in the
+/// public scalar.h, because error.h pulls in a dependency (tl/expected) the
+/// plugin SDK include directory does not ship.
+inline dstd::Result<dftu_scalar> reduction_result(dftu_scalar s) {
     if (s.kind == DFTU_SCALAR_TAG_ERR) {
         const char* msg = s.value.err != nullptr && s.value.err->message
                               ? s.value.err->message
                               : "reduction failed";
-        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                        msg);
+        return common::make_error(common::ErrorCode::InvalidArgument, msg);
     }
     return s;
 }

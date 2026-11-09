@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 
@@ -176,8 +177,8 @@ TEST_SUITE("native frame") {
         f.columns.push_back(strings({"1", "\"1\"", "1", "\"1\""}).as_json());
         const std::int64_t v[] = {1, 2, 3, 4};
         f.columns.push_back(Series::flat_i64(v, 4));
-        const DataFrame g =
-            f.group_by(dstd::String("k"), {GroupAgg{Agg::Sum, "v", "s"}});
+        const DataFrame g = dftu_utils_test::ok(
+            f.group_by(dstd::String("k"), {GroupAgg{Agg::Sum, "v", "s"}}));
         REQUIRE(g.num_rows() == 2);
         CHECK(g.column("k").is_json());
         const auto back = frame_from_native(frame_to_native(g));

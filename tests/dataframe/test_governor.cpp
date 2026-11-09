@@ -291,7 +291,8 @@ TEST_CASE("a request posted to a sort makes it spill at the next morsel") {
     CHECK(before > 0);
     CHECK(asked == memory::Status::Pending);
     CHECK(after == 0);
-    const DataFrame want = source->whole().sort_by("k", false);
+    const DataFrame want =
+        dftu_utils_test::ok(source->whole().sort_by("k", false));
     CHECK(ints(got, "k") == ints(want, "k"));
     CHECK(ints(got, "v") == ints(want, "v"));
 }
@@ -314,17 +315,18 @@ TEST_CASE("a request posted to a group by makes it spill at the next morsel") {
         if (i > ASK_AT) after = std::min(after, reserved_of(group_pool));
     });
     const dstd::Vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};
-    const DataFrame got =
+    const DataFrame got = dftu_utils_test::ok(
         dftu_utils_test::run_here(LazyFrame::scan(source)
                                       .group_by("k", aggs)
                                       .memory_budget(LAZY_BUDGET)
                                       .collect())
-            .sort_by("k", false);
+            .sort_by("k", false));
     CHECK(before > 0);
     CHECK(asked == memory::Status::Pending);
     CHECK(after == 0);
-    const DataFrame want =
-        source->whole().group_by("k", aggs).sort_by("k", false);
+    const DataFrame want = dftu_utils_test::ok(
+        dftu_utils_test::ok(source->whole().group_by("k", aggs))
+            .sort_by("k", false));
     CHECK(ints(got, "k") == ints(want, "k"));
     CHECK(ints(got, "s") == ints(want, "s"));
 }
@@ -366,11 +368,13 @@ TEST_CASE(
                                       .collect());
     CHECK(before > 0);
     CHECK(after == 0);
-    const DataFrame want = source->whole().sort_by("k", false);
+    const DataFrame want =
+        dftu_utils_test::ok(source->whole().sort_by("k", false));
     CHECK(ints(got, "k") == ints(want, "k"));
     CHECK(ints(got, "v") == ints(want, "v"));
     REQUIRE(second_source);
-    const DataFrame second_want = second_source->whole().sort_by("k", false);
+    const DataFrame second_want =
+        dftu_utils_test::ok(second_source->whole().sort_by("k", false));
     CHECK(ints(second_got, "k") == ints(second_want, "k"));
     CHECK(ints(second_got, "v") == ints(second_want, "v"));
 }

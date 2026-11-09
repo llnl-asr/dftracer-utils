@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -103,7 +104,7 @@ DataFrame collect(const dstd::Vector<DataFrame>& parts, std::size_t leading) {
 DataFrame serial(const dstd::Vector<DataFrame>& parts, ConcatHow how) {
     dstd::Vector<const DataFrame*> ptrs;
     for (const DataFrame& p : parts) ptrs.push_back(&p);
-    return dftracer::utils::dataframe::concat(ptrs, how);
+    return dftu_utils_test::ok(dftracer::utils::dataframe::concat(ptrs, how));
 }
 
 void check_equal(const DataFrame& got, const DataFrame& want) {
@@ -222,16 +223,16 @@ TEST_CASE("an error in one column fails the collect") {
         parts[k].columns.push_back(Series::structs({"a"}, std::move(field)));
     }
 
-    dstd::String serial_error;
-    try {
-        serial(parts, ConcatHow::Diagonal);
-    } catch (const std::exception& e) {
-        serial_error = e.what();
-    }
+    dstd::Vector<const DataFrame*> ptrs;
+    for (const DataFrame& p : parts) ptrs.push_back(&p);
+    const auto serial_result =
+        dftracer::utils::dataframe::concat(ptrs, ConcatHow::Diagonal);
+    REQUIRE(!serial_result.has_value());
+    const dstd::String serial_error = serial_result.error().c_str();
     REQUIRE_FALSE(serial_error.empty());
     try {
-        collect(parts, 1);
-        FAIL("the collect must throw");
+        (void)collect(parts, 1);
+        FAIL("the collect must fail");
     } catch (const std::exception& e) {
         CHECK(dstd::String(e.what()) == serial_error);
     }
@@ -243,11 +244,12 @@ TEST_CASE("ConcatPlan columns equal the serial concat, column by column") {
             how == ConcatHow::Vertical ? equal_parts() : ragged_parts();
         dstd::Vector<const DataFrame*> ptrs;
         for (const DataFrame& p : parts) ptrs.push_back(&p);
-        const ConcatPlan plan(ptrs, how);
+        const ConcatPlan plan =
+            dftu_utils_test::ok(ConcatPlan::make(ptrs, how));
         DataFrame got;
         got.names = plan.names();
         for (std::size_t c = 0; c < got.names.size(); ++c)
-            got.columns.push_back(plan.column(c));
+            got.columns.push_back(dftu_utils_test::ok(plan.column(c)));
         check_equal(got, serial(parts, how));
     }
 }
@@ -256,6 +258,8 @@ TEST_CASE("ConcatPlan refuses vertical parts with different schemas") {
     const auto parts = ragged_parts();
     dstd::Vector<const DataFrame*> ptrs;
     for (const DataFrame& p : parts) ptrs.push_back(&p);
-    CHECK_THROWS_AS(ConcatPlan(ptrs, ConcatHow::Vertical),
-                    std::invalid_argument);
+    const auto plan = ConcatPlan::make(ptrs, ConcatHow::Vertical);
+    REQUIRE(!plan.has_value());
+    CHECK(common::errorcode_of(plan.error()) ==
+          common::ErrorCode::InvalidArgument);
 }

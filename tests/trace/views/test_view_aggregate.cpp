@@ -219,7 +219,8 @@ TEST_SUITE("View") {
         // batch.
         dataframe::DataFrame on_view =
             dftu_utils_test::ok(make().sort_by("n", true).collect().get());
-        dataframe::DataFrame on_vec = dataframe::sort_by(base, "n", true);
+        dataframe::DataFrame on_vec =
+            dftu_utils_test::ok(dataframe::sort_by(base, "n", true));
         REQUIRE(on_view.num_rows() == on_vec.num_rows());
         for (std::int64_t i = 0; i < on_view.num_rows(); ++i) {
             CHECK(bnum(on_view, i, "n") == bnum(on_vec, i, "n"));
@@ -230,7 +231,8 @@ TEST_SUITE("View") {
         // topk(n, 1): the single largest-count group.
         dataframe::DataFrame tk_view =
             dftu_utils_test::ok(make().topk("n", 1).collect().get());
-        dataframe::DataFrame tk_vec = dataframe::topk(base, "n", 1, true);
+        dataframe::DataFrame tk_vec =
+            dftu_utils_test::ok(dataframe::topk(base, "n", 1, true));
         REQUIRE(tk_view.num_rows() == 1);
         CHECK(bnum(tk_view, 0, "n") == bnum(tk_vec, 0, "n"));
         CHECK(bstr(tk_view, 0, "cat") == "posix");

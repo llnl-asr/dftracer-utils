@@ -6,9 +6,11 @@
 // test that expects the task to have succeeded. A test of an error reads the
 // Result itself.
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/result.h>
 #include <doctest/doctest.h>
 
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -21,6 +23,17 @@ typename std::remove_cvref_t<R>::value_type ok(R&& result) {
                       typename std::remove_cvref_t<R>::value_type>) {
         return *std::forward<R>(result);
     }
+}
+
+// Checks that a Result is an error of the given code, and when `text` is not
+// null that its message is exactly `text`.
+template <typename R>
+void expect_error(const R& result, dftracer::utils::common::ErrorCode code,
+                  const char* text = nullptr) {
+    REQUIRE_MESSAGE(!result.has_value(), "expected an error result");
+    CHECK(dftracer::utils::common::errorcode_of(result.error()) == code);
+    if (text != nullptr)
+        CHECK(std::string_view(result.error().c_str()) == text);
 }
 
 }  // namespace dftu_utils_test

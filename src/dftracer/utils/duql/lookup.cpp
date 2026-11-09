@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -25,7 +26,7 @@ namespace {
 
 dstd::Unexpected<dstd::Error> fail(const dstd::String& why) {
     return common::make_error(common::ErrorCode::InvalidArgument,
-                              "View::duql " + why);
+                              dstd::fmt<"View::duql {}">(why));
 }
 
 dstd::Unexpected<dstd::Error> raise(const DuqlError& error) {
@@ -337,9 +338,9 @@ dstd::Result<void> index_range(LookupTable& t, RangeRead read,
                             arg->null_count() == arg->length();
         if (!number || arg->is_json())
             return fail(
-                "'" + t.name +
-                "' sums a column that is not a typed number; cast it with "
-                "int() or float() in the sub-query");
+                dstd::fmt<"'{}' sums a column that is not a typed number; "
+                          "cast it with int() or float() in the "
+                          "sub-query">(t.name));
         ix->integral = integral(type);
     }
     dstd::Vector<dstd::Pair<Ordered, std::int64_t>> sorted;
@@ -425,24 +426,24 @@ dstd::Result<void> index_range(LookupTable& t, RangeRead read,
 dstd::Result<dstd::SharedPtr<const LookupTable>> make_lookup_table(
     const TLookup& l, dstd::SharedPtr<const dataframe::DataFrame> frame) {
     if (joined(l))
-        return fail("'" + l.name +
-                    "' reads its rows through a join, not a table");
+        return fail(dstd::fmt<"'{}' reads its rows through a join, not a "
+                              "table">(l.name));
     const dataframe::DataFrame& f = *frame;
     dstd::Vector<std::size_t> columns;
     dstd::Optional<std::size_t> range;
     if (l.range != RangeRead::None) {
         range = column_of(f, CORRELATED_RANGE);
         if (!range)
-            return fail("'" + l.name + "' has no column '" + CORRELATED_RANGE +
-                        "'");
+            return fail(
+                dstd::fmt<"'{}' has no column '{}'">(l.name, CORRELATED_RANGE));
     }
     switch (l.kind) {
         case LookupKind::In:
             if (!range && f.columns.size() != l.keys.size())
-                return fail("'" + l.name + "' gives " +
-                            dstd::int_text(f.columns.size()) +
-                            " columns; 'in' compares " +
-                            dstd::int_text(l.keys.size() - l.correlated));
+                return fail(
+                    dstd::fmt<"'{}' gives {} columns; 'in' compares {}">(
+                        l.name, f.columns.size(),
+                        l.keys.size() - l.correlated));
             for (std::size_t i = 0; i < f.columns.size(); ++i)
                 if (!range || i != *range) columns.push_back(i);
             break;
@@ -450,8 +451,9 @@ dstd::Result<dstd::SharedPtr<const LookupTable>> make_lookup_table(
             for (const auto& target : l.target) {
                 const auto c = column_of(f, target);
                 if (!c)
-                    return fail("'" + l.name + "' has no key column '" +
-                                target + "' for '->'");
+                    return fail(
+                        dstd::fmt<"'{}' has no key column '{}' for '->'">(
+                            l.name, target));
                 columns.push_back(*c);
             }
             break;
@@ -460,16 +462,16 @@ dstd::Result<dstd::SharedPtr<const LookupTable>> make_lookup_table(
                 for (const auto& target : l.target) {
                     const auto c = column_of(f, target);
                     if (!c)
-                        return fail("'" + l.name + "' has no key column '" +
-                                    target + "'");
+                        return fail(dstd::fmt<"'{}' has no key column '{}'">(
+                            l.name, target));
                     columns.push_back(*c);
                 }
             } else if (f.columns.size() != 1 || f.num_rows() > 1)
-                return fail("the sub-query '" + l.name + "' gives " +
-                            dstd::int_text(f.num_rows()) + " rows and " +
-                            dstd::int_text(f.columns.size()) +
-                            " columns; a sub-query in an expression gives one "
-                            "row and one column");
+                return fail(
+                    dstd::fmt<"the sub-query '{}' gives {} rows and {} "
+                              "columns; a sub-query in an expression gives "
+                              "one row and one column">(l.name, f.num_rows(),
+                                                        f.columns.size()));
             break;
     }
     auto t = std::const_pointer_cast<LookupTable>(
@@ -613,7 +615,8 @@ dstd::Result<dataframe::Series> lookup_column(
     std::int64_t n) {
     const LookupTable* table = t.slot ? t.slot->table.get() : nullptr;
     if (!table)
-        return fail("'" + t.name + "' was read before its rows were bound");
+        return fail(
+            dstd::fmt<"'{}' was read before its rows were bound">(t.name));
     if (t.range != RangeRead::None) return range_column(t, *table, keys, n);
     const dataframe::DataFrame& f = *table->frame;
     if (t.kind == LookupKind::Scalar) {
@@ -702,11 +705,13 @@ dstd::Result<dataframe::Series> scalar_column(
     std::int64_t none = -1;
     if (empty) {
         if (empty->num_rows() != 1)
-            return fail("'" + name + "' over no rows gives " +
-                        dstd::int_text(empty->num_rows()) + " rows, not one");
+            return fail(dstd::fmt<"'{}' over no rows gives {} rows, not one">(
+                name, empty->num_rows()));
         none = values.num_rows();
-        values =
+        dstd::Result<dataframe::DataFrame> merged =
             dataframe::concat({&values, empty}, dataframe::ConcatHow::Diagonal);
+        if (!merged) return merged.error();
+        values = std::move(*merged);
     }
     dstd::Vector<std::int64_t> pick(static_cast<std::size_t>(n), none);
     for (std::int64_t r = 0; r < n; ++r) {

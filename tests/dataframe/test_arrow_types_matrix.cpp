@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -287,28 +288,34 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
                 // column is the one partial case: min and max give its
                 // bytewise extremes, sum and mean are refused.
                 if (row.id == TypeId::LargeString) {
-                    CHECK(s.min().str() <= s.max().str());
+                    CHECK(dftu_utils_test::ok(s.min()).str() <=
+                          dftu_utils_test::ok(s.max()).str());
                 } else {
-                    CHECK_THROWS_AS((void)s.min(),
-                                    dftracer::utils::common::DFTUtilsException);
-                    CHECK_THROWS_AS((void)s.max(),
-                                    dftracer::utils::common::DFTUtilsException);
+                    dftu_utils_test::expect_error(
+                        s.min(),
+                        dftracer::utils::common::ErrorCode::InvalidArgument);
+                    dftu_utils_test::expect_error(
+                        s.max(),
+                        dftracer::utils::common::ErrorCode::InvalidArgument);
                 }
-                CHECK_THROWS_AS((void)s.sum(),
-                                dftracer::utils::common::DFTUtilsException);
-                CHECK_THROWS_AS((void)s.mean(),
-                                dftracer::utils::common::DFTUtilsException);
+                dftu_utils_test::expect_error(
+                    s.sum(),
+                    dftracer::utils::common::ErrorCode::InvalidArgument);
+                dftu_utils_test::expect_error(
+                    s.mean(),
+                    dftracer::utils::common::ErrorCode::InvalidArgument);
                 CHECK(s.arg_min() == -1);
                 CHECK(s.arg_max() == -1);
                 continue;
             }
-            CHECK(scalar_value<double>(s.min()) ==
+            CHECK(scalar_value<double>(dftu_utils_test::ok(s.min())) ==
                   doctest::Approx(row.expect_min));
-            CHECK(scalar_value<double>(s.max()) ==
+            CHECK(scalar_value<double>(dftu_utils_test::ok(s.max())) ==
                   doctest::Approx(row.expect_max));
-            CHECK(scalar_value<double>(s.sum()) ==
+            CHECK(scalar_value<double>(dftu_utils_test::ok(s.sum())) ==
                   doctest::Approx(row.expect_sum));
-            CHECK(s.mean() == doctest::Approx(row.expect_sum / 4.0));
+            CHECK(dftu_utils_test::ok(s.mean()) ==
+                  doctest::Approx(row.expect_sum / 4.0));
             CHECK(s.arg_min() == 1);
             CHECK(s.arg_max() == 0);
         }
@@ -411,12 +418,13 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             REQUIRE(s.valid());
             DataFrame df = keyed_frame(s);
             if (row.ops[OpGroupAgg] == Support::Refuses) {
-                CHECK_THROWS_AS(
+                dftu_utils_test::expect_error(
                     df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}),
-                    common::DFTUtilsException);
+                    dftracer::utils::common::ErrorCode::InvalidArgument);
                 continue;
             }
-            DataFrame g = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+            DataFrame g = dftu_utils_test::ok(
+                df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
             CHECK(g.num_rows() == 3);
             CHECK(g.column("k").type() == row.id);
         }

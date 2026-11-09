@@ -724,48 +724,69 @@ class LazyGroupBy {
     /// Shift periods (negative looks ahead), the Head / Tail count, the Nth
     /// position (0-based, negative from the end) or the rolling window;
     /// `method` / `ascending` apply to Rank (Float64, as pandas; Ordinal is
-    /// pandas' `first`). Throws std::invalid_argument when
-    /// no column is eligible, NGroup has no keys or the window op is not
-    /// registered; std::out_of_range for an absent key.
-    LazyFrame transform(GroupwiseOp kind, std::int64_t n = 0,
-                        RankMethod method = RankMethod::Average,
-                        bool ascending = true) const;
-    LazyFrame cumsum() const { return transform(GroupwiseOp::CumSum); }
-    LazyFrame cummax() const { return transform(GroupwiseOp::CumMax); }
-    LazyFrame cummin() const { return transform(GroupwiseOp::CumMin); }
-    LazyFrame cumcount() const { return transform(GroupwiseOp::CumCount); }
-    LazyFrame shift(std::int64_t periods = 1) const {
+    /// pandas' `first`). An InvalidArgument error when
+    /// no column is eligible, NGroup has no keys or the window is under 1;
+    /// still throws std::invalid_argument when the window op is not
+    /// registered, and std::out_of_range for an absent key.
+    dstd::Result<LazyFrame> transform(GroupwiseOp kind, std::int64_t n = 0,
+                                      RankMethod method = RankMethod::Average,
+                                      bool ascending = true) const;
+    dstd::Result<LazyFrame> cumsum() const {
+        return transform(GroupwiseOp::CumSum);
+    }
+    dstd::Result<LazyFrame> cummax() const {
+        return transform(GroupwiseOp::CumMax);
+    }
+    dstd::Result<LazyFrame> cummin() const {
+        return transform(GroupwiseOp::CumMin);
+    }
+    dstd::Result<LazyFrame> cumcount() const {
+        return transform(GroupwiseOp::CumCount);
+    }
+    dstd::Result<LazyFrame> shift(std::int64_t periods = 1) const {
         return transform(GroupwiseOp::Shift, periods);
     }
-    LazyFrame diff() const { return transform(GroupwiseOp::Diff); }
-    LazyFrame pct_change() const { return transform(GroupwiseOp::PctChange); }
-    LazyFrame rank(RankMethod method = RankMethod::Average,
-                   bool ascending = true) const {
+    dstd::Result<LazyFrame> diff() const {
+        return transform(GroupwiseOp::Diff);
+    }
+    dstd::Result<LazyFrame> pct_change() const {
+        return transform(GroupwiseOp::PctChange);
+    }
+    dstd::Result<LazyFrame> rank(RankMethod method = RankMethod::Average,
+                                 bool ascending = true) const {
         return transform(GroupwiseOp::Rank, 0, method, ascending);
     }
-    LazyFrame ngroup() const { return transform(GroupwiseOp::NGroup); }
-    LazyFrame head(std::int64_t n = 5) const {
+    dstd::Result<LazyFrame> ngroup() const {
+        return transform(GroupwiseOp::NGroup);
+    }
+    dstd::Result<LazyFrame> head(std::int64_t n = 5) const {
         return transform(GroupwiseOp::Head, n);
     }
-    LazyFrame tail(std::int64_t n = 5) const {
+    dstd::Result<LazyFrame> tail(std::int64_t n = 5) const {
         return transform(GroupwiseOp::Tail, n);
     }
-    LazyFrame nth(std::int64_t n) const {
+    dstd::Result<LazyFrame> nth(std::int64_t n) const {
         return transform(GroupwiseOp::Nth, n);
     }
-    LazyFrame cumprod() const { return transform(GroupwiseOp::CumProd); }
-    LazyFrame ffill() const { return transform(GroupwiseOp::FFill); }
-    LazyFrame bfill() const { return transform(GroupwiseOp::BFill); }
-    LazyFrame rolling_sum(std::int64_t window) const {
+    dstd::Result<LazyFrame> cumprod() const {
+        return transform(GroupwiseOp::CumProd);
+    }
+    dstd::Result<LazyFrame> ffill() const {
+        return transform(GroupwiseOp::FFill);
+    }
+    dstd::Result<LazyFrame> bfill() const {
+        return transform(GroupwiseOp::BFill);
+    }
+    dstd::Result<LazyFrame> rolling_sum(std::int64_t window) const {
         return transform(GroupwiseOp::RollingSum, window);
     }
-    LazyFrame rolling_mean(std::int64_t window) const {
+    dstd::Result<LazyFrame> rolling_mean(std::int64_t window) const {
         return transform(GroupwiseOp::RollingMean, window);
     }
-    LazyFrame rolling_min(std::int64_t window) const {
+    dstd::Result<LazyFrame> rolling_min(std::int64_t window) const {
         return transform(GroupwiseOp::RollingMin, window);
     }
-    LazyFrame rolling_max(std::int64_t window) const {
+    dstd::Result<LazyFrame> rolling_max(std::int64_t window) const {
         return transform(GroupwiseOp::RollingMax, window);
     }
 

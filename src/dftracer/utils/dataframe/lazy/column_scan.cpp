@@ -95,7 +95,7 @@ class ColumnScanCursor : public Cursor {
         Series whole;
         if (held > 0) {
             const dstd::Vector<const Series*> parts{&carry_, &col};
-            whole = concat_columns(parts);
+            whole = common::unwrap(concat_columns(parts));
         } else {
             whole = col.share();
         }

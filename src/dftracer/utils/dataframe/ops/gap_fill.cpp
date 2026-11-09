@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/frame_ops.h>
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -8,7 +9,7 @@
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
-#include <stdexcept>
+#include <utility>
 
 namespace dftracer::utils::dataframe {
 
@@ -76,32 +77,44 @@ struct Real {
 
 }  // namespace
 
-DataFrame gap_fill(
+dstd::Result<DataFrame> gap_fill(
     const DataFrame& df, const dstd::Vector<dstd::String>& partition_by,
     const dstd::String& time, std::int64_t bucket,
     const dstd::Vector<dstd::String>& values, GapFillMode mode,
     dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> range) {
     if (bucket <= 0)
-        throw std::invalid_argument("gap_fill: bucket_width must be positive");
-    const std::size_t time_at = ops::column_named(df, time, "gap_fill");
+        return invalid_argument<"gap_fill: bucket_width must be positive">();
+    const dstd::Result<std::size_t> time_col =
+        ops::column_named(df, time, "gap_fill");
+    if (!time_col) return time_col.error();
+    const std::size_t time_at = *time_col;
     const TypeId time_type = df.columns[time_at].type();
     if (!is_integer_time(time_type))
-        throw std::invalid_argument("gap_fill: time column must be integer");
+        return invalid_argument<"gap_fill: time column must be integer">();
     dstd::Vector<std::size_t> part_at;
     dstd::Vector<std::size_t> value_at;
-    for (const dstd::String& n : partition_by)
-        part_at.push_back(ops::column_named(df, n, "gap_fill"));
+    for (const dstd::String& n : partition_by) {
+        const dstd::Result<std::size_t> at =
+            ops::column_named(df, n, "gap_fill");
+        if (!at) return at.error();
+        part_at.push_back(*at);
+    }
     for (const dstd::String& n : values) {
-        const std::size_t at = ops::column_named(df, n, "gap_fill");
+        const dstd::Result<std::size_t> found =
+            ops::column_named(df, n, "gap_fill");
+        if (!found) return found.error();
+        const std::size_t at = *found;
         if (mode == GapFillMode::Linear &&
             value_domain(df.columns[at].type()) != ValueDomain::Numeric)
-            throw std::invalid_argument(
-                "gap_fill: LINEAR fill over a non-numeric column");
+            return invalid_argument<
+                "gap_fill: LINEAR fill over a non-numeric column">();
         value_at.push_back(at);
     }
 
-    const dstd::Vector<ColumnView> parts =
+    dstd::Result<dstd::Vector<ColumnView>> part_views =
         ops::views_of(df, partition_by, "gap_fill");
+    if (!part_views) return part_views.error();
+    const dstd::Vector<ColumnView> parts = std::move(*part_views);
     dstd::Vector<ColumnView> keys = parts;
     keys.emplace_back(df.columns[time_at]);
     const ColumnView& times = keys.back();
@@ -148,9 +161,9 @@ DataFrame gap_fill(
                 const std::uint64_t span = static_cast<std::uint64_t>(end) -
                                            static_cast<std::uint64_t>(start);
                 if (span >= static_cast<std::uint64_t>(GRID_MAX_POINTS))
-                    throw std::invalid_argument(
+                    return invalid_argument<
                         "gap_fill: grid exceeds 10,000,000 points; narrow the "
-                        "range or widen the bucket");
+                        "range or widen the bucket">();
                 const std::int64_t rep = reals.front().row;
                 std::int64_t j = 0;
                 const auto count = static_cast<std::int64_t>(reals.size());

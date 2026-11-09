@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/named.h>
@@ -1394,7 +1395,7 @@ dataframe::DataFrame PluginFold::rewritten_batch(
     }
     if (!query_ || df.columns.empty()) return df;
     try {
-        return df.filter(df.mask(*query_));
+        return df.filter(common::unwrap(df.mask(*query_)));
     } catch (const std::exception& e) {
         if (!query_on_rewrite_refused_) {
             query_on_rewrite_refused_ = true;

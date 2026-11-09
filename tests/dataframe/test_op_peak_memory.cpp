@@ -324,7 +324,15 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
         {"pivot",
          [](const LazyFrame& b) { return b.pivot("k", "g", "v", "sum"); }},
         {"group_transform",
-         [](const LazyFrame& b) { return b.group_by({"s"}).cumsum(); }},
+         [](const LazyFrame& b) {
+             auto r = b.group_by({"s"}).cumsum();
+             if (!r.has_value()) {
+                 std::fprintf(stderr, "group_transform: %s\n",
+                              r.error().c_str());
+                 std::abort();
+             }
+             return std::move(*r);
+         }},
         // Strings of about 200 bytes, unique per row: 50 MB of keys.
         {"sort_by_long_strings",
          [](const LazyFrame&) {

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -595,9 +596,9 @@ void Applier::stage(const duql::PipelineUnpivot& u) {
             dstd::Vector<const dataframe::DataFrame*> ptrs;
             for (const auto& p : parts) ptrs.push_back(&p);
             dataframe::DataFrame stacked =
-                ptrs.empty()
-                    ? dataframe::DataFrame{}
-                    : dataframe::concat(ptrs, dataframe::ConcatHow::Vertical);
+                ptrs.empty() ? dataframe::DataFrame{}
+                             : common::unwrap(dataframe::concat(
+                                   ptrs, dataframe::ConcatHow::Vertical));
             dataframe::DataFrame out;
             for (const auto j : ids) {
                 out.names.emplace_back(f.names[j]);

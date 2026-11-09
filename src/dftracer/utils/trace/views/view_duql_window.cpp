@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -193,8 +194,8 @@ void Applier::partition_aggs(
     const dstd::String spid(pid);
     finish(
         [spid, specs](dataframe::DataFrame f) {
-            dataframe::DataFrame g =
-                f.group_by(dstd::Vector<dstd::String>{spid}, specs);
+            dataframe::DataFrame g = common::unwrap(
+                f.group_by(dstd::Vector<dstd::String>{spid}, specs));
             return f.join(g, {spid}, {spid}, dataframe::JoinHow::Lookup);
         },
         "partition aggregates " + text, std::move(schema));

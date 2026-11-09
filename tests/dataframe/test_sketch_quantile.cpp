@@ -199,7 +199,7 @@ TEST_CASE("sketch_quantile: merged cells equal one sketch over the group") {
         {0, text_of(sketch_of({1, 2, 3, 4, 5}))},
         {0, text_of(sketch_of({6, 7, 8, 9, 0}))},
     });
-    const DataFrame r = d.group_by("k", quantile_aggs());
+    const DataFrame r = dftu_utils_test::ok(d.group_by("k", quantile_aggs()));
     REQUIRE(r.num_rows() == 1);
     for (double q : QUANTILES)
         CHECK(r.column("q" + dstd::to_string(q)).data<double>()[0] ==
@@ -209,7 +209,7 @@ TEST_CASE("sketch_quantile: merged cells equal one sketch over the group") {
 TEST_CASE(
     "sketch_quantile: invalid cells are skipped, an empty group is null") {
     Fixture f;
-    f.check(f.frame.group_by("k", quantile_aggs()));
+    f.check(dftu_utils_test::ok(f.frame.group_by("k", quantile_aggs())));
 }
 
 TEST_CASE("sketch_quantile: reads large string sketch text") {
@@ -219,7 +219,7 @@ TEST_CASE("sketch_quantile: reads large string sketch text") {
     large.columns.push_back(f.frame.column("k").share());
     large.columns.push_back(large_copy(f.frame.column("s")));
     REQUIRE(large.column("s").type() == TypeId::LargeString);
-    f.check(large.group_by("k", quantile_aggs()));
+    f.check(dftu_utils_test::ok(large.group_by("k", quantile_aggs())));
 }
 
 TEST_CASE("sketch_quantile: lazy and spilled group_by match eager") {
@@ -286,8 +286,9 @@ TEST_CASE("sketch_quantile: a non-String column is refused") {
     d.names = {"k", "s"};
     d.columns.push_back(Series::flat_i64(k.data(), 2));
     d.columns.push_back(Series::flat_i64(v.data(), 2));
-    CHECK_THROWS_AS(d.group_by("k", quantile_aggs()),
-                    common::DFTUtilsException);
+    dftu_utils_test::expect_error(
+        d.group_by("k", quantile_aggs()),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("DDSketch::deserialize rejects truncated and hostile bytes") {

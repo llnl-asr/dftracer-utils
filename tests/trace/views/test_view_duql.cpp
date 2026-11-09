@@ -1828,9 +1828,10 @@ TEST_SUITE("View duql window") {
         CHECK(by_group("quantile(x, 0.5)") == "a;a;b;a;b");
         CHECK(rows(frame(v.duql("window g { h = histogram(x) } | derive n = "
                                 "len(h) | select n"))) ==
-              rows(frame(v.duql("group g { h = histogram(x) } | derive n = "
-                                "len(h) | select g, n"))
-                       .select({"n"})
+              rows(dftu_utils_test::ok(
+                       frame(v.duql("group g { h = histogram(x) } | derive n = "
+                                    "len(h) | select g, n"))
+                           .select({"n"}))
                        .take(dstd::Vector<std::int64_t>{0, 0, 1, 0, 1})));
         CHECK(rows(frame(v.duql("window { n = count(), r = rank() }"
                                 " | select n, r"))) == "5,1;5,1;5,1;5,1;5,1");

@@ -49,29 +49,36 @@ PyObject* series_unary(PyObject* self, PyObject*) {
 // the member (returning dftu_scalar / double / int64), bound as a template
 // argument so each stays one PyMethodDef line.
 //
-// A reducer that refuses its column (sum of a string, ...) throws from the C++
-// member; it reaches Python as a TypeError that carries the refusal's message.
+// A reducer that refuses its column (sum of a string, ...) returns an error
+// from the C++ member; it reaches Python as a TypeError that carries the
+// refusal's message.
 template <auto Method>
 PyObject* series_reduce_scalar(PyObject* self, PyObject*) {
     Series* a = as_series(self);
     if (!a) return nullptr;
-    try {
-        return scalar_to_py((a->*Method)());
-    } catch (const dftracer::utils::common::DFTUtilsException& e) {
-        PyErr_SetString(PyExc_TypeError, e.what());
-        return nullptr;
+    auto out = (a->*Method)();
+    if constexpr (std::is_same_v<decltype(out),
+                                 dftracer::utils::dstd::Result<
+                                     dftracer::utils::dataframe::Scalar>>) {
+        if (!out) {
+            PyErr_SetString(PyExc_TypeError, out.error().c_str());
+            return nullptr;
+        }
+        return scalar_to_py(*out);
+    } else {
+        return scalar_to_py(out);
     }
 }
 template <auto Method>
 PyObject* series_reduce_f64(PyObject* self, PyObject*) {
     Series* a = as_series(self);
     if (!a) return nullptr;
-    try {
-        return PyFloat_FromDouble((a->*Method)());
-    } catch (const dftracer::utils::common::DFTUtilsException& e) {
-        PyErr_SetString(PyExc_TypeError, e.what());
+    auto out = (a->*Method)();
+    if (!out) {
+        PyErr_SetString(PyExc_TypeError, out.error().c_str());
         return nullptr;
     }
+    return PyFloat_FromDouble(*out);
 }
 template <auto Method>
 PyObject* series_reduce_i64(PyObject* self, PyObject*) {

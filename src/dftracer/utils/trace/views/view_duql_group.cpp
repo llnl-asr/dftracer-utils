@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -798,7 +799,8 @@ bool fill_missing_rows(const FillSpec& spec, const dataframe::DataFrame& f,
     if (take.empty()) return false;
     dstd::Vector<dstd::String> key_names(f.names.begin(),
                                          f.names.begin() + 1 + n_keys);
-    dataframe::DataFrame add = f.select(std_strs(key_names)).take(take);
+    dataframe::DataFrame add =
+        common::unwrap(f.select(std_strs(key_names))).take(take);
     const auto m = static_cast<std::int64_t>(take.size());
     add.columns[0] =
         dataframe::Series::flat_f64(starts.data(), m).cast(f.columns[0].type());
@@ -818,12 +820,14 @@ bool fill_missing_rows(const FillSpec& spec, const dataframe::DataFrame& f,
         add.names.emplace_back("__duql_added");
         add.columns.push_back(dataframe::Series::flat_i64(ones.data(), m));
     }
-    out = dataframe::concat({base, &add}, dataframe::ConcatHow::Diagonal);
+    out = common::unwrap(
+        dataframe::concat({base, &add}, dataframe::ConcatHow::Diagonal));
     dstd::Vector<dstd::String> keep = strings_of(f.names);
     if (carry) keep.push_back("__duql_added");
-    out = out.select(std_strs(keep))
-              .sort_by_multi(std_strs(key_names),
-                             dstd::Vector<bool>(key_names.size(), false));
+    out = common::unwrap(
+        common::unwrap(out.select(std_strs(keep)))
+            .sort_by_multi(std_strs(key_names),
+                           dstd::Vector<bool>(key_names.size(), false)));
     return true;
 }
 
@@ -930,7 +934,7 @@ void Applier::finish_fill(const duql::PipelineGroup& g,
             if (!fill_missing_rows(spec, f, out)) return f;
             if (spec.mode == duql::syntax::FillMode::Zero) return out;
             fill_carry(spec, f, out);
-            return out.select(f.names);
+            return common::unwrap(out.select(f.names));
         },
         "fill buckets " + number_text(width) +
             (origin != 0 ? " at " + number_text(origin) : "") +

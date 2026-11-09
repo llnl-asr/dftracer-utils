@@ -54,13 +54,12 @@ PyObject* Series_nunique(PyObject* self, PyObject*) {
 PyObject* Series_value_counts(PyObject* self, PyObject*) {
     Series* a = as_series(self);
     if (!a) return nullptr;
-    try {
-        return dftracer::utils::python::wrap_dataframe(
-            dataframe::value_counts(*a));
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
+    auto out = dataframe::value_counts(*a);
+    if (!out) {
+        PyErr_SetString(PyExc_ValueError, out.error().c_str());
         return nullptr;
     }
+    return dftracer::utils::python::wrap_dataframe(std::move(*out));
 }
 PyObject* Series_is_sorted(PyObject* self, PyObject* args, PyObject* kwds) {
     Series* a = as_series(self);

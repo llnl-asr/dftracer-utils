@@ -158,13 +158,13 @@ coro::CoroTask<DataFrame> join_parts(dstd::Vector<DataFrame> parts) {
     dstd::Vector<const DataFrame*> ptrs;
     ptrs.reserve(parts.size());
     for (const DataFrame& p : parts) ptrs.push_back(&p);
-    const ConcatPlan plan(ptrs,
-                          uniform ? ConcatHow::Vertical : ConcatHow::Diagonal);
+    const ConcatPlan plan = common::unwrap(ConcatPlan::make(
+        ptrs, uniform ? ConcatHow::Vertical : ConcatHow::Diagonal));
     DataFrame out;
     out.names = plan.names();
     out.columns.resize(out.names.size());
     co_await each_column(out.columns.size(), [&plan, &out](std::size_t c) {
-        out.columns[c] = chunked_column(plan.chunks(c));
+        out.columns[c] = common::unwrap(chunked_column(plan.chunks(c)));
     });
     co_return out;
 }
@@ -847,7 +847,7 @@ class TailCursor : public Cursor {
             dstd::Vector<const Series*> parts;
             parts.reserve(buf_.size());
             for (Morsel& m : buf_) parts.push_back(&m.columns[c]);
-            out.columns.push_back(concat_columns(parts));
+            out.columns.push_back(common::unwrap(concat_columns(parts)));
         }
         if (total_ > n_) return slice_morsel(out, total_ - n_, n_);
         return out;
@@ -1067,7 +1067,7 @@ Morsel frame_op(Morsel&& m, const dstd::Vector<dstd::String>& names, Fn&& fn) {
     DataFrame tmp;
     tmp.names = names;
     for (Series& c : m.columns) tmp.columns.push_back(std::move(c));
-    DataFrame r = fn(std::move(tmp));
+    DataFrame r = common::unwrap(fn(std::move(tmp)));
     Morsel out;
     out.rows = r.num_rows();
     out.columns.reserve(r.columns.size());
@@ -1104,7 +1104,7 @@ class UnnestCursor : public Cursor {
    private:
     Morsel apply(Morsel m) {
         DataFrame f = frame_of(std::move(m.columns), sch_);
-        DataFrame r = f.unnest(column_, keep_empty_);
+        DataFrame r = common::unwrap(f.unnest(column_, keep_empty_));
         out_names_ = r.names;
         return morsel_of(std::move(r));
     }
@@ -1316,7 +1316,7 @@ class TopkCursor : public Cursor {
                 Morsel first = std::move(*m);
                 if (has) {
                     DataFrame cur = frame_of(std::move(first.columns), sch_);
-                    first = morsel_of(concat({&best, &cur}));
+                    first = morsel_of(common::unwrap(concat({&best, &cur})));
                     best = DataFrame{};
                 }
                 gov_.spilled(0);
@@ -1332,11 +1332,11 @@ class TopkCursor : public Cursor {
             cur.names = sch_;
             for (Series& c : m->columns) cur.columns.push_back(std::move(c));
             if (!has) {
-                best = cur.topk(name_, k_, largest_);
+                best = common::unwrap(cur.topk(name_, k_, largest_));
                 has = true;
             } else {
-                DataFrame u = concat({&best, &cur});
-                best = u.topk(name_, k_, largest_);
+                DataFrame u = common::unwrap(concat({&best, &cur}));
+                best = common::unwrap(u.topk(name_, k_, largest_));
             }
         }
         if (!has) co_return dstd::nullopt;
@@ -1408,7 +1408,7 @@ class SampleCursor : public Cursor {
             DataFrame combined =
                 best.num_rows() == 0
                     ? std::move(mf)
-                    : concat({&best, &mf}, ConcatHow::Vertical);
+                    : common::unwrap(concat({&best, &mf}, ConcatHow::Vertical));
             keys.reserve(keys.size() + static_cast<std::size_t>(mrows));
             idx.reserve(idx.size() + static_cast<std::size_t>(mrows));
             for (std::int64_t i = 0; i < mrows; ++i) {
@@ -2106,7 +2106,9 @@ class ToDummiesCursor : public Cursor {
         // Distinct values, ascending (Series::unique sorts), matching eager.
         Series uniq;
         if (!chunks.empty())
-            uniq = concat_columns(column_ptrs(chunks)).unique().materialize();
+            uniq = common::unwrap(concat_columns(column_ptrs(chunks)))
+                       .unique()
+                       .materialize();
         const std::int64_t d = uniq.length();
         dstd::Vector<Series> one;
         one.push_back(uniq.share());
@@ -2203,7 +2205,8 @@ class TakeCursor : public Cursor {
             dstd::Vector<const Series*> parts;
             parts.reserve(pieces.size());
             for (auto& pc : pieces) parts.push_back(&pc[c]);
-            out.columns.push_back(concat_columns(parts).take(back));
+            out.columns.push_back(
+                common::unwrap(concat_columns(parts)).take(back));
         }
         co_return out;
     }
@@ -2613,9 +2616,10 @@ class JoinCursor : public Cursor {
             if (values.length() <= NARROW_MAX_KEYS) {
                 one = expr_is_in(col, std::move(values));
             } else if (is_numeric_dispatchable(keys.type())) {
-                one = expr_logical(LogicalOp::And,
-                                   expr_cmp(CmpOp::Ge, col, values.min()),
-                                   expr_cmp(CmpOp::Le, col, values.max()));
+                one = expr_logical(
+                    LogicalOp::And,
+                    expr_cmp(CmpOp::Ge, col, common::unwrap(values.min())),
+                    expr_cmp(CmpOp::Le, col, common::unwrap(values.max())));
             } else {
                 continue;
             }
@@ -4478,44 +4482,51 @@ coro::CoroTask<DataFrame> LazyFrame::run_ops_in_memory(
                         common::unwrap(eval(o.expr, column_ptrs(df.columns))));
                 },
                 [&](const SelectOp& o) {
-                    return df.select(without_rest(o.names));
+                    return common::unwrap(df.select(without_rest(o.names)));
                 },
-                [&](const RenameOp& o) { return df.rename(o.names); },
+                [&](const RenameOp& o) {
+                    return common::unwrap(df.rename(o.names));
+                },
                 [&](const DropOp& o) {
-                    return df.select(dropped_names(df.names, o.names));
+                    return common::unwrap(
+                        df.select(dropped_names(df.names, o.names)));
                 },
                 [&](const RenameColumnsOp& o) {
-                    return df.rename(
-                        renamed_names(df.names, rename_map(o.from, o.to)));
+                    return common::unwrap(df.rename(
+                        renamed_names(df.names, rename_map(o.from, o.to))));
                 },
                 [&](const SliceOp& o) { return df.slice(o.offset, o.len); },
                 [&](const TailOp& o) { return df.tail(o.n); },
                 [&](const DropNullsOp&) { return df.drop_nulls(); },
                 [&](const FillNullOp& o) { return df.fill_null(o.value); },
                 [&](const SortByOp& o) {
-                    return df.sort_by(o.name, o.descending);
+                    return common::unwrap(df.sort_by(o.name, o.descending));
                 },
                 [&](const SortByMultiOp& o) {
-                    return df.sort_by_multi(o.by, o.descending);
+                    return common::unwrap(df.sort_by_multi(o.by, o.descending));
                 },
                 [&](const ReverseOp&) { return df.reverse(); },
                 [&](const TakeOp& o) { return df.take(o.indices); },
                 [&](const FilterMaskOp& o) { return df.filter(o.mask); },
-                [&](const UniqueOp& o) { return df.unique(o.subset); },
+                [&](const UniqueOp& o) {
+                    return common::unwrap(df.unique(o.subset));
+                },
                 [&](const SampleOp& o) { return df.sample(o.n, o.seed); },
                 [&](const TopkOp& o) {
-                    return df.topk(o.name, o.k, o.largest);
+                    return common::unwrap(df.topk(o.name, o.k, o.largest));
                 },
                 [&](const WithRowIndexOp& o) {
                     return df.with_row_index(o.name);
                 },
                 [&](const NullCountOp&) { return df.null_count(); },
                 [&](const GroupByDynamicOp& o) {
-                    return df.group_by_dynamic(o.time_col, o.every, o.period,
-                                               o.aggs, o.origin, o.origin_min);
+                    return common::unwrap(
+                        df.group_by_dynamic(o.time_col, o.every, o.period,
+                                            o.aggs, o.origin, o.origin_min));
                 },
                 [&](const GroupByOp& o) {
-                    if (o.dyn.empty()) return df.group_by(o.keys, o.aggs);
+                    if (o.dyn.empty())
+                        return common::unwrap(df.group_by(o.keys, o.aggs));
                     // DataFrame::group_by drops the dyn side-channel; run the
                     // same AggState path the streaming cursor uses.
                     LoweredGroupAggs lowered = lower_group_aggs(o.aggs);
@@ -4701,7 +4712,7 @@ dstd::Vector<GroupAgg> LazyFrame::reduce_specs(
         types.push_back(f.type.id);
     }
     for (const dstd::String& k : keys) require_col(names, k, "reduce");
-    return dataframe::reduce_specs(names, types, agg, keys);
+    return common::unwrap(dataframe::reduce_specs(names, types, agg, keys));
 }
 
 LazyFrame LazyFrame::reduce(Agg agg) const {
@@ -5854,7 +5865,7 @@ coro::CoroTask<DataFrame> collect_owned(LazyFrame plan, std::uint64_t budget,
 coro::CoroTask<DataFrame> join_chunks(DataFrame f) {
     co_await each_column(f.columns.size(), [&f](std::size_t c) {
         if (f.columns[c].encoding() == Encoding::Chunked)
-            f.columns[c] = join_chunks(f.columns[c]);
+            f.columns[c] = common::unwrap(join_chunks(f.columns[c]));
     });
     co_return f;
 }

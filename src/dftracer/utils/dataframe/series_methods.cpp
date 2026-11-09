@@ -60,14 +60,23 @@ Series Series::div(const Series& o) const {
     return Series{dftu_series_div(handle_, o.handle_)};
 }
 
-Scalar Series::sum() const {
-    return raise_if_error(dftu_series_reduce(handle_, DFTU_REDUCE_SUM));
+dstd::Result<Scalar> Series::sum() const {
+    const dstd::Result<dftu_scalar> r =
+        reduction_result(dftu_series_reduce(handle_, DFTU_REDUCE_SUM));
+    if (!r) return r.error();
+    return Scalar{*r};
 }
-Scalar Series::min() const {
-    return raise_if_error(dftu_series_reduce(handle_, DFTU_REDUCE_MIN));
+dstd::Result<Scalar> Series::min() const {
+    const dstd::Result<dftu_scalar> r =
+        reduction_result(dftu_series_reduce(handle_, DFTU_REDUCE_MIN));
+    if (!r) return r.error();
+    return Scalar{*r};
 }
-Scalar Series::max() const {
-    return raise_if_error(dftu_series_reduce(handle_, DFTU_REDUCE_MAX));
+dstd::Result<Scalar> Series::max() const {
+    const dstd::Result<dftu_scalar> r =
+        reduction_result(dftu_series_reduce(handle_, DFTU_REDUCE_MAX));
+    if (!r) return r.error();
+    return Scalar{*r};
 }
 Scalar Series::product() const { return dftu_series_product(handle_); }
 Scalar Series::mode() const { return dftu_series_mode(handle_); }
@@ -76,10 +85,12 @@ bool Series::any() const { return dftu_series_any(handle_) != 0; }
 std::int64_t Series::arg_min() const { return dftu_series_arg_min(handle_); }
 std::int64_t Series::arg_max() const { return dftu_series_arg_max(handle_); }
 std::int64_t Series::count() const { return dftu_series_count(handle_); }
-double Series::mean() const {
+dstd::Result<double> Series::mean() const {
     // sum() first: a column type that has no sum (a string) is refused even
     // when it has no valid value.
-    const double total = scalar_as_double(sum());
+    const dstd::Result<Scalar> total_sum = sum();
+    if (!total_sum) return total_sum.error();
+    const double total = scalar_as_double(*total_sum);
     const std::int64_t n = count();
     return n == 0 ? 0.0 : total / static_cast<double>(n);
 }

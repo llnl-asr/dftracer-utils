@@ -300,7 +300,8 @@ class FigureWriter {
         dstd::Vector<Series> cols;
         cols.push_back(Series::strings(blobs_));
         for (dstd::Vector<Series>& l : lasts_) {
-            cols.push_back(concat_columns(column_ptrs(l)).materialize());
+            cols.push_back(
+                common::unwrap(concat_columns(column_ptrs(l))).materialize());
             l.clear();
         }
         spool_->add(std::move(cols), static_cast<std::int64_t>(blobs_.size()));
@@ -670,10 +671,11 @@ class WindowStreamCursor : public Cursor {
                 dstd::Vector<Series> parts;
                 for (const Morsel& m : held_)
                     parts.push_back(m.columns[c].share());
-                cols.push_back((parts.size() == 1
-                                    ? parts[0].share()
-                                    : concat_columns(column_ptrs(parts)))
-                                   .materialize());
+                cols.push_back(
+                    (parts.size() == 1
+                         ? parts[0].share()
+                         : common::unwrap(concat_columns(column_ptrs(parts))))
+                        .materialize());
             }
             held_.clear();
             const std::int64_t n = held_rows_;
@@ -708,8 +710,10 @@ class WindowStreamCursor : public Cursor {
                     body = cols[c].take(head).materialize();
                 }
                 fcols.push_back(
-                    ctx_n > 0 ? concat_columns({&ctx_[c], &body}).materialize()
-                              : std::move(body));
+                    ctx_n > 0
+                        ? common::unwrap(concat_columns({&ctx_[c], &body}))
+                              .materialize()
+                        : std::move(body));
             }
             if (seq_) co_await fetch_figures(emit, key);
             DataFrame frame;
@@ -1424,10 +1428,11 @@ class WindowStreamCursor : public Cursor {
                     cols.push_back(Series::flat_i64(wk.out.data(), m->rows));
                     continue;
                 }
-                cols.push_back(concat_columns({&wk.carried, &col})
-                                   .materialize()
-                                   .take(wk.out)
-                                   .materialize());
+                cols.push_back(
+                    common::unwrap(concat_columns({&wk.carried, &col}))
+                        .materialize()
+                        .take(wk.out)
+                        .materialize());
                 if (wk.best >= 0)
                     back[j].best = col.take(dstd::Vector<std::int64_t>{wk.best})
                                        .materialize();
@@ -1666,6 +1671,11 @@ class WindowStreamCursor : public Cursor {
                 bits[r] = std::bit_cast<std::uint64_t>(
                     is_mean ? c.fsum.mean(c.nonnull) : c.fsum.sum);
             } else if (w.func == DFTU_WINDOW_FRAME_SUM) {
+                if (cls == NumClass::Unsigned ? !c.sum.fits_u64()
+                                              : !c.sum.fits_i64())
+                    throw_window_overflow("FRAME_SUM", cls == NumClass::Unsigned
+                                                           ? "uint64"
+                                                           : "int64");
                 bits[r] = cls == NumClass::Unsigned
                               ? c.sum.u64()
                               : static_cast<std::uint64_t>(c.sum.i64());
@@ -2137,6 +2147,11 @@ class WindowStreamCursor : public Cursor {
             } else if (float_acc) {
                 bits[r] = dstd::double_bits(s.win_sum.sum);
             } else if (sum_fn) {
+                if (cls == NumClass::Unsigned ? !s.win_isum.fits_u64()
+                                              : !s.win_isum.fits_i64())
+                    throw_window_overflow("FRAME_SUM", cls == NumClass::Unsigned
+                                                           ? "uint64"
+                                                           : "int64");
                 bits[r] = cls == NumClass::Unsigned
                               ? s.win_isum.u64()
                               : static_cast<std::uint64_t>(s.win_isum.i64());
@@ -2146,7 +2161,8 @@ class WindowStreamCursor : public Cursor {
         }
         if (suffix) {
             const Series all =
-                concat_columns({&hist, &cols[s.ext_at]}).materialize();
+                common::unwrap(concat_columns({&hist, &cols[s.ext_at]}))
+                    .materialize();
             put(res, w.out, all.take(src).materialize());
             const auto rows = static_cast<std::int64_t>(emit);
             const std::int64_t keep_n =
@@ -2224,7 +2240,8 @@ class WindowStreamCursor : public Cursor {
             }
             if (have && count >= w.min_count) src[r] = best >= 0 ? 1 + best : 0;
         }
-        const Series all = concat_columns({&carried, &vcol}).materialize();
+        const Series all =
+            common::unwrap(concat_columns({&carried, &vcol})).materialize();
         put(res, w.out, all.take(src).materialize());
         s.have_ext = have;
         s.ext_count = count;
@@ -2257,7 +2274,8 @@ class WindowStreamCursor : public Cursor {
                 src[r] = 1 + at;
             if (r + 1 == emit) pick_at = at;
         }
-        const Series all = concat_columns({&carried, &vcol}).materialize();
+        const Series all =
+            common::unwrap(concat_columns({&carried, &vcol})).materialize();
         put(res, w.out, all.take(src).materialize());
         if (emit == 0) return;
         const auto last = static_cast<std::int64_t>(emit) - 1;
@@ -2286,7 +2304,8 @@ class WindowStreamCursor : public Cursor {
             src[r] = static_cast<std::int64_t>(pieces.size()) - 1;
         }
         if (pieces.empty()) return;
-        put(res, w.out, concat_columns(pieces).take(src).materialize());
+        put(res, w.out,
+            common::unwrap(concat_columns(pieces)).take(src).materialize());
     }
 
     // The state after a chunk: the rows of the continuing partition are
@@ -2348,12 +2367,16 @@ class WindowStreamCursor : public Cursor {
                         col = patched(col, run, [&](std::uint64_t v) {
                             steps::SumU64 sum{s.last_u};
                             sum.add(v);
+                            if (sum.overflowed)
+                                throw_window_overflow("RUNNING_SUM", "uint64");
                             return sum.acc;
                         });
                     else
                         col = patched(col, run, [&](std::int64_t v) {
                             steps::SumI64 sum{s.last_i};
                             sum.add(v);
+                            if (sum.overflowed)
+                                throw_window_overflow("RUNNING_SUM", "int64");
                             return sum.acc;
                         });
                 }

@@ -6,6 +6,7 @@
 //
 //   window_bench [rows] [reps]
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -119,8 +120,8 @@ int main(int argc, char** argv) {
                 dftracer::utils::dstd::Vector<double> ms;
                 for (int r = 0; r < reps; ++r) {
                     const auto t0 = std::chrono::steady_clock::now();
-                    DataFrame out =
-                        dataframe::window(frame, part, order, specs);
+                    DataFrame out = dftracer::utils::common::unwrap(
+                        dataframe::window(frame, part, order, specs));
                     const auto t1 = std::chrono::steady_clock::now();
                     ms.push_back(
                         std::chrono::duration<double, std::milli>(t1 - t0)

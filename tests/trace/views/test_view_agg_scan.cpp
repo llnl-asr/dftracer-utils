@@ -58,8 +58,10 @@ TEST_SUITE("View") {
         auto check_match = [](const dataframe::DataFrame& a0,
                               const dataframe::DataFrame& b0,
                               const dstd::String& key) {
-            dataframe::DataFrame a = a0.sort_by(key, false);
-            dataframe::DataFrame b = b0.sort_by(key, false);
+            dataframe::DataFrame a =
+                dftu_utils_test::ok(a0.sort_by(key, false));
+            dataframe::DataFrame b =
+                dftu_utils_test::ok(b0.sort_by(key, false));
             REQUIRE(a.names.size() == b.names.size());
             for (std::size_t i = 0; i < a.names.size(); ++i) {
                 CHECK(a.names[i] == b.names[i]);

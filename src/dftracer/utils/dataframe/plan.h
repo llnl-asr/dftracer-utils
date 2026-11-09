@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/detail/ast.h>
@@ -31,9 +32,10 @@ struct QueryPlan {
 
 /// Execute `plan` over `input`, returning a new batch. The predicate is
 /// evaluated as a SIMD mask (see mask.h) - a predicate with no columnar
-/// lowering throws DFTUtilsException{duql::DuqlErrc::Unsupported}. Columns
-/// are shared zero-copy where a stage does not gather.
-dftracer::utils::dataframe::DataFrame execute(
+/// lowering returns an error with code duql::DuqlErrc::Unsupported, and a stage
+/// the batch cannot take (an unknown column) returns that stage's error.
+/// Columns are shared zero-copy where a stage does not gather.
+dstd::Result<dftracer::utils::dataframe::DataFrame> execute(
     const QueryPlan& plan, const dftracer::utils::dataframe::DataFrame& input);
 
 }  // namespace dftracer::utils::dataframe

@@ -11,6 +11,7 @@
 //
 //   dataframe_parallel_bench [rows] [groups]
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -87,7 +88,7 @@ double time_group_by(const DataFrame& df,
     double best = 1e300;
     for (int r = 0; r < reps; ++r) {
         const auto t0 = std::chrono::steady_clock::now();
-        DataFrame out = df.group_by("k", aggs);
+        DataFrame out = dftracer::utils::common::unwrap(df.group_by("k", aggs));
         const auto t1 = std::chrono::steady_clock::now();
         do_not_optimize(out.num_rows());
         const double ms =
@@ -134,7 +135,7 @@ int main(int argc, char** argv) {
         double s_sort = 1e300, s_desc = 1e300;
         for (int r = 0; r < 3; ++r) {
             auto t0 = std::chrono::steady_clock::now();
-            DataFrame o = df.sort_by("v");
+            DataFrame o = dftracer::utils::common::unwrap(df.sort_by("v"));
             auto t1 = std::chrono::steady_clock::now();
             do_not_optimize(o.num_rows());
             s_sort = std::min(
@@ -213,7 +214,8 @@ int main(int argc, char** argv) {
         double best = 1e300;
         for (int r = 0; r < 3; ++r) {
             const auto t0 = std::chrono::steady_clock::now();
-            DataFrame out = df.sort_by("s");  // scattered key
+            DataFrame out = dftracer::utils::common::unwrap(
+                df.sort_by("s"));  // scattered key
             const auto t1 = std::chrono::steady_clock::now();
             do_not_optimize(out.num_rows());
             best = std::min(
@@ -224,10 +226,10 @@ int main(int argc, char** argv) {
     };
     set_parallel_backend(nullptr, nullptr);
     const double sort_ser = time_sort();
-    DataFrame sorted_serial = df.sort_by("s");
+    DataFrame sorted_serial = dftracer::utils::common::unwrap(df.sort_by("s"));
     install_runtime_parallel_backend();
     const double sort_par = time_sort();
-    DataFrame sorted_par = df.sort_by("s");
+    DataFrame sorted_par = dftracer::utils::common::unwrap(df.sort_by("s"));
     std::printf("sort_by: serial %8.2f ms | runtime %8.2f ms (%.2fx)\n",
                 sort_ser, sort_par, sort_ser / sort_par);
 
@@ -631,7 +633,7 @@ int main(int argc, char** argv) {
         DataFrame r;
         for (int i = 0; i < reps; ++i) {
             const auto tt0 = std::chrono::steady_clock::now();
-            r = dummy_df.to_dummies("cat");
+            r = dftracer::utils::common::unwrap(dummy_df.to_dummies("cat"));
             const auto tt1 = std::chrono::steady_clock::now();
             do_not_optimize(r.num_rows());
             best = std::min(
@@ -644,7 +646,8 @@ int main(int argc, char** argv) {
     DataFrame td_serial_out = time_dummies(1);
     const double td_ser = [&] {
         const auto tt0 = std::chrono::steady_clock::now();
-        DataFrame r = dummy_df.to_dummies("cat");
+        DataFrame r =
+            dftracer::utils::common::unwrap(dummy_df.to_dummies("cat"));
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.num_rows());
         return std::chrono::duration<double, std::milli>(tt1 - tt0).count();
@@ -654,7 +657,8 @@ int main(int argc, char** argv) {
     double td_par = 1e300;
     for (int i = 0; i < 3; ++i) {
         const auto tt0 = std::chrono::steady_clock::now();
-        DataFrame r = dummy_df.to_dummies("cat");
+        DataFrame r =
+            dftracer::utils::common::unwrap(dummy_df.to_dummies("cat"));
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.num_rows());
         td_par = std::min(
@@ -684,7 +688,8 @@ int main(int argc, char** argv) {
         dftracer::utils::dstd::Vector<DataFrame> r;
         for (int i = 0; i < reps; ++i) {
             const auto tt0 = std::chrono::steady_clock::now();
-            r = hash_partition(dummy_df, {"cat"}, 64);
+            r = dftracer::utils::common::unwrap(
+                hash_partition(dummy_df, {"cat"}, 64));
             const auto tt1 = std::chrono::steady_clock::now();
             std::int64_t total = 0;
             for (const auto& p : r) total += p.num_rows();
@@ -701,7 +706,8 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 3; ++i) {
         const auto tt0 = std::chrono::steady_clock::now();
         dftracer::utils::dstd::Vector<DataFrame> r =
-            hash_partition(dummy_df, {"cat"}, 64);
+            dftracer::utils::common::unwrap(
+                hash_partition(dummy_df, {"cat"}, 64));
         const auto tt1 = std::chrono::steady_clock::now();
         std::int64_t total = 0;
         for (const auto& p : r) total += p.num_rows();
@@ -716,7 +722,8 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 3; ++i) {
         const auto tt0 = std::chrono::steady_clock::now();
         dftracer::utils::dstd::Vector<DataFrame> r =
-            hash_partition(dummy_df, {"cat"}, 64);
+            dftracer::utils::common::unwrap(
+                hash_partition(dummy_df, {"cat"}, 64));
         const auto tt1 = std::chrono::steady_clock::now();
         std::int64_t total = 0;
         for (const auto& p : r) total += p.num_rows();
@@ -795,7 +802,8 @@ int main(int argc, char** argv) {
         DataFrame r;
         for (int i = 0; i < reps; ++i) {
             const auto tt0 = std::chrono::steady_clock::now();
-            r = sort_by_multi(multi_df, {"k", "v"}, false);
+            r = dftracer::utils::common::unwrap(
+                sort_by_multi(multi_df, {"k", "v"}, false));
             const auto tt1 = std::chrono::steady_clock::now();
             do_not_optimize(r.num_rows());
             best = std::min(
@@ -809,7 +817,8 @@ int main(int argc, char** argv) {
     double sbm_ser = 1e300;
     for (int i = 0; i < 3; ++i) {
         const auto tt0 = std::chrono::steady_clock::now();
-        DataFrame r = sort_by_multi(multi_df, {"k", "v"}, false);
+        DataFrame r = dftracer::utils::common::unwrap(
+            sort_by_multi(multi_df, {"k", "v"}, false));
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.num_rows());
         sbm_ser = std::min(
@@ -821,7 +830,8 @@ int main(int argc, char** argv) {
     double sbm_par = 1e300;
     for (int i = 0; i < 3; ++i) {
         const auto tt0 = std::chrono::steady_clock::now();
-        DataFrame r = sort_by_multi(multi_df, {"k", "v"}, false);
+        DataFrame r = dftracer::utils::common::unwrap(
+            sort_by_multi(multi_df, {"k", "v"}, false));
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.num_rows());
         sbm_par = std::min(
@@ -1077,7 +1087,7 @@ int main(int argc, char** argv) {
         Series r;
         for (int i = 0; i < reps; ++i) {
             const auto tt0 = std::chrono::steady_clock::now();
-            r = concat_columns(part_ptrs);
+            r = dftracer::utils::common::unwrap(concat_columns(part_ptrs));
             const auto tt1 = std::chrono::steady_clock::now();
             do_not_optimize(r.length());
             best = std::min(
@@ -1091,7 +1101,7 @@ int main(int argc, char** argv) {
     double ccat_ser = 1e300;
     for (int i = 0; i < 5; ++i) {
         const auto tt0 = std::chrono::steady_clock::now();
-        Series r = concat_columns(part_ptrs);
+        Series r = dftracer::utils::common::unwrap(concat_columns(part_ptrs));
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         ccat_ser = std::min(
@@ -1103,7 +1113,7 @@ int main(int argc, char** argv) {
     double ccat_par = 1e300;
     for (int i = 0; i < 5; ++i) {
         const auto tt0 = std::chrono::steady_clock::now();
-        Series r = concat_columns(part_ptrs);
+        Series r = dftracer::utils::common::unwrap(concat_columns(part_ptrs));
         const auto tt1 = std::chrono::steady_clock::now();
         do_not_optimize(r.length());
         ccat_par = std::min(
@@ -1401,7 +1411,7 @@ int main(int argc, char** argv) {
     thr.value.i = keep_from;
     Expr keep = expr_cmp(CmpOp::Gt, expr_col(1), thr);  // column 1 = v
     auto eager_sort_filter = [&]() {
-        DataFrame se = df.sort_by("s");
+        DataFrame se = dftracer::utils::common::unwrap(df.sort_by("s"));
         Series m = se.column("v") > keep_from;
         return se.filter(m);
     };
@@ -1453,7 +1463,7 @@ int main(int argc, char** argv) {
         Series m = df.column("v") > (rows / 2);
         DataFrame f = df.filter(m);
         DataFrame w = f.with_column("kv", f.column("k") + f.column("v"));
-        return w.select({"k", "kv"});
+        return dftracer::utils::common::unwrap(w.select({"k", "kv"}));
     };
     auto lazy_map = [&]() {
         return run(df.lazy()

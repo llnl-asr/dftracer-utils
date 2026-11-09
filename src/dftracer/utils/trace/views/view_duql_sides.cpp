@@ -76,9 +76,10 @@ void persist(const CacheKey& key,
         for (const auto& p : parts) ptrs.push_back(&p);
         index::cache::persist_lookup(
             *db, key.sig,
-            ptrs.size() == 1 ? dataframe::frame_to_native(parts.front())
-                             : dataframe::frame_to_native(dataframe::concat(
-                                   ptrs, dataframe::ConcatHow::Diagonal)));
+            ptrs.size() == 1
+                ? dataframe::frame_to_native(parts.front())
+                : dataframe::frame_to_native(common::unwrap(dataframe::concat(
+                      ptrs, dataframe::ConcatHow::Diagonal))));
     } catch (const std::exception&) {
     }
 }
@@ -218,8 +219,8 @@ dstd::SharedPtr<const dataframe::DataFrame> Sides::distinct(std::size_t i) {
     if (key) persist(*key, parts);
     dstd::Vector<const dataframe::DataFrame*> ptrs;
     for (const auto& part : parts) ptrs.push_back(&part);
-    return dstd::make_shared<const dataframe::DataFrame>(
-        dataframe::concat(ptrs, dataframe::ConcatHow::Diagonal));
+    return dstd::make_shared<const dataframe::DataFrame>(common::unwrap(
+        dataframe::concat(ptrs, dataframe::ConcatHow::Diagonal)));
 }
 
 dstd::SharedPtr<const dataframe::DataFrame> Sides::run(std::size_t i) {
@@ -256,7 +257,7 @@ dstd::SharedPtr<const dataframe::DataFrame> Sides::run(std::size_t i) {
     caps.check_bytes(name, duql::frame_bytes(f));
     if (keys[i]) {
         dstd::Vector<dataframe::DataFrame> parts;
-        parts.push_back(f.select(f.names));
+        parts.push_back(common::unwrap(f.select(f.names)));
         persist(*keys[i], parts);
     }
     return dstd::make_shared<const dataframe::DataFrame>(std::move(f));
@@ -308,7 +309,8 @@ class SideSource final : public dataframe::Source {
                 f.names = frame->names;
                 for (const auto& c : frame->columns)
                     f.columns.push_back(c.share());
-                if (!projection_.empty()) f = f.select(projection_);
+                if (!projection_.empty())
+                    f = common::unwrap(f.select(projection_));
                 rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
             }
             co_return co_await rows_->next(max_rows);

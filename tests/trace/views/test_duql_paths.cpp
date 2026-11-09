@@ -10,6 +10,7 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -213,7 +214,8 @@ TEST_SUITE("duql paths") {
             const dataframe::DataFrame df = frame_of(c.numeric_x);
             const auto q = duql::Query::from_string(c.filter);
             REQUIRE(q.has_value());
-            CHECK(names_of(df.filter(df.mask(*q))) == c.expected);
+            CHECK(names_of(df.filter(dftu_utils_test::ok(df.mask(*q)))) ==
+                  c.expected);
         }
     }
 
@@ -312,7 +314,8 @@ TEST_SUITE("duql paths") {
             if (c.frame) {
                 const auto q = duql::Query::from_string(c.filter);
                 REQUIRE(q.has_value());
-                CHECK(names_of(frame.filter(frame.mask(*q))) == c.expected);
+                CHECK(names_of(frame.filter(
+                          dftu_utils_test::ok(frame.mask(*q)))) == c.expected);
             }
         }
     }
@@ -347,7 +350,7 @@ TEST_SUITE("duql paths") {
         auto kept = [&](const char* filter) {
             const auto q = duql::Query::from_string(filter);
             REQUIRE(q.has_value());
-            return names_of(df.filter(df.mask(*q)));
+            return names_of(df.filter(dftu_utils_test::ok(df.mask(*q))));
         };
         CHECK(kept("x == 1").empty());
         CHECK(kept("not (x == 1)").empty());

@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
@@ -145,7 +146,7 @@ class Vectorizer {
     }
 
     V no_kernel(dstd::StringView what) const {
-        return fail(dstd::String(what) + " has no column kernel");
+        return fail(dstd::fmt<"{} has no column kernel">(what));
     }
 
     static V null() { return {}; }
@@ -184,7 +185,8 @@ class Vectorizer {
                 key += s.key;
             }
             auto c = column(key);
-            if (!c && !element && args_fallback_) c = column("args." + key);
+            if (!c && !element && args_fallback_)
+                c = column(dstd::fmt<"args.{}">(key));
             if (c) {
                 best = c;
                 consumed = i + 1;
@@ -222,8 +224,7 @@ class Vectorizer {
         const auto c = field_column(f, consumed);
         if (!c) return null();
         const VectorColumn& col = columns_[*c];
-        if (col.json)
-            return fail("'" + dstd::String(col.name) + "' is a json field");
+        if (col.json) return fail(dstd::fmt<"'{}' is a json field">(col.name));
         V v{dataframe::expr_col(static_cast<std::int32_t>(*c)),
             column_kind(col.type.id)};
         const dataframe::DataType* type = &col.type;
@@ -472,8 +473,8 @@ class Vectorizer {
                 if (k == K::Other || k == K::List) return null();
                 return {dataframe::expr_col(static_cast<std::int32_t>(i)), k};
             }
-        return fail("a lookup into '" + l.name +
-                    "' runs on columns only through lookup()");
+        return fail(dstd::fmt<"a lookup into '{}' runs on columns only "
+                              "through lookup()">(l.name));
     }
 
     // The column of `t` when it is a parse_json() call.
@@ -552,9 +553,9 @@ class Vectorizer {
     V arg(const TCall& c, std::size_t i) {
         V v = (*this)(*c.args[i]);
         if (v.k == K::Any)
-            return fail(dstd::String(fn_name(c)) + "() reads '" +
-                        term_text(*c.args[i]) +
-                        "', whose type only each batch gives");
+            return fail(
+                dstd::fmt<"{}() reads '{}', whose type only each "
+                          "batch gives">(fn_name(c), term_text(*c.args[i])));
         return v;
     }
 
@@ -994,8 +995,8 @@ dstd::Result<dstd::Vector<dataframe::Series>> key_columns(
 // The table of `l`, or the error when its rows were not bound.
 dstd::Result<const LookupTable*> bound(const TLookup& l) {
     if (!l.slot || !l.slot->table)
-        return unsupported("'" + l.name +
-                           "' was read before its rows were bound");
+        return unsupported(
+            dstd::fmt<"'{}' was read before its rows were bound">(l.name));
     return l.slot->table.get();
 }
 
@@ -1289,6 +1290,16 @@ dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>> object_fields(
     return out;
 }
 
+// The one column of the single-column frames `ptrs`, joined. Every part has the
+// element type call_type admitted, which concat always joins, so a failure
+// here is a broken contract.
+dataframe::Series joined_values(
+    const dstd::Vector<const dataframe::DataFrame*>& ptrs) {
+    dstd::Result<dataframe::DataFrame> all = dataframe::concat(ptrs);
+    if (!all) dstd::fatal("vectorize: the parts of a list do not join");
+    return std::move(all->columns.front());
+}
+
 dataframe::Series members_column(const dstd::Vector<dataframe::Series>& args,
                                  const dstd::Vector<dstd::String>& keys,
                                  bool names, const dataframe::DataType& type) {
@@ -1329,8 +1340,7 @@ dataframe::Series members_column(const dstd::Vector<dataframe::Series>& args,
                                         : fields[k].second.cast(elem));
         ptrs.push_back(&frames[k]);
     }
-    dataframe::Series values =
-        dataframe::concat(ptrs).columns.front().take(take);
+    dataframe::Series values = joined_values(ptrs).take(take);
     return make_list(offsets, std::move(values), valid);
 }
 
@@ -1622,8 +1632,7 @@ dataframe::Series list_column(const dstd::Vector<dataframe::Series>& items,
     take.reserve(static_cast<std::size_t>(n * m));
     for (std::int64_t r = 0; r < n; ++r)
         for (std::int64_t k = 0; k < m; ++k) take.push_back(k * n + r);
-    return make_list(offsets,
-                     dataframe::concat(ptrs).columns.front().take(take), valid);
+    return make_list(offsets, joined_values(ptrs).take(take), valid);
 }
 
 }  // namespace

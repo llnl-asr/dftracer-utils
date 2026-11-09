@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
@@ -57,25 +58,28 @@ coro::AsyncGenerator<DataFrame> DataFrame::stream(
     }
 }
 DataFrame DataFrame::reverse() const { return dataframe::reverse(*this); }
-DataFrame DataFrame::sort_by(const dstd::String& name, bool descending) const {
+dstd::Result<DataFrame> DataFrame::sort_by(const dstd::String& name,
+                                           bool descending) const {
     return dataframe::sort_by(*this, name, descending);
 }
-DataFrame DataFrame::sort_by_multi(const dstd::Vector<dstd::String>& by,
-                                   bool descending) const {
+dstd::Result<DataFrame> DataFrame::sort_by_multi(
+    const dstd::Vector<dstd::String>& by, bool descending) const {
     return dataframe::sort_by_multi(*this, by, descending);
 }
-DataFrame DataFrame::sort_by_multi(const dstd::Vector<dstd::String>& by,
-                                   const dstd::Vector<bool>& descending) const {
+dstd::Result<DataFrame> DataFrame::sort_by_multi(
+    const dstd::Vector<dstd::String>& by,
+    const dstd::Vector<bool>& descending) const {
     return dataframe::sort_by_multi(*this, by, descending);
 }
 DataFrame DataFrame::drop_nulls() const { return dataframe::drop_nulls(*this); }
 DataFrame DataFrame::fill_null(Scalar value) const {
     return dataframe::fill_null(*this, value);
 }
-DataFrame DataFrame::unique(const dstd::Vector<dstd::String>& subset) const {
+dstd::Result<DataFrame> DataFrame::unique(
+    const dstd::Vector<dstd::String>& subset) const {
     return dataframe::unique(*this, subset);
 }
-DataFrame DataFrame::drop_duplicates(
+dstd::Result<DataFrame> DataFrame::drop_duplicates(
     const dstd::Vector<dstd::String>& subset) const {
     return dataframe::unique(*this, subset);
 }
@@ -87,33 +91,38 @@ DataFrame DataFrame::with_row_index(const dstd::String& name) const {
 }
 DataFrame DataFrame::describe() const { return dataframe::describe(*this); }
 DataFrame DataFrame::null_count() const { return dataframe::null_count(*this); }
-DataFrame DataFrame::reduce(const dstd::Vector<GroupAgg>& aggs) const {
+dstd::Result<DataFrame> DataFrame::reduce(
+    const dstd::Vector<GroupAgg>& aggs) const {
     return dataframe::reduce(*this, aggs);
 }
-DataFrame DataFrame::reduce(Agg agg) const {
+dstd::Result<DataFrame> DataFrame::reduce(Agg agg) const {
     return dataframe::reduce(*this, agg);
 }
-Series DataFrame::is_duplicated() const {
+dstd::Result<Series> DataFrame::is_duplicated() const {
     return dataframe::is_duplicated(*this);
 }
-Series DataFrame::is_unique() const { return dataframe::is_unique(*this); }
-Series DataFrame::partition_id(const dstd::Vector<dstd::String>& keys,
-                               std::int64_t n_parts) const {
+dstd::Result<Series> DataFrame::is_unique() const {
+    return dataframe::is_unique(*this);
+}
+dstd::Result<Series> DataFrame::partition_id(
+    const dstd::Vector<dstd::String>& keys, std::int64_t n_parts) const {
     return dataframe::partition_id(*this, keys, n_parts);
 }
 
-DataFrame Series::value_counts() const {
+dstd::Result<DataFrame> Series::value_counts() const {
     return dataframe::value_counts(*this);
 }
-DataFrame DataFrame::topk(const dstd::String& name, std::int64_t k,
-                          bool largest) const {
+dstd::Result<DataFrame> DataFrame::topk(const dstd::String& name,
+                                        std::int64_t k, bool largest) const {
     return dataframe::topk(*this, name, k, largest);
 }
 
-DataFrame DataFrame::select(const dstd::Vector<dstd::String>& cols) const {
+dstd::Result<DataFrame> DataFrame::select(
+    const dstd::Vector<dstd::String>& cols) const {
     return dataframe::select(*this, cols);
 }
-DataFrame DataFrame::rename(const dstd::Vector<dstd::String>& new_names) const {
+dstd::Result<DataFrame> DataFrame::rename(
+    const dstd::Vector<dstd::String>& new_names) const {
     return dataframe::rename(*this, new_names);
 }
 DataFrame DataFrame::with_column(const dstd::String& name,
@@ -121,13 +130,14 @@ DataFrame DataFrame::with_column(const dstd::String& name,
     return dataframe::with_column(*this, name, col);
 }
 
-DataFrame DataFrame::group_by(const dstd::String& key,
-                              const dstd::Vector<GroupAgg>& aggs) const {
+dstd::Result<DataFrame> DataFrame::group_by(
+    const dstd::String& key, const dstd::Vector<GroupAgg>& aggs) const {
     return dataframe::group_by(*this, key, aggs);
 }
 
-DataFrame DataFrame::group_by(const dstd::Vector<dstd::String>& keys,
-                              const dstd::Vector<GroupAgg>& aggs) const {
+dstd::Result<DataFrame> DataFrame::group_by(
+    const dstd::Vector<dstd::String>& keys,
+    const dstd::Vector<GroupAgg>& aggs) const {
     return dataframe::group_by(*this, keys, aggs);
 }
 
@@ -140,27 +150,26 @@ GroupBy::GroupBy(const DataFrame& frame, dstd::Vector<dstd::String> keys)
     frame_.names = frame.names;
     frame_.columns.reserve(frame.columns.size());
     for (const Series& c : frame.columns) frame_.columns.push_back(c.share());
-    for (const dstd::String& k : keys_)
-        if (frame_.column_index(k) < 0)
-            throw std::out_of_range(("group_by: no column named " + k).c_str());
 }
 
-DataFrame GroupBy::agg(const dstd::Vector<GroupAgg>& aggs) const {
+dstd::Result<DataFrame> GroupBy::agg(const dstd::Vector<GroupAgg>& aggs) const {
     return dataframe::group_by(frame_, keys_, aggs);
 }
 
-DataFrame GroupBy::reduce(Agg agg) const {
-    return dataframe::group_by(frame_, keys_,
-                               dataframe::reduce_specs(frame_, agg, keys_));
+dstd::Result<DataFrame> GroupBy::reduce(Agg agg) const {
+    const dstd::Result<dstd::Vector<GroupAgg>> specs =
+        dataframe::reduce_specs(frame_, agg, keys_);
+    if (!specs) return specs.error();
+    return dataframe::group_by(frame_, keys_, *specs);
 }
 
-DataFrame GroupBy::size() const {
+dstd::Result<DataFrame> GroupBy::size() const {
     return dataframe::group_by(frame_, keys_,
                                {GroupAgg{Agg::Count, "", "size"}});
 }
 
-DataFrame DataFrame::group_by(const Expr& key,
-                              const dstd::Vector<AggExprSpec>& aggs) const {
+dstd::Result<DataFrame> DataFrame::group_by(
+    const Expr& key, const dstd::Vector<AggExprSpec>& aggs) const {
     const std::int64_t idx = expr_col_index(key);
     const dstd::String key_name =
         (idx >= 0 && static_cast<std::size_t>(idx) < names.size())
@@ -169,11 +178,12 @@ DataFrame DataFrame::group_by(const Expr& key,
     dstd::Vector<const Series*> inputs;
     inputs.reserve(columns.size());
     for (const Series& c : columns) inputs.push_back(&c);
-    return common::unwrap(group_agg_expr(key, aggs, inputs, key_name));
+    return group_agg_expr(key, aggs, inputs, key_name);
 }
 
-DataFrame DataFrame::group_by(const dstd::Vector<Expr>& keys,
-                              const dstd::Vector<AggExprSpec>& aggs) const {
+dstd::Result<DataFrame> DataFrame::group_by(
+    const dstd::Vector<Expr>& keys,
+    const dstd::Vector<AggExprSpec>& aggs) const {
     dstd::Vector<dstd::String> key_names;
     key_names.reserve(keys.size());
     for (std::size_t k = 0; k < keys.size(); ++k) {
@@ -181,12 +191,12 @@ DataFrame DataFrame::group_by(const dstd::Vector<Expr>& keys,
         key_names.push_back(
             (idx >= 0 && static_cast<std::size_t>(idx) < names.size())
                 ? names[static_cast<std::size_t>(idx)]
-                : "key" + dstd::to_string(k));
+                : dstd::fmt<"key{}">(k));
     }
     dstd::Vector<const Series*> inputs;
     inputs.reserve(columns.size());
     for (const Series& c : columns) inputs.push_back(&c);
-    return common::unwrap(group_agg_expr(keys, aggs, inputs, key_names));
+    return group_agg_expr(keys, aggs, inputs, key_names);
 }
 
 DataFrame DataFrame::join(const DataFrame& other,
@@ -203,42 +213,47 @@ DataFrame DataFrame::join(const DataFrame& other,
     return dataframe::join(*this, other, on, on, how, suffix, nulls_equal);
 }
 
-DataFrame DataFrame::unpivot(
+dstd::Result<DataFrame> DataFrame::unpivot(
     const dstd::Vector<dstd::String>& id_vars,
     const dstd::Vector<dstd::String>& value_vars) const {
     return dataframe::unpivot(*this, id_vars, value_vars);
 }
-DataFrame DataFrame::melt(const dstd::Vector<dstd::String>& id_vars,
-                          const dstd::Vector<dstd::String>& value_vars) const {
+dstd::Result<DataFrame> DataFrame::melt(
+    const dstd::Vector<dstd::String>& id_vars,
+    const dstd::Vector<dstd::String>& value_vars) const {
     return dataframe::unpivot(*this, id_vars, value_vars);
 }
-DataFrame DataFrame::explode(const dstd::String& column) const {
+dstd::Result<DataFrame> DataFrame::explode(const dstd::String& column) const {
     return dataframe::explode(*this, column);
 }
 DataFrame DataFrame::compare_agg(const DataFrame& variant,
                                  std::int64_t n_key) const {
     return dataframe::compare_agg(*this, variant, n_key);
 }
-DataFrame DataFrame::unnest(const dstd::String& column, bool keep_empty) const {
+dstd::Result<DataFrame> DataFrame::unnest(const dstd::String& column,
+                                          bool keep_empty) const {
     return dataframe::unnest(*this, column, keep_empty);
 }
-DataFrame DataFrame::to_dummies(const dstd::String& column) const {
+dstd::Result<DataFrame> DataFrame::to_dummies(
+    const dstd::String& column) const {
     return dataframe::to_dummies(*this, column);
 }
-DataFrame DataFrame::pivot(const dstd::String& index, const dstd::String& on,
-                           const dstd::String& values,
-                           const dstd::String& agg) const {
+dstd::Result<DataFrame> DataFrame::pivot(const dstd::String& index,
+                                         const dstd::String& on,
+                                         const dstd::String& values,
+                                         const dstd::String& agg) const {
     return dataframe::pivot(*this, index, on, values, agg);
 }
-DataFrame DataFrame::pivot(const dstd::String& index, const dstd::String& on,
-                           const dstd::String& values, Agg agg) const {
+dstd::Result<DataFrame> DataFrame::pivot(const dstd::String& index,
+                                         const dstd::String& on,
+                                         const dstd::String& values,
+                                         Agg agg) const {
     return dataframe::pivot(*this, index, on, values, to_string(agg));
 }
-DataFrame DataFrame::group_by_dynamic(const dstd::String& time_col,
-                                      std::int64_t every, std::int64_t period,
-                                      const dstd::Vector<GroupAgg>& aggs,
-                                      std::int64_t origin,
-                                      bool origin_min) const {
+dstd::Result<DataFrame> DataFrame::group_by_dynamic(
+    const dstd::String& time_col, std::int64_t every, std::int64_t period,
+    const dstd::Vector<GroupAgg>& aggs, std::int64_t origin,
+    bool origin_min) const {
     return dataframe::group_by_dynamic(*this, time_col, every, period, aggs,
                                        origin, origin_min);
 }

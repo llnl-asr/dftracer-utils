@@ -255,8 +255,9 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
                               4 * 16) == 0);
             // The scale must actually be used downstream: min() reads the
             // scaled value, so it only matches if decimal_scale survived.
-            CHECK(scalar_value<double>(back.min()) ==
-                  doctest::Approx(scalar_value<double>(s.min())));
+            CHECK(scalar_value<double>(dftu_utils_test::ok(back.min())) ==
+                  doctest::Approx(
+                      scalar_value<double>(dftu_utils_test::ok(s.min()))));
         }
         {
             INFO("Decimal256");
@@ -436,7 +437,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             {
                 LazyFrame lf = src.lazy().select({"v"});
                 DataFrame lazy_r = run(lf.collect());
-                DataFrame eager_r = src.select({"v"});
+                DataFrame eager_r = dftu_utils_test::ok(src.select({"v"}));
                 REQUIRE(lazy_r.columns.size() == 1);
                 check_v_equal(lazy_r.columns[0], eager_r.columns[0]);
             }
@@ -474,7 +475,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             DataFrame src = keyed(v);
             LazyFrame lf = src.lazy().sort_by("v", false);
             DataFrame lazy_r = run(lf.collect());
-            DataFrame eager_r = src.sort_by("v", false);
+            DataFrame eager_r = dftu_utils_test::ok(src.sort_by("v", false));
             REQUIRE(lazy_r.num_rows() == eager_r.num_rows());
             check_v_equal(lazy_r.columns[1], eager_r.columns[1]);
             // sort_by must reorder `k` in lockstep with `v`.
@@ -495,7 +496,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
 
         dstd::Vector<GroupAgg> aggs = {{Agg::Count, "v", "v_count"}};
         DataFrame lazy_r = run(df.lazy().group_by("k", aggs).collect(2));
-        DataFrame eager_r = df.group_by("k", aggs);
+        DataFrame eager_r = dftu_utils_test::ok(df.group_by("k", aggs));
         REQUIRE(lazy_r.num_rows() == eager_r.num_rows());
         REQUIRE(lazy_r.num_rows() == 2);
         const std::int64_t* lc = lazy_r.columns[1].data<std::int64_t>();

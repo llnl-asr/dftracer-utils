@@ -495,8 +495,9 @@ class GroupByDynamicCursor : public Cursor {
             if (!m) {
                 eof_ = true;
                 // The open windows, or a typed result with no rows.
-                chunks_.set(morsel_of(agg_finalize(*state_, time_col_)
-                                          .sort_by(time_col_, false)));
+                chunks_.set(
+                    morsel_of(common::unwrap(agg_finalize(*state_, time_col_)
+                                                 .sort_by(time_col_, false))));
                 break;
             }
             accumulate(*m);
@@ -567,7 +568,7 @@ class GroupByDynamicCursor : public Cursor {
         done.names = all.names;
         for (const Series& c : all.columns)
             done.columns.push_back(c.take(closed));
-        chunks_.set(morsel_of(done.sort_by(time_col_, false)));
+        chunks_.set(morsel_of(common::unwrap(done.sort_by(time_col_, false))));
     }
 
     dstd::UniquePtr<Cursor> in_;

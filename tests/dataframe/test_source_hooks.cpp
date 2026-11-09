@@ -136,9 +136,9 @@ class SmartSource final : public Source,
         for (const NamedExpr& e : exprs)
             names.push_back(
                 frame_.names[static_cast<std::size_t>(expr_col_index(e.expr))]);
-        return derive(frame_.select(names), policy_->projection_inexact
-                                                ? ApplyStatus::Inexact
-                                                : ApplyStatus::Exact);
+        return derive(dftu_utils_test::ok(frame_.select(names)),
+                      policy_->projection_inexact ? ApplyStatus::Inexact
+                                                  : ApplyStatus::Exact);
     }
 
     dstd::Optional<SourceApplication> apply_aggregation(
@@ -159,8 +159,10 @@ class SmartSource final : public Source,
                     expr_col_index(a.input))];
             aggs.push_back(ga);
         }
-        return derive(frame_.group_by(keys, aggs).sort_by(keys.front()),
-                      ApplyStatus::Exact);
+        return derive(
+            dftu_utils_test::ok(dftu_utils_test::ok(frame_.group_by(keys, aggs))
+                                    .sort_by(keys.front())),
+            ApplyStatus::Exact);
     }
 
     dstd::Optional<SourceApplication> apply_sort(
@@ -168,8 +170,9 @@ class SmartSource final : public Source,
         log_->offered.push_back(Kind::Sort);
         log_->last_sort = spec;
         if (!accepts(Kind::Sort)) return dstd::nullopt;
-        return derive(frame_.sort_by_multi(spec.by, spec.descending),
-                      ApplyStatus::Exact);
+        return derive(
+            dftu_utils_test::ok(frame_.sort_by_multi(spec.by, spec.descending)),
+            ApplyStatus::Exact);
     }
 
     dstd::Optional<SourceApplication> apply_topn(
@@ -178,8 +181,10 @@ class SmartSource final : public Source,
         log_->last_sort = spec;
         log_->last_k = k;
         if (!accepts(Kind::TopN)) return dstd::nullopt;
-        return derive(frame_.sort_by_multi(spec.by, spec.descending).head(k),
-                      ApplyStatus::Exact);
+        return derive(
+            dftu_utils_test::ok(frame_.sort_by_multi(spec.by, spec.descending))
+                .head(k),
+            ApplyStatus::Exact);
     }
 
     dstd::Optional<SourceApplication> apply_limit(

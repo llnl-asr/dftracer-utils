@@ -308,7 +308,8 @@ TEST_SUITE("slice views") {
                     CAPTURE(len);
                     Series got{dftu_series_slice(base.handle(), offset, len)};
                     Series want = base.take(range(offset, len));
-                    CHECK(got.sum().i64() == want.sum().i64());
+                    CHECK(dftu_utils_test::ok(got.sum()).i64() ==
+                          dftu_utils_test::ok(want.sum()).i64());
                 }
         }
     }

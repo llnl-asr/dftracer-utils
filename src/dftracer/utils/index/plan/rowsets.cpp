@@ -233,7 +233,8 @@ dstd::Optional<dataframe::DataFrame> stored_rowset(
     if (parts.size() == 1) return std::move(parts.front());
     dstd::Vector<const dataframe::DataFrame*> ptrs;
     for (const auto& p : parts) ptrs.push_back(&p);
-    return dataframe::concat(ptrs, dataframe::ConcatHow::Diagonal);
+    return common::unwrap(
+        dataframe::concat(ptrs, dataframe::ConcatHow::Diagonal));
 }
 
 bool has_stored_rowsets(const dstd::Vector<RowSetFile>& files) {

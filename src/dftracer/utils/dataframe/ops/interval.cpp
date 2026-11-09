@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/frame_ops.h>
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
-#include <stdexcept>
+#include <utility>
 
 namespace dftracer::utils::dataframe {
 
@@ -20,32 +21,52 @@ struct RightPartition {
 
 }  // namespace
 
-DataFrame interval(const DataFrame& left, const DataFrame& right,
-                   const dstd::String& point, const dstd::String& lo,
-                   const dstd::String& hi, const dstd::Vector<dstd::String>& by,
-                   bool outer) {
-    const std::size_t p_at = ops::column_named(left, point, "interval");
-    const std::size_t lo_at = ops::column_named(right, lo, "interval");
-    const std::size_t hi_at = ops::column_named(right, hi, "interval");
+dstd::Result<DataFrame> interval(const DataFrame& left, const DataFrame& right,
+                                 const dstd::String& point,
+                                 const dstd::String& lo, const dstd::String& hi,
+                                 const dstd::Vector<dstd::String>& by,
+                                 bool outer) {
+    const dstd::Result<std::size_t> p =
+        ops::column_named(left, point, "interval");
+    if (!p) return p.error();
+    const dstd::Result<std::size_t> lo_col =
+        ops::column_named(right, lo, "interval");
+    if (!lo_col) return lo_col.error();
+    const dstd::Result<std::size_t> hi_col =
+        ops::column_named(right, hi, "interval");
+    if (!hi_col) return hi_col.error();
+    const std::size_t p_at = *p;
+    const std::size_t lo_at = *lo_col;
+    const std::size_t hi_at = *hi_col;
     const TypeId type = left.columns[p_at].type();
     if (type != right.columns[lo_at].type() ||
         type != right.columns[hi_at].type())
-        throw std::invalid_argument("interval: point/lo/hi types differ");
+        return invalid_argument<"interval: point/lo/hi types differ">();
     if (!ColumnView::supports(type) ||
         ColumnView(left.columns[p_at]).is_bytes())
-        throw std::invalid_argument(
-            "interval: point/lo/hi columns must be numeric");
+        return invalid_argument<
+            "interval: point/lo/hi columns must be numeric">();
     dstd::Vector<std::size_t> skip{lo_at, hi_at};
     for (const dstd::String& n : by) {
-        const std::size_t l = ops::column_named(left, n, "interval");
-        const std::size_t r = ops::column_named(right, n, "interval");
-        if (left.columns[l].type() != right.columns[r].type())
-            throw std::invalid_argument("interval: equi column types differ");
-        skip.push_back(r);
+        const dstd::Result<std::size_t> lc =
+            ops::column_named(left, n, "interval");
+        if (!lc) return lc.error();
+        const dstd::Result<std::size_t> rc =
+            ops::column_named(right, n, "interval");
+        if (!rc) return rc.error();
+        if (left.columns[*lc].type() != right.columns[*rc].type())
+            return invalid_argument<"interval: equi column types differ">();
+        skip.push_back(*rc);
     }
 
-    dstd::Vector<ColumnView> lequi = ops::views_of(left, by, "interval");
-    dstd::Vector<ColumnView> requi = ops::views_of(right, by, "interval");
+    dstd::Result<dstd::Vector<ColumnView>> lviews =
+        ops::views_of(left, by, "interval");
+    if (!lviews) return lviews.error();
+    dstd::Result<dstd::Vector<ColumnView>> rviews =
+        ops::views_of(right, by, "interval");
+    if (!rviews) return rviews.error();
+    dstd::Vector<ColumnView> lequi = std::move(*lviews);
+    dstd::Vector<ColumnView> requi = std::move(*rviews);
     dstd::Vector<ColumnView> lkeys = lequi;
     dstd::Vector<ColumnView> rkeys = requi;
     lkeys.emplace_back(left.columns[p_at]);

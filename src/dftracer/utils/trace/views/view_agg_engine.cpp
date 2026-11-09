@@ -979,7 +979,8 @@ class TransformSource final : public dataframe::Source {
                 if (!batch) co_return dstd::nullopt;
                 dataframe::DataFrame f = std::move(*batch);
                 append_transform_columns(f, tfs_, resolver_.get());
-                if (!projection_.empty()) f = f.select(projection_);
+                if (!projection_.empty())
+                    f = common::unwrap(f.select(projection_));
                 ids_.clear();
                 for (const auto& n : f.names)
                     ids_.push_back(intern_->get_or_insert(n));

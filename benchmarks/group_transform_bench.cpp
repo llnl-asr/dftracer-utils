@@ -99,11 +99,13 @@ int main(int argc, char** argv) {
         dftracer::utils::dstd::Vector<double> native, composed;
         for (int r = 0; r < reps; ++r) {
             auto t0 = std::chrono::steady_clock::now();
-            collect(frame.lazy().group_by(keys).transform(
-                c.op, c.n, RankMethod::Average, true));
+            collect(dftracer::utils::common::unwrap(
+                frame.lazy().group_by(keys).transform(
+                    c.op, c.n, RankMethod::Average, true)));
             auto t1 = std::chrono::steady_clock::now();
-            collect(dataframe::composed_group_transform(
-                frame.lazy(), keys, c.op, c.n, RankMethod::Average, true));
+            collect(dftracer::utils::common::unwrap(
+                dataframe::composed_group_transform(
+                    frame.lazy(), keys, c.op, c.n, RankMethod::Average, true)));
             auto t2 = std::chrono::steady_clock::now();
             native.push_back(
                 std::chrono::duration<double, std::milli>(t1 - t0).count());

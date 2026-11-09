@@ -981,8 +981,10 @@ TEST_SUITE("View") {
             CHECK(
                 legacy.columns[static_cast<std::size_t>(bcol(legacy, "sum_x"))]
                     .type() == dataframe::TypeId::Float64);
-            dataframe::DataFrame a = legacy.sort_by("name", false);
-            dataframe::DataFrame b = engine.sort_by("name", false);
+            dataframe::DataFrame a =
+                dftu_utils_test::ok(legacy.sort_by("name", false));
+            dataframe::DataFrame b =
+                dftu_utils_test::ok(engine.sort_by("name", false));
             REQUIRE(a.num_rows() == b.num_rows());
             for (std::int64_t r = 0; r < a.num_rows(); ++r)
                 CHECK(bnum(a, r, "sum_x") ==

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/platform_compat.h>  // hardware_concurrency
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/batch_ops.h>     // concat, take
@@ -183,7 +184,7 @@ dstd::Optional<DataFrame> stitch_in_first_seen_order(
         dstd::Vector<const DataFrame*> ptrs;
         ptrs.reserve(ones.size());
         for (const DataFrame& one : ones) ptrs.push_back(&one);
-        DataFrame cat = concat(ptrs, ConcatHow::Vertical);
+        DataFrame cat = common::unwrap(concat(ptrs, ConcatHow::Vertical));
         ones.clear();
         DataFrame ordered = take(cat, order);
         out.names.push_back(std::move(ordered.names[0]));
@@ -1128,20 +1129,27 @@ dstd::Result<DataFrame> group_agg(const dstd::Vector<const Series*>& keys,
                                   const dstd::Vector<dstd::String>& key_names) {
     dstd::Vector<Series> joined;
     joined.reserve(keys.size() + values.size());
-    auto flat = [&](const dstd::Vector<const Series*>& in) {
+    auto flat = [&](const dstd::Vector<const Series*>& in)
+        -> dstd::Result<dstd::Vector<const Series*>> {
         dstd::Vector<const Series*> out;
         out.reserve(in.size());
         for (const Series* c : in) {
             if (c && c->encoding() == Encoding::Chunked) {
-                joined.push_back(join_chunks(*c));
+                dstd::Result<Series> j = join_chunks(*c);
+                if (!j) return j.error();
+                joined.push_back(std::move(*j));
                 c = &joined.back();
             }
             out.push_back(c);
         }
         return out;
     };
-    const dstd::Vector<const Series*> flat_keys = flat(keys);
-    const dstd::Vector<const Series*> flat_values = flat(values);
+    const dstd::Result<dstd::Vector<const Series*>> keys_flat = flat(keys);
+    if (!keys_flat) return keys_flat.error();
+    const dstd::Result<dstd::Vector<const Series*>> values_flat = flat(values);
+    if (!values_flat) return values_flat.error();
+    const dstd::Vector<const Series*>& flat_keys = *keys_flat;
+    const dstd::Vector<const Series*>& flat_values = *values_flat;
     dstd::Result<dstd::Optional<DataFrame>> batched =
         group_agg_in_batches(flat_keys, flat_values, specs, key_names);
     if (!batched) return batched.error();

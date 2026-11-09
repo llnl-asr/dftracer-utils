@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -273,7 +274,8 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
         parts.reserve(frames.size());
         for (const auto& f : frames) parts.push_back(&f);
         // Slots discover different args, so union their schemas.
-        *out = dataframe::concat(parts, dataframe::ConcatHow::Diagonal);
+        *out = common::unwrap(
+            dataframe::concat(parts, dataframe::ConcatHow::Diagonal));
     };
 
     // effective_query folds the branch's phase into the predicate (bp.query

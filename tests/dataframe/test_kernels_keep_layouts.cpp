@@ -252,7 +252,8 @@ dstd::String in_truth(const Series& col, const dstd::String& query) {
     f.columns.push_back(col.share());
     auto q = dftracer::utils::duql::Query::from_string(query);
     REQUIRE(q.has_value());
-    return truth_of(evaluate_mask(duql::detail::QueryAccess::root(*q), f));
+    return truth_of(dftu_utils_test::ok(
+        evaluate_mask(duql::detail::QueryAccess::root(*q), f)));
 }
 
 }  // namespace
@@ -408,9 +409,10 @@ TEST_SUITE("kernels keep layouts") {
             same(df.tail(10), flat.tail(10));
             same(df.slice(20, 30), flat.slice(20, 30));
             same(df.take({3, -1, 3, 80}), flat.take({3, -1, 3, 80}));
-            same(df.sort_by("id"), flat.sort_by("id"));
-            same(df.sort_by_multi({"key", "id"}, true),
-                 flat.sort_by_multi({"key", "id"}, true));
+            same(dftu_utils_test::ok(df.sort_by("id")),
+                 dftu_utils_test::ok(flat.sort_by("id")));
+            same(dftu_utils_test::ok(df.sort_by_multi({"key", "id"}, true)),
+                 dftu_utils_test::ok(flat.sort_by_multi({"key", "id"}, true)));
 
             DataFrame right;
             right.names = {"key", "w"};
@@ -780,11 +782,14 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
             for (bool desc : {false, true}) {
                 CAPTURE(desc);
                 const Idx one = expected(k.rows, desc, false);
-                CHECK(ids_of(df.sort_by("s", desc).columns[1]) == one);
-                CHECK(ids_of(df.sort_by_multi({"s"}, desc).columns[1]) == one);
+                CHECK(ids_of(dftu_utils_test::ok(df.sort_by("s", desc))
+                                 .columns[1]) == one);
+                CHECK(ids_of(dftu_utils_test::ok(df.sort_by_multi({"s"}, desc))
+                                 .columns[1]) == one);
                 CHECK(ids_of(k.col.argsort(desc)) == one);
-                CHECK(ids_of(df.sort_by_multi({"s", "o"}, desc).columns[1]) ==
-                      expected(k.rows, desc, true));
+                CHECK(ids_of(dftu_utils_test::ok(
+                                 df.sort_by_multi({"s", "o"}, desc))
+                                 .columns[1]) == expected(k.rows, desc, true));
             }
         }
     }

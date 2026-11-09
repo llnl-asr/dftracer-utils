@@ -266,7 +266,8 @@ class RunMerger {
                 dstd::Vector<const Series*> parts;
                 parts.reserve(segments.size());
                 for (auto& seg : segments) parts.push_back(&seg[c]);
-                out.columns.push_back(concat_columns(parts).take(order));
+                out.columns.push_back(
+                    common::unwrap(concat_columns(parts)).take(order));
             }
         }
         // The merge always takes the globally smallest key across the whole
@@ -375,9 +376,9 @@ class SortMergeCursor : public Cursor {
 
    private:
     DataFrame sort_rows(DataFrame df) const {
-        return keys_.size() == 1
-                   ? df.sort_by(keys_.front(), descending_.front())
-                   : df.sort_by_multi(keys_, descending_);
+        return common::unwrap(
+            keys_.size() == 1 ? df.sort_by(keys_.front(), descending_.front())
+                              : df.sort_by_multi(keys_, descending_));
     }
 
     DataFrame concat_pending(
@@ -389,7 +390,7 @@ class SortMergeCursor : public Cursor {
             dstd::Vector<const Series*> parts;
             parts.reserve(pending.size());
             for (auto& ch : pending) parts.push_back(&ch[c]);
-            buf.columns.push_back(concat_columns(parts));
+            buf.columns.push_back(common::unwrap(concat_columns(parts)));
         }
         return buf;
     }

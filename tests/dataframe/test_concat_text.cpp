@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <random>
@@ -55,7 +56,7 @@ TEST_CASE("strings with nulls and an empty part") {
     Series a = build({Row{"a"}, Row{}, Row{"ccc"}});
     Series e = build({});
     Series b = build({Row{""}, Row{"dd"}});
-    Series out = dataframe::concat_columns({&a, &e, &b});
+    Series out = dftu_utils_test::ok(dataframe::concat_columns({&a, &e, &b}));
     CHECK(out.type() == TypeId::String);
     CHECK(out.length() == 5);
     CHECK(out.null_count() == 1);
@@ -70,7 +71,7 @@ TEST_CASE("a null row with a non-empty offset range copies no bytes") {
     Series odd{dftu_series_new_string(static_cast<dftu_dtype>(TypeId::String),
                                       off, data, 3, &valid)};
     Series z = build({Row{"z"}});
-    Series out = dataframe::concat_columns({&odd, &z});
+    Series out = dftu_utils_test::ok(dataframe::concat_columns({&odd, &z}));
     CHECK(read(out) == Rows{Row{"a"}, Row{}, Row{"d"}, Row{"z"}});
     const Series flat = out.materialize();
     REQUIRE(flat.offsets() != nullptr);
@@ -81,7 +82,8 @@ TEST_CASE("a null row with a non-empty offset range copies no bytes") {
 TEST_CASE("a part with no data pointer and all-empty rows") {
     Series empties = build({Row{""}, Row{""}, Row{""}});
     Series s = build({Row{"x"}});
-    Series out = dataframe::concat_columns({&empties, &s, &empties});
+    Series out = dftu_utils_test::ok(
+        dataframe::concat_columns({&empties, &s, &empties}));
     CHECK(read(out) ==
           Rows{Row{""}, Row{""}, Row{""}, Row{"x"}, Row{""}, Row{""}, Row{""}});
 }
@@ -110,7 +112,7 @@ TEST_CASE("random parts equal appending the rows one at a time") {
         }
         dstd::Vector<const Series*> ptrs;
         for (const Series& s : built) ptrs.push_back(&s);
-        Series out = dataframe::concat_columns(ptrs);
+        Series out = dftu_utils_test::ok(dataframe::concat_columns(ptrs));
         REQUIRE(out.length() == static_cast<std::int64_t>(want.size()));
         CHECK(out.type() == TypeId::String);
         CHECK(read(out) == want);

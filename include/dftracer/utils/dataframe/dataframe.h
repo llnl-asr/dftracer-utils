@@ -78,8 +78,8 @@ enum class Agg {
 const char* to_string(Agg agg) noexcept;
 
 /// Parse a canonical aggregate name (as `to_string` produces) into an Agg.
-/// Throws std::out_of_range on an unknown name.
-Agg agg_from_string(dstd::StringView name);
+/// A NotFound error on an unknown name.
+dstd::Result<Agg> agg_from_string(dstd::StringView name);
 
 /// Map the public Agg selector to the engine AggOp code. Same op; the two enums
 /// carry the same op under different stable values.
@@ -135,16 +135,23 @@ struct DataFrame {
     DataFrame head(std::int64_t n) const;
     DataFrame tail(std::int64_t n) const;
     DataFrame reverse() const;
-    DataFrame sort_by(const dstd::String& name, bool descending = false) const;
-    /// Stable lexicographic sort by several key columns (nulls last).
-    DataFrame sort_by_multi(const dstd::Vector<dstd::String>& by,
-                            bool descending = false) const;
+    /// Sort by column `name`; the errors of @ref dataframe::sort_by (a NotFound
+    /// error for an absent column, an InvalidArgument error for a nested one).
+    dstd::Result<DataFrame> sort_by(const dstd::String& name,
+                                    bool descending = false) const;
+    /// Stable lexicographic sort by several key columns (nulls last); the
+    /// errors of @ref dataframe::sort_by_multi.
+    dstd::Result<DataFrame> sort_by_multi(const dstd::Vector<dstd::String>& by,
+                                          bool descending = false) const;
     /// Per-column direction form: `descending[i]` applies to `by[i]`; a single
     /// flag broadcasts to every key.
-    DataFrame sort_by_multi(const dstd::Vector<dstd::String>& by,
-                            const dstd::Vector<bool>& descending) const;
-    DataFrame topk(const dstd::String& name, std::int64_t k,
-                   bool largest = true) const;
+    dstd::Result<DataFrame> sort_by_multi(
+        const dstd::Vector<dstd::String>& by,
+        const dstd::Vector<bool>& descending) const;
+    /// The k rows with the largest (or smallest) values of `name`; the errors
+    /// of @ref dataframe::topk.
+    dstd::Result<DataFrame> topk(const dstd::String& name, std::int64_t k,
+                                 bool largest = true) const;
 
     /// Drop every row that is null in any column.
     DataFrame drop_nulls() const;
@@ -158,10 +165,11 @@ struct DataFrame {
         return fill_null(to_scalar(value));
     }
     /// Distinct rows, keeping the first occurrence, keyed on every column or
-    /// on `subset` (empty = all).
-    DataFrame unique(const dstd::Vector<dstd::String>& subset = {}) const;
+    /// on `subset` (empty = all); the errors of @ref dataframe::unique.
+    dstd::Result<DataFrame> unique(
+        const dstd::Vector<dstd::String>& subset = {}) const;
     /// Alias of unique().
-    DataFrame drop_duplicates(
+    dstd::Result<DataFrame> drop_duplicates(
         const dstd::Vector<dstd::String>& subset = {}) const;
     /// A deterministic n-row sample (mix64(index + seed) bottom-n).
     DataFrame sample(std::int64_t n, std::uint64_t seed = 0) const;
@@ -173,54 +181,67 @@ struct DataFrame {
     DataFrame null_count() const;
     /// The whole frame as one group: any aggregate specs, one output row
     /// (group_by with no key).
-    DataFrame reduce(const dstd::Vector<GroupAgg>& aggs) const;
+    dstd::Result<DataFrame> reduce(const dstd::Vector<GroupAgg>& aggs) const;
     /// One row reducing each eligible column with `agg` under its own name
     /// (the pandas `df.sum()` family): CountValid / First / Last take every
     /// column, the other one-column aggregates the numeric ones. The grouped
-    /// form is group_by(keys, reduce_specs(*this, agg, keys)).
-    DataFrame reduce(Agg agg) const;
-    /// Bool mask (per row): true where the whole row is duplicated.
-    Series is_duplicated() const;
-    /// Bool mask (per row): true where the whole row is unique.
-    Series is_unique() const;
+    /// form is group_by(keys, reduce_specs(*this, agg, keys)). An
+    /// InvalidArgument error for an aggregate that takes a second column or a
+    /// parameter.
+    dstd::Result<DataFrame> reduce(Agg agg) const;
+    /// Bool mask (per row): true where the whole row is duplicated. An
+    /// InvalidArgument error for a column type with no per-row value to key on.
+    dstd::Result<Series> is_duplicated() const;
+    /// Bool mask (per row): true where the whole row is unique. Errors as
+    /// is_duplicated().
+    dstd::Result<Series> is_unique() const;
     /// Int32 column: the part in [0, n_parts) each row lands in under a
-    /// stable hash of the `keys` columns.
-    Series partition_id(const dstd::Vector<dstd::String>& keys,
-                        std::int64_t n_parts) const;
+    /// stable hash of the `keys` columns; the errors of
+    /// @ref dataframe::partition_id.
+    dstd::Result<Series> partition_id(const dstd::Vector<dstd::String>& keys,
+                                      std::int64_t n_parts) const;
 
     /// Evaluate a compiled query as a per-row bit-packed Bool mask (for
     /// filter()) under three-valued logic: an UNKNOWN row (a missing column,
-    /// a null cell, a type mismatch) is null and filter() drops it. Throws
-    /// std::runtime_error if the predicate has no columnar lowering (pattern
-    /// match, any(), ordered comparison on a string or bool column).
-    Series mask(const duql::Query& q) const;
+    /// a null cell, a type mismatch) is null and filter() drops it. An error
+    /// if the predicate has no columnar lowering (pattern match, any(),
+    /// ordered comparison on a string or bool column).
+    dstd::Result<Series> mask(const duql::Query& q) const;
 
-    DataFrame select(const dstd::Vector<dstd::String>& names) const;
-    DataFrame rename(const dstd::Vector<dstd::String>& new_names) const;
+    /// Project the named columns; the errors of @ref dataframe::select.
+    dstd::Result<DataFrame> select(
+        const dstd::Vector<dstd::String>& names) const;
+    /// Rename columns positionally; the errors of @ref dataframe::rename.
+    dstd::Result<DataFrame> rename(
+        const dstd::Vector<dstd::String>& new_names) const;
     DataFrame with_column(const dstd::String& name, const Series& col) const;
 
     /// Group rows by column `key` (first-seen order) and compute each
-    /// aggregate.
-    DataFrame group_by(const dstd::String& key,
-                       const dstd::Vector<GroupAgg>& aggs) const;
+    /// aggregate. The errors of @ref dataframe::group_by (a NotFound error for
+    /// an unknown column or op).
+    dstd::Result<DataFrame> group_by(const dstd::String& key,
+                                     const dstd::Vector<GroupAgg>& aggs) const;
     /// Group by N key columns (a composite key: hashed and compared
     /// column-by-column, each keeping its own type) and compute each
     /// aggregate.
-    DataFrame group_by(const dstd::Vector<dstd::String>& keys,
-                       const dstd::Vector<GroupAgg>& aggs) const;
+    dstd::Result<DataFrame> group_by(const dstd::Vector<dstd::String>& keys,
+                                     const dstd::Vector<GroupAgg>& aggs) const;
     /// The two-step form: the keys now, the aggregates on the returned
     /// @ref GroupBy (`df.group_by({"k"}).sum()`, `.agg(specs)`). Empty keys
-    /// make the whole frame one group.
+    /// make the whole frame one group. A key the frame lacks is reported by
+    /// the first aggregate, as a NotFound error.
     GroupBy group_by(dstd::Vector<dstd::String> keys = {}) const;
     /// Group by an expression key and compute each expression aggregate in one
     /// CSE'd, pruned pass (see group_agg_expr). A bare column-ref key uses that
-    /// column's name for the result; a computed key is named "key".
-    DataFrame group_by(const Expr& key,
-                       const dstd::Vector<AggExprSpec>& aggs) const;
+    /// column's name for the result; a computed key is named "key". The errors
+    /// of @ref group_agg_expr.
+    dstd::Result<DataFrame> group_by(
+        const Expr& key, const dstd::Vector<AggExprSpec>& aggs) const;
     /// Group by N expression keys; each bare column-ref key uses that column's
     /// name, a computed key is named "key<i>".
-    DataFrame group_by(const dstd::Vector<Expr>& keys,
-                       const dstd::Vector<AggExprSpec>& aggs) const;
+    dstd::Result<DataFrame> group_by(
+        const dstd::Vector<Expr>& keys,
+        const dstd::Vector<AggExprSpec>& aggs) const;
 
     /// Hash join with `other` on `left_on[i]` = `right_on[i]` (exact match; a
     /// null key never matches unless `nulls_equal`, which makes a null key cell
@@ -253,46 +274,57 @@ struct DataFrame {
     DataFrame compare_agg(const DataFrame& variant, std::int64_t n_key) const;
 
     /// Reshape wide -> long: keep `id_vars`, stack `value_vars` into a
-    /// `variable`/`value` column pair. `melt` is an alias.
-    DataFrame unpivot(const dstd::Vector<dstd::String>& id_vars,
-                      const dstd::Vector<dstd::String>& value_vars) const;
-    DataFrame melt(const dstd::Vector<dstd::String>& id_vars,
-                   const dstd::Vector<dstd::String>& value_vars) const;
+    /// `variable`/`value` column pair. `melt` is an alias. The errors of
+    /// @ref dataframe::unpivot.
+    dstd::Result<DataFrame> unpivot(
+        const dstd::Vector<dstd::String>& id_vars,
+        const dstd::Vector<dstd::String>& value_vars) const;
+    dstd::Result<DataFrame> melt(
+        const dstd::Vector<dstd::String>& id_vars,
+        const dstd::Vector<dstd::String>& value_vars) const;
 
     /// Expand a List `column`: each list element becomes its own row (other
-    /// columns repeated); an empty/null list yields one null row.
-    DataFrame explode(const dstd::String& column) const;
+    /// columns repeated); an empty/null list yields one null row. The errors
+    /// of @ref dataframe::explode.
+    dstd::Result<DataFrame> explode(const dstd::String& column) const;
     /// UNNEST a List `column`: as explode, but an empty/null list drops the
     /// row unless `keep_empty`, and a List<Struct> flattens into one column
     /// per field.
-    DataFrame unnest(const dstd::String& column, bool keep_empty = false) const;
+    dstd::Result<DataFrame> unnest(const dstd::String& column,
+                                   bool keep_empty = false) const;
 
     /// One-hot encode `column`: replace it with one Int8 column per distinct
-    /// value (sorted), named `<column>_<value>`.
-    DataFrame to_dummies(const dstd::String& column) const;
+    /// value (sorted), named `<column>_<value>`. The errors of
+    /// @ref dataframe::to_dummies.
+    dstd::Result<DataFrame> to_dummies(const dstd::String& column) const;
 
     /// Reshape long -> wide: rows are the distinct `index` values (sorted), one
     /// value column per distinct `columns` value (sorted), each cell `values`
     /// aggregated over the matching rows. `agg` is the collision reducer
-    /// (first|last|sum|min|max|mean; mean yields Float64).
-    DataFrame pivot(const dstd::String& index, const dstd::String& on,
-                    const dstd::String& values,
-                    const dstd::String& agg = "first") const;
+    /// (first|last|sum|min|max|mean; mean yields Float64). The errors of
+    /// @ref dataframe::pivot.
+    dstd::Result<DataFrame> pivot(const dstd::String& index,
+                                  const dstd::String& on,
+                                  const dstd::String& values,
+                                  const dstd::String& agg = "first") const;
     /// pivot with a typed collision reducer (any Agg, including First/Last).
-    DataFrame pivot(const dstd::String& index, const dstd::String& on,
-                    const dstd::String& values, Agg agg) const;
+    dstd::Result<DataFrame> pivot(const dstd::String& index,
+                                  const dstd::String& on,
+                                  const dstd::String& values, Agg agg) const;
 
     /// Tumbling/sliding time-window aggregation over an ascending Int64
     /// `time_col`: windows start at the first time floored to a multiple of
     /// `every`, stride by `every`, and each covers `[start, start + period)`
     /// (`period <= 0` means "= every"). One row per non-empty window, a leading
-    /// Int64 `time_col` window-start column plus each aggregate. Throws
-    /// std::invalid_argument when a non-null time is below the one before.
-    DataFrame group_by_dynamic(const dstd::String& time_col, std::int64_t every,
-                               std::int64_t period,
-                               const dstd::Vector<GroupAgg>& aggs,
-                               std::int64_t origin = 0,
-                               bool origin_min = false) const;
+    /// Int64 `time_col` window-start column plus each aggregate. An
+    /// InvalidArgument error when a non-null time is below the one before; the
+    /// other errors of @ref dataframe::group_by_dynamic.
+    dstd::Result<DataFrame> group_by_dynamic(const dstd::String& time_col,
+                                             std::int64_t every,
+                                             std::int64_t period,
+                                             const dstd::Vector<GroupAgg>& aggs,
+                                             std::int64_t origin = 0,
+                                             bool origin_min = false) const;
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     /// Export this frame through the Arrow C Data Interface as a struct array
@@ -332,25 +364,25 @@ class GroupBy {
     const dstd::Vector<dstd::String>& keys() const noexcept { return keys_; }
 
     /// Any aggregates, as DataFrame::group_by takes them.
-    DataFrame agg(const dstd::Vector<GroupAgg>& aggs) const;
+    dstd::Result<DataFrame> agg(const dstd::Vector<GroupAgg>& aggs) const;
     /// One aggregate broadcast over every eligible non-key column, each under
-    /// its own name. Throws std::invalid_argument for an aggregate that takes
-    /// a second column or a parameter (give it to agg()).
-    DataFrame reduce(Agg agg) const;
+    /// its own name. An InvalidArgument error for an aggregate that takes a
+    /// second column or a parameter (give it to agg()).
+    dstd::Result<DataFrame> reduce(Agg agg) const;
 
-    DataFrame sum() const { return reduce(Agg::Sum); }
-    DataFrame mean() const { return reduce(Agg::Mean); }
-    DataFrame min() const { return reduce(Agg::Min); }
-    DataFrame max() const { return reduce(Agg::Max); }
-    DataFrame count() const { return reduce(Agg::CountValid); }
-    DataFrame var() const { return reduce(Agg::Var); }
-    DataFrame std() const { return reduce(Agg::Std); }
-    DataFrame skew() const { return reduce(Agg::Skew); }
-    DataFrame kurt() const { return reduce(Agg::Kurt); }
-    DataFrame first() const { return reduce(Agg::First); }
-    DataFrame last() const { return reduce(Agg::Last); }
+    dstd::Result<DataFrame> sum() const { return reduce(Agg::Sum); }
+    dstd::Result<DataFrame> mean() const { return reduce(Agg::Mean); }
+    dstd::Result<DataFrame> min() const { return reduce(Agg::Min); }
+    dstd::Result<DataFrame> max() const { return reduce(Agg::Max); }
+    dstd::Result<DataFrame> count() const { return reduce(Agg::CountValid); }
+    dstd::Result<DataFrame> var() const { return reduce(Agg::Var); }
+    dstd::Result<DataFrame> std() const { return reduce(Agg::Std); }
+    dstd::Result<DataFrame> skew() const { return reduce(Agg::Skew); }
+    dstd::Result<DataFrame> kurt() const { return reduce(Agg::Kurt); }
+    dstd::Result<DataFrame> first() const { return reduce(Agg::First); }
+    dstd::Result<DataFrame> last() const { return reduce(Agg::Last); }
     /// The row count per group (pandas `size()`), as one Int64 column `size`.
-    DataFrame size() const;
+    dstd::Result<DataFrame> size() const;
 
     /// LazyGroupBy::transform over this frame, collected: the group-wise
     /// transforms (`cumsum`, `shift`, `rank`, `head`, ...) with the same

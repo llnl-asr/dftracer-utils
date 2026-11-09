@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -976,7 +977,7 @@ DataFrame join(const DataFrame& left, const DataFrame& right,
     DataFrame matched = hj.probe(left);
     DataFrame rest = hj.flush(left.names, left.columns);
     if (rest.num_rows() == 0) return matched;
-    return concat({&matched, &rest});
+    return common::unwrap(concat({&matched, &rest}));
 }
 
 namespace {
@@ -1012,10 +1013,10 @@ DataFrame compare_agg(const DataFrame& base, const DataFrame& variant,
         keys.push_back(base.names[i]);
     }
 
-    DataFrame joined = sort_by_multi(
+    DataFrame joined = common::unwrap(sort_by_multi(
         join(prefix_metrics(base, nk, "l_"), prefix_metrics(variant, nk, "r_"),
              keys, keys, JoinHow::Outer, "_right"),
-        keys, false);
+        keys, false));
 
     const std::int64_t n = joined.num_rows();
     dstd::Vector<double> hundred(static_cast<std::size_t>(n), 100.0);

@@ -76,14 +76,17 @@ class PivotCursor : public Cursor {
                 on.push_back(m->columns[1].share());
                 val.push_back(m->columns[2].share());
             }
-            Series ic = (idx.size() == 1 ? idx[0].share()
-                                         : concat_columns(column_ptrs(idx)))
+            Series ic = (idx.size() == 1
+                             ? idx[0].share()
+                             : common::unwrap(concat_columns(column_ptrs(idx))))
                             .materialize();
-            Series oc = (on.size() == 1 ? on[0].share()
-                                        : concat_columns(column_ptrs(on)))
+            Series oc = (on.size() == 1
+                             ? on[0].share()
+                             : common::unwrap(concat_columns(column_ptrs(on))))
                             .materialize();
-            Series vc = (val.size() == 1 ? val[0].share()
-                                         : concat_columns(column_ptrs(val)))
+            Series vc = (val.size() == 1
+                             ? val[0].share()
+                             : common::unwrap(concat_columns(column_ptrs(val))))
                             .materialize();
             const std::int64_t n = ic.length();
             std::int64_t done = n;
@@ -159,10 +162,11 @@ class PivotCursor : public Cursor {
         }
         first_.reset();
 
-        uniq_col_ =
-            distinct.empty()
-                ? Series{}
-                : concat_columns(column_ptrs(distinct)).unique().materialize();
+        uniq_col_ = distinct.empty()
+                        ? Series{}
+                        : common::unwrap(concat_columns(column_ptrs(distinct)))
+                              .unique()
+                              .materialize();
         const std::int64_t C = uniq_col_.length();
         dstd::Vector<Series> one;
         one.push_back(uniq_col_.share());
@@ -179,7 +183,7 @@ class PivotCursor : public Cursor {
             spool_.reader(), dstd::Vector<dstd::String>{i_name, o_name, v_name},
             dstd::Vector<dstd::String>{i_name, o_name},
             dstd::Vector<GroupAgg>{
-                GroupAgg{agg_from_string(agg_), v_name, "v"}},
+                GroupAgg{common::unwrap(agg_from_string(agg_)), v_name, "v"}},
             budget_ / share::SPOOL);
         sorted_ = make_sort_merge(
             std::move(grouped), dstd::Vector<dstd::String>{i_name, o_name, "v"},

@@ -319,7 +319,8 @@ TEST_SUITE("chunked columns") {
         a.columns.push_back(piece_of(Kind::StringFlat, 0, 10, true, 0));
         b.columns.push_back(piece_of(Kind::StringView, 10, 20, false, 0));
         c.columns.push_back(piece_of(Kind::StringDict, 20, 30, true, 0));
-        const DataFrame eager = concat({&a, &b, &c}, ConcatHow::Diagonal);
+        const DataFrame eager =
+            dftu_utils_test::ok(concat({&a, &b, &c}, ConcatHow::Diagonal));
         dstd::Vector<DataFrame> parts;
         parts.push_back(std::move(a));
         parts.push_back(std::move(b));
@@ -386,7 +387,7 @@ TEST_SUITE("chunked columns") {
                         CHECK(read_f64(c, a) == read_f64(j, a));
                     if (text) CHECK(read_bytes(c, a) == read_bytes(j, a));
                     if (kind == Kind::StringMixed) continue;
-                    const Series joined = join_chunks(c);
+                    const Series joined = dftu_utils_test::ok(join_chunks(c));
                     for (std::int64_t b = 0; b < N; ++b)
                         if (!c.is_null(b))
                             REQUIRE(compare_rows(joined, a, b) ==
@@ -561,12 +562,18 @@ TEST_SUITE("chunked columns") {
                     }
                 };
 
-                same(chunked.sort_by("key"), joined.sort_by("key"));
-                same(chunked.sort_by("key", true), joined.sort_by("key", true));
-                same(chunked.sort_by("s"), joined.sort_by("s"));
-                same(chunked.sort_by("f", true), joined.sort_by("f", true));
-                same(chunked.sort_by_multi({"key", "i"}, {false, true}),
-                     joined.sort_by_multi({"key", "i"}, {false, true}));
+                same(dftu_utils_test::ok(chunked.sort_by("key")),
+                     dftu_utils_test::ok(joined.sort_by("key")));
+                same(dftu_utils_test::ok(chunked.sort_by("key", true)),
+                     dftu_utils_test::ok(joined.sort_by("key", true)));
+                same(dftu_utils_test::ok(chunked.sort_by("s")),
+                     dftu_utils_test::ok(joined.sort_by("s")));
+                same(dftu_utils_test::ok(chunked.sort_by("f", true)),
+                     dftu_utils_test::ok(joined.sort_by("f", true)));
+                same(dftu_utils_test::ok(
+                         chunked.sort_by_multi({"key", "i"}, {false, true})),
+                     dftu_utils_test::ok(
+                         joined.sort_by_multi({"key", "i"}, {false, true})));
 
                 if (kind == Kind::Bool) continue;
                 dstd::Vector<GroupAgg> aggs;
@@ -580,13 +587,14 @@ TEST_SUITE("chunked columns") {
                         a.out = dstd::String(col) + "_" + to_string(op);
                         aggs.push_back(std::move(a));
                     }
-                const DataFrame want = joined.group_by("key", aggs);
+                const DataFrame want =
+                    dftu_utils_test::ok(joined.group_by("key", aggs));
                 REQUIRE(want.num_rows() > 0);
-                same(chunked.group_by("key", aggs), want);
-                same(chunked.group_by(dstd::Vector<dstd::String>{"key", "s"},
-                                      aggs),
-                     joined.group_by(dstd::Vector<dstd::String>{"key", "s"},
-                                     aggs));
+                same(dftu_utils_test::ok(chunked.group_by("key", aggs)), want);
+                same(dftu_utils_test::ok(chunked.group_by(
+                         dstd::Vector<dstd::String>{"key", "s"}, aggs)),
+                     dftu_utils_test::ok(joined.group_by(
+                         dstd::Vector<dstd::String>{"key", "s"}, aggs)));
             }
     }
 }

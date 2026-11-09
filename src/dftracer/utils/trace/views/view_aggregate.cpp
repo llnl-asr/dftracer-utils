@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -296,10 +297,11 @@ void project_columns(dftracer::utils::dataframe::DataFrame& batch,
 dataframe::DataFrame apply_agg_post_ops(dataframe::DataFrame batch,
                                         const ViewPlan& plan) {
     if (!plan.sort_col.empty())
-        batch = batch.sort_by(dstd::String(plan.sort_col), plan.sort_desc);
+        batch = common::unwrap(
+            batch.sort_by(dstd::String(plan.sort_col), plan.sort_desc));
     if (!plan.topk_col.empty())
-        batch = batch.topk(dstd::String(plan.topk_col), plan.topk_k,
-                           plan.topk_largest);
+        batch = common::unwrap(batch.topk(dstd::String(plan.topk_col),
+                                          plan.topk_k, plan.topk_largest));
     if (plan.offset || plan.limit) {
         const std::int64_t off = static_cast<std::int64_t>(plan.offset);
         const std::int64_t len = plan.limit

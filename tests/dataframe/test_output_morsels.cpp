@@ -80,7 +80,7 @@ dstd::Vector<dstd::String> row_set(const DataFrame& one) {
 DataFrame joined(const dstd::Vector<DataFrame>& parts) {
     dstd::Vector<const DataFrame*> ptrs;
     for (const DataFrame& p : parts) ptrs.push_back(&p);
-    return concat(ptrs, ConcatHow::Vertical);
+    return dftu_utils_test::ok(concat(ptrs, ConcatHow::Vertical));
 }
 
 // The same rows in the same order: for the ops that keep the order of their
@@ -232,8 +232,9 @@ TEST_SUITE("output morsels") {
         // An unpivot lists a morsel by value column, so the order between
         // morsels follows their size; within a value column the rows keep the
         // order of the input.
-        expect_same_rows(joined(cut).sort_by("variable", false),
-                         joined(whole).sort_by("variable", false));
+        expect_same_rows(
+            dftu_utils_test::ok(joined(cut).sort_by("variable", false)),
+            dftu_utils_test::ok(joined(whole).sort_by("variable", false)));
     }
 
     TEST_CASE("a join with many matches leaves in morsels of the share") {
@@ -298,7 +299,9 @@ TEST_SUITE("output morsels") {
             morsels(tf.lazy().group_by_dynamic("t", 7, 7, aggs), 500);
         CHECK(most_rows(windows) <= 500);
         CHECK(windows.size() >= 2);
-        expect_same_rows(joined(windows), tf.group_by_dynamic("t", 7, 7, aggs));
+        expect_same_rows(
+            joined(windows),
+            dftu_utils_test::ok(tf.group_by_dynamic("t", 7, 7, aggs)));
     }
 
     TEST_CASE("group_by_dynamic refuses a time that goes back") {
@@ -309,9 +312,10 @@ TEST_SUITE("output morsels") {
         df.columns.push_back(Series::flat_i64(t.data(), 5));
         df.columns.push_back(Series::flat_i64(v.data(), 5));
         const dstd::Vector<GroupAgg> aggs = {GroupAgg{Agg::Count, "", "n"}};
-        CHECK_THROWS_WITH_AS(df.group_by_dynamic("t", 2, 4, aggs),
-                             "group_by_dynamic: t must ascend, 4 follows 9",
-                             std::invalid_argument);
+        dftu_utils_test::expect_error(
+            df.group_by_dynamic("t", 2, 4, aggs),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "group_by_dynamic: t must ascend, 4 follows 9");
         CHECK_THROWS_WITH_AS(
             morsels(df.lazy().memory_budget(1 << 20).group_by_dynamic("t", 2, 4,
                                                                       aggs),
@@ -422,7 +426,8 @@ TEST_SUITE("output morsels") {
                             "t", every, period, aggs),
                         500);
             expect_same_rows(joined(got),
-                             df.group_by_dynamic("t", every, period, aggs));
+                             dftu_utils_test::ok(df.group_by_dynamic(
+                                 "t", every, period, aggs)));
         }
     }
 
@@ -434,12 +439,14 @@ TEST_SUITE("output morsels") {
                 500);
             // The running best leaves as one morsel; the sort in several.
             CHECK(cut.size() > 1);
-            expect_same_rows(joined(cut), df.topk("a", 3000, largest));
+            expect_same_rows(joined(cut),
+                             dftu_utils_test::ok(df.topk("a", 3000, largest)));
             const auto kept = morsels(
                 df.lazy().memory_budget(64 << 20).topk("a", 3000, largest),
                 500);
             CHECK(kept.size() == 1);
-            expect_same_rows(joined(kept), df.topk("a", 3000, largest));
+            expect_same_rows(joined(kept),
+                             dftu_utils_test::ok(df.topk("a", 3000, largest)));
         }
     }
 
@@ -600,21 +607,23 @@ TEST_SUITE("output morsels") {
             const LazyFrame lf =
                 df.lazy().frame_op("dftu.frame.sort_by_multi_per_col", args);
             CHECK(streamed(lf));
-            expect_same_rows(
-                joined(morsels(lf, 1000)),
-                df.sort_by_multi({"v", "w"}, dstd::Vector<bool>{true, false}));
+            expect_same_rows(joined(morsels(lf, 1000)),
+                             dftu_utils_test::ok(df.sort_by_multi(
+                                 {"v", "w"}, dstd::Vector<bool>{true, false})));
         }
         {
             const dstd::Vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};
             const dftu_group_agg raw[] = {{"sum", "v", "s"}};
             OpArgs args;
             args.str(1, "t").i64(2, 7).i64(3, 7).agglist(4, raw);
-            const DataFrame sorted = df.sort_by("t", false);
+            const DataFrame sorted =
+                dftu_utils_test::ok(df.sort_by("t", false));
             const LazyFrame lf =
                 sorted.lazy().frame_op("dftu.frame.group_by_dynamic", args);
             CHECK(streamed(lf));
-            expect_same_rows(joined(morsels(lf, 500)),
-                             sorted.group_by_dynamic("t", 7, 7, aggs));
+            expect_same_rows(
+                joined(morsels(lf, 500)),
+                dftu_utils_test::ok(sorted.group_by_dynamic("t", 7, 7, aggs)));
         }
     }
 }

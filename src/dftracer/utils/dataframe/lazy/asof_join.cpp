@@ -419,7 +419,7 @@ class OrderedJoin : public Cursor {
                 pieces.push_back(segs[s]->cols[lay_.rout[k]].take(per[s]));
             dstd::Vector<const Series*> ptrs;
             for (const Series& p : pieces) ptrs.push_back(&p);
-            out.push_back(concat_columns(ptrs).take(perm));
+            out.push_back(common::unwrap(concat_columns(ptrs)).take(perm));
         }
         return out;
     }
@@ -708,7 +708,7 @@ class IntervalCursor : public OrderedJoin {
             }
             dstd::Vector<const Series*> ptrs;
             for (const Series& p : pieces) ptrs.push_back(&p);
-            c->cols[col] = concat_columns(ptrs);
+            c->cols[col] = common::unwrap(concat_columns(ptrs));
         }
         c->t.emplace(c->cols[lay_.rt]);
         c->hi.emplace(c->cols[lay_.rhi]);

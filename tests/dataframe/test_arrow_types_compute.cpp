@@ -235,7 +235,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE("Float16 reduction (sum) promotes to Float32 and computes") {
         Series a = make_float16({1.0f, 2.0f, 3.0f});
         REQUIRE(a.valid());
-        Scalar total = a.sum();
+        Scalar total = dftu_utils_test::ok(a.sum());
         CHECK(total.f64() == doctest::Approx(6.0));
     }
 
@@ -521,8 +521,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE("Timestamp min/max compute on the exact value") {
         Series s = make_timestamp({300, -1, 100});
         REQUIRE(s.valid());
-        Scalar mn = s.min();
-        Scalar mx = s.max();
+        Scalar mn = dftu_utils_test::ok(s.min());
+        Scalar mx = dftu_utils_test::ok(s.max());
         CHECK(mn.i64() == -1);
         CHECK(mx.i64() == 300);
     }
@@ -589,7 +589,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"ts", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("ts", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("ts", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 2);
         Series gkeys = grouped.column("ts");
         Series gn = grouped.column("n");
@@ -745,7 +746,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "refused") {
         Series d = make_duration(NANOARROW_TIME_UNIT_MICRO, {10, 20, 30});
         REQUIRE(d.valid());
-        Scalar total = d.sum();
+        Scalar total = dftu_utils_test::ok(d.sum());
         CHECK(total.i64() == 60);
 
         dftu_scalar prod = dftu_series_product(d.handle());
@@ -818,7 +819,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::FixedSizeBinary);
@@ -926,7 +928,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Decimal128);
@@ -1010,7 +1013,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Decimal256);
@@ -1092,7 +1096,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Binary);
@@ -1165,7 +1170,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::LargeBinary);
@@ -1242,7 +1248,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 4);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Float16);

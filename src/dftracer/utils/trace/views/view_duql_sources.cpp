@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -84,7 +85,8 @@ class FinishSource final : public dataframe::Source {
                 dataframe::DataFrame collected = co_await inner_.collect();
                 dataframe::DataFrame f = (*finish_)(
                     co_await dataframe::join_chunks(std::move(collected)));
-                if (!projection_.empty()) f = f.select(projection_);
+                if (!projection_.empty())
+                    f = common::unwrap(f.select(projection_));
                 intern_ =
                     dstd::make_shared<dftracer::utils::dstd::StringIntern>();
                 ids_ = frame_ids(f, declared_, *intern_);
@@ -164,7 +166,8 @@ class MapSource final : public dataframe::Source {
                 auto batch = co_await batches_.next();
                 if (!batch) co_return dstd::nullopt;
                 dataframe::DataFrame f = (*map_)(std::move(*batch));
-                if (!projection_.empty()) f = f.select(projection_);
+                if (!projection_.empty())
+                    f = common::unwrap(f.select(projection_));
                 ids_ = frame_ids(f, declared_, *intern_);
                 rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
             }
@@ -270,7 +273,8 @@ class FoldSource final : public dataframe::Source {
                 }
                 dataframe::DataFrame f =
                     common::unwrap(fold_.finish(std::move(names_)));
-                if (!projection_.empty()) f = f.select(projection_);
+                if (!projection_.empty())
+                    f = common::unwrap(f.select(projection_));
                 rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
             }
             co_return co_await rows_->next(max_rows);

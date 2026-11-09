@@ -43,6 +43,7 @@
 //   slice_bench --case NAME    (one case in this process; prints RESULT)
 
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -397,7 +398,7 @@ double repeat_op(std::size_t reps, Op op) {
 double sort_by(const Scale& s) {
     DataFrame frame = key_frame(s.op_rows, 1000);
     return repeat_op(s.sort_reps, [&] {
-        DataFrame out = frame.sort_by("k");
+        DataFrame out = dftracer::utils::common::unwrap(frame.sort_by("k"));
         check(out.num_rows() == s.op_rows, "sort rows");
     });
 }
@@ -407,7 +408,8 @@ double group_by_sum(const Scale& s) {
     dftracer::utils::dstd::Vector<dataframe::GroupAgg> aggs{
         {dataframe::Agg::Sum, "v", "sum_v"}};
     return repeat_op(s.group_reps, [&] {
-        DataFrame out = frame.group_by("g", aggs);
+        DataFrame out =
+            dftracer::utils::common::unwrap(frame.group_by("g", aggs));
         check(out.num_rows() > 0 && out.num_rows() <= 10000, "group rows");
     });
 }
@@ -415,7 +417,7 @@ double group_by_sum(const Scale& s) {
 double unique_rows(const Scale& s) {
     DataFrame frame = key_frame(s.op_rows, s.op_rows / 4);
     return repeat_op(s.unique_reps, [&] {
-        DataFrame out = frame.unique({"g"});
+        DataFrame out = dftracer::utils::common::unwrap(frame.unique({"g"}));
         check(out.num_rows() > 0 && out.num_rows() <= s.op_rows / 4,
               "unique rows");
     });

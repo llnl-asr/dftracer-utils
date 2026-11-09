@@ -2,17 +2,19 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -22,12 +24,14 @@ namespace {
 
 constexpr const char* ROW = "__dftu_row__";
 
+// `name` is a column the plan's own schema produced or a temporary column the
+// transform has just added, so a miss is a broken transform.
 std::int32_t index_of(const LazyFrame& plan, const dstd::String& name) {
     const dstd::Vector<dstd::String> sch = plan.schema();
     auto it = std::find(sch.begin(), sch.end(), name);
     if (it == sch.end())
-        throw std::out_of_range(
-            ("group_by transform: no column named " + name).c_str());
+        dstd::fatal("group_by transform: a column of its own plan is missing",
+                    name.c_str());
     return static_cast<std::int32_t>(it - sch.begin());
 }
 
@@ -69,19 +73,18 @@ LazyFrame window(const LazyFrame& plan, const dstd::Vector<dstd::String>& part,
     return plan.frame_op("dftu.frame.window", a, {}, std::move(names));
 }
 
-dstd::Vector<dstd::String> value_columns(const LazyFrame& plan,
-                                         const dstd::Vector<dstd::String>& keys,
-                                         Agg agg) {
+dstd::Result<dstd::Vector<dstd::String>> value_columns(
+    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys, Agg agg) {
     dstd::Vector<dstd::String> out;
     for (const GroupAgg& g : plan.reduce_specs(agg, keys))
         out.push_back(g.column);
     if (out.empty())
-        throw std::invalid_argument("group_by transform: no eligible columns");
+        return invalid_argument<"group_by transform: no eligible columns">();
     return out;
 }
 
 dstd::String tmp(const char* stem, std::size_t i) {
-    return dstd::String("__dftu_") + stem + "_" + dstd::to_string(i) + "__";
+    return dstd::fmt<"__dftu_{}_{}__">(stem, i);
 }
 
 Expr keep_null(const LazyFrame& p, const dstd::String& c,
@@ -109,10 +112,24 @@ LazyFrame per_column(const LazyFrame& plan,
     return out.select(columns);
 }
 
-LazyFrame ranked(const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
-                 RankMethod method, bool ascending) {
-    const dstd::Vector<dstd::String> columns =
+// per_column over the value columns `agg` broadcasts to.
+template <class Spec, class Post>
+dstd::Result<LazyFrame> per_value_column(const LazyFrame& plan,
+                                         const dstd::Vector<dstd::String>& keys,
+                                         Agg agg, Spec make_spec, Post post) {
+    const dstd::Result<dstd::Vector<dstd::String>> columns =
+        value_columns(plan, keys, agg);
+    if (!columns) return columns.error();
+    return per_column(plan, keys, *columns, make_spec, post);
+}
+
+dstd::Result<LazyFrame> ranked(const LazyFrame& plan,
+                               const dstd::Vector<dstd::String>& keys,
+                               RankMethod method, bool ascending) {
+    const dstd::Result<dstd::Vector<dstd::String>> found =
         value_columns(plan, keys, Agg::Sum);
+    if (!found) return found.error();
+    const dstd::Vector<dstd::String>& columns = *found;
     LazyFrame out = plan.with_row_index(ROW);
     for (std::size_t i = 0; i < columns.size(); ++i) {
         const dstd::String& c = columns[i];
@@ -189,10 +206,13 @@ LazyFrame counter(const LazyFrame& plan, const dstd::Vector<dstd::String>& part,
 
 // The nearest present value before (or, over the reversed row order, after)
 // each row within its group.
-LazyFrame filled(const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
-                 bool backward) {
-    const dstd::Vector<dstd::String> columns =
+dstd::Result<LazyFrame> filled(const LazyFrame& plan,
+                               const dstd::Vector<dstd::String>& keys,
+                               bool backward) {
+    const dstd::Result<dstd::Vector<dstd::String>> found =
         value_columns(plan, keys, Agg::First);
+    if (!found) return found.error();
+    const dstd::Vector<dstd::String>& columns = *found;
     LazyFrame out = plan.with_row_index(ROW);
     dstd::String order = ROW;
     if (backward) {
@@ -214,12 +234,13 @@ LazyFrame filled(const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
 
 // A trailing frame of `n` rows within the group, null until it holds `n`
 // present values (the FRAME_* minimum count).
-LazyFrame rolling(const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
-                  dftu_window_func func, std::int64_t n) {
+dstd::Result<LazyFrame> rolling(const LazyFrame& plan,
+                                const dstd::Vector<dstd::String>& keys,
+                                dftu_window_func func, std::int64_t n) {
     if (n < 1)
-        throw std::invalid_argument("rolling: the window must be at least 1");
-    return per_column(
-        plan, keys, value_columns(plan, keys, Agg::Sum),
+        return invalid_argument<"rolling: the window must be at least 1">();
+    return per_value_column(
+        plan, keys, Agg::Sum,
         [func, n](const char* c, const char* o) {
             dftu_window_spec s = spec(func, c, o, n);
             s.param.frame.preceding = n - 1;
@@ -256,35 +277,34 @@ namespace {
 
 // The window plan of a group-wise transform. The parameters carry the names
 // of the LazyGroupBy members the cases below read.
-LazyFrame composed_transform(const LazyFrame& plan,
-                             const dstd::Vector<dstd::String>& keys,
-                             GroupwiseOp kind, std::int64_t n,
-                             RankMethod method, bool ascending) {
+dstd::Result<LazyFrame> composed_transform(
+    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
+    GroupwiseOp kind, std::int64_t n, RankMethod method, bool ascending) {
     switch (kind) {
         case GroupwiseOp::CumSum:
-            return per_column(
-                plan, keys, value_columns(plan, keys, Agg::Sum),
+            return per_value_column(
+                plan, keys, Agg::Sum,
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_SUM, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumProd:
-            return per_column(
-                plan, keys, value_columns(plan, keys, Agg::Sum),
+            return per_value_column(
+                plan, keys, Agg::Sum,
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_PROD, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumMax:
-            return per_column(
-                plan, keys, value_columns(plan, keys, Agg::Max),
+            return per_value_column(
+                plan, keys, Agg::Max,
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_MAX, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumMin:
-            return per_column(
-                plan, keys, value_columns(plan, keys, Agg::Min),
+            return per_value_column(
+                plan, keys, Agg::Min,
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_RUNNING_MIN, c, o);
                 },
@@ -296,8 +316,8 @@ LazyFrame composed_transform(const LazyFrame& plan,
             const dftu_window_func func =
                 n >= 0 ? DFTU_WINDOW_LAG : DFTU_WINDOW_LEAD;
             const std::int64_t offset = n >= 0 ? n : -n;
-            return per_column(
-                plan, keys, value_columns(plan, keys, Agg::First),
+            return per_value_column(
+                plan, keys, Agg::First,
                 [func, offset](const char* c, const char* o) {
                     return spec(func, c, o, offset);
                 },
@@ -305,16 +325,16 @@ LazyFrame composed_transform(const LazyFrame& plan,
                    const dstd::String& o) { return ref(p, o); });
         }
         case GroupwiseOp::Diff:
-            return per_column(
-                plan, keys, value_columns(plan, keys, Agg::Sum),
+            return per_value_column(
+                plan, keys, Agg::Sum,
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_DELTA, c, o);
                 },
                 [](const LazyFrame& p, const dstd::String&,
                    const dstd::String& o) { return ref(p, o); });
         case GroupwiseOp::PctChange:
-            return per_column(
-                plan, keys, value_columns(plan, keys, Agg::Sum),
+            return per_value_column(
+                plan, keys, Agg::Sum,
                 [](const char* c, const char* o) {
                     return spec(DFTU_WINDOW_LAG, c, o, 1);
                 },
@@ -326,7 +346,7 @@ LazyFrame composed_transform(const LazyFrame& plan,
             return ranked(plan, keys, method, ascending);
         case GroupwiseOp::NGroup:
             if (keys.empty())
-                throw std::invalid_argument("ngroup: the group-by has no keys");
+                return invalid_argument<"ngroup: the group-by has no keys">();
             return counter(plan, {}, keys, DFTU_WINDOW_DENSE_RANK, "ngroup");
         case GroupwiseOp::Head:
             return positional(plan, keys, CmpOp::Le, n, false);
@@ -348,26 +368,25 @@ LazyFrame composed_transform(const LazyFrame& plan,
         case GroupwiseOp::RollingMax:
             return rolling(plan, keys, DFTU_WINDOW_FRAME_MAX, n);
     }
-    throw std::invalid_argument(("group_by transform: unknown transform " +
-                                 dstd::to_string(static_cast<int>(kind)))
-                                    .c_str());
+    dstd::fatal("group_by transform: unknown transform");
 }
 
 }  // namespace
 
-LazyFrame composed_group_transform(const LazyFrame& plan,
-                                   const dstd::Vector<dstd::String>& keys,
-                                   GroupwiseOp kind, std::int64_t n,
-                                   RankMethod method, bool ascending) {
+dstd::Result<LazyFrame> composed_group_transform(
+    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
+    GroupwiseOp kind, std::int64_t n, RankMethod method, bool ascending) {
     return composed_transform(plan, keys, kind, n, method, ascending);
 }
 
-LazyFrame LazyGroupBy::transform(GroupwiseOp kind, std::int64_t n,
-                                 RankMethod method, bool ascending) const {
-    LazyFrame composed =
+dstd::Result<LazyFrame> LazyGroupBy::transform(GroupwiseOp kind, std::int64_t n,
+                                               RankMethod method,
+                                               bool ascending) const {
+    dstd::Result<LazyFrame> composed =
         composed_transform(plan_, keys_, kind, n, method, ascending);
+    if (!composed) return composed.error();
     if (auto native = native_group_transform(plan_, keys_, kind, n,
-                                             composed.output_schema()))
+                                             composed->output_schema()))
         return std::move(*native);
     return composed;
 }
@@ -375,11 +394,13 @@ LazyFrame LazyGroupBy::transform(GroupwiseOp kind, std::int64_t n,
 dstd::Result<DataFrame> GroupBy::transform(GroupwiseOp kind, std::int64_t n,
                                            RankMethod method,
                                            bool ascending) const {
-    return dftracer::utils::default_runtime()
-        .submit(LazyGroupBy(frame_.lazy(), keys_)
-                    .transform(kind, n, method, ascending)
-                    .collect())
-        .get();
+    for (const dstd::String& k : keys_)
+        if (frame_.column_index(k) < 0)
+            return not_found<"group_by: no column named {}">(k);
+    dstd::Result<LazyFrame> plan =
+        LazyGroupBy(frame_.lazy(), keys_).transform(kind, n, method, ascending);
+    if (!plan) return plan.error();
+    return dftracer::utils::default_runtime().submit(plan->collect()).get();
 }
 
 }  // namespace dftracer::utils::dataframe

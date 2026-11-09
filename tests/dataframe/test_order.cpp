@@ -148,11 +148,12 @@ TEST_CASE("every float order in the library is the order of compare_doubles") {
     frame.names = {"x", "row"};
     frame.columns.push_back(f64.share());
     frame.columns.push_back(dataframe::Series::flat_i64(row.data(), n));
-    CHECK(order_of(frame.sort_by("x", false).column("row").materialize()) ==
-          want);
-    CHECK(order_of(
-              frame.sort_by_multi({"x"}, false).column("row").materialize()) ==
-          want);
+    CHECK(order_of(dftu_utils_test::ok(frame.sort_by("x", false))
+                       .column("row")
+                       .materialize()) == want);
+    CHECK(order_of(dftu_utils_test::ok(frame.sort_by_multi({"x"}, false))
+                       .column("row")
+                       .materialize()) == want);
     dataframe::DataFrame spilled =
         dftu_utils_test::ok(dftracer::utils::default_runtime()
                                 .submit(frame.lazy()
@@ -202,9 +203,10 @@ TEST_CASE(
     frame.columns.push_back(dataframe::Series::flat_i64(row.data(), n));
     CHECK(order_of(dataframe::argsort(frame.columns[0], false).materialize()) ==
           want);
-    CHECK(order_of(frame.sort_by("x", false).column("row").materialize()) ==
-          want);
-    CHECK(order_of(frame.sort_by_multi({"x", "row"}, false)
+    CHECK(order_of(dftu_utils_test::ok(frame.sort_by("x", false))
+                       .column("row")
+                       .materialize()) == want);
+    CHECK(order_of(dftu_utils_test::ok(frame.sort_by_multi({"x", "row"}, false))
                        .column("row")
                        .materialize()) == want);
     const dataframe::DataFrame spilled =

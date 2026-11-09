@@ -74,12 +74,21 @@ void LazyFrame_dealloc(LazyFrameObject* self) {
     Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
 }
 
-// Wrap a builder call that returns a LazyFrame, turning C++ exceptions into
-// Python errors.
+// Wrap a builder call that returns a LazyFrame or a LazyFrame result, turning
+// its error and any C++ exception into a Python ValueError.
 template <class Fn>
 PyObject* run_lazy_op(Fn&& fn) {
     try {
-        return make_lazyframe(fn());
+        auto out = fn();
+        if constexpr (std::is_same_v<decltype(out), LazyFrame>) {
+            return make_lazyframe(std::move(out));
+        } else {
+            if (!out) {
+                PyErr_SetString(PyExc_ValueError, out.error().c_str());
+                return nullptr;
+            }
+            return make_lazyframe(std::move(*out));
+        }
     } catch (const std::exception& e) {
         PyErr_SetString(PyExc_ValueError, e.what());
         return nullptr;
@@ -263,8 +272,11 @@ PyObject* LazyFrame_reduce(PyObject* self, PyObject* arg) {
     if (!b) return nullptr;
     const char* agg = PyUnicode_AsUTF8(arg);
     if (!agg) return nullptr;
-    return run_lazy_op(
-        [&] { return b->lf.reduce(dataframe::agg_from_string(agg)); });
+    return run_lazy_op([&]() -> dftracer::utils::dstd::Result<LazyFrame> {
+        const auto op = dataframe::agg_from_string(agg);
+        if (!op) return op.error();
+        return b->lf.reduce(*op);
+    });
 }
 
 PyObject* LazyFrame_group_transform(PyObject* self, PyObject* args,
@@ -293,10 +305,15 @@ PyObject* LazyFrame_reduce_specs(PyObject* self, PyObject* args) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     if (keys_obj != Py_None && !strings_from_str_or_seq(keys_obj, keys))
         return nullptr;
+    const auto op = dataframe::agg_from_string(agg);
+    if (!op) {
+        PyErr_SetString(PyExc_KeyError, op.error().c_str());
+        return nullptr;
+    }
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> specs;
     try {
         specs = dftracer::utils::python::reduce_spec_strings(
-            b->lf.reduce_specs(dataframe::agg_from_string(agg), keys));
+            b->lf.reduce_specs(*op, keys));
     } catch (const std::out_of_range& e) {
         PyErr_SetString(PyExc_KeyError, e.what());
         return nullptr;

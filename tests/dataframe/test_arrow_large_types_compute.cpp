@@ -391,7 +391,8 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::LargeString);

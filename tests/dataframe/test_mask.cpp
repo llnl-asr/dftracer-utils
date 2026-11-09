@@ -11,6 +11,7 @@
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
@@ -41,8 +42,8 @@ dstd::String truth(const Series& m) {
 Series mask_of(const char* q, const DataFrame& b) {
     auto parsed = duql::Query::from_string(q);
     REQUIRE(parsed.has_value());
-    return dataframe::evaluate_mask(duql::detail::QueryAccess::root(*parsed),
-                                    b);
+    return dftu_utils_test::ok(
+        dataframe::evaluate_mask(duql::detail::QueryAccess::root(*parsed), b));
 }
 
 std::int64_t kept_rows(const char* q, const DataFrame& b) {
@@ -50,7 +51,7 @@ std::int64_t kept_rows(const char* q, const DataFrame& b) {
     REQUIRE(parsed.has_value());
     dataframe::QueryPlan plan;
     plan.where = &duql::detail::QueryAccess::root(*parsed);
-    return dataframe::execute(plan, b).num_rows();
+    return dftu_utils_test::ok(dataframe::execute(plan, b)).num_rows();
 }
 
 DataFrame nullable_x() {
@@ -74,8 +75,8 @@ TEST_SUITE("query vec_mask") {
 
         auto q = duql::Query::from_string("dur > 100 and cat == \"io\"");
         REQUIRE(q.has_value());
-        Series mask =
-            dataframe::evaluate_mask(duql::detail::QueryAccess::root(*q), b);
+        Series mask = dftu_utils_test::ok(
+            dataframe::evaluate_mask(duql::detail::QueryAccess::root(*q), b));
         REQUIRE(mask.type() == dftracer::utils::dataframe::TypeId::Bool);
         REQUIRE(mask.length() == 5);
         // dur>100: {1,2,4}; cat==io: {0,2,3}; AND -> only row 2.
@@ -94,8 +95,8 @@ TEST_SUITE("query vec_mask") {
 
         auto q = duql::Query::from_string("x in [2, 4]");
         REQUIRE(q.has_value());
-        Series mask =
-            dataframe::evaluate_mask(duql::detail::QueryAccess::root(*q), b);
+        Series mask = dftu_utils_test::ok(
+            dataframe::evaluate_mask(duql::detail::QueryAccess::root(*q), b));
         CHECK(bit_at(mask, 0) == 0);
         CHECK(bit_at(mask, 1) == 1);
         CHECK(bit_at(mask, 2) == 0);
@@ -116,7 +117,7 @@ TEST_SUITE("query vec_mask") {
         CHECK(kept_rows("nope is missing", b) == 4);
     }
 
-    TEST_CASE("unsupported predicate throws DuqlErrc::Unsupported") {
+    TEST_CASE("unsupported predicate gives DuqlErrc::Unsupported") {
         dstd::Vector<std::int64_t> v{1};
         DataFrame b;
         b.names = {"name"};
@@ -125,15 +126,11 @@ TEST_SUITE("query vec_mask") {
         CHECK(truth(mask_of("name ~ \"^p\"", b)) == "N");
         auto q = duql::Query::from_string("any(name) == \"p\"");
         REQUIRE(q.has_value());
-        bool threw = false;
-        try {
+        auto r =
             dataframe::evaluate_mask(duql::detail::QueryAccess::root(*q), b);
-        } catch (const dftracer::utils::common::DFTUtilsException& e) {
-            threw = true;
-            CHECK(e.condition() == dstd::Condition::Unsupported);
-            CHECK(e.domain() == duql::ERROR_DOMAIN.id);
-        }
-        CHECK(threw);
+        REQUIRE(!r.has_value());
+        CHECK(r.error().condition() == dstd::Condition::Unsupported);
+        CHECK(r.error().domain().id == duql::ERROR_DOMAIN.id);
     }
 
     TEST_CASE("missing column is UNKNOWN on every row") {
@@ -200,7 +197,7 @@ TEST_SUITE("query vec_mask") {
         plan.order_by = "dur";
         plan.descending = true;
         plan.limit = 2;
-        DataFrame out = dataframe::execute(plan, b);
+        DataFrame out = dftu_utils_test::ok(dataframe::execute(plan, b));
         // dur>60: {150,200,80,300}; sort desc -> 300,200,150,80; limit 2.
         REQUIRE(out.num_rows() == 2);
         REQUIRE(out.names == dstd::Vector<dstd::String>{"dur", "cat"});
@@ -222,7 +219,7 @@ TEST_SUITE("query vec_mask") {
                      {dataframe::Agg::Sum, "dur", "sum_dur"}};
         plan.order_by = "count";
         plan.descending = true;
-        DataFrame out = dataframe::execute(plan, b);
+        DataFrame out = dftu_utils_test::ok(dataframe::execute(plan, b));
         // groups io(3),cpu(1),net(1); order by count desc -> io first.
         REQUIRE(out.num_rows() == 3);
         REQUIRE(out.names ==

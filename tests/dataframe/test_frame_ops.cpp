@@ -81,17 +81,17 @@ TEST_SUITE("frame ops") {
         specs[2].set_value("dur");
         specs[2].params.offset = 1;
         specs[2].out = "prev";
-        DataFrame out =
-            dataframe::window(make_events(), {"pid"}, {"ts"}, specs);
+        DataFrame out = dftu_utils_test::ok(
+            dataframe::window(make_events(), {"pid"}, {"ts"}, specs));
         CHECK(out.names == dstd::Vector<dstd::String>{"pid", "ts", "dur", "rn",
                                                       "cum", "prev"});
         CHECK(i64_col(out, "rn") == dstd::Vector<I>{1, 2, 3, 1});
         CHECK(i64_col(out, "cum") == dstd::Vector<I>{1, 3, 6, 4});
         CHECK(i64_col(out, "prev") == dstd::Vector<I>{NI, 1, 2, NI});
         specs[1].set_value("nope");
-        CHECK_THROWS_AS(
+        dftu_utils_test::expect_error(
             dataframe::window(make_events(), {"pid"}, {"ts"}, specs),
-            std::out_of_range);
+            dftracer::utils::common::ErrorCode::NotFound);
     }
 
     TEST_CASE("gap_fill: locf over a grid, with and without a range") {
@@ -100,14 +100,14 @@ TEST_SUITE("frame ops") {
         df.columns.push_back(i64s({1, 1, 1}));
         df.columns.push_back(i64s({0, 10, 30}));
         df.columns.push_back(i64s({100, 110, 130}));
-        DataFrame locf =
+        DataFrame locf = dftu_utils_test::ok(
             dataframe::gap_fill(df, {"pid"}, "ts", 10, {"v"},
-                                dataframe::GapFillMode::Locf, dstd::nullopt);
+                                dataframe::GapFillMode::Locf, dstd::nullopt));
         CHECK(i64_col(locf, "ts") == dstd::Vector<I>{0, 10, 20, 30});
         CHECK(i64_col(locf, "v") == dstd::Vector<I>{100, 110, 110, 130});
-        DataFrame ranged = dataframe::gap_fill(
+        DataFrame ranged = dftu_utils_test::ok(dataframe::gap_fill(
             df, {"pid"}, "ts", 10, {"v"}, dataframe::GapFillMode::None,
-            dstd::Pair<std::int64_t, std::int64_t>{0, 40});
+            dstd::Pair<std::int64_t, std::int64_t>{0, 40}));
         CHECK(i64_col(ranged, "ts") == dstd::Vector<I>{0, 10, 20, 30, 40});
         CHECK(i64_col(ranged, "v") == dstd::Vector<I>{100, 110, NI, 130, NI});
     }
@@ -125,18 +125,18 @@ TEST_SUITE("frame ops") {
         right.columns.push_back(i64s({1, 1, 2}));
         right.columns.push_back(i64s({5, 20, 50}));
         right.columns.push_back(i64s({50, 200, 500}));
-        DataFrame out =
+        DataFrame out = dftu_utils_test::ok(
             dataframe::asof(left, right, "ts", {"pid"},
-                            dataframe::AsofDirection::Backward, dstd::nullopt);
+                            dataframe::AsofDirection::Backward, dstd::nullopt));
         CHECK(out.names == dstd::Vector<dstd::String>{"pid", "ts", "x", "y"});
         CHECK(i64_col(out, "x") == dstd::Vector<I>{1, 2, 3});
         CHECK(i64_col(out, "y") == dstd::Vector<I>{50, 200, NI});
-        DataFrame tight = dataframe::asof(
-            left, right, "ts", {"pid"}, dataframe::AsofDirection::Backward, 3);
+        DataFrame tight = dftu_utils_test::ok(dataframe::asof(
+            left, right, "ts", {"pid"}, dataframe::AsofDirection::Backward, 3));
         CHECK(i64_col(tight, "y") == dstd::Vector<I>{NI, NI, NI});
-        DataFrame fwd =
+        DataFrame fwd = dftu_utils_test::ok(
             dataframe::asof(left, right, "ts", {"pid"},
-                            dataframe::AsofDirection::Forward, dstd::nullopt);
+                            dataframe::AsofDirection::Forward, dstd::nullopt));
         CHECK(i64_col(fwd, "y") == dstd::Vector<I>{200, NI, 500});
     }
 
@@ -149,13 +149,13 @@ TEST_SUITE("frame ops") {
         right.columns.push_back(i64s({0, 10}));
         right.columns.push_back(i64s({10, 20}));
         right.columns.push_back(i64s({1, 2}));
-        DataFrame inner =
-            dataframe::interval(left, right, "p", "lo", "hi", {}, false);
+        DataFrame inner = dftu_utils_test::ok(
+            dataframe::interval(left, right, "p", "lo", "hi", {}, false));
         CHECK(inner.names == dstd::Vector<dstd::String>{"p", "tag"});
         CHECK(i64_col(inner, "p") == dstd::Vector<I>{5, 15});
         CHECK(i64_col(inner, "tag") == dstd::Vector<I>{1, 2});
-        DataFrame outer =
-            dataframe::interval(left, right, "p", "lo", "hi", {}, true);
+        DataFrame outer = dftu_utils_test::ok(
+            dataframe::interval(left, right, "p", "lo", "hi", {}, true));
         CHECK(i64_col(outer, "p") == dstd::Vector<I>{5, 15, 99});
         CHECK(i64_col(outer, "tag") == dstd::Vector<I>{1, 2, NI});
     }

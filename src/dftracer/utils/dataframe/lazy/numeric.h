@@ -2,13 +2,23 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_NUMERIC_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_NUMERIC_H
 
+#include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/vector.h>
 
+#include <stdexcept>
+
 namespace dftracer::utils::dataframe::lazy_internal {
 
 enum class NumClass { Signed, Unsigned, Float };
+
+// The lazy window steps still report a window overflow by throwing; the eager
+// window op returns it as an error.
+[[noreturn]] inline void throw_window_overflow(const char* func,
+                                               const char* type) {
+    throw std::overflow_error(steps::overflow_message(func, type).c_str());
+}
 
 inline bool num_class(TypeId t, NumClass& cls) {
     switch (t) {

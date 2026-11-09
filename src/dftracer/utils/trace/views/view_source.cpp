@@ -1489,7 +1489,7 @@ dftracer::utils::dataframe::ScanResult ViewSource::scan(
         if (!req.projection.empty())
             buf =
                 dstd::make_shared<const dftracer::utils::dataframe::DataFrame>(
-                    buf->select(req.projection));
+                    common::unwrap(buf->select(req.projection)));
         r.cursor = dstd::make_unique<ViewCursor>(std::move(buf));
         return r;
     }

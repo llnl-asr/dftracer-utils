@@ -117,12 +117,36 @@ DataFrame to_dataframe(const DataFrameObject* self) {
     return b;
 }
 
-// Wrap a batch_ops call that may throw, turning C++ exceptions into Python
-// errors.
+// A frame op's error as a Python error: an unknown name raises KeyError, as the
+// std::out_of_range it replaced did, and any other error raises ValueError.
+void set_batch_error(const dftracer::utils::dstd::Error& error) {
+    PyErr_SetString(dftracer::utils::common::errorcode_of(error) ==
+                            dftracer::utils::common::ErrorCode::NotFound
+                        ? PyExc_KeyError
+                        : PyExc_ValueError,
+                    error.c_str());
+}
+
+// An error that always raises ValueError.
+void set_value_error(const dftracer::utils::dstd::Error& error) {
+    PyErr_SetString(PyExc_ValueError, error.c_str());
+}
+
+// Wrap a batch_ops call that returns a frame or a frame result, turning its
+// error and any C++ exception into a Python error.
 template <class Fn>
 PyObject* run_batch_op(Fn&& fn) {
     try {
-        return make_dataframe(fn());
+        auto out = fn();
+        if constexpr (std::is_same_v<decltype(out), DataFrame>) {
+            return make_dataframe(std::move(out));
+        } else {
+            if (!out) {
+                set_batch_error(out.error());
+                return nullptr;
+            }
+            return make_dataframe(std::move(*out));
+        }
     } catch (const std::out_of_range& e) {
         PyErr_SetString(PyExc_KeyError, e.what());
         return nullptr;
@@ -249,7 +273,21 @@ PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
             plan.limit = PyLong_AsLongLong(limit_obj);
             if (plan.limit == -1 && PyErr_Occurred()) return nullptr;
         }
-        return make_dataframe(dataframe::execute(plan, bat));
+        auto out = dataframe::execute(plan, bat);
+        if (!out) {
+            // An unknown name was std::out_of_range, which set_typed_py_error
+            // maps to the base type; the other errors keep their own type.
+            const auto& error = out.error();
+            PyObject* type =
+                dftracer::utils::common::errorcode_of(error) ==
+                        dftracer::utils::common::ErrorCode::NotFound
+                    ? dftracer::utils::python::g_dft_error
+                    : dftracer::utils::python::py_error_type_for(
+                          dftracer::utils::common::DFTUtilsException(error));
+            PyErr_SetString(type, error.c_str());
+            return nullptr;
+        }
+        return make_dataframe(std::move(*out));
     } catch (const std::exception& e) {
         dftracer::utils::python::set_typed_py_error(e);
         return nullptr;
@@ -471,9 +509,10 @@ PyObject* DataFrame_reduce(PyObject* self, PyObject* arg) {
     if (!b) return nullptr;
     const char* agg = PyUnicode_AsUTF8(arg);
     if (!agg) return nullptr;
-    return run_batch_op([&] {
-        return dataframe::reduce(to_dataframe(b),
-                                 dataframe::agg_from_string(agg));
+    return run_batch_op([&]() -> dftracer::utils::dstd::Result<DataFrame> {
+        const auto op = dataframe::agg_from_string(agg);
+        if (!op) return op.error();
+        return dataframe::reduce(to_dataframe(b), *op);
     });
 }
 
@@ -486,11 +525,10 @@ PyObject* DataFrame_group_transform(PyObject* self, PyObject* args,
                                                        names_from_obj, a))
         return nullptr;
     return run_batch_op([&] {
-        return common::unwrap(
-            dataframe::GroupBy(to_dataframe(b), a.keys)
-                .transform(static_cast<dataframe::GroupwiseOp>(a.kind), a.n,
-                           static_cast<dataframe::RankMethod>(a.method),
-                           a.ascending != 0));
+        return dataframe::GroupBy(to_dataframe(b), a.keys)
+            .transform(static_cast<dataframe::GroupwiseOp>(a.kind), a.n,
+                       static_cast<dataframe::RankMethod>(a.method),
+                       a.ascending != 0);
     });
 }
 
@@ -504,18 +542,18 @@ PyObject* DataFrame_reduce_specs(PyObject* self, PyObject* args) {
     if (!PyArg_ParseTuple(args, "s|O", &agg, &keys_obj)) return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     if (keys_obj != Py_None && !names_from_obj(keys_obj, keys)) return nullptr;
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> specs;
-    try {
-        specs = dftracer::utils::python::reduce_spec_strings(
-            dataframe::reduce_specs(to_dataframe(b),
-                                    dataframe::agg_from_string(agg), keys));
-    } catch (const std::out_of_range& e) {
-        PyErr_SetString(PyExc_KeyError, e.what());
-        return nullptr;
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
+    const auto op = dataframe::agg_from_string(agg);
+    if (!op) {
+        set_batch_error(op.error());
         return nullptr;
     }
+    const auto found = dataframe::reduce_specs(to_dataframe(b), *op, keys);
+    if (!found) {
+        set_batch_error(found.error());
+        return nullptr;
+    }
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> specs =
+        dftracer::utils::python::reduce_spec_strings(*found);
     PyObject* list = PyList_New(static_cast<Py_ssize_t>(specs.size()));
     if (!list) return nullptr;
     for (std::size_t i = 0; i < specs.size(); ++i) {
@@ -532,25 +570,23 @@ PyObject* DataFrame_reduce_specs(PyObject* self, PyObject* args) {
 PyObject* DataFrame_is_duplicated(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    try {
-        return dftracer::utils::python::wrap_vec_column(
-            dataframe::is_duplicated(to_dataframe(b)));
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
+    auto out = dataframe::is_duplicated(to_dataframe(b));
+    if (!out) {
+        set_value_error(out.error());
         return nullptr;
     }
+    return dftracer::utils::python::wrap_vec_column(std::move(*out));
 }
 
 PyObject* DataFrame_is_unique(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    try {
-        return dftracer::utils::python::wrap_vec_column(
-            dataframe::is_unique(to_dataframe(b)));
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
+    auto out = dataframe::is_unique(to_dataframe(b));
+    if (!out) {
+        set_value_error(out.error());
         return nullptr;
     }
+    return dftracer::utils::python::wrap_vec_column(std::move(*out));
 }
 
 PyObject* DataFrame_column_index(PyObject* self, PyObject* arg) {
@@ -625,16 +661,13 @@ PyObject* DataFrame_partition_id(PyObject* self, PyObject* args) {
                                  keys)) {
         return nullptr;
     }
-    try {
-        return dftracer::utils::python::wrap_vec_column(dataframe::partition_id(
-            to_dataframe(b), keys, static_cast<std::int64_t>(n_parts)));
-    } catch (const std::out_of_range& e) {
-        PyErr_SetString(PyExc_KeyError, e.what());
-        return nullptr;
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
+    auto out = dataframe::partition_id(to_dataframe(b), keys,
+                                       static_cast<std::int64_t>(n_parts));
+    if (!out) {
+        set_batch_error(out.error());
         return nullptr;
     }
+    return dftracer::utils::python::wrap_vec_column(std::move(*out));
 }
 
 // hash_partition(keys, n_parts) -> list[DataFrame]; keys is a name or a
@@ -654,14 +687,13 @@ PyObject* DataFrame_hash_partition(PyObject* self, PyObject* args) {
         return nullptr;
     }
 
-    dftracer::utils::dstd::Vector<DataFrame> parts;
-    try {
-        parts = dataframe::hash_partition(to_dataframe(b), keys,
-                                          static_cast<std::int64_t>(n_parts));
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
+    auto found = dataframe::hash_partition(to_dataframe(b), keys,
+                                           static_cast<std::int64_t>(n_parts));
+    if (!found) {
+        set_value_error(found.error());
         return nullptr;
     }
+    dftracer::utils::dstd::Vector<DataFrame> parts = std::move(*found);
     PyObject* list = PyList_New(static_cast<Py_ssize_t>(parts.size()));
     if (!list) return nullptr;
     for (std::size_t i = 0; i < parts.size(); ++i) {

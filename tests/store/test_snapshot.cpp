@@ -247,8 +247,9 @@ dstd::String only_data_file(const dstd::String& dir) {
 }
 
 void drop_summary(const dstd::String& dir) {
-    (void)dstd::fs::remove(dstd::Path(dir) /
-                           dstd::String(store::engine::SUMMARY_FILE_NAME));
+    dstd::fs::remove(dstd::Path(dir) /
+                     dstd::String(store::engine::SUMMARY_FILE_NAME))
+        .discard();
 }
 
 dstd::Vector<std::uint8_t> with_tail_version(dstd::Vector<std::uint8_t> bytes,
@@ -3835,9 +3836,10 @@ TEST_SUITE("index store snapshot") {
         auto listed = store::engine::read_summary(dir.str());
         REQUIRE(listed.has_value());
         REQUIRE(listed->size() == 2);
-        (void)dstd::fs::remove(dstd::Path(dir.str()) /
-                               dstd::String(listed->back().name.data(),
-                                            listed->back().name.size()));
+        dstd::fs::remove(dstd::Path(dir.str()) /
+                         dstd::String(listed->back().name.data(),
+                                      listed->back().name.size()))
+            .discard();
 
         auto snapshot = engine::Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());

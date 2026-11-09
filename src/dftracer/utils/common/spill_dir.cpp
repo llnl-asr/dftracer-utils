@@ -230,7 +230,7 @@ void sweep_stale(dstd::PathView root, dstd::StringView prefix) {
         if (perr != std::errc{} || stop == last || *stop != '_' || pid <= 0)
             continue;
         if (::kill(static_cast<pid_t>(pid), 0) == 0 || errno != ESRCH) continue;
-        (void)dstd::fs::remove_all((root / name).view());
+        dstd::fs::remove_all((root / name).view()).discard();
     }
 }
 
@@ -303,7 +303,7 @@ ScopedSpillSubdir::~ScopedSpillSubdir() { remove(); }
 // leave the gauge once the files are gone and no writer adds more.
 void ScopedSpillSubdir::remove() noexcept {
     if (path_.empty()) return;
-    (void)dstd::fs::remove_all(path_.view());
+    dstd::fs::remove_all(path_.view()).discard();
     SubdirRegistry& reg = subdirs();
     {
         std::lock_guard<std::mutex> lock(reg.mu);

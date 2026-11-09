@@ -71,7 +71,7 @@ static dstd::String create_variable_line_test_file(
         return "";
     }
 
-    (void)dstd::fs::remove(txt_file);
+    dstd::fs::remove(txt_file).discard();
     return gz_file;
 }
 

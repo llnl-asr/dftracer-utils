@@ -38,7 +38,7 @@ dstd::String write_tagged(TestEnvironment& env, std::size_t path_budget) {
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     dftracer::utils::index::IndexerOptions o;
     o.bloom->path_budget = path_budget;
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},

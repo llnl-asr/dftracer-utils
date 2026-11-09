@@ -158,7 +158,7 @@ dstd::String write_agg_trace(TestEnvironment& env) {
     }
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -434,7 +434,7 @@ TEST_SUITE("View") {
         }
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto out = View::from_file(dstd::String(gz), dstd::String(idx))
                        .group_by({GroupKey::name()})
@@ -475,7 +475,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto any = View::from_file(dstd::String(gz), dstd::String(idx))
@@ -1479,7 +1479,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto table = View::from_file(dstd::String(gz), dstd::String(idx))
@@ -1517,7 +1517,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto table = View::from_file(dstd::String(gz), dstd::String(idx))
@@ -1773,7 +1773,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         dataframe::DataFrame b =
             View::from_file(dstd::String(gz), dstd::String(idx))
@@ -1872,7 +1872,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         dataframe::DataFrame b =
             View::from_file(dstd::String(gz), dstd::String(idx))
@@ -1900,7 +1900,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         dataframe::DataFrame b =
             View::from_file(dstd::String(gz), dstd::String(idx))
@@ -1926,7 +1926,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         dataframe::DataFrame b =
             View::from_file(dstd::String(gz), dstd::String(idx))
@@ -1955,7 +1955,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         {
@@ -2101,7 +2101,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto counts = [&](const dstd::String& col, const GroupKey& gk) {
             dataframe::DataFrame b =
@@ -2165,7 +2165,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto counts = [&](const dstd::String& col, const GroupKey& gk) {
             dataframe::DataFrame b =
@@ -2213,7 +2213,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         CHECK(View::from_file(dstd::String(gz), dstd::String(idx))

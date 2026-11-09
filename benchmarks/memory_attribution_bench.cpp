@@ -315,7 +315,7 @@ dstd::String trace_text(std::int64_t lines) {
 }
 
 Paths prepare(const dstd::String& dir, const Sizes& s) {
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
     Paths p;
     p.trace = dir + "/trace/smoke.pfw.gz";
     write_gz(p.trace, trace_text(s.trace_lines));

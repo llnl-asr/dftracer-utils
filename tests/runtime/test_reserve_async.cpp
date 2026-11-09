@@ -123,7 +123,7 @@ Bare wait_in_bare(memory::Pool* pool, std::size_t bytes,
     Alive guard{alive};
     ReserveAsync::Result r = co_await reserve_async(*pool, bytes, deadline);
     resumed->store(true);
-    (void)r;
+    r.discard();
 }
 
 CoroTask<void> start_and_destroy(memory::Pool* pool, std::size_t bytes,

@@ -126,7 +126,7 @@ TEST_SUITE("ViewPlannerUtility") {
             CHECK(c.end_byte > c.start_byte);
         }
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ViewPlanner - Compute view filters to compute chunks") {
@@ -156,7 +156,7 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->candidates.size() >= 2);
         CHECK(output->skipped_checkpoints >= 2);
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ViewPlanner - File-level skip for absent values") {
@@ -187,7 +187,7 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->candidates.empty());
         CHECK(output->skipped_checkpoints == 4);
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ViewPlanner - No bloom predicates returns all chunks") {
@@ -218,7 +218,7 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->candidates.size() == 4);
         CHECK(output->skipped_checkpoints == 0);
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ViewPlanner - No index reads the file as one unit") {
@@ -310,7 +310,7 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->file_may_match);
         CHECK(output->candidates.size() == 1);
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ViewPlanner - several chunks without a chunk table fail") {
@@ -346,6 +346,6 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(dstd::String(output.error().message()).find("chunk table") !=
               dstd::String::npos);
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 }

@@ -141,7 +141,7 @@ TEST_CASE("PaddedStripedWriter - gzip -t passes and payload round-trips") {
     CHECK(decompressed ==
           hdr_payload + w0_payload + w1_payload + w2_payload + ftr_payload);
 
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 // GzipLineWriter passes its own scope to open(), runs its compress jobs in it
@@ -192,7 +192,7 @@ TEST_CASE("PaddedStripedWriter - the caller's scope joins before close") {
         for (const auto& p : payloads) n += p.size();
         return n;
     }());
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE(
@@ -315,7 +315,7 @@ TEST_CASE(
     auto round = gunzip_all(path);
     CHECK(round == big + big);
 
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 namespace {
@@ -396,7 +396,7 @@ TEST_CASE("PaddedStripedWriter - a drop without close on an executor joins") {
     CHECK(gunzip_all(path).find(payload) != dstd::String::npos);
     CHECK(on_executor.load());
     runtime.shutdown();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("PaddedStripedWriter - every stripe ends in whole gzip members") {
@@ -437,5 +437,5 @@ TEST_CASE("PaddedStripedWriter - every stripe ends in whole gzip members") {
     dstd::String want;
     for (const auto& p : payloads) want += p;
     CHECK(gunzip_all(path) == want);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }

@@ -73,7 +73,7 @@ TEST_CASE("StripedWriter - header, chunks, footer land in single file") {
     CHECK(lines.count("worker2") == 1);
     CHECK(lines.count("END") == 1);
 
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("StripedWriter - empty chunks are no-ops") {
@@ -93,7 +93,7 @@ TEST_CASE("StripedWriter - empty chunks are no-ops") {
     CHECK(runtime.submit(task(), "striped_empty").get() == 0);
     CHECK(dstd::fs::exists(path).value());
     CHECK(dstd::fs::file_size(path).value() == 0);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("StripedWriter - output_paths returns single entry") {
@@ -113,5 +113,5 @@ TEST_CASE("StripedWriter - output_paths returns single entry") {
     CHECK(runtime.submit(task(), "striped_paths").get() == 0);
     REQUIRE(paths.size() == 1);
     CHECK(paths[0] == path);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }

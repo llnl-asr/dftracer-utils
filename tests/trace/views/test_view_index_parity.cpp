@@ -169,7 +169,7 @@ struct Fixture {
             const dstd::String out = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
-            (void)dstd::fs::remove(plain);
+            dstd::fs::remove(plain).discard();
             gz.push_back(out);
         }
         index::IndexerOptions o;
@@ -542,7 +542,7 @@ TEST_SUITE("ViewIndexParity") {
         }
         const dstd::String gz = plain + ".gz";
         REQUIRE(compress_file_to_gzip(plain, gz));
-        (void)dstd::fs::remove(plain);
+        dstd::fs::remove(plain).discard();
         index::IndexerOptions o;
         o.index_dir = env.dir() + "/idx";
         index::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
@@ -595,7 +595,7 @@ TEST_SUITE("ViewIndexParity") {
             }
             const dstd::String out = plain + ".gz";
             REQUIRE(compress_file_to_gzip(plain, out));
-            (void)dstd::fs::remove(plain);
+            dstd::fs::remove(plain).discard();
             gz.push_back(out);
         }
         index::IndexerOptions opts;
@@ -653,7 +653,7 @@ TEST_SUITE("ViewIndexParity") {
         }
         const dstd::String gz = plain + ".gz";
         REQUIRE(compress_file_to_gzip(plain, gz));
-        (void)dstd::fs::remove(plain);
+        dstd::fs::remove(plain).discard();
         const dstd::String index_dir = env.dir() + "/idx";
         const dstd::String index =
             dstd::String(determine_index_path(gz, index_dir));
@@ -717,7 +717,7 @@ TEST_SUITE("ViewIndexParity") {
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             plain, gz, MEMBER_BYTES));
-        (void)dstd::fs::remove(plain);
+        dstd::fs::remove(plain).discard();
         index::IndexerOptions opts;
         opts.index_dir = env.dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
@@ -761,7 +761,7 @@ TEST_SUITE("ViewIndexParity") {
             const dstd::String out = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
-            (void)dstd::fs::remove(plain);
+            dstd::fs::remove(plain).discard();
             gz.push_back(out);
         }
         index::IndexerOptions opts;

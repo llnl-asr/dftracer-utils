@@ -152,7 +152,8 @@ static coro::CoroTask<FileResult> compress_file_parallel(
     }
     if (remove_output) {
         auto removing = runtime::fs::remove(dstd::PathView(result.output_path));
-        (void)co_await std::move(removing);
+        // Best effort: the compression error is already recorded.
+        (co_await std::move(removing)).discard();
     }
 
     co_return result;

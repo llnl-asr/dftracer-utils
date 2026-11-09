@@ -52,7 +52,7 @@ dstd::Vector<dstd::String> rows(const Series& s) {
 
 void write_file(dstd::PathView p, const dstd::String& text) {
     const dstd::Path owned(p.str());
-    (void)dstd::fs::write_file(dstd::PathView(owned), text);
+    dstd::fs::write_file(dstd::PathView(owned), text).discard();
 }
 
 }  // namespace

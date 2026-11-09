@@ -177,7 +177,7 @@ class FileDecompressorUtility {
 
         } catch (const std::exception& e) {
             // Clean up partial output file on error
-            (void)dstd::fs::remove(dstd::PathView(input.output_path));
+            dstd::fs::remove(dstd::PathView(input.output_path)).discard();
 
             co_return common::make_error(
                 common::ErrorCode::Compression,

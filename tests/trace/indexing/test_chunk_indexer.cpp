@@ -52,7 +52,7 @@ static dstd::Pair<dstd::String, std::size_t> create_test_trace_gz(
     dstd::String gz_path = plain_path + ".gz";
     dftu_utils_test::compress_file_to_gzip(dstd::String(plain_path),
                                            dstd::String(gz_path));
-    (void)dstd::fs::remove(plain_path);
+    dstd::fs::remove(plain_path).discard();
 
     return {gz_path, uncompressed_size};
 }
@@ -113,7 +113,7 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.statistics.name_counts.count("read") == 1);
         CHECK(output.statistics.duration_count == 50);
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ChunkIndexer - Extra dimensions with nested keys") {
@@ -159,7 +159,7 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.bloom_filters.at("io.size").possibly_contains("1024"));
         CHECK(output.bloom_filters.at("io.size").possibly_contains("2048"));
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ChunkIndexer - Events missing some fields") {
@@ -184,7 +184,7 @@ TEST_SUITE("ChunkIndexer") {
         dstd::String gz_path = plain_path + ".gz";
         dftu_utils_test::compress_file_to_gzip(dstd::String(plain_path),
                                                dstd::String(gz_path));
-        (void)dstd::fs::remove(plain_path);
+        dstd::fs::remove(plain_path).discard();
 
         ChunkIndexerConfig config;
         config.expected_entries_per_chunk = 100;
@@ -206,6 +206,6 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.bloom_filters.at("fhash").possibly_contains("def456"));
         CHECK(output.statistics.total_events == 2);
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 }

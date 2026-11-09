@@ -502,7 +502,8 @@ struct GzipLineWriter::Impl {
             if (writer) co_await writer->close();
             writer.reset();
             // Cleanup of a failed write, so a file already gone is fine.
-            for (auto& p : created) (void)dstd::fs::remove(dstd::PathView(p));
+            for (auto& p : created)
+                dstd::fs::remove(dstd::PathView(p)).discard();
         }
         if (job_error) std::rethrow_exception(job_error);
         co_return get_error();

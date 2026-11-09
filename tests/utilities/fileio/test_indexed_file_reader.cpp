@@ -32,7 +32,7 @@ TEST_SUITE("IndexedFileReader") {
 
             // Ensure no index exists initially
             if (dstd::fs::exists(db_root).value()) {
-                (void)dstd::fs::remove_all(db_root);
+                dstd::fs::remove_all(db_root).discard();
             }
 
             IndexedFileReaderUtility reader_utility;
@@ -261,7 +261,7 @@ TEST_SUITE("IndexedFileReader") {
 
             // Modify the gz file (touch it to update mtime)
             dstd::String ofs;
-            (void)dstd::fs::append_file(dstd::PathView(gz_path), ofs);
+            dstd::fs::append_file(dstd::PathView(gz_path), ofs).discard();
 
             // Process should detect outdated index and rebuild
             IndexedFileReaderUtility reader_utility;

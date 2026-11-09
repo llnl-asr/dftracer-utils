@@ -26,7 +26,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
             dstd::String ofs;
             ofs += "Hello, World!\n";
             ofs += "This is a test file.\n";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
         Text content = reader(test_file).get();
@@ -34,14 +34,14 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
         CHECK(content.content == "Hello, World!\nThis is a test file.\n");
         CHECK(content.size() == 35);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("Read empty file") {
         // Create empty file
         {
             dstd::String ofs;
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
         Text content = reader(test_file).get();
@@ -49,7 +49,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
         CHECK(content.content.empty());
         CHECK(content.size() == 0);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("Read file with special characters") {
@@ -58,7 +58,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
             ofs += "Special: !@#$%^&*()\n";
             ofs += "Unicode: こんにちは\n";
             ofs += "Tabs:\t\t\tSpaces:   \n";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
         Text content = reader(test_file).get();
@@ -67,7 +67,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
               dstd::String::npos);
         CHECK(content.content.find("こんにちは") != dstd::String::npos);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 }
 
@@ -87,7 +87,7 @@ TEST_CASE("FileReaderUtility - Error Handling") {
         CHECK_THROWS_AS(reader(test_dir).get(),
                         dftracer::utils::common::DFTUtilsException);
 
-        (void)dstd::fs::remove(test_dir);
+        dstd::fs::remove(test_dir).discard();
     }
 }
 
@@ -99,7 +99,7 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
         {
             dstd::String ofs;
             ofs += "x";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
         Text content = reader(test_file).get();
@@ -107,7 +107,7 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
         CHECK(content.size() == 1);
         CHECK(content.content == "x");
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("1KB file") {
@@ -116,14 +116,14 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
             for (int i = 0; i < 1024; ++i) {
                 ofs += "a";
             }
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
         Text content = reader(test_file).get();
 
         CHECK(content.size() == 1024);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("Large file (100KB)") {
@@ -132,14 +132,14 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
             for (int i = 0; i < 100 * 1024; ++i) {
                 ofs += "b";
             }
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
         Text content = reader(test_file).get();
 
         CHECK(content.size() == 100 * 1024);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 }
 
@@ -151,7 +151,7 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
         {
             dstd::String ofs;
             ofs += "\n\n\n\n\n";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
         Text content = reader(test_file).get();
@@ -159,7 +159,7 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
         CHECK(content.size() == 5);
         CHECK(content.content == "\n\n\n\n\n");
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("Mixed line endings") {
@@ -168,7 +168,7 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
             ofs += "Line 1\n";
             ofs += "Line 2\r\n";
             ofs += "Line 3\n";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
         Text content = reader(test_file).get();
@@ -177,20 +177,20 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
         CHECK(content.content.find("Line 2") != dstd::String::npos);
         CHECK(content.content.find("Line 3") != dstd::String::npos);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("No trailing newline") {
         {
-            (void)dstd::fs::write_file(dstd::PathView(test_file),
-                                       "No newline at end");
+            dstd::fs::write_file(dstd::PathView(test_file), "No newline at end")
+                .discard();
         }
 
         Text content = reader(test_file).get();
 
         CHECK(content.content == "No newline at end");
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 }
 
@@ -205,7 +205,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
             ofs += "[2024-01-01 10:00:00] INFO: Application started\n";
             ofs += "[2024-01-01 10:00:01] DEBUG: Loading configuration\n";
             ofs += "[2024-01-01 10:00:02] INFO: Configuration loaded\n";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
         Text content = reader(test_file).get();
@@ -215,7 +215,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
         CHECK(content.content.find("DEBUG: Loading configuration") !=
               dstd::String::npos);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("CSV file") {
@@ -225,7 +225,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
             ofs += "1,Alice,100\n";
             ofs += "2,Bob,200\n";
             ofs += "3,Charlie,300\n";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
         Text content = reader(test_file).get();
@@ -233,16 +233,17 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
         CHECK(content.content.find("id,name,value") != dstd::String::npos);
         CHECK(content.content.find("Alice") != dstd::String::npos);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("JSON file") {
         {
-            (void)dstd::fs::write_file(dstd::PathView(test_file), R"({
+            dstd::fs::write_file(dstd::PathView(test_file), R"({
   "name": "test",
   "value": 42,
   "items": [1, 2, 3]
-})");
+})")
+                .discard();
         }
 
         Text content = reader(test_file).get();
@@ -250,7 +251,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
         CHECK(content.content.find("\"name\": \"test\"") != dstd::String::npos);
         CHECK(content.content.find("\"value\": 42") != dstd::String::npos);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 }
 
@@ -264,11 +265,13 @@ TEST_CASE("FileReaderUtility - Composition with find_all") {
     {
         dstd::String ofs;
         ofs += "Content 1";
-        (void)dstd::fs::write_file(dstd::PathView(test_dir / "file1.txt"), ofs);
+        dstd::fs::write_file(dstd::PathView(test_dir / "file1.txt"), ofs)
+            .discard();
     }
     {
-        (void)dstd::fs::write_file(dstd::PathView(test_dir / "file2.txt"),
-                                   "Content 2");
+        dstd::fs::write_file(dstd::PathView(test_dir / "file2.txt"),
+                             "Content 2")
+            .discard();
     }
 
     // Scan and read

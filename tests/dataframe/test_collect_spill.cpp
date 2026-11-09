@@ -49,7 +49,7 @@ struct SpillDirVar {
     }
     ~SpillDirVar() {
         ::unsetenv(DIR_VAR);
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
     std::size_t entries() const {
         std::size_t n = 0;
@@ -202,7 +202,7 @@ TEST_SUITE("collect spill") {
         CHECK(run_path.str().rfind(var.dir.str(), 0) == 0);
         {
             dftracer::utils::dataframe::spill::Dir d;
-            (void)dstd::fs::write_file(dstd::PathView(d.run_path(0)), "x");
+            dstd::fs::write_file(dstd::PathView(d.run_path(0)), "x").discard();
             CHECK(var.entries() == 1);
         }
         CHECK(var.entries() == 0);
@@ -211,7 +211,7 @@ TEST_SUITE("collect spill") {
     TEST_CASE("an unusable directory fails naming it and the variable") {
         SpillDirVar var("dftu_cs_bad");
         const dstd::Path blocker = var.dir / "file";
-        (void)dstd::fs::write_file(dstd::PathView(blocker), "x");
+        dstd::fs::write_file(dstd::PathView(blocker), "x").discard();
         const dstd::Path bad = blocker / "sub";
         ::setenv(DIR_VAR, bad.c_str(), 1);
         const DataFrame df = make_frame();

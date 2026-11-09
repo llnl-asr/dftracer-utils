@@ -69,12 +69,12 @@ dstd::String write_members(const dstd::String& dir, const dstd::String& name,
                            std::size_t member = 1024) {
     const auto plain = dir + "/" + name + ".pfw";
     {
-        (void)dstd::fs::write_file(dstd::PathView(plain), body);
+        dstd::fs::write_file(dstd::PathView(plain), body).discard();
     }
     const auto gz = plain + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, member));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 

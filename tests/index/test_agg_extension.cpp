@@ -57,11 +57,11 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
                 R"("ts":)",
                 start_us + static_cast<std::uint64_t>(i) * 1000,
                 R"(,"args":{"hhash":"h1","util":)", i, "}}\n");
-        (void)dstd::fs::write_file(dstd::PathView(pfw), out);
+        dstd::fs::write_file(dstd::PathView(pfw), out).discard();
     }
     const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 

@@ -176,7 +176,7 @@ TEST_SUITE("DFTracerInfo") {
         // Rewrite the same file with more events; the index is now stale.
         auto raw = env.create_dft_test_gzip_file(300);
         REQUIRE(!raw.empty());
-        (void)dstd::fs::remove(f);
+        dstd::fs::remove(f).discard();
         REQUIRE(dstd::fs::rename(raw, f).has_value());
 
         long n2 = valid_events(run_info_capture(binary, {env.dir()}, &rc));

@@ -46,12 +46,12 @@ dstd::String write_nginx(const dstd::String& dir, int records) {
             R"(.25,"upstream":"u)", i / 300, R"(","path":"/p)", i % 5, "\"}\n");
     const auto plain = dir + "/access.ndjson";
     {
-        (void)dstd::fs::write_file(dstd::PathView(plain), out);
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                8 * 1024));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 
@@ -406,20 +406,22 @@ TEST_SUITE("SchemaRegistry") {
         dftu_utils_test::TestEnvironment env(1);
         const auto dir = env.dir() + "/specs";
         REQUIRE(dstd::fs::create_directories(dir).has_value());
-        (void)dstd::fs::write_file(dstd::PathView(dir + "/a.yaml"),
-                                   "id: dir_a\n");
-        (void)dstd::fs::write_file(dstd::PathView(dir + "/b.json"),
-                                   R"({"id":"dir_b","extends":"dir_a"})");
-        (void)dstd::fs::write_file(dstd::PathView(dir + "/notes.txt"),
-                                   "not a spec");
+        dstd::fs::write_file(dstd::PathView(dir + "/a.yaml"), "id: dir_a\n")
+            .discard();
+        dstd::fs::write_file(dstd::PathView(dir + "/b.json"),
+                             R"({"id":"dir_b","extends":"dir_a"})")
+            .discard();
+        dstd::fs::write_file(dstd::PathView(dir + "/notes.txt"), "not a spec")
+            .discard();
         index::load_schemas(dir);
         REQUIRE(index::find_schema("dir_b") != nullptr);
         index::load_schemas(dir);
 
         const auto bad = env.dir() + "/broken";
         REQUIRE(dstd::fs::create_directories(bad).has_value());
-        (void)dstd::fs::write_file(dstd::PathView(bad + "/c.yaml"),
-                                   "id: dir_c\nbogus: 1\n");
+        dstd::fs::write_file(dstd::PathView(bad + "/c.yaml"),
+                             "id: dir_c\nbogus: 1\n")
+            .discard();
         const auto what = error_of([&] { index::load_schemas(bad); });
         CHECK(mentions(what, "c.yaml"));
         CHECK(mentions(what, "bogus"));
@@ -467,7 +469,7 @@ TEST_SUITE("SchemaRegistry") {
         REQUIRE(
             dstd::fs::create_directories(index_dir + "/schemas").has_value());
         // path_budget 1: the always-indexed field and the first other path.
-        (void)dstd::fs::write_file(
+        dstd::fs::write_file(
             dstd::PathView(index_dir + "/schemas/nginx.yaml"),
             common::str_cat(
                 "id: idx_nginx\n"
@@ -477,7 +479,8 @@ TEST_SUITE("SchemaRegistry") {
                 "  request_time: {type: float}\n"
                 "  upstream: {type: string, optional: true, always_index: "
                 "true}\n"
-                "index: {path_budget: 1}\n"));
+                "index: {path_budget: 1}\n"))
+            .discard();
         index::IndexerOptions o;
         o.index_dir = index_dir;
         auto indexer =
@@ -535,12 +538,12 @@ TEST_SUITE("SchemaDetection") {
         dstd::String plain(dstd::StringView(env.dir()));
         plain += "/";
         plain += name;
-        (void)dstd::fs::write_file(dstd::PathView(plain), text);
+        dstd::fs::write_file(dstd::PathView(plain), text).discard();
         if (!gz) return plain;
         const auto out = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(dstd::String(plain),
                                                        dstd::String(out)));
-        (void)dstd::fs::remove(plain);
+        dstd::fs::remove(plain).discard();
         return out;
     }
 
@@ -720,12 +723,14 @@ TEST_SUITE("SchemaDetection") {
     TEST_CASE("file detection is cached until the file changes") {
         dftu_utils_test::TestEnvironment env(1);
         const auto path = env.dir() + "/c.ndjson";
-        (void)dstd::fs::write_file(dstd::PathView(path),
-                                   common::str_cat(R"({"k":1})", "\n"));
+        dstd::fs::write_file(dstd::PathView(path),
+                             common::str_cat(R"({"k":1})", "\n"))
+            .discard();
         CHECK(index::detect_file_schema(path).id == "generic");
-        (void)dstd::fs::write_file(
+        dstd::fs::write_file(
             dstd::PathView(path),
-            common::str_cat(dft_event(1), "\n", dft_event(2), "\n"));
+            common::str_cat(dft_event(1), "\n", dft_event(2), "\n"))
+            .discard();
         CHECK(index::detect_file_schema(path).id == "dftracer");
     }
 

@@ -960,7 +960,7 @@ struct Bench {
         return true;
     }
 
-    void cleanup() { (void)dftracer::utils::dstd::fs::remove_all(root); }
+    void cleanup() { dftracer::utils::dstd::fs::remove_all(root).discard(); }
 
     dstd::String case_dir(const dstd::String& name) {
         return root + "/" + dstd::to_string(case_index++) + "-" + name;
@@ -1391,7 +1391,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
     if (keep_dir) {
         row.keep_dir = dir;
     } else {
-        (void)dftracer::utils::dstd::fs::remove_all(dir);
+        dftracer::utils::dstd::fs::remove_all(dir).discard();
     }
     return row;
 }
@@ -1731,7 +1731,7 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
     row.ns_commit =
         static_cast<double>(commit_nanos) / static_cast<double>(opt.commits);
     writer.reset();
-    (void)dftracer::utils::dstd::fs::remove_all(dir);
+    dftracer::utils::dstd::fs::remove_all(dir).discard();
     return row;
 }
 
@@ -1937,7 +1937,7 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
             }
         }
     }
-    (void)dftracer::utils::dstd::fs::remove_all(dir);
+    dftracer::utils::dstd::fs::remove_all(dir).discard();
     return ok;
 }
 
@@ -2260,7 +2260,7 @@ bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
                             copies - 1);
         }
     }
-    (void)dftracer::utils::dstd::fs::remove_all(dir);
+    dftracer::utils::dstd::fs::remove_all(dir).discard();
     return ok;
 }
 
@@ -2333,7 +2333,7 @@ bool Bench::run() {
             if (do_query) {
                 run_query_case(workload, query_dir);
                 if (!query_dir.empty()) {
-                    (void)dftracer::utils::dstd::fs::remove_all(query_dir);
+                    dftracer::utils::dstd::fs::remove_all(query_dir).discard();
                 }
             }
         }

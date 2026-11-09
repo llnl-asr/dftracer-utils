@@ -483,7 +483,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // Empty select: every column, including both "name" and "args.name".
@@ -542,7 +542,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         {
             StringSink index_build;
@@ -643,7 +643,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         {
             StringSink index_build;
@@ -750,7 +750,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // Non-deterministic corruption: repeat so an uninitialized/garbage read
@@ -864,7 +864,7 @@ TEST_SUITE("View") {
                     << R"(,"dur":5,"args":{}})" << "\n";
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw, gz);
-            (void)dstd::fs::remove(pfw);
+            dstd::fs::remove(pfw).discard();
         };
         write_trace(dir + "/a.pfw.gz", "AAA", 1, 10);
         write_trace(dir + "/b.pfw.gz", "BBB", 2, 20);

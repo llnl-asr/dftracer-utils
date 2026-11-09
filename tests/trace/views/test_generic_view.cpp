@@ -41,7 +41,7 @@ dstd::String write_ndjson(TestEnvironment& env, const dstd::String& name) {
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     return gz;
@@ -207,7 +207,7 @@ TEST_SUITE("GenericView") {
                    R"("ph":"M","args":{"name":"host","value":"h1"}})"
                 << "\n";
             REQUIRE(dftu_utils_test::compress_file_to_gzip(meta, meta + ".gz"));
-            (void)dstd::fs::remove(meta);
+            dstd::fs::remove(meta).discard();
         }
         // Unindexed, then indexed with each file's own detection.
         auto rows = [&] {

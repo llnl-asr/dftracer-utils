@@ -140,7 +140,7 @@ TEST_SUITE("QueryCache") {
 
         // Both caches are disposable. The index itself is not part of them.
         dstd::fs::remove_all(rollups_of(gz)).has_value();
-        (void)dstd::fs::remove_all(views_of(gz));
+        dstd::fs::remove_all(views_of(gz)).discard();
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
         StringSink again;
         const auto st = View::from_file(dstd::String(gz), dstd::String(idx))

@@ -214,7 +214,7 @@ TEST_CASE("Replay fidelity - sync path") {
     auto stats = analyze(rec.samples);
     check_fidelity(stats, "sync");
 
-    (void)dstd::fs::remove_all(temp_dir);
+    dstd::fs::remove_all(temp_dir).discard();
 }
 
 TEST_CASE("Replay fidelity - pipelined path") {
@@ -251,7 +251,7 @@ TEST_CASE("Replay fidelity - pipelined path") {
     auto stats = analyze(rec.samples);
     check_fidelity(stats, "pipelined");
 
-    (void)dstd::fs::remove_all(temp_dir);
+    dstd::fs::remove_all(temp_dir).discard();
 }
 
 TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
@@ -289,7 +289,7 @@ TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
                                  "Valgrind/CI slowdown)");
     check_fidelity(stats, "anchor-reset");
 
-    (void)dstd::fs::remove_all(temp_dir);
+    dstd::fs::remove_all(temp_dir).discard();
 }
 
 TEST_CASE("Replay pipelined - files replay at the same time") {
@@ -339,7 +339,7 @@ TEST_CASE("Replay pipelined - files replay at the same time") {
     CHECK(result.pid_counts[PID_A] == N);
     CHECK(result.pid_counts[PID_B] == N);
 
-    (void)dstd::fs::remove_all(temp_dir);
+    dstd::fs::remove_all(temp_dir).discard();
 }
 
 TEST_CASE("Replay pipelined - each file keeps its own timeline") {

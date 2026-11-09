@@ -83,12 +83,12 @@ dstd::String write_trace(const dstd::String& dir, int n,
     const dstd::String pfw =
         dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw";
     {
-        (void)dstd::fs::write_file(dstd::PathView(pfw), out);
+        dstd::fs::write_file(dstd::PathView(pfw), out).discard();
     }
     const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -353,11 +353,11 @@ TEST_SUITE("AggPartialsStore") {
         }
         text += "]\n";
         const dstd::String pfw = env.dir() + "/f.pfw";
-        (void)dstd::fs::write_file(dstd::PathView(pfw), text);
+        dstd::fs::write_file(dstd::PathView(pfw), text).discard();
         const dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             pfw, gz, CHECKPOINT_SIZE));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         const auto index_dir = index_dir_of(env);
         build_seconds({gz}, index_dir);
 

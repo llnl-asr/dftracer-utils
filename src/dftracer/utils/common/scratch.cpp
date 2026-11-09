@@ -33,13 +33,13 @@ dstd::String lower(dstd::String s) {
 
 bool writable_dir(dstd::PathView dir) {
     // A failed create_directories shows up as a missing directory below.
-    (void)dstd::fs::create_directories(dir);
+    dstd::fs::create_directories(dir).discard();
     const auto is_dir = dstd::fs::is_directory(dir);
     if (!is_dir || !*is_dir) return false;
     const dstd::Path probe =
         dir / str_cat(".dftracer_probe_", static_cast<long>(::getpid()));
     if (!dstd::fs::create_directory(probe.view())) return false;
-    (void)dstd::fs::remove(probe.view());
+    dstd::fs::remove(probe.view()).discard();
     return true;
 }
 
@@ -229,7 +229,7 @@ ScratchSession::ScratchSession(ScratchSession&& other) noexcept
 
 ScratchSession::~ScratchSession() {
     if (dir_.empty() || keep_) return;
-    (void)dstd::fs::remove_all(dir_.view());
+    dstd::fs::remove_all(dir_.view()).discard();
 }
 
 dstd::Optional<ScratchSession> staged_build_scratch(
@@ -250,8 +250,8 @@ dstd::Optional<ScratchSession> staged_build_scratch(
 
 void publish_path(dstd::PathView src, dstd::PathView dst) {
     const dstd::PathView parent = dst.parent();
-    if (!parent.empty()) (void)dstd::fs::create_directories(parent);
-    (void)dstd::fs::remove_all(dst);
+    if (!parent.empty()) dstd::fs::create_directories(parent).discard();
+    dstd::fs::remove_all(dst).discard();
 
     if (dstd::fs::rename(src, dst)) return;
 
@@ -263,7 +263,7 @@ void publish_path(dstd::PathView src, dstd::PathView dst) {
             ErrorCode::Io, str_cat("failed to publish ", src.str(), " to ",
                                    dst.str(), ": ", copied.error().message()));
     }
-    (void)dstd::fs::remove_all(src);
+    dstd::fs::remove_all(src).discard();
 }
 
 }  // namespace dftracer::utils::common

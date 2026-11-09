@@ -110,10 +110,11 @@ void append(dstd::Vector<std::uint8_t>& to, const dstd::String& text) {
 
 void write_file(const dstd::String& path,
                 const dstd::Vector<std::uint8_t>& bytes) {
-    (void)dstd::fs::write_file(
+    dstd::fs::write_file(
         dstd::PathView(path),
         dstd::StringView(reinterpret_cast<const char*>(bytes.data()),
-                         bytes.size()));
+                         bytes.size()))
+        .discard();
 }
 
 dstd::Vector<std::uint8_t> one_big_member(const Trace& t) {
@@ -173,7 +174,7 @@ struct Files {
         write_file(big, one_big_member(trace));
         write_file(many, many_members(trace));
     }
-    ~Files() { (void)dstd::fs::remove_all(dir); }
+    ~Files() { dstd::fs::remove_all(dir).discard(); }
 };
 
 std::size_t inflate_mismatches(
@@ -443,7 +444,7 @@ TEST_SUITE("BigMemberReads") {
                       lines_of(t.text, first, first + 2));
                 (newline_before ? after_newline : mid_line) = true;
             }
-            (void)dstd::fs::remove_all(dir);
+            dstd::fs::remove_all(dir).discard();
         }
         CHECK(mid_line);
         CHECK(after_newline);
@@ -521,7 +522,7 @@ TEST_SUITE("BigMemberReads") {
             CHECK(inflate_mismatches(path, text, &cache,
                                      hinted ? &heads : nullptr) == 0);
         }
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 
     TEST_CASE(
@@ -555,7 +556,7 @@ TEST_SUITE("BigMemberReads") {
                       t.text.substr(expect_from));
                 (newline_before ? after_newline : mid) = true;
             }
-            (void)dstd::fs::remove_all(dir);
+            dstd::fs::remove_all(dir).discard();
         }
         CHECK(mid);
         CHECK(after_newline);
@@ -613,6 +614,6 @@ TEST_SUITE("BigMemberReads") {
         const std::size_t numbered = ix.indexer->line_count();
         CHECK(ix.read_lines(numbered - 2, numbered) ==
               lines_of(t.text, numbered - 2, numbered));
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 }

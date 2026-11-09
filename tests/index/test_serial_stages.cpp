@@ -42,7 +42,8 @@ constexpr int VIEW_FILES = 12;
 constexpr std::size_t VIEW_WORKERS = 4;
 
 void write_sized_file(const dstd::String& path, std::size_t bytes) {
-    (void)dstd::fs::write_file(dstd::PathView(path), dstd::String(bytes, 'x'));
+    dstd::fs::write_file(dstd::PathView(path), dstd::String(bytes, 'x'))
+        .discard();
 }
 
 dstd::String write_small_trace(const dstd::String& dir, int n) {
@@ -109,7 +110,8 @@ dstd::String write_corrupt_trace(const dstd::String& dir, int n) {
     char name[32];
     std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
     const auto path = dir + name;
-    (void)dstd::fs::write_file(dstd::PathView(path), dstd::String(4096, 'x'));
+    dstd::fs::write_file(dstd::PathView(path), dstd::String(4096, 'x'))
+        .discard();
     return path;
 }
 

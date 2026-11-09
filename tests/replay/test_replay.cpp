@@ -283,7 +283,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
     }
 
     // Cleanup
-    (void)dstd::fs::remove_all(temp_dir);
+    dstd::fs::remove_all(temp_dir).discard();
 }
 
 TEST_CASE("DFTracer Replay - Trace structure") {

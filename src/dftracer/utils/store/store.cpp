@@ -453,7 +453,7 @@ Store::State::~State() {
     {
         memory::detail::Scope in_pool(*pool);
         drop_published();
-        (void)close_blocking();
+        close_blocking().discard();
     }
     std::lock_guard<std::mutex> lock(registry_mutex());
     auto& states = registry();

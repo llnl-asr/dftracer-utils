@@ -32,7 +32,7 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
     }
     const dstd::String gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     index::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
     return gz;
 }

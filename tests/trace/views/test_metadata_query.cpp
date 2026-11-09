@@ -49,7 +49,7 @@ dstd::String create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
     ofs.close();
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -175,7 +175,7 @@ dstd::String create_threaded_trace(TestEnvironment& env) {
     const dstd::String gz = pfw + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 4 * 1024));
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     return gz;

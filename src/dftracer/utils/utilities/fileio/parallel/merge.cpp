@@ -82,7 +82,7 @@ coro::CoroTask<int> merge_shards(dstd::CStringView target,
     co_await ::dftracer::utils::runtime::io::close(static_cast<int>(out_fd));
 
     for (const auto& shard : shards) {
-        (void)dstd::fs::remove(dstd::PathView(shard));
+        dstd::fs::remove(dstd::PathView(shard)).discard();
     }
     co_return 0;
 }

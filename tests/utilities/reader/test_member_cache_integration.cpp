@@ -43,7 +43,7 @@ void write_single_member(const dstd::String& path,
     REQUIRE(m.has_value());
     dstd::String ofs;
     ofs.append(reinterpret_cast<const char*>(m->data()), m->size());
-    (void)dstd::fs::write_file(dstd::PathView(path), ofs);
+    dstd::fs::write_file(dstd::PathView(path), ofs).discard();
 }
 
 std::int64_t read_line_count(const dstd::String& gz, const dstd::String& idx) {
@@ -136,6 +136,6 @@ TEST_SUITE("member_cache_integration") {
         CHECK(decs < reqs);
         CHECK(decs * 2 < reqs);
 
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 }

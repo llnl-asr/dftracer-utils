@@ -70,7 +70,7 @@ struct Fixture {
             co_await indexer->build_async();
         });
     }
-    ~Fixture() { (void)dstd::fs::remove_all(dir); }
+    ~Fixture() { dstd::fs::remove_all(dir).discard(); }
 
     dstd::String read_from(std::size_t start) {
         reader::internal::GzipReader reader(indexer);

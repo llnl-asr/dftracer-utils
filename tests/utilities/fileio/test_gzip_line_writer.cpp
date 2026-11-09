@@ -154,7 +154,7 @@ TEST_CASE("GzipLineWriter - cut rule, long line, cut(), index equality") {
                       [](const MemberInfo& m) { return m.uc_size > 5 * MS; }));
     (void)long_alone;
     expect_equal_to_index(w.members, index_of(dstd::String(path.str())), 0);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 
     // cut() ends the current member at once; a long line cut off is alone.
     GzipWriterOptions c;
@@ -168,7 +168,7 @@ TEST_CASE("GzipLineWriter - cut rule, long line, cut(), index equality") {
     CHECK(w2.members[2].uc_size > 5 * MS);
     CHECK(w2.members[0].lines == 1);
     expect_equal_to_index(w2.members, index_of(dstd::String(path.str())), 0);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("GzipLineWriter - order, bounded in flight, fold once") {
@@ -218,7 +218,7 @@ TEST_CASE("GzipLineWriter - order, bounded in flight, fold once") {
     CHECK(w.summary.peak_in_flight >= 1);
     CHECK(max_running.load() <= static_cast<int>(WORKERS));
     expect_equal_to_index(w.members, index_of(dstd::String(path.str())), 0);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 
     GzipWriterOptions one;
     one.member_size = 4000;
@@ -226,7 +226,7 @@ TEST_CASE("GzipLineWriter - order, bounded in flight, fold once") {
     auto w1 = write_all(dstd::String(path.str()), std::move(one), pieces);
     CHECK(w1.summary.peak_in_flight <= 3);
     CHECK(gunzip_all(dstd::String(path.str())) == all);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("GzipLineWriter - part files") {
@@ -269,7 +269,7 @@ TEST_CASE("GzipLineWriter - part files") {
         ++on_disk;
     }
     CHECK(on_disk == files);
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("GzipLineWriter - compress false") {
@@ -293,7 +293,7 @@ TEST_CASE("GzipLineWriter - compress false") {
         CHECK(m.c_offset == m.uc_offset);
         CHECK(m.c_size == m.uc_size);
     }
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("GzipLineWriter - errors") {
@@ -305,7 +305,7 @@ TEST_CASE("GzipLineWriter - errors") {
             write_all(dstd::String(path.str()), std::move(o), {"{\"a\":1}"});
         CHECK(!w.err.has_value());
         CHECK(w.err.error().is_code(common::ErrorCode::InvalidArgument));
-        (void)dstd::fs::remove(path);
+        dstd::fs::remove(path).discard();
     }
     SUBCASE("a worker failure removes the output") {
         auto path = dftu_utils_test::make_unique_test_path("glw_fail.pfw.gz");
@@ -352,7 +352,7 @@ TEST_CASE("GzipLineWriter - errors") {
         chmod(dir.c_str(), 0755);
         CHECK(failed);
         CHECK(!dstd::fs::exists(path).value());
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 }
 
@@ -379,7 +379,7 @@ TEST_CASE("GzipLineWriterBlocking - round trip") {
     CHECK(s->members == members.size());
     CHECK(gunzip_all(dstd::String(path.str())) == all);
     expect_equal_to_index(members, index_of(dstd::String(path.str())), 0);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("GzipLineWriter - destroying without close aborts") {
@@ -410,7 +410,7 @@ TEST_CASE("GzipLineWriter - destroying without close aborts") {
         ++left;
     }
     CHECK(left == 0);
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("GzipLineWriter - a moved writer closes once") {
@@ -433,7 +433,7 @@ TEST_CASE("GzipLineWriter - a moved writer closes once") {
         co_return;
     });
     CHECK(gunzip_all(dstd::String(path.str())) == all);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 namespace {
@@ -492,7 +492,7 @@ TEST_CASE("GzipLineWriter - close(tail) without a newline") {
         CHECK(s->uc_bytes == all.size() + 20);
     });
     CHECK(gunzip_all(dstd::String(path.str())) == all + "tail-without-newline");
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 
     // Only a tail: it forms its own member.
     auto only = dftu_utils_test::make_unique_test_path("glw_tail2.pfw.gz");
@@ -506,7 +506,7 @@ TEST_CASE("GzipLineWriter - close(tail) without a newline") {
     REQUIRE(s.has_value());
     CHECK(s->members == 1);
     CHECK(gunzip_all(dstd::String(only.str())) == "abc");
-    (void)dstd::fs::remove(only);
+    dstd::fs::remove(only).discard();
 }
 
 TEST_CASE("GzipLineWriter - named parts, header, footer, on_part") {
@@ -583,7 +583,7 @@ TEST_CASE("GzipLineWriter - named parts, header, footer, on_part") {
     auto w1 = write_all(dstd::String(one), std::move(o1), {"a\n", "b\n"});
     CHECK(slurp(dstd::String(one)) == "H\na\nb\nF\n");
     CHECK(w1.summary.lines == 2);
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("GzipLineWriter - fold sees each member's decoded bytes once") {
@@ -613,7 +613,7 @@ TEST_CASE("GzipLineWriter - fold sees each member's decoded bytes once") {
     for (std::size_t i = 0; i < idx.size(); ++i)
         CHECK(inflate_member(file, idx[i].c_offset, idx[i].c_size) ==
               folded[i]);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE(
@@ -679,8 +679,8 @@ TEST_CASE("GzipLineWriter - append_with equals append") {
         REQUIRE(co_await wr->close());
     });
     CHECK(slurp(dstd::String(a.str())) == slurp(dstd::String(b.str())));
-    (void)dstd::fs::remove(a);
-    (void)dstd::fs::remove(b);
+    dstd::fs::remove(a).discard();
+    dstd::fs::remove(b).discard();
 }
 
 TEST_CASE("GzipLineWriter - unordered mode") {
@@ -759,7 +759,7 @@ TEST_CASE("GzipLineWriter - unordered mode") {
         auto pt = inflate_member(file, m.c_offset, m.c_size);
         CHECK(pt.back() == '\n');
     }
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("GzipLineWriter - producers fill their own members") {
@@ -830,7 +830,7 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
     const dstd::String file = slurp(dstd::String(path.str()));
     for (auto& m : index_of(dstd::String(path.str())))
         CHECK(inflate_member(file, m.c_offset, m.c_size).back() == '\n');
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("GzipLineWriter - producer refused when ordered, close needs flush") {
@@ -930,5 +930,5 @@ TEST_CASE("GzipLineWriter - producers stay within the memory budget") {
     const dstd::String text = gunzip_all(dstd::String(path.str()));
     CHECK(static_cast<std::uint64_t>(
               std::count(text.begin(), text.end(), '\n')) == expect_lines);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }

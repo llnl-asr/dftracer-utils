@@ -48,7 +48,7 @@ dstd::String make_gz(TestEnvironment& env, const dstd::String& body) {
     }
     dstd::String gz = pfw + ".gz";
     compress_file_to_gzip_multimember(pfw, gz, 512);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 

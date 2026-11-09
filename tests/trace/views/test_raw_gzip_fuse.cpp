@@ -77,7 +77,7 @@ dstd::String create_meta_trace(TestEnvironment& env) {
     }
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 600);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -314,7 +314,7 @@ TEST_SUITE("RawGzipFuse") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 600);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         dstd::String idx =
             dstd::String(determine_index_path(gz, env.dir() + "/ei"));
@@ -353,7 +353,7 @@ TEST_SUITE("RawGzipFuse") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 600);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         dstd::String idx =
             dstd::String(determine_index_path(gz, env.dir() + "/ei"));

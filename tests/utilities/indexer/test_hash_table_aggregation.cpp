@@ -26,7 +26,7 @@ void write_single_member(const dstd::String& path,
     REQUIRE(member.has_value());
     dstd::String ofs;
     ofs.append(reinterpret_cast<const char*>(member->data()), member->size());
-    (void)dstd::fs::write_file(dstd::PathView(path), ofs);
+    dstd::fs::write_file(dstd::PathView(path), ofs).discard();
 }
 
 // A trace with one FH metadata entry (hash "f00d" -> a file path) plus data

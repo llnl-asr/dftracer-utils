@@ -39,12 +39,12 @@ dstd::String write_ndjson(const dstd::String& dir, int records) {
                                (i % 2 ? "true" : "false"), "}\n");
     const auto plain = dir + "/generic.ndjson";
     {
-        (void)dstd::fs::write_file(dstd::PathView(plain), out);
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                8 * 1024));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 

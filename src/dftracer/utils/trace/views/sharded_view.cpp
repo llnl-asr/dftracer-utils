@@ -203,12 +203,14 @@ std::size_t consolidate_shard_set(const dstd::String& root) {
     dftracer::utils::index::release_root(root);
 
     // Cleanup after the merge, so a failed removal leaves only stray files.
-    (void)dstd::fs::remove(
-        dstd::PathView(dftracer::utils::index::shard_manifest_path(root)));
+    dstd::fs::remove(
+        dstd::PathView(dftracer::utils::index::shard_manifest_path(root)))
+        .discard();
     for (const auto& shard : manifest->shards)
-        (void)dstd::fs::remove_all((dstd::PathView(root) / shard.path).view());
-    (void)dstd::fs::remove(
-        dstd::PathView(dftracer::utils::index::shards_dir(root)));
+        dstd::fs::remove_all((dstd::PathView(root) / shard.path).view())
+            .discard();
+    dstd::fs::remove(dstd::PathView(dftracer::utils::index::shards_dir(root)))
+        .discard();
     return files;
 }
 

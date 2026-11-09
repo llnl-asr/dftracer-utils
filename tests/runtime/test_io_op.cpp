@@ -74,7 +74,7 @@ class TempDir {
         std::snprintf(path_, sizeof(path_), "%s/dftu_io_dir_XXXXXX", folder);
         REQUIRE(::mkdtemp(path_) != nullptr);
     }
-    ~TempDir() { (void)dstd::fs::remove_all(dstd::PathView(path_)); }
+    ~TempDir() { dstd::fs::remove_all(dstd::PathView(path_)).discard(); }
     dstd::String join(const char* name) const {
         return dstd::String(path_) + "/" + name;
     }

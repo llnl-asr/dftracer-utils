@@ -71,7 +71,7 @@ static dstd::String create_variable_line_test_file(
         return "";
     }
 
-    (void)dstd::fs::remove(txt_file);
+    dstd::fs::remove(txt_file).discard();
     return gz_file;
 }
 
@@ -761,7 +761,7 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         f.close();
 
         compress_file_to_gzip(txt_file, gz_file);
-        (void)dstd::fs::remove(txt_file);
+        dstd::fs::remove(txt_file).discard();
 
         dstd::String idx_file = env.get_index_path(gz_file);
 

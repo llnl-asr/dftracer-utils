@@ -80,7 +80,7 @@ dstd::String write_trace(TestEnvironment& env,
     }
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     if (build)
         index::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
     return gz;

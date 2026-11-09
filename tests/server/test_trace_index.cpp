@@ -168,7 +168,7 @@ TEST_CASE("TraceIndex - empty directory") {
     rt.block_on(body());
     CHECK(count.load() == 0);
 
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("TraceIndex - directory and index_dir accessors") {

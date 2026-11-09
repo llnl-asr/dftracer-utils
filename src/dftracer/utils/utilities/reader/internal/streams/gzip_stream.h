@@ -130,7 +130,7 @@ class GzipStream : public StreamBase {
         max_file_bytes_ = 0;
         is_active_ = false;
         is_finished_ = false;
-        (void)fd_.close();
+        fd_.close().discard();
         file_offset_ = 0;
         inflater_.reset();
         member_ = dftracer::utils::index::gzip::GzipMemberRecord();
@@ -146,7 +146,7 @@ class GzipStream : public StreamBase {
             throw ReaderError(ReaderError::FileIoError,
                               "Failed to open file: " + path);
         }
-        (void)file->advise(dstd::Advice::Sequential);
+        file->advise(dstd::Advice::Sequential).discard();
         return std::move(*file);
     }
 

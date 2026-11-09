@@ -78,12 +78,12 @@ dstd::String write_trace(const dstd::String& dir) {
                 R"("tid":1,"ts":)", ts + 5'000,
                 R"(,"dur":10,"args":{"size":4096}})", "\n");
         }
-        (void)dstd::fs::write_file(dstd::PathView(pfw), out);
+        dstd::fs::write_file(dstd::PathView(pfw), out).discard();
     }
     const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 

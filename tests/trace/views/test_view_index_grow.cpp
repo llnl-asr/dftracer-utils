@@ -77,8 +77,8 @@ dstd::String member(const dstd::String& dir, const dstd::String& text) {
     }
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
     dstd::String bytes = read_bytes(gz);
-    (void)dstd::fs::remove(plain);
-    (void)dstd::fs::remove(gz);
+    dstd::fs::remove(plain).discard();
+    dstd::fs::remove(gz).discard();
     return bytes;
 }
 
@@ -415,7 +415,7 @@ TEST_SUITE("ViewIndexGrow") {
         start_trace(dir, gz, MEMBER_EVENTS, "A", "first");
         run(build_tier(gz));
 
-        (void)dstd::fs::remove(gz);
+        dstd::fs::remove(gz).discard();
         start_trace(dir, gz, 2 * MEMBER_EVENTS, "B", "other");
         const auto result = run(resolve_file(gz));
         CHECK(result.stale_detected);

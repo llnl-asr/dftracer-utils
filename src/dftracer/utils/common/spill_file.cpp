@@ -30,7 +30,7 @@ dstd::Result<dstd::UniquePtr<SpillFile>> SpillFile::create() {
             str_cat("spill: cannot create a spill file in '", dir->str(), "' (",
                     std::strerror(errno), "); set ", constants::SPILL_DIR_ENV,
                     " to a writable directory"));
-    (void)dstd::fs::remove(dstd::PathView(path));
+    dstd::fs::remove(dstd::PathView(path)).discard();
     return f;
 }
 

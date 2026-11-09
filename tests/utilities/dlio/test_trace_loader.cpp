@@ -61,7 +61,7 @@ dstd::String write_rank(const dstd::String& dir, int file,
             }
         }
         ofs += "]\n";
-        (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
+        dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
     }
     const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(

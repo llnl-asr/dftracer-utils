@@ -325,7 +325,7 @@ TEST_SUITE("stats via View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         statistics::ViewStats s = run_stats(statistics::StatsView::from_file(

@@ -50,7 +50,7 @@ dstd::String make_x_trace(TestEnvironment& env, const dstd::String& tag,
     ofs.close();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -163,8 +163,8 @@ void check_merged_partials(
     views::merge_shard_set(dstd::String(root), dstd::String(out));
     dstd::String merged_idx = dstd::String(determine_index_path("x", out));
 
-    (void)dstd::fs::remove(a);
-    (void)dstd::fs::remove(b);
+    dstd::fs::remove(a).discard();
+    dstd::fs::remove(b).discard();
 
     dftracer::utils::trace::AggQuery sharded;
     sharded.config = config;
@@ -326,8 +326,8 @@ TEST_SUITE("ShardedView") {
         auto with_traces = canon(sharded.aggregate(configure).get());
         REQUIRE(with_traces.size() == 2);
 
-        (void)dstd::fs::remove(a);
-        (void)dstd::fs::remove(b);
+        dstd::fs::remove(a).discard();
+        dstd::fs::remove(b).discard();
         auto without_traces = canon(sharded.aggregate(configure).get());
         CHECK(without_traces == with_traces);
     }
@@ -533,7 +533,7 @@ TEST_SUITE("ShardedView") {
         }
         CHECK(moved == 1);
 
-        (void)dstd::fs::remove(store_b);
+        dstd::fs::remove(store_b).discard();
         REQUIRE(dstd::fs::rename(held, store_b).has_value());
 
         CHECK(views::consolidate_shard_set(dstd::String(root)) == 2);
@@ -580,8 +580,8 @@ TEST_SUITE("ShardedView") {
         CHECK(index::store::read_shard_manifest(root).has_value());
         CHECK_FALSE(index::store::read_shard_manifest(out).has_value());
 
-        (void)dstd::fs::remove(a);
-        (void)dstd::fs::remove(b);
+        dstd::fs::remove(a).discard();
+        dstd::fs::remove(b).discard();
         const dstd::String out_idx =
             dstd::String(determine_index_path("x", out));
         auto merged =

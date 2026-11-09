@@ -59,7 +59,7 @@ class LargeTestEnvironment {
     ~LargeTestEnvironment() {
         try {
             if (dstd::fs::exists(temp_dir_).value()) {
-                (void)dstd::fs::remove_all(temp_dir_);
+                dstd::fs::remove_all(temp_dir_).discard();
             }
         } catch (...) {
             // Ignore cleanup errors
@@ -108,7 +108,7 @@ class LargeTestEnvironment {
         // re-inflating from the start of a single giant member.
         bool success =
             compress_file_to_gzip_multimember(txt_file, gz_file, 512 * 1024);
-        (void)dstd::fs::remove(txt_file);
+        dstd::fs::remove(txt_file).discard();
         return success ? gz_file : "";
     }
 

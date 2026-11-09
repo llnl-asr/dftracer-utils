@@ -59,7 +59,7 @@ TEST_CASE("IpcWriter - basic write and close") {
     CHECK(result == 0);
     CHECK(dstd::fs::exists(path).value());
     CHECK(dstd::fs::file_size(path).value() > 0);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcWriter - multiple batches") {
@@ -93,7 +93,7 @@ TEST_CASE("IpcWriter - multiple batches") {
     CHECK(result == 0);
     CHECK(dstd::fs::exists(path).value());
     CHECK(dstd::fs::file_size(path).value() > 0);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcWriter - close without writing batches") {
@@ -111,7 +111,7 @@ TEST_CASE("IpcWriter - close without writing batches") {
     auto result = runtime.submit(task(), "test").get();
 
     CHECK(result == 0);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 // With no pooled slot every batch takes the overflow slot, which the writer
@@ -153,8 +153,8 @@ TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
         REQUIRE(write_file(bare, mode, 0) == 0);
         CHECK(dstd::fs::file_size(bare).value() ==
               dstd::fs::file_size(pooled).value());
-        (void)dstd::fs::remove(pooled);
-        (void)dstd::fs::remove(bare);
+        dstd::fs::remove(pooled).discard();
+        dstd::fs::remove(bare).discard();
     }
 }
 
@@ -186,12 +186,12 @@ TEST_CASE("IpcWriter - explicit ZSTD compression") {
     CHECK(result == 0);
     CHECK(dstd::fs::exists(path).value());
     CHECK(dstd::fs::file_size(path).value() > 0);
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("PartitionWriter - basic single file") {
     dstd::String dir = tmp_path("test_partition_basic");
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 
     Runtime runtime(2);
     PartitionWriteStats stats;
@@ -224,12 +224,12 @@ TEST_CASE("PartitionWriter - basic single file") {
     CHECK(stats.row_counts[0] == 100);
     CHECK(dstd::fs::exists(stats.files[0]).value());
 
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("PartitionRouter - NONE mode pass-through") {
     dstd::String dir = tmp_path("test_router_none");
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 
     PartitionConfig config;
     config.mode = PartitionConfig::Mode::None;
@@ -263,12 +263,12 @@ TEST_CASE("PartitionRouter - NONE mode pass-through") {
     CHECK(stats.partitions.size() == 1);
     CHECK(stats.partitions.count("") == 1);
 
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("PartitionRouter - COLUMN mode single column") {
     dstd::String dir = tmp_path("test_router_column");
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 
     PartitionConfig config;
     config.mode = PartitionConfig::Mode::Column;
@@ -315,7 +315,7 @@ TEST_CASE("PartitionRouter - COLUMN mode single column") {
     CHECK(dstd::fs::exists(dir + "/cat=POSIX").value());
     CHECK(dstd::fs::exists(dir + "/cat=APP").value());
 
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 #else

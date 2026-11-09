@@ -80,7 +80,7 @@ TEST_CASE("ScratchSession release keeps the directory") {
         s.release();
     }
     CHECK(dstd::fs::exists(dir).value());
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("publish_path moves a built directory to its destination") {

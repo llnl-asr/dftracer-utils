@@ -387,7 +387,7 @@ Result measure(const Options& opt, const dstd::String& input,
         r.compressed_bytes += dstd::fs::file_size(f).value();
 
     for (int i = 0; i < opt.build_runs; ++i) {
-        (void)dstd::fs::remove_all(index_dir);
+        dstd::fs::remove_all(index_dir).discard();
         require_ok(dstd::fs::create_directories(index_dir),
                    "create_directories");
         r.build_s.push_back(seconds([&] {

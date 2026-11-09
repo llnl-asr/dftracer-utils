@@ -255,7 +255,7 @@ TEST_CASE("plugin cxx: sendfile transfers a file into a socket") {
     dstd::String src = env.dir() + "/src.bin";
     const dstd::String body = "zero-copy transfer payload\n";
     {
-        (void)dstd::fs::write_file(dstd::PathView(src), body);
+        dstd::fs::write_file(dstd::PathView(src), body).discard();
     }
 
     int sv[2] = {-1, -1};
@@ -332,8 +332,8 @@ TEST_CASE("plugin cxx: merge_shards concatenates shard files into a target") {
         fa += "AAAA";
         dstd::String fb;
         fb += "BBBB";
-        (void)dstd::fs::write_file(dstd::PathView(a), fa);
-        (void)dstd::fs::write_file(dstd::PathView(b), fb);
+        dstd::fs::write_file(dstd::PathView(a), fa).discard();
+        dstd::fs::write_file(dstd::PathView(b), fb).discard();
     }
 
     HostFixture fx;

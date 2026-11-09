@@ -72,7 +72,7 @@ TEST_SUITE("detail stats via View") {
         }
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dstd::Vector<dstd::String> group_by{"name"};
@@ -108,7 +108,7 @@ TEST_SUITE("detail stats via View") {
         }
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dstd::Vector<dstd::String> group_by{"name"};

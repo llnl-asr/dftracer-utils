@@ -50,7 +50,7 @@ void write_events(const dstd::String& gz, const char* cat, int n,
             plain, gz, member_bytes));
     else
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
 }
 
 void rewrite_events(const dstd::String& gz, const char* cat, int n,

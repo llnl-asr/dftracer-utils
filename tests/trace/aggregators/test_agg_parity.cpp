@@ -177,7 +177,7 @@ dstd::String write_trace(const dstd::String& dir, int file, std::uint64_t seed,
     }
     const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -224,7 +224,7 @@ void write_dlio_traces(const dstd::String& dir) {
             ofs << "]\n";
         }
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, pfw + ".gz"));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
     }
 }
 

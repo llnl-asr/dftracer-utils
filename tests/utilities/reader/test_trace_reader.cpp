@@ -135,7 +135,7 @@ dstd::String gzip_fixture(const dstd::String& plain_path) {
         (dir / (dstd::String(dstd::PathView(plain_path).filename()) + ".gz"))
             .str());
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain_path, gz_path));
-    (void)dstd::fs::remove(plain_path);
+    dstd::fs::remove(plain_path).discard();
     return gz_path;
 }
 }  // namespace
@@ -346,7 +346,7 @@ TEST_SUITE("TraceReader") {
             out += common::str_cat(first_line, "\n");
             out += common::str_cat(second_line, "\n");
             out += common::str_cat(third_line, "\n");
-            (void)dstd::fs::write_file(dstd::PathView(test_file), out);
+            dstd::fs::write_file(dstd::PathView(test_file), out).discard();
         }
         auto gz_file = gzip_fixture(dstd::String(test_file.str()));
 
@@ -363,7 +363,7 @@ TEST_SUITE("TraceReader") {
         CHECK(lines[0].find(R"("name":"read")") != dstd::String::npos);
         CHECK(lines[1].find(R"("name":"write")") != dstd::String::npos);
 
-        (void)dstd::fs::remove(gz_file);
+        dstd::fs::remove(gz_file).discard();
     }
 
     TEST_CASE("read_lines plain file byte range skips partial first line") {
@@ -374,7 +374,7 @@ TEST_SUITE("TraceReader") {
             out += "alpha\n";
             out += "beta\n";
             out += "gamma\n";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), out);
+            dstd::fs::write_file(dstd::PathView(test_file), out).discard();
         }
         auto gz_file = gzip_fixture(dstd::String(test_file.str()));
 
@@ -389,7 +389,7 @@ TEST_SUITE("TraceReader") {
         CHECK(lines[0] == "beta");
         CHECK(lines[1] == "gamma");
 
-        (void)dstd::fs::remove(gz_file);
+        dstd::fs::remove(gz_file).discard();
     }
 
     TEST_CASE("read_raw indexed and unindexed produce same chunk count") {
@@ -490,7 +490,7 @@ TEST_SUITE("TraceReader") {
             out += common::str_cat(
                 R"({"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2000,"dur":20,"ph":"X","args":{"ret":2}})",
                 "\n");
-            (void)dstd::fs::write_file(dstd::PathView(test_file), out);
+            dstd::fs::write_file(dstd::PathView(test_file), out).discard();
         }
 
         const auto uncompressed_size = dstd::fs::file_size(test_file).value();
@@ -507,7 +507,7 @@ TEST_SUITE("TraceReader") {
         REQUIRE(lines.size() == 1);
         CHECK(lines[0].find(R"("name":"write")") != dstd::String::npos);
 
-        (void)dstd::fs::remove(gz_file);
+        dstd::fs::remove(gz_file).discard();
     }
 
     TEST_CASE("Query keeps the lines the DOM parser refuses") {
@@ -527,7 +527,7 @@ TEST_SUITE("TraceReader") {
                 out += refused_line(k, R"("name":"read","cat":"POSIX","pid":3,)"
                                        R"("tid":1,"ts":3,"dur":20,"ph":"X")") +
                        "\n";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), out);
+            dstd::fs::write_file(dstd::PathView(test_file), out).discard();
         }
         const auto uncompressed_size = dstd::fs::file_size(test_file).value();
         auto gz_file = gzip_fixture(dstd::String(test_file.str()));
@@ -543,7 +543,7 @@ TEST_SUITE("TraceReader") {
         for (const auto& line : lines)
             CHECK(line.find(R"("name":"write")") != dstd::String::npos);
 
-        (void)dstd::fs::remove(gz_file);
+        dstd::fs::remove(gz_file).discard();
     }
 
     TEST_CASE("Query keeps a line nested 100000 deep") {
@@ -558,7 +558,7 @@ TEST_SUITE("TraceReader") {
                 out.append(100000, ']');
                 out += "}}\n";
             }
-            (void)dstd::fs::write_file(dstd::PathView(test_file), out);
+            dstd::fs::write_file(dstd::PathView(test_file), out).discard();
         }
         const auto uncompressed_size = dstd::fs::file_size(test_file).value();
         auto gz_file = gzip_fixture(dstd::String(test_file.str()));
@@ -571,7 +571,7 @@ TEST_SUITE("TraceReader") {
         REQUIRE(lines.size() == 1);
         CHECK(lines[0].find(R"("name":"write")") != dstd::String::npos);
         CHECK(lines[0].size() > 200000);
-        (void)dstd::fs::remove(gz_file);
+        dstd::fs::remove(gz_file).discard();
     }
 
     TEST_CASE("The time metric is read from a line the DOM parser refuses") {
@@ -586,12 +586,12 @@ TEST_SUITE("TraceReader") {
                 out +=
                     R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":"X","args":{"ret":1}})"
                     "\n";
-                (void)dstd::fs::write_file(dstd::PathView(test_file), out);
+                dstd::fs::write_file(dstd::PathView(test_file), out).discard();
             }
             auto gz_file = gzip_fixture(dstd::String(test_file.str()));
             TraceReader reader({.file_path = dstd::String(gz_file)});
             CHECK(reader.read_time_metric().get() == trace::TimeMetric::Ns);
-            (void)dstd::fs::remove(gz_file);
+            dstd::fs::remove(gz_file).discard();
         }
     }
 
@@ -700,11 +700,11 @@ TEST_SUITE("TraceReader") {
                     R"({"ph":"X","name":"train","cat":"COMPUTE","pid":1,"tid":1,"ts":)",
                     (100000 + i), R"(,"dur":500,"args":{}})", "\n");
             }
-            (void)dstd::fs::write_file(dstd::PathView(pfw), out);
+            dstd::fs::write_file(dstd::PathView(pfw), out).discard();
         }
         dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         REQUIRE(dftu_utils_test::build_index(gz));
 
@@ -743,11 +743,11 @@ TEST_SUITE("TraceReader") {
                     R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
                     (1000 + i), R"(,"dur":10,"args":{}})", "\n");
             }
-            (void)dstd::fs::write_file(dstd::PathView(pfw), out);
+            dstd::fs::write_file(dstd::PathView(pfw), out).discard();
         }
         dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         REQUIRE(dftu_utils_test::build_index(gz));
 
@@ -801,11 +801,11 @@ TEST_SUITE("TraceReader") {
                     (200000 + i), R"(,"dur":10,"args":{"pad":")", pad, R"("}})",
                     "\n");
             }
-            (void)dstd::fs::write_file(dstd::PathView(pfw), out);
+            dstd::fs::write_file(dstd::PathView(pfw), out).discard();
         }
         dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         REQUIRE(dftu_utils_test::build_index(gz, "",
                                              /*checkpoint_size=*/32 * 1024));
@@ -923,7 +923,7 @@ TEST_SUITE("TraceReader::read_json") {
                     R"({"ph":"X","name":"train","cat":"COMPUTE","pid":2,"tid":2,"ts":)",
                     (100000 + i), R"(,"dur":500,"args":{}})", "\n");
             }
-            (void)dstd::fs::write_file(dstd::PathView(pfw), out);
+            dstd::fs::write_file(dstd::PathView(pfw), out).discard();
         }
 
         auto gz = gzip_fixture(pfw);
@@ -937,7 +937,7 @@ TEST_SUITE("TraceReader::read_json") {
         CHECK(line_count == json_count);
         CHECK(json_count == 100);
 
-        (void)dstd::fs::remove(gz);
+        dstd::fs::remove(gz).discard();
     }
 
     TEST_CASE("read_json works with index and chunk pruning") {
@@ -964,11 +964,11 @@ TEST_SUITE("TraceReader::read_json") {
                     (200000 + i), R"(,"dur":10,"args":{"pad":")", pad, R"("}})",
                     "\n");
             }
-            (void)dstd::fs::write_file(dstd::PathView(pfw), out);
+            dstd::fs::write_file(dstd::PathView(pfw), out).discard();
         }
         dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         REQUIRE(dftu_utils_test::build_index(gz, "",
                                              /*checkpoint_size=*/32 * 1024));
@@ -999,11 +999,12 @@ TEST_SUITE("TraceReader::read_json") {
     TEST_CASE("read_json parser fields are accessible") {
         auto test_file = make_unique_test_path("json_parser_fields.pfw");
         {
-            (void)dstd::fs::write_file(
+            dstd::fs::write_file(
                 dstd::PathView(test_file),
                 common::str_cat(
                     R"({"ph":"X","name":"read","cat":"POSIX","pid":42,"tid":7,"ts":1000,"dur":10,"args":{"ret":1}})",
-                    "\n"));
+                    "\n"))
+                .discard();
         }
 
         auto gz_file = gzip_fixture(dstd::String(test_file.str()));
@@ -1015,7 +1016,7 @@ TEST_SUITE("TraceReader::read_json") {
         CHECK(events[0].cat == "POSIX");
         CHECK(events[0].ph == "X");
 
-        (void)dstd::fs::remove(gz_file);
+        dstd::fs::remove(gz_file).discard();
     }
 }
 

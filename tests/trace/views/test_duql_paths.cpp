@@ -94,7 +94,7 @@ dstd::String write_trace(TestEnvironment& env) {
     }
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     return gz;
@@ -273,7 +273,7 @@ TEST_SUITE("duql paths") {
         }
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        (void)dstd::fs::remove(plain);
+        dstd::fs::remove(plain).discard();
         dftracer::utils::index::Indexer::open(
             {dstd::String(dstd::StringView(gz))})
             .build();
@@ -327,7 +327,7 @@ TEST_SUITE("duql paths") {
         }
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        (void)dstd::fs::remove(plain);
+        dstd::fs::remove(plain).discard();
         dftracer::utils::index::Indexer::open(
             {dstd::String(dstd::StringView(gz))})
             .build();

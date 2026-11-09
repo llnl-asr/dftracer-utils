@@ -83,7 +83,7 @@ void IpcReader::close() {
     if (mapped_data_ && mapped_data_ != MAP_FAILED) {
         munmap(mapped_data_, mapped_size_);
     }
-    (void)file_.close();
+    file_.close().discard();
 
     reset_state();
 }

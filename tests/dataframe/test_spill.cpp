@@ -204,18 +204,18 @@ TEST_SUITE("spill errors") {
             const std::uint32_t len = 100;
             os.append(reinterpret_cast<const char*>(&len), sizeof(len));
             os.append("abcd", 4);
-            (void)dstd::fs::write_file(dstd::PathView(path), os);
+            dstd::fs::write_file(dstd::PathView(path), os).discard();
         }
         CHECK_THROWS(spill::AggRunReader(path));
         {
             dstd::String os;
             os.append("ab", 2);
-            (void)dstd::fs::write_file(dstd::PathView(path), os);
+            dstd::fs::write_file(dstd::PathView(path), os).discard();
         }
         CHECK_THROWS(spill::AggRunReader(path));
         {
             dstd::String os;
-            (void)dstd::fs::write_file(dstd::PathView(path), os);
+            dstd::fs::write_file(dstd::PathView(path), os).discard();
         }
         spill::AggRunReader empty(path);
         CHECK_FALSE(empty.valid());
@@ -230,7 +230,7 @@ TEST_SUITE("spill errors") {
                                            std::int64_t{1} << 40};
             os.append(reinterpret_cast<const char*>(sizes), sizeof(sizes));
             os.append("abcd", 4);
-            (void)dstd::fs::write_file(dstd::PathView(path), os);
+            dstd::fs::write_file(dstd::PathView(path), os).discard();
         }
         spill::Reader big(path);
         CHECK_THROWS(run(big.next(0)));
@@ -238,7 +238,7 @@ TEST_SUITE("spill errors") {
             dstd::String os;
             const std::int64_t sizes[2] = {-5, -5};
             os.append(reinterpret_cast<const char*>(sizes), sizeof(sizes));
-            (void)dstd::fs::write_file(dstd::PathView(path), os);
+            dstd::fs::write_file(dstd::PathView(path), os).discard();
         }
         spill::Reader negative(path);
         CHECK_THROWS(run(negative.next(0)));
@@ -251,7 +251,7 @@ TEST_SUITE("spill errors") {
         const std::uint32_t len = 0xFFFFFFF0u;
         os.append(reinterpret_cast<const char*>(&len), sizeof(len));
         os.append("abcdefgh", 8);
-        (void)dstd::fs::write_file(dstd::PathView(path), os);
+        dstd::fs::write_file(dstd::PathView(path), os).discard();
         CHECK_THROWS(spill::AggRunReader(path));
     }
 

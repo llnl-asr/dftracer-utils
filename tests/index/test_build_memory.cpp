@@ -65,12 +65,12 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
     out += "]\n";
     const auto plain = dir + "/" + name + ".pfw";
     {
-        (void)dstd::fs::write_file(dstd::PathView(plain), out);
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                member_bytes));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 

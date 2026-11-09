@@ -287,7 +287,7 @@ coro::CoroTask<int> IpcWriter::open(dstd::CStringView path,
     auto write_result =
         co_await runtime::io::pwrite(file_.native_handle(), MAGIC, 8, 0);
     if (write_result < 0) {
-        (void)file_.close();
+        file_.close().discard();
         reset_state();
         co_return static_cast<int>(write_result);
     }
@@ -648,9 +648,9 @@ coro::CoroTask<int> IpcWriter::close() {
             .reset();
     }
 
-    // Fsync and close
-    co_await runtime::io::fsync(file_.native_handle());
-    (void)file_.close();
+    const ssize_t synced = co_await runtime::io::fsync(file_.native_handle());
+    auto closed = file_.close();
+    if (!closed || synced < 0) rc = -1;
 
     reset_state();
     co_return rc;

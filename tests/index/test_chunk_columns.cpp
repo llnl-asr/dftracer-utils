@@ -380,12 +380,12 @@ dstd::String write_gzip(const dstd::String& dir, const dstd::String& name,
     REQUIRE(dstd::fs::create_directories(sub).has_value());
     const dstd::String pfw = sub + "/trace.pfw";
     {
-        (void)dstd::fs::write_file(dstd::PathView(pfw), text);
+        dstd::fs::write_file(dstd::PathView(pfw), text).discard();
     }
     const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 

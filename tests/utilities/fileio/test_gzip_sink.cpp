@@ -69,5 +69,5 @@ TEST_CASE("GzipSink - pieces split mid-line") {
     CHECK(decode(path, last) == expected);
     REQUIRE(last.size() >= 2);
     for (std::size_t i = 0; i + 1 < last.size(); ++i) CHECK(last[i] == '\n');
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }

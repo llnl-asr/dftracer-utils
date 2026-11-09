@@ -38,7 +38,7 @@ dstd::String write_single_member_gz(const dstd::String& path,
     REQUIRE(member.has_value());
     dstd::String ofs;
     ofs.append(reinterpret_cast<const char*>(member->data()), member->size());
-    (void)dstd::fs::write_file(dstd::PathView(path), ofs);
+    dstd::fs::write_file(dstd::PathView(path), ofs).discard();
     return path;
 }
 
@@ -114,7 +114,7 @@ TEST_SUITE("gzip_rechunker") {
                        head->size());
             ofs.append(reinterpret_cast<const char*>(body->data()),
                        body->size());
-            (void)dstd::fs::write_file(dstd::PathView(gz), ofs);
+            dstd::fs::write_file(dstd::PathView(gz), ofs).discard();
         }
 
         auto fd_file = dstd::File::open(gz, {});
@@ -138,7 +138,7 @@ TEST_SUITE("gzip_rechunker") {
         CHECK(sampled.compressed == size);
         CHECK_FALSE(sampled.exceeds_cap);
 
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 
     TEST_CASE("rechunk preserves bytes and produces multiple members") {
@@ -164,7 +164,7 @@ TEST_SUITE("gzip_rechunker") {
             CHECK(last_bytes[i] == '\n');
         }
 
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 
     TEST_CASE("rechunk handles a payload with no trailing newline") {
@@ -179,6 +179,6 @@ TEST_SUITE("gzip_rechunker") {
         fileio::compress::gzip_rechunk_to_members(in, out, 4 * 1024, 6).get();
         CHECK(decode_all(out).first == payload);
 
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 }

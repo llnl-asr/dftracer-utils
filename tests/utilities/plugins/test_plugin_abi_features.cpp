@@ -393,11 +393,12 @@ TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
     dftu_utils_test::TestEnvironment env(0);
     dstd::String path = env.dir() + "/config.json";
     {
-        (void)dstd::fs::write_file(
+        dstd::fs::write_file(
             dstd::PathView(path),
             common::str_cat(
                 R"({"threshold":42,"ratio":2.5,"label":"posix","enabled":true,)",
-                R"("nested":{"inner":7},"buckets":[10,20,30]})"));
+                R"("nested":{"inner":7},"buckets":[10,20,30]})"))
+            .discard();
     }
 
     plugins::ConfigTree tree = plugins::ConfigTree::from_json_file(path);

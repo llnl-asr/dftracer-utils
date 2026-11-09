@@ -128,7 +128,7 @@ RunCounts run_once(const dstd::String& binary,
                    const dstd::Vector<dstd::String>& inputs) {
     RunCounts rc;
     rc.per_input.resize(inputs.size());
-    (void)dstd::fs::remove(log_path);
+    dstd::fs::remove(log_path).discard();
 
     dftu_utils_test::set_test_library_path(binary);
     ::setenv(PRELOAD_VAR, DFTRACER_UTILS_TEST_INTERPOSE_PATH, 1);

@@ -247,7 +247,7 @@ TEST_SUITE("ViewMV") {
             ofs.close();
             dstd::String gz = pfw + ".gz";
             dftu_utils_test::compress_file_to_gzip(pfw, gz);
-            (void)dstd::fs::remove(pfw);
+            dstd::fs::remove(pfw).discard();
             return gz;
         };
         dstd::String a = write_mixed("da", 1000);

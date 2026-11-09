@@ -74,7 +74,7 @@ dstd::String create_bloom_trace(TestEnvironment& env, int n,
     }
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, member_bytes);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -491,7 +491,7 @@ TEST_SUITE("BloomFold") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String index_path = dstd::String(determine_index_path(gz, ""));
         {
             StringSink s;
@@ -630,7 +630,7 @@ TEST_SUITE("BloomFold - auto fields") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 4000);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         return gz;
     }
 

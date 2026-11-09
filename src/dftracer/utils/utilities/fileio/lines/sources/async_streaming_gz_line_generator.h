@@ -83,7 +83,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
                         co_yield Line(line, current_line);
                     }
                     if (end_line > 0 && current_line >= end_line) {
-                        (void)owned.close();
+                        owned.close().discard();
                         co_return;
                     }
                     line_buffer.clear();

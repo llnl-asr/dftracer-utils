@@ -37,7 +37,7 @@ static dstd::String create_pfw_gz(TestEnvironment& env, int n) {
     ofs.close();
     dstd::String gz = pfw + ".gz";
     compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -64,7 +64,7 @@ static dstd::String create_metadata_pfw_gz(TestEnvironment& env) {
     ofs.close();
     dstd::String gz = pfw + ".gz";
     compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -120,7 +120,7 @@ static dstd::String create_refused_gz(TestEnvironment& env) {
     }
     dstd::String gz = pfw + ".gz";
     compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -204,7 +204,7 @@ TEST_SUITE("ViewScanner") {
         }
         dstd::String gz = pfw + ".gz";
         compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         ViewScannerInput input;
         input.with_file_path(dstd::String(gz))
@@ -307,7 +307,7 @@ TEST_SUITE("ViewScanner") {
         }
         dstd::String gz = pfw + ".gz";
         compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         ViewScannerInput input;
         input.with_file_path(dstd::String(gz))

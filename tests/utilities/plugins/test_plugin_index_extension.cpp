@@ -38,12 +38,12 @@ dstd::String write_records(dftu_utils_test::TestEnvironment& env,
         dstd::String out;
         for (int i = 0; i < RECORDS; ++i)
             out += common::str_cat(R"({"op":"read","v":)", i, "}\n");
-        (void)dstd::fs::write_file(dstd::PathView(plain), out);
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                8 * 1024));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 

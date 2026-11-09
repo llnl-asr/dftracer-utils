@@ -39,7 +39,7 @@ namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
     static void close_fd(engine::DataFileWriter& writer) {
-        (void)writer.fd_.close();
+        writer.fd_.close().discard();
     }
 };
 
@@ -178,7 +178,7 @@ struct TempDir {
         REQUIRE(dstd::fs::create_directories(path).has_value());
     }
 
-    ~TempDir() { (void)dstd::fs::remove_all(path); }
+    ~TempDir() { dstd::fs::remove_all(path).discard(); }
 
     dstd::String file(const dstd::String& name) const {
         return dstd::String((path / name).str());

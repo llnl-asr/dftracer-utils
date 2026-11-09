@@ -51,7 +51,7 @@ dstd::String write_trace(TestEnvironment& env, const dstd::String& name,
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                member_bytes));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     return gz;

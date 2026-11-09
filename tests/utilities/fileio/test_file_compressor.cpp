@@ -43,7 +43,7 @@ TEST_SUITE("FileCompressor") {
                     "This is line ", i,
                     " of test content that will be compressed.\n");
             }
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             auto original_size = dstd::fs::file_size(test_file).value();
 
@@ -76,7 +76,7 @@ TEST_SUITE("FileCompressor") {
             {
                 dstd::String ofs;
                 ofs += common::str_cat(content);
-                (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+                dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
             }
 
             FileCompressorUtility compressor;
@@ -104,7 +104,7 @@ TEST_SUITE("FileCompressor") {
 
             dstd::String ofs;
             ofs += "Test content for custom output path\n";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 
@@ -134,7 +134,7 @@ TEST_SUITE("FileCompressor") {
             for (int i = 0; i < 1000; ++i) {
                 ofs += "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n";
             }
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 
@@ -180,7 +180,7 @@ TEST_SUITE("FileCompressor") {
                 }
                 ofs += common::str_cat('\n');
             }
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 
@@ -243,7 +243,7 @@ TEST_SUITE("FileCompressor") {
             dstd::String output_file = test_file + ".gz";
 
             dstd::String ofs;
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 
@@ -262,7 +262,7 @@ TEST_SUITE("FileCompressor") {
 
             dstd::String ofs;
             ofs += "Test content";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 
@@ -297,7 +297,7 @@ TEST_SUITE("FileCompressor") {
                 byte = static_cast<unsigned char>(dis(gen));
             }
             ofs.append(reinterpret_cast<const char*>(data.data()), data.size());
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 

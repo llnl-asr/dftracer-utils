@@ -40,7 +40,7 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
                                    .value_or(dstd::String());
         CHECK(content == "Hello, World!");
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("Write multiple chunks") {
@@ -61,7 +61,7 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
                                    .value_or(dstd::String());
         CHECK(content == "First Second Third");
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("Write empty chunk") {
@@ -81,7 +81,7 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
                                    .value_or(dstd::String());
         CHECK(content == "BeforeAfter");
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 }
 
@@ -108,7 +108,7 @@ TEST_CASE("StreamingFileWriterUtility - Binary Data") {
         CHECK(content[0] == 0x00);
         CHECK(content[4] == 0xFE);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("Write null bytes") {
@@ -132,7 +132,7 @@ TEST_CASE("StreamingFileWriterUtility - Binary Data") {
         CHECK(content[1] == 0x00);
         CHECK(content[2] == 0x00);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 }
 
@@ -159,7 +159,7 @@ TEST_CASE("StreamingFileWriterUtility - Append Mode") {
         dstd::fs::read_file(dstd::PathView(test_file)).value_or(dstd::String());
     CHECK(content == "Initial content\nAppended content\n");
 
-    (void)dstd::fs::remove(test_file);
+    dstd::fs::remove(test_file).discard();
 }
 
 TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
@@ -179,7 +179,7 @@ TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
         CHECK(dstd::fs::exists(test_file).value());
         CHECK(dstd::fs::exists(test_dir).value());
 
-        (void)dstd::fs::remove_all(test_root);
+        dstd::fs::remove_all(test_root).discard();
     }
 
     SUBCASE("Don't create directories") {
@@ -199,7 +199,7 @@ TEST_CASE("StreamingFileWriterUtility - Error Handling") {
         CHECK_THROWS_AS(writer.process(dstd::ByteView("Data")).get(),
                         dftracer::utils::common::DFTUtilsException);
 
-        (void)dstd::fs::remove(test_file);
+        dstd::fs::remove(test_file).discard();
     }
 
     SUBCASE("Invalid path") {

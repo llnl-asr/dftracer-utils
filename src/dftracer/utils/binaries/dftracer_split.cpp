@@ -327,7 +327,7 @@ class ProbeStage {
                 open_budget_) {
             probe.fd = dstd::make_shared<dstd::File>(std::move(sfd));
         } else {
-            (void)sfd.close();
+            sfd.close().discard();
         }
         if (first.exceeds_cap) {
             dstd::String out((rechunk_dir_->get().view() /

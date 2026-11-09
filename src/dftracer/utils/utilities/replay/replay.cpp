@@ -597,8 +597,8 @@ dstd::Vector<dstd::String> glob_trace_files(dstd::StringView dir,
         suffix = suffix.substr(star + 1);
     dstd::Vector<dstd::String> out;
     // An unreadable directory ends the walk with the files found so far.
-    (void)dstd::fs::walk(dstd::PathView(dir), [&](dstd::PathView path,
-                                                  dstd::fs::FileKind kind) {
+    dstd::fs::walk(dstd::PathView(dir), [&](dstd::PathView path,
+                                            dstd::fs::FileKind kind) {
         if (kind == dstd::fs::FileKind::Symlink) {
             const auto target = dstd::fs::stat(path);
             if (!target || target->kind != dstd::fs::FileKind::File) {
@@ -613,7 +613,7 @@ dstd::Vector<dstd::String> glob_trace_files(dstd::StringView dir,
              s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0))
             out.emplace_back(s);
         return dstd::fs::WalkAction::Continue;
-    });
+    }).discard();
     std::sort(out.begin(), out.end());
     return out;
 }

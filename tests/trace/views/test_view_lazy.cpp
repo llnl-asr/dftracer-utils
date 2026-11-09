@@ -556,7 +556,7 @@ struct FnameTrace {
         ofs.close();
         gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         idx = dstd::String(determine_index_path(gz, ""));
         StringSink sink;
         test_view_common::run(
@@ -782,7 +782,7 @@ struct NestedTrace {
         ofs.close();
         gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         StringSink sink;
         test_view_common::run(
             View::from_file(dstd::String(gz)).sink_json(sink));
@@ -1059,7 +1059,7 @@ TEST_SUITE("View - trace terminals") {
         }
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         const TypedResult t =
             test_view_common::run(views::detail::scan::collect_typed(
                 views::detail::scan::from_file(dstd::String(gz)), 0, 4096));
@@ -1404,7 +1404,7 @@ dstd::String write_args_trace(TestEnvironment& env) {
     }
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -1566,7 +1566,7 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
         }
         const dstd::String absent = absent_pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(absent_pfw, absent);
-        (void)dstd::fs::remove(absent_pfw);
+        dstd::fs::remove(absent_pfw).discard();
 
         for (const dstd::String& gz : {write_args_trace(env), absent}) {
             CAPTURE(gz);
@@ -1635,7 +1635,7 @@ struct BadPartTrace {
         ofs.close();
         gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
     }
 };
 

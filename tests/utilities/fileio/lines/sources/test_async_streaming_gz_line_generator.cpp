@@ -38,7 +38,7 @@ dstd::String write_gz(const dstd::Vector<std::uint8_t>& bytes) {
     dstd::Path p = dftu_utils_test::make_unique_test_path("stream_gz.pfw.gz");
     dstd::String ofs;
     ofs.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    (void)dstd::fs::write_file(dstd::PathView(p), ofs);
+    dstd::fs::write_file(dstd::PathView(p), ofs).discard();
     return dstd::String(p.str());
 }
 

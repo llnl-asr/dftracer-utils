@@ -83,7 +83,7 @@ dstd::Pair<dstd::String, dstd::Vector<std::uint64_t>> write_multi_member_gz(
     auto path = dir / "members.pfw.gz";
     dstd::String ofs;
     ofs.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    (void)dstd::fs::write_file(dstd::PathView(path), ofs);
+    dstd::fs::write_file(dstd::PathView(path), ofs).discard();
     return {dstd::String(path.str()), offsets};
 }
 
@@ -177,10 +177,11 @@ TEST_SUITE("IndexBuilder") {
                 comp;
             auto member = comp.compress_member(text.data(), text.size());
             REQUIRE(member.has_value());
-            (void)dstd::fs::write_file(
+            dstd::fs::write_file(
                 dstd::PathView(path),
                 dstd::StringView(reinterpret_cast<const char*>(member->data()),
-                                 member->size()));
+                                 member->size()))
+                .discard();
             files.push_back(path);
         }
         IndexBuildBatchResult r;

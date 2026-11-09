@@ -932,7 +932,7 @@ TEST_CASE("DFTracer Server - rebuilds stale index on changed source") {
     // Third run added; the on-disk index is now stale.
     auto v2 = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
     REQUIRE(!v2.empty());
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     REQUIRE(dstd::fs::rename(v2, pfw).has_value());
     {
         int port = pick_port();
@@ -1233,7 +1233,7 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
     // A changed source invalidates the cache: the new run's gap must appear.
     auto v2 = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
     REQUIRE(!v2.empty());
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     REQUIRE(dstd::fs::rename(v2, pfw).has_value());
     {
         int port = pick_port();

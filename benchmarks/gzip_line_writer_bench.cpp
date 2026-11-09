@@ -187,7 +187,7 @@ double run_case(const char* name, std::size_t in_bytes,
         ms.push_back(
             std::chrono::duration<double, std::milli>(Clock::now() - t0)
                 .count());
-        (void)dftracer::utils::dstd::fs::remove(path);
+        dftracer::utils::dstd::fs::remove(path).discard();
     }
     std::sort(ms.begin(), ms.end());
     double med = ms[ms.size() / 2];
@@ -247,6 +247,6 @@ int main(int argc, char** argv) {
     std::printf("%-28s %9.1f ms %9.1f MB/s (append copy into a 4MiB member)\n",
                 "memcpy only", cp[1],
                 static_cast<double>(data.size()) / 1e6 / (cp[1] / 1e3));
-    (void)dftracer::utils::dstd::fs::remove_all(dir);
+    dftracer::utils::dstd::fs::remove_all(dir).discard();
     return 0;
 }

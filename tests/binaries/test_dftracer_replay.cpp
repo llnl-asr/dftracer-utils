@@ -239,7 +239,7 @@ TEST_SUITE("DFTracerReplay") {
         CHECK(output.find("Replay Summary") != dstd::String::npos);
         CHECK(output.find("Executed:") != dstd::String::npos);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("dftracer mode with no-sleep") {
@@ -262,7 +262,7 @@ TEST_SUITE("DFTracerReplay") {
         CHECK(rc == 0);
         CHECK(output.find("Replay Summary") != dstd::String::npos);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("dftracer mode with no-timing") {
@@ -285,7 +285,7 @@ TEST_SUITE("DFTracerReplay") {
         CHECK(rc == 0);
         CHECK(output.find("Executed:") != dstd::String::npos);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("a bad pid or tid token is an error") {
@@ -311,7 +311,7 @@ TEST_SUITE("DFTracerReplay") {
             CHECK(output.find("abc") != dstd::String::npos);
         }
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("filter by category") {
@@ -336,7 +336,7 @@ TEST_SUITE("DFTracerReplay") {
         CHECK(output.find("Executed:") != dstd::String::npos);
         CHECK(output.find("Filtered:") != dstd::String::npos);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("filter by multiple categories") {
@@ -357,7 +357,7 @@ TEST_SUITE("DFTracerReplay") {
         run_replay(binary, {"--dry-run", "--filter-category", "POSIX,STDIO",
                             trace_file});
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("filter by function name") {
@@ -380,7 +380,7 @@ TEST_SUITE("DFTracerReplay") {
             {"--dry-run", "--filter-function", "read,write", trace_file}, &rc);
         CHECK(output.find("Replay Summary") != dstd::String::npos);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("max events limit") {
@@ -403,7 +403,7 @@ TEST_SUITE("DFTracerReplay") {
         CHECK(rc == 0);
         CHECK(output.find("Executed:") != dstd::String::npos);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("50% deterministic sampling") {
@@ -428,7 +428,7 @@ TEST_SUITE("DFTracerReplay") {
         CHECK(rc == 0);
         CHECK(output.find("Replay Summary") != dstd::String::npos);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("25% sampling") {
@@ -452,7 +452,7 @@ TEST_SUITE("DFTracerReplay") {
                            &rc);
         CHECK(rc == 0);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("invalid sampling rate") {
@@ -472,7 +472,7 @@ TEST_SUITE("DFTracerReplay") {
         CHECK(run_replay(binary, {"--dry-run", "--sample-rate", "1.5",
                                   trace_file}) == 1);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("timing scale factor") {
@@ -493,7 +493,7 @@ TEST_SUITE("DFTracerReplay") {
             run_replay(binary, {"--dftracer-mode", "--no-sleep", trace_file});
         CHECK(rc == 0);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("benchmark mode") {
@@ -521,7 +521,7 @@ TEST_SUITE("DFTracerReplay") {
             std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         if (!under_valgrind()) CHECK(duration.count() < 5000);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("summary reports totals") {
@@ -544,7 +544,7 @@ TEST_SUITE("DFTracerReplay") {
         CHECK(rc == 0);
         CHECK(output.find("Total events:") != dstd::String::npos);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("statistics output") {
@@ -567,7 +567,7 @@ TEST_SUITE("DFTracerReplay") {
         CHECK(output.find("Replay Summary") != dstd::String::npos);
         CHECK(output.find("Executed:") != dstd::String::npos);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("per-function statistics") {
@@ -589,7 +589,7 @@ TEST_SUITE("DFTracerReplay") {
             run_replay_capture(binary, {"--dry-run", trace_file}, &rc);
         CHECK(!output.empty());
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("nonexistent trace file") {
@@ -623,7 +623,7 @@ TEST_SUITE("DFTracerReplay") {
 
         CHECK(run_replay(binary, {"--dry-run", bad_trace}) == 1);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("empty trace file") {
@@ -649,7 +649,7 @@ TEST_SUITE("DFTracerReplay") {
             run_replay_capture(binary, {"--dry-run", empty_trace}, &rc);
         CHECK(output.find("Replay Summary") != dstd::String::npos);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("multiple trace files") {
@@ -674,7 +674,7 @@ TEST_SUITE("DFTracerReplay") {
         CHECK(rc == 0);
         CHECK(output.find("Replay Summary") != dstd::String::npos);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("the thread count does not change the result") {
@@ -712,7 +712,7 @@ TEST_SUITE("DFTracerReplay") {
             CHECK(count_after(output, "Executed: ") == expected);
         }
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("directory with trace files") {
@@ -739,7 +739,7 @@ TEST_SUITE("DFTracerReplay") {
             run_replay(binary, {"--dry-run", dstd::String(trace_dir.str())});
         CHECK(rc == 0);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("call tree mode with real traces") {
@@ -866,7 +866,7 @@ TEST_SUITE("DFTracerReplay") {
             std::chrono::duration_cast<std::chrono::seconds>(end - start);
         if (!under_valgrind()) CHECK(duration.count() < 10);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 
     TEST_CASE("high sampling rate with large file") {
@@ -888,6 +888,6 @@ TEST_SUITE("DFTracerReplay") {
                      "--sample-seed", "42", large_trace});
         CHECK(rc == 0);
 
-        (void)dstd::fs::remove_all(temp_dir);
+        dstd::fs::remove_all(temp_dir).discard();
     }
 }

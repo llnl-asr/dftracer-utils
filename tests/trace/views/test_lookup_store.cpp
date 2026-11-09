@@ -59,7 +59,7 @@ dstd::String lookup_trace(TestEnvironment& env) {
     }
     const dstd::String gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     return gz;
@@ -184,7 +184,7 @@ TEST_SUITE("LookupStore") {
             REQUIRE(db);
             index::cache::persist_lookup(*db, *sig, "rows");
         }
-        (void)dstd::fs::remove_all(path);
+        dstd::fs::remove_all(path).discard();
 
         CHECK_FALSE(index::cache::open_lookup_db(
             path, index::cache::CacheStore::Mode::ReadOnly));

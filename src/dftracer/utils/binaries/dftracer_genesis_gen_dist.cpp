@@ -749,7 +749,7 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
             if (target && !target->close()) appended = false;
         }
     }
-    (void)dstd::fs::remove(dstd::PathView(head_path));
+    dstd::fs::remove(dstd::PathView(head_path)).discard();
     if (io_error || !closed || !appended) {
         DFTRACER_UTILS_LOG_ERROR(
             "Cannot write %s%s%s", binaries::c_str(output), closed ? "" : ": ",
@@ -800,7 +800,7 @@ int join_parts(dstd::StringView output, const dstd::String& part, int rank,
                               : dstd::Expected<std::uint64_t, dstd::Error>(0);
     const std::uint64_t mine = part_size ? *part_size : 0;
     if (!all_ranks(ok && part_size)) {
-        (void)dstd::fs::remove(dstd::PathView(part));
+        dstd::fs::remove(dstd::PathView(part)).discard();
         return 1;
     }
     dstd::Vector<std::uint64_t> sizes(static_cast<std::size_t>(size));
@@ -826,7 +826,7 @@ int join_parts(dstd::StringView output, const dstd::String& part, int rank,
         copied = file && copy_into(part, *file, offset);
         if (file && !file->close()) copied = false;
     }
-    (void)dstd::fs::remove(dstd::PathView(part));
+    dstd::fs::remove(dstd::PathView(part)).discard();
     copied = all_ranks(copied);
     unsigned long long counts[2] = {report.runs, report.skips};
     unsigned long long sums[2] = {0, 0};
@@ -835,7 +835,7 @@ int join_parts(dstd::StringView output, const dstd::String& part, int rank,
     if (rank != 0) return copied ? 0 : 1;
     if (!copied) {
         DFTRACER_UTILS_LOG_ERROR("Cannot write %s", binaries::c_str(output));
-        (void)dstd::fs::remove(dstd::PathView(output));
+        dstd::fs::remove(dstd::PathView(output)).discard();
         return 1;
     }
     print_summary(

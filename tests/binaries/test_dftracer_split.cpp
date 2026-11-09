@@ -364,7 +364,7 @@ TEST_SUITE("DFTracerSplit") {
                                    "--disable-watchdog"}) == 0);
         const auto first = count_gz_lines_in_dir(out);
         REQUIRE(first > 0);
-        (void)dstd::fs::remove_all(out);
+        dstd::fs::remove_all(out).discard();
         REQUIRE(run_split(binary, {input_dir(env), "-o", out,
                                    "--disable-watchdog"}) == 0);
         REQUIRE(dstd::fs::create_directories(out + "/stale").has_value());

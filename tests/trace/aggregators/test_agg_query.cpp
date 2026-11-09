@@ -253,7 +253,7 @@ dstd::String write_trace(const dstd::String& dir, int n,
                        static_cast<std::streamsize>(member->size()));
         }
     }
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -999,7 +999,7 @@ TEST_SUITE("AggQuery") {
         };
         expect_rows(run(q));
 
-        for (const auto& f : fx->files) (void)dstd::fs::remove(f);
+        for (const auto& f : fx->files) dstd::fs::remove(f).discard();
         expect_rows(run(q));
     }
 
@@ -1034,7 +1034,7 @@ TEST_SUITE("AggQuery") {
         const dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             pfw, gz, CHECKPOINT_SIZE));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         fx->files.push_back(gz);
         fx->index_dir = fx->env.dir() + "/idx_mixed";
         index::IndexerOptions o;

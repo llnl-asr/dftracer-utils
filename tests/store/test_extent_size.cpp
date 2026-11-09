@@ -50,7 +50,7 @@ struct TempDir {
     }
     TempDir(const TempDir&) = delete;
     TempDir& operator=(const TempDir&) = delete;
-    ~TempDir() { (void)dstd::fs::remove_all(path); }
+    ~TempDir() { dstd::fs::remove_all(path).discard(); }
 };
 
 std::uint32_t chosen(std::size_t stripe_size,

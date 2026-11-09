@@ -258,12 +258,12 @@ TEST_CASE("the pre-filter never drops a match") {
     {
         dstd::String out;
         for (const auto& l : lines) out += common::str_cat(l, "\n");
-        (void)dstd::fs::write_file(dstd::PathView(plain), out);
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                MEMBER_BYTES));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     REQUIRE(dftu_utils_test::build_index(gz));
 
     simdjson::dom::parser parser;
@@ -311,12 +311,12 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
     {
         dstd::String out;
         for (const auto& l : lines) out += common::str_cat(l, "\n");
-        (void)dstd::fs::write_file(dstd::PathView(plain), out);
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                MEMBER_BYTES));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     REQUIRE(dftu_utils_test::build_index(gz));
 
     auto leaf = [&]() -> dstd::String {

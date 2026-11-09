@@ -1515,7 +1515,7 @@ TEST_CASE("a commit lands from a worker, a process worker and a plain thread") {
 namespace {
 
 dstd::String write_bytes(const dstd::Path& path, dstd::StringView contents) {
-    (void)dstd::fs::write_file(dstd::PathView(path), contents);
+    dstd::fs::write_file(dstd::PathView(path), contents).discard();
     return dstd::String(path.str());
 }
 

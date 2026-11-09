@@ -482,7 +482,7 @@ TEST_CASE("a trailing separator never follows a symlinked directory") {
 
     REQUIRE(::symlink(dir.file("victim").c_str(), dir.file("lnk2").c_str()) ==
             0);
-    (void)dstd::fs::remove(dstd::Path(dir.file("lnk2") + "/").view());
+    dstd::fs::remove(dstd::Path(dir.file("lnk2") + "/").view()).discard();
     CHECK(::access(dir.file("victim/keep").c_str(), F_OK) == 0);
 }
 

@@ -53,10 +53,10 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env,
         ofs += common::str_cat(
             R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
             (1000 + i * 100), R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
-    (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
+    dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
 
     return test_plugin_common::index_trace(gz);
 }

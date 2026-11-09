@@ -84,7 +84,7 @@ TEST_CASE("IpcReader - basic read single batch") {
     reader.close();
     CHECK_FALSE(reader.is_open());
 
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - read multiple batches") {
@@ -107,7 +107,7 @@ TEST_CASE("IpcReader - read multiple batches") {
     CHECK(total_rows == 100);
 
     reader.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - read_all") {
@@ -130,7 +130,7 @@ TEST_CASE("IpcReader - read_all") {
     CHECK(total_rows == 45);
 
     reader.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - for_each_batch") {
@@ -156,7 +156,7 @@ TEST_CASE("IpcReader - for_each_batch") {
     CHECK(total_rows == 100);
 
     reader.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - open fails on non-existent file") {
@@ -179,7 +179,7 @@ TEST_CASE("IpcReader - open fails on invalid file") {
     CHECK(reader.open(path) != 0);
     CHECK_FALSE(reader.is_open());
 
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - move semantics") {
@@ -202,7 +202,7 @@ TEST_CASE("IpcReader - move semantics") {
     CHECK(batch.valid());
 
     r2.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - read batch out of range") {
@@ -224,7 +224,7 @@ TEST_CASE("IpcReader - read batch out of range") {
     CHECK_FALSE(reader.read_batch(100).valid());
 
     reader.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - read ZSTD compressed file") {
@@ -248,7 +248,7 @@ TEST_CASE("IpcReader - read ZSTD compressed file") {
     CHECK(total_rows == 150);
 
     reader.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - roundtrip with all column types") {
@@ -302,7 +302,7 @@ TEST_CASE("IpcReader - roundtrip with all column types") {
         reader.close();
     }
 
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +336,7 @@ TEST_CASE("read_arrow_files_parallel - single file") {
     CHECK(result.file_results[0].batches->size() == 2);
 
     runtime.shutdown();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("read_arrow_files_parallel - multiple files") {
@@ -368,7 +368,7 @@ TEST_CASE("read_arrow_files_parallel - multiple files") {
     }
 
     runtime.shutdown();
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("read_arrow_files_parallel - handles non-existent files") {
@@ -387,7 +387,7 @@ TEST_CASE("read_arrow_files_parallel - handles non-existent files") {
     CHECK(result.total_rows == 10);
 
     runtime.shutdown();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("read_arrow_files_parallel - empty list") {
@@ -447,7 +447,7 @@ TEST_CASE("read_arrow_files_streaming - completion order callback") {
     CHECK(total_rows == 100);
 
     runtime.shutdown();
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("read_arrow_files_streaming - early cancel") {
@@ -486,7 +486,7 @@ TEST_CASE("read_arrow_files_streaming - early cancel") {
     CHECK(callback_count == 2);  // Only 2 callbacks before cancel
 
     runtime.shutdown();
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("read_arrow_files_parallel - mixed compression") {
@@ -511,7 +511,7 @@ TEST_CASE("read_arrow_files_parallel - mixed compression") {
     CHECK(result.total_batches == 4);
 
     runtime.shutdown();
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 #else

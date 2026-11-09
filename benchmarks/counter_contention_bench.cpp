@@ -162,7 +162,7 @@ void genesis(const dstd::String& root) {
 }
 
 dstd::String prepare_genesis(const dstd::String& dir, const Sizes& s) {
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
     const dstd::String run = dir + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
     require_ok(dstd::fs::create_directories(run), "create_directories");
     require_ok(
@@ -202,7 +202,7 @@ SizeMix collect_mix(const Sizes& s) {
         mix_out.counts[b] = dftu::memory_probe::histogram_count(b) - before[b];
         mix_out.total += mix_out.counts[b];
     }
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
     return mix_out;
 }
 

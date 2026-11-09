@@ -57,7 +57,7 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
             plain, gz, member_bytes));
     else
         dftu_utils_test::compress_file_to_gzip(plain, gz);
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     dftracer::utils::index::IndexerOptions o;
     if (checkpoint_size) o.checkpoint_size = checkpoint_size;
     if (!extensions.empty()) {
@@ -159,7 +159,7 @@ TEST_SUITE("View duql joins") {
         }
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         const View v = view_of(gz);
         const auto f = frame(v.duql(
             R"(let fh = from all | where ph == "M" and name == "FH"; from fh | agg { n = count() })"));
@@ -199,7 +199,7 @@ TEST_SUITE("View duql joins") {
             }
             const dstd::String gz = pfw + ".gz";
             dftu_utils_test::compress_file_to_gzip(pfw, gz);
-            (void)dstd::fs::remove(pfw);
+            dstd::fs::remove(pfw).discard();
             REQUIRE_FALSE(
                 dstd::fs::exists(dstd::String(determine_index_path(gz, "")))
                     .value());

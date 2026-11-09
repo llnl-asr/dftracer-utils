@@ -50,7 +50,7 @@ TEST_CASE("member cache: fills from a read then returns" * doctest::skip()) {
     const dstd::String gz = root + "/trace.pfw.gz";
     const dstd::String index_dir = root + "/idx";
     {
-        (void)dstd::fs::write_file(dstd::PathView(plain), trace_text(4000));
+        dstd::fs::write_file(dstd::PathView(plain), trace_text(4000)).discard();
     }
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, 4096));

@@ -90,7 +90,7 @@ dstd::String write_group_trace(TestEnvironment& env) {
     ofs.close();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -119,7 +119,7 @@ dstd::String write_argmax_trace(TestEnvironment& env) {
     ofs.close();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -137,7 +137,7 @@ dstd::String write_and_index(const dstd::String& dir, const dstd::String& name,
     ofs.close();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     dstd::String idx = dstd::String(determine_index_path(gz, ""));
     StringSink sink;
     View::from_file(dstd::String(gz), dstd::String(idx)).sink_json(sink).get();
@@ -650,7 +650,7 @@ TEST_SUITE("View C ABI") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         StringSink sink;
         View::from_file(dstd::String(gz), dstd::String(idx))

@@ -578,8 +578,9 @@ void append_summary(dstd::StringView data_path, std::uint64_t needed_bytes,
         {.access = dstd::Access::Append, .creation = dstd::Creation::IfNeeded});
     if (!file) return;
     // One write, so writers that close at once append whole entries.
-    (void)file->append(
-        {reinterpret_cast<const std::byte*>(entry.data()), entry.size()});
+    file->append(
+            {reinterpret_cast<const std::byte*>(entry.data()), entry.size()})
+        .discard();
 }
 
 }  // namespace
@@ -1319,7 +1320,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     // No sync after the footer: a footer lost to a crash leaves a file that
     // reads as not closed, whose commits are checked whole.
     auto header = write_header();
-    (void)fd_.close();
+    fd_.close().discard();
     closed_.store(true, std::memory_order_release);
     if (!header) return header;
     // A failed append only leaves the file for readers to open as before.

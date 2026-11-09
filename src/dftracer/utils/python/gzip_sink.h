@@ -27,7 +27,7 @@ class GzipSink : public trace::views::ExportSink {
                 dstd::String(path), std::move(opts))));
     }
     ~GzipSink() override {
-        if (writer_) (void)writer_->close(tail_);
+        if (writer_) writer_->close(tail_).discard();
     }
     void write(dstd::StringView data) override {
         const std::size_t nl = data.rfind('\n');

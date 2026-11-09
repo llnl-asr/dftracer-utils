@@ -64,7 +64,7 @@ struct TempDir {
     }
     TempDir(const TempDir&) = delete;
     TempDir& operator=(const TempDir&) = delete;
-    ~TempDir() { (void)dstd::fs::remove_all(path); }
+    ~TempDir() { dstd::fs::remove_all(path).discard(); }
 };
 
 struct Collector {

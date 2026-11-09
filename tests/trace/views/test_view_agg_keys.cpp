@@ -67,7 +67,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw2, gz2);
-            (void)dstd::fs::remove(pfw2);
+            dstd::fs::remove(pfw2).discard();
         }
         SUBCASE("group_by (pid, fhash) across two files") {
             run_both_multi({{dstd::String(gz2a), dstd::String(idx2)},
@@ -103,7 +103,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw3, gz3);
-            (void)dstd::fs::remove(pfw3);
+            dstd::fs::remove(pfw3).discard();
         }
         SUBCASE("group_by cat, mixed case merges") {
             run_both_file(gz3, idx3, GroupKey::cat(), "cat", 0);
@@ -151,7 +151,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw4, gz4);
-            (void)dstd::fs::remove(pfw4);
+            dstd::fs::remove(pfw4).discard();
 
             dstd::String pfw5 = rdir + "/agg_engine_resolved_b.pfw";
             dftu_utils_test::FileOut ofs5(pfw5);
@@ -171,7 +171,7 @@ TEST_SUITE("View") {
             }
             ofs5.close();
             dftu_utils_test::compress_file_to_gzip(pfw5, gz5);
-            (void)dstd::fs::remove(pfw5);
+            dstd::fs::remove(pfw5).discard();
         }
         SUBCASE("group_by file_path across two files") {
             run_both_multi({{dstd::String(gz4), dstd::String(idx4)},
@@ -232,7 +232,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw6, gz6);
-            (void)dstd::fs::remove(pfw6);
+            dstd::fs::remove(pfw6).discard();
         }
         SUBCASE("group_by rank") {
             run_both_file(gz6, idx6, GroupKey::rank(), "rank", 0);
@@ -268,7 +268,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw7, gz7);
-            (void)dstd::fs::remove(pfw7);
+            dstd::fs::remove(pfw7).discard();
         }
         SUBCASE("group_by arg x") {
             run_both_file(gz7, idx7, GroupKey::of_arg("x"), "x", 0);

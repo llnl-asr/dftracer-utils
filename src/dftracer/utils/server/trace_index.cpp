@@ -571,7 +571,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 // Drop the cached handle first, as the builder does: a live
                 // handle on a removed directory would serve the old data.
                 index::release_root(root);
-                (void)dstd::fs::remove_all(dstd::PathView(store));
+                dstd::fs::remove_all(dstd::PathView(store)).discard();
                 common::forget_input(store);
             }
         }
@@ -967,13 +967,13 @@ void TraceIndex::persist_viz_summary() const {
         const dstd::Path tmp{dstd::StringView(tmp_text)};
         if (!dstd::fs::write_file(tmp.view(),
                                   dstd::StringView(w.b.data(), w.b.size()))) {
-            (void)dstd::fs::remove(tmp.view());
+            dstd::fs::remove(tmp.view()).discard();
             return;
         }
         // A cache that cannot be published is dropped, and the next run
         // builds it again.
         if (!dstd::fs::rename(tmp.view(), path.view())) {
-            (void)dstd::fs::remove(tmp.view());
+            dstd::fs::remove(tmp.view()).discard();
         }
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_WARN(

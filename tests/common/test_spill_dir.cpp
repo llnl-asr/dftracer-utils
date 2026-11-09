@@ -37,7 +37,7 @@ class DiskDir {
     }
     DiskDir(const DiskDir&) = delete;
     DiskDir& operator=(const DiskDir&) = delete;
-    ~DiskDir() { (void)dstd::fs::remove_all(path_); }
+    ~DiskDir() { dstd::fs::remove_all(path_).discard(); }
     const dstd::Path& path() const { return path_; }
 
    private:
@@ -96,7 +96,7 @@ TEST_CASE("an unset variable gives a writable directory that is not RAM") {
     dftu_utils_test::FileOut out(probe);
     CHECK(out.good());
     out.close();
-    (void)dstd::fs::remove(probe);
+    dstd::fs::remove(probe).discard();
 }
 
 TEST_CASE("without a variable or a local disk the first usable fallback wins") {
@@ -205,7 +205,7 @@ TEST_CASE("a spill dir on tmpfs warns once") {
     for (std::size_t n; (n = std::fread(buf, 1, sizeof(buf), sink)) > 0;)
         text.append(buf, n);
     std::fclose(sink);
-    (void)dstd::fs::remove_all(ram);
+    dstd::fs::remove_all(ram).discard();
 
     std::size_t warnings = 0;
     for (std::size_t at = text.find("RAM-backed"); at != dstd::String::npos;

@@ -272,7 +272,7 @@ TEST_SUITE("MetadataCollector") {
         CHECK_FALSE(
             dstd::fs::exists(dstd::Path(root) / "store" / "stale_marker")
                 .value());
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 
     TEST_CASE("MetadataCollector - Invalid inputs") {
@@ -313,7 +313,7 @@ TEST_SUITE("MetadataCollector") {
             CHECK(output.valid_events == 0);
             CHECK(output.size_mb == 0);
 
-            (void)dstd::fs::remove_all(test_dir);
+            dstd::fs::remove_all(test_dir).discard();
         }
     }
 }
@@ -376,6 +376,6 @@ TEST_SUITE("MetadataCollectorRoot") {
         CHECK(built.success);
         CHECK(built.line_count == 7);
 
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 }

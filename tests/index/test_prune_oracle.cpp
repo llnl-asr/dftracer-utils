@@ -136,12 +136,12 @@ dstd::String write_trace(const dstd::String& dir, int seed, int events) {
     }
     out += "]\n";
     const auto plain = dir + "/trace" + dstd::to_string(seed) + ".pfw";
-    (void)dstd::fs::write_file(dstd::PathView(plain), out);
+    dstd::fs::write_file(dstd::PathView(plain), out).discard();
     const auto gz = plain + ".gz";
     const std::size_t member = seed == 3 ? LARGE_MEMBER_BYTES : MEMBER_BYTES;
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, member));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 
@@ -388,7 +388,7 @@ TEST_CASE("prune decisions match the recording") {
         for (const auto& l : lines) f += common::str_cat(l, "\n");
         MESSAGE("recorded " << lines.size() << " lines to "
                             << dstd::String(out));
-        (void)dstd::fs::write_file(dstd::PathView(out), f);
+        dstd::fs::write_file(dstd::PathView(out), f).discard();
         return;
     }
 
@@ -664,11 +664,11 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
                 R"(,"dur":5,"args":{"fhash":")", hash, "\"}}\n");
         const auto plain =
             env.dir() + "/t" + dstd::to_string(traces.size()) + ".pfw";
-        (void)dstd::fs::write_file(dstd::PathView(plain), out);
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
         const auto gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    1024));
-        (void)dstd::fs::remove(plain);
+        dstd::fs::remove(plain).discard();
         traces.push_back(gz);
     }
     index::IndexerOptions opts;

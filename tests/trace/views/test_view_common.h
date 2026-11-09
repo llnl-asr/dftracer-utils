@@ -49,7 +49,7 @@ inline dftracer::utils::dstd::String create_mixed_trace(
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -69,7 +69,7 @@ inline dftracer::utils::dstd::String create_multimember_trace(
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, member_bytes);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -89,7 +89,7 @@ inline dftracer::utils::dstd::String create_trace_with_counters(
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -108,7 +108,7 @@ inline dftracer::utils::dstd::String create_bulk_counters(
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -133,7 +133,7 @@ inline dftracer::utils::dstd::String create_counter_file(
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 

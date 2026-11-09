@@ -74,10 +74,11 @@ TEST_SUITE("Indexer") {
         dftu_utils_test::TestEnvironment env(10);
         const dstd::Path dir = dstd::Path(env.dir()) / "traces";
         REQUIRE(dstd::fs::create_directories(dir).has_value());
-        (void)dstd::fs::write_file(dstd::PathView(dir / "a.pfw.gz"), "x");
-        (void)dstd::fs::write_file(dstd::PathView(dir / "b.ndjson.gz"), "x");
-        (void)dstd::fs::write_file(dstd::PathView(dir / "plain.pfw"), "x");
-        (void)dstd::fs::write_file(dstd::PathView(dir / "notes.txt"), "x");
+        dstd::fs::write_file(dstd::PathView(dir / "a.pfw.gz"), "x").discard();
+        dstd::fs::write_file(dstd::PathView(dir / "b.ndjson.gz"), "x")
+            .discard();
+        dstd::fs::write_file(dstd::PathView(dir / "plain.pfw"), "x").discard();
+        dstd::fs::write_file(dstd::PathView(dir / "notes.txt"), "x").discard();
 
         auto ix = Indexer::open({dstd::String(dir.str())}, with_runtime(rt));
         dstd::Vector<dstd::String> names;
@@ -132,9 +133,9 @@ TEST_SUITE("Indexer") {
         const dstd::Path root(index_of(trace));
         REQUIRE(dstd::fs::create_directories(root / "rollups" / "store")
                     .has_value());
-        (void)dstd::fs::write_file(dstd::PathView(root / "rollups" / "marker"),
-                                   "r");
-        (void)dstd::fs::remove_all(root / "store");
+        dstd::fs::write_file(dstd::PathView(root / "rollups" / "marker"), "r")
+            .discard();
+        dstd::fs::remove_all(root / "store").discard();
         REQUIRE(dstd::fs::exists(root).value());
         REQUIRE_FALSE(dstd::fs::exists(root / "store").value());
 
@@ -402,11 +403,11 @@ dstd::String write_prefix(const dstd::String& src, const dstd::String& dst,
                           double frac) {
     dstd::String bytes =
         dstd::fs::read_file(dstd::PathView(src)).value_or(dstd::String());
-    (void)dstd::fs::write_file(
-        dstd::PathView(dst),
-        common::str_cat(bytes.substr(
-            0, static_cast<std::size_t>(static_cast<double>(bytes.size()) *
-                                        frac))));
+    dstd::fs::write_file(dstd::PathView(dst),
+                         common::str_cat(bytes.substr(
+                             0, static_cast<std::size_t>(
+                                    static_cast<double>(bytes.size()) * frac))))
+        .discard();
     return dst;
 }
 
@@ -440,7 +441,7 @@ dstd::String multimember_trace(dftu_utils_test::TestEnvironment& env,
     const dstd::String gz((dstd::Path(env.dir()) / name).str());
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 

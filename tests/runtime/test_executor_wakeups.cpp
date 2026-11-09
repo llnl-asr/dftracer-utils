@@ -186,7 +186,7 @@ TEST_SUITE("ExecutorWakeups") {
                 co_return;
             })));
         rt.shutdown();
-        (void)dstd::fs::remove(path);
+        dstd::fs::remove(path).discard();
         CHECK(landed);
     }
 }

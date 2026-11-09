@@ -863,7 +863,7 @@ TEST_CASE("C++ API - Regression and stress tests") {
         bool success =
             dftu_utils_test::compress_file_to_gzip(txt_file, gz_file);
         REQUIRE(success);
-        (void)dstd::fs::remove(txt_file);
+        dstd::fs::remove(txt_file).discard();
 
         // Build index
         {
@@ -1475,7 +1475,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
                 gz_file, idx_file + dstd::to_string(ckpt_size_mb), ckpt_size);
             CHECK_NOTHROW(indexer->build());
             CHECK(indexer->checkpoint_size() <= ckpt_size);
-            (void)dstd::fs::remove(idx_file + dstd::to_string(ckpt_size_mb));
+            dstd::fs::remove(idx_file + dstd::to_string(ckpt_size_mb))
+                .discard();
         }
     }
 

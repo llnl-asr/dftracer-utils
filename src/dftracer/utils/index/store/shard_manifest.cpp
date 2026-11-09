@@ -110,7 +110,7 @@ IndexShardManifest parse_manifest(dstd::StringView json) {
 void write_shard_manifest(dstd::StringView root,
                           const IndexShardManifest& manifest) {
     // A directory that cannot be made fails the write below.
-    (void)dstd::fs::create_directories(dstd::PathView(root));
+    dstd::fs::create_directories(dstd::PathView(root)).discard();
 
     const dstd::Path final_path{shard_manifest_path(root)};
     const dstd::Path tmp_path =
@@ -119,7 +119,7 @@ void write_shard_manifest(dstd::StringView root,
 
     const dstd::String body = to_json(manifest);
     if (!dstd::fs::write_file(tmp_path.view(), body)) {
-        (void)dstd::fs::remove(tmp_path.view());
+        dstd::fs::remove(tmp_path.view()).discard();
         throw common::DFTUtilsException(
             common::ErrorCode::Io,
             common::str_cat("failed to write shard manifest: ",
@@ -128,7 +128,7 @@ void write_shard_manifest(dstd::StringView root,
 
     const auto renamed = dstd::fs::rename(tmp_path.view(), final_path.view());
     if (!renamed) {
-        (void)dstd::fs::remove(tmp_path.view());
+        dstd::fs::remove(tmp_path.view()).discard();
         throw common::DFTUtilsException(
             common::ErrorCode::Io,
             common::str_cat("failed to publish shard manifest to ",

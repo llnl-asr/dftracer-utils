@@ -47,11 +47,11 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
         if (i == 3) ofs += R"(,"v":1)";
         ofs += "}}\n";
     }
-    (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
+    dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
 
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
 
     return test_plugin_common::index_trace(gz);
 }
@@ -130,11 +130,11 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
         dstd::String ofs;
         for (int i = 0; i < NUM_EVENTS; ++i)
             ofs += common::str_cat(R"({"x":)", i, R"(,"k":"a"})", "\n");
-        (void)dstd::fs::write_file(dstd::PathView(plain), ofs);
+        dstd::fs::write_file(dstd::PathView(plain), ofs).discard();
     }
     const dstd::String gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     View view = View::from_files(

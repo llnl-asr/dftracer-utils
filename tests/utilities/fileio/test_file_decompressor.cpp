@@ -58,7 +58,7 @@ TEST_SUITE("FileDecompressor") {
 
             dstd::String ofs;
             ofs += common::str_cat(original_content);
-            (void)dstd::fs::write_file(dstd::PathView(original_file), ofs);
+            dstd::fs::write_file(dstd::PathView(original_file), ofs).discard();
 
             FileCompressorUtility compressor;
             auto compress_input =
@@ -66,7 +66,7 @@ TEST_SUITE("FileDecompressor") {
             auto compress_result = compressor(compress_input).get();
             REQUIRE(compress_result.has_value());
 
-            (void)dstd::fs::remove(original_file);
+            dstd::fs::remove(original_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_input =
@@ -96,13 +96,13 @@ TEST_SUITE("FileDecompressor") {
 
             dstd::String ofs;
             ofs += "Custom output path test";
-            (void)dstd::fs::write_file(dstd::PathView(original_file), ofs);
+            dstd::fs::write_file(dstd::PathView(original_file), ofs).discard();
 
             FileCompressorUtility compressor;
             auto compress_input =
                 FileCompressionUtilityInput::from_file(original_file);
             REQUIRE(compressor(compress_input).get().has_value());
-            (void)dstd::fs::remove(original_file);
+            dstd::fs::remove(original_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_input =
@@ -137,7 +137,7 @@ TEST_SUITE("FileDecompressor") {
 
             dstd::String ofs;
             ofs += common::str_cat(original_content);
-            (void)dstd::fs::write_file(dstd::PathView(original_file), ofs);
+            dstd::fs::write_file(dstd::PathView(original_file), ofs).discard();
 
             FileCompressorUtility compressor;
             auto compress_result =
@@ -146,7 +146,7 @@ TEST_SUITE("FileDecompressor") {
                     .get();
             REQUIRE(compress_result.has_value());
 
-            (void)dstd::fs::remove(original_file);
+            dstd::fs::remove(original_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_result =
@@ -173,7 +173,7 @@ TEST_SUITE("FileDecompressor") {
             for (int i = 0; i < 10000; ++i) {
                 ofs += common::str_cat(i, ": ", line);
             }
-            (void)dstd::fs::write_file(dstd::PathView(original_file), ofs);
+            dstd::fs::write_file(dstd::PathView(original_file), ofs).discard();
 
             auto original_size = dstd::fs::file_size(original_file).value();
 
@@ -184,7 +184,7 @@ TEST_SUITE("FileDecompressor") {
                     .get();
             REQUIRE(compress_result.has_value());
 
-            (void)dstd::fs::remove(original_file);
+            dstd::fs::remove(original_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_result =
@@ -225,7 +225,7 @@ TEST_SUITE("FileDecompressor") {
 
             dstd::String ofs;
             ofs += "This is not valid gzip data!";
-            (void)dstd::fs::write_file(dstd::PathView(corrupt_file), ofs);
+            dstd::fs::write_file(dstd::PathView(corrupt_file), ofs).discard();
 
             FileDecompressorUtility decompressor;
             auto input = FileDecompressionUtilityInput::from_file(corrupt_file);
@@ -249,7 +249,7 @@ TEST_SUITE("FileDecompressor") {
             dstd::String compressed_file = empty_file + ".gz";
 
             dstd::String ofs;
-            (void)dstd::fs::write_file(dstd::PathView(empty_file), ofs);
+            dstd::fs::write_file(dstd::PathView(empty_file), ofs).discard();
 
             FileCompressorUtility compressor;
             auto compress_result =
@@ -257,7 +257,7 @@ TEST_SUITE("FileDecompressor") {
                     .get();
             REQUIRE(compress_result.has_value());
 
-            (void)dstd::fs::remove(empty_file);
+            dstd::fs::remove(empty_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_result =
@@ -292,7 +292,7 @@ TEST_SUITE("FileDecompressor") {
             }
             ofs.append(reinterpret_cast<const char*>(original_data.data()),
                        original_data.size());
-            (void)dstd::fs::write_file(dstd::PathView(binary_file), ofs);
+            dstd::fs::write_file(dstd::PathView(binary_file), ofs).discard();
 
             FileCompressorUtility compressor;
             auto compress_result =
@@ -300,7 +300,7 @@ TEST_SUITE("FileDecompressor") {
                     .get();
             REQUIRE(compress_result.has_value());
 
-            (void)dstd::fs::remove(binary_file);
+            dstd::fs::remove(binary_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_result =
@@ -333,8 +333,9 @@ TEST_SUITE("FileDecompressor") {
             dstd::String compressed_file = original_file + ".gz";
             dstd::String original_content = "happy path content\n";
 
-            (void)dstd::fs::write_file(dstd::PathView(original_file),
-                                       original_content);
+            dstd::fs::write_file(dstd::PathView(original_file),
+                                 original_content)
+                .discard();
 
             FileCompressorUtility compressor;
             auto compress_result =
@@ -342,7 +343,7 @@ TEST_SUITE("FileDecompressor") {
                     FileCompressionUtilityInput::from_file(original_file))
                     .get();
             REQUIRE(compress_result.has_value());
-            (void)dstd::fs::remove(original_file);
+            dstd::fs::remove(original_file).discard();
 
             FileDecompressorUtility decompressor;
             auto input =

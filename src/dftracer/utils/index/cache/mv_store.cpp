@@ -275,17 +275,17 @@ dstd::Optional<Manifest> read_manifest(dstd::StringView dir) {
 std::uint64_t dir_size(dstd::StringView dir) {
     std::uint64_t sum = 0;
     // A tree that cannot be walked sums what was visited.
-    (void)dstd::fs::walk(
-        dstd::PathView(dir), [&](dstd::PathView path, dstd::fs::FileKind kind) {
-            if (kind == dstd::fs::FileKind::File ||
-                kind == dstd::fs::FileKind::Symlink) {
-                const auto found = dstd::fs::stat(path);
-                if (found && found->kind == dstd::fs::FileKind::File) {
-                    sum += found->size;
-                }
+    dstd::fs::walk(dstd::PathView(dir), [&](dstd::PathView path,
+                                            dstd::fs::FileKind kind) {
+        if (kind == dstd::fs::FileKind::File ||
+            kind == dstd::fs::FileKind::Symlink) {
+            const auto found = dstd::fs::stat(path);
+            if (found && found->kind == dstd::fs::FileKind::File) {
+                sum += found->size;
             }
-            return dstd::fs::WalkAction::Continue;
-        });
+        }
+        return dstd::fs::WalkAction::Continue;
+    }).discard();
     return sum;
 }
 
@@ -307,12 +307,13 @@ void touch_last_used(dstd::StringView dir) {
                                        .creation = dstd::Creation::IfNeeded,
                                        .mode = 0666});
     if (!file) return;
-    (void)file->close();
+    file->close().discard();
     const auto now = std::chrono::system_clock::now().time_since_epoch();
-    (void)dstd::fs::set_mtime_ns(
+    dstd::fs::set_mtime_ns(
         path.view(),
         static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()));
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()))
+        .discard();
 }
 
 // Removes the least recently used views under `root` until they hold at most
@@ -503,8 +504,8 @@ dstd::File lock_view_dir(dstd::StringView dir) {
 
 void unlock_view_dir(dstd::File& lock) {
     if (!lock.is_open()) return;
-    (void)lock.unlock();
-    (void)lock.close();
+    lock.unlock().discard();
+    lock.close().discard();
 }
 
 dstd::String materialize_view_dir(const trace::views::detail::ViewPlan& plan) {
@@ -552,7 +553,7 @@ void register_view(dstd::StringView dir,
     }
     j += bases.empty() ? "]\n}\n" : "\n  ]\n}\n";
 
-    (void)dstd::fs::write_file(manifest_path(dir).view(), j);
+    dstd::fs::write_file(manifest_path(dir).view(), j).discard();
     if (!plan.record_schema) return;
     const dstd::String root = views_root(plan);
     if (!root.empty()) evict_views(root, dir);
@@ -587,7 +588,7 @@ dstd::Optional<dstd::Vector<trace::views::ViewFile>> find_subsuming_view(
         // can never be served again, and nobody reads a non-matching MV.
         if (manifest_is_stale(*m)) {
             release_root(dir);
-            (void)dstd::fs::remove_all(dstd::PathView(dir));
+            dstd::fs::remove_all(dstd::PathView(dir)).discard();
             continue;
         }
         if (!manifest_matches(*m, plan, q_bases)) continue;

@@ -126,7 +126,7 @@ TEST_CASE("plugin cxx: Io ops are co_await-able directly") {
     dstd::String path = env.dir() + "/probe.txt";
     const dstd::String body = "alpha\nbeta\ngamma\n";
     {
-        (void)dstd::fs::write_file(dstd::PathView(path), body);
+        dstd::fs::write_file(dstd::PathView(path), body).discard();
     }
 
     HostFixture fx;

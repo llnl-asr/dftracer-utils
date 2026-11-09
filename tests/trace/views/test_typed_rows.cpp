@@ -59,7 +59,7 @@ dstd::String write_access(TestEnvironment& env, const dstd::String& extra) {
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
     return gz;
@@ -153,7 +153,7 @@ TEST_SUITE("TypedRows") {
         }
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         const auto events = run(rows<Event>(view_of(gz)));
         REQUIRE(events.size() == 20);
         for (const Event& e : events) {
@@ -185,7 +185,7 @@ TEST_SUITE("TypedRows") {
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    1 << 20));
-        (void)dstd::fs::remove(plain);
+        dstd::fs::remove(plain).discard();
         dftracer::utils::index::Indexer::open(
             {dstd::String(dstd::StringView(gz))})
             .build();

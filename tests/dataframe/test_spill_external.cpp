@@ -143,7 +143,7 @@ struct SpillDirVar {
     }
     ~SpillDirVar() {
         ::unsetenv("DFTRACER_UTILS_SPILL_DIR");
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 };
 

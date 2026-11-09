@@ -291,7 +291,7 @@ TEST_CASE(
     }
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
 
     struct Sink {
         dstd::Vector<dstd::String> names;

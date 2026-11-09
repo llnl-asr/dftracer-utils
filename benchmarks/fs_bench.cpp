@@ -106,7 +106,7 @@ int run_smoke() {
     const bool same = serial.paths.size() == 400 &&
                       hash_paths(serial.paths) == hash_paths(found.paths) &&
                       serial.bytes == found.bytes;
-    (void)dstd::fs::remove_all(root);
+    dstd::fs::remove_all(root).discard();
     if (!same) std::fprintf(stderr, "find_all and the serial walk differ\n");
     return same ? 0 : 1;
 }

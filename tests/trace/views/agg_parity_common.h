@@ -182,7 +182,7 @@ inline dftracer::utils::dstd::String write_agg_engine_trace(
         }
     }
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 

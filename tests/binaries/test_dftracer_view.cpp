@@ -64,7 +64,7 @@ dstd::String make_multimember_pfw_gz(dftu_utils_test::TestEnvironment& env,
     utilities::fileio::compress::gzip_rechunk_to_members(
         dstd::String(single), dstd::String(mm), member_bytes, 6)
         .get();
-    (void)dstd::fs::remove(single);
+    dstd::fs::remove(single).discard();
     return mm;
 }
 
@@ -118,7 +118,7 @@ int run_view_capture(const dstd::String& binary,
         ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
         ::_exit(127);
     }
-    (void)capture->close();
+    capture->close().discard();
     int status = 0;
     ::waitpid(pid, &status, 0);
     out = dftu_utils_test::read_text(capture_path);
@@ -530,7 +530,7 @@ TEST_SUITE("DFTracerView") {
         }
         dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         dstd::String cap = env.dir() + "/cap.txt";
         dstd::String out;
@@ -568,7 +568,7 @@ TEST_SUITE("DFTracerView") {
         }
         dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         dstd::String cap = env.dir() + "/cap.txt";
         dstd::String out;
@@ -607,7 +607,7 @@ TEST_SUITE("DFTracerView") {
         }
         dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         dstd::String cap = env.dir() + "/cap.txt";
         dstd::String out;

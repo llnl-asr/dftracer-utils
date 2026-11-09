@@ -118,7 +118,7 @@ struct TempFile {
         REQUIRE(std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size());
         std::fclose(f);
     }
-    ~TempFile() { (void)dstd::fs::remove_all(dir); }
+    ~TempFile() { dstd::fs::remove_all(dir).discard(); }
 };
 
 // Whole-file reference decode with the system zlib.

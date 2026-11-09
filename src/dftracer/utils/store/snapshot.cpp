@@ -2151,8 +2151,8 @@ void Snapshot::warm_window(const detail::FileData& file,
     }
     // A failed read here costs only the cache: the query reads its pages.
     BlockReads reads;
-    (void)file.reader.warm_range(window * READ_RUN_BYTES, READ_RUN_BYTES,
-                                 &reads);
+    file.reader.warm_range(window * READ_RUN_BYTES, READ_RUN_BYTES, &reads)
+        .discard();
     // A reader with direct reads warms nothing.
     if (reads.calls == 0) return;
     reads_->add_window(reads);

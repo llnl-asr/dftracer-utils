@@ -859,10 +859,10 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
     # A string scalar compares the text of a String column.
     __hash__ = None  # type: ignore[assignment]
 
-    def __eq__(self, other: object) -> "Series":  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __eq__(self, other: object) -> "Series":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._cmp(_CMP_EQ, other)
 
-    def __ne__(self, other: object) -> "Series":  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __ne__(self, other: object) -> "Series":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._cmp(_CMP_NE, other)
 
     def __lt__(self, other: _Scalar) -> "Series":
@@ -2503,13 +2503,13 @@ class _StrAccessor:
         labels = [names.get(g, str(g - 1)) for g in range(1, rx.groups + 1)]
         found = DataFrame.from_dict({"m": self._s.str_findall(pat)})
         rows = found.with_row_index("row").explode("m")
-        rows = cast(DataFrame, rows[cast(Series, rows["m"]).notna()])
+        rows = rows[rows["m"].notna()]
         if len(rows) == 0:
             ints = {c: Series.from_list([], dtype=DType.INT64) for c in ["row", "match"]}
             text = {c: Series.from_list([], dtype=DType.STRING) for c in labels}
             return DataFrame.from_dict({**ints, **text})
         rows = rows.assign(match=rows.groupby("row").cumcount()["cumcount"])
-        m = cast(Series, rows["m"])
+        m = rows["m"]
         groups = {c: m.str.extract(pat, g) for g, c in enumerate(labels, 1)}
         return DataFrame.from_dict({"row": rows["row"], "match": rows["match"], **groups})
 

@@ -302,7 +302,7 @@ class TraceViewer(LazyFrame):
         """Spill budget for the scan and the plan; bytes or a unit string."""
         return self._trace(self._tv.memory_budget(coerce_bytes(nbytes, "nbytes")))
 
-    def group_by(  # ty: ignore[invalid-method-override]
+    def group_by(  # ty: ignore[incompatible-method-override]
         self, *keys: "Union[str, Sequence[str]]"
     ) -> "TraceViewer":
         """Trace group keys: ``name``/``cat``/``pid``/``tid``/``fhash``/
@@ -314,7 +314,7 @@ class TraceViewer(LazyFrame):
             flat.extend([k] if isinstance(k, str) else k)
         return self._trace(self._tv.group_by(*flat))
 
-    def agg(self, *specs: Union[str, Agg]) -> "TraceViewer":  # ty: ignore[invalid-method-override]
+    def agg(self, *specs: Union[str, Agg]) -> "TraceViewer":  # ty: ignore[incompatible-method-override]
         """Trace aggregates: spec strings (``"count"``, ``"mean:dur"``,
         ``"p99:dur"``, ``"busy:dur"``) or bare-field ``Agg`` expressions
         (``F.dur.sum()``, ``F.dur.busy(resolution="1ms")``, ``F.any.mean()``)."""
@@ -601,7 +601,7 @@ class TraceViewer(LazyFrame):
         """Write the materialized-view manifest at ``dir``."""
         self._tv.register_materialized(dir)
 
-    def stream(self, batch_size: int = 65536) -> "Iterator[DataFrame]":  # ty: ignore[invalid-method-override]
+    def stream(self, batch_size: int = 65536) -> "Iterator[DataFrame]":  # ty: ignore[lost-keyword-for-regular-parameter]
         """The rows as :class:`DataFrame` chunks of about ``batch_size`` rows,
         holding a bounded amount in memory."""
         return LazyFrame.stream(self, batch_size)

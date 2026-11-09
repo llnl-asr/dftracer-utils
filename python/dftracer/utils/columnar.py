@@ -41,7 +41,6 @@ from typing import (
     Sequence,
     Tuple,
     Union,
-    cast,
 )
 
 from . import dftracer_utils_ext as _ext
@@ -320,10 +319,10 @@ class Expr:
     def __le__(self, other: "Union[Value, Expr]") -> "Expr":
         return _Cmp("le", self, other)
 
-    def __eq__(self, other: "Union[Value, Expr]") -> "Expr":  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __eq__(self, other: "Union[Value, Expr]") -> "Expr":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return _Cmp("eq", self, other)
 
-    def __ne__(self, other: "Union[Value, Expr]") -> "Expr":  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __ne__(self, other: "Union[Value, Expr]") -> "Expr":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return _Cmp("ne", self, other)
 
     def eq(self, other: "Union[Value, Expr]") -> "Expr":
@@ -2450,10 +2449,10 @@ class Agg:
     def __le__(self, other: object) -> Expr:
         return self._cmp("le", other)
 
-    def __eq__(self, other: object) -> Expr:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __eq__(self, other: object) -> Expr:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._cmp("eq", other)
 
-    def __ne__(self, other: object) -> Expr:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __ne__(self, other: object) -> Expr:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._cmp("ne", other)
 
     __hash__ = None  # type: ignore[assignment]
@@ -2843,7 +2842,7 @@ class GroupBy:
         if frame.num_rows == 0:
             if not 0.0 <= q <= 1.0:
                 raise ValueError(f"quantile: q must be in [0, 1], not {q!r}")
-            picked = cast(DataFrame, frame[self._keys + columns])
+            picked = frame[self._keys + columns]
             return picked.astype({c: "float64" for c in columns})
         out = group_quantile(frame.lazy(), self._keys, columns, float(q)).collect()
         return self._sorted(out)

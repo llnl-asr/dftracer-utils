@@ -1254,31 +1254,31 @@ class BoundColumn(_Col):
     def _scalar(self, agg: "Agg") -> LazyScalar:
         return LazyScalar(self._frame.select(agg.alias("value")))
 
-    def sum(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def sum(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._scalar(_Col(self.name).sum())
 
-    def mean(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def mean(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._scalar(_Col(self.name).mean())
 
-    def min(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def min(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._scalar(_Col(self.name).min())
 
-    def max(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def max(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._scalar(_Col(self.name).max())
 
-    def var(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def var(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._scalar(_Col(self.name).var())
 
-    def std(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def std(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._scalar(_Col(self.name).std())
 
-    def first(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def first(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._scalar(_Col(self.name).first())
 
-    def last(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def last(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._scalar(_Col(self.name).last())
 
-    def count(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def count(self) -> LazyScalar:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         from .columnar import Agg
 
         return self._scalar(Agg("count_valid", _Col(self.name)))

@@ -191,7 +191,10 @@ def _typed_event_frame(
     if "hhash" in df.columns:
         out["host_hash"] = df["hhash"].astype("string")
     if {"pid", "tid"}.issubset(df.columns):
-        host = df["host_name"].astype("string") if "host_name" in df.columns else pd.NA
+        if "host_name" in df.columns:
+            host = df["host_name"].astype("string")
+        else:
+            host = pd.Series(pd.NA, index=df.index, dtype="string")
         if "hhash" in df.columns:
             host = host.mask(host.isna() | (host == ""), df["hhash"].astype("string"))
         host = host.fillna("unknown").replace("", "unknown")

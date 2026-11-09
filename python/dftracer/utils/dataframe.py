@@ -27,6 +27,7 @@ from typing import (
     Union,
     cast,
     get_args,
+    overload,
 )
 
 from . import dftracer_utils_ext as _ext
@@ -656,6 +657,10 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             return pl.DataFrame(self)
         return pl.DataFrame({name: self[name].to_polars() for name in self.columns})
 
+    @overload
+    def __getitem__(self, key: str) -> Series: ...
+    @overload
+    def __getitem__(self, key: "Union[Sequence[str], Series]") -> "DataFrame": ...
     def __getitem__(self, key: "Union[str, Sequence[str], Series]") -> "Union[Series, DataFrame]":
         """``df["a"]`` is a column; ``df[["a", "b"]]`` a projection; ``df[mask]``
         with a Bool Series the matching rows (the pandas spellings)."""
@@ -825,7 +830,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         the last, and ``False`` marks every one of them. Nulls compare
         equal."""
         cols = list(self.columns) if subset is None else _names(subset)
-        frame = cast("DataFrame", self[cols])
+        frame = self[cols]
         if keep is False:
             return cast("Series", _wrap(frame._native.is_duplicated()))
         if keep == "last":
@@ -882,7 +887,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         keys = _names(index)
         if len(keys) == 1 and aggfunc in get_args(PivotAgg):
             return self.pivot(keys[0], columns, values, cast("PivotAgg", aggfunc))
-        picked = cast("DataFrame", self[keys + [columns, values]])
+        picked = self[keys + [columns, values]]
         cells = getattr(picked.groupby(keys + [columns]), aggfunc)()
         row = "__dftu_pivot_row__"
         cells = cells.assign(**{row: cells.groupby(keys).ngroup()["ngroup"]})

@@ -169,7 +169,7 @@ DataFrame DataFrame::group_by(const Expr& key,
     dstd::Vector<const Series*> inputs;
     inputs.reserve(columns.size());
     for (const Series& c : columns) inputs.push_back(&c);
-    return group_agg_expr(key, aggs, inputs, key_name);
+    return common::unwrap(group_agg_expr(key, aggs, inputs, key_name));
 }
 
 DataFrame DataFrame::group_by(const dstd::Vector<Expr>& keys,
@@ -186,7 +186,7 @@ DataFrame DataFrame::group_by(const dstd::Vector<Expr>& keys,
     dstd::Vector<const Series*> inputs;
     inputs.reserve(columns.size());
     for (const Series& c : columns) inputs.push_back(&c);
-    return group_agg_expr(keys, aggs, inputs, key_names);
+    return common::unwrap(group_agg_expr(keys, aggs, inputs, key_names));
 }
 
 DataFrame DataFrame::join(const DataFrame& other,

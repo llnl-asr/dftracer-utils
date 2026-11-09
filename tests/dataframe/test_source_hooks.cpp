@@ -5,6 +5,7 @@
 // hand-written vtable exercises the C marshaling and derived-source ownership.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -123,8 +124,8 @@ class SmartSource final : public Source,
             return derive(share(frame_), ApplyStatus::Inexact, std::move(seen));
         dstd::Vector<const Series*> in;
         for (const Series& c : frame_.columns) in.push_back(&c);
-        return derive(frame_.filter(eval(predicate, in)), ApplyStatus::Exact,
-                      std::move(seen));
+        return derive(frame_.filter(dftu_utils_test::eval_ok(predicate, in)),
+                      ApplyStatus::Exact, std::move(seen));
     }
 
     dstd::Optional<SourceApplication> apply_projection(

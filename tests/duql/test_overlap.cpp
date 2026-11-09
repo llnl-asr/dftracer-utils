@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/overlap.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 #include <mmix_lcg.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -98,8 +101,8 @@ TEST_CASE("overlap equals a nested loop") {
         CAPTURE(m);
         const Table rows = random_table(rng, n, keys, span, dur);
         const Table side = random_table(rng, m, keys, span, dur);
-        const OverlapMatches got =
-            overlap_matches(columns_of(rows), columns_of(side));
+        const OverlapMatches got = dftu_utils_test::ok(
+            overlap_matches(columns_of(rows), columns_of(side)));
         const OverlapMatches want = nested_loop(rows, side);
         CHECK(got.offsets == want.offsets);
         CHECK(got.rows == want.rows);
@@ -117,7 +120,8 @@ TEST_CASE("overlap is half open and zero-length intervals sit inside") {
     rows.start = {10, 9, 5, 4};
     rows.duration = {5, 2, 0, 4};
     rows.key_ok = rows.start_ok = rows.duration_ok = {1, 1, 1, 1};
-    const auto m = overlap_matches(columns_of(rows), columns_of(side));
+    const auto m = dftu_utils_test::ok(
+        overlap_matches(columns_of(rows), columns_of(side)));
     // [10,15) meets [0,10) not and takes [10,20); [9,11) takes both; [5,5)
     // is inside [0,10) only; [4,8) takes [0,10) and the zero-length row at 5.
     const dstd::Vector<std::int64_t> rows_want = {1, 0, 1, 0, 0, 2};
@@ -136,7 +140,8 @@ TEST_CASE("overlap does not scan pairs") {
     const Table rows = random_table(rng, N, KEYS, 5'000'000, 50);
     const Table side = random_table(rng, N, KEYS, 5'000'000, 50);
     g_overlap_steps.store(0, std::memory_order_relaxed);
-    const auto m = overlap_matches(columns_of(rows), columns_of(side));
+    const auto m = dftu_utils_test::ok(
+        overlap_matches(columns_of(rows), columns_of(side)));
     const std::uint64_t steps = g_overlap_steps.load(std::memory_order_relaxed);
     MESSAGE("steps: " << steps << ", matches: " << m.rows.size());
     CHECK(m.offsets.size() == static_cast<std::size_t>(N) + 1);
@@ -159,6 +164,64 @@ TEST_CASE("overlap compares doubles and scaled durations") {
     rows.start = dataframe::Series::flat_i64(&at, 1);
     rows.duration = dataframe::Series::flat_i64(&len, 1);
     rows.scale = 0.001;  // 3000 ns is 3 in the unit of the start
-    const auto m = overlap_matches(rows, side);
+    const auto m = dftu_utils_test::ok(overlap_matches(rows, side));
     CHECK(m.rows == dstd::Vector<std::int64_t>{0, 1});
+}
+
+TEST_CASE("overlap refuses a start that is not a number") {
+    const std::int64_t one = 1;
+    OverlapColumns side;
+    side.keys.push_back(dataframe::Series::flat_i64(&one, 1));
+    side.start = dataframe::Series::strings({"a"});
+    side.duration = dataframe::Series::flat_i64(&one, 1);
+    OverlapColumns rows;
+    rows.keys.push_back(dataframe::Series::flat_i64(&one, 1));
+    rows.start = dataframe::Series::flat_i64(&one, 1);
+    rows.duration = dataframe::Series::flat_i64(&one, 1);
+    const auto m = overlap_matches(rows, side);
+    REQUIRE(!m.has_value());
+    CHECK(dftracer::utils::common::errorcode_of(m.error()) ==
+          dftracer::utils::common::ErrorCode::InvalidArgument);
+    CHECK(dstd::String(m.error().message()).find("not a number") !=
+          dstd::String::npos);
+}
+
+TEST_CASE("overlap with unequal key counts ends the process" *
+          doctest::skip()) {
+    fresh_process::announce_abort();
+    const std::int64_t one = 1;
+    OverlapColumns rows;
+    rows.keys.push_back(dataframe::Series::flat_i64(&one, 1));
+    rows.start = dataframe::Series::flat_i64(&one, 1);
+    rows.duration = dataframe::Series::flat_i64(&one, 1);
+    OverlapColumns side;
+    side.start = dataframe::Series::flat_i64(&one, 1);
+    side.duration = dataframe::Series::flat_i64(&one, 1);
+    (void)overlap_matches(rows, side);
+}
+
+TEST_CASE("overlap with unequal key counts is fatal") {
+    auto result =
+        fresh_process::run("overlap with unequal key counts ends the process");
+    CHECK(result.aborted_with("key columns differ in count"));
+}
+
+TEST_CASE(
+    "overlap with a start and duration of unequal length ends the "
+    "process" *
+    doctest::skip()) {
+    fresh_process::announce_abort();
+    const std::int64_t two[] = {1, 2};
+    OverlapColumns rows;
+    rows.keys.push_back(dataframe::Series::flat_i64(two, 2));
+    rows.start = dataframe::Series::flat_i64(two, 2);
+    rows.duration = dataframe::Series::flat_i64(two, 1);
+    (void)overlap_matches(rows, rows);
+}
+
+TEST_CASE("overlap with a start and duration of unequal length is fatal") {
+    auto result = fresh_process::run(
+        "overlap with a start and duration of unequal length ends the "
+        "process");
+    CHECK(result.aborted_with("start and duration differ in length"));
 }

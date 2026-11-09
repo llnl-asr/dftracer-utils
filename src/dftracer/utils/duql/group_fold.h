@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -60,12 +61,14 @@ class GroupFold {
               dstd::Vector<FoldAgg> aggs);
     ~GroupFold();
 
-    /// Throws std::invalid_argument for a key that holds a list or object.
-    void add(dataframe::DataFrame batch);
+    /// An InvalidArgument error for a key that holds a list or object, or the
+    /// error of the engine aggregation. After an error the fold is unusable.
+    dstd::Result<void> add(dataframe::DataFrame batch);
 
     /// One row per group: the keys, then one column per aggregate, as
-    /// `names`.
-    dataframe::DataFrame finish(dstd::Vector<dstd::String> names);
+    /// `names`. An InvalidArgument error when a plugin reducer is not
+    /// registered or fails on a group.
+    dstd::Result<dataframe::DataFrame> finish(dstd::Vector<dstd::String> names);
 
    private:
     struct Ord;

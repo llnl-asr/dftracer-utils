@@ -254,7 +254,7 @@ dataframe::Expr Applier::per_batch(const duql::TermRef& t,
             // Series*>
             dstd::Vector<const dataframe::Series*> inputs;
             for (const auto& c : f.columns) inputs.push_back(&c);
-            dataframe::Series out = dataframe::eval(e, inputs);
+            dataframe::Series out = common::unwrap(dataframe::eval(e, inputs));
             f.names.emplace_back(name);
             f.columns.push_back(std::move(out));
             return f;
@@ -406,7 +406,8 @@ void Applier::call(const duql::TermRef& t, const duql::Term* term) {
             arg_types.push_back(
                 ls && duql::is_null_term(*a, cols_, schema_.args_fallback)
                     ? dataframe::scalar(dataframe::TypeId::Unknown)
-                    : dataframe::infer_type(args.back(), types()));
+                    : common::unwrap(
+                          dataframe::infer_type(args.back(), types())));
         }
     }
     const dstd::String name = "__duql_c_" + dstd::to_string(calls_++);
@@ -435,16 +436,17 @@ void Applier::call(const duql::TermRef& t, const duql::Term* term) {
                 dstd::Vector<dataframe::Series> values;
                 dstd::Vector<dataframe::DataType> types = arg_types;
                 for (std::size_t i = 0; i < args.size(); ++i) {
-                    values.push_back(dataframe::eval(args[i], inputs));
+                    values.push_back(
+                        common::unwrap(dataframe::eval(args[i], inputs)));
                     if (per_batch[i]) types[i] = values.back().data_type();
                 }
-                dstd::Optional<dataframe::DataType> type;
-                try {
-                    type = duql::call_type(*term, types);
-                } catch (const std::invalid_argument& e) {
+                auto called = duql::call_type(*term, types);
+                if (!called)
                     throw std::invalid_argument(
-                        ("'" + text + "': " + e.what()).c_str());
-                }
+                        ("'" + text +
+                         "': " + dstd::String(called.error().message()))
+                            .c_str());
+                dstd::Optional<dataframe::DataType> type = *called;
                 const std::int64_t rows = f.num_rows();
                 f.names.emplace_back(name);
                 f.columns.push_back(
@@ -456,12 +458,10 @@ void Applier::call(const duql::TermRef& t, const duql::Term* term) {
             std::move(next), "call " + name + " per batch = " + text);
         return;
     }
-    dstd::Optional<dataframe::DataType> type;
-    try {
-        type = duql::call_type(*term, arg_types);
-    } catch (const std::invalid_argument& e) {
-        refuse("'" + text + "': " + e.what());
-    }
+    auto called = duql::call_type(*term, arg_types);
+    if (!called)
+        refuse("'" + text + "': " + dstd::String(called.error().message()));
+    dstd::Optional<dataframe::DataType> type = *called;
     if (!type) {
         with_column(name, dataframe::expr_lit_null(dataframe::TypeId::Bool),
                     text);
@@ -479,7 +479,7 @@ void Applier::call(const duql::TermRef& t, const duql::Term* term) {
             for (const auto& x : f.columns) inputs.push_back(&x);
             dstd::Vector<dataframe::Series> values;
             for (const auto& a : args)
-                values.push_back(dataframe::eval(a, inputs));
+                values.push_back(common::unwrap(dataframe::eval(a, inputs)));
             const std::int64_t rows = f.num_rows();
             f.names.emplace_back(name);
             f.columns.push_back(
@@ -676,9 +676,9 @@ void Applier::join_lookup(const duql::TermRef& t, const duql::Term* term) {
                 dstd::SharedPtr<const dataframe::DataFrame> none;
                 if (empty)
                     none = (strong ? strong : owner(weak))->frame(*empty);
-                out = duql::scalar_column(dstd::String(sub), ptrs,
-                                          at(matched).materialize(), *field,
-                                          none.get());
+                out = common::unwrap(duql::scalar_column(
+                    dstd::String(sub), ptrs, at(matched).materialize(), *field,
+                    none.get()));
             }
             f.names.emplace_back(name);
             f.columns.push_back(std::move(out));
@@ -745,7 +745,8 @@ void Applier::lookup(const duql::TermRef& t, const duql::Term* term) {
 
 void Applier::with_column(const dstd::String& name, const dataframe::Expr& e,
                           const dstd::String& text) {
-    dataframe::DataType type = dataframe::infer_type(e, types());
+    dataframe::DataType type =
+        common::unwrap(dataframe::infer_type(e, types()));
     v_ = v_.with_column(std_str(name), e);
     if (auto i = index(name))
         cols_[*i] = {name, std::move(type), false};

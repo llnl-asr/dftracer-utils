@@ -312,7 +312,7 @@ class FilterCursor : public Cursor {
     // column - it cannot move one kept row before another - so a ByColumn
     // claim on the input survives filtering unchanged.
     dstd::Optional<Morsel> apply(Morsel&& m) {
-        Series mask = eval(pred_, column_ptrs(m.columns));
+        Series mask = common::unwrap(eval(pred_, column_ptrs(m.columns)));
         DataFrame tmp;
         tmp.names.assign(m.columns.size(), dstd::String());
         for (Series& c : m.columns) tmp.columns.push_back(c.share());
@@ -674,7 +674,7 @@ class WithColumnCursor : public Cursor {
     // the ordered column itself invalidates the claim: the new values have no
     // known relation to it.
     Morsel apply(Morsel&& m) {
-        Series nc = eval(expr_, column_ptrs(m.columns));
+        Series nc = common::unwrap(eval(expr_, column_ptrs(m.columns)));
         Morsel out;
         out.rows = m.rows;
         out.batch_index = m.batch_index;
@@ -3329,7 +3329,7 @@ Schema out_types(const LazyOp& op, Schema in) {
                 dstd::Vector<DataType> types;
                 types.reserve(in.fields.size());
                 for (const Field& f : in.fields) types.push_back(f.type);
-                DataType t = infer_type(o.expr, types);
+                DataType t = common::unwrap(infer_type(o.expr, types));
                 auto it = std::find_if(
                     in.fields.begin(), in.fields.end(),
                     [&](const Field& f) { return f.name == o.name; });
@@ -4125,7 +4125,7 @@ dstd::Optional<DataFrame> try_fuse_map(
             if (expr_as_col_cmp(p, &c, &op, &rhs))
                 return src.columns[static_cast<std::size_t>(c)].compare(op,
                                                                         rhs);
-            return eval(p, column_ptrs(src.columns));
+            return common::unwrap(eval(p, column_ptrs(src.columns)));
         };
         Series mask = mask_of(filters[0]->pred);
         for (std::size_t i = 1; i < filters.size(); ++i)
@@ -4143,8 +4143,9 @@ dstd::Optional<DataFrame> try_fuse_map(
             computed.push_back(expr_remap_cols(e, old_to_new));
     }
     dstd::Vector<Series> comp =
-        computed.empty() ? dstd::Vector<Series>{}
-                         : eval_many(computed, column_ptrs(sub.columns));
+        computed.empty()
+            ? dstd::Vector<Series>{}
+            : common::unwrap(eval_many(computed, column_ptrs(sub.columns)));
     DataFrame out;
     out.names = sel->names;
     out.columns.reserve(outs.size());
@@ -4468,11 +4469,13 @@ coro::CoroTask<DataFrame> LazyFrame::run_ops_in_memory(
         DataFrame next = std::visit(
             Overloaded{
                 [&](const FilterOp& o) {
-                    return df.filter(eval(o.pred, column_ptrs(df.columns)));
+                    return df.filter(
+                        common::unwrap(eval(o.pred, column_ptrs(df.columns))));
                 },
                 [&](const WithColumnOp& o) {
                     return df.with_column(
-                        o.name, eval(o.expr, column_ptrs(df.columns)));
+                        o.name,
+                        common::unwrap(eval(o.expr, column_ptrs(df.columns))));
                 },
                 [&](const SelectOp& o) {
                     return df.select(without_rest(o.names));

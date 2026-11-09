@@ -3,6 +3,7 @@
 // eval, the C ABI builders, and the typed refusals.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -52,9 +53,9 @@ dstd::Vector<std::int64_t> i64s(const Series& s) {
 // Every string node must type the same way it evaluates.
 void check_inferred(const Expr& e, const Series& in) {
     dstd::Vector<const Series*> ins{&in};
-    Series out = eval(e, ins);
+    Series out = dftu_utils_test::eval_ok(e, ins);
     REQUIRE(out.valid());
-    DataType dt = infer_type(e, {in.data_type()});
+    DataType dt = dftu_utils_test::infer_type_ok(e, {in.data_type()});
     CHECK(dt.id == out.type());
 }
 
@@ -65,36 +66,43 @@ TEST_SUITE("expr string ops") {
         Series s = names();
         dstd::Vector<const Series*> in{&s};
         using B = dstd::Vector<bool>;
-        CHECK(
-            bools(eval(expr_str_pred(StrPredOp::Contains, expr_col(0), "read"),
-                       in)) == B{true, true, false, false, true});
-        CHECK(
-            bools(eval(expr_str_pred(StrPredOp::StartsWith, expr_col(0), "re"),
-                       in)) == B{true, false, false, false, true});
-        CHECK(bools(eval(expr_str_pred(StrPredOp::EndsWith, expr_col(0), "64"),
-                         in)) == B{false, true, false, false, false});
-        CHECK(bools(eval(expr_str_pred(StrPredOp::Like, expr_col(0), "%ead%"),
-                         in)) == B{true, true, false, false, true});
-        CHECK(bools(eval(expr_str_pred(StrPredOp::Like, expr_col(0), "r_ad_"),
-                         in)) == B{false, false, false, false, true});
-        CHECK(
-            bools(eval(expr_str_pred(StrPredOp::Matches, expr_col(0), "[a-z]+"),
-                       in)) == B{true, false, false, true, true});
-        CHECK(bools(eval(expr_str_pred(StrPredOp::Search, expr_col(0), "[0-9]"),
-                         in)) == B{false, true, false, false, false});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_str_pred(StrPredOp::Contains, expr_col(0), "read"),
+                  in)) == B{true, true, false, false, true});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_str_pred(StrPredOp::StartsWith, expr_col(0), "re"),
+                  in)) == B{true, false, false, false, true});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_str_pred(StrPredOp::EndsWith, expr_col(0), "64"), in)) ==
+              B{false, true, false, false, false});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_str_pred(StrPredOp::Like, expr_col(0), "%ead%"), in)) ==
+              B{true, true, false, false, true});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_str_pred(StrPredOp::Like, expr_col(0), "r_ad_"), in)) ==
+              B{false, false, false, false, true});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_str_pred(StrPredOp::Matches, expr_col(0), "[a-z]+"),
+                  in)) == B{true, false, false, true, true});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_str_pred(StrPredOp::Search, expr_col(0), "[0-9]"),
+                  in)) == B{false, true, false, false, false});
         // Matches is whole-string; Search is anywhere. Same pattern, two rows
         // differ.
-        CHECK(bools(eval(expr_str_pred(StrPredOp::Matches, expr_col(0), "ead"),
-                         in)) == B{false, false, false, false, false});
-        CHECK(bools(eval(expr_str_pred(StrPredOp::Search, expr_col(0), "ead"),
-                         in)) == B{true, true, false, false, true});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_str_pred(StrPredOp::Matches, expr_col(0), "ead"), in)) ==
+              B{false, false, false, false, false});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_str_pred(StrPredOp::Search, expr_col(0), "ead"), in)) ==
+              B{true, true, false, false, true});
         // Case matters for Contains; lower() first for a case-fold.
-        CHECK(
-            bools(eval(expr_str_pred(StrPredOp::Contains, expr_col(0), "write"),
-                       in)) == B{false, false, false, false, false});
-        CHECK(bools(eval(expr_str_pred(StrPredOp::Contains,
-                                       expr_lower(expr_col(0)), "write"),
-                         in)) == B{false, false, true, false, false});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_str_pred(StrPredOp::Contains, expr_col(0), "write"),
+                  in)) == B{false, false, false, false, false});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_str_pred(StrPredOp::Contains, expr_lower(expr_col(0)),
+                                "write"),
+                  in)) == B{false, false, true, false, false});
         for (StrPredOp op :
              {StrPredOp::Contains, StrPredOp::StartsWith, StrPredOp::EndsWith,
               StrPredOp::Like, StrPredOp::Matches, StrPredOp::Search})
@@ -106,32 +114,44 @@ TEST_SUITE("expr string ops") {
         dstd::Vector<const Series*> in{&s};
         using S = dstd::Vector<dstd::String>;
         using I = dstd::Vector<std::int64_t>;
-        CHECK(strs(eval(expr_str_map(StrMapOp::Upper, expr_col(0)), in)) ==
+        CHECK(strs(dftu_utils_test::eval_ok(
+                  expr_str_map(StrMapOp::Upper, expr_col(0)), in)) ==
               S{"  READ ", "PREAD64", "X"});
-        CHECK(strs(eval(expr_str_map(StrMapOp::Lower, expr_col(0)), in)) ==
+        CHECK(strs(dftu_utils_test::eval_ok(
+                  expr_str_map(StrMapOp::Lower, expr_col(0)), in)) ==
               S{"  read ", "pread64", "x"});
-        CHECK(strs(eval(expr_str_map(StrMapOp::Strip, expr_col(0)), in)) ==
+        CHECK(strs(dftu_utils_test::eval_ok(
+                  expr_str_map(StrMapOp::Strip, expr_col(0)), in)) ==
               S{"Read", "pread64", "x"});
-        CHECK(strs(eval(expr_str_map(StrMapOp::Lstrip, expr_col(0)), in)) ==
+        CHECK(strs(dftu_utils_test::eval_ok(
+                  expr_str_map(StrMapOp::Lstrip, expr_col(0)), in)) ==
               S{"Read ", "pread64", "x"});
-        CHECK(strs(eval(expr_str_map(StrMapOp::Rstrip, expr_col(0)), in)) ==
+        CHECK(strs(dftu_utils_test::eval_ok(
+                  expr_str_map(StrMapOp::Rstrip, expr_col(0)), in)) ==
               S{"  Read", "pread64", "x"});
-        CHECK(i64s(eval(expr_str_size(expr_col(0), false), in)) == I{7, 7, 1});
-        CHECK(i64s(eval(expr_str_find(expr_col(0), "ead"), in)) == I{3, 2, -1});
-        CHECK(strs(eval(expr_str_replace(expr_col(0), "ea", "EA", false),
-                        in)) == S{"  REAd ", "prEAd64", "x"});
+        CHECK(i64s(dftu_utils_test::eval_ok(expr_str_size(expr_col(0), false),
+                                            in)) == I{7, 7, 1});
+        CHECK(i64s(dftu_utils_test::eval_ok(expr_str_find(expr_col(0), "ead"),
+                                            in)) == I{3, 2, -1});
+        CHECK(strs(dftu_utils_test::eval_ok(
+                  expr_str_replace(expr_col(0), "ea", "EA", false), in)) ==
+              S{"  REAd ", "prEAd64", "x"});
         Series rr = Series::strings({"aXaXa"});
         dstd::Vector<const Series*> rin{&rr};
-        CHECK(strs(eval(expr_str_replace(expr_col(0), "a", "b", false), rin)) ==
+        CHECK(strs(dftu_utils_test::eval_ok(
+                  expr_str_replace(expr_col(0), "a", "b", false), rin)) ==
               S{"bXaXa"});
-        CHECK(strs(eval(expr_str_replace(expr_col(0), "a", "b", true), rin)) ==
+        CHECK(strs(dftu_utils_test::eval_ok(
+                  expr_str_replace(expr_col(0), "a", "b", true), rin)) ==
               S{"bXbXb"});
-        CHECK(strs(eval(expr_str_slice(expr_col(0), 2, 3), in)) ==
-              S{"Rea", "ead", ""});
+        CHECK(strs(dftu_utils_test::eval_ok(expr_str_slice(expr_col(0), 2, 3),
+                                            in)) == S{"Rea", "ead", ""});
         Series utf = Series::strings({"héllo"});
         dstd::Vector<const Series*> uin{&utf};
-        CHECK(i64s(eval(expr_str_size(expr_col(0), false), uin)) == I{6});
-        CHECK(i64s(eval(expr_str_size(expr_col(0), true), uin)) == I{5});
+        CHECK(i64s(dftu_utils_test::eval_ok(expr_str_size(expr_col(0), false),
+                                            uin)) == I{6});
+        CHECK(i64s(dftu_utils_test::eval_ok(expr_str_size(expr_col(0), true),
+                                            uin)) == I{5});
 
         check_inferred(expr_str_map(StrMapOp::Upper, expr_col(0)), s);
         check_inferred(expr_str_size(expr_col(0), true), s);
@@ -144,9 +164,9 @@ TEST_SUITE("expr string ops") {
         Series s = names();
         dstd::Vector<const Series*> in{&s};
         Expr e = expr_is_in(expr_col(0), Series::strings({"read", "fsync"}));
-        CHECK(bools(eval(e, in)) ==
+        CHECK(bools(dftu_utils_test::eval_ok(e, in)) ==
               dstd::Vector<bool>{true, false, false, true, false});
-        CHECK(bools(eval(expr_not(e), in)) ==
+        CHECK(bools(dftu_utils_test::eval_ok(expr_not(e), in)) ==
               dstd::Vector<bool>{false, true, true, false, true});
         check_inferred(e, s);
 
@@ -154,9 +174,9 @@ TEST_SUITE("expr string ops") {
         Series ints = Series::flat_i64(v.data(), 4);
         dstd::Vector<std::int64_t> set{2, 4};
         dstd::Vector<const Series*> iin{&ints};
-        CHECK(
-            bools(eval(expr_is_in(expr_col(0), Series::flat_i64(set.data(), 2)),
-                       iin)) == dstd::Vector<bool>{false, true, false, true});
+        CHECK(bools(dftu_utils_test::eval_ok(
+                  expr_is_in(expr_col(0), Series::flat_i64(set.data(), 2)),
+                  iin)) == dstd::Vector<bool>{false, true, false, true});
     }
 
     TEST_CASE("string ops CSE by text, not by pointer") {
@@ -169,9 +189,9 @@ TEST_SUITE("expr string ops") {
                     expr_str_pred(StrPredOp::Contains, expr_col(0), b);
         Expr diff = expr_str_pred(StrPredOp::Contains, expr_col(0), a) &
                     expr_str_pred(StrPredOp::StartsWith, expr_col(0), c);
-        CHECK(bools(eval(same, in)) ==
+        CHECK(bools(dftu_utils_test::eval_ok(same, in)) ==
               dstd::Vector<bool>{true, true, false, false, true});
-        CHECK(bools(eval(diff, in)) ==
+        CHECK(bools(dftu_utils_test::eval_ok(diff, in)) ==
               dstd::Vector<bool>{true, false, false, false, true});
     }
 
@@ -179,22 +199,20 @@ TEST_SUITE("expr string ops") {
         dstd::Vector<std::int64_t> v{1, 2};
         Series ints = Series::flat_i64(v.data(), 2);
         dstd::Vector<const Series*> in{&ints};
-        CHECK_THROWS_AS(
-            eval(expr_str_pred(StrPredOp::Contains, expr_col(0), "x"), in),
-            std::invalid_argument);
-        CHECK_THROWS_AS(eval(expr_str_map(StrMapOp::Upper, expr_col(0)), in),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(
-            eval(expr_is_in(expr_col(0), Series::strings({"a"})), in),
-            std::invalid_argument);
+        CHECK(dftu_utils_test::is_invalid(dftracer::utils::dataframe::eval(
+            expr_str_pred(StrPredOp::Contains, expr_col(0), "x"), in)));
+        CHECK(dftu_utils_test::is_invalid(dftracer::utils::dataframe::eval(
+            expr_str_map(StrMapOp::Upper, expr_col(0)), in)));
+        CHECK(dftu_utils_test::is_invalid(dftracer::utils::dataframe::eval(
+            expr_is_in(expr_col(0), Series::strings({"a"})), in)));
         Series s = names();
         dstd::Vector<const Series*> sin{&s};
         dstd::Vector<std::int64_t> set{1};
-        CHECK_THROWS_AS(
-            eval(expr_is_in(expr_col(0), Series::flat_i64(set.data(), 1)), sin),
-            std::invalid_argument);
-        CHECK(infer_type(expr_str_size(expr_col(0), false),
-                         {dftracer::utils::dataframe::scalar(TypeId::Unknown)})
+        CHECK(dftu_utils_test::is_invalid(dftracer::utils::dataframe::eval(
+            expr_is_in(expr_col(0), Series::flat_i64(set.data(), 1)), sin)));
+        CHECK(dftu_utils_test::infer_type_ok(
+                  expr_str_size(expr_col(0), false),
+                  {dftracer::utils::dataframe::scalar(TypeId::Unknown)})
                   .id == TypeId::Unknown);
     }
 
@@ -231,8 +249,8 @@ TEST_SUITE("expr string ops") {
                      dftracer::utils::dataframe::to_scalar(std::int64_t{2}));
 
         // column : literal
-        Series r =
-            eval(expr_select(big, expr_col(0), expr_lit(std::int64_t{0})), in);
+        Series r = dftu_utils_test::eval_ok(
+            expr_select(big, expr_col(0), expr_lit(std::int64_t{0})), in);
         REQUIRE(r.valid());
         CHECK(r.type() == TypeId::Int64);
         // Row 1 is null in x, so the condition is null there and the else arm
@@ -241,7 +259,7 @@ TEST_SUITE("expr string ops") {
         CHECK_FALSE(r.is_null(1));
 
         // literal : literal, float promotes
-        Series f = eval(
+        Series f = dftu_utils_test::eval_ok(
             expr_select(big, expr_lit(1.5), expr_lit(std::int64_t{0})), in);
         CHECK(f.type() == TypeId::Float64);
         CHECK(f.data<double>()[3] == 1.5);
@@ -255,15 +273,16 @@ TEST_SUITE("expr string ops") {
         dstd::Vector<std::uint8_t> yvalid{0x0E};  // row 0 null
         Series y = Series::flat(TypeId::Int32, yv.data(), 4, yvalid.data());
         dstd::Vector<const Series*> in2{&x, &y};
-        Series m = eval(expr_select(big, expr_col(0), expr_col(1)), in2);
+        Series m = dftu_utils_test::eval_ok(
+            expr_select(big, expr_col(0), expr_col(1)), in2);
         CHECK(m.type() == TypeId::Int64);
         CHECK(i64s(m)[1] == -2);
         CHECK(i64s(m)[2] == 3);
         CHECK(i64s(m)[3] == 9);
         CHECK(m.is_null(0));
         CHECK_FALSE(m.is_null(1));
-        Series flipped =
-            eval(expr_select(expr_not(big), expr_col(0), expr_col(1)), in2);
+        Series flipped = dftu_utils_test::eval_ok(
+            expr_select(expr_not(big), expr_col(0), expr_col(1)), in2);
         CHECK(i64s(flipped)[0] == 1);
         CHECK(i64s(flipped)[1] == -2);  // NOT null is still null: else arm
         CHECK_FALSE(flipped.is_null(1));
@@ -275,16 +294,15 @@ TEST_SUITE("expr string ops") {
         dstd::Vector<const Series*> sin{&s};
         Series alt = Series::strings({"a", "b", "c", "d", "e"});
         dstd::Vector<const Series*> sin2{&s, &alt};
-        Series ws = eval(
+        Series ws = dftu_utils_test::eval_ok(
             expr_select(expr_str_pred(StrPredOp::StartsWith, expr_col(0), "re"),
                         expr_col(0), expr_col(1)),
             sin2);
         CHECK(strs(ws) ==
               dstd::Vector<dstd::String>{"read", "b", "c", "d", "readv"});
-        CHECK_THROWS_AS(eval(expr_select(expr_col(0), expr_col(0),
-                                         expr_lit(std::int64_t{0})),
-                             in),
-                        std::invalid_argument);  // non-Bool condition
+        CHECK(dftu_utils_test::is_invalid(dftracer::utils::dataframe::eval(
+            expr_select(expr_col(0), expr_col(0), expr_lit(std::int64_t{0})),
+            in)));  // non-Bool condition
 
         dftu_expr* c = dftu_expr_col(0);
         dftu_expr* cond = dftu_expr_cmp(
@@ -317,13 +335,14 @@ TEST_SUITE("expr string ops") {
         const DataType di = dbl.data_type();
         auto inferred = [](const Expr& e, dstd::Vector<const Series*> in,
                            dstd::Vector<DataType> types) {
-            Series out = eval(e, in);
+            Series out = dftu_utils_test::eval_ok(e, in);
             REQUIRE(out.valid());
-            CHECK(infer_type(e, types).id == out.type());
+            CHECK(dftu_utils_test::infer_type_ok(e, types).id == out.type());
             return out;
         };
-        inferred(dftracer::utils::dataframe::expr_str_pred_col(
-                     StrPredOp::StartsWith, col(0), col(1)),
+        inferred(dftu_utils_test::built(
+                     dftracer::utils::dataframe::expr_str_pred_col(
+                         StrPredOp::StartsWith, col(0), col(1))),
                  {&s, &n}, {si, ni});
         inferred(dftracer::utils::dataframe::expr_str_replace_col(
                      col(0), col(1), col(1)),
@@ -427,15 +446,18 @@ TEST_SUITE("expr string ops") {
             Series::strings({"a-b", "no", "c-d"}).str_extract("(\\w)-(\\w)", 1);
         REQUIRE(s.null_count() == 1);
         dstd::Vector<const Series*> in{&s};
-        CHECK(bools(eval(expr_is_null(expr_col(0), true), in)) ==
+        CHECK(bools(dftu_utils_test::eval_ok(expr_is_null(expr_col(0), true),
+                                             in)) ==
               dstd::Vector<bool>{false, true, false});
-        CHECK(bools(eval(expr_is_null(expr_col(0), false), in)) ==
+        CHECK(bools(dftu_utils_test::eval_ok(expr_is_null(expr_col(0), false),
+                                             in)) ==
               dstd::Vector<bool>{true, false, true});
         check_inferred(expr_is_null(expr_col(0), true), s);
 
         Series full = names();
         dstd::Vector<const Series*> fin{&full};
-        CHECK(bools(eval(expr_is_null(expr_col(0), true), fin)) ==
+        CHECK(bools(dftu_utils_test::eval_ok(expr_is_null(expr_col(0), true),
+                                             fin)) ==
               dstd::Vector<bool>{false, false, false, false, false});
 
         dftu_expr* c = dftu_expr_col(0);

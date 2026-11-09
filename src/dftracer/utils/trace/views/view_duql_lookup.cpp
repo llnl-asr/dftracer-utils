@@ -446,7 +446,8 @@ void Applier::overlap_lookup(
             theirs.start = find(side, side_names[*t]);
             theirs.duration = find(side, side_names[*d]);
             theirs.scale = scale;
-            const duql::OverlapMatches m = duql::overlap_matches(mine, theirs);
+            const duql::OverlapMatches m =
+                common::unwrap(duql::overlap_matches(mine, theirs));
 
             dataframe::DataFrame out;
             out.names = rows.names;

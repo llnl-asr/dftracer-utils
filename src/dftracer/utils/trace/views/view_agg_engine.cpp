@@ -1030,7 +1030,8 @@ dataframe::DataFrame build_agg_input_frame(
         dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>> out;
         out.reserve(spec.computed.size());
         for (const AggInputSpec::Computed& c : spec.computed)
-            out.emplace_back(c.name, dataframe::eval(c.expr, inputs));
+            out.emplace_back(c.name,
+                             common::unwrap(dataframe::eval(c.expr, inputs)));
         for (auto& [name, col] : out) {
             const std::int64_t at = f.column_index(name);
             if (at >= 0) {

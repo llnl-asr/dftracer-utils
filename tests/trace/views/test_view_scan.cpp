@@ -829,8 +829,8 @@ TEST_SUITE("View") {
             present.value = cyc;
             present.out = "present_cycles";
             specs.push_back(present);
-            dataframe::DataFrame g =
-                dataframe::group_agg_expr(key, specs, inputs, "name");
+            dataframe::DataFrame g = dftu_utils_test::ok(
+                dataframe::group_agg_expr(key, specs, inputs, "name"));
 
             REQUIRE(bhas(g, "count_cycles"));
             REQUIRE(bhas(g, "present_cycles"));
@@ -842,10 +842,11 @@ TEST_SUITE("View") {
                 CHECK(bnum(g, i, "present_cycles") ==
                       doctest::Approx(nm == "read" ? 0 : 3));
             }
-            CHECK_THROWS_AS(dataframe::group_agg_expr(
-                                key, {dataframe::agg_sum(cyc, "sum_cycles")},
-                                inputs, "name"),
-                            common::DFTUtilsException);
+            auto refused = dataframe::group_agg_expr(
+                key, {dataframe::agg_sum(cyc, "sum_cycles")}, inputs, "name");
+            REQUIRE(!refused.has_value());
+            CHECK(common::errorcode_of(refused.error()) ==
+                  common::ErrorCode::InvalidArgument);
         }
     }
 

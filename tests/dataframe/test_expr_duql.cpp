@@ -3,6 +3,7 @@
 // numbers compare exactly across integer and double columns.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -14,6 +15,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <cmath>
 #include <cstdint>
@@ -119,7 +121,12 @@ Opt<dstd::String> as_strs(const Series& s) {
 }
 
 Series run(const Expr& e, const dstd::Vector<const Series*>& in) {
-    return dataframe::eval(e, in);
+    return dftu_utils_test::eval_ok(e, in);
+}
+
+// Whether compiling or evaluating `e` over `in` fails with InvalidArgument.
+bool refused(const Expr& e, const dstd::Vector<const Series*>& in) {
+    return dftu_utils_test::is_invalid(dataframe::eval(e, in));
 }
 
 dftu_scalar si(std::int64_t v) {
@@ -228,8 +235,7 @@ TEST_CASE("arith mixes Uint64, narrow integers and literals") {
               {&c})) == Opt<double>{5.5, 6.5});
 
     const Series s = strs({"a", "b"});
-    CHECK_THROWS_AS(run(dataframe::expr_arith(ArithOp::Add, c0(), c0()), {&s}),
-                    std::invalid_argument);
+    CHECK(refused(dataframe::expr_arith(ArithOp::Add, c0(), c0()), {&s}));
 }
 
 TEST_CASE("neg nulls INT64_MIN and a uint64 past it") {
@@ -272,9 +278,7 @@ TEST_CASE("cmp_expr orders strings bytewise and false before true") {
     const Series y = bools({true, false, true});
     CHECK(as_bools(run(dataframe::expr_cmp_expr(CmpOp::Lt, c0(), c1()),
                        {&x, &y})) == Opt<bool>{true, false, false});
-    CHECK_THROWS_AS(
-        run(dataframe::expr_cmp_expr(CmpOp::Eq, c0(), c1()), {&a, &x}),
-        std::invalid_argument);
+    CHECK(refused(dataframe::expr_cmp_expr(CmpOp::Eq, c0(), c1()), {&a, &x}));
 }
 
 TEST_CASE("expr_cmp against a scalar is exact across integer and double") {
@@ -339,9 +343,18 @@ TEST_CASE("coalesce takes the first present operand in order") {
     const Series t = strs({"y", "z"});
     CHECK(as_strs(run(dataframe::expr_coalesce({c0(), c1()}), {&s, &t})) ==
           Opt<dstd::String>{"y", "x"});
-    CHECK_THROWS_AS(run(dataframe::expr_coalesce({c0(), c1()}), {&s, &i}),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(dataframe::expr_coalesce({}), std::invalid_argument);
+    CHECK(refused(dataframe::expr_coalesce({c0(), c1()}), {&s, &i}));
+}
+
+TEST_CASE("coalesce of no operands ends the process" * doctest::skip()) {
+    fresh_process::announce_abort();
+    (void)dataframe::expr_coalesce({});
+}
+
+TEST_CASE("coalesce of no operands is fatal") {
+    auto result =
+        fresh_process::run("coalesce of no operands ends the process");
+    CHECK(result.aborted_with("needs at least one operand"));
 }
 
 TEST_CASE("least and greatest are null when any operand is null") {
@@ -382,8 +395,7 @@ TEST_CASE("concat joins strings and is null when any operand is null") {
             dataframe::expr_concat({c0(), c1(), dataframe::expr_lit_str("!")}),
             {&a, &b})) == Opt<dstd::String>{"ab!", dstd::nullopt, "d!"});
     const Series i = ints({1, 2, 3});
-    CHECK_THROWS_AS(run(dataframe::expr_concat({c0(), c1()}), {&a, &i}),
-                    std::invalid_argument);
+    CHECK(refused(dataframe::expr_concat({c0(), c1()}), {&a, &i}));
 }
 
 TEST_CASE("round is half away from zero and keeps integers") {
@@ -455,8 +467,7 @@ TEST_CASE("str_pattern runs a compiled duql pattern; a work limit is null") {
           Opt<bool>{dstd::nullopt, true});
 #endif
 
-    CHECK_THROWS_AS(run(dataframe::expr_str_pattern(c0(), nullptr), {&s}),
-                    std::invalid_argument);
+    CHECK(refused(dataframe::expr_str_pattern(c0(), nullptr), {&s}));
 }
 
 TEST_CASE("str_extract returns a capture group or null") {
@@ -467,8 +478,7 @@ TEST_CASE("str_extract returns a capture group or null") {
           Opt<dstd::String>{"34", dstd::nullopt, dstd::nullopt});
     CHECK(as_strs(run(dataframe::expr_str_extract(c0(), *re, 0), {&s})) ==
           Opt<dstd::String>{"12-34", dstd::nullopt, dstd::nullopt});
-    CHECK_THROWS_AS(run(dataframe::expr_str_extract(c0(), *re, 3), {&s}),
-                    std::invalid_argument);
+    CHECK(refused(dataframe::expr_str_extract(c0(), *re, 3), {&s}));
 
     const Series hard = strs({dstd::String(10000, 'a') + "!"});
     auto slow = duql::compile_regex("^(a|aa)+$", false);
@@ -481,29 +491,34 @@ TEST_CASE("string predicates take a column needle") {
     const Series s = strs({"hello", "hello", "", "abc", dstd::nullopt, "x"});
     const Series n = strs({"he", "lo", "", "bc", "a", dstd::nullopt});
     using P = dataframe::StrPredOp;
-    CHECK(as_bools(run(dataframe::expr_str_pred_col(P::StartsWith, c0(), c1()),
+    CHECK(as_bools(run(dftu_utils_test::built(dataframe::expr_str_pred_col(
+                           P::StartsWith, c0(), c1())),
                        {&s, &n})) ==
           Opt<bool>{true, false, true, false, dstd::nullopt, dstd::nullopt});
-    CHECK(as_bools(run(dataframe::expr_str_pred_col(P::EndsWith, c0(), c1()),
+    CHECK(as_bools(run(dftu_utils_test::built(dataframe::expr_str_pred_col(
+                           P::EndsWith, c0(), c1())),
                        {&s, &n})) ==
           Opt<bool>{false, true, true, true, dstd::nullopt, dstd::nullopt});
-    CHECK(as_bools(run(dataframe::expr_str_pred_col(P::Contains, c0(), c1()),
+    CHECK(as_bools(run(dftu_utils_test::built(dataframe::expr_str_pred_col(
+                           P::Contains, c0(), c1())),
                        {&s, &n})) ==
           Opt<bool>{true, true, true, true, dstd::nullopt, dstd::nullopt});
     const Series longer = strs({"hello world", "a", "", "abcd", "q", "x"});
-    CHECK(as_bools(run(dataframe::expr_str_pred_col(P::Contains, c0(), c1()),
+    CHECK(as_bools(run(dftu_utils_test::built(dataframe::expr_str_pred_col(
+                           P::Contains, c0(), c1())),
                        {&s, &longer})) ==
           Opt<bool>{false, false, true, false, dstd::nullopt, true});
     for (P op : {P::Contains, P::StartsWith, P::EndsWith}) {
-        CHECK(as_bools(run(dataframe::expr_str_pred_col(
-                               op, c0(), dataframe::expr_lit_str("l")),
+        CHECK(as_bools(run(dftu_utils_test::built(dataframe::expr_str_pred_col(
+                               op, c0(), dataframe::expr_lit_str("l"))),
                            {&s})) ==
               as_bools(run(dataframe::expr_str_pred(op, c0(), "l"), {&s})));
     }
-    CHECK_THROWS_AS(dataframe::expr_str_pred_col(P::Like, c0(), c1()),
-                    std::invalid_argument);
-    CHECK(dataframe::infer_type(
-              dataframe::expr_str_pred_col(P::Contains, c0(), c1()),
+    CHECK(dftu_utils_test::is_invalid(
+        dataframe::expr_str_pred_col(P::Like, c0(), c1())));
+    CHECK(dftu_utils_test::infer_type_ok(
+              dftu_utils_test::built(
+                  dataframe::expr_str_pred_col(P::Contains, c0(), c1())),
               {s.data_type(), n.data_type()})
               .id == TypeId::Bool);
 }
@@ -580,8 +595,8 @@ TEST_CASE("round takes a column of digits") {
     CHECK(as_dbls(run(
               dataframe::expr_round_col(c0(), dataframe::lit(std::int64_t{2})),
               {&d})) == as_dbls(run(dataframe::expr_round(c0(), 2), {&d})));
-    CHECK(dataframe::infer_type(dataframe::expr_round_col(c0(), c1()),
-                                {n.data_type(), dg2.data_type()})
+    CHECK(dftu_utils_test::infer_type_ok(dataframe::expr_round_col(c0(), c1()),
+                                         {n.data_type(), dg2.data_type()})
               .id == TypeId::Int64);
 }
 
@@ -599,9 +614,8 @@ TEST_CASE("extract takes a column of groups") {
                           c0(), *re, dataframe::lit(std::int64_t{1})),
                       {&s})) ==
           as_strs(run(dataframe::expr_str_extract(c0(), *re, 1), {&s})));
-    CHECK_THROWS_AS(
-        run(dataframe::expr_str_extract_col(c0(), nullptr, c1()), {&s, &g}),
-        std::invalid_argument);
+    CHECK(refused(dataframe::expr_str_extract_col(c0(), nullptr, c1()),
+                  {&s, &g}));
 }
 
 TEST_CASE("str_regex_replace substitutes groups and keeps nulls") {
@@ -629,9 +643,8 @@ TEST_CASE("str_regex_replace substitutes groups and keeps nulls") {
     dftu_expr_free(e);
     dftu_expr_free(col);
 
-    CHECK_THROWS_AS(
-        run(dataframe::expr_str_regex_replace(c0(), nullptr, *sub), {&s}),
-        std::invalid_argument);
+    CHECK(
+        refused(dataframe::expr_str_regex_replace(c0(), nullptr, *sub), {&s}));
     CHECK_FALSE(duql::compile_substitution(**re, "$3"));
     CHECK_FALSE(duql::compile_substitution(**re, "$x"));
     CHECK_FALSE(s.str_regex_replace("(", "x").valid());
@@ -752,8 +765,7 @@ TEST_CASE("list functions") {
           Opt<bool>{true, false});
 
     const Series i = ints({1});
-    CHECK_THROWS_AS(run(dataframe::expr_list_size(c0()), {&i}),
-                    std::invalid_argument);
+    CHECK(refused(dataframe::expr_list_size(c0()), {&i}));
 }
 
 TEST_CASE("literals broadcast to a column of their type") {
@@ -768,23 +780,23 @@ TEST_CASE("literals broadcast to a column of their type") {
               dataframe::expr_arith(ArithOp::Add, c0(),
                                     dataframe::expr_lit_null(TypeId::Int64)),
               {&i})) == Opt<std::int64_t>{dstd::nullopt, dstd::nullopt});
-    CHECK_THROWS_AS(run(dataframe::expr_lit_null(TypeId::List), {&i}),
-                    std::invalid_argument);
+    CHECK(refused(dataframe::expr_lit_null(TypeId::List), {&i}));
 }
 
 TEST_CASE("infer_type agrees with the node types") {
     const dstd::Vector<dataframe::DataType> in{
         dataframe::scalar(TypeId::Int32), dataframe::scalar(TypeId::Float64)};
-    CHECK(dataframe::infer_type(dataframe::expr_arith(ArithOp::Add, c0(), c0()),
-                                in)
+    CHECK(dftu_utils_test::infer_type_ok(
+              dataframe::expr_arith(ArithOp::Add, c0(), c0()), in)
               .id == TypeId::Int64);
-    CHECK(dataframe::infer_type(dataframe::expr_arith(ArithOp::Div, c0(), c0()),
-                                in)
+    CHECK(dftu_utils_test::infer_type_ok(
+              dataframe::expr_arith(ArithOp::Div, c0(), c0()), in)
               .id == TypeId::Float64);
-    CHECK(dataframe::infer_type(dataframe::expr_extreme({c0(), c1()}, true), in)
+    CHECK(dftu_utils_test::infer_type_ok(
+              dataframe::expr_extreme({c0(), c1()}, true), in)
               .id == TypeId::Float64);
-    CHECK(dataframe::infer_type(dataframe::expr_convert(ConvertOp::Json, c0()),
-                                in)
+    CHECK(dftu_utils_test::infer_type_ok(
+              dataframe::expr_convert(ConvertOp::Json, c0()), in)
               .id == TypeId::String);
 }
 
@@ -855,10 +867,14 @@ constexpr std::int64_t NS_PER_H = 3600 * NS_PER_S;
 constexpr std::int64_t NS_PER_D = 86400 * NS_PER_S;
 
 Opt<std::int64_t> part(const Series& s, std::int32_t p, std::int64_t unit) {
-    return as_ints(run(dataframe::expr_date_part(c0(), p, unit), {&s}));
+    return as_ints(
+        run(dftu_utils_test::built(dataframe::expr_date_part(c0(), p, unit)),
+            {&s}));
 }
 Opt<dstd::String> fmt(const Series& s, dstd::StringView f, std::int64_t unit) {
-    return as_strs(run(dataframe::expr_format_time(c0(), f, unit), {&s}));
+    return as_strs(
+        run(dftu_utils_test::built(dataframe::expr_format_time(c0(), f, unit)),
+            {&s}));
 }
 
 }  // namespace
@@ -990,42 +1006,51 @@ TEST_CASE("format_time directives on fixed instants in every unit") {
 TEST_CASE("date_part and format_time: types, CSE and refusals") {
     const Series i = ints({1'700'000'000'123'456});
     const Series s = strs({"x"});
-    for (const Expr& e : {dataframe::expr_date_part(c0(), DFTU_DT_HOUR, 1000),
-                          dataframe::expr_format_time(c0(), "%F", 1000)}) {
-        CHECK_THROWS_AS(run(e, {&s}), std::invalid_argument);
+    for (const Expr& e : {dftu_utils_test::built(dataframe::expr_date_part(
+                              c0(), DFTU_DT_HOUR, 1000)),
+                          dftu_utils_test::built(
+                              dataframe::expr_format_time(c0(), "%F", 1000))}) {
+        CHECK(refused(e, {&s}));
     }
-    CHECK(dataframe::infer_type(
-              dataframe::expr_date_part(c0(), DFTU_DT_HOUR, 1000),
+    CHECK(dftu_utils_test::infer_type_ok(
+              dftu_utils_test::built(
+                  dataframe::expr_date_part(c0(), DFTU_DT_HOUR, 1000)),
               {i.data_type()})
               .id == TypeId::Int64);
-    CHECK(dataframe::infer_type(dataframe::expr_format_time(c0(), "%F", 1000),
-                                {i.data_type()})
+    CHECK(dftu_utils_test::infer_type_ok(
+              dftu_utils_test::built(
+                  dataframe::expr_format_time(c0(), "%F", 1000)),
+              {i.data_type()})
               .id == TypeId::String);
-    CHECK_THROWS_AS(dataframe::expr_date_part(c0(), 99, 1000),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(dataframe::expr_date_part(c0(), DFTU_DT_IS_LEAP_YEAR, 1000),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(dataframe::expr_date_part(c0(), DFTU_DT_HOUR, 0),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(dataframe::expr_format_time(c0(), "%Q", 1000),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(dataframe::expr_format_time(c0(), "%Y%", 1000),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(dataframe::expr_format_time(c0(), "%F", -5),
-                    std::invalid_argument);
+    CHECK(
+        dftu_utils_test::is_invalid(dataframe::expr_date_part(c0(), 99, 1000)));
+    CHECK(dftu_utils_test::is_invalid(
+        dataframe::expr_date_part(c0(), DFTU_DT_IS_LEAP_YEAR, 1000)));
+    CHECK(dftu_utils_test::is_invalid(
+        dataframe::expr_date_part(c0(), DFTU_DT_HOUR, 0)));
+    CHECK(dftu_utils_test::is_invalid(
+        dataframe::expr_format_time(c0(), "%Q", 1000)));
+    CHECK(dftu_utils_test::is_invalid(
+        dataframe::expr_format_time(c0(), "%Y%", 1000)));
+    CHECK(dftu_utils_test::is_invalid(
+        dataframe::expr_format_time(c0(), "%F", -5)));
 
     // The same field of two units and two formats must not share a slot.
     const Expr both = dataframe::expr_concat(
-        {dataframe::expr_format_time(c0(), "%H", 1000),
-         dataframe::expr_format_time(c0(), "%M", 1000),
-         dataframe::expr_format_time(c0(), "%H", NS_PER_S)});
+        {dftu_utils_test::built(dataframe::expr_format_time(c0(), "%H", 1000)),
+         dftu_utils_test::built(dataframe::expr_format_time(c0(), "%M", 1000)),
+         dftu_utils_test::built(
+             dataframe::expr_format_time(c0(), "%H", NS_PER_S))});
     CHECK(as_strs(run(both, {&i})) ==
           Opt<dstd::String>{"22"
                             "13" +
                             *fmt(i, "%H", NS_PER_S)[0]});
-    const Expr sum = dataframe::expr_arith(
-        ArithOp::Add, dataframe::expr_date_part(c0(), DFTU_DT_YEAR, 1000),
-        dataframe::expr_date_part(c0(), DFTU_DT_YEAR, NS_PER_S));
+    const Expr sum =
+        dataframe::expr_arith(ArithOp::Add,
+                              dftu_utils_test::built(dataframe::expr_date_part(
+                                  c0(), DFTU_DT_YEAR, 1000)),
+                              dftu_utils_test::built(dataframe::expr_date_part(
+                                  c0(), DFTU_DT_YEAR, NS_PER_S)));
     CHECK(as_ints(run(sum, {&i})) ==
           Opt<std::int64_t>{*part(i, DFTU_DT_YEAR, 1000)[0] +
                             *part(i, DFTU_DT_YEAR, NS_PER_S)[0]});

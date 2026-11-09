@@ -767,9 +767,13 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
     dftracer::utils::dstd::Vector<const Series*> inputs;
     inputs.reserve(bat.columns.size());
     for (const Series& c : bat.columns) inputs.push_back(&c);
-    return run_batch_op([&] {
-        return dataframe::group_agg_expr(key_exprs, aggs, inputs, keys);
-    });
+    auto grouped = dataframe::group_agg_expr(key_exprs, aggs, inputs, keys);
+    if (!grouped) {
+        const dstd::String message(grouped.error().message());
+        PyErr_SetString(PyExc_ValueError, message.c_str());
+        return nullptr;
+    }
+    return make_dataframe(std::move(*grouped));
 }
 
 // Two-step / expression forms delegate to the Python GroupBy, which serializes

@@ -106,9 +106,10 @@ Series compare_mask(const Series& col, CompareOp op, const LiteralValue& v) {
         return want ? col.share() : negate(col.share());
     }
     if (is_bool(col)) {
-        return eval(expr_cmp_expr(static_cast<CmpOp>(cmp_code(op)), expr_col(0),
-                                  expr_lit_bool(std::get<bool>(v))),
-                    {&col});
+        return common::unwrap(
+            eval(expr_cmp_expr(static_cast<CmpOp>(cmp_code(op)), expr_col(0),
+                               expr_lit_bool(std::get<bool>(v))),
+                 {&col}));
     }
     Series m{dftu_series_compare(col.handle(),
                                  static_cast<dftu_cmp_op>(cmp_code(op)),
@@ -182,7 +183,7 @@ Series leaf_mask(const duql::detail::ExprLeaf& leaf, const DataFrame& b) {
     }
     auto e = vectorize_condition(*leaf.term, cols, FRAME_ARGS_FALLBACK);
     if (!e) unsupported(e.error().message());
-    return eval(*e, inputs);
+    return common::unwrap(eval(*e, inputs));
 }
 
 Series lower(const duql::detail::QueryNode& node, const DataFrame& b) {
@@ -205,8 +206,8 @@ Series lower(const duql::detail::QueryNode& node, const DataFrame& b) {
                 return field_mask(b, n.field, [&](const Series& c) {
                     if (!is_string(c) || !n.compiled)
                         return unknown(c.length());
-                    Series m =
-                        eval(expr_str_pattern(expr_col(0), n.compiled), {&c});
+                    Series m = common::unwrap(
+                        eval(expr_str_pattern(expr_col(0), n.compiled), {&c}));
                     return n.negated ? negate(std::move(m)) : std::move(m);
                 });
             } else if constexpr (std::is_same_v<T, duql::detail::AndNode>) {

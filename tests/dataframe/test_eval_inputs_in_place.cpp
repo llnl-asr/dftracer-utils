@@ -4,6 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -145,8 +146,10 @@ dstd::Vector<Expr> roots() {
 void compare(const dstd::Vector<Series>& in, const dstd::Vector<Series>& flat,
              bool expect_chunked) {
     const dstd::Vector<Expr> rs = roots();
-    const dstd::Vector<Series> got = eval_many(rs, ptrs(in));
-    const dstd::Vector<Series> want = eval_many(rs, ptrs(flat));
+    const dstd::Vector<Series> got =
+        dftu_utils_test::eval_many_ok(rs, ptrs(in));
+    const dstd::Vector<Series> want =
+        dftu_utils_test::eval_many_ok(rs, ptrs(flat));
     REQUIRE(got.size() == want.size());
     for (std::size_t k = 0; k < got.size(); ++k) {
         CAPTURE(k);
@@ -195,7 +198,8 @@ TEST_SUITE("eval inputs in place") {
         in.push_back(chunk(strings(M, true), b));
         for (const Series& c : in) flat.push_back(joined(c));
         compare(in, flat, true);
-        const dstd::Vector<Series> outs = eval_many(roots(), ptrs(in));
+        const dstd::Vector<Series> outs =
+            dftu_utils_test::eval_many_ok(roots(), ptrs(in));
         const Series& out = outs[0];
         REQUIRE(out.handle()->is_chunked());
         CHECK(out.handle()->nested.size() == b.size() - 1);
@@ -270,7 +274,7 @@ TEST_SUITE("eval inputs in place") {
             DataFrame got = run(ch.lazy().filter(p).collect());
             const dstd::Vector<const Series*> in = {
                 &df.columns[0], &df.columns[1], &df.columns[2]};
-            DataFrame want = df.filter(eval(p, in));
+            DataFrame want = df.filter(dftu_utils_test::eval_ok(p, in));
             REQUIRE(got.names == want.names);
             for (std::size_t c = 0; c < want.columns.size(); ++c) {
                 CAPTURE(c);
@@ -281,7 +285,8 @@ TEST_SUITE("eval inputs in place") {
         DataFrame got =
             run(ch.lazy().with_column("c", col(0) + col(1)).collect());
         const dstd::Vector<const Series*> in = {&df.columns[0], &df.columns[1]};
-        DataFrame want = df.with_column("c", eval(col(0) + col(1), in));
+        DataFrame want =
+            df.with_column("c", dftu_utils_test::eval_ok(col(0) + col(1), in));
         REQUIRE(got.names == want.names);
         for (std::size_t c = 0; c < want.columns.size(); ++c) {
             CAPTURE(c);

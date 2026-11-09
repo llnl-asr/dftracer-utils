@@ -728,7 +728,8 @@ Pushdown key_sets(const duql::Pipeline& p) {
             const dataframe::Series& values = t.frame->columns[*t.value];
             if (auto e = duql::vectorize_condition(
                     *cond, {{".", values.data_type()}}, false))
-                pass = dataframe::eval(*e, {&values}).materialize();
+                pass = common::unwrap(dataframe::eval(*e, {&values}))
+                           .materialize();
         }
         auto passes = [&](std::int64_t r) {
             if (!pass) return !cond || !t.value || record;

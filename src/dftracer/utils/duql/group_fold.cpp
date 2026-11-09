@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <stdexcept>
 #include <utility>
 
 namespace dftracer::utils::duql {
@@ -203,10 +202,10 @@ GroupFold::GroupFold(dstd::Vector<dataframe::DataType> key_types,
 
 GroupFold::~GroupFold() = default;
 
-void GroupFold::add(dataframe::DataFrame batch) {
+dstd::Result<void> GroupFold::add(dataframe::DataFrame batch) {
     batch = flat_frame(std::move(batch));
     const std::int64_t n = batch.num_rows();
-    if (n == 0) return;
+    if (n == 0) return {};
     const std::size_t n_keys = key_types_.size();
     dstd::Vector<std::int64_t> gid(static_cast<std::size_t>(n));
     dstd::Vector<std::int64_t> fresh;
@@ -229,10 +228,10 @@ void GroupFold::add(dataframe::DataFrame batch) {
                 } else {
                     key.clear();
                     if (!append_cell_key(key, c, r))
-                        throw std::invalid_argument(
-                            ("group: key '" + batch.names[0] +
-                             "' holds a list or object; group by a scalar")
-                                .c_str());
+                        return common::make_error(
+                            common::ErrorCode::InvalidArgument,
+                            "group: key '" + batch.names[0] +
+                                "' holds a list or object; group by a scalar");
                     const auto text = string_key_text(key);
                     if (text) {
                         sv = *text;
@@ -269,10 +268,10 @@ void GroupFold::add(dataframe::DataFrame batch) {
             } else if (is_float(c.type())) {
                 key += '\1';
             } else {
-                throw std::invalid_argument(
-                    ("group: key '" + batch.names[k] +
-                     "' holds a list or object; group by a scalar")
-                        .c_str());
+                return common::make_error(
+                    common::ErrorCode::InvalidArgument,
+                    "group: key '" + batch.names[k] +
+                        "' holds a list or object; group by a scalar");
             }
         }
         auto [it, added] = groups_.try_emplace(key, group_count_);
@@ -291,7 +290,8 @@ void GroupFold::add(dataframe::DataFrame batch) {
         dstd::Vector<const dataframe::Series*> values;
         for (const auto& c : batch.columns) values.push_back(&c);
         dataframe::agg_set_row_base(*engine_, rows_);
-        common::unwrap(dataframe::agg_accumulate(*engine_, {&g}, values));
+        if (auto ok = dataframe::agg_accumulate(*engine_, {&g}, values); !ok)
+            return ok.error();
     }
     for (std::size_t a = 0; a < aggs_.size(); ++a) {
         const FoldAgg& f = aggs_[a];
@@ -379,6 +379,7 @@ void GroupFold::add(dataframe::DataFrame batch) {
         }
     }
     rows_ += n;
+    return {};
 }
 
 void GroupFold::arg(std::size_t a, const dataframe::Series& in,
@@ -451,7 +452,8 @@ void GroupFold::sketches(std::size_t a, const dataframe::Series& in,
     }
 }
 
-dataframe::DataFrame GroupFold::finish(dstd::Vector<dstd::String> names) {
+dstd::Result<dataframe::DataFrame> GroupFold::finish(
+    dstd::Vector<dstd::String> names) {
     const auto groups = group_count_;
     const auto count = static_cast<std::size_t>(groups);
     dataframe::DataFrame out;
@@ -508,9 +510,9 @@ dataframe::DataFrame GroupFold::finish(dstd::Vector<dstd::String> names) {
             case FoldOp::Plugin: {
                 const dftu_op_desc* op = dftu_op_find(f.plugin.c_str());
                 if (!op)
-                    throw common::DFTUtilsException::cat(
-                        common::ErrorCode::InvalidArgument, "plugin function '",
-                        f.plugin, "' is not registered");
+                    return common::make_error(
+                        common::ErrorCode::InvalidArgument,
+                        "plugin function '" + f.plugin + "' is not registered");
                 const dftu_op_arg arg = plugin_arg(*op, f.params);
                 auto& members = members_[a];
                 members.resize(count);
@@ -528,11 +530,11 @@ dataframe::DataFrame GroupFold::finish(dstd::Vector<dstd::String> names) {
                         const dftu_scalar r =
                             dftu_op_run_aggregate(op, part.handle(), &arg, &ok);
                         if (!ok)
-                            throw common::DFTUtilsException::cat(
+                            return common::make_error(
                                 common::ErrorCode::InvalidArgument,
-                                "plugin function '", f.plugin,
-                                "' failed on a group; it takes ",
-                                dftu_op_signature(op->sig));
+                                "plugin function '" + f.plugin +
+                                    "' failed on a group; it takes " +
+                                    dftu_op_signature(op->sig));
                         valid[g] = true;
                         const bool from_f = r.kind == DFTU_SCALAR_TAG_F64;
                         const bool from_u = r.kind == DFTU_SCALAR_TAG_U64;

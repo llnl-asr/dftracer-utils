@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -91,7 +92,7 @@ TEST_CASE("the lazy filter equals the eager filter of the same mask") {
     DataFrame d = two_ints({1, 5, 3, 9, 2}, {}, {2, 4, 3, 1, 8}, {});
     const Expr pred = expr_cmp_expr(CmpOp::Gt, col(0), col(1));
     dstd::Vector<const Series*> inputs{&d.columns[0], &d.columns[1]};
-    DataFrame eager = d.filter(eval(pred, inputs));
+    DataFrame eager = d.filter(dftu_utils_test::eval_ok(pred, inputs));
     DataFrame lazy = run(d.lazy().filter(pred).collect(2));
     CHECK(column_of(lazy, "a") == column_of(eager, "a"));
     CHECK(column_of(lazy, "b") == column_of(eager, "b"));

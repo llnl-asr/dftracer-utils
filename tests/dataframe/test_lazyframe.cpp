@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
@@ -258,8 +260,10 @@ TEST_SUITE("lazyframe") {
         DataFrame lazy = run(lf.collect(2));
 
         DataFrame e = make_df();
-        DataFrame ef = e.filter(eval(col(0) > std::int64_t{3}, ptrs(e)));
-        DataFrame ew = ef.with_column("c", eval(col(0) + col(1), ptrs(ef)));
+        DataFrame ef = e.filter(
+            dftu_utils_test::eval_ok(col(0) > std::int64_t{3}, ptrs(e)));
+        DataFrame ew = ef.with_column(
+            "c", dftu_utils_test::eval_ok(col(0) + col(1), ptrs(ef)));
         DataFrame eager = ew.select({"a", "c"});
 
         REQUIRE(lazy.num_rows() == eager.num_rows());
@@ -2382,7 +2386,8 @@ TEST_SUITE("lazyframe") {
 
     TEST_CASE("lazy filter_mask matches the eager DataFrame::filter(mask)") {
         DataFrame df = make_df();
-        Series mask = eval(col(0) > std::int64_t{3}, ptrs(df));
+        Series mask =
+            dftu_utils_test::eval_ok(col(0) > std::int64_t{3}, ptrs(df));
         DataFrame lz = run(df.lazy().filter_mask(mask.share()).collect(2));
         DataFrame eg = df.filter(mask);
         REQUIRE(lz.num_rows() == eg.num_rows());
@@ -2455,8 +2460,9 @@ TEST_SUITE("lazyframe") {
         CHECK(fpos < rpos);  // filter reordered before reverse
 
         DataFrame df = make_df();
-        DataFrame eg =
-            df.filter(eval(col(0) > std::int64_t{3}, ptrs(df))).reverse();
+        DataFrame eg = df.filter(dftu_utils_test::eval_ok(
+                                     col(0) > std::int64_t{3}, ptrs(df)))
+                           .reverse();
         DataFrame lz = run(lf.collect(2));
         REQUIRE(lz.num_rows() == eg.num_rows());
         const std::int64_t* la = lz.column("a").data<std::int64_t>();
@@ -2482,7 +2488,8 @@ TEST_SUITE("lazyframe") {
         CHECK(spos != dstd::String::npos);
         CHECK(fpos < spos);  // filter reordered before sort_by_multi
 
-        DataFrame eg = df.filter(eval(col(0) > std::int64_t{1}, ptrs(df)))
+        DataFrame eg = df.filter(dftu_utils_test::eval_ok(
+                                     col(0) > std::int64_t{1}, ptrs(df)))
                            .sort_by_multi({"k", "v"}, false);
         DataFrame lz = run(lf.collect(2));
         REQUIRE(lz.num_rows() == eg.num_rows());
@@ -2506,8 +2513,8 @@ TEST_SUITE("lazyframe") {
         CHECK(tpos < fpos);  // NOT hoisted: take must run first
 
         DataFrame taken = df.take(idx);
-        DataFrame eg =
-            taken.filter(eval(col(0) > std::int64_t{3}, ptrs(taken)));
+        DataFrame eg = taken.filter(
+            dftu_utils_test::eval_ok(col(0) > std::int64_t{3}, ptrs(taken)));
         DataFrame lz = run(lf.collect(2));
         REQUIRE(lz.num_rows() == eg.num_rows());
         const std::int64_t* la = lz.column("a").data<std::int64_t>();
@@ -2527,8 +2534,8 @@ TEST_SUITE("lazyframe") {
         CHECK(filt != dstd::String::npos);
         CHECK(proj < filt);  // projection pushed ahead of filter+take
 
-        DataFrame filtered =
-            df.filter(eval(col(0) > std::int64_t{1}, ptrs(df)));
+        DataFrame filtered = df.filter(
+            dftu_utils_test::eval_ok(col(0) > std::int64_t{1}, ptrs(df)));
         DataFrame eg = filtered.take(idx).select({"a"});
         DataFrame lz = run(lf.collect(2));
         REQUIRE(lz.num_rows() == eg.num_rows());
@@ -2545,8 +2552,8 @@ TEST_SUITE("lazyframe") {
         CHECK(plan.find("select [a]") != dstd::String::npos);
         CHECK(plan.find("reverse") != dstd::String::npos);
 
-        DataFrame filtered =
-            df.filter(eval(col(0) > std::int64_t{2}, ptrs(df)));
+        DataFrame filtered = df.filter(
+            dftu_utils_test::eval_ok(col(0) > std::int64_t{2}, ptrs(df)));
         DataFrame eg = filtered.reverse().select({"a"});
         DataFrame lz = run(lf.collect(2));
         REQUIRE(lz.num_rows() == eg.num_rows());
@@ -2560,10 +2567,10 @@ TEST_SUITE("lazyframe") {
         // so it is built against the already-filtered frame (5 rows), not the
         // original.
         DataFrame df = make_df();
-        DataFrame filtered =
-            df.filter(eval(col(0) > std::int64_t{1}, ptrs(df)));
-        Series mask =
-            eval(col(1) < std::int64_t{60}, ptrs(filtered));  // b < 60
+        DataFrame filtered = df.filter(
+            dftu_utils_test::eval_ok(col(0) > std::int64_t{1}, ptrs(df)));
+        Series mask = dftu_utils_test::eval_ok(col(1) < std::int64_t{60},
+                                               ptrs(filtered));  // b < 60
 
         auto lf = df.lazy()
                       .filter(col(0) > std::int64_t{1})
@@ -2795,7 +2802,14 @@ TEST_SUITE("lazyframe") {
         f.names = {"name"};
         f.columns.push_back(Series::strings(names));
         LazyFrame lf = f.lazy().with_column("big", col(0) > std::int64_t{25});
-        CHECK_THROWS_AS(run(lf.collect()), std::invalid_argument);
+        bool refused = false;
+        try {
+            run(lf.collect());
+        } catch (const dftracer::utils::common::DFTUtilsException& e) {
+            refused = dftracer::utils::common::errorcode_of(e.error()) ==
+                      dftracer::utils::common::ErrorCode::InvalidArgument;
+        }
+        CHECK(refused);
     }
 
     TEST_CASE("predicate pushdown keeps a dependent filter after with_column") {

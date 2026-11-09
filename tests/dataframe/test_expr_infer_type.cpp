@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
@@ -15,9 +16,10 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-// infer_type must agree with what eval() actually produces, for every op it
-// covers: build one input column per `input_types` (values are irrelevant),
-// evaluate `root` for real, and compare its DataType to infer_type's answer.
+// infer_type must agree with what dftu_utils_test::eval_ok() actually produces,
+// for every op it covers: build one input column per `input_types` (values are
+// irrelevant), evaluate `root` for real, and compare its DataType to
+// infer_type's answer.
 void check_matches_eval(const Expr& root,
                         const dstd::Vector<DataType>& input_types) {
     dstd::Vector<Series> cols;
@@ -47,8 +49,8 @@ void check_matches_eval(const Expr& root,
     dstd::Vector<const Series*> ptrs;
     for (const Series& c : cols) ptrs.push_back(&c);
 
-    DataType inferred = infer_type(root, input_types);
-    Series result = eval(root, ptrs);
+    DataType inferred = dftu_utils_test::infer_type_ok(root, input_types);
+    Series result = dftu_utils_test::eval_ok(root, ptrs);
     CHECK(inferred == result.data_type());
 }
 
@@ -57,11 +59,11 @@ void check_matches_eval(const Expr& root,
 TEST_SUITE("expr infer_type") {
     TEST_CASE("bare column reference reports the full input DataType") {
         DataType ts = timestamp(TimeUnit::Micro, "UTC");
-        DataType out = infer_type(col(0), {ts});
+        DataType out = dftu_utils_test::infer_type_ok(col(0), {ts});
         CHECK(out == ts);
 
         DataType dec = decimal128(38, 9);
-        CHECK(infer_type(col(0), {dec}) == dec);
+        CHECK(dftu_utils_test::infer_type_ok(col(0), {dec}) == dec);
     }
 
     TEST_CASE("arithmetic: int+int stays Int64, any float widens to Float64") {
@@ -83,8 +85,8 @@ TEST_SUITE("expr infer_type") {
     }
 
     TEST_CASE("cast reports the requested target type") {
-        DataType out = infer_type(expr_cast(TypeId::Float64, col(0)),
-                                  {scalar(TypeId::Int64)});
+        DataType out = dftu_utils_test::infer_type_ok(
+            expr_cast(TypeId::Float64, col(0)), {scalar(TypeId::Int64)});
         CHECK(out == scalar(TypeId::Float64));
         check_matches_eval(expr_cast(TypeId::Float64, col(0)),
                            {scalar(TypeId::Int64)});
@@ -94,7 +96,9 @@ TEST_SUITE("expr infer_type") {
         check_matches_eval(expr_lower(col(0)), {scalar(TypeId::String)});
     }
 
-    TEST_CASE("prim reports Int64, unary keeps or widens as eval() does") {
+    TEST_CASE(
+        "prim reports Int64, unary keeps or widens as "
+        "dftu_utils_test::eval_ok() does") {
         check_matches_eval(expr_prim(PrimOp::Ilog2, col(0)),
                            {scalar(TypeId::Int64)});
         check_matches_eval(expr_unary(UnaryOp::Abs, col(0)),
@@ -111,33 +115,40 @@ TEST_SUITE("expr infer_type") {
         DataType dur = duration_of(TimeUnit::Nano);
         Scalar lo = to_scalar(std::int64_t{0});
         Scalar hi = to_scalar(std::int64_t{100});
-        CHECK(infer_type(expr_clip(col(0), lo, hi), {dur}) ==
-              scalar(TypeId::Duration));
-        CHECK(infer_type(expr_fillna(col(0), lo), {dur}) ==
+        CHECK(
+            dftu_utils_test::infer_type_ok(expr_clip(col(0), lo, hi), {dur}) ==
+            scalar(TypeId::Duration));
+        CHECK(dftu_utils_test::infer_type_ok(expr_fillna(col(0), lo), {dur}) ==
               scalar(TypeId::Duration));
     }
 
     TEST_CASE("an Unknown input column propagates Unknown, not a guess") {
         DataType unk = scalar(TypeId::Unknown);
-        CHECK(infer_type(col(0), {unk}).id == TypeId::Unknown);
-        CHECK(infer_type(col(0) + col(1), {scalar(TypeId::Int64), unk}).id ==
+        CHECK(dftu_utils_test::infer_type_ok(col(0), {unk}).id ==
               TypeId::Unknown);
-        CHECK(infer_type(col(0) > std::int64_t{1}, {unk}).id ==
+        CHECK(dftu_utils_test::infer_type_ok(col(0) + col(1),
+                                             {scalar(TypeId::Int64), unk})
+                  .id == TypeId::Unknown);
+        CHECK(dftu_utils_test::infer_type_ok(col(0) > std::int64_t{1}, {unk})
+                  .id == TypeId::Unknown);
+        CHECK(dftu_utils_test::infer_type_ok(expr_lower(col(0)), {unk}).id ==
               TypeId::Unknown);
-        CHECK(infer_type(expr_lower(col(0)), {unk}).id == TypeId::Unknown);
     }
 
     TEST_CASE("a constant is a column of its type") {
-        CHECK(infer_type(lit(std::int64_t{1}), {scalar(TypeId::Int64)}).id ==
-              TypeId::Int64);
-        CHECK(infer_type(lit(2.5), {scalar(TypeId::Int64)}).id ==
-              TypeId::Float64);
+        CHECK(dftu_utils_test::infer_type_ok(lit(std::int64_t{1}),
+                                             {scalar(TypeId::Int64)})
+                  .id == TypeId::Int64);
+        CHECK(dftu_utils_test::infer_type_ok(lit(2.5), {scalar(TypeId::Int64)})
+                  .id == TypeId::Float64);
     }
 
-    TEST_CASE("malformed expressions throw, matching eval()'s contract") {
-        CHECK_THROWS_AS(infer_type(col(5), {scalar(TypeId::Int64)}),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(infer_type(expr_lower(col(0)), {scalar(TypeId::Int64)}),
-                        std::invalid_argument);
+    TEST_CASE("malformed expressions are refused, matching eval()'s contract") {
+        CHECK(
+            dftu_utils_test::is_invalid(dftracer::utils::dataframe::infer_type(
+                col(5), {scalar(TypeId::Int64)})));
+        CHECK(
+            dftu_utils_test::is_invalid(dftracer::utils::dataframe::infer_type(
+                expr_lower(col(0)), {scalar(TypeId::Int64)})));
     }
 }

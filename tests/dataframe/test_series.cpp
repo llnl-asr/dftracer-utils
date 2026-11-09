@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
@@ -1533,7 +1534,7 @@ TEST_SUITE("vec") {
                                    dataframe::expr_lit(std::int64_t{2}));
         // Two outputs sharing `a+b`; the shared node is computed once (CSE).
         dstd::Vector<dataframe::Series> outs =
-            dataframe::eval_many({sum_ab, twice}, in);
+            dftu_utils_test::eval_many_ok({sum_ab, twice}, in);
         REQUIRE(outs.size() == 2);
         REQUIRE(outs[0].length() == 4);
         CHECK(outs[0].data<std::int64_t>()[0] == 11);
@@ -1559,7 +1560,8 @@ TEST_SUITE("vec") {
         dstd::Vector<dataframe::AggExprSpec> specs{
             dataframe::agg_count("n"), dataframe::agg_sum(ab).as("sum_ab"),
             dataframe::agg_mean(ab).as("mean_ab")};
-        DataFrame out = dataframe::group_agg_expr(keyx, specs, in, "k");
+        DataFrame out = dftu_utils_test::ok(
+            dataframe::group_agg_expr(keyx, specs, in, "k"));
         REQUIRE(out.num_rows() == 2);
         REQUIRE(out.names ==
                 dstd::Vector<dstd::String>{"k", "n", "sum_ab", "mean_ab"});
@@ -1702,13 +1704,13 @@ TEST_SUITE("vec") {
                                    dataframe::expr_col(0),
                                    dataframe::expr_col(1)),
             dataframe::expr_lit(std::int64_t{2}));
-        Series r = dataframe::eval(e, in);
+        Series r = dftu_utils_test::eval_ok(e, in);
         CHECK(r.type() == TypeId::Int64);
         CHECK(r.data<std::int64_t>()[0] == 22);
         CHECK(r.data<std::int64_t>()[3] == 88);
 
         // a / 2  promotes to float
-        Series rf = dataframe::eval(
+        Series rf = dftu_utils_test::eval_ok(
             dataframe::expr_binary(dataframe::BinaryOp::Div,
                                    dataframe::expr_col(0),
                                    dataframe::expr_lit(std::int64_t{2})),
@@ -1721,12 +1723,12 @@ TEST_SUITE("vec") {
         dataframe::Expr sum = dataframe::expr_binary(dataframe::BinaryOp::Add,
                                                      dataframe::expr_col(0),
                                                      dataframe::expr_col(1));
-        Series cse = dataframe::eval(
+        Series cse = dftu_utils_test::eval_ok(
             dataframe::expr_binary(dataframe::BinaryOp::Add, sum, sum), in);
         CHECK(cse.data<std::int64_t>()[0] == 22);  // (1+10)*2
 
         // comparison -> bool
-        Series mask = dataframe::eval(
+        Series mask = dftu_utils_test::eval_ok(
             dataframe::expr_cmp(
                 dataframe::CmpOp::Gt, dataframe::expr_col(1),
                 dftracer::utils::dataframe::to_scalar<std::int64_t>(25)),

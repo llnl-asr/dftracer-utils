@@ -266,9 +266,10 @@ class FoldSource final : public dataframe::Source {
                 for (;;) {
                     auto batch = co_await batches_.next();
                     if (!batch) break;
-                    fold_.add(aligned(std::move(*batch), in_));
+                    common::unwrap(fold_.add(aligned(std::move(*batch), in_)));
                 }
-                dataframe::DataFrame f = fold_.finish(std::move(names_));
+                dataframe::DataFrame f =
+                    common::unwrap(fold_.finish(std::move(names_)));
                 if (!projection_.empty()) f = f.select(projection_);
                 rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
             }

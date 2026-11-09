@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
@@ -41,10 +42,11 @@ struct OverlapColumns {
 /// duration, a negative duration or a NaN never matches. Times and durations
 /// of integer type are compared exactly when both frames hold integers and
 /// the scales are 1, else as doubles. Runs in
-/// `O((n + m) log m + matches)`. Throws std::invalid_argument on key columns
-/// of unequal count or a start or duration that is not a number.
-OverlapMatches overlap_matches(const OverlapColumns& rows,
-                               const OverlapColumns& side);
+/// `O((n + m) log m + matches)`. A start or duration that is not a number is an
+/// InvalidArgument error. Key columns of unequal count, or a start and
+/// duration of unequal length, are fatal.
+dstd::Result<OverlapMatches> overlap_matches(const OverlapColumns& rows,
+                                             const OverlapColumns& side);
 
 }  // namespace dftracer::utils::duql
 

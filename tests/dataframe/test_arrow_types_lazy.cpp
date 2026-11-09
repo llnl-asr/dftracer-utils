@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -424,7 +425,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             {
                 LazyFrame lf = src.lazy().filter(col(0) > std::int64_t{2});
                 DataFrame lazy_r = run(lf.collect());
-                Series mask = eval(col(0) > std::int64_t{2}, ptrs(src));
+                Series mask = dftu_utils_test::eval_ok(col(0) > std::int64_t{2},
+                                                       ptrs(src));
                 DataFrame eager_r = src.filter(mask);
                 REQUIRE(lazy_r.num_rows() == eager_r.num_rows());
                 REQUIRE(lazy_r.num_rows() == 2);
@@ -450,8 +452,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             {
                 LazyFrame lf = src.lazy().with_column("v2", col(1));
                 DataFrame lazy_r = run(lf.collect());
-                DataFrame eager_r =
-                    src.with_column("v2", eval(col(1), ptrs(src)));
+                DataFrame eager_r = src.with_column(
+                    "v2", dftu_utils_test::eval_ok(col(1), ptrs(src)));
                 REQUIRE(lazy_r.columns.size() == 3);
                 check_v_equal(lazy_r.columns[2], eager_r.columns[2]);
             }

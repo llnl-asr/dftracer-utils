@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_op_codes.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -70,16 +71,18 @@ AggExprSpec agg_set_union(Expr value, dstd::String out = "set_union",
 /// expressions share a single evaluated column (and thus one accumulator). A
 /// bare column-ref key shares that input column directly (any type); a
 /// computed key routes through the numeric expr evaluator. The result is one
-/// key column per `key_names` (in order) plus one column per spec.
-DataFrame group_agg_expr(const dstd::Vector<Expr>& keys,
-                         const dstd::Vector<AggExprSpec>& specs,
-                         const dstd::Vector<const Series*>& inputs,
-                         const dstd::Vector<dstd::String>& key_names);
+/// key column per `key_names` (in order) plus one column per spec. A spec that
+/// needs a bare column reference or a `by` column and lacks it, a value
+/// expression that is not numeric, and any @ref eval or @ref group_agg error
+/// come back as an error result.
+dstd::Result<DataFrame> group_agg_expr(
+    const dstd::Vector<Expr>& keys, const dstd::Vector<AggExprSpec>& specs,
+    const dstd::Vector<const Series*>& inputs,
+    const dstd::Vector<dstd::String>& key_names);
 /// Single-key convenience: forwards to the N-key form.
-DataFrame group_agg_expr(const Expr& key,
-                         const dstd::Vector<AggExprSpec>& specs,
-                         const dstd::Vector<const Series*>& inputs,
-                         const dstd::String& key_name);
+dstd::Result<DataFrame> group_agg_expr(
+    const Expr& key, const dstd::Vector<AggExprSpec>& specs,
+    const dstd::Vector<const Series*>& inputs, const dstd::String& key_name);
 
 }  // namespace dftracer::utils::dataframe
 

@@ -284,26 +284,31 @@ int main(int argc, char** argv) {
         const dataframe::Expr lit_e =
             dataframe::expr_str_pred(op, dataframe::expr_col(0), lit);
         const double lit_ns = ns_per_record(n, rounds, [&] {
-            if (!dataframe::eval(lit_e, in0).handle()) std::abort();
+            auto out = dataframe::eval(lit_e, in0);
+            if (!out || !out->handle()) std::abort();
         });
         std::printf("%-12s %-31s %10.1f\n", label, "literal needle", lit_ns);
         std::fill(same_needles.begin(), same_needles.end(), lit);
         const dataframe::Series same = dataframe::Series::strings(same_needles);
         const dataframe::Series varied =
             dataframe::Series::strings(varied_needles);
-        const dataframe::Expr col_e = dataframe::expr_str_pred_col(
-            op, dataframe::expr_col(0), dataframe::expr_col(1));
+        auto col_pred = dataframe::expr_str_pred_col(op, dataframe::expr_col(0),
+                                                     dataframe::expr_col(1));
+        if (!col_pred) std::abort();
+        const dataframe::Expr col_e = *col_pred;
         const dftracer::utils::dstd::Vector<const dataframe::Series*> in_same{
             &col, &same};
         const dftracer::utils::dstd::Vector<const dataframe::Series*> in_varied{
             &col, &varied};
         const double same_ns = ns_per_record(n, rounds, [&] {
-            if (!dataframe::eval(col_e, in_same).handle()) std::abort();
+            auto out = dataframe::eval(col_e, in_same);
+            if (!out || !out->handle()) std::abort();
         });
         std::printf("%-12s %-31s %10.1f\n", label, "column needle, same",
                     same_ns);
         const double var_ns = ns_per_record(n, rounds, [&] {
-            if (!dataframe::eval(col_e, in_varied).handle()) std::abort();
+            auto out = dataframe::eval(col_e, in_varied);
+            if (!out || !out->handle()) std::abort();
         });
         std::printf("%-12s %-31s %10.1f\n", label, "column needle, varied",
                     var_ns);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
@@ -130,20 +131,21 @@ TEST_CASE(
     present.op = dataframe::AggOp::CountValid;
     present.value = cyc;
     present.out = "present";
-    DataFrame g = dataframe::group_agg_expr(dataframe::expr_col(0),
-                                            {cnt, present}, inputs, "name");
+    DataFrame g = dftu_utils_test::ok(dataframe::group_agg_expr(
+        dataframe::expr_col(0), {cnt, present}, inputs, "name"));
     REQUIRE(g.num_rows() == 2);
     CHECK(g.column("n").data<std::int64_t>()[0] == 2);
     CHECK(g.column("n").data<std::int64_t>()[1] == 2);
     CHECK(g.column("present").data<std::int64_t>()[0] == 1);  // cpu: row 2 null
     CHECK(g.column("present").data<std::int64_t>()[1] == 2);
-    CHECK_THROWS_WITH_AS(
-        dataframe::group_agg_expr(dataframe::expr_col(0),
-                                  {dataframe::agg_sum(cyc, "s")}, inputs,
-                                  "name"),
-        "group_by: aggregate 's' reduces a String column numerically; only "
-        "count_valid, first and last apply to strings",
-        common::DFTUtilsException);
+    auto refused = dataframe::group_agg_expr(
+        dataframe::expr_col(0), {dataframe::agg_sum(cyc, "s")}, inputs, "name");
+    REQUIRE(!refused.has_value());
+    CHECK(common::errorcode_of(refused.error()) ==
+          common::ErrorCode::InvalidArgument);
+    CHECK(dstd::String(refused.error().message()) ==
+          "group_by: aggregate 's' reduces a String column numerically; only "
+          "count_valid, first and last apply to strings");
 }
 
 TEST_CASE("SIMD sketch_bucket_keys matches scalar DDSketch::add") {
@@ -523,8 +525,8 @@ TEST_CASE("group_agg_expr argmax/sumsq/set_union via the expression builders") {
         dataframe::agg_sumsq(dataframe::expr_col(2), "sumsq_dur"),
         dataframe::agg_set_union(dataframe::expr_col(3), "tags"),
     };
-    DataFrame g =
-        dataframe::group_agg_expr(dataframe::expr_col(0), specs, inputs, "k");
+    DataFrame g = dftu_utils_test::ok(
+        dataframe::group_agg_expr(dataframe::expr_col(0), specs, inputs, "k"));
     REQUIRE(g.num_rows() == 2);
     const std::int64_t* key = g.column("k").data<std::int64_t>();
     for (std::int64_t r = 0; r < 2; ++r) {
@@ -608,13 +610,13 @@ TEST_CASE("Expr operators build and evaluate a fused expression") {
     Series b = i64({10, 20, 30, 40});
     // (a + b) evaluated over [a, b]
     dataframe::Expr e = dataframe::col(0) + dataframe::col(1);
-    Series r = dataframe::eval(e, {&a, &b});
+    Series r = dftu_utils_test::eval_ok(e, {&a, &b});
     REQUIRE(r.length() == 4);
     CHECK(r.data<std::int64_t>()[0] == 11);
     CHECK(r.data<std::int64_t>()[3] == 44);
     // a comparison expression yields a Bool mask
     dataframe::Expr mask = dataframe::col(0) > std::int64_t(2);
-    Series m = dataframe::eval(mask, {&a});
+    Series m = dftu_utils_test::eval_ok(mask, {&a});
     CHECK(((m.data<std::uint8_t>()[0] >> 0) & 1) == 0);  // 1 > 2 = false
     CHECK(((m.data<std::uint8_t>()[0] >> 3) & 1) == 1);  // 4 > 2 = true
 }
@@ -623,13 +625,13 @@ TEST_CASE("Expr unary math / clip / cast evaluate") {
     dstd::Vector<double> xv{-3.2, 4.7, -1.5, 9.9};
     Series x = dataframe::Series::flat_f64(xv.data(), 4);
 
-    Series fl = dataframe::eval(
+    Series fl = dftu_utils_test::eval_ok(
         dataframe::expr_unary(dataframe::UnaryOp::Floor, dataframe::col(0)),
         {&x});
     CHECK(fl.data<double>()[0] == doctest::Approx(-4.0));
     CHECK(fl.data<double>()[3] == doctest::Approx(9.0));
 
-    Series cl = dataframe::eval(
+    Series cl = dftu_utils_test::eval_ok(
         dataframe::expr_clip(dataframe::col(0),
                              dataframe::detail::expr_scalar_d(-2.0),
                              dataframe::detail::expr_scalar_d(5.0)),
@@ -638,15 +640,15 @@ TEST_CASE("Expr unary math / clip / cast evaluate") {
     CHECK(cl.data<double>()[3] == doctest::Approx(5.0));
 
     Series n = i64({1, 2, 3, 4});
-    Series cf = dataframe::eval(
+    Series cf = dftu_utils_test::eval_ok(
         dataframe::expr_cast(dataframe::TypeId::Float64, dataframe::col(0)),
         {&n});
     CHECK(cf.type() == dataframe::TypeId::Float64);
     CHECK(cf.data<double>()[2] == doctest::Approx(3.0));
 
     auto unary = [&](dataframe::UnaryOp op, Series& in) {
-        return dataframe::eval(dataframe::expr_unary(op, dataframe::col(0)),
-                               {&in});
+        return dftu_utils_test::eval_ok(
+            dataframe::expr_unary(op, dataframe::col(0)), {&in});
     };
 
     dstd::Vector<double> pv{1.0, 4.0, 9.0, 16.0};
@@ -707,7 +709,7 @@ TEST_CASE("Expr engine is null-aware: fillna and null-preserving ops") {
     // A nullable column reaches the expr engine (the chunk slice now carries
     // its validity bitmap), so fillna sees the nulls.
     Series nul = i64_nullable({5, 0, 7, 0}, {1, 0, 1, 0});
-    Series filled = dataframe::eval(
+    Series filled = dftu_utils_test::eval_ok(
         dataframe::expr_fillna(dataframe::col(0),
                                dataframe::detail::expr_scalar_i(-7)),
         {&nul});
@@ -718,13 +720,13 @@ TEST_CASE("Expr engine is null-aware: fillna and null-preserving ops") {
     CHECK(filled.null_count() == 0);
 
     // A math op over a nullable column preserves the null positions.
-    Series abs_nul = dataframe::eval(
+    Series abs_nul = dftu_utils_test::eval_ok(
         dataframe::expr_unary(dataframe::UnaryOp::Abs, dataframe::col(0)),
         {&nul});
     CHECK(abs_nul.null_count() == 2);
 
     // fillna after abs closes the nulls.
-    Series both = dataframe::eval(
+    Series both = dftu_utils_test::eval_ok(
         dataframe::expr_fillna(
             dataframe::expr_unary(dataframe::UnaryOp::Abs, dataframe::col(0)),
             dataframe::detail::expr_scalar_i(0)),

@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/group_fold.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <optional>
@@ -48,8 +49,8 @@ dataframe::DataFrame fold(dataframe::DataType key_type, Batches... bs) {
     a.in = 1;
     a.type = dataframe::scalar(dataframe::TypeId::Int64);
     duql::GroupFold g({key_type}, {a});
-    (g.add(std::move(bs)), ...);
-    return g.finish({"k", "d"});
+    (dftu_utils_test::ok(g.add(std::move(bs))), ...);
+    return dftu_utils_test::ok(g.finish({"k", "d"}));
 }
 
 dstd::Vector<std::int64_t> counts(const dataframe::DataFrame& f) {

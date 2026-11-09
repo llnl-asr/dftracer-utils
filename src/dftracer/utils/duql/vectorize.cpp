@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -21,7 +22,6 @@
 #include <limits>
 #include <numeric>
 #include <optional>
-#include <stdexcept>
 #include <utility>
 #include <variant>
 
@@ -108,19 +108,18 @@ TypeId type_of(K k) {
     }
 }
 
-struct Failure {
-    dstd::String message;
-};
-
-dstd::Unexpected<dstd::Error> unsupported(const Failure& f) {
+dstd::Unexpected<dstd::Error> unsupported(const dstd::String& message) {
     return dstd::Unexpected<dstd::Error>(
-        dstd::Error{DuqlErrc::Unsupported, dstd::StringView(f.message)});
+        dstd::Error{DuqlErrc::Unsupported, dstd::StringView(message)});
 }
 
 class Vectorizer {
    public:
     Vectorizer(const dstd::Vector<VectorColumn>& columns, bool args_fallback)
         : columns_(columns), args_fallback_(args_fallback) {}
+
+    bool failed() const { return !error_.empty(); }
+    const dstd::String& error() const { return error_; }
 
     V operator()(const Term& t) {
         return std::visit([this](const auto& n) { return this->node(n); },
@@ -131,12 +130,22 @@ class Vectorizer {
     const dstd::Vector<VectorColumn>& columns_;
     bool args_fallback_;
 
-    [[noreturn]] static void fail(dstd::String msg) {
-        throw Failure{std::move(msg)};
+    // The first unsupported form; the walk goes on with a null value, and
+    // the entry points read error() after it.
+    mutable dstd::String error_;
+
+    V fail(dstd::String msg) const {
+        if (error_.empty()) error_ = std::move(msg);
+        return null();
     }
 
-    [[noreturn]] static void no_kernel(dstd::StringView what) {
-        fail(dstd::String(what) + " has no column kernel");
+    V checked(dstd::Result<Expr> e, K k) const {
+        if (!e) return fail(dstd::String(e.error().message()));
+        return {std::move(*e), k};
+    }
+
+    V no_kernel(dstd::StringView what) const {
+        return fail(dstd::String(what) + " has no column kernel");
     }
 
     static V null() { return {}; }
@@ -197,7 +206,7 @@ class Vectorizer {
                 else if constexpr (std::is_same_v<T, std::uint64_t>) {
                     if (v > static_cast<std::uint64_t>(
                                 std::numeric_limits<std::int64_t>::max()))
-                        no_kernel("an integer literal above int64");
+                        return no_kernel("an integer literal above int64");
                     return {dataframe::expr_lit(static_cast<std::int64_t>(v)),
                             K::Int, &c};
                 } else if constexpr (std::is_same_v<T, double>)
@@ -213,7 +222,8 @@ class Vectorizer {
         const auto c = field_column(f, consumed);
         if (!c) return null();
         const VectorColumn& col = columns_[*c];
-        if (col.json) fail("'" + dstd::String(col.name) + "' is a json field");
+        if (col.json)
+            return fail("'" + dstd::String(col.name) + "' is a json field");
         V v{dataframe::expr_col(static_cast<std::int32_t>(*c)),
             column_kind(col.type.id)};
         const dataframe::DataType* type = &col.type;
@@ -330,7 +340,7 @@ class Vectorizer {
     }
 
     // One kind for the operands of a value-choosing form, or a compile error.
-    static K common(const dstd::Vector<V>& vs, dstd::StringView what) {
+    K common(const dstd::Vector<V>& vs, dstd::StringView what) const {
         K out = K::Nul;
         for (const V& v : vs) {
             if (v.k == K::Nul) continue;
@@ -345,6 +355,7 @@ class Vectorizer {
                      " chooses between values of different "
                      "types; convert them with int(), "
                      "float() or string()");
+                return K::Nul;
             }
         }
         return out;
@@ -370,7 +381,7 @@ class Vectorizer {
                                                : arith_kind(b.op, l.k, r.k)};
     }
 
-    static V coalesce(dstd::Vector<V> vs, dstd::StringView what) {
+    V coalesce(dstd::Vector<V> vs, dstd::StringView what) const {
         const K k = common(vs, what);
         dstd::Vector<Expr> args;
         for (const V& v : vs)
@@ -432,7 +443,7 @@ class Vectorizer {
     V node(const TIndex& x) {
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].index == &x) return column_value(i);
-        fail(
+        return fail(
             "an array index runs on columns only through "
             "call_column()");
     }
@@ -440,7 +451,7 @@ class Vectorizer {
     V node(const TList& l) {
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].list == &l) return column_value(i);
-        fail(
+        return fail(
             "a list literal runs on columns only through "
             "call_column()");
     }
@@ -450,8 +461,8 @@ class Vectorizer {
             if (columns_[i].quant == &q)
                 return {dataframe::expr_col(static_cast<std::int32_t>(i)),
                         K::Bool};
-        fail(dstd::String(q.all ? "all" : "any") +
-             "() runs on a list column only through quantify()");
+        return fail(dstd::String(q.all ? "all" : "any") +
+                    "() runs on a list column only through quantify()");
     }
 
     V node(const TLookup& l) {
@@ -461,8 +472,8 @@ class Vectorizer {
                 if (k == K::Other || k == K::List) return null();
                 return {dataframe::expr_col(static_cast<std::int32_t>(i)), k};
             }
-        fail("a lookup into '" + l.name +
-             "' runs on columns only through lookup()");
+        return fail("a lookup into '" + l.name +
+                    "' runs on columns only through lookup()");
     }
 
     // The column of `t` when it is a parse_json() call.
@@ -490,7 +501,7 @@ class Vectorizer {
 
     V column_value(std::size_t i) {
         if (columns_[i].json)
-            fail(
+            return fail(
                 "parse_json() gives a json value, which only json() "
                 "and a whole select or derive item read here");
         V v{dataframe::expr_col(static_cast<std::int32_t>(i)),
@@ -503,9 +514,9 @@ class Vectorizer {
     V column_call(const TCall& c) {
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].call == &c) return column_value(i);
-        fail(dstd::String(fn_name(c)) +
-             "() runs on columns only through "
-             "call_column()");
+        return fail(dstd::String(fn_name(c)) +
+                    "() runs on columns only through "
+                    "call_column()");
     }
 
     V node(const TMatch& m) {
@@ -541,8 +552,9 @@ class Vectorizer {
     V arg(const TCall& c, std::size_t i) {
         V v = (*this)(*c.args[i]);
         if (v.k == K::Any)
-            fail(dstd::String(fn_name(c)) + "() reads '" +
-                 term_text(*c.args[i]) + "', whose type only each batch gives");
+            return fail(dstd::String(fn_name(c)) + "() reads '" +
+                        term_text(*c.args[i]) +
+                        "', whose type only each batch gives");
         return v;
     }
 
@@ -658,7 +670,7 @@ class Vectorizer {
             case Fn::Max: {
                 if (c.args.size() == 1) {
                     if (arg(c, 0).k == K::List)
-                        no_kernel("min() and max() of a list");
+                        return no_kernel("min() and max() of a list");
                     return null();
                 }
                 dstd::Vector<Expr> args;
@@ -730,7 +742,8 @@ class Vectorizer {
                                     : dataframe::StrPredOp::EndsWith;
                 if (const auto* n = const_str(p))
                     return {dataframe::expr_str_pred(op, v.e, *n), K::Bool};
-                return {dataframe::expr_str_pred_col(op, v.e, p.e), K::Bool};
+                return checked(dataframe::expr_str_pred_col(op, v.e, p.e),
+                               K::Bool);
             }
             case Fn::Contains: {
                 if (const auto* l = std::get_if<TList>(&c.args[0]->node))
@@ -744,9 +757,10 @@ class Vectorizer {
                         return {dataframe::expr_str_pred(
                                     dataframe::StrPredOp::Contains, v.e, *n),
                                 K::Bool};
-                    return {dataframe::expr_str_pred_col(
-                                dataframe::StrPredOp::Contains, v.e, p.e),
-                            K::Bool};
+                    return checked(
+                        dataframe::expr_str_pred_col(
+                            dataframe::StrPredOp::Contains, v.e, p.e),
+                        K::Bool);
                 }
                 if (v.k != K::List) return null();
                 if (const auto i = const_int(p))
@@ -758,7 +772,8 @@ class Vectorizer {
                                 v.e, dataframe::detail::expr_scalar_d(
                                          std::get<double>(p.constant->value))),
                             K::Bool};
-                no_kernel("contains() of a list with a non-numeric literal");
+                return no_kernel(
+                    "contains() of a list with a non-numeric literal");
             }
             case Fn::Substr: {
                 const V v = arg(c, 0);
@@ -829,7 +844,7 @@ class Vectorizer {
                                ? null()
                                : V{dataframe::expr_lit_str("null"), K::Str};
                 if (v.k == K::List || v.k == K::Other)
-                    no_kernel("json() of a list");
+                    return no_kernel("json() of a list");
                 return {
                     dataframe::expr_convert(dataframe::ConvertOp::Json, v.e),
                     K::Str};
@@ -916,17 +931,18 @@ class Vectorizer {
             case Fn::DatePart: {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
-                return {dataframe::expr_date_part(v.e, c.part, c.ns_per_unit),
-                        K::Int};
+                return checked(
+                    dataframe::expr_date_part(v.e, c.part, c.ns_per_unit),
+                    K::Int);
             }
             case Fn::FormatTime: {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
                 const auto* fmt = std::get_if<TConst>(&c.args[1]->node);
-                return {
+                return checked(
                     dataframe::expr_format_time(
                         v.e, std::get<dstd::String>(fmt->value), c.ns_per_unit),
-                    K::Str};
+                    K::Str);
             }
         }
         return null();
@@ -938,45 +954,49 @@ class Vectorizer {
 dstd::Result<dataframe::Expr> vectorize(
     const Term& t, const dstd::Vector<VectorColumn>& columns,
     bool args_fallback) {
-    try {
-        V v = Vectorizer(columns, args_fallback).whole(t);
-        if (v.k == K::Nul) return dataframe::expr_lit_null(TypeId::Bool);
-        return std::move(v.e);
-    } catch (const Failure& f) {
-        return unsupported(f);
-    }
+    Vectorizer vz(columns, args_fallback);
+    V v = vz.whole(t);
+    if (vz.failed()) return unsupported(vz.error());
+    if (v.k == K::Nul) return dataframe::expr_lit_null(TypeId::Bool);
+    return std::move(v.e);
 }
 
 bool is_null_term(const Term& t, const dstd::Vector<VectorColumn>& columns,
                   bool args_fallback) {
-    try {
-        return Vectorizer(columns, args_fallback).whole(t).k == K::Nul;
-    } catch (const Failure&) {
-        return false;
-    }
+    Vectorizer vz(columns, args_fallback);
+    const V v = vz.whole(t);
+    return !vz.failed() && v.k == K::Nul;
 }
 
 namespace {
 
 // The key columns of `l` for `rows` rows: each key term evaluated, FLAT.
-dstd::Vector<dataframe::Series> key_columns(
+dstd::Result<dstd::Vector<dataframe::Series>> key_columns(
     const TLookup& l, const dstd::Vector<const dataframe::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, std::int64_t rows,
     bool args_fallback) {
     dstd::Vector<dataframe::Series> out;
     for (const auto& k : l.keys) {
-        const V v = Vectorizer(columns, args_fallback)(*k);
-        out.push_back(v.k == K::Nul || v.k == K::Other || v.k == K::List
-                          ? dataframe::Series::nulls(TypeId::Bool, rows)
-                          : dataframe::eval(v.e, inputs).materialize());
+        Vectorizer vz(columns, args_fallback);
+        const V v = vz(*k);
+        if (vz.failed()) return unsupported(vz.error());
+        if (v.k == K::Nul || v.k == K::Other || v.k == K::List) {
+            out.push_back(dataframe::Series::nulls(TypeId::Bool, rows));
+            continue;
+        }
+        dstd::Result<dataframe::Series> key = dataframe::eval(v.e, inputs);
+        if (!key) return key.error();
+        out.push_back(key->materialize());
     }
     return out;
 }
 
-const LookupTable& bound(const TLookup& l) {
+// The table of `l`, or the error when its rows were not bound.
+dstd::Result<const LookupTable*> bound(const TLookup& l) {
     if (!l.slot || !l.slot->table)
-        throw Failure{"'" + l.name + "' was read before its rows were bound"};
-    return *l.slot->table;
+        return unsupported("'" + l.name +
+                           "' was read before its rows were bound");
+    return l.slot->table.get();
 }
 
 }  // namespace
@@ -985,16 +1005,13 @@ dstd::Result<dataframe::Series> lookup(
     const TLookup& l, const dstd::Vector<const dataframe::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
-    try {
-        bound(l);
-        const dstd::Vector<dataframe::Series> keys =
-            key_columns(l, inputs, columns, rows, args_fallback);
-        dstd::Vector<const dataframe::Series*> ptrs;
-        for (const auto& k : keys) ptrs.push_back(&k);
-        return lookup_column(l, ptrs, rows);
-    } catch (const Failure& f) {
-        return unsupported(f);
-    }
+    if (auto table = bound(l); !table) return table.error();
+    const dstd::Result<dstd::Vector<dataframe::Series>> keys =
+        key_columns(l, inputs, columns, rows, args_fallback);
+    if (!keys) return keys.error();
+    dstd::Vector<const dataframe::Series*> ptrs;
+    for (const auto& k : *keys) ptrs.push_back(&k);
+    return lookup_column(l, ptrs, rows);
 }
 
 dstd::Result<dataframe::Series> quantify(
@@ -1003,141 +1020,142 @@ dstd::Result<dataframe::Series> quantify(
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
     const dataframe::Series unknown =
         dataframe::Series::nulls(TypeId::Bool, rows);
-    try {
-        // Each row's elements are values[starts[r], starts[r + 1]).
-        dataframe::Series values;
-        dstd::Vector<std::int64_t> starts;
-        dstd::Vector<std::uint8_t> present(static_cast<std::size_t>(rows), 0);
-        if (const auto* l = std::get_if<TLookup>(&q.subject->node);
-            l && l->all) {
-            const LookupTable& t = bound(*l);
-            const dstd::Vector<dataframe::Series> keys =
-                key_columns(*l, inputs, columns, rows, args_fallback);
-            dstd::Vector<const dataframe::Series*> ptrs;
-            for (const auto& k : keys) ptrs.push_back(&k);
-            Matches m = match(t, ptrs, rows);
-            const auto n = static_cast<std::int64_t>(m.rows.size());
-            values = t.value ? t.frame->columns[*t.value].take(m.rows)
-                             : dataframe::Series::nulls(TypeId::String, n);
-            starts = std::move(m.offsets);
-            for (std::int64_t r = 0; r < rows; ++r)
-                present[static_cast<std::size_t>(r)] =
-                    starts[static_cast<std::size_t>(r) + 1] >
-                    starts[static_cast<std::size_t>(r)];
-        } else {
-            const V subject = Vectorizer(columns, args_fallback)(*q.subject);
-            if (subject.k != K::List) return unknown.share();
-            dataframe::Series list =
-                dataframe::eval(subject.e, inputs).materialize();
-            const std::int32_t* off = list.offsets();
-            if (!off) return unknown.share();
-            const dataframe::Series child = list.child(0);
-            const auto n = static_cast<std::int64_t>(off[rows] - off[0]);
-            if (off[0] == 0 && child.length() == n) {
-                values = child.share();
-            } else {
-                dstd::Vector<std::int64_t> at(static_cast<std::size_t>(n));
-                std::iota(at.begin(), at.end(), std::int64_t{off[0]});
-                values = child.take(at);
-            }
-            for (std::int64_t r = 0; r <= rows; ++r)
-                starts.push_back(off[r] - off[0]);
-            for (std::int64_t r = 0; r < rows; ++r)
-                present[static_cast<std::size_t>(r)] = !list.is_null(r);
-        }
-        dstd::Vector<std::int64_t> parent;
-        parent.reserve(static_cast<std::size_t>(starts.back()));
+    // Each row's elements are values[starts[r], starts[r + 1]).
+    dataframe::Series values;
+    dstd::Vector<std::int64_t> starts;
+    dstd::Vector<std::uint8_t> present(static_cast<std::size_t>(rows), 0);
+    if (const auto* l = std::get_if<TLookup>(&q.subject->node); l && l->all) {
+        const dstd::Result<const LookupTable*> bound_table = bound(*l);
+        if (!bound_table) return bound_table.error();
+        const LookupTable& t = **bound_table;
+        const dstd::Result<dstd::Vector<dataframe::Series>> keys =
+            key_columns(*l, inputs, columns, rows, args_fallback);
+        if (!keys) return keys.error();
+        dstd::Vector<const dataframe::Series*> ptrs;
+        for (const auto& k : *keys) ptrs.push_back(&k);
+        Matches m = match(t, ptrs, rows);
+        const auto n = static_cast<std::int64_t>(m.rows.size());
+        values = t.value ? t.frame->columns[*t.value].take(m.rows)
+                         : dataframe::Series::nulls(TypeId::String, n);
+        starts = std::move(m.offsets);
         for (std::int64_t r = 0; r < rows; ++r)
-            for (std::int64_t e = starts[static_cast<std::size_t>(r)];
-                 e < starts[static_cast<std::size_t>(r) + 1]; ++e)
-                parent.push_back(r);
-        const auto n = static_cast<std::int64_t>(parent.size());
-
-        dstd::Vector<dataframe::Series> owned;
-        dstd::Vector<VectorColumn> cols;
-        owned.push_back(std::move(values));
-        cols.push_back({".", owned.back().data_type()});
-        if (owned.front().type() == TypeId::Struct)
-            for (std::int64_t i = 0; i < owned.front().num_children(); ++i) {
-                dataframe::Series field = owned.front().child(i);
-                cols.push_back(
-                    {dstd::String(".").append(owned.front().field_name(i)),
-                     field.data_type()});
-                owned.push_back(std::move(field));
-            }
-        dstd::Vector<dstd::String> read;
-        for_each_term_field(*q.cond,
-                            [&](const TField& f) { read.push_back(f.base); });
-        auto reads = [&](const VectorColumn& c) {
-            if (c.quant || c.lookup || c.call) return true;
-            for (const auto& b : read)
-                if (b == dstd::StringView(c.name) ||
-                    (args_fallback && c.name.starts_with("args.") &&
-                     dstd::StringView(c.name).substr(5) == b) ||
-                    (b.size() > c.name.size() && b.starts_with(c.name) &&
-                     (b[c.name.size()] == '.' || b[c.name.size()] == '[')))
-                    return true;
-            return false;
-        };
-        for (std::size_t i = 0; i < columns.size(); ++i) {
-            cols.push_back(columns[i]);
-            owned.push_back(reads(columns[i]) ? inputs[i]->take(parent)
-                                              : inputs[i]->share());
+            present[static_cast<std::size_t>(r)] =
+                starts[static_cast<std::size_t>(r) + 1] >
+                starts[static_cast<std::size_t>(r)];
+    } else {
+        Vectorizer subject_vz(columns, args_fallback);
+        const V subject = subject_vz(*q.subject);
+        if (subject_vz.failed()) return unsupported(subject_vz.error());
+        if (subject.k != K::List) return unknown.share();
+        dstd::Result<dataframe::Series> evaluated =
+            dataframe::eval(subject.e, inputs);
+        if (!evaluated) return evaluated.error();
+        dataframe::Series list = evaluated->materialize();
+        const std::int32_t* off = list.offsets();
+        if (!off) return unknown.share();
+        const dataframe::Series child = list.child(0);
+        const auto n = static_cast<std::int64_t>(off[rows] - off[0]);
+        if (off[0] == 0 && child.length() == n) {
+            values = child.share();
+        } else {
+            dstd::Vector<std::int64_t> at(static_cast<std::size_t>(n));
+            std::iota(at.begin(), at.end(), std::int64_t{off[0]});
+            values = child.take(at);
         }
-        dstd::Vector<const dataframe::Series*> frame;
-        for (const auto& c : owned) frame.push_back(&c);
-        const V cond = Vectorizer(cols, args_fallback)(*q.cond);
-        dstd::Vector<std::uint8_t> yes(static_cast<std::size_t>(n), 0);
-        dstd::Vector<std::uint8_t> known(static_cast<std::size_t>(n), 0);
-        if (cond.k == K::Bool && n > 0) {
-            const dataframe::Series t =
-                dataframe::eval(cond.e, frame).materialize();
-            const auto* bits = t.data<std::uint8_t>();
-            for (std::int64_t e = 0; e < n; ++e) {
-                if (t.is_null(e)) continue;
-                known[static_cast<std::size_t>(e)] = 1;
-                yes[static_cast<std::size_t>(e)] =
-                    (bits[e >> 3] >> (e & 7)) & 1;
-            }
-        }
-        dstd::Vector<std::uint8_t> out((static_cast<std::size_t>(rows) + 7) / 8,
-                                       0);
-        dstd::Vector<std::uint8_t> valid(
-            (static_cast<std::size_t>(rows) + 7) / 8, 0);
-        for (std::int64_t r = 0; r < rows; ++r) {
-            if (!present[static_cast<std::size_t>(r)]) continue;
-            bool hit = false;
-            bool unsure = false;
-            for (std::int64_t e = starts[static_cast<std::size_t>(r)];
-                 e < starts[static_cast<std::size_t>(r) + 1]; ++e) {
-                const auto at = static_cast<std::size_t>(e);
-                if (!known[at])
-                    unsure = true;
-                else if ((yes[at] != 0) != q.all)
-                    hit = true;
-            }
-            if (!hit && unsure) continue;
-            const auto bit = static_cast<std::uint8_t>(1u << (r & 7));
-            if (hit != q.all) out[static_cast<std::size_t>(r) >> 3] |= bit;
-            valid[static_cast<std::size_t>(r) >> 3] |= bit;
-        }
-        return dataframe::Series::flat(TypeId::Bool, out.data(), rows,
-                                       valid.data());
-    } catch (const Failure& f) {
-        return unsupported(f);
+        for (std::int64_t r = 0; r <= rows; ++r)
+            starts.push_back(off[r] - off[0]);
+        for (std::int64_t r = 0; r < rows; ++r)
+            present[static_cast<std::size_t>(r)] = !list.is_null(r);
     }
+    dstd::Vector<std::int64_t> parent;
+    parent.reserve(static_cast<std::size_t>(starts.back()));
+    for (std::int64_t r = 0; r < rows; ++r)
+        for (std::int64_t e = starts[static_cast<std::size_t>(r)];
+             e < starts[static_cast<std::size_t>(r) + 1]; ++e)
+            parent.push_back(r);
+    const auto n = static_cast<std::int64_t>(parent.size());
+
+    dstd::Vector<dataframe::Series> owned;
+    dstd::Vector<VectorColumn> cols;
+    owned.push_back(std::move(values));
+    cols.push_back({".", owned.back().data_type()});
+    if (owned.front().type() == TypeId::Struct)
+        for (std::int64_t i = 0; i < owned.front().num_children(); ++i) {
+            dataframe::Series field = owned.front().child(i);
+            cols.push_back(
+                {dstd::String(".").append(owned.front().field_name(i)),
+                 field.data_type()});
+            owned.push_back(std::move(field));
+        }
+    dstd::Vector<dstd::String> read;
+    for_each_term_field(*q.cond,
+                        [&](const TField& f) { read.push_back(f.base); });
+    auto reads = [&](const VectorColumn& c) {
+        if (c.quant || c.lookup || c.call) return true;
+        for (const auto& b : read)
+            if (b == dstd::StringView(c.name) ||
+                (args_fallback && c.name.starts_with("args.") &&
+                 dstd::StringView(c.name).substr(5) == b) ||
+                (b.size() > c.name.size() && b.starts_with(c.name) &&
+                 (b[c.name.size()] == '.' || b[c.name.size()] == '[')))
+                return true;
+        return false;
+    };
+    for (std::size_t i = 0; i < columns.size(); ++i) {
+        cols.push_back(columns[i]);
+        owned.push_back(reads(columns[i]) ? inputs[i]->take(parent)
+                                          : inputs[i]->share());
+    }
+    dstd::Vector<const dataframe::Series*> frame;
+    for (const auto& c : owned) frame.push_back(&c);
+    Vectorizer cond_vz(cols, args_fallback);
+    const V cond = cond_vz(*q.cond);
+    if (cond_vz.failed()) return unsupported(cond_vz.error());
+    dstd::Vector<std::uint8_t> yes(static_cast<std::size_t>(n), 0);
+    dstd::Vector<std::uint8_t> known(static_cast<std::size_t>(n), 0);
+    if (cond.k == K::Bool && n > 0) {
+        dstd::Result<dataframe::Series> truth = dataframe::eval(cond.e, frame);
+        if (!truth) return truth.error();
+        const dataframe::Series t = truth->materialize();
+        const auto* bits = t.data<std::uint8_t>();
+        for (std::int64_t e = 0; e < n; ++e) {
+            if (t.is_null(e)) continue;
+            known[static_cast<std::size_t>(e)] = 1;
+            yes[static_cast<std::size_t>(e)] = (bits[e >> 3] >> (e & 7)) & 1;
+        }
+    }
+    dstd::Vector<std::uint8_t> out((static_cast<std::size_t>(rows) + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> valid((static_cast<std::size_t>(rows) + 7) / 8,
+                                     0);
+    for (std::int64_t r = 0; r < rows; ++r) {
+        if (!present[static_cast<std::size_t>(r)]) continue;
+        bool hit = false;
+        bool unsure = false;
+        for (std::int64_t e = starts[static_cast<std::size_t>(r)];
+             e < starts[static_cast<std::size_t>(r) + 1]; ++e) {
+            const auto at = static_cast<std::size_t>(e);
+            if (!known[at])
+                unsure = true;
+            else if ((yes[at] != 0) != q.all)
+                hit = true;
+        }
+        if (!hit && unsure) continue;
+        const auto bit = static_cast<std::uint8_t>(1u << (r & 7));
+        if (hit != q.all) out[static_cast<std::size_t>(r) >> 3] |= bit;
+        valid[static_cast<std::size_t>(r) >> 3] |= bit;
+    }
+    return dataframe::Series::flat(TypeId::Bool, out.data(), rows,
+                                   valid.data());
 }
 
 dstd::Result<dataframe::Expr> vectorize_condition(
     const Term& t, const dstd::Vector<VectorColumn>& columns,
     bool args_fallback) {
-    try {
-        V v = Vectorizer(columns, args_fallback)(t);
-        if (v.k != K::Bool) return dataframe::expr_lit_null(TypeId::Bool);
-        return std::move(v.e);
-    } catch (const Failure& f) {
-        return unsupported(f);
-    }
+    Vectorizer vz(columns, args_fallback);
+    V v = vz(t);
+    if (vz.failed()) return unsupported(vz.error());
+    if (v.k != K::Bool) return dataframe::expr_lit_null(TypeId::Bool);
+    return std::move(v.e);
 }
 
 namespace {
@@ -1624,8 +1642,12 @@ bool is_column_term(const Term& t) {
            std::holds_alternative<TList>(t.node);
 }
 
-dstd::Optional<dataframe::DataType> call_type(
-    const Term& t, const dstd::Vector<dataframe::DataType>& args) {
+namespace {
+
+// call_type() with the error in `error` (set only when it returns nullopt).
+dstd::Optional<dataframe::DataType> call_type_of(
+    const Term& t, const dstd::Vector<dataframe::DataType>& args,
+    dstd::String& error) {
     auto integer = [](const dataframe::DataType& d) {
         return kind_of(d.id) == K::Int || kind_of(d.id) == K::Uint;
     };
@@ -1641,9 +1663,10 @@ dstd::Optional<dataframe::DataType> call_type(
             if (a.id == TypeId::Unknown) continue;
             const K x = kind_of(a.id);
             if (!scalar_kind(x) ||
-                (k != K::Nul && k != x && !(numeric(k) && numeric(x))))
-                throw std::invalid_argument(
-                    "a list after the scan needs items of one type");
+                (k != K::Nul && k != x && !(numeric(k) && numeric(x)))) {
+                error = "a list after the scan needs items of one type";
+                return dstd::nullopt;
+            }
             k = k == K::Nul || k == x ? x : K::Float;
         }
         switch (k) {
@@ -1690,13 +1713,15 @@ dstd::Optional<dataframe::DataType> call_type(
                     k = K::Float;
                     continue;
                 }
-                throw std::invalid_argument(
+                error =
                     "values() reads fields of different types; convert them "
-                    "with int(), float() or string()");
+                    "with int(), float() or string()";
+                return dstd::nullopt;
             }
-            if (k == K::Other || k == K::List)
-                throw std::invalid_argument(
-                    "values() reads a field that holds a list or object");
+            if (k == K::Other || k == K::List) {
+                error = "values() reads a field that holds a list or object";
+                return dstd::nullopt;
+            }
             return dataframe::list_of(dataframe::scalar(type_of(k)));
         }
         case Fn::ParseJson:
@@ -1715,11 +1740,11 @@ dstd::Optional<dataframe::DataType> call_type(
         case Fn::Sort:
         case Fn::Unique:
             if (!is_list_type(args[0])) return dstd::nullopt;
-            if (!scalar_kind(kind_of(args[0].fields.front().type.id)))
-                throw std::invalid_argument(
-                    (dstd::String(fn_info(c.fn).name) +
-                     "() reads an array of arrays or objects")
-                        .c_str());
+            if (!scalar_kind(kind_of(args[0].fields.front().type.id))) {
+                error = dstd::String(fn_info(c.fn).name) +
+                        "() reads an array of arrays or objects";
+                return dstd::nullopt;
+            }
             return dataframe::list_of(args[0].fields.front().type);
         case Fn::Join:
             if (!is_list_type(args[0]) || kind_of(args[1].id) != K::Str)
@@ -1728,6 +1753,17 @@ dstd::Optional<dataframe::DataType> call_type(
         default:
             return dstd::nullopt;
     }
+}
+
+}  // namespace
+
+dstd::Result<dstd::Optional<dataframe::DataType>> call_type(
+    const Term& t, const dstd::Vector<dataframe::DataType>& args) {
+    dstd::String error;
+    dstd::Optional<dataframe::DataType> type = call_type_of(t, args, error);
+    if (!type && !error.empty())
+        return common::make_error(common::ErrorCode::InvalidArgument, error);
+    return type;
 }
 
 dataframe::Series call_column(const Term& t,

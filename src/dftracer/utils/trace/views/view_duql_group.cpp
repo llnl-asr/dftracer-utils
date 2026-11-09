@@ -77,7 +77,7 @@ dstd::Optional<dataframe::TypeId> Applier::term_type(const duql::TermRef& t,
                        ? dstd::nullopt
                        : dstd::Optional<dataframe::TypeId>(c->type.id);
     const dataframe::TypeId id =
-        dataframe::infer_type(compile(t, text), types()).id;
+        common::unwrap(dataframe::infer_type(compile(t, text), types())).id;
     if (id == dataframe::TypeId::Unknown) return dstd::nullopt;
     return id;
 }

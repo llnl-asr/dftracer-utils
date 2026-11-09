@@ -74,7 +74,7 @@ dstd::Result<dataframe::Series> quantify(
     const dstd::Vector<VectorColumn>& columns, bool args_fallback);
 
 /// The column the bound lookup `l` (not `l.all`) gives for each row of
-/// `inputs`. Throws DFTUtilsException for a query error of the lookup.
+/// `inputs`. A query error of the lookup is an InvalidArgument error.
 dstd::Result<dataframe::Series> lookup(
     const TLookup& l, const dstd::Vector<const dataframe::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, bool args_fallback);
@@ -92,11 +92,10 @@ bool is_column_term(const Term& t);
 /// arguments are the array and the index, for a list literal its items; an
 /// item of Unknown type is a null element, and items of different numeric
 /// kinds give Float64.
-/// Nullopt when every row is unknown. Throws std::invalid_argument for
-/// values() of fields with no common type, a list literal whose items are not
-/// of one scalar type, and sort() or unique() of an array of arrays or
-/// objects.
-dstd::Optional<dataframe::DataType> call_type(
+/// Nullopt when every row is unknown. An InvalidArgument error for values() of
+/// fields with no common type, a list literal whose items are not of one
+/// scalar type, and sort() or unique() of an array of arrays or objects.
+dstd::Result<dstd::Optional<dataframe::DataType>> call_type(
     const Term& t, const dstd::Vector<dataframe::DataType>& args);
 
 /// The column of `t` over its arguments' columns `args`, as `type`, of
@@ -123,10 +122,10 @@ dstd::Optional<std::size_t> column_of(const dataframe::DataFrame& f,
                                       dstd::StringView name);
 
 /// The table `t` reads over `frame`, keyed by `t.target` (a range IN: every
-/// column but the range). Throws DFTUtilsException naming the row set when a
+/// column but the range). An InvalidArgument error naming the row set when a
 /// key column is missing, an uncorrelated SCALAR side is not one row and one
 /// column, or `t` is joined().
-dstd::SharedPtr<const LookupTable> make_lookup_table(
+dstd::Result<dstd::SharedPtr<const LookupTable>> make_lookup_table(
     const TLookup& t, dstd::SharedPtr<const dataframe::DataFrame> frame);
 
 /// A table over `frame` keyed by `columns`.
@@ -152,9 +151,10 @@ Matches match(const LookupTable& table,
               std::int64_t n);
 
 /// The column the bound lookup `t` gives for `n` rows with key columns
-/// `keys`: IN a Bool, ARROW the value (throwing, naming the row set and the
-/// key, when matching rows differ), SCALAR its cell. Not for `t.all`.
-dataframe::Series lookup_column(
+/// `keys`: IN a Bool, ARROW the value (an InvalidArgument error, naming the row
+/// set and the key, when matching rows differ), SCALAR its cell. Not for
+/// `t.all`.
+dstd::Result<dataframe::Series> lookup_column(
     const TLookup& t, const dstd::Vector<const dataframe::Series*>& keys,
     std::int64_t n);
 
@@ -168,9 +168,9 @@ dataframe::Series in_column(const dstd::Vector<const dataframe::Series*>& keys,
 
 /// A joined keyed scalar over `nest`, the side rows its nest join gathered:
 /// the value of struct field `field` of the one row, the CORRELATED_VALUE of
-/// the one-row `empty` (else null) for none. Throws the query error naming
+/// the one-row `empty` (else null) for none. An InvalidArgument error naming
 /// the sub-query `name` and the key for several rows.
-dataframe::Series scalar_column(
+dstd::Result<dataframe::Series> scalar_column(
     const dstd::String& name,
     const dstd::Vector<const dataframe::Series*>& keys,
     const dataframe::Series& nest, std::size_t field,

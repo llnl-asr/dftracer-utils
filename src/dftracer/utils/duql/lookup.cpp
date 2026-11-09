@@ -23,14 +23,14 @@ namespace dftracer::utils::duql {
 
 namespace {
 
-[[noreturn]] void fail(const dstd::String& why) {
-    throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                    ("View::duql " + why).c_str());
+dstd::Unexpected<dstd::Error> fail(const dstd::String& why) {
+    return common::make_error(common::ErrorCode::InvalidArgument,
+                              "View::duql " + why);
 }
 
-[[noreturn]] void raise(const DuqlError& error) {
-    throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                    error.message.c_str());
+dstd::Unexpected<dstd::Error> raise(const DuqlError& error) {
+    return common::make_error(common::ErrorCode::InvalidArgument,
+                              error.message);
 }
 
 bool bit(const dataframe::Series& s, std::int64_t r) {
@@ -321,8 +321,9 @@ namespace {
 
 // The range index of `t`, whose `rows` are its keys' rows, over the range
 // column `range` and the value column `value`; it takes over `t.rows`.
-void index_range(LookupTable& t, RangeRead read, std::size_t range,
-                 dstd::Optional<std::size_t> value) {
+dstd::Result<void> index_range(LookupTable& t, RangeRead read,
+                               std::size_t range,
+                               dstd::Optional<std::size_t> value) {
     auto ix = dstd::make_shared<RangeIndex>();
     const dataframe::DataFrame& f = *t.frame;
     const dataframe::Series& by = f.columns[range];
@@ -335,9 +336,10 @@ void index_range(LookupTable& t, RangeRead read, std::size_t range,
                             type == dataframe::TypeId::Float64 ||
                             arg->null_count() == arg->length();
         if (!number || arg->is_json())
-            fail("'" + t.name +
-                 "' sums a column that is not a typed number; cast it with "
-                 "int() or float() in the sub-query");
+            return fail(
+                "'" + t.name +
+                "' sums a column that is not a typed number; cast it with "
+                "int() or float() in the sub-query");
         ix->integral = integral(type);
     }
     dstd::Vector<dstd::Pair<Ordered, std::int64_t>> sorted;
@@ -415,29 +417,32 @@ void index_range(LookupTable& t, RangeRead read, std::size_t range,
     if (tree) build_range_tree(*ix, read, leaves);
     t.rows.clear();
     t.range = std::move(ix);
+    return {};
 }
 
 }  // namespace
 
-dstd::SharedPtr<const LookupTable> make_lookup_table(
+dstd::Result<dstd::SharedPtr<const LookupTable>> make_lookup_table(
     const TLookup& l, dstd::SharedPtr<const dataframe::DataFrame> frame) {
     if (joined(l))
-        fail("'" + l.name + "' reads its rows through a join, not a table");
+        return fail("'" + l.name +
+                    "' reads its rows through a join, not a table");
     const dataframe::DataFrame& f = *frame;
     dstd::Vector<std::size_t> columns;
     dstd::Optional<std::size_t> range;
     if (l.range != RangeRead::None) {
         range = column_of(f, CORRELATED_RANGE);
         if (!range)
-            fail("'" + l.name + "' has no column '" + CORRELATED_RANGE + "'");
+            return fail("'" + l.name + "' has no column '" + CORRELATED_RANGE +
+                        "'");
     }
     switch (l.kind) {
         case LookupKind::In:
             if (!range && f.columns.size() != l.keys.size())
-                fail("'" + l.name + "' gives " +
-                     dstd::int_text(f.columns.size()) +
-                     " columns; 'in' compares " +
-                     dstd::int_text(l.keys.size() - l.correlated));
+                return fail("'" + l.name + "' gives " +
+                            dstd::int_text(f.columns.size()) +
+                            " columns; 'in' compares " +
+                            dstd::int_text(l.keys.size() - l.correlated));
             for (std::size_t i = 0; i < f.columns.size(); ++i)
                 if (!range || i != *range) columns.push_back(i);
             break;
@@ -445,8 +450,8 @@ dstd::SharedPtr<const LookupTable> make_lookup_table(
             for (const auto& target : l.target) {
                 const auto c = column_of(f, target);
                 if (!c)
-                    fail("'" + l.name + "' has no key column '" + target +
-                         "' for '->'");
+                    return fail("'" + l.name + "' has no key column '" +
+                                target + "' for '->'");
                 columns.push_back(*c);
             }
             break;
@@ -455,16 +460,16 @@ dstd::SharedPtr<const LookupTable> make_lookup_table(
                 for (const auto& target : l.target) {
                     const auto c = column_of(f, target);
                     if (!c)
-                        fail("'" + l.name + "' has no key column '" + target +
-                             "'");
+                        return fail("'" + l.name + "' has no key column '" +
+                                    target + "'");
                     columns.push_back(*c);
                 }
             } else if (f.columns.size() != 1 || f.num_rows() > 1)
-                fail("the sub-query '" + l.name + "' gives " +
-                     dstd::int_text(f.num_rows()) + " rows and " +
-                     dstd::int_text(f.columns.size()) +
-                     " columns; a sub-query in an expression gives one "
-                     "row and one column");
+                return fail("the sub-query '" + l.name + "' gives " +
+                            dstd::int_text(f.num_rows()) + " rows and " +
+                            dstd::int_text(f.columns.size()) +
+                            " columns; a sub-query in an expression gives one "
+                            "row and one column");
             break;
     }
     auto t = std::const_pointer_cast<LookupTable>(
@@ -475,7 +480,10 @@ dstd::SharedPtr<const LookupTable> make_lookup_table(
         t->value = 0;
     if (l.kind == LookupKind::Scalar && !l.keys.empty())
         t->value = column_of(*t->frame, l.column);
-    if (range) index_range(*t, l.range, *range, t->value);
+    if (range) {
+        if (auto ok = index_range(*t, l.range, *range, t->value); !ok)
+            return ok.error();
+    }
     if (t->value) {
         const dataframe::Series& v = t->frame->columns[*t->value];
         t->cells.reserve(static_cast<std::size_t>(v.length()));
@@ -530,7 +538,7 @@ bool same_cell(const dataframe::Series& x, std::int64_t a,
 
 namespace {
 
-dataframe::Series range_column(
+dstd::Result<dataframe::Series> range_column(
     const TLookup& t, const LookupTable& table,
     const dstd::Vector<const dataframe::Series*>& keys, std::int64_t n) {
     const std::size_t bounds = (t.low ? 1 : 0) + (t.high ? 1 : 0);
@@ -584,7 +592,7 @@ dataframe::Series range_column(
             valid[i >> 3] |= bit;
         }
     }
-    if (const auto failure = t.slot->failure.get()) raise(*failure);
+    if (const auto failure = t.slot->failure.get()) return raise(*failure);
     if (in)
         return dataframe::Series::flat(dataframe::TypeId::Bool, bits.data(), n,
                                        valid.data());
@@ -600,11 +608,12 @@ dataframe::Series range_column(
 
 }  // namespace
 
-dataframe::Series lookup_column(
+dstd::Result<dataframe::Series> lookup_column(
     const TLookup& t, const dstd::Vector<const dataframe::Series*>& keys,
     std::int64_t n) {
     const LookupTable* table = t.slot ? t.slot->table.get() : nullptr;
-    if (!table) fail("'" + t.name + "' was read before its rows were bound");
+    if (!table)
+        return fail("'" + t.name + "' was read before its rows were bound");
     if (t.range != RangeRead::None) return range_column(t, *table, keys, n);
     const dataframe::DataFrame& f = *table->frame;
     if (t.kind == LookupKind::Scalar) {
@@ -649,7 +658,8 @@ dataframe::Series lookup_column(
         for (std::int64_t h = lo + 1; h < hi; ++h)
             if (!same_cell(value, first, value,
                            m.rows[static_cast<std::size_t>(h)]))
-                raise(conflict_error(*table, t.column, row_key(keys, r)));
+                return raise(
+                    conflict_error(*table, t.column, row_key(keys, r)));
         pick[i] = first;
     }
     return value.take(pick);
@@ -678,7 +688,7 @@ dataframe::Series in_column(const dstd::Vector<const dataframe::Series*>& keys,
                                    valid.data());
 }
 
-dataframe::Series scalar_column(
+dstd::Result<dataframe::Series> scalar_column(
     const dstd::String& name,
     const dstd::Vector<const dataframe::Series*>& keys,
     const dataframe::Series& nest, std::size_t field,
@@ -692,8 +702,8 @@ dataframe::Series scalar_column(
     std::int64_t none = -1;
     if (empty) {
         if (empty->num_rows() != 1)
-            fail("'" + name + "' over no rows gives " +
-                 dstd::int_text(empty->num_rows()) + " rows, not one");
+            return fail("'" + name + "' over no rows gives " +
+                        dstd::int_text(empty->num_rows()) + " rows, not one");
         none = values.num_rows();
         values =
             dataframe::concat({&values, empty}, dataframe::ConcatHow::Diagonal);
@@ -702,8 +712,8 @@ dataframe::Series scalar_column(
     for (std::int64_t r = 0; r < n; ++r) {
         const std::int64_t rows = nest.is_null(r) ? 0 : off[r + 1] - off[r];
         if (rows > 1)
-            raise(scalar_conflict_error(name, row_key(keys, r),
-                                        static_cast<std::size_t>(rows)));
+            return raise(scalar_conflict_error(name, row_key(keys, r),
+                                               static_cast<std::size_t>(rows)));
         if (rows == 1) pick[static_cast<std::size_t>(r)] = off[r];
     }
     const auto v = column_of(values, CORRELATED_VALUE);

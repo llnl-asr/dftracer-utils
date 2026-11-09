@@ -141,7 +141,7 @@ Pushdown Sides::prepare(const duql::Pipeline& p) {
             if (l->slot->table) continue;
             const auto& rows =
                 frames_[l->side] ? frames_[l->side] : key_frames_[l->side];
-            l->slot->table = duql::make_lookup_table(*l, rows);
+            l->slot->table = common::unwrap(duql::make_lookup_table(*l, rows));
         }
     }
     return key_sets(p);

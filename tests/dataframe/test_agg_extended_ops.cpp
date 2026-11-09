@@ -388,11 +388,11 @@ TEST_CASE("group_agg_expr reads a value column in a view encoding") {
     const std::int64_t kv[2] = {7, 7};
     Series k = Series::flat_i64(kv, 2);
     dstd::Vector<const Series*> inputs{&k, &xs, &y};
-    DataFrame r =
+    DataFrame r = dftu_utils_test::ok(
         dataframe::group_agg_expr(dataframe::col(0),
                                   {dataframe::agg_sum(dataframe::col(1), "sx"),
                                    dataframe::agg_sum(dataframe::col(2), "sy")},
-                                  inputs, "k");
+                                  inputs, "k"));
     REQUIRE(r.num_rows() == 1);
     CHECK(r.column("sx").data<double>()[0] == doctest::Approx(1.0));
     CHECK(r.column("sy").data<double>()[0] == doctest::Approx(4.0));

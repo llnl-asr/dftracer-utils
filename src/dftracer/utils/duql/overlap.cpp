@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -9,7 +11,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <stdexcept>
 
 namespace dftracer::utils::duql {
 
@@ -44,12 +45,14 @@ void copy_column(const dataframe::Series& s, Numbers<T>& out) {
 }
 
 template <class T>
-Numbers<T> read_numbers(const dataframe::Series& s, const char* what) {
+dstd::Result<Numbers<T>> read_numbers(const dataframe::Series& s,
+                                      const char* what) {
     if (!is_number(s.type()))
-        throw std::invalid_argument(
-            (dstd::String("overlap: the ") + what + " is " +
-             dstd::String(dataframe::type_name(s.type())) + ", not a number")
-                .c_str());
+        return common::make_error(
+            common::ErrorCode::InvalidArgument,
+            dstd::String("overlap: the ") + what + " is " +
+                dstd::String(dataframe::type_name(s.type())) +
+                ", not a number");
     const auto n = static_cast<std::size_t>(s.length());
     Numbers<T> out{dstd::Vector<T>(n), dstd::Vector<std::uint8_t>(n)};
     switch (s.type()) {
@@ -116,11 +119,15 @@ struct Intervals {
 };
 
 template <class T>
-Intervals<T> read_intervals(const OverlapColumns& c) {
-    Numbers<T> s = read_numbers<T>(c.start, "start");
-    Numbers<T> d = read_numbers<T>(c.duration, "duration");
+dstd::Result<Intervals<T>> read_intervals(const OverlapColumns& c) {
+    dstd::Result<Numbers<T>> sr = read_numbers<T>(c.start, "start");
+    if (!sr) return sr.error();
+    dstd::Result<Numbers<T>> dr = read_numbers<T>(c.duration, "duration");
+    if (!dr) return dr.error();
+    Numbers<T>& s = *sr;
+    Numbers<T>& d = *dr;
     if (s.value.size() != d.value.size())
-        throw std::invalid_argument("overlap: start and duration differ");
+        dstd::fatal("overlap: start and duration differ in length");
     Intervals<T> out;
     out.ok.resize(s.value.size());
     for (std::size_t i = 0; i < s.value.size(); ++i) {
@@ -219,9 +226,14 @@ class Group {
 };
 
 template <class T>
-OverlapMatches run(const OverlapColumns& rows, const OverlapColumns& side) {
-    const Intervals<T> mine = read_intervals<T>(rows);
-    const Intervals<T> theirs = read_intervals<T>(side);
+dstd::Result<OverlapMatches> run(const OverlapColumns& rows,
+                                 const OverlapColumns& side) {
+    const dstd::Result<Intervals<T>> mine_r = read_intervals<T>(rows);
+    if (!mine_r) return mine_r.error();
+    const dstd::Result<Intervals<T>> theirs_r = read_intervals<T>(side);
+    if (!theirs_r) return theirs_r.error();
+    const Intervals<T>& mine = *mine_r;
+    const Intervals<T>& theirs = *theirs_r;
     dstd::HashMap<dstd::String, Group<T>> groups;
     dstd::String key;
     const auto m = static_cast<std::int64_t>(theirs.start.size());
@@ -256,10 +268,10 @@ OverlapMatches run(const OverlapColumns& rows, const OverlapColumns& side) {
 
 }  // namespace
 
-OverlapMatches overlap_matches(const OverlapColumns& rows,
-                               const OverlapColumns& side) {
+dstd::Result<OverlapMatches> overlap_matches(const OverlapColumns& rows,
+                                             const OverlapColumns& side) {
     if (rows.keys.size() != side.keys.size())
-        throw std::invalid_argument("overlap: the key columns differ in count");
+        dstd::fatal("overlap: the key columns differ in count");
     const bool exact = rows.scale == 1 && side.scale == 1 &&
                        is_int64_safe(rows.start.type()) &&
                        is_int64_safe(rows.duration.type()) &&

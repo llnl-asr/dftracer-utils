@@ -329,8 +329,8 @@ dftu_task* narrow_cursor_narrow(void* self, const dftu_expr* predicate,
     const dstd::Vector<std::int64_t>& v = cs->owner->src.col0;
     Series column =
         Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
-    Series mask = dftracer::utils::dataframe::eval(
-        dftracer::utils::dataframe::expr_handle_unwrap(predicate), {&column});
+    Series mask = dftu_utils_test::ok(dftracer::utils::dataframe::eval(
+        dftracer::utils::dataframe::expr_handle_unwrap(predicate), {&column}));
     dstd::Vector<bool> bits;
     for (std::int64_t i = 0; i < mask.length(); ++i)
         bits.push_back((mask.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1);

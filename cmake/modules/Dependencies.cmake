@@ -351,23 +351,11 @@ function(need_zlib)
     "WITH_NATIVE_INSTRUCTIONS OFF"
     "INSTALL_UTILS OFF"
     "SKIP_INSTALL_ALL ON")
-  if(NOT TARGET zlib-ng-static)
-    message(FATAL_ERROR "need_zlib: zlib-ng made no zlib-ng-static target")
-  endif()
-  get_target_property(_zng zlib-ng-static ALIASED_TARGET)
-  if(NOT _zng)
-    set(_zng zlib-ng-static)
-  endif()
+  # BUILD_SHARED_LIBS is OFF, so zlib-ng makes the one static target zlib-ng.
+  set(_zng zlib-ng)
   get_target_property(_zng_type ${_zng} TYPE)
   if(NOT _zng_type STREQUAL "STATIC_LIBRARY")
-    message(FATAL_ERROR "need_zlib: zlib-ng-static is a ${_zng_type}")
-  endif()
-  if(TARGET zlib-ng AND NOT _zng STREQUAL "zlib-ng")
-    get_target_property(_zng_shared zlib-ng ALIASED_TARGET)
-    if(NOT _zng_shared)
-      set(_zng_shared zlib-ng)
-    endif()
-    set_target_properties(${_zng_shared} PROPERTIES EXCLUDE_FROM_ALL ON)
+    message(FATAL_ERROR "need_zlib: zlib-ng is a ${_zng_type}")
   endif()
   set_target_properties(
     ${_zng}

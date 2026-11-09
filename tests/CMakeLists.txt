@@ -906,6 +906,10 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
   # ==========================================================================
   # pkg-config discovery tests
   # ==========================================================================
+  # Both install from this build tree, which a build test (c_abi_guard) can
+  # configure again while they copy its files.
+  set_tests_properties(install_package public_headers_compile
+                       PROPERTIES RESOURCE_LOCK build_tree)
 
   if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     # Test memory library

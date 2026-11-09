@@ -50,6 +50,12 @@ using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::views;
 using dftracer::utils::json::json_number;
 
+static duql::Query parsed_query(dstd::StringView text) {
+    auto parsed = duql::Query::from_string(text);
+    if (!parsed) throw duql::DuqlParseError(parsed.error());
+    return std::move(*parsed);
+}
+
 // A density block as it appears in the response: the map key/aggregate pair
 // flattened with `ts` resolved from the column index. `name` borrows the
 // aggregate's storage.
@@ -683,11 +689,10 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             });
     };
     auto pass1 = [&](views::ViewSession& p1run) {
-        auto ev_h =
-            p1run.fold<Acc>(duql::parse_or_throw("ph == 1 or ph == \"X\""),
-                            fold_event, merge_acc);
+        auto ev_h = p1run.fold<Acc>(parsed_query("ph == 1 or ph == \"X\""),
+                                    fold_event, merge_acc);
         auto cs_h = p1run.fold<Acc>(
-            duql::parse_or_throw("ph == 2 or ph == \"C\""),
+            parsed_query("ph == 2 or ph == \"C\""),
             [begin, threshold, ncols](Acc& acc, json::Value& jv,
                                       dstd::StringView) {
                 fold_counter_density(jv, begin, threshold, ncols, acc.dens);
@@ -698,7 +703,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         // selection) and give it a renderable span below once the aggregation
         // window is known.
         auto ag_h = p1run.fold<Acc>(
-            duql::parse_or_throw("ph == 3 or ph == \"A\""),
+            parsed_query("ph == 3 or ph == \"A\""),
             [](Acc& acc, json::Value& jv, dstd::StringView raw) {
                 collect_aggregated(jv, raw, acc.agg);
             },
@@ -782,7 +787,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             dstd::Optional<views::Deferred<Acc>> agg_h, enc_h;
             if (want_agg)
                 agg_h = s.fold<Acc>(
-                    duql::parse_or_throw("ph == 3 or ph == \"A\""),
+                    parsed_query("ph == 3 or ph == \"A\""),
                     [agg_lo](Acc& acc, json::Value& jv, dstd::StringView raw) {
                         double ts = 0, dur = 0;
                         if (!parse_ts_dur(jv, ts, dur) || ts < agg_lo) return;
@@ -812,7 +817,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
                     merge_acc);
             else if (want_enc)
                 enc_h = s.fold<Acc>(
-                    duql::parse_or_throw("ph == 1 or ph == \"X\""),
+                    parsed_query("ph == 1 or ph == \"X\""),
                     [enclose](Acc& acc, json::Value& jv, dstd::StringView raw) {
                         enclose(acc, jv, raw);
                     },

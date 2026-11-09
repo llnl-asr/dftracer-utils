@@ -353,6 +353,16 @@ TEST_SUITE("View duql joins") {
                           dup.duql(let + "derive app = run -> runs.app"));
                   }),
                   {"'runs'", "key 1"}));
+        CHECK(has(error_of([&] {
+                      (void)frame(dup.duql(
+                          let +
+                          "where type == \"ev\" and ((run -> runs.app) "
+                          "?? \"\") == \"amg\""));
+                  }),
+                  {"'runs'", "key 1"}));
+        CHECK(has(dup.explain_duql(let + "where type == \"ev\" and ((run -> "
+                                         "runs.app) ?? \"\") == \"amg\""),
+                  {"scan filter:", "(pushed)"}));
         const auto any = frame(dup.duql(
             let + "where type == \"ev\" and run -> runs.app == \"amg\""));
         CHECK(column(any, "i") ==

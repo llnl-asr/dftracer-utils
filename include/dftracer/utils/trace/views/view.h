@@ -717,13 +717,10 @@ class View : public dataframe::LazyOps<View> {
     /// "DFTUtilsException" INVALID_ARGUMENT for a query that does not compile
     /// against this view's columns and record schema.
     View duql(dstd::StringView text, const duql::Params& params = {}) const;
-    /// Apply the builder pipeline `pipe` with its bound parameters.
-    View duql(const duql::Pipe& pipe) const {
-        duql::Params params;
-        for (const auto& [name, value] : pipe.bound())
-            params.emplace(name, value);
-        return duql(pipe.raw(), params);
-    }
+    /// Apply the builder pipeline `pipe` with its bound parameters. Throws
+    /// @ref dftracer::utils::common::DFTUtilsException "DFTUtilsException"
+    /// INVALID_ARGUMENT with the input error of `pipe` when it holds one.
+    View duql(const duql::Pipe& pipe) const;
     /// Same as duql().
     View query(dstd::StringView text, const duql::Params& params = {}) const {
         return duql(text, params);

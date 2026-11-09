@@ -912,11 +912,11 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
 
     // Second pass: POSIX/STDIO calls inside provenance activities.
     const SpanIndex spans = index_spans(g.activities);
-    views::View io =
-        view.phase(views::Phase::Any)
-            .filter(duql::parse_or_throw(
-                "cat == \"POSIX\" or cat == \"STDIO\" or name == \"FH\" or "
-                "name == \"SH\" or name == \"start\""));
+    auto io_query = duql::Query::from_string(
+        "cat == \"POSIX\" or cat == \"STDIO\" or name == \"FH\" or "
+        "name == \"SH\" or name == \"start\"");
+    if (!io_query) throw duql::DuqlParseError(io_query.error());
+    views::View io = view.phase(views::Phase::Any).filter(std::move(*io_query));
     auto ios = co_await io.map_batches<IoAcc>(
         [&spans](IoAcc& a, const dstd::Vector<dstd::StringView>& events) {
             for (auto ev : events) ingest_io(a, spans, ev);

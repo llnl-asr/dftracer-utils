@@ -274,7 +274,8 @@ TEST_CASE("the pre-filter never drops a match") {
     for (int i = 0; i < 300; ++i) {
         const dstd::String text = random_query(rng, 3);
         CAPTURE(text);
-        const duql::Query q = dftracer::utils::duql::parse_or_throw(text);
+        const duql::Query q = dftu_utils_test::ok(
+            dftracer::utils::duql::Query::from_string(text));
         std::uint64_t data = 0, all = 0;
         for (std::size_t k = 0; k < lines.size(); ++k) {
             auto root = parser.parse(padded[k]).value();
@@ -350,7 +351,8 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
         const dstd::String text =
             rng() % 2 ? leaf() : "(" + leaf() + ") and (" + leaf() + ")";
         CAPTURE(text);
-        const duql::Query q = dftracer::utils::duql::parse_or_throw(text);
+        const duql::Query q = dftu_utils_test::ok(
+            dftracer::utils::duql::Query::from_string(text));
         std::uint64_t all = 0;
         for (auto& p : padded)
             all += eval_json(q, dftracer::utils::json::JsonValue(

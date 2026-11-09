@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
+#include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -192,6 +194,15 @@ bool query_matches(json::Value& event, const duql::Query& query,
                                      line, args_fallback);
     if (line.broken) json::detail::ValueAccess::mark_broken(event);
     return kept;
+}
+
+// A lookup that failed on a record left its error in its slot, since the
+// evaluator returns one value per record; the scan raises it between chunks.
+void check_lookups(const duql::Query& query) {
+    if (const auto failure =
+            duql::lookup_failure(duql::detail::QueryAccess::root(query)))
+        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                        failure->message.c_str());
 }
 
 struct LineScan {
@@ -573,6 +584,8 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
 
             pos = (newline - data) + 1;
         }
+
+        if (use_query) check_lookups(*query);
 
         // Yield at end of each chunk, string_view events point into
         // chunk data which is valid until the next co_await read_async().

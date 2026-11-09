@@ -540,10 +540,14 @@ void reject_resolved(const duql::Program& p) {
         };
     auto pipeline = [&](const duql::Pipeline& pl) {
         if (pl.filter) node(*pl.filter);
+        // Checked after the walk: check can throw, and the walk is in duql,
+        // which is built without exceptions.
+        dstd::Vector<dstd::StringView> bases;
         duql::for_each_pipeline_term(pl, [&](const duql::Term& t) {
             if (const auto* f = std::get_if<duql::TField>(&t.node))
-                check(f->base);
+                bases.push_back(f->base);
         });
+        for (const dstd::StringView base : bases) check(base);
     };
     pipeline(p.main);
     for (const auto& s : p.sides) pipeline(s.pipeline);

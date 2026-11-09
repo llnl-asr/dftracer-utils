@@ -28,6 +28,11 @@ namespace {
                                     ("View::duql " + why).c_str());
 }
 
+[[noreturn]] void raise(const DuqlError& error) {
+    throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                    error.message.c_str());
+}
+
 bool bit(const dataframe::Series& s, std::int64_t r) {
     const auto* bits = s.data<std::uint8_t>();
     return (bits[r >> 3] >> (r & 7)) & 1;
@@ -579,6 +584,7 @@ dataframe::Series range_column(
             valid[i >> 3] |= bit;
         }
     }
+    if (const auto failure = t.slot->failure.get()) raise(*failure);
     if (in)
         return dataframe::Series::flat(dataframe::TypeId::Bool, bits.data(), n,
                                        valid.data());
@@ -643,7 +649,7 @@ dataframe::Series lookup_column(
         for (std::int64_t h = lo + 1; h < hi; ++h)
             if (!same_cell(value, first, value,
                            m.rows[static_cast<std::size_t>(h)]))
-                conflict(*table, t.column, row_key(keys, r));
+                raise(conflict_error(*table, t.column, row_key(keys, r)));
         pick[i] = first;
     }
     return value.take(pick);
@@ -696,8 +702,8 @@ dataframe::Series scalar_column(
     for (std::int64_t r = 0; r < n; ++r) {
         const std::int64_t rows = nest.is_null(r) ? 0 : off[r + 1] - off[r];
         if (rows > 1)
-            scalar_conflict(name, row_key(keys, r),
-                            static_cast<std::size_t>(rows));
+            raise(scalar_conflict_error(name, row_key(keys, r),
+                                        static_cast<std::size_t>(rows)));
         if (rows == 1) pick[static_cast<std::size_t>(r)] = off[r];
     }
     const auto v = column_of(values, CORRELATED_VALUE);

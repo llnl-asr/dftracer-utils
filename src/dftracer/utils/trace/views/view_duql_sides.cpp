@@ -129,13 +129,20 @@ Pushdown Sides::prepare(const duql::Pipeline& p) {
             key_frame(i);
     {
         const std::lock_guard<std::mutex> lock(bind_);
+        // Built after the walk: make_lookup_table can throw, and the walk is
+        // in duql, which is built without exceptions.
+        dstd::Vector<const duql::TLookup*> unbound;
         duql::for_each_pipeline_term(p, [&](const duql::Term& t) {
             const auto* l = std::get_if<duql::TLookup>(&t.node);
             if (!l || duql::joined(*l) || l->slot->table) return;
+            unbound.push_back(l);
+        });
+        for (const duql::TLookup* l : unbound) {
+            if (l->slot->table) continue;
             const auto& rows =
                 frames_[l->side] ? frames_[l->side] : key_frames_[l->side];
             l->slot->table = duql::make_lookup_table(*l, rows);
-        });
+        }
     }
     return key_sets(p);
 }

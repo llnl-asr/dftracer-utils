@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cmath>
@@ -1351,7 +1352,8 @@ TEST_CASE("DataFrame mask from a compiled query") {
         Series::strings({"POSIX", "STDIO", "POSIX", "MPI", "POSIX"}));
     df.columns.push_back(i64({10, 20, 30, 40, 50}));
 
-    auto q = dftracer::utils::duql::parse_or_throw("cat == \"POSIX\"");
+    auto q = dftu_utils_test::ok(
+        dftracer::utils::duql::Query::from_string("cat == \"POSIX\""));
     Series m = df.mask(q);
     REQUIRE(m.length() == 5);
     const std::uint8_t* bits = m.data<std::uint8_t>();
@@ -1374,7 +1376,8 @@ TEST_CASE("DataFrame mask on a missing column selects no row") {
     DataFrame df;
     df.names = {"cat"};
     df.columns.push_back(Series::strings({"POSIX", "STDIO"}));
-    Series m = df.mask(dftracer::utils::duql::parse_or_throw("dur > 5"));
+    Series m = df.mask(dftu_utils_test::ok(
+        dftracer::utils::duql::Query::from_string("dur > 5")));
     REQUIRE(m.length() == 2);
     CHECK(m.null_count() == 2);
     CHECK(df.filter(m).num_rows() == 0);
@@ -1384,7 +1387,8 @@ TEST_CASE("DataFrame mask throws when a predicate cannot be lowered") {
     DataFrame df;
     df.names = {"cat"};
     df.columns.push_back(Series::strings({"POSIX", "STDIO"}));
-    auto q = dftracer::utils::duql::parse_or_throw("any(cat) == \"P\"");
+    auto q = dftu_utils_test::ok(
+        dftracer::utils::duql::Query::from_string("any(cat) == \"P\""));
     CHECK_THROWS_AS(df.mask(q), std::runtime_error);
 }
 

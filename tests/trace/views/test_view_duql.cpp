@@ -626,6 +626,19 @@ TEST_SUITE("View duql pipeline") {
         CHECK(got.num_rows() == 3);
     }
 
+    TEST_CASE("a resolved column in a derived term is refused") {
+        CHECK(fails_with("derive x = resolved.fhash.path",
+                         {"resolved.", "fhash -> files.path"}));
+    }
+
+    TEST_CASE("a builder pipe that holds an error does not run") {
+        const duql::Pipe q =
+            duql::Pipe().time_range(dstd::nullopt, dstd::nullopt);
+        REQUIRE_FALSE(q.error().empty());
+        CHECK_THROWS_WITH_AS(base().duql(q), doctest::Contains("time_range"),
+                             dftracer::utils::common::DFTUtilsException);
+    }
+
     TEST_CASE("sort keeps nulls last unless nulls first") {
         const dstd::String q =
             "derive y = if(dur > 35, null, dur) | sort -y{} | take 9"

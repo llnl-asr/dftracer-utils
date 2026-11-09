@@ -4,6 +4,7 @@
 #include <dftracer/utils/trace/views/pipeline.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <trace/views/test_view_common.h>
 
 #include <stdexcept>
@@ -52,7 +53,8 @@ TEST_SUITE("Pipeline plan") {
 
         views::detail::scan::ScanPlan sorted = views::detail::scan::sort_by(
             views::detail::scan::filter(
-                base, duql::parse_or_throw(R"(cat == "POSIX")")),
+                base, dftu_utils_test::ok(
+                          duql::Query::from_string(R"(cat == "POSIX")"))),
             "dur", true);
         views::detail::scan::ScanPlan posix_plan = views::detail::scan::limit(
             views::detail::scan::offset(sorted, 2), 10);

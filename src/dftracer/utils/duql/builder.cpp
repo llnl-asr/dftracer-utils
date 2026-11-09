@@ -5,22 +5,33 @@
 #include <dftracer/utils/duql/syntax/tree.h>
 
 #include <cstddef>
-#include <stdexcept>
 
 namespace dftracer::utils::duql {
 
-dstd::String Pipe::text() const {
+namespace {
+
+DuqlError input_error(const dstd::String& message) {
+    DuqlError error;
+    error.message = message;
+    return error;
+}
+
+}  // namespace
+
+dstd::Expected<dstd::String, DuqlError> Pipe::text() const {
+    if (!error_.empty()) return dstd::Unexpected(input_error(error_));
     auto program = syntax::parse(raw());
-    if (!program) throw std::invalid_argument(program.error().format().c_str());
+    if (!program) return dstd::Unexpected(program.error());
     return syntax::to_text(*program);
 }
 
-dstd::String Source::text() const {
-    if (members_.empty()) return {};
+dstd::Expected<dstd::String, DuqlError> Source::text() const {
+    if (!error_.empty()) return dstd::Unexpected(input_error(error_));
+    if (members_.empty()) return dstd::String();
     dstd::String joined;
     for (const auto& m : members_) joined += m + ";\n";
     auto program = syntax::parse("source s {\n" + joined + "}");
-    if (!program) throw std::invalid_argument(program.error().format().c_str());
+    if (!program) return dstd::Unexpected(program.error());
     const dstd::String text = syntax::to_text(*program);
     std::size_t pos = 0;
     auto next_line = [&](dstd::StringView& line) {

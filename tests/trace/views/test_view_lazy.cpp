@@ -66,7 +66,8 @@ TEST_SUITE("trace scan - lazy collect") {
         dataframe::LazyFrame lz =
             views::detail::scan::collect(
                 views::detail::scan::filter(
-                    base, duql::parse_or_throw(R"(cat == "POSIX")")))
+                    base, dftu_utils_test::ok(
+                              duql::Query::from_string(R"(cat == "POSIX")"))))
                 .select({"cat", "name"});
         dataframe::DataFrame subset = test_view_common::run(lz.collect());
 
@@ -200,7 +201,8 @@ TEST_SUITE("View - scan plan equality") {
                     views::detail::scan::phase(
                         views::detail::scan::filter(
                             base_plan(),
-                            duql::parse_or_throw(R"(cat == "POSIX")")),
+                            dftu_utils_test::ok(
+                                duql::Query::from_string(R"(cat == "POSIX")"))),
                         Phase::Events),
                     1000, 3000),
                 {GroupKey::name()}),
@@ -241,7 +243,8 @@ TEST_SUITE("View - scan plan equality") {
     TEST_CASE("a row query with a select") {
         views::detail::scan::ScanPlan v = views::detail::scan::select(
             views::detail::scan::filter(
-                base_plan(), duql::parse_or_throw(R"(cat == "STDIO")")),
+                base_plan(), dftu_utils_test::ok(duql::Query::from_string(
+                                 R"(cat == "STDIO")"))),
             {"cat", "name"});
         View t =
             base_viewer().duql(R"(cat == "STDIO")").select({"cat", "name"});
@@ -903,12 +906,14 @@ TEST_SUITE("View - trace terminals") {
         };
         same(t.duql(R"(cat == "POSIX")"),
              views::detail::scan::filter(
-                 nested_plan(), duql::parse_or_throw(R"(cat == "POSIX")")));
+                 nested_plan(), dftu_utils_test::ok(duql::Query::from_string(
+                                    R"(cat == "POSIX")"))));
         same(t.filter(dataframe::expr_cmp(dataframe::CmpOp::Eq,
                                           dataframe::col(cat),
                                           dataframe::str("APP"))),
              views::detail::scan::filter(
-                 nested_plan(), duql::parse_or_throw(R"(cat == "APP")")));
+                 nested_plan(), dftu_utils_test::ok(duql::Query::from_string(
+                                    R"(cat == "APP")"))));
         same(t.phase(Phase::Events),
              views::detail::scan::phase(nested_plan(), Phase::Events));
         same(t.time_range(0, 2500),
@@ -984,7 +989,8 @@ TEST_SUITE("View - trace terminals") {
         const ExportStats want =
             test_view_common::run(views::detail::scan::export_json(
                 views::detail::scan::filter(
-                    nested_plan(), duql::parse_or_throw(R"(cat == "POSIX")")),
+                    nested_plan(), dftu_utils_test::ok(duql::Query::from_string(
+                                       R"(cat == "POSIX")"))),
                 old));
         CHECK(eager.lines() == old.lines());
         CHECK(eager.lines().size() == 16);
@@ -1019,7 +1025,8 @@ TEST_SUITE("View - trace terminals") {
         CHECK(rows_of(b.frames[2], FLAME_COLS) ==
               rows_of(scan_flamegraph(views::detail::scan::filter(
                           nested_plan(),
-                          duql::parse_or_throw(R"(cat == "POSIX")"))),
+                          dftu_utils_test::ok(
+                              duql::Query::from_string(R"(cat == "POSIX")")))),
                       FLAME_COLS));
         const dstd::String fp = trace::views::detail::partial_of(b.frames[3]);
         const dstd::Vector<dstd::StringView> fps{fp};
@@ -1152,7 +1159,8 @@ TEST_SUITE("View - trace terminals") {
         auto seen = dstd::make_shared<std::atomic<std::int64_t>>(0);
         auto counting = [seen](ViewSession& s) -> Deferred<std::int64_t> {
             return s.fold<std::int64_t>(
-                dftracer::utils::duql::parse_or_throw("dur >= 0"),
+                dftu_utils_test::ok(
+                    dftracer::utils::duql::Query::from_string("dur >= 0")),
                 [seen](std::int64_t& n, json::Value&, dstd::StringView) {
                     ++n;
                     ++*seen;

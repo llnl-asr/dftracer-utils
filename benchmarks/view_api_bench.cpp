@@ -42,6 +42,12 @@ using namespace dftracer::utils::trace::views;
 
 namespace {
 
+duql::Query parsed_query(dstd::StringView text) {
+    auto parsed = duql::Query::from_string(text);
+    if (!parsed) throw duql::DuqlParseError(parsed.error());
+    return std::move(*parsed);
+}
+
 /// Prints the error and exits with 1 when a setup call failed.
 template <class T>
 void require_ok(const dftracer::utils::dstd::Expected<
@@ -346,8 +352,7 @@ int main(int argc, char** argv) {
                     trace::views::detail::scan::agg(
                         trace::views::detail::scan::group_by(
                             trace::views::detail::scan::filter(
-                                base,
-                                duql::parse_or_throw(R"(cat == "POSIX")")),
+                                base, parsed_query(R"(cat == "POSIX")")),
                             {GroupKey::pid()}),
                         {{AggOp::Mean, "dur", "m"}}),
                     "m", 5);
@@ -384,7 +389,7 @@ int main(int argc, char** argv) {
             trace::views::detail::scan::ScanPlan p =
                 trace::views::detail::scan::select(
                     trace::views::detail::scan::filter(
-                        base, duql::parse_or_throw(R"(name == "fwrite")")),
+                        base, parsed_query(R"(name == "fwrite")")),
                     {"name", "dur", "args.size"});
             run(trace::views::detail::scan::collect_frame(p));
         },
@@ -398,7 +403,7 @@ int main(int argc, char** argv) {
         [&] {
             trace::views::detail::scan::ScanPlan p =
                 trace::views::detail::scan::filter(
-                    base, duql::parse_or_throw(R"(cat == "POSIX")"));
+                    base, parsed_query(R"(cat == "POSIX")"));
             run(trace::views::detail::scan::flamegraph(p, {"pid", "tid"}, "ts",
                                                        "dur", "name", {}));
         },

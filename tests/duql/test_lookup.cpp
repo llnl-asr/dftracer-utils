@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/fields.h>
+#include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/subsumption.h>
@@ -15,6 +16,7 @@
 #include <dftracer/utils/json/json_value.h>
 #include <doctest/doctest.h>
 #include <duql/eval_json.h>
+#include <memory/fresh_process.h>
 #include <simdjson.h>
 
 #include <memory>
@@ -36,15 +38,23 @@ dstd::SharedPtr<const dataframe::DataFrame> runs() {
     return f;
 }
 
+// The lookups of `p`, collected inside the walk: duql is built without
+// exceptions, so nothing that can throw runs in the callback.
+dstd::Vector<const TLookup*> lookups(const Pipeline& p) {
+    dstd::Vector<const TLookup*> out;
+    for_each_pipeline_term(p, [&](const Term& t) {
+        if (const auto* l = std::get_if<TLookup>(&t.node)) out.push_back(l);
+    });
+    return out;
+}
+
 // `text`'s scan filter with every lookup bound to runs().
 Query bound(const dstd::String& text) {
     auto p = compile_program(text, {}, nullptr);
     REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
     REQUIRE(p->main.filter);
-    for_each_pipeline_term(p->main, [](const Term& t) {
-        if (const auto* l = std::get_if<TLookup>(&t.node))
-            l->slot->table = make_lookup_table(*l, runs());
-    });
+    for (const TLookup* l : lookups(p->main))
+        l->slot->table = make_lookup_table(*l, runs());
     return duql::detail::QueryAccess::from_node(clone(*p->main.filter));
 }
 
@@ -91,29 +101,23 @@ TEST_CASE("an arrow's conflicting values fail in a value position") {
         "let runs = where run > 0; where (run -> runs.app) ?? \"\" == \"amg\"",
         {}, nullptr);
     REQUIRE(p);
-    for_each_pipeline_term(p->main, [&](const Term& t) {
-        if (const auto* l = std::get_if<TLookup>(&t.node))
-            l->slot->table = make_lookup_table(*l, f);
-    });
+    for (const TLookup* l : lookups(p->main))
+        l->slot->table = make_lookup_table(*l, f);
     const Query q =
         duql::detail::QueryAccess::from_node(clone(*p->main.filter));
-    try {
-        (void)on_json(q, R"({"run":1})");
-        FAIL("no conflict error");
-    } catch (const dftracer::utils::common::DFTUtilsException& e) {
-        const dstd::String what = e.what();
-        CHECK(what.find("'runs'") != dstd::String::npos);
-        CHECK(what.find("key 1") != dstd::String::npos);
-    }
+    CHECK_FALSE(lookup_failure(duql::detail::QueryAccess::root(q)));
+    (void)on_json(q, R"({"run":1})");
+    const auto failure = lookup_failure(duql::detail::QueryAccess::root(q));
+    REQUIRE(failure);
+    CHECK(failure->message.find("'runs'") != dstd::String::npos);
+    CHECK(failure->message.find("key 1") != dstd::String::npos);
     // In a comparison, any matching row may make it hold.
     auto any = compile_program(
         "let runs = where run > 0; where run -> runs.app == \"amg\"", {},
         nullptr);
     REQUIRE(any);
-    for_each_pipeline_term(any->main, [&](const Term& t) {
-        if (const auto* l = std::get_if<TLookup>(&t.node))
-            l->slot->table = make_lookup_table(*l, f);
-    });
+    for (const TLookup* l : lookups(any->main))
+        l->slot->table = make_lookup_table(*l, f);
     CHECK(
         on_json(duql::detail::QueryAccess::from_node(clone(*any->main.filter)),
                 R"({"run":1})"));
@@ -130,15 +134,21 @@ TEST_CASE("a lookup leaf is a residual to subsumption") {
                                duql::detail::QueryAccess::root(plain)));
 }
 
-TEST_CASE("an unbound lookup fails loudly") {
+TEST_CASE("an unbound lookup ends the process" * doctest::skip()) {
+    fresh_process::announce_abort();
     auto p = compile_program(
         "let runs = where run > 0; where run -> runs.app == \"amg\"", {},
         nullptr);
     REQUIRE(p);
     const Query q =
         duql::detail::QueryAccess::from_node(clone(*p->main.filter));
-    CHECK_THROWS_AS((void)on_json(q, R"({"run":1})"),
-                    dftracer::utils::common::DFTUtilsException);
+    (void)on_json(q, R"({"run":1})");
+}
+
+TEST_CASE("an unbound lookup fails loudly") {
+    const auto result =
+        fresh_process::run("an unbound lookup ends the process");
+    CHECK(result.aborted_with("was read before its rows were bound"));
 }
 
 TEST_CASE("a joined sub-query term leaves the scan filter") {
@@ -158,12 +168,10 @@ TEST_CASE("a joined sub-query term leaves the scan filter") {
     CHECK(p->main.stages.size() == 2);
     dstd::Vector<const TLookup*> joins;
     dstd::Vector<const TLookup*> sets;
-    for_each_pipeline_term(p->main, [&](const Term& t) {
-        if (const auto* l = std::get_if<TLookup>(&t.node)) {
-            if (joined(*l)) joins.push_back(l);
-            if (l->key_set) sets.push_back(l);
-        }
-    });
+    for (const TLookup* l : lookups(p->main)) {
+        if (joined(*l)) joins.push_back(l);
+        if (l->key_set) sets.push_back(l);
+    }
     CHECK(joins.size() == 2);
     CHECK(sets.size() == 1);
     CHECK_THROWS_AS(make_lookup_table(*joins.front(), runs()),
@@ -191,13 +199,11 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
         dstd::SharedPtr<Program> program =
             dstd::make_shared<Program>(std::move(*p));
         const TLookup* found = nullptr;
-        for_each_pipeline_term(program->main, [&](const Term& t) {
-            if (const auto* l = std::get_if<TLookup>(&t.node)) {
-                REQUIRE(l->range != RangeRead::None);
-                l->slot->table = make_lookup_table(*l, side);
-                found = l;
-            }
-        });
+        for (const TLookup* l : lookups(program->main)) {
+            REQUIRE(l->range != RangeRead::None);
+            l->slot->table = make_lookup_table(*l, side);
+            found = l;
+        }
         REQUIRE(found);
         return dstd::make_pair(program, found);
     };

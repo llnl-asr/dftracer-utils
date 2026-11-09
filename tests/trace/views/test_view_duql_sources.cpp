@@ -221,13 +221,21 @@ TEST_SUITE("View duql sources") {
             dftu_utils_test::FileOut o(path);
             o << "def ms(x) = x / 1000;\ndef long_io(t) = ms(dur) > t;\n";
         }
-        dftracer::utils::duql::load_macros(path);
+        REQUIRE(dftracer::utils::duql::load_macros(path).has_value());
         const View v = view_of(write_records(env, "t", dftracer_lines()));
         CHECK(column(frame(v.duql("where long_io(0.0015) | select ts")),
                      "ts") == dstd::Vector<dstd::String>{"20", "30"});
         CHECK(column(frame(v.duql("def ms(x) = x; where ms(dur) > 2"
                                   " | select ts")),
                      "ts") == dstd::Vector<dstd::String>{"30"});
+    }
+
+    TEST_CASE("a macro file that is missing gives an error") {
+        TestEnvironment env(10);
+        const auto loaded =
+            dftracer::utils::duql::load_macros(env.dir() + "/missing.duql");
+        REQUIRE_FALSE(loaded.has_value());
+        CHECK(loaded.error().is_code(dftracer::utils::common::ErrorCode::Io));
     }
 
     TEST_CASE("pipeline macros run as stages") {
@@ -295,7 +303,7 @@ source: |
             o << "def posix_rate(d) = where cat == \"POSIX\" | bucket d | agg "
                  "{ b = sum(dur) };\n";
         }
-        dftracer::utils::duql::load_macros(path);
+        REQUIRE(dftracer::utils::duql::load_macros(path).has_value());
         const View v = view_of(write_records(env, "t", dftracer_lines()));
         const dataframe::DataFrame want = frame(v.duql(
             "where cat == \"POSIX\" | bucket 10us | agg { b = sum(dur) } | "

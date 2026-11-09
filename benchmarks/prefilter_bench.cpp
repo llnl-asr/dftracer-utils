@@ -62,7 +62,9 @@ void run(
     const char* label, const dftracer::utils::dstd::String& query,
     const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& lines,
     int rounds) {
-    const Prefilter p(duql::parse_or_throw(query));
+    auto parsed = duql::Query::from_string(query);
+    if (!parsed) throw duql::DuqlParseError(parsed.error());
+    const Prefilter p(std::move(*parsed));
     std::size_t needles = 0;
     for (const auto& c : p.clauses()) needles += c.size();
     const bool per_needle = std::getenv("PREFILTER_PER_NEEDLE") != nullptr;

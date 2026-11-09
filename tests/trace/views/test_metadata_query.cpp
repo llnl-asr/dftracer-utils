@@ -106,7 +106,8 @@ void check_metadata_variant(bool numeric_ph) {
         views::detail::scan::phase(
             views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
             Phase::Metadata),
-        duql::parse_or_throw("args.name == \"time_metric\""));
+        dftu_utils_test::ok(
+            duql::Query::from_string("args.name == \"time_metric\"")));
     dataframe::LazyFrame filtered_lazy = views::detail::scan::collect(filtered);
     dataframe::DataFrame f_lazy = run(filtered_lazy.collect());
     dataframe::DataFrame f_eager =
@@ -120,7 +121,7 @@ void check_metadata_variant(bool numeric_ph) {
         views::detail::scan::phase(
             views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
             Phase::Metadata),
-        duql::parse_or_throw("args.name == \"nope\""));
+        dftu_utils_test::ok(duql::Query::from_string("args.name == \"nope\"")));
     dataframe::LazyFrame no_match_lazy = views::detail::scan::collect(no_match);
     CHECK(run(no_match_lazy.collect()).num_rows() == 0);
     CHECK(run(views::detail::scan::collect_frame(no_match)).num_rows() == 0);
@@ -239,13 +240,15 @@ TEST_SUITE("View - metadata under pruning") {
             views::detail::scan::phase(views::detail::scan::from_file(
                                            dstd::String(gz), dstd::String(idx)),
                                        Phase::Metadata),
-            duql::parse_or_throw(R"(args.name == "t37")"));
+            dftu_utils_test::ok(
+                duql::Query::from_string(R"(args.name == "t37")")));
         CHECK(run(views::detail::scan::collect_frame(q)).num_rows() == 1);
         views::detail::scan::ScanPlan all = views::detail::scan::filter(
             views::detail::scan::phase(views::detail::scan::from_file(
                                            dstd::String(gz), dstd::String(idx)),
                                        Phase::Metadata),
-            duql::parse_or_throw(R"(name == "thread_name")"));
+            dftu_utils_test::ok(
+                duql::Query::from_string(R"(name == "thread_name")")));
         CHECK(run(views::detail::scan::collect_frame(all)).num_rows() == 40);
     }
 
@@ -295,7 +298,8 @@ TEST_SUITE("View - metadata under pruning") {
             views::detail::scan::phase(views::detail::scan::from_file(
                                            dstd::String(gz), dstd::String(idx)),
                                        Phase::Metadata),
-            duql::parse_or_throw(R"(name == "thread_name")"));
+            dftu_utils_test::ok(
+                duql::Query::from_string(R"(name == "thread_name")")));
         CHECK(run(views::detail::scan::collect_frame(all)).num_rows() == 40);
         StringSink pruned;
         dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
@@ -342,7 +346,8 @@ TEST_SUITE("View - metadata under pruning") {
         const dstd::String gz = create_threaded_trace(env);
         auto chunks = [&](const dstd::String& text,
                           index::plan::MetadataUse use) {
-            const auto q = dftracer::utils::duql::parse_or_throw(text);
+            const auto q = dftu_utils_test::ok(
+                dftracer::utils::duql::Query::from_string(text));
             auto out = index::plan::prune_file(
                            {.index_path = determine_index_path(gz, ""),
                             .file_path = dstd::String(dstd::StringView(gz)),

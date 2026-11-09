@@ -587,7 +587,9 @@ static void add_duration_filter(const ViewArgParse& cli, ViewDefinition& view) {
         extra +=
             "dur <= " + dstd::to_string(static_cast<uint64_t>(max_duration));
     }
-    view.with_query(duql::parse_or_throw(extra));
+    auto query = duql::Query::from_string(extra);
+    if (!query) throw duql::DuqlParseError(query.error());
+    view.with_query(std::move(*query));
 }
 
 // --phase selects the input phase; "any" reads every record, metadata

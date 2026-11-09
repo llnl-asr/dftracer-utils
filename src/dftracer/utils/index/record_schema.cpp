@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -153,8 +154,10 @@ class Detector {
                            c.args_fallback == s->args_fallback;
                 });
             if (same == conds_.end()) {
-                conds_.push_back({s->data, s->args_fallback,
-                                  duql::parse_or_throw(s->data), 0});
+                auto parsed = duql::Query::from_string(s->data);
+                if (!parsed) throw duql::DuqlParseError(parsed.error());
+                conds_.push_back(
+                    {s->data, s->args_fallback, std::move(*parsed), 0});
                 same = std::prev(conds_.end());
             }
             cond_of_[i] = static_cast<std::size_t>(same - conds_.begin());
@@ -426,6 +429,14 @@ FieldSpec builtin_field(dstd::String name, FieldType type, bool optional,
     return f;
 }
 
+dstd::String built_source(const duql::Source& source) {
+    auto text = source.text();
+    if (!text)
+        dstd::fatal("a built-in record schema source does not build",
+                    text.error().message.c_str());
+    return std::move(*text);
+}
+
 dstd::Vector<RecordSchema> builtins() {
     RecordSchema dft;
     dft.id = "dftracer";
@@ -448,28 +459,29 @@ dstd::Vector<RecordSchema> builtins() {
         };
         dft.source = merge_source(
             {},
-            Source()
-                .rowset("data",
-                        Pipe().where(c("ph").not_in(dstd::Vector<Col>{"M", 4})))
-                .rowset("files", dict("FH")
-                                     .select({{"fhash", c("args.value")},
-                                              {"path", c("args.name")}})
-                                     .distinct())
-                .rowset("hosts", dict("HH")
-                                     .select({{"hhash", c("args.value")},
-                                              {"name", c("args.name")}})
-                                     .distinct())
-                .rowset("strings", dict("SH")
-                                       .select({{"shash", c("args.value")},
-                                                {"value", c("args.name")}})
-                                       .distinct())
-                .rowset("ranks", Pipe()
-                                     .where(meta && c("name") == "PR" &&
-                                            c("args.name") == "rank")
-                                     .select({"pid", {"rank", c("args.value")}})
-                                     .distinct())
-                .flag("args_fallback", true)
-                .text(),
+            built_source(
+                Source()
+                    .rowset("data", Pipe().where(c("ph").not_in(
+                                        dstd::Vector<Col>{"M", 4})))
+                    .rowset("files", dict("FH")
+                                         .select({{"fhash", c("args.value")},
+                                                  {"path", c("args.name")}})
+                                         .distinct())
+                    .rowset("hosts", dict("HH")
+                                         .select({{"hhash", c("args.value")},
+                                                  {"name", c("args.name")}})
+                                         .distinct())
+                    .rowset("strings", dict("SH")
+                                           .select({{"shash", c("args.value")},
+                                                    {"value", c("args.name")}})
+                                           .distinct())
+                    .rowset("ranks",
+                            Pipe()
+                                .where(meta && c("name") == "PR" &&
+                                       c("args.name") == "rank")
+                                .select({"pid", {"rank", c("args.value")}})
+                                .distinct())
+                    .flag("args_fallback", true)),
             "dftracer");
     }
     dft.data = data_condition(dft);
@@ -494,16 +506,16 @@ dstd::Vector<RecordSchema> builtins() {
         using namespace duql;
         genesis.source = merge_source(
             {},
-            Source()
-                .rowset("data", Pipe().where(c("gtype") != "run"))
-                .rowset("runs",
-                        Pipe()
-                            .where(c("gtype") == "run")
-                            .select({"run", "app", "system", "unique_input",
-                                     "nodes", "ppn", "papi_set", "method",
-                                     "sketch_accuracy", "leaf"})
-                            .distinct())
-                .text(),
+            built_source(
+                Source()
+                    .rowset("data", Pipe().where(c("gtype") != "run"))
+                    .rowset("runs",
+                            Pipe()
+                                .where(c("gtype") == "run")
+                                .select({"run", "app", "system", "unique_input",
+                                         "nodes", "ppn", "papi_set", "method",
+                                         "sketch_accuracy", "leaf"})
+                                .distinct())),
             "genesis");
     }
     genesis.data = data_condition(genesis);

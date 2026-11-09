@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -22,6 +24,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 
 #include <algorithm>
+#include <exception>
 #include <mutex>
 #include <utility>
 
@@ -244,22 +247,36 @@ dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan(
     Ctx ctx;
     ctx.roles = index::duql_roles(schema);
     const duql::PluginCatalog plugins = registry_plugins();
-    const duql::LeafPaths leaves = [this] {
-        detail::scan::ensure_catalog(plan_);
-        if (const auto file = detail::scan::file_without_catalog(plan_))
-            refuse(
-                "wildcard paths expand against the index's path catalog, "
-                "which the index of " +
-                *file +
-                " does not hold; build the full index (dftracer_index or "
-                "BatchIndexer) first");
-        dstd::Vector<dstd::String> out;
-        for (const auto& l : schema_tree()) out.emplace_back(l.path);
-        return out;
+    // duql is built without exceptions, so the lookup keeps what it throws and
+    // hands duql an error; the throw comes back after the compile.
+    std::exception_ptr leaves_failure;
+    const duql::LeafPaths leaves =
+        [&]() -> dstd::Expected<dstd::Vector<dstd::String>, duql::DuqlError> {
+        try {
+            detail::scan::ensure_catalog(plan_);
+            if (const auto file = detail::scan::file_without_catalog(plan_))
+                refuse(
+                    "wildcard paths expand against the index's path catalog, "
+                    "which the index of " +
+                    *file +
+                    " does not hold; build the full index (dftracer_index or "
+                    "BatchIndexer) first");
+            dstd::Vector<dstd::String> out;
+            for (const auto& l : schema_tree()) out.emplace_back(l.path);
+            return out;
+        } catch (...) {
+            leaves_failure = std::current_exception();
+            duql::DuqlError error;
+            error.message = "the leaf paths could not be read";
+            return dstd::Unexpected(std::move(error));
+        }
     };
     auto p = duql::compile_program(text, params, &ctx.roles, schema.source,
                                    &plugins, &leaves);
-    if (!p) refuse(p.error().format());
+    if (!p) {
+        if (leaves_failure) std::rethrow_exception(leaves_failure);
+        refuse(p.error().format());
+    }
     reject_resolved(*p);
     ctx.sides = dstd::make_shared<Sides>(std::move(*p));
     ctx.order = [](const View& in) {
@@ -384,6 +401,15 @@ dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan(
 
 View View::duql(dstd::StringView text, const duql::Params& params) const {
     return duql_plan(text, params).first;
+}
+
+View View::duql(const duql::Pipe& pipe) const {
+    if (!pipe.error().empty())
+        common::throw_error(
+            dstd::Error{common::ErrorCode::InvalidArgument, pipe.error()});
+    duql::Params params;
+    for (const auto& [name, value] : pipe.bound()) params.emplace(name, value);
+    return duql(pipe.raw(), params);
 }
 
 dstd::String View::explain_duql(dstd::StringView text,

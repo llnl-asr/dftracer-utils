@@ -391,10 +391,12 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
                 order.push_back(columns[c]);
                 descending.push_back(names[c] == "dur");
             }
+    auto row_query = duql::Query::from_string(text);
+    if (!row_query) throw duql::DuqlParseError(row_query.error());
     dataframe::LazyFrame sorted =
         views::View::from_files(
             to_view_files(collect_candidate_files(index, params)))
-            .filter(duql::parse_or_throw(text))
+            .filter(std::move(*row_query))
             .cancel_when([&req]() { return req.cancel_token.cancelled(); })
             .select(dstd::Vector<dstd::String>(columns.begin(), columns.end()))
             .sort_by_multi(order, descending);

@@ -6,6 +6,7 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <initializer_list>
 
@@ -17,7 +18,8 @@ using Clauses = dstd::Vector<dstd::Vector<dstd::String>>;
 namespace {
 
 plan::Prefilter of(const char* q) {
-    return plan::Prefilter(dftracer::utils::duql::parse_or_throw(q));
+    return plan::Prefilter(
+        dftu_utils_test::ok(dftracer::utils::duql::Query::from_string(q)));
 }
 
 void agree(const plan::Prefilter& p, std::initializer_list<const char*> lines,

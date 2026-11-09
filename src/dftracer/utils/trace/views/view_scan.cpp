@@ -114,11 +114,12 @@ dstd::Optional<duql::Query> phase_query(const ViewPlan& plan) {
     }
     // Match both the current integer "ph" and the legacy single-letter form so
     // the same View reads new- and old-format traces alike.
-    duql::Query q = duql::parse_or_throw(
+    auto q = duql::Query::from_string(
         "ph == " + dstd::to_string(phase_to_int(rp)) + " or ph == \"" +
         dstd::String(1, phase_to_letter(rp)) + "\"");
-    if (plan.query) return duql::conjoin(*plan.query, q);
-    return q;
+    if (!q) throw duql::DuqlParseError(q.error());
+    if (plan.query) return duql::conjoin(*plan.query, *q);
+    return std::move(*q);
 }
 
 }  // namespace
@@ -128,8 +129,9 @@ dstd::Optional<duql::Query> effective_query(const ViewPlan& plan) {
     if (!plan.all_records) {
         const dstd::String& data = plan_record_schema(plan).data;
         if (!data.empty() && data != dftracer::utils::index::NO_METADATA) {
-            duql::Query d = duql::parse_or_throw(data);
-            q = q ? duql::conjoin(*q, d) : std::move(d);
+            auto d = duql::Query::from_string(data);
+            if (!d) throw duql::DuqlParseError(d.error());
+            q = q ? duql::conjoin(*q, *d) : std::move(*d);
         }
     }
     if (!plan.build_step) return q;
@@ -226,8 +228,9 @@ void add_time_conditions(const ViewPlan& plan, ViewDefinition& vdef) {
     if (conds.empty()) return;
     dstd::String q;
     for (const auto& c : conds) q += (q.empty() ? "" : " and ") + c;
-    duql::Query bounds = duql::parse_or_throw(q);
-    vdef.query = vdef.query ? duql::conjoin(*vdef.query, bounds) : bounds;
+    auto bounds = duql::Query::from_string(q);
+    if (!bounds) throw duql::DuqlParseError(bounds.error());
+    vdef.query = vdef.query ? duql::conjoin(*vdef.query, *bounds) : *bounds;
 }
 
 }  // namespace

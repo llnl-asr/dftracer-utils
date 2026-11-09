@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
@@ -1209,7 +1210,8 @@ PyObject* duql_load_path_py(PyObject*, PyObject* arg) {
     const char* path = as_utf8(arg);
     if (!path) return nullptr;
     return guarded([&]() -> PyObject* {
-        dftracer::utils::duql::load_macros(path);
+        auto loaded = dftracer::utils::duql::load_macros(path);
+        if (!loaded) common::throw_error(loaded.error());
         Py_RETURN_NONE;
     });
 }

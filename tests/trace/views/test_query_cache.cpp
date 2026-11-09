@@ -204,7 +204,7 @@ TEST_SUITE("QueryCache") {
                     views::detail::scan::filter(
                         views::detail::scan::from_file(dstd::String(gz),
                                                        dstd::String(idx)),
-                        duql::parse_or_throw(q)),
+                        dftu_utils_test::ok(duql::Query::from_string(q))),
                     {GroupKey::cat()}),
                 {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };

@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -55,14 +56,15 @@ dftracer::utils::dstd::Expected<void, DuqlError> expand_macros(
     const dstd::Function<bool(dstd::StringView)>& builtin);
 
 /// The macros of the `.duql` files on `$DFTRACER_UTILS_DUQL_PATH` (colon
-/// separated) and every path `load_macros` added. Thread-safe.
-dstd::Vector<Macro> path_macros();
+/// separated) and every path `load_macros` added. Thread-safe. Fails like
+/// @ref load_macros for a path on the variable.
+dstd::Result<dstd::Vector<Macro>> path_macros();
 
 /// Adds the `def`s of the `.duql` file `path`, or of every `.duql` file of a
-/// directory in name order. A path is loaded once. Throws DFTUtilsException
-/// INVALID_ARGUMENT for a file that holds anything but `def`s or does not
-/// parse, IO when it cannot be read.
-void load_macros(dstd::StringView path);
+/// directory in name order. A path is loaded once. Fails with
+/// ErrorCode::InvalidArgument for a file that holds anything but `def`s or
+/// does not parse, ErrorCode::Io when it cannot be read.
+dstd::Result<void> load_macros(dstd::StringView path);
 
 }  // namespace dftracer::utils::duql
 

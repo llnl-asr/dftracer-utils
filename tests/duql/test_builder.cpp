@@ -260,7 +260,9 @@ void check_same_tree(const Pipe& built, const dstd::String& text) {
     auto got = syntax::parse(built.raw());
     REQUIRE_MESSAGE(got.has_value(), got.error().format());
     CHECK(syntax::equal(*got, *want));
-    CHECK(built.text() == syntax::to_text(*want));
+    auto text_of_built = built.text();
+    REQUIRE(text_of_built.has_value());
+    CHECK(*text_of_built == syntax::to_text(*want));
 }
 
 }  // namespace
@@ -502,28 +504,63 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
 }
 
 TEST_CASE("an index follows a field path") {
-    CHECK_THROWS_AS(fn("sort", {c("xs")})[0], std::invalid_argument);
-    CHECK_THROWS_AS((c("a") + 1)[0], std::invalid_argument);
-    CHECK_THROWS_AS(Col(5)[0], std::invalid_argument);
+    CHECK(fn("sort", {c("xs")})[0].error() == "an index follows a field path");
+    CHECK((c("a") + 1)[0].error() == "an index follows a field path");
+    CHECK(Col(5)[0].error() == "an index follows a field path");
+    CHECK(c("a")[0].error().empty());
+}
+
+TEST_CASE("a builder value keeps its first input error through composition") {
+    const Col bad_index = Col(5)[0];
+    const Col bad_number = lit(std::nan(""));
+    CHECK(bad_number.error() == "duql: a number must be finite");
+    CHECK((bad_index + bad_number).error() == "an index follows a field path");
+    CHECK((bad_number + bad_index).error() == "duql: a number must be finite");
+    CHECK(fn("f", {c("x"), bad_number}).error() ==
+          "duql: a number must be finite");
+    CHECK(duration(std::nan(""), "s").error() ==
+          "duql: a number must be finite");
+    const Pipe p = Pipe().where(bad_index).where(bad_number);
+    CHECK(p.error() == "an index follows a field path");
+    auto text = p.text();
+    REQUIRE_FALSE(text.has_value());
+    CHECK(text.error().message == "an index follows a field path");
+    CHECK(Pipe().select({bad_number}).error() ==
+          "duql: a number must be finite");
+    CHECK(Pipe().lookup(Pipe().where(bad_number), {"k"}).error() ==
+          "duql: a number must be finite");
+    CHECK(Pipe().take(c("n") + bad_number).take(1).error() ==
+          "duql: a number must be finite");
+    const auto source_text =
+        Source().rowset("x", Pipe().where(bad_number)).text();
+    REQUIRE_FALSE(source_text.has_value());
+    CHECK(source_text.error().message == "duql: a number must be finite");
+}
+
+TEST_CASE("pipe time_range and anti lookup report their own errors") {
+    CHECK(Pipe().time_range(dstd::nullopt, dstd::nullopt).error() ==
+          "duql: time_range needs a low or a high bound");
+    CHECK(Pipe().time_range(lit(1), dstd::nullopt).error().empty());
+    CHECK(Pipe().lookup("hosts", {"host"}, "info", LookupHow::Anti).error() ==
+          "duql: an anti lookup cannot take into");
 }
 
 TEST_CASE("pipe bucket rejects a range without fill and a bad mode") {
-    CHECK_THROWS_AS(Pipe().bucket(duration(1, "s"), false, {}, "forward"),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(
-        Pipe().bucket(duration(1, "s"), false, {}, "zero", lit(0), lit(1)),
-        std::invalid_argument);
-    CHECK_THROWS_AS(Pipe().bucket(duration(1, "s"), true, {}, "cubic"),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(Pipe().bucket(duration(1, "s"), true, {}, "zero", lit(0)),
-                    std::invalid_argument);
+    CHECK(Pipe().bucket(duration(1, "s"), false, {}, "forward").error() ==
+          "duql: a bucket mode or range needs fill");
+    CHECK(Pipe()
+              .bucket(duration(1, "s"), false, {}, "zero", lit(0), lit(1))
+              .error() == "duql: a bucket mode or range needs fill");
+    CHECK(Pipe().bucket(duration(1, "s"), true, {}, "cubic").error() ==
+          "duql: bucket mode is zero, forward or linear");
+    CHECK(Pipe().bucket(duration(1, "s"), true, {}, "zero", lit(0)).error() ==
+          "duql: a bucket range needs both low and high");
 }
 
 TEST_CASE("pipe builder writes any string as a literal") {
     CHECK(lit("a\"b'c").raw() == R"("a\"b'c")");
     CHECK(lit("ends\\").raw() == R"("ends\\")");
     CHECK(lit("a\nb").raw() == R"("a\nb")");
-    CHECK_THROWS_AS(lit(std::nan("")), std::invalid_argument);
     check_same_tree(Pipe().where(c("x") == "q\" s' b\\"),
                     R"(where x == 'q" s\' b\\')");
 }
@@ -541,21 +578,25 @@ TEST_CASE("pipe builder binds parameters and reports parse errors") {
         "n", dstd::Vector<LiteralValue>{dstd::String("a"), dstd::String("b")});
     CHECK(std::get<dstd::Vector<LiteralValue>>(p.bound()[0].second).size() ==
           2);
-    CHECK_THROWS_AS((void)Pipe().where(c("a..b") == 1).text(),
-                    std::invalid_argument);
+    auto bad = Pipe().where(c("a..b") == 1).text();
+    REQUIRE_FALSE(bad.has_value());
+    CHECK_FALSE(bad.error().message.empty());
 }
 
 TEST_CASE("source builder writes the members in order") {
-    const dstd::String text = Source()
-                                  .rowset("data", Pipe().where(c("ph") != "M"))
-                                  .flag("args_fallback", true)
-                                  .text();
-    CHECK(text == "data = where ph != \"M\";\ndef args_fallback = true");
-    CHECK(Source().flag("x", false).text() == "def x = false");
+    const auto text = Source()
+                          .rowset("data", Pipe().where(c("ph") != "M"))
+                          .flag("args_fallback", true)
+                          .text();
+    REQUIRE(text.has_value());
+    CHECK(*text == "data = where ph != \"M\";\ndef args_fallback = true");
+    const auto flag = Source().flag("x", false).text();
+    REQUIRE(flag.has_value());
+    CHECK(*flag == "def x = false");
 }
 
 TEST_CASE("source builder writes macros and compiles") {
-    const dstd::String text =
+    const auto built =
         Source()
             .define("slow", {"t"}, c("dur") > param("t"))
             .define("fast", {"t"}, Pipe().where(c("dur") < param("t")))
@@ -564,6 +605,8 @@ TEST_CASE("source builder writes macros and compiles") {
                                  .select({{"fhash", c("args.value")}, "pid"})
                                  .distinct())
             .text();
+    REQUIRE(built.has_value());
+    const dstd::String& text = *built;
     CHECK(text ==
           "files = where name == \"FH\" | select fhash = args.value, pid | "
           "distinct;\n"
@@ -574,8 +617,12 @@ TEST_CASE("source builder writes macros and compiles") {
 }
 
 TEST_CASE("source builder refuses a row set that reads a file") {
-    CHECK_THROWS_AS(Source().rowset("x", rowset("runs")),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(Source().rowset("x", source("a.pfw")),
-                    std::invalid_argument);
+    const auto from_rowset = Source().rowset("x", rowset("runs")).text();
+    REQUIRE_FALSE(from_rowset.has_value());
+    CHECK(from_rowset.error().message ==
+          "a source row set cannot start with from");
+    const auto from_file = Source().rowset("x", source("a.pfw")).text();
+    REQUIRE_FALSE(from_file.has_value());
+    CHECK(from_file.error().message ==
+          "a source row set cannot start with from");
 }

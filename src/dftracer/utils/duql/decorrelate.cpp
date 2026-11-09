@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -87,17 +89,25 @@ struct Copy {
     PipelinePtr pipeline;
 };
 
+// The tree of canonical text, which always parses.
+Program parse_canonical(const dstd::String& text) {
+    auto tree = syntax::parse(text);
+    if (!tree)
+        dstd::fatal("canonical sub-query text does not parse",
+                    tree.error().format().c_str());
+    return std::move(*tree);
+}
+
 Copy copy_of(const Pipeline& p) {
     Copy c;
     c.text = to_text(p);
-    auto tree = syntax::parse(c.text);
-    c.pipeline = std::move(tree->pipeline);
+    c.pipeline = std::move(parse_canonical(c.text).pipeline);
     return c;
 }
 
-[[noreturn]] void refuse(const dstd::String& text, Span span,
-                         dstd::String message) {
-    throw Refusal{text, span, std::move(message)};
+dstd::Unexpected<Refusal> refuse(const dstd::String& text, Span span,
+                                 dstd::String message) {
+    return dstd::Unexpected<Refusal>(Refusal{text, span, std::move(message)});
 }
 
 void flatten(ExprPtr& e, dstd::Vector<ExprPtr*>& out) {
@@ -145,9 +155,9 @@ void set_span(Expr& e, Span span) {
 
 // A copy of `e` with `span`: its canonical text parsed again.
 ExprPtr clone(const Expr& e, Span span) {
-    auto tree = syntax::parse("where " + to_text(e));
+    Program tree = parse_canonical("where " + to_text(e));
     ExprPtr out = std::move(
-        std::get<Where>(tree->pipeline->stages.front().node).condition);
+        std::get<Where>(tree.pipeline->stages.front().node).condition);
     set_span(*out, span);
     return out;
 }
@@ -182,10 +192,10 @@ class Terms {
     dstd::Vector<ExprPtr> kept;
     dstd::Vector<Assign> keys;
 
-    void add(ExprPtr& t) {
+    dstd::Expected<void, Refusal> add(ExprPtr& t) {
         if (count_enclosing(*t) == 0) {
             kept.push_back(std::move(t));
-            return;
+            return {};
         }
         if (auto* b = std::get_if<Between>(&t->node);
             b && !b->negated && count_enclosing(*b->subject) == 0) {
@@ -196,9 +206,9 @@ class Terms {
                                           std::move(b->high)});
             low->span = at;
             high->span = at;
-            add(low);
-            add(high);
-            return;
+            auto lower = add(low);
+            if (!lower) return dstd::Unexpected(lower.error());
+            return add(high);
         }
         const dstd::String term = to_text(*t);
         auto* b = std::get_if<Binary>(&t->node);
@@ -206,20 +216,22 @@ class Terms {
         const std::size_t l = ok ? count_enclosing(*b->left) : 0;
         const std::size_t r = ok ? count_enclosing(*b->right) : 0;
         if (!ok || (l > 0) == (r > 0))
-            refuse(text_, t->span,
-                   "'" + term +
-                       "' reads the enclosing row only as one side of '==', "
-                       "'<', '<=', '>', '>=' or 'between' against the "
-                       "sub-query's own fields, in a 'where' term joined by "
-                       "'and'; for intervals write 'lookup ... overlap'");
+            return refuse(text_, t->span,
+                          "'" + term +
+                              "' reads the enclosing row only as one side of "
+                              "'==', '<', '<=', '>', '>=' or 'between' "
+                              "against the sub-query's own fields, in a "
+                              "'where' term joined by 'and'; for intervals "
+                              "write 'lookup ... overlap'");
         ExprPtr inner = std::move(l > 0 ? b->right : b->left);
         ExprPtr outer = std::move(l > 0 ? b->left : b->right);
         const BinaryOp op = l > 0 ? flipped(b->op) : b->op;
         if (reads_own(*outer))
-            refuse(text_, t->span,
-                   "'" + term +
-                       "' mixes the enclosing row with the sub-query's own "
-                       "fields on one side; compare an expression of each");
+            return refuse(text_, t->span,
+                          "'" + term +
+                              "' mixes the enclosing row with the "
+                              "sub-query's own fields on one side; compare "
+                              "an expression of each");
         auto unroot = [](Expr&, Path& path) { path.root = PathRoot::Record; };
         enclosing(*outer, 0, unroot);
         if (op == BinaryOp::Eq) {
@@ -227,27 +239,29 @@ class Terms {
                                       dstd::int_text(out_.outer.size()),
                                   std::move(inner)});
             out_.outer.push_back(std::move(outer));
-            return;
+            return {};
         }
         const dstd::String bounded = to_text(*inner);
         if (range_.empty()) {
             range_ = bounded;
             keys.push_back(Assign{CORRELATED_RANGE, std::move(inner)});
         } else if (bounded != range_) {
-            refuse(text_, t->span,
-                   "'" + term + "' bounds '" + bounded +
-                       "', another term bounds '" + range_ +
-                       "'; a correlated range bounds one expression; for "
-                       "intervals write 'lookup ... overlap'");
+            return refuse(text_, t->span,
+                          "'" + term + "' bounds '" + bounded +
+                              "', another term bounds '" + range_ +
+                              "'; a correlated range bounds one expression; "
+                              "for intervals write 'lookup ... overlap'");
         }
         const bool lower = op == BinaryOp::Gt || op == BinaryOp::Ge;
         auto& slot = lower ? out_.low : out_.high;
         if (slot)
-            refuse(text_, t->span,
-                   "'" + term + "' is a second " + (lower ? "lower" : "upper") +
-                       " bound of '" + range_ + "'");
+            return refuse(text_, t->span,
+                          "'" + term + "' is a second " +
+                              (lower ? "lower" : "upper") + " bound of '" +
+                              range_ + "'");
         slot = CorrelatedBound{std::move(outer),
                                op == BinaryOp::Gt || op == BinaryOp::Lt};
+        return {};
     }
 
    private:
@@ -256,7 +270,8 @@ class Terms {
     dstd::String& range_;
 };
 
-Rewrite split(const dstd::String& text, Pipeline& p, bool keys_derived) {
+dstd::Expected<Rewrite, Refusal> split(const dstd::String& text, Pipeline& p,
+                                       bool keys_derived) {
     Rewrite out;
     dstd::String range;
     dstd::Optional<std::size_t> start;
@@ -265,7 +280,10 @@ Rewrite split(const dstd::String& text, Pipeline& p, bool keys_derived) {
             dstd::Vector<ExprPtr*> terms;
             flatten(w->condition, terms);
             Terms sorted(text, out, range);
-            for (auto* t : terms) sorted.add(*t);
+            for (auto* t : terms) {
+                const auto added = sorted.add(*t);
+                if (!added) return dstd::Unexpected(added.error());
+            }
             if (!sorted.kept.empty())
                 out.stages.push_back(
                     Stage{Where{and_of(std::move(sorted.kept))}, s.span});
@@ -277,15 +295,18 @@ Rewrite split(const dstd::String& text, Pipeline& p, bool keys_derived) {
             }
             continue;
         }
+        dstd::Optional<Refusal> refusal;
         auto note = [&](Expr& e, Path&) {
-            refuse(text, e.span,
-                   "'" + to_text(e) +
-                       "' reads the enclosing row in a stage other than "
-                       "'where'");
+            if (refusal) return;
+            refusal = Refusal{text, e.span,
+                              "'" + to_text(e) +
+                                  "' reads the enclosing row in a stage "
+                                  "other than 'where'"};
         };
         slots(s, [&](ExprPtr& e) {
             if (e) enclosing(*e, 0, note);
         });
+        if (refusal) return dstd::Unexpected(std::move(*refusal));
         out.stages.push_back(std::move(s));
     }
     if (!start) return out;
@@ -302,14 +323,14 @@ Rewrite split(const dstd::String& text, Pipeline& p, bool keys_derived) {
         const bool named = std::holds_alternative<Select>(node) ||
                            std::holds_alternative<Group>(node) ||
                            std::holds_alternative<Agg>(node);
-        refuse(text, out.stages[i].span,
-               dstd::String("'") + STAGE_NAMES[node.index()] +
-                   (named ? "' must be the last stage of a correlated "
-                            "sub-query"
-                          : "' after a correlated 'where' depends on the "
-                            "rows of other keys; a correlated sub-query "
-                            "holds only 'where', 'derive' and a last "
-                            "'select', 'group' or 'agg'"));
+        return refuse(text, out.stages[i].span,
+                      dstd::String("'") + STAGE_NAMES[node.index()] +
+                          (named ? "' must be the last stage of a correlated "
+                                   "sub-query"
+                                 : "' after a correlated 'where' depends on "
+                                   "the rows of other keys; a correlated "
+                                   "sub-query holds only 'where', 'derive' "
+                                   "and a last 'select', 'group' or 'agg'"));
     }
     return out;
 }
@@ -344,18 +365,21 @@ dstd::Vector<Assign> inline_keys(Rewrite& r) {
     return out;
 }
 
-void name_terminal(const Rewrite& r, const dstd::String& text) {
+dstd::Expected<void, Refusal> name_terminal(const Rewrite& r,
+                                            const dstd::String& text) {
     if (r.stages.empty() ||
         !(std::holds_alternative<Select>(r.stages.back().node) ||
           std::holds_alternative<Group>(r.stages.back().node) ||
           std::holds_alternative<Agg>(r.stages.back().node)))
-        refuse(text, Span{},
-               "end a correlated sub-query with 'select', 'group' or 'agg' "
-               "so that its columns are named");
+        return refuse(text, Span{},
+                      "end a correlated sub-query with 'select', 'group' or "
+                      "'agg' so that its columns are named");
+    return {};
 }
 
 // What a range sub-query's aggregate `e` gives for the rows in range.
-RangeRead range_read(const dstd::String& text, const Expr& e) {
+dstd::Expected<RangeRead, Refusal> range_read(const dstd::String& text,
+                                              const Expr& e) {
     const auto* c = std::get_if<Call>(&e.node);
     const dstd::String name = c ? c->name : to_text(e);
     if (c && name == "count") {
@@ -366,15 +390,16 @@ RangeRead range_read(const dstd::String& text, const Expr& e) {
     if (c && name == "min") return RangeRead::Min;
     if (c && name == "max") return RangeRead::Max;
     if (c && name == "mean") return RangeRead::Mean;
-    refuse(text, e.span,
-           "'" + name +
-               "' over a correlated range; use count, count_if, sum, min, "
-               "max or mean");
+    return refuse(text, e.span,
+                  "'" + name +
+                      "' over a correlated range; use count, count_if, sum, "
+                      "min, max or mean");
 }
 
 }  // namespace
 
-dstd::Optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
+dstd::Expected<dstd::Optional<Decorrelated>, Refusal> decorrelate(
+    const Pipeline& p, bool scalar) {
     Copy main = copy_of(p);
     bool reads = false;
     for (auto& s : main.pipeline->stages)
@@ -382,13 +407,16 @@ dstd::Optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
             auto any = [&](Expr&, Path&) { reads = true; };
             if (e) enclosing(*e, 0, any);
         });
-    if (!reads) return dstd::nullopt;
+    if (!reads) return dstd::Optional<Decorrelated>{};
 
     Copy empty = copy_of(p);
     Decorrelated d;
     d.text = main.text;
-    Rewrite r = split(main.text, *main.pipeline, true);
-    name_terminal(r, main.text);
+    auto rewritten = split(main.text, *main.pipeline, true);
+    if (!rewritten) return dstd::Unexpected(rewritten.error());
+    Rewrite r = std::move(*rewritten);
+    const auto named = name_terminal(r, main.text);
+    if (!named) return dstd::Unexpected(named.error());
     for (std::size_t i = 0; i < r.outer.size(); ++i)
         d.names.push_back(dstd::String(CORRELATED_KEY_PREFIX) +
                           dstd::int_text(i));
@@ -408,18 +436,18 @@ dstd::Optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
     Stage& tail = r.stages.back();
     if (scalar) {
         if (std::holds_alternative<Group>(tail.node))
-            refuse(main.text, tail.span,
-                   "a correlated sub-query in an expression ends in "
-                   "'select' or 'agg', not 'group'");
+            return refuse(main.text, tail.span,
+                          "a correlated sub-query in an expression ends in "
+                          "'select' or 'agg', not 'group'");
         const std::size_t width =
             std::holds_alternative<Select>(tail.node)
                 ? std::get<Select>(tail.node).items.size()
                 : std::get<Agg>(tail.node).aggregates.size();
         if (width != 1)
-            refuse(main.text, tail.span,
-                   "a sub-query in an expression gives one column; this one "
-                   "gives " +
-                       dstd::int_text(width));
+            return refuse(main.text, tail.span,
+                          "a sub-query in an expression gives one column; "
+                          "this one gives " +
+                              dstd::int_text(width));
         if (auto* s = std::get_if<Select>(&tail.node))
             s->items.front().name = CORRELATED_VALUE;
         else
@@ -434,12 +462,14 @@ dstd::Optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
                    g && g->aggregates.empty()) {
             items = std::move(g->keys);
         } else if (!scalar) {
-            refuse(main.text, tail.span,
-                   "an 'in' over a correlated range ends in 'select' or in "
-                   "'group' without aggregates");
+            return refuse(main.text, tail.span,
+                          "an 'in' over a correlated range ends in 'select' "
+                          "or in 'group' without aggregates");
         } else {
             Assign& a = std::get<Agg>(tail.node).aggregates.front();
-            d.read = range_read(main.text, *a.value);
+            const auto read = range_read(main.text, *a.value);
+            if (!read) return dstd::Unexpected(read.error());
+            d.read = *read;
             auto& args = std::get<Call>(a.value->node).args;
             if (!args.empty())
                 items.push_back(
@@ -462,8 +492,11 @@ dstd::Optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
 
     main.pipeline->stages = std::move(r.stages);
     if (has_empty) {
-        Rewrite e = split(empty.text, *empty.pipeline, false);
-        name_terminal(e, empty.text);
+        auto split_empty = split(empty.text, *empty.pipeline, false);
+        if (!split_empty) return dstd::Unexpected(split_empty.error());
+        Rewrite e = std::move(*split_empty);
+        const auto empty_named = name_terminal(e, empty.text);
+        if (!empty_named) return dstd::Unexpected(empty_named.error());
         std::get<Agg>(e.stages.back().node).aggregates.front().name =
             CORRELATED_VALUE;
         dstd::Vector<Stage> stages;

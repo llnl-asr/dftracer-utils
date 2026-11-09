@@ -248,7 +248,7 @@ dstd::Vector<dstd::String> run_oracle(const Corpus& c) {
                 ->max_bytes;
 
         for (const auto& text : QUERIES) {
-            const auto q = duql::parse_or_throw(text);
+            const auto q = dftu_utils_test::ok(duql::Query::from_string(text));
             const dstd::String key = base + "|" + text + "|";
 
             plan::ChunkPruner pruner;
@@ -343,7 +343,7 @@ std::uint64_t count_view(const dstd::String& trace,
     trace::views::detail::ViewPlan vp;
     vp.files.push_back(
         {dstd::String(trace), dstd::String(index_path), 0, 0, 0});
-    vp.query = duql::parse_or_throw(text);
+    vp.query = dftu_utils_test::ok(duql::Query::from_string(text));
     const auto vdef = trace::views::detail::make_vdef(vp, false);
     auto run = [&]() -> coro::CoroTask<std::uint64_t> {
         std::uint64_t skipped = 0;
@@ -361,7 +361,7 @@ std::uint64_t count_view_unpruned(const dstd::String& trace,
                                   const dstd::String& index_path,
                                   const dstd::String& text) {
     trace::views::detail::ViewPlan vp;
-    vp.query = duql::parse_or_throw(text);
+    vp.query = dftu_utils_test::ok(duql::Query::from_string(text));
     const auto vdef = trace::views::detail::make_vdef(vp, false);
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
     const auto spans = dftu_utils_test::index_take(index::spans(
@@ -441,7 +441,7 @@ dstd::Vector<std::uint64_t> view_chunks(const dstd::String& trace,
              ->max_bytes,
          dftu_utils_test::index_take(index::members(snapshot, file)).size(),
          0});
-    vp.query = duql::parse_or_throw(text);
+    vp.query = dftu_utils_test::ok(duql::Query::from_string(text));
     const auto vdef = trace::views::detail::make_vdef(vp, false);
     std::uint64_t skipped = 0;
     dstd::Vector<std::uint64_t> out;

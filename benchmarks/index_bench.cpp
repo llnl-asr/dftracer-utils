@@ -462,10 +462,11 @@ Result measure(const Options& opt, const dstd::String& input,
 
     for (const auto& [key, text] : r.queries) {
         if (text.find("->") == dstd::String::npos) {
-            const auto parsed = duql::parse_or_throw(text);
+            const auto parsed = duql::Query::from_string(text);
+            if (!parsed) throw duql::DuqlParseError(parsed.error());
             dftracer::utils::index::plan::ChunkPrunerBatchInput in;
             in.index_path = index_path;
-            for (const auto& f : files) in.items.push_back({f, parsed});
+            for (const auto& f : files) in.items.push_back({f, *parsed});
             dftracer::utils::index::plan::ChunkPruner pruner;
             Samples per_file;
             for (double s :

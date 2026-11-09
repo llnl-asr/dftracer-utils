@@ -20,9 +20,8 @@ namespace {
 
 using namespace syntax;
 
-struct Failure {
-    DuqlError error;
-};
+using Status = dstd::Expected<void, DuqlError>;
+using Fail = dstd::Unexpected<DuqlError>;
 
 using Segments = dstd::Vector<dstd::String>;
 
@@ -144,9 +143,15 @@ class Expander {
     Expander(const LeafPaths& leaves, bool fallback, dstd::StringView text)
         : leaves_(leaves), fallback_(fallback), text_(text) {}
 
-    void run(Pipeline& p) {
-        stage_items(p);
-        each_slot(p, [&](ExprPtr& e) { expr(e, false); });
+    Status run(Pipeline& p) {
+        auto items = stage_items(p);
+        if (!items) return items;
+        Status status;
+        each_slot(p, [&](ExprPtr& e) {
+            if (!status) return;
+            status = expr(e, false);
+        });
+        return status;
     }
 
    private:
@@ -155,15 +160,21 @@ class Expander {
     dstd::StringView text_;
     dstd::Optional<dstd::Vector<Segments>> cache_;
 
-    [[noreturn]] void fail(Span span, dstd::String msg) const {
-        throw Failure{
-            make_error(text_, span.offset, span.length, std::move(msg))};
+    Fail fail(Span span, dstd::String msg) const {
+        return Fail(
+            make_error(text_, span.offset, span.length, std::move(msg)));
     }
 
-    dstd::Vector<Path> matches(const Path& pattern, Span span) {
+    dstd::Expected<dstd::Vector<Path>, DuqlError> matches(const Path& pattern,
+                                                          Span span) {
         if (!cache_) {
             cache_.emplace();
-            for (const auto& l : leaves_()) cache_->push_back(split(l));
+            auto leaves = leaves_();
+            if (!leaves) {
+                cache_.reset();
+                return Fail(std::move(leaves.error()));
+            }
+            for (const auto& l : *leaves) cache_->push_back(split(l));
         }
         const Segments want = segments_of(pattern);
         const bool bare = fallback_ && want.front() != "args";
@@ -182,28 +193,32 @@ class Expander {
             }
         }
         if (found.empty())
-            fail(span, "no field matches the pattern '" + join(want) + "'");
+            return fail(span,
+                        "no field matches the pattern '" + join(want) + "'");
         dstd::Vector<Path> out;
         for (const auto& s : found) out.push_back(path_of(s));
         return out;
     }
 
-    void paths(dstd::Vector<Path>& list, Span span) {
+    Status paths(dstd::Vector<Path>& list, Span span) {
         dstd::Vector<Path> next;
         for (auto& p : list) {
             if (!has_wildcard(p)) {
                 next.push_back(std::move(p));
                 continue;
             }
-            for (auto& m : matches(p, span)) next.push_back(std::move(m));
+            auto ms = matches(p, span);
+            if (!ms) return dstd::Unexpected(ms.error());
+            for (auto& m : *ms) next.push_back(std::move(m));
         }
         list = std::move(next);
+        return {};
     }
 
-    void stage_items(Pipeline& p) {
-        for (auto& s : p.stages)
-            std::visit(
-                [&](auto& n) {
+    Status stage_items(Pipeline& p) {
+        for (auto& s : p.stages) {
+            Status done = std::visit(
+                [&](auto& n) -> Status {
                     using T = std::decay_t<decltype(n)>;
                     if constexpr (std::is_same_v<T, Select>) {
                         dstd::Vector<Item> next;
@@ -214,41 +229,58 @@ class Expander {
                                 next.push_back(std::move(it));
                                 continue;
                             }
-                            for (auto& m : matches(*path, it.value->span))
+                            auto ms = matches(*path, it.value->span);
+                            if (!ms) return dstd::Unexpected(ms.error());
+                            for (auto& m : *ms)
                                 next.push_back(
                                     {make(std::move(m), it.value->span), {}});
                         }
                         n.items = std::move(next);
                     } else if constexpr (std::is_same_v<T, Drop> ||
                                          std::is_same_v<T, Unpivot>) {
-                        paths(n.paths, s.span);
+                        return paths(n.paths, s.span);
                     } else if constexpr (std::is_same_v<T, Lookup> ||
                                          std::is_same_v<T, AsofLookup> ||
                                          std::is_same_v<T, OverlapLookup>) {
-                        if (n.side) stage_items(*n.side);
+                        if (n.side) return stage_items(*n.side);
                     } else if constexpr (std::is_same_v<T, Union>) {
-                        stage_items(*n.other);
+                        return stage_items(*n.other);
                     }
+                    return {};
                 },
                 s.node);
+            if (!done) return done;
+        }
+        return {};
     }
 
-    void expr(ExprPtr& slot, bool compared) {
-        if (!slot) return;
+    Status expr(ExprPtr& slot, bool compared) {
+        if (!slot) return {};
         if (quant_pattern(*slot)) {
             if (!compared)
-                fail(slot->span,
-                     "any(p) and all(p) with a pattern compare with a value, "
-                     "as in 'any(p) > v'");
-            return;
+                return fail(
+                    slot->span,
+                    "any(p) and all(p) with a pattern compare with a value, "
+                    "as in 'any(p) > v'");
+            return {};
         }
-        if (auto* sub = std::get_if<Subquery>(&slot->node))
-            stage_items(*sub->pipeline);
-        if (auto* in = std::get_if<In>(&slot->node); in && in->subquery)
-            stage_items(*in->subquery);
+        if (auto* sub = std::get_if<Subquery>(&slot->node)) {
+            auto r = stage_items(*sub->pipeline);
+            if (!r) return r;
+        }
+        if (auto* in = std::get_if<In>(&slot->node); in && in->subquery) {
+            auto r = stage_items(*in->subquery);
+            if (!r) return r;
+        }
         const bool cmp = comparison(*slot);
-        children(*slot, [&](ExprPtr& c) { expr(c, cmp); });
-        if (cmp) rewrite(slot);
+        Status status;
+        children(*slot, [&](ExprPtr& c) {
+            if (!status) return;
+            status = expr(c, cmp);
+        });
+        if (!status) return status;
+        if (cmp) return rewrite(slot);
+        return {};
     }
 
     static ExprPtr* quant_child(Expr& e, int& count) {
@@ -263,20 +295,22 @@ class Expander {
         return found;
     }
 
-    void rewrite(ExprPtr& slot) {
+    Status rewrite(ExprPtr& slot) {
         int count = 0;
         ExprPtr* q = quant_child(*slot, count);
-        if (!q) return;
+        if (!q) return {};
         if (count > 1)
-            fail(slot->span, "compare a quantified array with a value");
+            return fail(slot->span, "compare a quantified array with a value");
         const Span span = slot->span;
         const Call& call = std::get<Call>((*q)->node);
         const Path& pattern = *quant_pattern(**q);
         const bool all = call.name == "all";
-        dstd::Vector<Path> ms = matches(pattern, (*q)->span);
+        auto found = matches(pattern, (*q)->span);
+        if (!found) return dstd::Unexpected(found.error());
+        dstd::Vector<Path> ms = std::move(*found);
         if (ms.size() == 1) {
             *q = make(std::move(ms.front()), span);
-            return;
+            return {};
         }
         const auto part_for = [&](Path m) {
             ExprPtr part = clone(*slot);
@@ -291,6 +325,7 @@ class Expander {
                        span);
         acc->span = span;
         slot = std::move(acc);
+        return {};
     }
 };
 
@@ -299,12 +334,7 @@ class Expander {
 dftracer::utils::dstd::Expected<void, DuqlError> expand_wildcards(
     syntax::Pipeline& p, const LeafPaths& leaves, bool args_fallback,
     dstd::StringView text) {
-    try {
-        Expander(leaves, args_fallback, text).run(p);
-        return {};
-    } catch (const Failure& f) {
-        return dftracer::utils::dstd::Unexpected(f.error);
-    }
+    return Expander(leaves, args_fallback, text).run(p);
 }
 
 }  // namespace dftracer::utils::duql

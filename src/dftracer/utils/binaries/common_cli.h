@@ -373,9 +373,23 @@ struct DuqlArgs : CliSchema {
     }
 
     void after_parse() override {
-        for (const auto& path : macro_paths)
-            dftracer::utils::duql::load_macros(path);
+        for (const auto& path : macro_paths) {
+            auto loaded = dftracer::utils::duql::load_macros(path);
+            if (!loaded) {
+                macro_error_ = loaded.error().c_str();
+                return;
+            }
+        }
     }
+
+    bool validate() override {
+        if (macro_error_.empty()) return true;
+        DFTRACER_UTILS_LOG_ERROR("Error: %s", macro_error_.c_str());
+        return false;
+    }
+
+   private:
+    dstd::String macro_error_;
 };
 
 struct WatchdogArgs : CliSchema {

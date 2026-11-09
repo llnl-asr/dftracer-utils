@@ -555,7 +555,9 @@ fields:
         // through unparsed.
         StringSink sink;
         const auto stats = dftu_utils_test::ok(
-            v.filter(dftracer::utils::duql::parse_or_throw("exists(n)"))
+            v
+                .filter(dftu_utils_test::ok(
+                    dftracer::utils::duql::Query::from_string("exists(n)")))
                 .sink_json(sink)
                 .get());
         CHECK(sink.lines().size() == 3);
@@ -704,7 +706,7 @@ fields:
         REQUIRE(snapshot.has_value());
         const auto plan = index::plan::explain_file_chunks(
             *snapshot, dstd::String(dstd::StringView(gz)),
-            duql::parse_or_throw("name == \"b0150\""));
+            dftu_utils_test::ok(duql::Query::from_string("name == \"b0150\"")));
         REQUIRE(plan.total_chunks > 3);
         CHECK(plan.read.size() < plan.total_chunks / 2);
     }
@@ -738,7 +740,8 @@ fields:
                 dstd::String(gz),
                 dstd::String(dstd::String(determine_index_path(gz, ""))));
             if (!where.empty())
-                p = views::detail::scan::filter(p, duql::parse_or_throw(where));
+                p = views::detail::scan::filter(
+                    p, dftu_utils_test::ok(duql::Query::from_string(where)));
             return views::detail::scan::agg(
                 views::detail::scan::group_by(p, std::move(keys)),
                 std::move(aggs));

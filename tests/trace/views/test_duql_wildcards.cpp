@@ -165,6 +165,17 @@ TEST_SUITE("DuqlWildcards") {
         }
     }
 
+    TEST_CASE("a wildcard on a missing trace file reports the failed scan") {
+        TestEnvironment env(10);
+        const dstd::String gz = env.dir() + "/absent.ndjson.gz";
+        const auto v = View::from_file(
+            dstd::String(gz),
+            dstd::String(dstd::String(determine_index_path(gz, ""))));
+        const dstd::String e = error_of(v, "select args.counters.*.p50");
+        CHECK(e.find("metadata read failed for " + gz) != dstd::String::npos);
+        CHECK(e.find("cannot stat") != dstd::String::npos);
+    }
+
     TEST_CASE("the expanded comparisons prune chunks") {
         TestEnvironment env(10);
         const auto gz = write_counters(env);

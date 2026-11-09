@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Report the first input error of the duql builder from `Pipe::text()` and `Source::text()`, which now give a `dstd::Expected<dstd::String, DuqlError>`, in place of raising `std::invalid_argument`.
+  A `Col`, `Pipe` or `Source` keeps the first error of the calls that built it, such as a number that is not finite or a `bucket` with a bad mode.
+  `error()` reads it.
+  `View::duql(pipe)` throws `INVALID_ARGUMENT` for a `Pipe` that holds an error.
+- Remove `duql::parse_or_throw`.
+  Use `Query::from_string`, which gives a `dstd::Expected`, or `try_parse`.
+- Return a `dstd::Result` from `duql::load_macros` and `duql::path_macros` in place of raising.
+  The Python `duql.load_path` still raises the same exception.
 - Require a `noexcept` function for `dstd::add_shutdown_hook`, so a hook that can raise does not compile.
 - End a cancelled task at its wait, in place of resuming it with an exception: the frame is destroyed, and the stop moves up to the first scope or combinator.
   `coro::with_timeout`, `coro::with_deadline`, `JoinSet::next_within` and `coro::with_item_timeout` give a `dstd::Result` with `dstd::Condition::Timeout` in place of raising, and the `timeout` adaptor of a stage gives a `dstd::Result` of its output.

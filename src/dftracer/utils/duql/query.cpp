@@ -63,12 +63,6 @@ bool Query::matches(const json::Value& event) const {
 
 dstd::String Query::to_string() const { return detail::to_string(*root_); }
 
-Query parse_or_throw(dstd::StringView input) {
-    auto result = Query::from_string(input);
-    if (!result) throw DuqlParseError(result.error());
-    return std::move(*result);
-}
-
 dstd::Optional<Query> try_parse(dstd::StringView input) {
     auto result = Query::from_string(input);
     if (!result) return dstd::nullopt;

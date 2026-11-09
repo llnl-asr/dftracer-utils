@@ -45,16 +45,16 @@ bool stage_word(dstd::StringView word) {
 // Precedence levels, lowest first, matching the printer.
 enum Level { OrLevel, AndLevel, CmpLevel, AddLevel, MulLevel };
 
-struct Failure {
-    duql::DuqlError error;
-};
+template <class T>
+using Res = dstd::Expected<T, duql::DuqlError>;
+using Fail = dstd::Unexpected<duql::DuqlError>;
 
 class Parser {
    public:
     Parser(dstd::StringView src, dstd::Vector<Token> tokens)
         : src_(src), toks_(std::move(tokens)) {}
 
-    Program program() {
+    Res<Program> program() {
         Program q;
         if (word("duql") &&
             (peek(1).kind == Tok::Int || peek(1).kind == Tok::Float)) {
@@ -73,13 +73,15 @@ class Parser {
                 }
             }
             if (!ok)
-                fail(v, "duql version must be MAJOR or MAJOR.MINOR, not " +
-                            dstd::String(v.text));
+                return fail(v,
+                            "duql version must be MAJOR or MAJOR.MINOR, not " +
+                                dstd::String(v.text));
             if (major != DUQL_VERSION_MAJOR || minor > DUQL_VERSION_MINOR)
-                fail(v, "Unsupported duql version " + dstd::String(v.text) +
-                            "; this build reads duql " +
-                            dstd::int_text(DUQL_VERSION_MAJOR) + "." +
-                            dstd::int_text(DUQL_VERSION_MINOR));
+                return fail(v, "Unsupported duql version " +
+                                   dstd::String(v.text) +
+                                   "; this build reads duql " +
+                                   dstd::int_text(DUQL_VERSION_MAJOR) + "." +
+                                   dstd::int_text(DUQL_VERSION_MINOR));
         }
         while (true) {
             if (word("let") && peek(1).kind == Tok::Name &&
@@ -88,29 +90,40 @@ class Parser {
                 Let let;
                 let.name = dstd::String(advance().text);
                 advance();
-                let.pipeline = pipeline();
-                expect(Tok::Semi, "';' after a let");
+                auto body = pipeline();
+                if (!body) return dstd::Unexpected(body.error());
+                let.pipeline = std::move(*body);
+                auto semi = expect(Tok::Semi, "';' after a let");
+                if (!semi) return dstd::Unexpected(semi.error());
                 q.decls.emplace_back(std::move(let));
             } else if (word("def") && peek(1).kind == Tok::Name) {
                 advance();
-                Def def = definition();
-                expect(Tok::Semi, "';' after a def");
-                q.decls.emplace_back(std::move(def));
+                auto def = definition();
+                if (!def) return dstd::Unexpected(def.error());
+                auto semi = expect(Tok::Semi, "';' after a def");
+                if (!semi) return dstd::Unexpected(semi.error());
+                q.decls.emplace_back(std::move(*def));
             } else if (word("source") && peek(1).kind == Tok::Name &&
                        peek(2).kind == Tok::Lbrace) {
                 advance();
-                q.decls.emplace_back(source_decl());
+                auto decl = source_decl();
+                if (!decl) return dstd::Unexpected(decl.error());
+                q.decls.emplace_back(std::move(*decl));
             } else {
                 break;
             }
         }
-        if (cur().kind != Tok::End) q.pipeline = pipeline();
+        if (cur().kind != Tok::End) {
+            auto body = pipeline();
+            if (!body) return dstd::Unexpected(body.error());
+            q.pipeline = std::move(*body);
+        }
         if (cur().kind != Tok::End)
-            fail(cur(), cur().kind == Tok::Pipe
-                            ? "Expected a stage after '|'"
-                            : "Expected '|', an operator or the end of the "
-                              "query, got '" +
-                                  shown(cur()) + "'");
+            return fail(cur(), cur().kind == Tok::Pipe
+                                   ? "Expected a stage after '|'"
+                                   : "Expected '|', an operator or the end of "
+                                     "the query, got '" +
+                                         shown(cur()) + "'");
         return q;
     }
 
@@ -145,7 +158,7 @@ class Parser {
     // The value of the string token `t`: `\\`, `\"`, `\'`, `\n`, `\t`,
     // `\r` and `\uXXXX` (a surrogate pair for one code point) decode; any
     // other backslash stays, so a regex such as "\d+" keeps its escape.
-    dstd::String string_value(const Token& t) const {
+    Res<dstd::String> string_value(const Token& t) const {
         const dstd::StringView s = t.text;
         dstd::String out;
         out.reserve(s.size());
@@ -203,7 +216,7 @@ class Parser {
                     break;
                 case 'u': {
                     long cp = hex4(i + 1);
-                    if (cp < 0) fail(t, "'\\u' takes four hex digits");
+                    if (cp < 0) return fail(t, "'\\u' takes four hex digits");
                     i += 4;
                     if (cp >= 0xD800 && cp <= 0xDBFF) {
                         const long lo = i + 2 < s.size() && s[i + 1] == '\\' &&
@@ -211,11 +224,14 @@ class Parser {
                                             ? hex4(i + 3)
                                             : -1;
                         if (lo < 0xDC00 || lo > 0xDFFF)
-                            fail(t, "a '\\u' high surrogate needs a low one");
+                            return fail(t,
+                                        "a '\\u' high surrogate needs a low "
+                                        "one");
                         cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
                         i += 6;
                     } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
-                        fail(t, "a '\\u' low surrogate needs a high one first");
+                        return fail(
+                            t, "a '\\u' low surrogate needs a high one first");
                     }
                     put_utf8(static_cast<unsigned long>(cp));
                     break;
@@ -228,46 +244,59 @@ class Parser {
         return out;
     }
 
-    [[noreturn]] void fail(const Token& t, dstd::String msg) const {
-        throw Failure{make_error(src_, t.offset,
-                                 t.text.empty() ? 1 : t.text.size(),
-                                 std::move(msg))};
+    Fail fail(const Token& t, dstd::String msg) const {
+        return Fail(make_error(src_, t.offset,
+                               t.text.empty() ? 1 : t.text.size(),
+                               std::move(msg)));
     }
     // The token as written, for a message: a parameter keeps its `$`.
     static dstd::String shown(const Token& t) {
         return t.kind == Tok::Param ? "$" + dstd::String(t.text)
                                     : dstd::String(t.text);
     }
-    const Token& expect(Tok k, dstd::StringView what) {
+    Res<const Token*> expect_token(Tok k, dstd::StringView what) {
         if (!at(k))
-            fail(cur(), "Expected " + dstd::String(what) + ", got '" +
-                            shown(cur()) + "'");
-        return advance();
+            return fail(cur(), "Expected " + dstd::String(what) + ", got '" +
+                                   shown(cur()) + "'");
+        return &advance();
     }
-    void expect_word(dstd::StringView w) {
+    Res<void> expect(Tok k, dstd::StringView what) {
+        auto t = expect_token(k, what);
+        if (!t) return dstd::Unexpected(t.error());
+        return {};
+    }
+    Res<void> expect_word(dstd::StringView w) {
         if (!accept_word(w))
-            fail(cur(), "Expected '" + dstd::String(w) + "', got '" +
-                            shown(cur()) + "'");
+            return fail(cur(), "Expected '" + dstd::String(w) + "', got '" +
+                                   shown(cur()) + "'");
+        return {};
     }
-    dstd::String name(dstd::StringView what) {
+    Res<dstd::String> name(dstd::StringView what) {
         if (!at(Tok::Name) || reserved(cur().text))
-            fail(cur(), "Expected " + dstd::String(what) + ", got '" +
-                            shown(cur()) + "'");
+            return fail(cur(), "Expected " + dstd::String(what) + ", got '" +
+                                   shown(cur()) + "'");
         return dstd::String(advance().text);
     }
-    dstd::String int_text(dstd::StringView what) {
-        return dstd::String(expect(Tok::Int, what).text);
+    Res<dstd::String> int_text(dstd::StringView what) {
+        auto t = expect_token(Tok::Int, what);
+        if (!t) return dstd::Unexpected(t.error());
+        return dstd::String((*t)->text);
     }
     // A row count: an integer, or a parameter kept as `$name`.
-    dstd::String count_text() {
+    Res<dstd::String> count_text() {
         if (at(Tok::Param)) return "$" + dstd::String(advance().text);
         return int_text("a row count or a parameter");
     }
-    dstd::Pair<ExprPtr, ExprPtr> join_key() {
-        ExprPtr left = level(AddLevel);
+    Res<dstd::Pair<ExprPtr, ExprPtr>> join_key() {
+        auto left = level(AddLevel);
+        if (!left) return dstd::Unexpected(left.error());
         ExprPtr right;
-        if (accept(Tok::Eq)) right = level(AddLevel);
-        return {std::move(left), std::move(right)};
+        if (accept(Tok::Eq)) {
+            auto r = level(AddLevel);
+            if (!r) return dstd::Unexpected(r.error());
+            right = std::move(*r);
+        }
+        return dstd::Pair<ExprPtr, ExprPtr>{std::move(*left), std::move(right)};
     }
     Span span_from(const Token& first) const {
         const Token& last = toks_[pos_ == 0 ? 0 : pos_ - 1];
@@ -284,55 +313,75 @@ class Parser {
         return e;
     }
 
-    Def definition() {
+    Res<Def> definition() {
         Def def;
-        def.name = name("a macro name");
+        auto n = name("a macro name");
+        if (!n) return dstd::Unexpected(n.error());
+        def.name = std::move(*n);
         if (accept(Tok::Lparen)) {
             if (!at(Tok::Rparen)) {
                 do {
-                    def.params.push_back(name("a parameter name"));
+                    auto param = name("a parameter name");
+                    if (!param) return dstd::Unexpected(param.error());
+                    def.params.push_back(std::move(*param));
                 } while (accept(Tok::Comma));
             }
-            expect(Tok::Rparen, "')'");
+            auto close = expect(Tok::Rparen, "')'");
+            if (!close) return dstd::Unexpected(close.error());
         }
-        expect(Tok::Assign, "'=' in a def");
+        auto assign_tok = expect(Tok::Assign, "'=' in a def");
+        if (!assign_tok) return dstd::Unexpected(assign_tok.error());
         if (word("from"))
-            fail(cur(),
-                 "A macro body starts with a stage or an expression, not "
-                 "'from'");
+            return fail(cur(),
+                        "A macro body starts with a stage or an expression, "
+                        "not 'from'");
         if (stage_start()) {
-            def.body = pipeline();
+            auto body = pipeline();
+            if (!body) return dstd::Unexpected(body.error());
+            def.body = std::move(*body);
         } else {
             const Token& first = cur();
-            ExprPtr e = expr();
+            auto e = expr();
+            if (!e) return dstd::Unexpected(e.error());
             if (at(Tok::Pipe)) {
                 auto p = dstd::make_unique<Pipeline>();
-                p->stages.push_back(leading_stage(std::move(e), first));
-                def.body = pipeline_tail(std::move(p));
+                p->stages.push_back(leading_stage(std::move(*e), first));
+                auto body = pipeline_tail(std::move(p));
+                if (!body) return dstd::Unexpected(body.error());
+                def.body = std::move(*body);
             } else {
-                def.body = std::move(e);
+                def.body = std::move(*e);
             }
         }
         return def;
     }
 
-    SourceDecl source_decl() {
+    Res<SourceDecl> source_decl() {
         SourceDecl s;
         s.name = dstd::String(advance().text);
-        expect(Tok::Lbrace, "'{'");
+        auto open = expect(Tok::Lbrace, "'{'");
+        if (!open) return dstd::Unexpected(open.error());
         while (!at(Tok::Rbrace)) {
             if (word("def") && peek(1).kind == Tok::Name) {
                 advance();
-                s.defs.push_back(definition());
+                auto def = definition();
+                if (!def) return dstd::Unexpected(def.error());
+                s.defs.push_back(std::move(*def));
             } else {
                 RowSet r;
-                r.name = name("a row set name or 'def'");
-                expect(Tok::Assign, "'=' after a row set name");
-                r.pipeline = pipeline();
+                auto n = name("a row set name or 'def'");
+                if (!n) return dstd::Unexpected(n.error());
+                r.name = std::move(*n);
+                auto eq = expect(Tok::Assign, "'=' after a row set name");
+                if (!eq) return dstd::Unexpected(eq.error());
+                auto body = pipeline();
+                if (!body) return dstd::Unexpected(body.error());
+                r.pipeline = std::move(*body);
                 s.rowsets.push_back(std::move(r));
             }
             if (!accept(Tok::Semi) && !at(Tok::Rbrace))
-                fail(cur(), "Expected ';' between source members, got '" +
+                return fail(cur(),
+                            "Expected ';' between source members, got '" +
                                 dstd::String(cur().text) + "'");
         }
         advance();
@@ -343,27 +392,35 @@ class Parser {
     // name is written with backticks.
     bool stage_start() const { return at(Tok::Name) && stage_word(cur().text); }
 
-    PipelinePtr pipeline() {
+    Res<PipelinePtr> pipeline() {
         auto p = dstd::make_unique<Pipeline>();
         if (word("from")) {
             advance();
             do {
                 From f;
                 if (at(Tok::String)) {
-                    f.name = string_value(advance());
+                    auto text = string_value(advance());
+                    if (!text) return dstd::Unexpected(text.error());
+                    f.name = std::move(*text);
                     f.quoted = true;
                 } else if (at(Tok::Param)) {
                     f.name = Param{dstd::String(advance().text)};
                 } else {
-                    f.name = name("a file, a row set or a parameter");
+                    auto n = name("a file, a row set or a parameter");
+                    if (!n) return dstd::Unexpected(n.error());
+                    f.name = std::move(*n);
                 }
                 p->sources.push_back(std::move(f));
             } while (accept(Tok::Comma));
         } else if (stage_start()) {
-            p->stages.push_back(stage());
+            auto s = stage();
+            if (!s) return dstd::Unexpected(s.error());
+            p->stages.push_back(std::move(*s));
         } else {
             const Token& first = cur();
-            p->stages.push_back(leading_stage(expr(), first));
+            auto e = expr();
+            if (!e) return dstd::Unexpected(e.error());
+            p->stages.push_back(leading_stage(std::move(*e), first));
         }
         return pipeline_tail(std::move(p));
     }
@@ -380,45 +437,55 @@ class Parser {
         return s;
     }
 
-    PipelinePtr pipeline_tail(PipelinePtr p) {
+    Res<PipelinePtr> pipeline_tail(PipelinePtr p) {
         while (accept(Tok::Pipe)) {
             if (at(Tok::Name) && !stage_word(cur().text) &&
                 peek(1).kind == Tok::Lparen) {
                 const Token& first = cur();
                 Stage s;
                 dstd::String n(advance().text);
-                s.node = Use{call(std::move(n))};
+                auto c = call(std::move(n));
+                if (!c) return dstd::Unexpected(c.error());
+                s.node = Use{std::move(*c)};
                 s.span = span_from(first);
                 p->stages.push_back(std::move(s));
                 continue;
             }
             if (!at(Tok::Name) || !stage_word(cur().text))
-                fail(cur(), "Expected a stage after '|', got '" +
-                                dstd::String(cur().text) + "'");
-            p->stages.push_back(stage());
+                return fail(cur(), "Expected a stage after '|', got '" +
+                                       dstd::String(cur().text) + "'");
+            auto s = stage();
+            if (!s) return dstd::Unexpected(s.error());
+            p->stages.push_back(std::move(*s));
         }
         return p;
     }
 
-    dstd::Vector<Assign> block() {
-        expect(Tok::Lbrace, "'{'");
+    Res<dstd::Vector<Assign>> block() {
+        auto open = expect(Tok::Lbrace, "'{'");
+        if (!open) return dstd::Unexpected(open.error());
         dstd::Vector<Assign> out;
         if (!at(Tok::Rbrace)) {
             do {
                 if (at(Tok::Name) && peek(1).kind == Tok::Assign) {
-                    out.push_back(assign());
+                    auto a = assign();
+                    if (!a) return dstd::Unexpected(a.error());
+                    out.push_back(std::move(*a));
                     continue;
                 }
                 const Token& first = cur();
                 Assign a;
-                a.value = expr();
+                auto e = expr();
+                if (!e) return dstd::Unexpected(e.error());
+                a.value = std::move(*e);
                 a.name = implicit_name(to_text(*a.value));
                 if (a.name.empty())
-                    fail(first, "Name this entry: 'name = ...'");
+                    return fail(first, "Name this entry: 'name = ...'");
                 out.push_back(std::move(a));
             } while (accept(Tok::Comma));
         }
-        expect(Tok::Rbrace, "'}'");
+        auto close = expect(Tok::Rbrace, "'}'");
+        if (!close) return dstd::Unexpected(close.error());
         return out;
     }
 
@@ -440,64 +507,83 @@ class Parser {
         return out;
     }
 
-    Assign assign() {
+    Res<Assign> assign() {
         Assign a;
-        a.name = name("a field name");
-        expect(Tok::Assign, "'='");
-        a.value = expr();
+        auto n = name("a field name");
+        if (!n) return dstd::Unexpected(n.error());
+        a.name = std::move(*n);
+        auto eq = expect(Tok::Assign, "'='");
+        if (!eq) return dstd::Unexpected(eq.error());
+        auto v = expr();
+        if (!v) return dstd::Unexpected(v.error());
+        a.value = std::move(*v);
         return a;
     }
 
-    Item item() {
+    Res<Item> item() {
         Item it;
         if (at(Tok::Name) && peek(1).kind == Tok::Assign) {
-            it.name = name("a field name");
+            auto n = name("a field name");
+            if (!n) return dstd::Unexpected(n.error());
+            it.name = std::move(*n);
             advance();
-            it.value = expr();
+            auto v = expr();
+            if (!v) return dstd::Unexpected(v.error());
+            it.value = std::move(*v);
         } else {
-            it.value = expr();
-            if (accept_word("as")) it.name = name("a field name");
+            auto v = expr();
+            if (!v) return dstd::Unexpected(v.error());
+            it.value = std::move(*v);
+            if (accept_word("as")) {
+                auto n = name("a field name");
+                if (!n) return dstd::Unexpected(n.error());
+                it.name = std::move(*n);
+            }
         }
         return it;
     }
 
-    dstd::Vector<SortKey> sort_keys() {
+    Res<dstd::Vector<SortKey>> sort_keys() {
         dstd::Vector<SortKey> keys;
         do {
             SortKey k;
-            if (accept(Tok::Minus)) {
-                k.descending = true;
-                k.value = expr();
-            } else {
-                k.value = expr();
-            }
+            if (accept(Tok::Minus)) k.descending = true;
+            auto v = expr();
+            if (!v) return dstd::Unexpected(v.error());
+            k.value = std::move(*v);
             if (accept_word("nulls")) {
                 if (accept_word("first"))
                     k.nulls = NullsOrder::First;
                 else if (accept_word("last"))
                     k.nulls = NullsOrder::Last;
                 else
-                    fail(cur(), "Expected 'first' or 'last' after 'nulls'");
+                    return fail(cur(),
+                                "Expected 'first' or 'last' after 'nulls'");
             }
             keys.push_back(std::move(k));
         } while (accept(Tok::Comma));
         return keys;
     }
 
-    dstd::Vector<ExprPtr> expr_list() {
+    Res<dstd::Vector<ExprPtr>> expr_list() {
         dstd::Vector<ExprPtr> out;
         do {
-            out.push_back(expr());
+            auto e = expr();
+            if (!e) return dstd::Unexpected(e.error());
+            out.push_back(std::move(*e));
         } while (accept(Tok::Comma));
         return out;
     }
 
-    PipelinePtr from_pipeline(dstd::StringView what) {
-        expect(Tok::Lparen, "'('");
+    Res<PipelinePtr> from_pipeline(dstd::StringView what) {
+        auto open = expect(Tok::Lparen, "'('");
+        if (!open) return dstd::Unexpected(open.error());
         if (!word("from"))
-            fail(cur(), dstd::String(what) + " starts with 'from'");
+            return fail(cur(), dstd::String(what) + " starts with 'from'");
         auto p = pipeline();
-        expect(Tok::Rparen, "')'");
+        if (!p) return dstd::Unexpected(p.error());
+        auto close = expect(Tok::Rparen, "')'");
+        if (!close) return dstd::Unexpected(close.error());
         return p;
     }
 
@@ -506,7 +592,7 @@ class Parser {
                at(Tok::Rparen) || at(Tok::Rbrace);
     }
 
-    Stage stage() {
+    Res<Stage> stage() {
         const Token& first = cur();
         const dstd::String kw = [&] {
             dstd::String w(advance().text);
@@ -515,56 +601,76 @@ class Parser {
         }();
         Stage s;
         if (kw == "where") {
-            s.node = Where{expr()};
+            auto e = expr();
+            if (!e) return dstd::Unexpected(e.error());
+            s.node = Where{std::move(*e)};
         } else if (kw == "derive") {
             Derive d;
             do {
-                d.fields.push_back(assign());
+                auto a = assign();
+                if (!a) return dstd::Unexpected(a.error());
+                d.fields.push_back(std::move(*a));
             } while (accept(Tok::Comma));
             s.node = std::move(d);
         } else if (kw == "parse") {
             Parse p;
-            p.column = path();
+            auto col = path();
+            if (!col) return dstd::Unexpected(col.error());
+            p.column = std::move(*col);
             if (!at(Tok::Regex))
-                fail(cur(), "Expected '~' after the column of 'parse', got '" +
+                return fail(cur(),
+                            "Expected '~' after the column of 'parse', got '" +
                                 shown(cur()) + "'");
             advance();
             if (!at(Tok::String) && !at(Tok::Param))
-                fail(cur(), "Expected a pattern string or a parameter, got '" +
+                return fail(cur(),
+                            "Expected a pattern string or a parameter, got '" +
                                 shown(cur()) + "'");
-            p.pattern = primary();
+            auto pat = primary();
+            if (!pat) return dstd::Unexpected(pat.error());
+            p.pattern = std::move(*pat);
             s.node = std::move(p);
         } else if (kw == "select") {
             Select sel;
             do {
                 wild_start_ = &cur();
-                sel.items.push_back(item());
+                auto it = item();
+                if (!it) return dstd::Unexpected(it.error());
+                sel.items.push_back(std::move(*it));
                 const auto* wp =
                     std::get_if<Path>(&sel.items.back().value->node);
                 if (wp && has_wildcard(*wp) && !sel.items.back().name.empty())
-                    fail(cur(), "A wildcard path cannot be renamed");
+                    return fail(cur(), "A wildcard path cannot be renamed");
             } while (accept(Tok::Comma));
             s.node = std::move(sel);
         } else if (kw == "drop") {
             Drop d;
             do {
                 wild_start_ = &cur();
-                d.paths.push_back(path());
+                auto pa = path();
+                if (!pa) return dstd::Unexpected(pa.error());
+                d.paths.push_back(std::move(*pa));
             } while (accept(Tok::Comma));
             s.node = std::move(d);
         } else if (kw == "rename") {
             Rename r;
             do {
-                dstd::String n = name("a field name");
-                expect(Tok::Assign, "'='");
-                r.pairs.emplace_back(std::move(n), path());
+                auto n = name("a field name");
+                if (!n) return dstd::Unexpected(n.error());
+                auto eq = expect(Tok::Assign, "'='");
+                if (!eq) return dstd::Unexpected(eq.error());
+                auto pa = path();
+                if (!pa) return dstd::Unexpected(pa.error());
+                r.pairs.emplace_back(std::move(*n), std::move(*pa));
             } while (accept(Tok::Comma));
             s.node = std::move(r);
         } else if (kw == "distinct") {
             Distinct d;
             if (!pipeline_end()) {
                 do {
-                    d.keys.push_back(item());
+                    auto it = item();
+                    if (!it) return dstd::Unexpected(it.error());
+                    d.keys.push_back(std::move(*it));
                 } while (accept(Tok::Comma));
             }
             s.node = std::move(d);
@@ -572,69 +678,117 @@ class Parser {
             Group g;
             if (!at(Tok::Lbrace)) {
                 do {
-                    g.keys.push_back(item());
+                    auto it = item();
+                    if (!it) return dstd::Unexpected(it.error());
+                    g.keys.push_back(std::move(*it));
                 } while (accept(Tok::Comma));
             }
-            g.aggregates = block();
+            auto aggs = block();
+            if (!aggs) return dstd::Unexpected(aggs.error());
+            g.aggregates = std::move(*aggs);
             s.node = std::move(g);
         } else if (kw == "agg") {
-            s.node = Agg{block()};
+            auto aggs = block();
+            if (!aggs) return dstd::Unexpected(aggs.error());
+            s.node = Agg{std::move(*aggs)};
         } else if (kw == "window") {
             Window w;
             if (!at(Tok::Lbrace) && !word("sort")) {
                 do {
-                    w.partition.push_back(item());
+                    auto it = item();
+                    if (!it) return dstd::Unexpected(it.error());
+                    w.partition.push_back(std::move(*it));
                 } while (accept(Tok::Comma));
             }
-            if (accept_word("sort")) w.order = sort_keys();
-            w.fields = block();
+            if (accept_word("sort")) {
+                auto keys = sort_keys();
+                if (!keys) return dstd::Unexpected(keys.error());
+                w.order = std::move(*keys);
+            }
+            auto fields = block();
+            if (!fields) return dstd::Unexpected(fields.error());
+            w.fields = std::move(*fields);
             s.node = std::move(w);
         } else if (kw == "pivot") {
             Pivot p;
-            p.key = level(AddLevel);
+            auto key = level(AddLevel);
+            if (!key) return dstd::Unexpected(key.error());
+            p.key = std::move(*key);
             if (accept_word("in")) {
-                expect(Tok::Lbracket, "'['");
+                auto open = expect(Tok::Lbracket, "'['");
+                if (!open) return dstd::Unexpected(open.error());
                 if (!at(Tok::Rbracket)) {
                     do {
-                        p.values.push_back(expr());
-                        p.labels.push_back(accept_word("as")
-                                               ? name("a column name")
-                                               : dstd::String());
+                        auto v = expr();
+                        if (!v) return dstd::Unexpected(v.error());
+                        p.values.push_back(std::move(*v));
+                        if (accept_word("as")) {
+                            auto label = name("a column name");
+                            if (!label) return dstd::Unexpected(label.error());
+                            p.labels.push_back(std::move(*label));
+                        } else {
+                            p.labels.push_back(dstd::String());
+                        }
                     } while (accept(Tok::Comma));
                 }
-                expect(Tok::Rbracket, "']'");
+                auto close = expect(Tok::Rbracket, "']'");
+                if (!close) return dstd::Unexpected(close.error());
             }
-            p.aggregates = block();
+            auto aggs = block();
+            if (!aggs) return dstd::Unexpected(aggs.error());
+            p.aggregates = std::move(*aggs);
             s.node = std::move(p);
         } else if (kw == "unpivot") {
             Unpivot u;
             do {
                 wild_start_ = &cur();
-                u.paths.push_back(path());
+                auto pa = path();
+                if (!pa) return dstd::Unexpected(pa.error());
+                u.paths.push_back(std::move(*pa));
             } while (accept(Tok::Comma));
-            expect_word("as");
-            u.key_name = name("a field name");
-            expect(Tok::Comma, "','");
-            u.value_name = name("a field name");
+            auto as = expect_word("as");
+            if (!as) return dstd::Unexpected(as.error());
+            auto key = name("a field name");
+            if (!key) return dstd::Unexpected(key.error());
+            u.key_name = std::move(*key);
+            auto comma = expect(Tok::Comma, "','");
+            if (!comma) return dstd::Unexpected(comma.error());
+            auto value = name("a field name");
+            if (!value) return dstd::Unexpected(value.error());
+            u.value_name = std::move(*value);
             s.node = std::move(u);
         } else if (kw == "sort") {
-            s.node = Sort{sort_keys()};
+            auto keys = sort_keys();
+            if (!keys) return dstd::Unexpected(keys.error());
+            s.node = Sort{std::move(*keys)};
         } else if (kw == "take") {
             Take t;
-            t.count = count_text();
+            auto count = count_text();
+            if (!count) return dstd::Unexpected(count.error());
+            t.count = std::move(*count);
             if (accept(Tok::Dotdot)) {
-                t.last = count_text();
-                if (word("by")) fail(cur(), "'take a..b' takes no 'by'");
+                auto last = count_text();
+                if (!last) return dstd::Unexpected(last.error());
+                t.last = std::move(*last);
+                if (word("by")) return fail(cur(), "'take a..b' takes no 'by'");
             }
             if (accept_word("by")) {
                 do {
-                    t.by.push_back(expr());
+                    auto v = expr();
+                    if (!v) return dstd::Unexpected(v.error());
+                    t.by.push_back(std::move(*v));
                 } while (accept(Tok::Comma));
-                if (accept_word("sort")) t.order = sort_keys();
+                if (accept_word("sort")) {
+                    auto keys = sort_keys();
+                    if (!keys) return dstd::Unexpected(keys.error());
+                    t.order = std::move(*keys);
+                }
             }
             s.node = std::move(t);
         } else if (kw == "skip") {
-            s.node = Skip{count_text()};
+            auto count = count_text();
+            if (!count) return dstd::Unexpected(count.error());
+            s.node = Skip{std::move(*count)};
         } else if (kw == "sample") {
             Sample sm;
             if (at(Tok::Int) || at(Tok::Float))
@@ -642,65 +796,102 @@ class Parser {
             else if (at(Tok::Param))
                 sm.amount = "$" + dstd::String(advance().text);
             else
-                fail(cur(),
-                     "Expected a row count, a percentage or a "
-                     "parameter, got '" +
-                         shown(cur()) + "'");
+                return fail(cur(),
+                            "Expected a row count, a percentage or a "
+                            "parameter, got '" +
+                                shown(cur()) + "'");
             sm.percent = accept(Tok::Percent);
-            if (accept_word("seed")) sm.seed = count_text();
+            if (accept_word("seed")) {
+                auto seed = count_text();
+                if (!seed) return dstd::Unexpected(seed.error());
+                sm.seed = std::move(*seed);
+            }
             s.node = std::move(sm);
         } else if (kw == "expand") {
             Expand e;
-            e.path = path();
-            if (accept_word("as")) e.as = name("a field name");
-            if (accept_word("with_index")) e.with_index = name("a field name");
+            auto pa = path();
+            if (!pa) return dstd::Unexpected(pa.error());
+            e.path = std::move(*pa);
+            if (accept_word("as")) {
+                auto n = name("a field name");
+                if (!n) return dstd::Unexpected(n.error());
+                e.as = std::move(*n);
+            }
+            if (accept_word("with_index")) {
+                auto n = name("a field name");
+                if (!n) return dstd::Unexpected(n.error());
+                e.with_index = std::move(*n);
+            }
             e.keep_empty = accept_word("keep_empty");
             s.node = std::move(e);
         } else if (kw == "lookup") {
             Lookup l;
-            if (at(Tok::Lparen))
-                l.side = from_pipeline("A lookup side");
-            else
-                l.rowset = name("a row set");
-            expect_word("on");
+            if (at(Tok::Lparen)) {
+                auto side = from_pipeline("A lookup side");
+                if (!side) return dstd::Unexpected(side.error());
+                l.side = std::move(*side);
+            } else {
+                auto n = name("a row set");
+                if (!n) return dstd::Unexpected(n.error());
+                l.rowset = std::move(*n);
+            }
+            auto on = expect_word("on");
+            if (!on) return dstd::Unexpected(on.error());
             do {
-                l.keys.push_back(join_key());
+                auto k = join_key();
+                if (!k) return dstd::Unexpected(k.error());
+                l.keys.push_back(std::move(*k));
             } while (accept(Tok::Comma));
             if (word("inner") || word("anti")) {
                 l.kind = word("inner") ? LookupKind::Inner : LookupKind::Anti;
                 advance();
                 if (word("asof") || word("overlap"))
-                    fail(cur(),
-                         "'inner' and 'anti' do not combine with 'asof' or "
-                         "'overlap'");
+                    return fail(cur(),
+                                "'inner' and 'anti' do not combine with "
+                                "'asof' or 'overlap'");
                 if (l.kind == LookupKind::Anti && word("into"))
-                    fail(cur(), "'anti' adds no column, so it takes no 'into'");
+                    return fail(cur(),
+                                "'anti' adds no column, so it takes no 'into'");
             }
             if (accept_word("overlap")) {
                 OverlapLookup o;
                 o.rowset = std::move(l.rowset);
                 o.side = std::move(l.side);
                 o.keys = std::move(l.keys);
-                if (accept_word("into")) o.into = name("a field name");
+                if (accept_word("into")) {
+                    auto n = name("a field name");
+                    if (!n) return dstd::Unexpected(n.error());
+                    o.into = std::move(*n);
+                }
                 s.node = std::move(o);
             } else if (accept_word("asof")) {
                 AsofLookup a;
                 a.rowset = std::move(l.rowset);
                 a.side = std::move(l.side);
                 a.keys = std::move(l.keys);
-                a.time = join_key();
+                auto time = join_key();
+                if (!time) return dstd::Unexpected(time.error());
+                a.time = std::move(*time);
                 if (accept_word("backward"))
                     a.direction = AsofDirection::Backward;
                 else if (accept_word("forward"))
                     a.direction = AsofDirection::Forward;
                 else if (accept_word("nearest"))
                     a.direction = AsofDirection::Nearest;
-                if (accept_word("within")) a.within = level(AddLevel);
+                if (accept_word("within")) {
+                    auto within = level(AddLevel);
+                    if (!within) return dstd::Unexpected(within.error());
+                    a.within = std::move(*within);
+                }
                 if (word("into"))
-                    fail(cur(), "'asof' and 'into' cannot be combined");
+                    return fail(cur(), "'asof' and 'into' cannot be combined");
                 s.node = std::move(a);
             } else {
-                if (accept_word("into")) l.into = name("a field name");
+                if (accept_word("into")) {
+                    auto n = name("a field name");
+                    if (!n) return dstd::Unexpected(n.error());
+                    l.into = std::move(*n);
+                }
                 s.node = std::move(l);
             }
         } else if (kw == "union") {
@@ -708,40 +899,72 @@ class Parser {
                 auto other = dstd::make_unique<Pipeline>();
                 From f;
                 f.quoted = at(Tok::String);
-                f.name = f.quoted ? string_value(advance())
-                                  : name("a file, a row set or a let");
+                if (f.quoted) {
+                    auto text = string_value(advance());
+                    if (!text) return dstd::Unexpected(text.error());
+                    f.name = std::move(*text);
+                } else {
+                    auto n = name("a file, a row set or a let");
+                    if (!n) return dstd::Unexpected(n.error());
+                    f.name = std::move(*n);
+                }
                 other->sources.push_back(std::move(f));
                 s.node = Union{std::move(other)};
             } else {
-                s.node = Union{from_pipeline("A union pipeline")};
+                auto other = from_pipeline("A union pipeline");
+                if (!other) return dstd::Unexpected(other.error());
+                s.node = Union{std::move(*other)};
             }
         } else if (kw == "call") {
             const Token& at_name = cur();
-            dstd::String n = name("a function name");
+            auto first_name = name("a function name");
+            if (!first_name) return dstd::Unexpected(first_name.error());
+            dstd::String n = std::move(*first_name);
             while (at(Tok::Dot) && peek(1).kind == Tok::Name) {
                 advance();
                 n += '.';
                 n += advance().text;
             }
-            if (!at(Tok::Lparen)) fail(at_name, "Expected '(' after the name");
-            s.node = CallStage{call(std::move(n))};
+            if (!at(Tok::Lparen))
+                return fail(at_name, "Expected '(' after the name");
+            auto c = call(std::move(n));
+            if (!c) return dstd::Unexpected(c.error());
+            s.node = CallStage{std::move(*c)};
         } else if (kw == "time_range") {
             TimeRange t;
-            if (!at(Tok::Dotdot)) t.low = expr();
-            expect(Tok::Dotdot, "'..'");
-            if (!at(Tok::Pipe) && !at(Tok::End) && !word("overlap"))
-                t.high = expr();
+            if (!at(Tok::Dotdot)) {
+                auto low = expr();
+                if (!low) return dstd::Unexpected(low.error());
+                t.low = std::move(*low);
+            }
+            auto dots = expect(Tok::Dotdot, "'..'");
+            if (!dots) return dstd::Unexpected(dots.error());
+            if (!at(Tok::Pipe) && !at(Tok::End) && !word("overlap")) {
+                auto high = expr();
+                if (!high) return dstd::Unexpected(high.error());
+                t.high = std::move(*high);
+            }
             if (!t.low && !t.high)
-                fail(cur(), "'time_range' needs a low or a high bound");
+                return fail(cur(), "'time_range' needs a low or a high bound");
             t.overlap = accept_word("overlap");
             s.node = std::move(t);
         } else if (kw == "call_tree") {
             s.node = CallTree{};
         } else if (kw == "bucket") {
             Bucket b;
-            b.width = expr();
-            if (accept_word("every")) b.every = expr();
-            if (accept_word("at")) b.at = expr();
+            auto width = expr();
+            if (!width) return dstd::Unexpected(width.error());
+            b.width = std::move(*width);
+            if (accept_word("every")) {
+                auto every = expr();
+                if (!every) return dstd::Unexpected(every.error());
+                b.every = std::move(*every);
+            }
+            if (accept_word("at")) {
+                auto when = expr();
+                if (!when) return dstd::Unexpected(when.error());
+                b.at = std::move(*when);
+            }
             b.fill = accept_word("fill");
             if (b.fill) {
                 if (accept_word("forward"))
@@ -751,49 +974,73 @@ class Parser {
             }
             if (word("from")) {
                 if (!b.fill)
-                    fail(cur(), "'from .. to' sets the range of 'fill'");
+                    return fail(cur(), "'from .. to' sets the range of 'fill'");
                 advance();
-                b.low = expr();
-                expect_word("to");
-                b.high = expr();
+                auto low = expr();
+                if (!low) return dstd::Unexpected(low.error());
+                b.low = std::move(*low);
+                auto to = expect_word("to");
+                if (!to) return dstd::Unexpected(to.error());
+                auto high = expr();
+                if (!high) return dstd::Unexpected(high.error());
+                b.high = std::move(*high);
             }
-            if (accept_word("as")) b.as = name("a field name");
+            if (accept_word("as")) {
+                auto n = name("a field name");
+                if (!n) return dstd::Unexpected(n.error());
+                b.as = std::move(*n);
+            }
             s.node = std::move(b);
         } else if (kw == "session") {
             Session ss;
             if (!word("gap")) {
                 do {
-                    ss.keys.push_back(item());
+                    auto it = item();
+                    if (!it) return dstd::Unexpected(it.error());
+                    ss.keys.push_back(std::move(*it));
                 } while (accept(Tok::Comma));
             }
-            expect_word("gap");
-            ss.gap = expr();
-            if (accept_word("max")) ss.max = expr();
-            if (accept_word("as")) ss.as = name("a field name");
+            auto gap_word = expect_word("gap");
+            if (!gap_word) return dstd::Unexpected(gap_word.error());
+            auto gap = expr();
+            if (!gap) return dstd::Unexpected(gap.error());
+            ss.gap = std::move(*gap);
+            if (accept_word("max")) {
+                auto max = expr();
+                if (!max) return dstd::Unexpected(max.error());
+                ss.max = std::move(*max);
+            }
+            if (accept_word("as")) {
+                auto n = name("a field name");
+                if (!n) return dstd::Unexpected(n.error());
+                ss.as = std::move(*n);
+            }
             s.node = std::move(ss);
         } else {
-            fail(first, "Unknown stage '" + dstd::String(first.text) + "'");
+            return fail(first,
+                        "Unknown stage '" + dstd::String(first.text) + "'");
         }
         s.span = span_from(first);
         return s;
     }
 
-    ExprPtr expr() { return level(OrLevel); }
+    Res<ExprPtr> expr() { return level(OrLevel); }
 
-    ExprPtr level(int lv) {
+    Res<ExprPtr> level(int lv) {
         switch (lv) {
             case OrLevel:
             case AndLevel: {
                 const Token& first = cur();
                 const dstd::StringView op = lv == OrLevel ? "or" : "and";
-                ExprPtr left = lv == OrLevel ? level(AndLevel) : not_expr();
+                auto left = lv == OrLevel ? level(AndLevel) : not_expr();
+                if (!left) return left;
                 while (word(op)) {
                     advance();
-                    ExprPtr right =
-                        lv == OrLevel ? level(AndLevel) : not_expr();
-                    left = make(
+                    auto right = lv == OrLevel ? level(AndLevel) : not_expr();
+                    if (!right) return right;
+                    *left = make(
                         Binary{lv == OrLevel ? BinaryOp::Or : BinaryOp::And,
-                               std::move(left), std::move(right)},
+                               std::move(*left), std::move(*right)},
                         first);
                 }
                 return left;
@@ -803,7 +1050,8 @@ class Parser {
             case AddLevel:
             case MulLevel: {
                 const Token& first = cur();
-                ExprPtr left = lv == AddLevel ? level(MulLevel) : unary();
+                auto left = lv == AddLevel ? level(MulLevel) : unary();
+                if (!left) return left;
                 while (true) {
                     BinaryOp op;
                     if (lv == AddLevel && at(Tok::Plus))
@@ -821,9 +1069,10 @@ class Parser {
                     else
                         break;
                     advance();
-                    ExprPtr right = lv == AddLevel ? level(MulLevel) : unary();
-                    left = make(Binary{op, std::move(left), std::move(right)},
-                                first);
+                    auto right = lv == AddLevel ? level(MulLevel) : unary();
+                    if (!right) return right;
+                    *left = make(
+                        Binary{op, std::move(*left), std::move(*right)}, first);
                 }
                 return left;
             }
@@ -832,10 +1081,13 @@ class Parser {
         }
     }
 
-    ExprPtr not_expr() {
+    Res<ExprPtr> not_expr() {
         const Token& first = cur();
-        if (accept_word("not"))
-            return make(Unary{UnaryOp::Not, not_expr()}, first);
+        if (accept_word("not")) {
+            auto operand = not_expr();
+            if (!operand) return operand;
+            return make(Unary{UnaryOp::Not, std::move(*operand)}, first);
+        }
         return comparison();
     }
 
@@ -850,26 +1102,35 @@ class Parser {
         return after == Tok::Name || after == Tok::Qname;
     }
 
-    ExprPtr comparison() {
+    Res<ExprPtr> comparison() {
         const Token& first = cur();
         if (legacy_contains()) {
             Contains c;
-            c.text = string_value(advance());
+            auto text = string_value(advance());
+            if (!text) return dstd::Unexpected(text.error());
+            c.text = std::move(*text);
             c.negated = accept_word("not");
-            expect_word("in");
+            auto in = expect_word("in");
+            if (!in) return dstd::Unexpected(in.error());
             if (word("any") && peek(1).kind == Tok::Lparen &&
                 peek(1).adjacent) {
                 advance();
                 advance();
-                c.path = path();
+                auto pa = path();
+                if (!pa) return dstd::Unexpected(pa.error());
+                c.path = std::move(*pa);
                 c.any = true;
-                expect(Tok::Rparen, "')' after any(path");
+                auto close = expect(Tok::Rparen, "')' after any(path");
+                if (!close) return dstd::Unexpected(close.error());
             } else {
-                c.path = path();
+                auto pa = path();
+                if (!pa) return dstd::Unexpected(pa.error());
+                c.path = std::move(*pa);
             }
             return make(std::move(c), first);
         }
-        ExprPtr left = level(AddLevel);
+        auto left = level(AddLevel);
+        if (!left) return left;
         BinaryOp op;
         switch (cur().kind) {
             case Tok::Eq:
@@ -903,14 +1164,15 @@ class Parser {
                 op = BinaryOp::Niregex;
                 break;
             default:
-                return keyword_comparison(std::move(left), first);
+                return keyword_comparison(std::move(*left), first);
         }
         advance();
-        ExprPtr right = level(AddLevel);
-        return make(Binary{op, std::move(left), std::move(right)}, first);
+        auto right = level(AddLevel);
+        if (!right) return right;
+        return make(Binary{op, std::move(*left), std::move(*right)}, first);
     }
 
-    ExprPtr keyword_comparison(ExprPtr left, const Token& first) {
+    Res<ExprPtr> keyword_comparison(ExprPtr left, const Token& first) {
         const bool negated =
             word("not") && peek(1).kind == Tok::Name &&
             (iequals(peek(1).text, "in") || iequals(peek(1).text, "between") ||
@@ -922,15 +1184,23 @@ class Parser {
             in.negated = negated;
             if (at(Tok::Lbracket)) {
                 advance();
-                if (!at(Tok::Rbracket)) in.list = expr_list();
-                expect(Tok::Rbracket, "']' or ','");
+                if (!at(Tok::Rbracket)) {
+                    auto list = expr_list();
+                    if (!list) return dstd::Unexpected(list.error());
+                    in.list = std::move(*list);
+                }
+                auto close = expect(Tok::Rbracket, "']' or ','");
+                if (!close) return dstd::Unexpected(close.error());
             } else if (at(Tok::Lparen) && peek(1).kind == Tok::Name &&
                        iequals(peek(1).text, "from")) {
-                in.subquery = from_pipeline("A sub-query");
+                auto sub = from_pipeline("A sub-query");
+                if (!sub) return dstd::Unexpected(sub.error());
+                in.subquery = std::move(*sub);
             } else if (at(Tok::Param)) {
                 in.list_param = dstd::String(advance().text);
             } else {
-                fail(cur(), "Expected '[', '(from' or a parameter after 'in'");
+                return fail(cur(),
+                            "Expected '[', '(from' or a parameter after 'in'");
             }
             return make(std::move(in), first);
         }
@@ -938,9 +1208,14 @@ class Parser {
             Between b;
             b.subject = std::move(left);
             b.negated = negated;
-            b.low = level(AddLevel);
-            expect_word("and");
-            b.high = level(AddLevel);
+            auto low = level(AddLevel);
+            if (!low) return dstd::Unexpected(low.error());
+            b.low = std::move(*low);
+            auto and_word = expect_word("and");
+            if (!and_word) return dstd::Unexpected(and_word.error());
+            auto high = level(AddLevel);
+            if (!high) return dstd::Unexpected(high.error());
+            b.high = std::move(*high);
             return make(std::move(b), first);
         }
         if (word("like") || word("ilike")) {
@@ -948,73 +1223,104 @@ class Parser {
             l.icase = iequals(advance().text, "ilike");
             l.subject = std::move(left);
             l.negated = negated;
-            if (at(Tok::Param))
+            if (at(Tok::Param)) {
                 l.pattern_param = dstd::String(advance().text);
-            else
-                l.pattern =
-                    string_value(expect(Tok::String, "a string pattern"));
-            if (accept_word("escape"))
-                l.escape =
-                    string_value(expect(Tok::String, "an escape string"));
+            } else {
+                auto tok = expect_token(Tok::String, "a string pattern");
+                if (!tok) return dstd::Unexpected(tok.error());
+                auto text = string_value(**tok);
+                if (!text) return dstd::Unexpected(text.error());
+                l.pattern = std::move(*text);
+            }
+            if (accept_word("escape")) {
+                auto tok = expect_token(Tok::String, "an escape string");
+                if (!tok) return dstd::Unexpected(tok.error());
+                auto text = string_value(**tok);
+                if (!text) return dstd::Unexpected(text.error());
+                l.escape = std::move(*text);
+            }
             return make(std::move(l), first);
         }
-        if (negated) fail(cur(), "Expected 'in', 'between', 'like' or 'ilike'");
+        if (negated)
+            return fail(cur(), "Expected 'in', 'between', 'like' or 'ilike'");
         if (accept_word("is")) {
             Is is;
             is.subject = std::move(left);
             is.negated = accept_word("not");
-            if (accept_word("missing"))
+            if (accept_word("missing")) {
                 is.missing = true;
-            else
-                expect_word("null");
+            } else {
+                auto null_word = expect_word("null");
+                if (!null_word) return dstd::Unexpected(null_word.error());
+            }
             return make(std::move(is), first);
         }
         return left;
     }
 
-    ExprPtr unary() {
+    Res<ExprPtr> unary() {
         const Token& first = cur();
-        if (accept(Tok::Minus))
-            return make(Unary{UnaryOp::Neg, unary()}, first);
+        if (accept(Tok::Minus)) {
+            auto operand = unary();
+            if (!operand) return operand;
+            return make(Unary{UnaryOp::Neg, std::move(*operand)}, first);
+        }
         return coalesce();
     }
 
-    ExprPtr coalesce() {
+    Res<ExprPtr> coalesce() {
         const Token& first = cur();
-        ExprPtr left = postfix();
-        while (accept(Tok::Coalesce))
-            left = make(Binary{BinaryOp::Coalesce, std::move(left), postfix()},
-                        first);
+        auto left = postfix();
+        if (!left) return left;
+        while (accept(Tok::Coalesce)) {
+            auto right = postfix();
+            if (!right) return right;
+            *left = make(
+                Binary{BinaryOp::Coalesce, std::move(*left), std::move(*right)},
+                first);
+        }
         return left;
     }
 
-    ExprPtr postfix() {
+    Res<ExprPtr> postfix() {
         const Token& first = cur();
-        ExprPtr e = primary();
+        auto prim = primary();
+        if (!prim) return prim;
+        ExprPtr e = std::move(*prim);
         if (std::holds_alternative<Call>(e->node) && word("over")) {
             advance();
             Over o;
             o.call = std::move(e);
             if (!at(Tok::Int) && !at(Tok::Float) && !at(Tok::Duration) &&
                 !at(Tok::Param))
-                fail(cur(),
-                     "Expected a number, a duration or a parameter "
-                     "after 'over'");
-            o.width = primary();
+                return fail(cur(),
+                            "Expected a number, a duration or a parameter "
+                            "after 'over'");
+            auto width = primary();
+            if (!width) return width;
+            o.width = std::move(*width);
             o.rows = accept_word("rows");
             e = make(std::move(o), first);
         }
         while (accept(Tok::Arrow)) {
             Arrow a;
             a.key = std::move(e);
-            a.rowset = name("a row set name after '->'");
+            auto rowset = name("a row set name after '->'");
+            if (!rowset) return dstd::Unexpected(rowset.error());
+            a.rowset = std::move(*rowset);
             if (at(Tok::Lparen) && cur().adjacent) {
                 advance();
-                a.target_key = path();
-                expect(Tok::Rparen, "')'");
+                auto target = path();
+                if (!target) return dstd::Unexpected(target.error());
+                a.target_key = std::move(*target);
+                auto close = expect(Tok::Rparen, "')'");
+                if (!close) return dstd::Unexpected(close.error());
             }
-            expect(Tok::Dot, "'.' and a path after the row set");
-            a.path = path_steps(Path{}, cur(), nullptr);
+            auto dot = expect(Tok::Dot, "'.' and a path after the row set");
+            if (!dot) return dstd::Unexpected(dot.error());
+            auto steps = path_steps(Path{}, cur(), nullptr);
+            if (!steps) return dstd::Unexpected(steps.error());
+            a.path = std::move(*steps);
             e = make(std::move(a), first);
         }
         return e;
@@ -1023,14 +1329,15 @@ class Parser {
     // Steps after a root: keys joined by '.', each with adjacent indexes. A
     // computed index ends the path; `out` receives it, and is null where
     // only a plain path may stand.
-    Path path_steps(Path p, const Token& first, ExprPtr* out) {
+    Res<Path> path_steps(Path p, const Token& first, ExprPtr* out) {
         while (true) {
             if (at(Tok::Star) && !p.steps.empty() && &first == wild_start_) {
                 advance();
                 p.steps.push_back({"*", false, {}});
             } else if (at(Tok::Name)) {
                 if (reserved(cur().text))
-                    fail(cur(), "'" + dstd::String(cur().text) +
+                    return fail(cur(),
+                                "'" + dstd::String(cur().text) +
                                     "' is a keyword; quote the key as `" +
                                     dstd::String(cur().text) + "`");
                 p.steps.push_back({dstd::String(advance().text), false, {}});
@@ -1047,10 +1354,12 @@ class Parser {
                 p.steps.push_back({dstd::String(f.substr(0, dot)), false, {}});
                 p.steps.push_back({dstd::String(f.substr(dot + 1)), false, {}});
             } else {
-                fail(cur(),
-                     "Expected a key, got '" + dstd::String(cur().text) + "'");
+                return fail(cur(), "Expected a key, got '" +
+                                       dstd::String(cur().text) + "'");
             }
-            if (indexes(p, first, out)) return p;
+            auto ended = indexes(p, first, out);
+            if (!ended.has_value()) return dstd::Unexpected(ended.error());
+            if (*ended) return p;
             if (!(at(Tok::Dot) &&
                   (peek(1).kind == Tok::Name || peek(1).kind == Tok::Qname ||
                    peek(1).kind == Tok::Int || peek(1).kind == Tok::Float ||
@@ -1066,29 +1375,35 @@ class Parser {
     }
 
     // True when a computed index ended the path and went to `out`.
-    bool indexes(Path& p, const Token& first, ExprPtr* out) {
+    Res<bool> indexes(Path& p, const Token& first, ExprPtr* out) {
         while (at(Tok::Lbracket) && cur().adjacent) {
             if (!literal_index()) {
                 const Token& open = cur();
-                if (!out) fail(open, "A computed index is not allowed here");
+                if (!out)
+                    return fail(open, "A computed index is not allowed here");
                 advance();
-                ExprPtr index = expr();
-                expect(Tok::Rbracket, "']'");
+                auto index = expr();
+                if (!index) return dstd::Unexpected(index.error());
+                auto close = expect(Tok::Rbracket, "']'");
+                if (!close) return dstd::Unexpected(close.error());
                 if ((at(Tok::Dot) && cur().adjacent) ||
                     (at(Tok::Lbracket) && cur().adjacent))
-                    fail(cur(), "A computed index ends the path");
-                *out = make(Index{make(std::move(p), first), std::move(index)},
+                    return fail(cur(), "A computed index ends the path");
+                *out = make(Index{make(std::move(p), first), std::move(*index)},
                             first);
                 return true;
             }
             advance();
             const bool negative = accept(Tok::Minus);
-            const Token& n = expect(Tok::Int, "an array index");
+            auto tok = expect_token(Tok::Int, "an array index");
+            if (!tok) return dstd::Unexpected(tok.error());
+            const Token& n = **tok;
             std::int64_t v = 0;
             const auto r = dstd::from_chars(n.text.data(),
                                             n.text.data() + n.text.size(), v);
-            if (r.ec != std::errc{}) fail(n, "Array index out of range");
-            expect(Tok::Rbracket, "']'");
+            if (r.ec != std::errc{}) return fail(n, "Array index out of range");
+            auto close = expect(Tok::Rbracket, "']'");
+            if (!close) return dstd::Unexpected(close.error());
             PathStep step;
             step.index = negative ? -v : v;
             p.steps.push_back(std::move(step));
@@ -1102,25 +1417,27 @@ class Parser {
         return false;
     }
 
-    Path path(ExprPtr* out = nullptr) {
-        Path p = path_root(out);
-        if (has_wildcard(p)) {
+    Res<Path> path(ExprPtr* out = nullptr) {
+        auto p = path_root(out);
+        if (!p) return p;
+        if (has_wildcard(*p)) {
             const Tok k = cur().kind;
             if (k != Tok::Comma && k != Tok::Pipe && k != Tok::Semi &&
                 k != Tok::End && k != Tok::Rparen && k != Tok::Rbrace &&
                 k != Tok::Name)
-                fail(cur(),
-                     "A wildcard path stands alone in select, drop, unpivot "
-                     "or any()/all()");
+                return fail(cur(),
+                            "A wildcard path stands alone in select, drop, "
+                            "unpivot or any()/all()");
         }
         return p;
     }
 
-    Path path_root(ExprPtr* out) {
+    Res<Path> path_root(ExprPtr* out) {
         const Token& first = cur();
         if (at(Tok::Caret)) {
             advance();
-            expect(Tok::Dot, "'.' after '^'");
+            auto dot = expect(Tok::Dot, "'.' after '^'");
+            if (!dot) return dstd::Unexpected(dot.error());
             return path_steps(Path{PathRoot::Enclosing, {}}, first, out);
         }
         if (at(Tok::Dot)) {
@@ -1128,66 +1445,83 @@ class Parser {
             Path p{PathRoot::Current, {}};
             if ((at(Tok::Name) && !reserved(cur().text)) || at(Tok::Qname))
                 return path_steps(std::move(p), first, out);
-            indexes(p, first, out);
+            auto ended = indexes(p, first, out);
+            if (!ended.has_value()) return dstd::Unexpected(ended.error());
             return p;
         }
         return path_steps(Path{}, first, out);
     }
 
-    ExprPtr path_expr(const Token& t) {
+    Res<ExprPtr> path_expr(const Token& t) {
         ExprPtr computed;
-        Path p = path(&computed);
-        return computed ? std::move(computed) : make(std::move(p), t);
+        auto p = path(&computed);
+        if (!p) return dstd::Unexpected(p.error());
+        return computed ? std::move(computed) : make(std::move(*p), t);
     }
 
-    Call call(dstd::String n) {
+    Res<Call> call(dstd::String n) {
         Call c;
         c.name = std::move(n);
-        expect(Tok::Lparen, "'('");
+        auto open = expect(Tok::Lparen, "'('");
+        if (!open) return dstd::Unexpected(open.error());
         if (c.name == "any" || c.name == "all") wild_start_ = &cur();
         if (!at(Tok::Rparen)) {
             do {
                 Arg a;
                 if (at(Tok::Name) && peek(1).kind == Tok::Assign) {
-                    a.name = name("an argument name");
+                    auto n2 = name("an argument name");
+                    if (!n2) return dstd::Unexpected(n2.error());
+                    a.name = std::move(*n2);
                     advance();
                 }
-                a.value = expr();
+                auto v = expr();
+                if (!v) return dstd::Unexpected(v.error());
+                a.value = std::move(*v);
                 c.args.push_back(std::move(a));
             } while (accept(Tok::Comma));
         }
-        expect(Tok::Rparen, "')'");
+        auto close = expect(Tok::Rparen, "')'");
+        if (!close) return dstd::Unexpected(close.error());
         return c;
     }
 
     // `case { c => a, ..., else => d }`: the call `case(c, a, ..., d)`.
-    Call case_block() {
+    Res<Call> case_block() {
         advance();
         const Token& open = advance();
         Call c;
         c.name = "case";
-        if (at(Tok::Rbrace)) fail(open, "A case block needs a 'c => v' pair");
+        if (at(Tok::Rbrace))
+            return fail(open, "A case block needs a 'c => v' pair");
         do {
             if (word("else") && peek(1).kind == Tok::Fatarrow) {
                 advance();
                 advance();
-                c.args.push_back({{}, expr()});
+                auto v = expr();
+                if (!v) return dstd::Unexpected(v.error());
+                c.args.push_back({{}, std::move(*v)});
                 if (!at(Tok::Rbrace))
-                    fail(cur(),
-                         "'else' must be the last entry of a case block");
+                    return fail(
+                        cur(), "'else' must be the last entry of a case block");
                 break;
             }
-            c.args.push_back({{}, expr()});
-            expect(Tok::Fatarrow, "'=>'");
-            c.args.push_back({{}, expr()});
+            auto cond = expr();
+            if (!cond) return dstd::Unexpected(cond.error());
+            c.args.push_back({{}, std::move(*cond)});
+            auto arrow = expect(Tok::Fatarrow, "'=>'");
+            if (!arrow) return dstd::Unexpected(arrow.error());
+            auto v = expr();
+            if (!v) return dstd::Unexpected(v.error());
+            c.args.push_back({{}, std::move(*v)});
         } while (accept(Tok::Comma));
         if (c.args.size() % 2 == 0)
             c.args.push_back({{}, make(Literal{Null{}, {}}, cur())});
-        expect(Tok::Rbrace, "'}'");
+        auto close = expect(Tok::Rbrace, "'}'");
+        if (!close) return dstd::Unexpected(close.error());
         return c;
     }
 
-    ExprPtr number(const Token& t) {
+    Res<ExprPtr> number(const Token& t) {
         Literal lit;
         lit.number_text = dstd::String(t.text);
         if (t.kind == Tok::Int) {
@@ -1195,18 +1529,20 @@ class Parser {
             const auto r = dstd::from_chars(t.text.data(),
                                             t.text.data() + t.text.size(), v);
             if (r.ec != std::errc{})
-                fail(t, "Invalid integer: '" + dstd::String(t.text) + "'");
+                return fail(t,
+                            "Invalid integer: '" + dstd::String(t.text) + "'");
             lit.value = static_cast<std::uint64_t>(v);
         } else {
             const dstd::Optional<double> d = dstd::from_chars<double>(t.text);
-            if (!d) fail(t, "Invalid float: '" + dstd::String(t.text) + "'");
+            if (!d)
+                return fail(t, "Invalid float: '" + dstd::String(t.text) + "'");
             lit.value = *d;
         }
         advance();
         return make(std::move(lit), t);
     }
 
-    ExprPtr primary() {
+    Res<ExprPtr> primary() {
         const Token& t = cur();
         switch (t.kind) {
             case Tok::Int:
@@ -1226,32 +1562,51 @@ class Parser {
                                      dstd::String(t.text.substr(i))},
                             t);
             }
-            case Tok::String:
+            case Tok::String: {
                 advance();
-                return make(Literal{string_value(t), {}}, t);
+                auto text = string_value(t);
+                if (!text) return dstd::Unexpected(text.error());
+                return make(Literal{std::move(*text), {}}, t);
+            }
             case Tok::Param:
                 advance();
                 return make(Param{dstd::String(t.text)}, t);
             case Tok::Lparen: {
-                if (peek(1).kind == Tok::Name && iequals(peek(1).text, "from"))
-                    return make(Subquery{from_pipeline("A sub-query")}, t);
+                if (peek(1).kind == Tok::Name &&
+                    iequals(peek(1).text, "from")) {
+                    auto sub = from_pipeline("A sub-query");
+                    if (!sub) return dstd::Unexpected(sub.error());
+                    return make(Subquery{std::move(*sub)}, t);
+                }
                 advance();
-                ExprPtr e = expr();
+                auto e = expr();
+                if (!e) return e;
                 if (at(Tok::Comma)) {
                     Tuple tu;
-                    tu.items.push_back(std::move(e));
-                    while (accept(Tok::Comma)) tu.items.push_back(expr());
-                    expect(Tok::Rparen, "')'");
+                    tu.items.push_back(std::move(*e));
+                    while (accept(Tok::Comma)) {
+                        auto item_expr = expr();
+                        if (!item_expr) return item_expr;
+                        tu.items.push_back(std::move(*item_expr));
+                    }
+                    auto close = expect(Tok::Rparen, "')'");
+                    if (!close) return dstd::Unexpected(close.error());
                     return make(std::move(tu), t);
                 }
-                expect(Tok::Rparen, "')'");
+                auto close = expect(Tok::Rparen, "')'");
+                if (!close) return dstd::Unexpected(close.error());
                 return e;
             }
             case Tok::Lbracket: {
                 advance();
                 List l;
-                if (!at(Tok::Rbracket)) l.items = expr_list();
-                expect(Tok::Rbracket, "']' or ','");
+                if (!at(Tok::Rbracket)) {
+                    auto items = expr_list();
+                    if (!items) return dstd::Unexpected(items.error());
+                    l.items = std::move(*items);
+                }
+                auto close = expect(Tok::Rbracket, "']' or ','");
+                if (!close) return dstd::Unexpected(close.error());
                 return make(std::move(l), t);
             }
             case Tok::Dot:
@@ -1267,11 +1622,14 @@ class Parser {
                     advance();
                     return make(Literal{iequals(t.text, "true"), {}}, t);
                 }
-                if (iequals(t.text, "case") && peek(1).kind == Tok::Lbrace)
-                    return make(case_block(), t);
+                if (iequals(t.text, "case") && peek(1).kind == Tok::Lbrace) {
+                    auto c = case_block();
+                    if (!c) return dstd::Unexpected(c.error());
+                    return make(std::move(*c), t);
+                }
                 if (reserved(t.text))
-                    fail(t, "Expected a value, got the keyword '" +
-                                dstd::String(t.text) + "'");
+                    return fail(t, "Expected a value, got the keyword '" +
+                                       dstd::String(t.text) + "'");
                 // A dotted name directly followed by '(' is a call.
                 std::size_t k = 0;
                 while (peek(k).kind == Tok::Name &&
@@ -1287,14 +1645,17 @@ class Parser {
                         n += '.';
                         n += advance().text;
                     }
-                    return make(call(std::move(n)), t);
+                    auto c = call(std::move(n));
+                    if (!c) return dstd::Unexpected(c.error());
+                    return make(std::move(*c), t);
                 }
                 return path_expr(t);
             }
             default:
-                fail(t, t.kind == Tok::End ? "Unexpected end of query"
-                                           : "Expected a value, got '" +
-                                                 dstd::String(t.text) + "'");
+                return fail(t, t.kind == Tok::End
+                                   ? "Unexpected end of query"
+                                   : "Expected a value, got '" +
+                                         dstd::String(t.text) + "'");
         }
     }
 };
@@ -1307,11 +1668,7 @@ dftracer::utils::dstd::Expected<Program, duql::DuqlError> parse(
     dstd::StringView source) {
     auto tokens = lex(source);
     if (!tokens) return dftracer::utils::dstd::Unexpected(tokens.error());
-    try {
-        return Parser(source, std::move(*tokens)).program();
-    } catch (const Failure& f) {
-        return dftracer::utils::dstd::Unexpected(f.error);
-    }
+    return Parser(source, std::move(*tokens)).program();
 }
 
 }  // namespace dftracer::utils::duql::syntax

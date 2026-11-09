@@ -1065,7 +1065,8 @@ TEST_SUITE("AggQuery") {
 
         // A filter keeps every record and so parses every re-read chunk.
         AggQuery filtered = make_query(*fx, ask, FIVE_SECONDS_US);
-        filtered.filter = duql::parse_or_throw("ts >= 0");
+        filtered.filter =
+            dftu_utils_test::ok(duql::Query::from_string("ts >= 0"));
         AggQueryResult by_events = run(filtered);
         CHECK(by_events.stats.chunks_reread == unfiltered.stats.chunks_reread);
         CHECK(by_events.stats.max_batch_events > 0);
@@ -1238,7 +1239,7 @@ TEST_SUITE("AggQuery") {
         AggQuery q = make_query(*fx, Ask{}, FIVE_SECONDS_US);
         q.config.compute_percentiles = false;
         // A filter keeps every event and so answers from the parse alone.
-        q.filter = duql::parse_or_throw("ts >= 0");
+        q.filter = dftu_utils_test::ok(duql::Query::from_string("ts >= 0"));
         const AggQueryResult r = run(q);
         CHECK(r.stats.events_read == TINY_EVENTS);
         CHECK(r.stats.max_batch_events > 0);
@@ -1291,7 +1292,7 @@ TEST_SUITE("AggQuery") {
         Ask ask;
         ask.by_pid = true;
         AggQuery q = make_query(*fx, ask, FIVE_SECONDS_US);
-        q.filter = duql::parse_or_throw("ts >= 0");
+        q.filter = dftu_utils_test::ok(duql::Query::from_string("ts >= 0"));
         const AggQueryResult r = run(q);
         CHECK(r.stats.events_read == 126);
         CHECK(r.stats.dropped_lines == 1);

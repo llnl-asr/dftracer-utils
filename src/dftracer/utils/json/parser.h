@@ -175,7 +175,7 @@ void JsonParser::for_each_field(Fn&& fn) {
     auto obj_result = active_.get_object();
     if (obj_result.error()) return;
 
-    for (auto field : obj_result.value()) {
+    for (auto field : obj_result.value_unsafe()) {
         if (field.error()) continue;
 
         const auto key_result = detail::get_key_or_raw(field);
@@ -184,7 +184,7 @@ void JsonParser::for_each_field(Fn&& fn) {
         auto val_result = field.value();
         if (val_result.error()) continue;
 
-        fn(*key_result, val_result.value());
+        fn(*key_result, val_result.value_unsafe());
     }
 }
 
@@ -195,7 +195,7 @@ bool JsonParser::for_each_field(dstd::StringView object_key, Fn&& fn) {
     auto nested_result = active_[object_key].get_object();
     if (nested_result.error()) return false;
 
-    for (auto field : nested_result.value()) {
+    for (auto field : nested_result.value_unsafe()) {
         if (field.error()) continue;
 
         const auto key_result = detail::get_key_or_raw(field);
@@ -204,7 +204,7 @@ bool JsonParser::for_each_field(dstd::StringView object_key, Fn&& fn) {
         auto val_result = field.value();
         if (val_result.error()) continue;
 
-        fn(*key_result, val_result.value());
+        fn(*key_result, val_result.value_unsafe());
     }
     return true;
 }
@@ -219,14 +219,14 @@ struct JsonValueHelper {
         simdjson::ondemand::value& val) {
         auto r = val.get_int64();
         return r.error() ? dstd::nullopt
-                         : dstd::Optional<std::int64_t>(r.value());
+                         : dstd::Optional<std::int64_t>(r.value_unsafe());
     }
 
     static dstd::Optional<std::uint64_t> get_uint64(
         simdjson::ondemand::value& val) {
         auto r = val.get_uint64();
         return r.error() ? dstd::nullopt
-                         : dstd::Optional<std::uint64_t>(r.value());
+                         : dstd::Optional<std::uint64_t>(r.value_unsafe());
     }
 
     static dstd::Optional<double> get_double(simdjson::ondemand::value& val) {
@@ -235,7 +235,8 @@ struct JsonValueHelper {
 
     static dstd::Optional<bool> get_bool(simdjson::ondemand::value& val) {
         auto r = val.get_bool();
-        return r.error() ? dstd::nullopt : dstd::Optional<bool>(r.value());
+        return r.error() ? dstd::nullopt
+                         : dstd::Optional<bool>(r.value_unsafe());
     }
 
     static dstd::Optional<dstd::StringView> get_string(
@@ -245,23 +246,23 @@ struct JsonValueHelper {
 
     static bool is_null(simdjson::ondemand::value& val) {
         auto r = val.is_null();
-        return r.error() ? false : r.value();
+        return r.error() ? false : r.value_unsafe();
     }
 
     static dstd::Optional<simdjson::ondemand::json_type> get_type(
         simdjson::ondemand::value& val) {
         auto r = val.type();
-        return r.error()
-                   ? dstd::nullopt
-                   : dstd::Optional<simdjson::ondemand::json_type>(r.value());
+        return r.error() ? dstd::nullopt
+                         : dstd::Optional<simdjson::ondemand::json_type>(
+                               r.value_unsafe());
     }
 
     static dstd::Optional<dstd::String> to_json_string(
         simdjson::ondemand::value& val) {
         auto r = simdjson::to_json_string(val);
-        return r.error()
-                   ? dstd::nullopt
-                   : dstd::Optional<dstd::String>(dstd::StringView(r.value()));
+        return r.error() ? dstd::nullopt
+                         : dstd::Optional<dstd::String>(
+                               dstd::StringView(r.value_unsafe()));
     }
 };
 

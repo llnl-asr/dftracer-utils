@@ -420,11 +420,12 @@ dstd::Vector<TraceConfig> config(const ScanPlan& plan) {
             dstd::String buf;
             void write(dstd::StringView d) override { buf.append(d); }
         } sink;
-        common::unwrap(
-            export_json(filter(from_file(f.file_path, f.index_path),
-                               duql::parse_or_throw(R"(name == "end")")),
-                        sink)
-                .get());
+        auto end_query = duql::Query::from_string(R"(name == "end")");
+        if (!end_query) throw duql::DuqlParseError(end_query.error());
+        common::unwrap(export_json(filter(from_file(f.file_path, f.index_path),
+                                          std::move(*end_query)),
+                                   sink)
+                           .get());
         std::size_t pos = 0;
         while (pos < sink.buf.size()) {
             std::size_t nl = sink.buf.find('\n', pos);

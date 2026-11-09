@@ -1014,6 +1014,8 @@ foreach(variant objects shared static)
     link_simdjson(${VARIANT_TARGET} ${VARIANT_UPPER})
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_json_objects)
+      target_compile_options(dftracer_utils_json_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
     elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
@@ -1200,6 +1202,8 @@ foreach(variant objects shared static)
       target_set_warnings(dftracer_utils_duql_objects)
       target_compile_definitions(dftracer_utils_duql_objects
                                  PRIVATE PCRE2_CODE_UNIT_WIDTH=8 PCRE2_STATIC)
+      target_compile_options(dftracer_utils_duql_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
     elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})

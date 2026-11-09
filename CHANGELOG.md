@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Use `Query::from_string`, which gives a `dstd::Expected`, or `try_parse`.
 - Return a `dstd::Result` from `duql::load_macros` and `duql::path_macros` in place of raising.
   The Python `duql.load_path` still raises the same exception.
+- Build the json and duql libraries without exceptions.
 - Require a `noexcept` function for `dstd::add_shutdown_hook`, so a hook that can raise does not compile.
 - End a cancelled task at its wait, in place of resuming it with an exception: the frame is destroyed, and the stop moves up to the first scope or combinator.
   `coro::with_timeout`, `coro::with_deadline`, `JoinSet::next_within` and `coro::with_item_timeout` give a `dstd::Result` with `dstd::Condition::Timeout` in place of raising, and the `timeout` adaptor of a stage gives a `dstd::Result` of its output.

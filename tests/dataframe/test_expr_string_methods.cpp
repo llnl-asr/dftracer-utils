@@ -11,9 +11,11 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -226,6 +228,27 @@ TEST_SUITE("expression string methods") {
         CHECK(idx.data<std::int64_t>()[0] == 1);
         Series ridx = run(fn(StrFn::Rindex, "o"), ok);
         CHECK(ridx.data<std::int64_t>()[0] == 2);
+    }
+
+    TEST_CASE("concurrent failing evals each report their own message") {
+        Series s = sample();
+        std::atomic<int> wrong{0};
+        auto worker = [&](dstd::StringView needle) {
+            const Expr e = fn(StrFn::Index, needle);
+            dstd::Vector<const Series*> in{&s};
+            for (int i = 0; i < 300; ++i) {
+                auto r = dftracer::utils::dataframe::eval(e, in);
+                if (r.has_value() || dstd::String(r.error().message())
+                                             .find("'" + dstd::String(needle) +
+                                                   "'") == dstd::String::npos)
+                    ++wrong;
+            }
+        };
+        dstd::Thread a([&] { worker("Q"); });
+        dstd::Thread b([&] { worker("Z"); });
+        a.join();
+        b.join();
+        CHECK(wrong.load() == 0);
     }
 
     TEST_CASE("a bool cast to string then capitalize spells True and False") {

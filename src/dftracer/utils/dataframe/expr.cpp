@@ -1939,14 +1939,17 @@ Series load_slice(const Series& in, std::int64_t offset, std::int64_t len) {
 }
 
 // A failure a worker raises for the calling thread (index / rindex finding no
-// match); require_evaluated returns it, since a parallel worker cannot.
-std::mutex g_eval_error_mutex;
-dstd::String g_eval_error;
+// match); require_evaluated returns it, since a parallel worker cannot. One
+// per eval call, shared by its workers; the first message is kept.
+struct EvalError {
+    std::mutex mutex;
+    dstd::String message;
 
-void set_eval_error(dstd::String message) {
-    std::lock_guard<std::mutex> lock(g_eval_error_mutex);
-    g_eval_error = std::move(message);
-}
+    void set(dstd::String text) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (message.empty()) message = std::move(text);
+    }
+};
 
 template <class T>
 Series const_fixed(TypeId t, const dftu_scalar& s, std::int64_t len) {
@@ -1957,8 +1960,9 @@ Series const_fixed(TypeId t, const dftu_scalar& s, std::int64_t len) {
 // A column of `len` rows of type `t`, every row holding `s` (a select arm
 // given as a literal). Refuses a type with no scalar form rather than build a
 // column whose contents would be a guess: the error goes to the calling thread
-// through set_eval_error and the column is invalid.
-Series const_column(TypeId t, const dftu_scalar& s, std::int64_t len) {
+// through `error` and the column is invalid.
+Series const_column(TypeId t, const dftu_scalar& s, std::int64_t len,
+                    EvalError& error) {
     switch (t) {
         case TypeId::Bool: {
             const bool on = scalar_as<std::int64_t>(s) != 0;
@@ -2016,8 +2020,8 @@ Series const_column(TypeId t, const dftu_scalar& s, std::int64_t len) {
         case TypeId::Map:
             break;
     }
-    set_eval_error(dstd::String("expr: a literal cannot broadcast to a ") +
-                   type_name(t) + " column");
+    error.set(dstd::String("expr: a literal cannot broadcast to a ") +
+              type_name(t) + " column");
     return {};
 }
 
@@ -3247,18 +3251,19 @@ Series list_contains_kernel(const Series& s, const dftu_scalar& v) {
     return c.finish();
 }
 
-Series str_const(dftracer::utils::dstd::StringView t, std::int64_t len) {
+Series str_const(dftracer::utils::dstd::StringView t, std::int64_t len,
+                 EvalError& error) {
     dftu_scalar sc{};
     sc.kind = DFTU_SCALAR_TAG_STR;
     sc.value.s = t.data();
     sc.len = static_cast<std::uint32_t>(t.size());
-    return const_column(TypeId::String, sc, len);
+    return const_column(TypeId::String, sc, len, error);
 }
 
 // The OP_STR_FN runtime: the same C ABI kernels the eager Series.str calls, so
 // an expression gives the eager result.
 Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
-                   std::int64_t len) {
+                   std::int64_t len, EvalError& error) {
     const dftu_series* h = a.handle();
     const std::int64_t i0 = op.scalar.value.i;
     const std::int64_t i1 = op.scalar2.value.i;
@@ -3298,7 +3303,7 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
                     ? dftu_series_str_slice(h, 0, 0)
                     : dftu_series_str_slice(h, i1, std::int64_t{1} << 62)};
             if (!head.handle() || !tail.handle()) return Series{};
-            const Series mid = str_const(op.text, len);
+            const Series mid = str_const(op.text, len, error);
             Series hm{dftu_series_str_cat(head.handle(), mid.handle())};
             if (!hm.handle()) return Series{};
             return Series{dftu_series_str_cat(hm.handle(), tail.handle())};
@@ -3343,7 +3348,7 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
             Series miss{
                 dftu_series_compare(r.handle(), DFTU_CMP_EQ, minus_one)};
             if (miss.handle() && dftu_series_any(miss.handle()) != 0) {
-                set_eval_error(
+                error.set(
                     dstd::String(fn == StrFn::Index ? "index" : "rindex") +
                     ": substring '" + dstd::String(op.text) +
                     "' not found in every row");
@@ -3370,7 +3375,7 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
             if (b == nullptr) return Series{};
             if (op.text.empty())
                 return Series{dftu_series_str_cat(h, b->handle())};
-            const Series sep = str_const(op.text, len);
+            const Series sep = str_const(op.text, len, error);
             Series ab{dftu_series_str_cat(h, sep.handle())};
             if (!ab.handle()) return Series{};
             return Series{dftu_series_str_cat(ab.handle(), b->handle())};
@@ -3385,7 +3390,8 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
 dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
                                 const dstd::Vector<Series>& inputs,
                                 const dstd::Vector<int>& finals,
-                                std::int64_t offset, std::int64_t len) {
+                                std::int64_t offset, std::int64_t len,
+                                EvalError& error) {
     dstd::Vector<Series> s(prog.size());
     for (std::size_t k = 0; k < prog.size(); ++k) {
         const SlotOp& op = prog[k];
@@ -3586,8 +3592,8 @@ dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
                                        : dftu_series_valid_mask(A())};
                 break;
             case OpConst:
-                s[k] =
-                    const_column(static_cast<TypeId>(op.param), op.scalar, len);
+                s[k] = const_column(static_cast<TypeId>(op.param), op.scalar,
+                                    len, error);
                 break;
             case OpSelect:
                 s[k] = Series{dftu_series_where(
@@ -3678,7 +3684,8 @@ dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
                 s[k] = list_contains_kernel(SA(), op.scalar);
                 break;
             case OpStrFn:
-                s[k] = str_fn_eval(op, SA(), op.b >= 0 ? &SB() : nullptr, len);
+                s[k] = str_fn_eval(op, SA(), op.b >= 0 ? &SB() : nullptr, len,
+                                   error);
                 break;
             default:
                 return {};
@@ -3694,12 +3701,13 @@ dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
 // eval_chunk returns no columns when a kernel does not take its input type;
 // reported here, on the calling thread, since the parallel workers cannot
 // return an error.
-dstd::Result<void> require_evaluated(const dstd::Vector<Series>& outs) {
+dstd::Result<void> require_evaluated(const dstd::Vector<Series>& outs,
+                                     EvalError& error) {
     if (outs.empty()) {
         dstd::String message;
         {
-            std::lock_guard<std::mutex> lock(g_eval_error_mutex);
-            message.swap(g_eval_error);
+            std::lock_guard<std::mutex> lock(error.mutex);
+            message.swap(error.message);
         }
         if (!message.empty())
             return common::make_error(common::ErrorCode::InvalidArgument,
@@ -3749,6 +3757,7 @@ dstd::Result<dstd::Vector<Series>> eval_many(
     input_types.reserve(inputs.size());
     for (const Series* s : inputs) input_types.push_back(s->data_type());
     Compiler c(input_types);
+    EvalError error;
     dstd::Vector<int> finals;
     finals.reserve(roots.size());
     for (const Expr& root : roots) {
@@ -3794,8 +3803,9 @@ dstd::Result<dstd::Vector<Series>> eval_many(
     if (!by_chunk) {
         if (n <= GRAIN) {
             dstd::Vector<Series> outs =
-                eval_chunk(c.program, flat, finals, 0, n);
-            if (auto ok = require_evaluated(outs); !ok) return ok.error();
+                eval_chunk(c.program, flat, finals, 0, n, error);
+            if (auto ok = require_evaluated(outs, error); !ok)
+                return ok.error();
             return outs;
         }
         for (std::int64_t lo = 0; lo < n; lo += GRAIN) bounds.push_back(lo);
@@ -3811,11 +3821,11 @@ dstd::Result<dstd::Vector<Series>> eval_many(
             const std::int64_t lo = bounds[static_cast<std::size_t>(k)];
             const std::int64_t hi = bounds[static_cast<std::size_t>(k) + 1];
             parts[static_cast<std::size_t>(k)] =
-                eval_chunk(c.program, flat, finals, lo, hi - lo);
+                eval_chunk(c.program, flat, finals, lo, hi - lo, error);
         }
     });
     for (const dstd::Vector<Series>& part : parts)
-        if (auto ok = require_evaluated(part); !ok) return ok.error();
+        if (auto ok = require_evaluated(part, error); !ok) return ok.error();
     dstd::Vector<Series> outs;
     outs.reserve(finals.size());
     for (std::size_t j = 0; j < finals.size(); ++j) {
